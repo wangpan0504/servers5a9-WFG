@@ -1,4 +1,4 @@
-using DfoServer.Game.Accounts;
+﻿using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer;
 
-// 名册尾部 tail[40]（ARAD 名册行 +0x499）= 超时空漩涡资格：已完成任务 8672 且是公会成员。
+// 名册尾部 tail[40]（ARAD 名册行 +0x499）= 超时空漩涡资格：已完成任务 8672；公会不再作为硬门槛。
 // 为 0 时客户端在选角前弹 IRDPopupWindow 1099（KB-20261021T015635-5c920e4e59，
 // 证据 evidence/popup1099-fiendwar-roster-flag-20261021.txt）。
 internal static class FiendWarRosterTests
@@ -22,8 +22,8 @@ internal static class FiendWarRosterTests
         int checks = TestCheck.Count;
         TestCheck.That(CharacterPackets.FiendWarEligibleTailOffset == 40, "超时空漩涡资格位于名册尾部 tail[40]");
         TestCheck.That(CharacterRosterEntry.FiendWarEntryQuest == 8672, "超时空漩涡资格任务为 8672");
-        TestCheck.That(CharacterRosterEntry.IsFiendWarEligible(true, true) && !CharacterRosterEntry.IsFiendWarEligible(true, false) &&
-            !CharacterRosterEntry.IsFiendWarEligible(false, true) && !CharacterRosterEntry.IsFiendWarEligible(false, false), "资格要求任务与公会同时满足");
+        TestCheck.That(CharacterRosterEntry.IsFiendWarEligible(true, true) && CharacterRosterEntry.IsFiendWarEligible(true, false) &&
+            !CharacterRosterEntry.IsFiendWarEligible(false, true) && !CharacterRosterEntry.IsFiendWarEligible(false, false), "资格要求前置任务，取消公会门槛");
         RunPacket();
         RunRepository();
         Console.WriteLine($"PASS {TestCheck.Count - checks} 超时空漩涡名册资格位断言");
@@ -40,7 +40,7 @@ internal static class FiendWarRosterTests
         byte[] guildOnly = Tail(Role([10], true));
         byte[] neither = Tail(Role([], false));
         TestCheck.That(eligible[40] == 1, "完成 8672 且在公会：tail[40]=1");
-        TestCheck.That(questOnly[40] == 0, "缺公会：tail[40]=0");
+        TestCheck.That(questOnly[40] == 1, "完成任务且无公会：tail[40]=1");
         TestCheck.That(guildOnly[40] == 0, "缺任务 8672：tail[40]=0");
         TestCheck.That(neither[40] == 0, "两项都缺：tail[40]=0");
         TestCheck.That(eligible[37] == 0 && eligible[38] == 0 && eligible[39] == 0 && eligible[41] == 0,
@@ -89,7 +89,7 @@ internal static class FiendWarRosterTests
             }
             var roster = repository.ListRoster(owner);
             bool Flag(ushort id) => roster.Single(row => row.Id == id).FiendWarEligible;
-            TestCheck.That(Flag(both.Id) && !Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询按 character_completed_quests 与 guild_members 计算资格");
+            TestCheck.That(Flag(both.Id) && Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询要求任务完成，无公会也可获得资格");
             bool BeastFlag(ushort id) => roster.Single(row => row.Id == id).BeastEligible;
             TestCheck.That(BeastFlag(beastDone.Id) && !BeastFlag(beastMiss.Id),
                 "名册查询按 character_completed_quests 打开魔兽资格（tail[39]）");

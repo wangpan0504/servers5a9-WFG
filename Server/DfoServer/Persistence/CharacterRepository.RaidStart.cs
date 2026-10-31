@@ -9,6 +9,18 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository : IRaidStartStore
 {
+    public int FiendwarGuideRoute(RaidActor actor, DateTimeOffset now) => actor.Owner.Execute(() =>
+    {
+        if (!actor.IsCurrent) throw new InvalidOperationException("漩涡引导原会话已变化");
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=2 AND state=2 AND clear_week=$week";
+        query.Parameters.AddWithValue("$id", actor.Character);
+        query.Parameters.AddWithValue("$account", actor.Owner.Account);
+        query.Parameters.AddWithValue("$week", FiendwarRewards.Cycle.Key(now));
+        return Math.Min(1, Convert.ToInt32(query.ExecuteScalar()));
+    });
+
     public ImmutableArray<Character> CommitRaidStart(RaidKind kind, RaidDefinition definition, Guid instance, IReadOnlyList<RaidStartReservation> reservations) =>
         RaidOwnerGroup.Execute(kind, reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
         {
@@ -54,17 +66,43 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             if (admission.WeeklyLimit is { } limit)
             {
                 command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week";
-                if (Convert.ToInt32(command.ExecuteScalar()) >= limit)
+                int completed = Convert.ToInt32(command.ExecuteScalar());
+                if (completed >= limit)
                     throw new RaidLifecycleRejectedException(kind.ToString().ToLowerInvariant() + "-weekly-clear-limit");
+                if (admission.FiendwarGuideRoute is { } route && (kind != RaidKind.Fiendwar || route != Math.Min(1, completed)))
+                    throw new RaidLifecycleRejectedException("fiendwar-guide-route-changed");
+            }
+            if (admission.FiendwarGuideRoute is not null)
+            {
+                // 名额与门票、入场生命周期共用事务，失败既不扣票也不占新槽。
+                command.CommandText = "DELETE FROM account_fiendwar_guides WHERE account=$account AND week<>$week";
+                command.ExecuteNonQuery();
+                command.CommandText = "SELECT EXISTS(SELECT 1 FROM account_fiendwar_guides WHERE account=$account AND character_id=$id AND week=$week)";
+                if (Convert.ToInt32(command.ExecuteScalar()) == 0)
+                {
+                    command.CommandText = "SELECT count(*) FROM account_fiendwar_guides WHERE account=$account AND week=$week";
+                    int bound = Convert.ToInt32(command.ExecuteScalar());
+                    if (bound >= 2) throw new RaidLifecycleRejectedException("fiendwar-guide-account-weekly-bind-limit");
+                    command.Parameters.AddWithValue("$slot", bound);
+                    command.CommandText = "INSERT INTO account_fiendwar_guides(account,slot,week,character_id) VALUES($account,$slot,$week,$id)";
+                    command.ExecuteNonQuery();
+                    command.Parameters.RemoveAt("$slot");
+                }
             }
             if (admission.DailyAccountLimit is { } daily)
             {
-                if (kind != RaidKind.Prey || daily <= 0) throw new InvalidDataException("攻坚账号日入场策略不完整");
+                if (kind is not (RaidKind.Prey or RaidKind.Fiendwar) || daily <= 0) throw new InvalidDataException("攻坚账号日入场策略不完整");
                 // 沿本服业务日UTC+8 06:00；失败和中途离团也已真实入场，不退回日次数。
                 long day = new DateTimeOffset(admission.At.UtcDateTime.AddHours(2).Date.AddHours(-2), TimeSpan.Zero).ToUnixTimeSeconds();
                 command.Parameters.AddWithValue("$day", day);
                 command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE account=$account AND raid_type=$type AND admitted_at >= $day AND admitted_at < $day+86400";
-                if (Convert.ToInt32(command.ExecuteScalar()) >= daily) throw new RaidLifecycleRejectedException("prey-daily-account-enter-limit");
+                if (Convert.ToInt32(command.ExecuteScalar()) >= daily)
+                    throw new RaidLifecycleRejectedException(kind.ToString().ToLowerInvariant() + "-daily-account-enter-limit");
+                if (kind == RaidKind.Fiendwar)
+                {
+                    command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND COALESCE(phase0_anchor,0) >= $day AND COALESCE(phase0_anchor,0) < $day+86400";
+                    if (Convert.ToInt32(command.ExecuteScalar()) >= 1) throw new RaidLifecycleRejectedException("fiendwar-daily-character-clear-limit");
+                }
                 command.Parameters.RemoveAt("$day");
             }
             command.CommandText = """

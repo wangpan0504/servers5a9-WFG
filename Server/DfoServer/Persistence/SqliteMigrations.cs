@@ -298,6 +298,16 @@ internal static class SqliteMigrations
             ReplaceTableConstraint(db, tx, "character_raid_reward_receipts", "CHECK(raid_type IN(0,1))", "CHECK(raid_type IN(0,1,3))");
             Execute(db, tx, RaidLifecycleSchema.PreyIndexes.Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal));
         }),
+        new(164, "漩涡团本单阶段生命周期类型", static (db, tx) =>
+        {
+            ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type IN(0,1,3))", "CHECK(raid_type IN(0,1,2,3))");
+            ReplaceTableConstraint(db, tx, "character_raid_reward_receipts", "CHECK(raid_type IN(0,1,3))", "CHECK(raid_type IN(0,1,2,3))");
+            ReplaceTableConstraint(db, tx, "character_raid_runs", RaidLifecycleSchema.TwoPhaseFinal, RaidLifecycleSchema.FiendwarFinal);
+        }),
+        // 与既有后续表迁移一致，允许完整兼容结构重放；最终ValidateSchema仍严格拒绝未知形状。
+        new(165, "漩涡引导账号周角色绑定", static (db, tx) => Execute(db, tx,
+            RaidLifecycleSchema.FiendwarGuideBindings.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(166, "普通安徒恩每日分支与顺序进度", AntonNormalProgressSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -774,9 +784,11 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         string sql = (string?)query.ExecuteScalar() ?? throw new InvalidDataException("缺少角色表");
         if (sql.Contains(newLimit, StringComparison.Ordinal)) return;
-        // 已知163结构重放旧团本迁移时，不将类型约束收窄；最终仍校验完整当前表定义。
+        // 已知后续结构重放旧团本迁移时，不将类型约束收窄；最终仍校验完整当前表定义。
         if (table is "character_raid_runs" or "character_raid_reward_receipts" &&
-            newLimit == "CHECK(raid_type IN(0,1))" && sql.Contains("CHECK(raid_type IN(0,1,3))", StringComparison.Ordinal)) return;
+            (newLimit == "CHECK(raid_type IN(0,1))" && sql.Contains("CHECK(raid_type IN(0,1,3))", StringComparison.Ordinal) ||
+             newLimit is "CHECK(raid_type IN(0,1))" or "CHECK(raid_type IN(0,1,3))" &&
+             sql.Contains("CHECK(raid_type IN(0,1,2,3))", StringComparison.Ordinal))) return;
         if (sql.Split(oldLimit, StringSplitOptions.None).Length != 2)
             throw new InvalidDataException("角色栏迁移拒绝未知槽位约束");
         query.CommandText = "PRAGMA schema_version";
@@ -2360,8 +2372,8 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
-            ("character_raid_runs",RaidLifecycleSchema.PreyDefinition),
-            ("character_raid_reward_receipts",RaidLifecycleSchema.PreyRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_raid_runs",RaidLifecycleSchema.FiendwarDefinition),
+            ("character_raid_reward_receipts",RaidLifecycleSchema.FiendwarRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
@@ -2374,6 +2386,7 @@ internal static class SqliteMigrations
             ("account_imperial_arena_challenge_claims",ImperialArenaSchema.Challenges),
             (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
             (PreyNormalProgressSchema.Table,PreyNormalProgressSchema.Definition),
+            (AntonNormalProgressSchema.Table,AntonNormalProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),
             ("marriage_records",MarriageSchema.RecordsSql),
@@ -2405,6 +2418,7 @@ internal static class SqliteMigrations
             ("evildom_war_battles",EvildomWarRecoverySchema.Battles.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_fiendwar_guides",RaidLifecycleSchema.FiendwarGuideBindings),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_ekern_cycle",EkernCycleSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_rename_pending",CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

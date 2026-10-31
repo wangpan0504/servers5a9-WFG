@@ -6,7 +6,8 @@ using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class TownHandler(TownProjection projection, ServerLog log, TagEvildomProjection? tagEvildom = null) : IGameCommandModule
+internal sealed class TownHandler(TownProjection projection, ServerLog log, TagEvildomProjection? tagEvildom = null,
+    DfoServer.Game.Raids.FiendwarDungeonService? fiendwar = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -41,7 +42,10 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         bool accepted = session.Travel(requested, out var receipt);
         log.Write("travel", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, Requested = requested, session.Selected?.Position, session.Selected?.Revision });
         if (accepted)
+        {
             await projection.TravelAsync(context, receipt!);
+            fiendwar?.Travelled(session);
+        }
         else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required")
         {
             await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "town_admission_denied");

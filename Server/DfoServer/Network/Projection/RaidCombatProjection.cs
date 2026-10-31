@@ -23,6 +23,11 @@ internal static partial class RaidCombatProjection
             PostLukeSnapshot(context, luke, view, Guard);
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey)
             PostPreySnapshot(context, prey, view, Guard);
+        else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Fiendwar } fiendwar)
+        {
+            PostFiendwarSnapshot(context, fiendwar, view, Guard);
+            context.LukePhaseExit?.Notice(view, actor);
+        }
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
         {
             // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
@@ -116,6 +121,11 @@ internal static partial class RaidCombatProjection
     internal static void PostState(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor,
         Func<bool> current, string action)
     {
+        if (context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Fiendwar)
+        {
+            PostFiendwarState(context, view, actor, current);
+            return;
+        }
         if (view.PhaseExpired) return;
         context.Owner.Execute(() =>
         {

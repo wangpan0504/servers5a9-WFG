@@ -211,9 +211,14 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 旧频道类型已知（同一服务端进程内的上一次选角）时直接比较谓词；否则按存档城镇推断。
             int? previousType = ChannelEntry is null ? null : channelHistory?.Previous(owner.Account);
             bool resumed = resumeTown && !ChannelAreaLanding.LeavesBeastTown(ChannelEntry, character.Position) &&
+                ChannelAreaLanding.AllowsFiendwarTown(ChannelEntry, character.Position.Town) &&
                 (ChannelEntry is not null && previousType is int previous
                 ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
                 : ChannelAreaLanding.ClientKeepsTownSnapshot(towns, ChannelEntry, character.Position));
+            // 修复旧115落点；重选角色不恢复上次攻坚队的候战/战场，五分钟重返另由原实例恢复。
+            if (ChannelEntry?.Type == ChannelAreaLanding.FiendwarType &&
+                (character.Position.Town != towns.Room.Town || character.Position.Area != towns.Room.Area) &&
+                character.Position is not { Town: ChannelAreaLanding.FiendwarTown, Area: <= 1 }) resumed = false;
             // 修复旧版本把普通街道保留在决斗频道的存档；同类型重连也不能继续恢复错误城镇。
             if (ChannelEntry is not null && ChannelAreaLanding.IsPvpType(ChannelEntry.Type) && character.Position.Town != 10)
                 resumed = false;

@@ -69,7 +69,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'raid-old','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1,'fixture/luke',1,0)");
                 using (var tx = db.BeginTransaction())
                 {
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type IN(0,1,3))", "CHECK(raid_type=1)");
+                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type IN(0,1,2,3))", "CHECK(raid_type=1)");
                     tx.Commit();
                 }
                 Execute(db, "PRAGMA user_version=144");

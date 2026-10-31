@@ -11,8 +11,8 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 换频道先进赛丽亚房间再出门到频道地区（安徒恩除外）；原生换频道进出卢克 0x20 / 安徒恩 0x17 / 超时空之战 0x2D / 魔界大战 0x36 / 普雷 0x32 的落点与快照（ARAD 01EB5AF0 谓词）：
-// 普通→团本页签频道、进出魔界大战客户端不记快照，服务端必须按落点城镇入城；团本页签频道之间互换客户端留在原城，
-// 服务端必须保留原位置。每次换频道后按客户端随后的 same-area 位置回放与移动核对服务端接受（不再被 route-not-in-pvf 拒绝）。
+// 普通与团队、漩涡与其他类型、进出魔界大战不保留快照；其余团队类型仍执行原生谓词。
+// 每次换频道后按客户端随后的same-area位置回放与移动核对服务端接受。
 internal static partial class RaidChannelLandingTcpTests
 {
     static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 5927, 3280];
@@ -39,10 +39,10 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(19, land: true, town: 19, "普通→安徒恩 19（0x17 直接落 19/0）");
         Switch(normal, land: true, town: 38, "安徒恩→普通（进赛丽亚房间，出门到艾尔文 38/0）", area: 1, exit: 38);
         Switch(20, land: true, town: 38, "普通→卢克 20（进赛丽亚房间，出门 32/3）", area: 1, exit: 32);
-        Switch(39, land: false, town: null, "卢克 20→超时空之战 39（同为团本页签，客户端保留 32/3）");
+        Switch(39, land: true, town: 38, "卢克20→漩涡39清除旧城镇快照", area: 1, exit: 57);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（0x36 谓词不同，出门 67/1）", area: 1, exit: 67);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，留在房间）", area: 1);
-        Switch(39, land: false, town: null, "普雷 42→超时空之战 39（房间快照保留，出门 115/0）", exit: 115);
+        Switch(39, land: true, town: 38, "普雷42→漩涡39清除快照并进入真实团队招募区", area: 1, exit: 57);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
         const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
         const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
@@ -269,7 +269,7 @@ internal static partial class RaidChannelLandingTcpTests
         // 勇士对决 0x3F/0x3E 在团队页签谓词里：普通→勇士对决不留快照，出门 119；两者之间及与超时空之战 0x2D 互换保留快照。
         Switch(44, land: true, town: 38, "普通→勇士对决-自由 44（出门 119）", area: 1, exit: 119);
         Switch(45, land: false, town: null, "勇士对决-自由 44→排位 45（同为团本页签）");
-        Switch(39, land: false, town: null, "勇士对决-排位 45→超时空之战 39（同为团本页签）");
+        Switch(39, land: true, town: 38, "勇士对决排位→漩涡39清除旧城镇快照", area: 1, exit: 57);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（出门 67/1）", area: 1, exit: 67);
         Switch(45, land: true, town: 38, "魔界大战 41→勇士对决-排位 45（出门 119）", area: 1, exit: 119);
     }

@@ -35,10 +35,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
     DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? preyRaid = null,
     EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null,
-    ImperialArenaProjection? imperialArena = null) : IGameCommandModule
+    ImperialArenaProjection? imperialArena = null,
+    DfoServer.Game.Raids.FiendwarDungeonService? fiendwarRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.FIEND_WAR_BOSS_PROC, FiendwarBossAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SEQUENTIAL_DUNGEON_INFO, SequentialInfoAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
@@ -60,6 +62,16 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> SequentialInfoAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseSequentialInfo(request.Body, out uint sequenceId)) return CommandResult.Unhandled;
+        if (sequenceId == AntonNormalProgress.SequenceId)
+        {
+            var anton = context.Session.CaptureAntonNormalSequence();
+            log.Write("anton_normal_sequence_query", new { Connection = context.Id, Sequence = sequenceId,
+                Accepted = anton is not null, anton?.Day, anton?.Info.Stage, anton?.Info.Branch });
+            if (anton is not null)
+                await context.Notify(NotiPacketType.SEQUENTIAL_DUNGEON_INFO, AntonNormalSequencePackets.Information(anton.Info),
+                    "anton_normal_sequence", () => context.Session.CanPublishAntonNormalSequence(anton));
+            return CommandResult.Handled;
+        }
         if (sequenceId == DfoServer.GameWorld.Dungeons.PreyNormalCatalog.SequenceId)
         {
             var prey = context.Session.CapturePreyNormalSequence();
@@ -178,6 +190,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
             context.Session.SelectionEpoch, context.Session.Phase, context.Session.CurrentDungeonSelection));
         var character = before.Selected;
+        if (character is not null && before.Ready && !context.BlocksTownActions &&
+            before.Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading &&
+            context.Session.ChannelEntry?.Type == 45 && fiendwarRaid is not null)
+            return await SelectFiendwarAsync(context, selection);
         if (character is not null && before.Ready && before.Phase == SessionPhase.Loading &&
             context.Session.ChannelEntry?.Type is 23 or 50 && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid) is { Enabled: true } &&
             (context.Session.StartedRaid is not null || selection.DungeonIndex <= int.MaxValue && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid)?.Contains((int)selection.DungeonIndex) == true))
@@ -348,6 +364,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         if (PreyNormalProgress.Applies(receipt.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Guard);
+        if (AntonNormalProgress.Applies(receipt.Entry)) await AntonNormalSequenceProjection.RefreshAsync(context, Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
         {

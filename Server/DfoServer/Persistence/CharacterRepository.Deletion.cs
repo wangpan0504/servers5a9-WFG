@@ -18,7 +18,7 @@ internal sealed partial class CharacterRepository
         "character_dungeon_incount_extra", "character_ekern_cycle", "character_rename_pending", "character_name_history",
         "character_evildom_war_seats",
         "character_pvp_daily_missions", "character_pvp_mission_rewards", "character_pvp_mission_facts", "character_pvp_rating_claims", "character_pvp_ratings",
-        "character_luke_normal_drop_claims", "character_luke_normal_progress",
+        "character_luke_normal_drop_claims", "character_luke_normal_progress", "character_anton_normal_progress",
         "character_prey_normal_progress",
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",

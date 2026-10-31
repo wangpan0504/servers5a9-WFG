@@ -165,6 +165,11 @@ internal sealed partial class GameSession
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true)
     {
         beastMode = retry?.Entry.BeastMode ?? beastMode;
+        // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
+        if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
+            return RejectFormal("normal-fiendwar-ordinary-channel-required");
+        if (ChannelEntry?.Type == ChannelAreaLanding.FiendwarType && !HasRaidDungeonAdmission)
+            return RejectFormal("fiendwar-raid-admission-required");
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
             return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
@@ -174,6 +179,10 @@ internal sealed partial class GameSession
         if (expected is null || expected.DungeonState is null ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        if (dungeonId <= int.MaxValue &&
+            catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/fiendwar_kr/", StringComparison.Ordinal) == true &&
+            catalog.Get((int)dungeonId).IsRaid)
+            return RejectFormal("fiendwar-raid-admission-required");
         // 难度不在这里卡：实机确认包带的是玩家在选图面板上选中的难度（样本为2），
         // 兼容网关的布局固定取源副本的 BeastLayouts[0]，难度只影响客户端显示。
         if (BeastDungeonRotation.IsGateway(dungeonId) && (!beastMode || ChannelEntry?.Type != ChannelAreaLanding.BeastType ||
@@ -419,6 +428,16 @@ internal sealed partial class GameSession
             if (!repository.LoadOrdinaryLukeProgress(owner, expected.Id).Allows(day, dungeonId))
                 return RejectFormal("luke-normal-progress-locked");
             entry = entry! with { OrdinaryLukeDay = day };
+        }
+        if (AntonNormalProgress.Applies(entry!))
+        {
+            var sharedAdmission = shared?.Session.PreparedParty(shared).Dungeon.Entry.AntonNormal;
+            if (shared is not null && sharedAdmission is null) return RejectFormal("party-anton-normal-day-missing");
+            int day = sharedAdmission?.Day ?? QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+            var progress = repository.LoadAntonNormalProgress(owner, expected.Id);
+            var admission = sharedAdmission ?? new AntonNormalAdmission(day, checked((int)progress.Information(day).Branch), catalog.AntonNormalSequence);
+            if (!progress.Allows(admission, dungeonId)) return RejectFormal("anton-normal-progress-locked");
+            entry = entry! with { AntonNormal = admission };
         }
         if (PreyNormalProgress.Applies(entry!))
         {
@@ -893,6 +912,9 @@ internal sealed partial class GameSession
         if (installing.Entry.OrdinaryLukeDay is { } lukeDay &&
             (lukeDay != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
              !repository.LoadOrdinaryLukeProgress(owner, character.Id).Allows(lukeDay, installing.Entry.DungeonId))) return null;
+        if (installing.Entry.AntonNormal is { } anton &&
+            (anton.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
+             !repository.LoadAntonNormalProgress(owner, character.Id).Allows(anton, installing.Entry.DungeonId))) return null;
         if (installing.Entry.PreyNormal is { } prey &&
             (prey.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
              !repository.LoadPreyNormalProgress(owner, character.Id).Allows(prey, installing.Entry.DungeonId))) return null;
@@ -1067,7 +1089,8 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
+                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
+                AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {

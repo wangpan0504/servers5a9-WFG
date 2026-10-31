@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         if (formalDungeon!.CharacterDead) return null;
         var character = Selected!;
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
-        bool blessing = formalDungeon!.Entry.RaidEntry?.Kind != Raids.RaidKind.Luke && !formalDungeon.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
+        bool blessing = formalDungeon!.Entry.RaidEntry?.Kind is not (Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar) && !formalDungeon.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
             GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId) && row.Active(now));
         var after = ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death,
             now);
@@ -75,10 +75,10 @@ internal sealed partial class GameSession
             {
                 if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
                     formalDungeon.Entry.Maze.IsGriefTower) return null;
-                bool luke = formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Luke;
+                bool luke = formalDungeon.Entry.RaidEntry?.Kind is Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar;
                 if (luke)
                 {
-                    if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke } raid ||
+                    if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } raid ||
                         formalDungeon.Entry.RaidEntry!.InstanceId != raid.Battle.Instance || PreservesDungeonConsumables)
                         return InventoryResult.Reject();
                     reservation = raid.Battle.ReserveLukeRevival(raid.Actor, formalDungeon.Run.Snapshot.Identity, formalDungeon.DeathSerial);

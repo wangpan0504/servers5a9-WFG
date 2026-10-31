@@ -33,7 +33,12 @@ internal sealed partial class GameSession
         }
         var objects = admission.LukeObjects is { } catalog
             ? new LukeRaidObjectRegistration(first.Run.Snapshot.Identity.InstanceId, checked((int)first.Entry.DungeonId), first.Entry.Maze, catalog) : null;
-        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects, route, first.Entry.Maze.SourceOrdinal);
+        if (battle.Kind == RaidKind.Fiendwar && (first.Entry.FiendwarScale is not { } scale ||
+            (battle.FiendwarAreaForDungeon(checked((int)first.Entry.DungeonId)) is 30 or 31
+                ? actors.Any(actor => !scale.Participants.Contains(actor.Actor.Character))
+                : !scale.Participants.ToHashSet().SetEquals(actors.Select(actor => actor.Actor.Character))) ||
+            prepared.Any(token => !ReferenceEquals(token.Session.PreparedParty(token).Dungeon.Entry.FiendwarScale, first.Entry.FiendwarScale)))) return null;
+        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects, route, first.Entry.Maze.SourceOrdinal, first.Entry.CoinLimit);
     }
 
     // PartyDungeonInstance在全部成员SQL已确认后调用；即使上次网络前消费中断，也从原Run保留的事实恢复。
@@ -42,7 +47,7 @@ internal sealed partial class GameSession
         change = null;
         if (members.Length is < 1 or > 4) return false;
         var first = members[0].Actor.Session;
-        if (first.raidCombat is not { Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } firstRaid) return false;
+        if (first.raidCombat is not { Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar } firstRaid) return false;
         var facts = new List<(RaidActor Actor, DungeonClearFact Fact)>();
         foreach (var member in members)
         {
@@ -59,7 +64,7 @@ internal sealed partial class GameSession
             change = firstRaid.Battle.RecordAntonPartyClears(facts.ToArray());
             return change is not null;
         }
-        change = firstRaid.Battle.Kind == RaidKind.Prey
+        change = firstRaid.Battle.Kind == RaidKind.Fiendwar ? firstRaid.Battle.CompleteFiendwarDungeon(facts.ToArray()) : firstRaid.Battle.Kind == RaidKind.Prey
             ? firstRaid.Battle.CompletePreyDungeon(facts.ToArray()) : firstRaid.Battle.CompleteLukeDungeon(facts.ToArray());
         return facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
     }
@@ -68,6 +73,16 @@ internal sealed partial class GameSession
     internal static PartyDungeonNotice[] ObserveRaidPartyRun(PartyMember[] members, Guid instance,
         PartyDungeonNotice[] notices, bool observeMap)
     {
+        if (members.Length is >= 1 and <= 4 && members[0].Actor.Session.raidCombat is { Battle.Kind: RaidKind.Fiendwar } fiendwar)
+        {
+            var snapshots = members.Select(member => member.Actor.Session.CurrentFormalDungeonScene()).ToArray();
+            if (snapshots.Any(scene => scene is null || scene.Snapshot.Identity.InstanceId != instance) ||
+                snapshots.Select(scene => scene!.Snapshot.CurrentMap).Distinct().Count() != 1) return notices;
+            var fiendwarChange = fiendwar.Battle.ObserveFiendwarRun(instance,
+                members.Select(member => member.Actor.Session.raidCombat!.Actor).ToArray(),
+                snapshots[0]!.Snapshot.CurrentMap.Id, observeMap);
+            return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members, snapshots[0], RaidBattleChange: fiendwarChange)];
+        }
         if (members.Length is < 1 or > 4 || members[0].Actor.Session.raidCombat is not { Battle.Kind: RaidKind.Luke } first)
             return notices;
         var rows = new List<(RaidActor Actor, DungeonRunIdentity Identity)>();

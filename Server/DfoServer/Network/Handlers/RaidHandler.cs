@@ -77,7 +77,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
             var restored = lukeRejoin.Restore(actor, key, callerCommandHeld: true);
             log.Write("luke_raid_rejoin", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
                 restored.Accepted, restored.Reason, Phase = restored.Battle?.Phase, Contract = "waiting-room-rejoin" });
-            if (restored is { Accepted: true, Raid: { } raid, Party: { } squad, Battle: { } view })
+            if (restored is { Accepted: true, Raid: { } raid, Battle: { } view })
             {
                 var travel = town is null ? null : context.Session.ReturnLukeRejoinToWaiting(actor);
                 if (travel is null)
@@ -86,11 +86,18 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
                     return CommandResult.Handled;
                 }
                 await town!.TravelAsync(context, travel);
+                // 漩涡落位会原子更新区域占用及revision；后续发布必须使用落位后的真实快照。
+                view = context.Session.CurrentRaidBattle(actor)!.View;
                 if (before is not null) registry.Publish(new(before, raid));
-                parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
-                    member, Party: squad)));
+                if (restored.Party is { } squad)
+                    parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
+                        member, Party: squad)));
                 bool Current() => actor.IsCurrent && actor.Session.CanPublishRaid(actor, raid) && actor.Session.CanPublishRaidBattle(actor, view);
-                context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "luke_rejoin_prepare", Current);
+                context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
+                    [], "raid_rejoin_prepare", Current);
+                if (raid.Type == 2)
+                    context.Sender.Post(0, (ushort)NotiPacketType.START_FIEND_WAR, [], "fiendwar_rejoin_started", Current,
+                        () => context.FiendwarTimers = context.FiendwarTimers.Clear());
                 RaidCombatProjection.Notice(context, view, actor);
                 await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
             }
@@ -208,17 +215,17 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         }
         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
         int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
-        bool supported = definition?.Type is 0 or 3 && start is not null && (definition.Type == 0 || party!.Guide && definition.Resources?.EntryCatalog?.Ready == true) || definition?.Type == 1 && lukeStart is not null;
+        bool supported = definition?.Type is 0 or 2 or 3 && start is not null && (definition.Type is 0 or 2 || party!.Guide && definition.Resources?.EntryCatalog?.Ready == true) || definition?.Type == 1 && lukeStart is not null;
         bool mayStart = party is not null && supported && party.Leader == actor.Character &&
             (party.Started is not null || members >= definition!.StartMinimum);
         bool creating = mayStart && party!.Started is null;
-        using var commands = creating && definition!.Type is 0 or 3 ? RaidStartCommands.TryEnter(party!, context.Session) : null;
+        using var commands = creating && definition!.Type is 0 or 2 or 3 ? RaidStartCommands.TryEnter(party!, context.Session) : null;
         using var lukeCommands = mayStart && definition!.Type == 1 ? RaidStartCommandScope.TryEnter(context, party!) : null;
         var check = party is null ? new RaidStartCheck(RaidPackets.StartUnavailable, "no-raid") :
             RaidStartCheck.Evaluate(party.Leader == actor.Character, members, definition);
-        var result = !mayStart ? new RaidStartResult(check.Error, check.Reason) : party!.Started is not null && definition!.Type is 0 or 3
+        var result = !mayStart ? new RaidStartResult(check.Error, check.Reason) : party!.Started is not null && definition!.Type is 0 or 2 or 3
             ? new RaidStartResult(0, "already-started", Replay: true)
-            : definition!.Type is 0 or 3
+            : definition!.Type is 0 or 2 or 3
                 ? commands is null ? new RaidStartResult(19, "raid-member-command-busy") : start!.Start(actor, party!, definition)
                 : lukeCommands is null ? new RaidStartResult(19, "raid-member-command-busy")
                     : lukeStart!.Start(actor, party!, definition, lukeCommands.Parties, lukeCommands.IsCurrent);
@@ -307,8 +314,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         var definition = catalog.Find(parsed.RaidType);
         // raid.lst 没有类型 6：魔界大战的建队走 SET_PARTY_INFO(kind=5)，这里不再为它破例建团本记录。
         var previousWaiting = actor is null ? null : registry.Waiting(actor);
-        bool guide = parsed.RaidType == 3 && parsed.Field210 == 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
-        bool validMode = parsed.RaidType != 3 || parsed.Field210 <= 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
+        bool guide = parsed.RaidType is 2 or 3 && parsed.Field210 == 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
+        bool validMode = parsed.RaidType is not (2 or 3) || parsed.Field210 <= 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
         var party = !validMode || actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
             registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), guide ? 1 : definition.MemberMax, guide ? 1 : definition.StartMinimum, guide);
         log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, Accepted = party is not null,

@@ -48,8 +48,8 @@ internal static class RaidProjection
         party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
         party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke), party.Guide);
 
-    internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type == 0 || party.Type == 1 && enableLuke || party.Type == 3 && party.Guide) && party.Started is null &&
-        party.Members.Length >= party.StartMinimum && party.Members.All(m => m.Squad != 0 && m.Actor.IsCurrent);
+    internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type is 0 or 2 || party.Type == 1 && enableLuke || party.Type == 3 && party.Guide) && party.Started is null &&
+        party.Members.Length >= party.StartMinimum && party.Members.All(m => (party.Type == 2 || m.Squad != 0) && m.Actor.IsCurrent);
 
     public static void Cost(GameConnectionContext context, RaidCostStatus[] rows, RaidActor recipient, Func<bool>? current = null) =>
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_ENTRY_COST_INFO, RaidPackets.EntryCosts(rows), "raid_entry_cost_snapshot",
@@ -91,8 +91,15 @@ internal static class RaidProjection
                 i.Core.ItemId == receipt.Cost.ItemId).Sum(i => (long)i.Core.Count)))).ToArray();
         Cost(context, rows, recipient, party.Type == (byte)RaidKind.Luke ? Guard : null);
         // 594无载荷，先安装同分队普通Party；其后11/12按同一普通接收器幂等确认。
-        context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "raid_prepare", Guard);
+        context.Sender.Post(0, (ushort)(party.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID), [], "raid_prepare", Guard);
         recipient.Owner.Execute(() => { if (Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
+        if (party.Type == 2 && receipt.Battle is { } fiendwarInitial && recipient.Session.CurrentRaidBattle(recipient) is { } fiendwarBattle)
+        {
+            context.Sender.Post(0, (ushort)NotiPacketType.START_FIEND_WAR, [], "fiendwar_started", Guard,
+                () => context.FiendwarTimers = context.FiendwarTimers.Clear());
+            RaidCombatProjection.PostFiendwarSnapshot(context, fiendwarBattle, fiendwarInitial,
+                () => Guard() && recipient.Session.CanPublishRaidBattle(recipient, fiendwarInitial));
+        }
         if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } initial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } currentBattle)
             RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard);
@@ -113,7 +120,7 @@ internal static class RaidProjection
             receipt.Battle is { } anton ? RaidCombatPackets.State(anton) : RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);
     }
 
-    public static void Notice(GameConnectionContext context, RaidChange change, RaidActor recipient, bool enableLuke = false)
+    public static void Notice(GameConnectionContext context, RaidChange change, RaidActor recipient, bool enableLuke = false, TownProjection? town = null)
     {
         if (change.Removed is { } removed && ReferenceEquals(removed.Session, recipient.Session) && removed.Epoch == recipient.Epoch)
         {
@@ -121,6 +128,13 @@ internal static class RaidProjection
             if (change.Kicked)
                 context.Sender.Post(1, (ushort)CmdPacketType.LEAVE_RAID, [1, 1], "raid_kicked",
                     () => recipient.IsCurrent && !recipient.Session.HasCurrentRaid(recipient));
+            if (change.TownReturn is { } receipt && town is not null)
+            {
+                bool Current() => recipient.IsCurrent && !recipient.Session.HasCurrentRaid(recipient) &&
+                    ReferenceEquals(recipient.Session.Selected, receipt.Character);
+                town.QueueRaidDeparture(context, receipt.Character, Current);
+                town.QueueRaidArrival(context, receipt.Character, Current);
+            }
             return;
         }
         if (change.After is not { } after) return;

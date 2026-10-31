@@ -95,7 +95,7 @@ internal static class ChannelAreaLandingTests
         That(!towns.Areas[(54, 0)].Map(new HashSet<int> { 5936, 6045, 6356 }).Npcs.Any(npc => npc.Id == 100000175),
             "旧黑市0区固定Before地图，不能承接乔斯拉的解放后身份");
         That(ChannelAreaLanding.Place(towns, fiend, 95, none) is null, "未完成入场任务 8672 的超时空之战频道留在共享房间");
-        That(ChannelAreaLanding.Place(towns, fiend, 95, new HashSet<int> { 8672 }) is { Town: 115, Area: 0 }, "完成 8672 的超时空之战频道落到最后防线 115/0");
+        That(ChannelAreaLanding.Place(towns, fiend, 95, new HashSet<int> { 8672 }) is { Town: 57, Area: 0 }, "完成8672的漩涡团队频道使用57/0门厅");
         That(towns.Areas.ContainsKey((10, 0)) && towns.Areas[(10, 0)].Gate is not null, "决斗场城镇 10 在目录里且写有门口");
         That(ChannelAreaLanding.Place(towns, pvp, 1, none) is null, "决斗场等级不足时留在共享房间");
         That(ChannelAreaLanding.Place(towns, pvp, 95, none) is { Town: 10, Area: 0, X: 474, Y: 234 }, "决斗场等级达到后落到目录门口");
@@ -125,7 +125,7 @@ internal static class ChannelAreaLandingTests
         var granRole = repo.Create(owner, new("Gran", towns.Room, towns.InitialReturn));
         var granPlaced = CharacterSelection.Prepare(repo, owner, granRole, towns, none, null, false, null, channel: granfloris);
         That(granPlaced.Position == towns.Room, "主入口格兰之森正式选角保持共享房间");
-        var lukeHigh = repo.Create(owner, new("Luke95", towns.Room, towns.InitialReturn) { Level = 95, CompletedQuests = [2903, 4872] });
+        var lukeHigh = repo.Create(owner, new("Luke95", towns.Room, towns.InitialReturn) { Level = 95, CompletedQuests = [2903, 4872, 8672] });
         var lukePlaced = CharacterSelection.Prepare(repo, owner, lukeHigh, towns, none, null, false, null, channel: luke);
         That(lukePlaced.Position == towns.Room, "卢克频道选角先进赛丽亚房间");
         var lukeExit = TownTravel.LeaveRoom(lukePlaced, towns, none, luke);
@@ -268,8 +268,8 @@ internal static class ChannelAreaLandingTests
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: fiend, channelHistory: history);
         session.Select(lukePlaced.Slot, resumeTown: true);
-        That(session.TownSnapshotResumed && session.Selected!.Position == towns.Room, "卢克→超时空同为团队页签谓词，客户端保留赛丽亚房间快照");
-        That(TownTravel.LeaveRoom(session.Selected!, towns, fiendDone, fiend).Position is { Town: 115, Area: 0 }, "超时空频道赛丽亚房间出门到 115/0");
+        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room, "卢克与漩涡独立比较类型位，清除旧城镇快照");
+        That(TownTravel.LeaveRoom(session.Selected!, towns, fiendDone, fiend).Position is { Town: 57, Area: 1 }, "漩涡频道共享房间出门到57/1招募街区");
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: elven, channelHistory: history);
         session.Select(lukePlaced.Slot, resumeTown: true);

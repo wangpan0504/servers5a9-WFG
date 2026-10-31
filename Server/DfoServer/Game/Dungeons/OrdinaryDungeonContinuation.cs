@@ -19,6 +19,12 @@ internal static class OrdinaryDungeonContinuation
             int index = route.IndexOf(checked((int)entry.DungeonId));
             return index >= 0 && index + 1 < route.Length ? checked((uint)route[index + 1]) : null;
         }
+        if (entry.AntonNormal is { } anton)
+        {
+            var route = anton.Catalog.Routes[anton.Branch - 1];
+            int index = route.IndexOf(checked((int)entry.DungeonId));
+            return index >= 0 && index + 1 < route.Length ? checked((uint)route[index + 1]) : null;
+        }
         if (catalog.Get(checked((int)entry.DungeonId)) is { IsOrdinaryAnton: true } definition &&
             definition.Path.StartsWith("dungeon/anton_ordinary/", StringComparison.OrdinalIgnoreCase))
             return catalog.AntonNormalSequence.Next(checked((int)entry.DungeonId));

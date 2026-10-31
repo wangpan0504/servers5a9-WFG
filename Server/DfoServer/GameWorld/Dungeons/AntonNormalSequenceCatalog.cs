@@ -5,7 +5,8 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Dungeons;
 
-internal sealed record AntonNormalSequenceCatalog(ImmutableArray<ImmutableArray<int>> Routes)
+internal sealed record AntonNormalSequenceCatalog(ImmutableArray<ImmutableArray<int>> Routes,
+    ImmutableDictionary<int, uint> DisabledAfterClear)
 {
     public uint? Next(int dungeon)
     {
@@ -40,6 +41,31 @@ internal sealed record AntonNormalSequenceCatalog(ImmutableArray<ImmutableArray<
                 throw new InvalidDataException("普通安徒恩路线与变体不匹配");
             routes.Add(route);
         }
-        return new(routes.MoveToImmutable());
+        var frozenRoutes = routes.MoveToImmutable();
+        var restrictions = Regex.Matches(blocks[0].Value,
+            @"\[disable by cleared sequence\]\s*([\d\s]+)\[/disable by cleared sequence\]");
+        if (restrictions.Count != 1) throw new InvalidDataException("普通安徒恩阶段关闭表缺失或重复");
+        var columns = restrictions[0].Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => int.Parse(value, CultureInfo.InvariantCulture)).ToArray();
+        var disabled = ImmutableDictionary.CreateBuilder<int, uint>();
+        for (int at = 0; at < columns.Length;)
+        {
+            if (at + 2 > columns.Length) throw new InvalidDataException("普通安徒恩阶段关闭行不完整");
+            int dungeon = columns[at++], count = columns[at++];
+            if (count is < 1 or > 6 || at + count > columns.Length || !frozenRoutes.Any(route => route.Contains(dungeon)))
+                throw new InvalidDataException("普通安徒恩阶段关闭行越界");
+            uint mask = 0;
+            for (int index = 0; index < count; index++)
+            {
+                int stage = columns[at++];
+                if (stage is < 0 or > 5 || (mask & (1u << stage)) != 0)
+                    throw new InvalidDataException("普通安徒恩阶段关闭条件越界或重复");
+                mask |= 1u << stage;
+            }
+            if (!disabled.TryAdd(dungeon, mask)) throw new InvalidDataException("普通安徒恩阶段关闭副本重复");
+        }
+        if (disabled.Count != frozenRoutes.SelectMany(route => route).Distinct().Count())
+            throw new InvalidDataException("普通安徒恩阶段关闭表未覆盖全部路线");
+        return new(frozenRoutes, disabled.ToImmutable());
     }
 }

@@ -9,9 +9,17 @@ internal static class ChannelAreaLanding
 {
     internal readonly record struct Decision(Location? Spot, string Reason);
 
-    // 超时空之战（卡名超时空漩涡）频道类型 0x2D = 45（CHANNEL_FIEND_WAR）。ARAD 频道虚表 +0x2C（01EB5740）即 type==0x2D；
+    // 漩涡团队频道类型 0x2D = 45（CHANNEL_FIEND_WAR），普通超时空之战是独立的town115。
     // 团队频道卡片构建 017128D0 对 type 0x2D 按事件 2449 与任务 8672 筛选，不需要 RaidChannel 插件。
     internal const int FiendwarType = 0x2D;
+    internal const byte FiendwarTown = 57, NormalFiendwarTown = 115;
+
+    internal static bool AllowsFiendwarTown(ChannelEntry? channel, byte town) => town switch
+    {
+        FiendwarTown => channel?.Type == FiendwarType,
+        NormalFiendwarTown => channel?.Type is null or OrdinaryType,
+        _ => true
+    };
 
     // 魔界大战频道类型：ARAD 频道类型名表 03EFBF1D 写入 CHANNEL_EVILDOM_WAR = 0x36（同表 CHANNEL_EVILDOM_WAR_CHALLENGE = 0x40）。
     internal const int EvildomWarType = 0x36;
@@ -89,12 +97,13 @@ internal static class ChannelAreaLanding
 
     // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔兽、魔界大战与再战魔界谓词比较。
     internal static bool SameSnapshotPredicates(int previousType, int nextType) =>
-        previousType != SpecialAreaType && nextType != SpecialAreaType && SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
+        previousType != SpecialAreaType && nextType != SpecialAreaType &&
+        (previousType == FiendwarType) == (nextType == FiendwarType) && SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
     // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。除vt+0x14的PVP位外，还区分以下谓词：
     // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
     // 谓词都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
-    // 因此 普通(22)↔安徒恩 0x17/卢克 0x20/超时空之战 0x2D/普雷 0x32 互换不记快照，团队页签类型之间（如 0x20↔0x2D、0x20↔0x32）互换保留快照，
+    // 普通(22)与团队类型互换不记快照；配套客户端额外隔离0x2D边界，其他团队类型之间仍执行原生谓词。
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
     static readonly int[] RaidTabTypes = [0x17, 0x19, 0x20, FiendwarType, PreyRaidType, 0x3E, 0x3F];
 
@@ -106,7 +115,7 @@ internal static class ChannelAreaLanding
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
     // 01EB5760（vt+30）比较type40魔兽；01EB5790比较type39帝国竞技场，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
-    // 五陵位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
+    // 五陵和漩涡类型位由配套客户端补丁比较；同类型继续执行原生谓词。
     static (bool RaidTab, bool Beast, bool Evildom, bool TagEvildom, bool ImperialArena, bool XianVillage, bool Pvp) SnapshotPredicates(int type) =>
         (RaidTabTypes.Contains(type), type == BeastType, type == EvildomWarType, type == 53, type == 39, type == XianVillageType, IsPvpType(type));
 
@@ -117,6 +126,7 @@ internal static class ChannelAreaLanding
     {
         if (Target(channel.Type, channel.Group) is not var (town, area))
             return new(null, "no-proven-town");
+        if (channel.Type == FiendwarType && level < 95) return new(null, "admission-level-required");
         // etc/enterablespecialchannel.etc 按频道键写入场任务；只对与分组同名的键生效（当前 fiendwar=8672、prey=8935）。
         if (towns.SpecialChannelQuests.TryGetValue(GroupName(channel.Group), out int channelQuest) && !completed.Contains(channelQuest))
             return new(null, "channel-quest-required");
@@ -177,6 +187,8 @@ internal static class ChannelAreaLanding
         if (channel is null)
             return true;
         if (channel.Type == SpecialAreaType) return false;
+        if (!AllowsFiendwarTown(channel, position.Town)) return false;
+        if (channel.Type == FiendwarType && position.Town != FiendwarTown) return false;
         // 决斗城镇有普通地图连接，不能据此把它当作普通频道快照；没有频道历史时按实际地区区分。
         if (IsPvpType(channel.Type)) return position.Town == 10;
         if (position.Town == 10) return false;
@@ -256,11 +268,9 @@ internal static class ChannelAreaLanding
             "harlem" or "east harlem" => (54, 1),
             "luke_raid" => (32, 0),
             "sainthorn" => (17, 0),
-            // 任务 8672「[超时空漩涡]奔赴前线」写明完成后“可以通过团队频道的超时空漩涡进入最后防线”；最后防线是 town 115
-            // chn_fiendwar_normal.twn，区域 0 为主城（need level 90），区域 1 带 [dungeon gate] 201（超时空之战 400000016）。
-            // 频道 39 名称键 048 = 超时空漩涡；115 无任何城镇/传送门连入，只能经频道落点到达。ARAD 03B876C0 把 type 0x2D 的
-            // 返回城镇（NOTI 1379 PREV_VILLAGE）改成 57，只管返回城镇、不决定落点，因此落点仍取 115/0（2026-10-22 决定，撤销 5fe61f2f 的 57/0）。
-            "fiendwar" => (115, 0),
+            // 原生03B876C0对0x2D返回57；57/1摆放可创建攻坚队的624，57/2为625候战。
+            // 普通115/1的400000039仅有仓库，DGN400000016不属于漩涡团队。
+            "fiendwar" when type == FiendwarType => (FiendwarTown, 0),
             // 魔界大战：任务 talisman_00「[护石]未知的石头」写“该任务只能在魔界大战频道完成”，交任务 NPC 100000149 莫妮卡只摆在
             // town 67 TheEvildomWar_P.twn（艾尔丁纪念馆）区域 1；67 没有其他城镇或传送门进入，三个区域 need level 95、无任务。
             // 区域 0 的 [gate] 474 234 是独立标签，TownCatalog 不读；67/0 又导入 gate_seria.map 是房间式区域，

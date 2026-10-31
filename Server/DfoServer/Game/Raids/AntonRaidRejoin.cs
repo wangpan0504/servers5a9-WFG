@@ -46,7 +46,7 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
         {
             PruneLukeLocked();
             if (!byCharacter.TryGetValue(character, out var fact) || fact.Luke is not { } reservation) return null;
-            return new(fact.Instance, fact.Key, fact.Slot, fact.Squad, reservation.OriginalParty.Id,
+            return new(fact.Instance, fact.Key, fact.Slot, fact.Squad, reservation.OriginalPartyId ?? 0,
                 reservation.PartySlot, reservation.Phase, !fact.OldOwner.IsCurrent);
         }
     }

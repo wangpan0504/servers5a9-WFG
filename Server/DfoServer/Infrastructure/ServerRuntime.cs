@@ -412,7 +412,8 @@ internal static class ServerRuntime
                 Phases = resourceCompletion.Phases.Select((phase, index) => new { Phase = index, phase.MinimumCommittedRuns,
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
-        var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled, lukeCandidatesEnabled: lukeStartPolicy is not null, clock: clock);
+        var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled,
+            lukeCandidatesEnabled: lukeStartPolicy is not null || raidCatalog.Find(2)?.Resources?.Fiendwar is not null, clock: clock);
         raidRegistry.BindRejoin(antonRejoin);
         var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
@@ -424,7 +425,11 @@ internal static class ServerRuntime
         var preyRun = preyReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey) : null;
         var preyRewards = preyReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.Script, itemResources.Items, itemResources.Boosters) : null;
         if (preyRewards is not null) _ = preyRewards.Create(false);
-        var lukeTimers = !preyReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        bool fiendwarReady = raidCatalog.Find(2)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true, Fiendwar: not null };
+        var fiendwarRun = fiendwarReady ? new Game.Raids.FiendwarDungeonService(raidRegistry, parties, raidCatalog.Find(2)!.Resources!.EntryCatalog!, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.EntryCatalog) : null;
+        var fiendwarRewards = fiendwarReady ? new Game.Raids.FiendwarRewards(raidCatalog.Find(2)!.Resources!.Fiendwar!, itemResources.Items, itemResources.Boosters, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.Fiendwar) : null;
+        if (fiendwarRewards is not null) _ = fiendwarRewards.Create(false);
+        var lukeTimers = !preyReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }),
             rewardAbandoned: view => log.Write("anton_phase_progress", new { view.Instance, view.Phase, view.Revision,
                 State = view.State.ToString(), Reason = "reward-wait-expired-offline-unclaimed-abandoned" }),
@@ -450,7 +455,8 @@ internal static class ServerRuntime
             lukeStart = null;
         }
         // 原实例五分钟候选与835/668共用，不恢复进程重启前的活跃Battle。
-        var lukeRejoin = lukeStart is null ? null : new Game.Raids.LukeRaidRejoin(raidRegistry, parties, antonRejoin);
+        var lukeRejoin = lukeStart is null && raidCatalog.Find(2)?.Resources?.Fiendwar is null ? null :
+            new Game.Raids.LukeRaidRejoin(raidRegistry, parties, antonRejoin);
         var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
             raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
             ? new Game.Raids.LukeRaidDungeonService(raidRegistry, parties, runCatalog, runPolicy, raidCatalog.Find(1)?.Resources?.LukeObjects) : null;
@@ -460,7 +466,8 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled || preyReady ? lukeTimers : null, preyRewards), lukeStart, antonRejoin, parties, lukeRejoin, projection);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
+                raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards), lukeStart, antonRejoin, parties, lukeRejoin, projection);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -626,7 +633,7 @@ internal static class ServerRuntime
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
-                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection);
+                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
             var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
@@ -681,7 +688,7 @@ internal static class ServerRuntime
             new AdventureWeeklyHandler(adventureWeeklyProjection),
             new SkillHandler(learning, log, inventoryProjection),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
-            new TownHandler(projection, log, tagEvildomProjection),
+            new TownHandler(projection, log, tagEvildomProjection, fiendwarRun),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates, guildParameters.TeleportCost), projection, inventoryProjection, presence, log, guildTeleportHandler),
             guildTeleportHandler,
@@ -783,7 +790,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun, fiendwarRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),

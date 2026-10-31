@@ -22,6 +22,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
     internal void Notice(AntonRaidBattleView view, RaidActor actor)
     {
         Guid? run = view.PhaseExpired ? null : context.Session.CurrentRaidBattle(actor)?.LukeEnergyReturnRun(actor);
+        if (!view.PhaseExpired && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } currentRun &&
+            view.FiendwarExpiredRuns.Contains(currentRun)) run = currentRun;
         if (!view.PhaseExpired && run is null) return;
         lock (gate)
         {
@@ -53,7 +55,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
     async Task ExitAsync(ExitRequest request)
     {
         var (view, actor, run) = request;
-        string reason = run is null ? "phase" : "energy";
+        string reason = run is null ? "phase" : view.Fiendwar is not null ? "encounter" : "energy";
         int failures = 0;
         bool returnCommitted = false;
         AntonRaidBattle? originalBattle = null;
@@ -70,7 +72,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         gates = await DispatchGateScope.EnterAsync(context, stop.Token);
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
                             battle.Instance != view.Instance ||
-                            (run is { } runId ? !battle.RequiresLukeEnergyReturn(actor, runId) : !battle.View.PhaseExpired)) return;
+                            (run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||
+                                battle.Kind == RaidKind.Fiendwar && battle.View.FiendwarExpiredRuns.Contains(runId) &&
+                                context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) : !battle.View.PhaseExpired)) return;
                         originalBattle = battle;
                         prefix = battle.Kind.ToString().ToLowerInvariant();
                     }

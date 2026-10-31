@@ -5,6 +5,14 @@ namespace DfoServer.Persistence;
 // 108保持历史原文；109只追加类型列和有界两阶段生命周期，不重建既有领奖主键。
 internal static class RaidLifecycleSchema
 {
+    // 每账号只保存当前周两槽；删角不退还绑定名额。
+    internal const string FiendwarGuideBindings = """
+        CREATE TABLE account_fiendwar_guides(
+          account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
+          week INTEGER NOT NULL CHECK(week>0),character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+          PRIMARY KEY(account,slot),UNIQUE(account,character_id),
+          FOREIGN KEY(account) REFERENCES accounts(account_id));
+        """;
     internal const string TypeColumn = "raid_type INTEGER NOT NULL DEFAULT 0 CHECK(raid_type IN(0,1))";
     internal static string RewardDefinition => RaidRewardSchema.Definition.Split(';')[0]
         .Replace("    PRIMARY KEY(character_id,instance_id,phase,kind)", "    " + TypeColumn + ",\n    PRIMARY KEY(character_id,instance_id,phase,kind)", StringComparison.Ordinal);
@@ -30,6 +38,11 @@ internal static class RaidLifecycleSchema
     internal static string AntonDefinition => Definition.Replace("CHECK(raid_type=1)", "CHECK(raid_type IN(0,1))", StringComparison.Ordinal);
     internal static string PreyDefinition => AntonDefinition.Replace("IN(0,1)", "IN(0,1,3)", StringComparison.Ordinal);
     internal static string PreyRewardDefinition => RewardDefinition.Replace("CHECK(raid_type IN(0,1))", "CHECK(raid_type IN(0,1,3))", StringComparison.Ordinal);
+    internal const string TwoPhaseFinal = "state=2 AND clear_week IS NOT NULL AND clear_week>0 AND phase1_event IS NOT NULL";
+    internal const string FiendwarFinal = "state=2 AND clear_week IS NOT NULL AND clear_week>0 AND ((raid_type=2 AND phase0_event IS NOT NULL AND phase1_event IS NULL) OR (raid_type<>2 AND phase1_event IS NOT NULL))";
+    internal static string FiendwarDefinition => PreyDefinition.Replace("IN(0,1,3)", "IN(0,1,2,3)", StringComparison.Ordinal)
+        .Replace(TwoPhaseFinal, FiendwarFinal, StringComparison.Ordinal);
+    internal static string FiendwarRewardDefinition => PreyRewardDefinition.Replace("IN(0,1,3)", "IN(0,1,2,3)", StringComparison.Ordinal);
     internal const string PreyIndexes = "CREATE INDEX character_raid_account_admission ON character_raid_runs(account,raid_type,admitted_at);";
     internal const string Indexes = """
         CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,raid_type) WHERE state=0;

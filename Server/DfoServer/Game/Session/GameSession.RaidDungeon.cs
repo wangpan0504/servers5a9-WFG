@@ -12,11 +12,11 @@ internal sealed partial class GameSession
     // 只能由已提交开战的领域协调者调用；授权仍随原owner/选角epoch与原实例一起失效。
     public bool AuthorizeRaidDungeon(RaidDungeonAdmission admission) => owner.Execute(() =>
     {
-        if (admission.Kind is not (RaidKind.Anton or RaidKind.Prey) || !ReferenceEquals(admission.Actor.Session, this) || !ReferenceEquals(admission.Actor.Owner, owner) ||
+        if (admission.Kind is not (RaidKind.Anton or RaidKind.Prey or RaidKind.Fiendwar) || !ReferenceEquals(admission.Actor.Session, this) || !ReferenceEquals(admission.Actor.Owner, owner) ||
             !admission.Current || ChannelEntry?.Identity != admission.Actor.Channel || RaidTypes.FromChannelType(ChannelEntry.Type) != (byte)admission.Kind ||
             !Ready || !(Phase == SessionPhase.Town || admission.Kind == RaidKind.Luke && Phase == SessionPhase.MapSelect) || formalDungeon is not null ||
             admission.Catalog.Script.WaitingRoom is not { } room || Selected?.Position is not { } position ||
-            position.Town != room.Town || position.Area != room.Area) return false;
+            position.Town != room.Town || (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) != position.Area : position.Area != room.Area)) return false;
         raidDungeonAdmission = admission;
         return true;
     });
@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         RaidTypes.FromChannelType(ChannelEntry.Type) == (byte)admission.Kind && Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
         formalDungeon is null && pendingRental is null && !HasPendingTownQuestCommit &&
         admission.Catalog.Script.WaitingRoom is { } room && Selected?.Position is { } position &&
-        position.Town == room.Town && position.Area == room.Area);
+        position.Town == room.Town && (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) == position.Area : position.Area == room.Area));
 
     internal DungeonSelectionReceipt InstallRaidDungeonMenu(RaidDungeonAdmission admission) => InstallRaidSelection(admission, null);
 
@@ -51,7 +51,7 @@ internal sealed partial class GameSession
         Ready && Phase == SessionPhase.Loading && formalDungeon is { } run &&
         run.Entry.DungeonId == dungeon && run.Run.LastLoadingFact is null &&
         run.Entry.StartMap == run.Run.Snapshot.CurrentMap &&
-        run.Entry.RaidEntry is { Kind: RaidKind.Anton or RaidKind.Prey } identity &&
+        run.Entry.RaidEntry is { Kind: RaidKind.Anton or RaidKind.Prey or RaidKind.Fiendwar } identity &&
         StartedRaid?.InstanceId == identity.InstanceId && IsCurrentRaidDungeon(run.Entry) &&
         raidDungeonAdmission!.Allows(dungeon) ? FormalReceipt() : null);
 
@@ -98,7 +98,10 @@ internal sealed partial class GameSession
     {
         if (!HasRaidDungeonAdmission || Selected is not { } character ||
             raidDungeonAdmission!.Catalog.Script.WaitingRoom is not { } room ||
-            character.Position.Town != room.Town || character.Position.Area != room.Area ||
+            character.Position.Town != room.Town ||
+            (raidDungeonAdmission.Kind == RaidKind.Fiendwar
+                ? raidDungeonAdmission.Battle?.FiendwarPosition(character.Id) != character.Position.Area
+                : character.Position.Area != room.Area) ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true) return null;
         if (CurrentDungeonSelection is null)
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, character.Id, character.Position, character.Position);
@@ -142,8 +145,9 @@ internal sealed partial class GameSession
         entry = entry! with
         {
             RaidEntry = identity,
+            FiendwarScale = admission.FiendwarScale,
             LukeEnergyObject = energy,
-            CoinLimit = controlled && admission.Kind != RaidKind.Prey ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
+            CoinLimit = controlled && admission.Kind is not (RaidKind.Prey or RaidKind.Fiendwar) ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
             DisableMonsterAndClearExperience = controlled || entry!.DisableMonsterAndClearExperience,
             DisableClearReward = controlled || entry.DisableClearReward,
             DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,

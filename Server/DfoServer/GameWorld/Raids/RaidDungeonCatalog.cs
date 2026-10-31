@@ -17,7 +17,7 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     public ImmutableArray<int> MissingDungeons => Script.Phases.SelectMany(phase => phase.Dungeons).Select(row => row.Id)
         .Distinct().Where(id => !DungeonPaths.ContainsKey(id)).Order().ToImmutableArray();
     public bool Ready => Script.Issues.IsEmpty && MapsReady;
-    public bool MapsReady => Type is 0 or 1 or 3 && MissingMaps.IsEmpty &&
+    public bool MapsReady => Type is 0 or 1 or 2 or 3 && MissingMaps.IsEmpty &&
         Script.Phases.SelectMany(phase => phase.Dungeons).All(row => definitions.ContainsKey(row.Id));
     // 保留原列顺序，仅投影整数；业务层不得直接依赖PVF解析记录或推定列含义。
     public int[] LukeCardMapColumns(int group)
@@ -46,8 +46,8 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     internal static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, Func<int, string?> mapPath, byte type = 0,
         IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
-        if (type is not (0 or 1 or 3)) throw new InvalidDataException("未登记团本目录类型");
-        string prefix = type switch { 0 => "dungeon/anton/", 1 => "dungeon/luke/", _ => "dungeon/kcontents3/isysraid_guide/" };
+        if (type is not (0 or 1 or 2 or 3)) throw new InvalidDataException("未登记团本目录类型");
+        string prefix = type switch { 0 => "dungeon/anton/", 1 => "dungeon/luke/", 2 => "dungeon/fiendwar_kr/", _ => "dungeon/kcontents3/isysraid_guide/" };
         var maps = new Dictionary<int, string>();
         var missing = ImmutableArray.CreateBuilder<int>();
         foreach (int id in resources.Dungeons.SelectMany(row => row.MapIds).Concat(supplementalMaps?.Keys ?? []).Distinct().Order())

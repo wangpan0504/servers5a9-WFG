@@ -32,7 +32,10 @@ internal sealed partial class GameSession
     {
         receipt = owner.Execute(() => CommitTravel(Phase == SessionPhase.Town && Selected is not null
             ? TownTravel.Plan(Selected, request, towns, completed, ChannelEntry,
-                npcTownVisit is { } visit && visit.Epoch == SelectionEpoch ? visit.Visit : null)
+                npcTownVisit is { } visit && visit.Epoch == SelectionEpoch ? visit.Visit : null,
+                raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: false, Started: null },
+                raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: true, Started: null },
+                raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar })
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
@@ -62,9 +65,23 @@ internal sealed partial class GameSession
             TravelReason = "evildom-war-party-required";
             return null;
         }
+        var fiendwar = raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar } binding ? binding : null;
+        if (plan.Position is { Town: 57, Area: >= 2 } && fiendwar is null)
+        {
+            // 624先将已创建的团送到625候战，随后才发666；候战与开战后的战场资格不同。
+            var preparing = raidRegistry?.FindCurrent(this, SelectionEpoch);
+            if (ChannelEntry?.Type != 45 || preparing is not { Type: 2, Started: null } ||
+                plan.Position.Area != (preparing.Guide ? 33 : 2))
+            { TravelReason = "fiendwar-raid-or-battle-required"; return null; }
+        }
+        using var movement = fiendwar is not null && plan.Position is { Town: 57 } target
+            ? fiendwar.Battle.ReserveFiendwarMovement(fiendwar.Actor, target.Area) : null;
+        if (fiendwar is not null && movement is null)
+        { TravelReason = "fiendwar-area-unavailable"; return null; }
         var saved = SaveTownPosition(Selected!, plan.Position!, plan.Return);
         if (saved is null) { TravelReason = "guild-membership-required"; return null; }
         Selected = saved;
+        movement?.Install();
         // 保存成功后才替换来源；失败重试保留原票据，不提前消耗也不制造成功入场。
         npcTownVisit = plan.NpcVisit is { } visit ? (visit, SelectionEpoch) : null;
         InvalidateImageCommunication();

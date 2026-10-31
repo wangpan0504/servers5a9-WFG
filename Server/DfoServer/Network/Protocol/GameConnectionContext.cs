@@ -23,6 +23,10 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
     internal Guid AntonDungeonDisplayInstance { get; set; }
+    internal System.Collections.Immutable.ImmutableDictionary<ushort, int> FiendwarUsers { get; set; } = System.Collections.Immutable.ImmutableDictionary<ushort, int>.Empty;
+    internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
+    internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarMonsters { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
+    internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
     public int Id => connection.Id;

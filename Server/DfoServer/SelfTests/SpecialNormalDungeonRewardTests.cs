@@ -66,6 +66,8 @@ internal static class SpecialNormalDungeonRewardTests
         }
         try { VerifyLukeDailyDrops(false); VerifyLukeDailyDrops(true); }
         catch (Exception error) { errors.Add($"Luke daily drops: {error}"); }
+        try { VerifyAntonRoute(); }
+        catch (Exception error) { errors.Add($"Anton sequence: {error}"); }
         try { VerifyLukeDayBoundary(); }
         catch (Exception error) { errors.Add($"Luke day: {error}"); }
         try { VerifyPreyRoutes(); VerifyPreyPrerequisite(); }
@@ -121,6 +123,7 @@ internal static class SpecialNormalDungeonRewardTests
                 fixture.Session.Select(0,resumeTown:true);
                 fixture.Session.MarkReady();
             }
+            if (definition.IsOrdinaryAnton) SeedAntonPredecessors(fixture, id, QuestCycle.Day(DateTimeOffset.UtcNow));
             Play(fixture, id);
         }
 
@@ -303,7 +306,8 @@ internal static class SpecialNormalDungeonRewardTests
             beforeSettlement?.Invoke();
             var progressBefore = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
             var preyBefore = fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id);
-            if (definition.IsOrdinaryLuke || definition.IsOrdinaryPrey)
+            var antonBefore = fixture.Repository.LoadAntonNormalProgress(fixture.Owner,fixture.Read().Id);
+            if (definition.IsOrdinaryLuke || definition.IsOrdinaryPrey || definition.IsOrdinaryAnton)
             {
                 fixture.Sql("CREATE TRIGGER luke_progress_fail BEFORE INSERT ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'luke progress rollback'); END");
                 string before = JsonSerializer.Serialize(fixture.Read());
@@ -311,6 +315,7 @@ internal static class SpecialNormalDungeonRewardTests
                     "进度已规划但末段卡牌账本SQL失败");
                 That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressBefore &&
                     fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id) == preyBefore &&
+                    fixture.Repository.LoadAntonNormalProgress(fixture.Owner,fixture.Read().Id) == antonBefore &&
                     JsonSerializer.Serialize(fixture.Read()) == before, "晚失败回滚经验、进度与冻结牌，不提前安装内存");
                 fixture.Sql("DROP TRIGGER luke_progress_fail");
             }
@@ -323,6 +328,9 @@ internal static class SpecialNormalDungeonRewardTests
                     result.Options is { PaidDisabled: true, BlackDiamond: null }, "普通超时空180个材料、禁经验、无黄金牌和黑钻加牌");
             var progressAfter = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
             var preyAfter = fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id);
+            var antonAfter = fixture.Repository.LoadAntonNormalProgress(fixture.Owner,fixture.Read().Id);
+            if (definition.IsOrdinaryAnton)
+                That(antonAfter == antonBefore.Clear(entry!.Entry.AntonNormal!, (uint)id), "普通安徒恩进度与实际结算同事务提交");
             if (definition.IsOrdinaryPrey)
                 That(preyAfter == preyBefore.Clear(entry!.Entry.PreyNormal!, (uint)id),"普通普雷真实结算与日进度同事务提交");
             if (definition.IsOrdinaryLuke)
@@ -390,6 +398,74 @@ internal static class SpecialNormalDungeonRewardTests
                 That(fixture.Session.ReviveFormalCharacter(fixture.Read().Id) is null &&
                     JsonSerializer.Serialize(fixture.Read()) == saved,"活角色重复复活不扣币或占次数");
             }
+        }
+
+        // 单图奖励夹具显式准备前序；自然零进度六图链由VerifyAntonRoute独立验证。
+        void SeedAntonPredecessors(QuestSceneTests.Fixture fixture, int id, int day)
+        {
+            int branch = id is >= 9599 and <= 9602 ? id - 9598 : id is >= 9603 and <= 9606 ? id - 9602 : 1;
+            int index = dungeons.AntonNormalSequence.Routes[branch - 1].IndexOf(id);
+            fixture.Sql("INSERT INTO character_anton_normal_progress(character_id,account,day,branch,progress) SELECT id,account,$p0,$p1,$p2 FROM characters WHERE 1 " +
+                "ON CONFLICT(character_id) DO UPDATE SET day=excluded.day,branch=excluded.branch,progress=excluded.progress",
+                day, branch, index);
+        }
+
+        void VerifyAntonRoute()
+        {
+            var catalog = dungeons.AntonNormalSequence;
+            for (int branch = 1; branch <= 4; branch++)
+            {
+                var admission = new AntonNormalAdmission(20261025, branch, catalog);
+                var state = default(AntonNormalProgress);
+                foreach (int id in catalog.Routes[branch - 1])
+                {
+                    That(state.Allows(admission, (uint)id), "安徒恩四分支仅真实前序开放下一项");
+                    state = state.Clear(admission, (uint)id);
+                    if (state.Completed == 4)
+                        That(catalog.Routes[branch - 1].Take(4).All(previous => !state.Allows(admission, (uint)previous)) &&
+                            state.Allows(admission, (uint)catalog.Routes[branch - 1][4]),
+                            "能源结算后按资源关闭前三图及能源，保留当前火山入口");
+                }
+                That(state.Completed == 6 && state.Clear(admission, 9607) == state &&
+                    state.Clear(admission with { Day = 20261024 }, 9607) == state &&
+                    state.Information(20261026) == new AntonNormalSequenceInfo(0, 0, 1),
+                    "终点重复不增量、迟到旧日不覆盖、跨日从首图重新开放");
+                That(!state.Allows(admission with { Day = 20261024 }, 9595) &&
+                    !state.Allows(admission with { Branch = branch % 4 + 1 }, 9595), "拒绝回拨日与其他分支资格");
+            }
+            var (position, done) = Entrance(9595);
+            foreach (int id in catalog.Routes[0]) done.UnionWith(Entrance(id).Completed);
+            var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-25T12:00:00Z"));
+            using var fixture = new QuestSceneTests.Fixture(resources.Towns, resources.Characters, resources.Learning,
+                growth, resources.Quests, false, 95, done.ToArray(), position:position, timeProvider:clock, items:[(3341,256)]);
+            string initial = JsonSerializer.Serialize(fixture.Read());
+            That(fixture.Session.CaptureAntonNormalSequence()!.Info == new AntonNormalSequenceInfo(0,0,1), "新角色序列28只开放黑雾之源");
+            foreach (uint id in new uint[] {9596,9597,9599,9603,9607})
+                That(fixture.Session.EnterFormalDungeon(id,0,2,dungeons,rooms,monsters,items.Items,pieces:items.EpicPieces,
+                    prepareDrops:value => drops.PrepareEntry(value)) is null &&
+                    fixture.Session.LastFormalDungeonRejection == "anton-normal-progress-locked" && JsonSerializer.Serialize(fixture.Read()) == initial,
+                    "安徒恩跳图拒绝不消费材料、不扣疲劳或预留实例");
+            fixture.Sql("CREATE TRIGGER anton_admit_fail BEFORE UPDATE OF revision ON characters BEGIN SELECT RAISE(ABORT,'anton admission rollback'); END");
+            Reject<SqliteException>(() => fixture.Session.EnterFormalDungeon(9595,0,2,dungeons,rooms,monsters,items.Items,
+                pieces:items.EpicPieces,prepareDrops:value => drops.PrepareEntry(value)), "入场进度与费用事务晚失败");
+            That(fixture.Query("SELECT count(*) FROM character_anton_normal_progress") is 0L &&
+                JsonSerializer.Serialize(fixture.Read()) == initial, "首次准入失败不留下进度或费用");
+            fixture.Sql("DROP TRIGGER anton_admit_fail");
+            for (int index = 0; index < 6; index++)
+            {
+                Play(fixture,catalog.Routes[0][index]);
+                var receipt = fixture.Session.CaptureAntonNormalSequence()!;
+                That(receipt.Info == new AntonNormalSequenceInfo((byte)(index+1),(1u << (index+1))-1,1), "真实六图逐次提交并开放后继");
+                fixture.Session.ReturnToRoster(); fixture.Session.Select(0,resumeTown:true); fixture.Session.MarkReady();
+                That(!fixture.Session.CanPublishAntonNormalSequence(receipt) && fixture.Session.CaptureAntonNormalSequence()!.Info == receipt.Info,
+                    "重登读取持久进度并拒绝旧会话投影");
+            }
+            var old = fixture.Session.CaptureAntonNormalSequence()!;
+            clock.Advance(TimeSpan.FromDays(1));
+            That(!fixture.Session.CanPublishAntonNormalSequence(old) && fixture.Session.CaptureAntonNormalSequence()!.Info == new AntonNormalSequenceInfo(0,0,1),
+                "跨06:00废弃旧投影和上一日通关位");
+            That(fixture.Session.EnterFormalDungeon(9596,0,2,dungeons,rooms,monsters,items.Items,pieces:items.EpicPieces,
+                prepareDrops:value => drops.PrepareEntry(value)) is null,"次日不能借昨日完成跳过黑雾之源");
         }
 
         void VerifyPreyRoutes()
@@ -779,6 +855,7 @@ internal static class SpecialNormalDungeonRewardTests
                             "跳图拒绝且不扣费/疲劳、不改尝试号");
                     }
                 }
+                if (dungeons.Get(route[index]).IsOrdinaryAnton) SeedAntonPredecessors(fixture, route[index], QuestCycle.Day(clock.GetUtcNow()));
                 Play(fixture, route[index], (uint)questId);
                 if (questId == 2902)
                 {
@@ -799,6 +876,7 @@ internal static class SpecialNormalDungeonRewardTests
                 if (dailyClear && index == 0)
                 {
                     fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+                    if (dungeons.Get(route[index]).IsOrdinaryAnton) SeedAntonPredecessors(fixture, route[index], QuestCycle.Day(clock.GetUtcNow()));
                     Play(fixture,route[index], (uint)questId);
                     That(fixture.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == 4,
                         "重登后同日第二个真实实例仍不累计；下一轮只把账本日期设为前日来复核跨日资格");

@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Party;
 using DfoServer.Game.Session;
+using DfoServer.Game.Town;
 using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Game.Raids;
@@ -24,7 +25,10 @@ internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] Title
     public int StartMinimum { get; init; } = 1;
     public bool Guide { get; init; }
 }
-internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false);
+internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false)
+{
+    internal TownTravelReceipt? TownReturn { get; init; }
+}
 internal sealed record RaidWaiting(RaidActor Actor, byte Type);
 internal sealed record RaidInvitation(RaidActor Source, RaidActor Target, uint Raid, uint Peer, DateTimeOffset Expires);
 internal sealed record RaidJoinResult(bool Accepted, RaidInvitation? Invitation = null, RaidChange? Change = null);
@@ -123,7 +127,7 @@ internal sealed partial class RaidRegistry
 
     void PruneEmptyLukeLocked()
     {
-        foreach (var row in parties.Where(row => row.Value.Type == 1 && row.Value.Members.IsEmpty &&
+        foreach (var row in parties.Where(row => row.Value.Type is 1 or 2 && row.Value.Members.IsEmpty &&
             rejoin?.HasLukeParty(row.Key) != true).ToArray()) parties.Remove(row.Key);
     }
     public int Count { get { lock (gate) { PruneEmptyLukeLocked(); return parties.Count; } } }
@@ -198,7 +202,7 @@ internal sealed partial class RaidRegistry
     {
         lock (gate)
         {
-            if (!actor.CanManage || capacity is < 1 or > 255 || guide && (type != 3 || capacity != 1 || startMinimum != 1) || FindCore(actor) is not null ||
+            if (!actor.CanManage || capacity is < 1 or > 255 || guide && (type is not (2 or 3) || capacity != 1 || startMinimum != 1) || FindCore(actor) is not null ||
                 parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
             uint key = Allocate(actor.Channel);
             var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
@@ -288,7 +292,7 @@ internal sealed partial class RaidRegistry
     RaidChange RemoveCore(RaidParty old, RaidActor actor, bool kicked = false)
     {
         var members = old.Members.Where(m => !Same(m.Actor, actor)).ToImmutableArray();
-        bool keepLuke = old.Type == 1 && old.Started is not null && rejoin?.HasLukeParty(old.Key) == true;
+        bool keepLuke = old.Type is 1 or 2 && old.Started is not null && rejoin?.HasLukeParty(old.Key) == true;
         RaidParty? updated = members.IsEmpty && !keepLuke ? null : old with
         {
             Members = members,

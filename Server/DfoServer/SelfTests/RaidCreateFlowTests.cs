@@ -53,6 +53,9 @@ internal static class RaidCreateFlowTests
         RaidPreparationTests.RunCore();
         LukeRaidStartTests.RunCoreAsync().GetAwaiter().GetResult();
         AntonRaidResourceTests.RunCore();
+        FiendwarResourceTests.RunCore();
+        FiendwarPacketTests.RunCore();
+        FiendwarEncounterTests.RunCore();
         AntonRaidBattleTests.RunCore();
         LukeRaidResourceTests.RunCore();
 
@@ -102,6 +105,7 @@ internal static class RaidCreateFlowTests
         That(catalog.Find(3) is { MemberMax: 12, StartMinimum: 1, PhaseMax: 2 }, "普雷 12 人");
         That(catalog.Find(6) is null, "类型 6（魔界大战频道 0x36 默认值）无脚本");
         AntonRaidResourceTests.RunResources(pvf, catalog, items);
+        FiendwarResourceTests.RunResources(pvf, catalog, items);
         LukeRaidResourceTests.RunResources(pvf, catalog, items);
         Console.WriteLine($"PASS {Count - before} 团本 raid.lst 人数上限断言（真实 PVF）");
     }

@@ -177,7 +177,7 @@ internal sealed partial class GameSession
     {
         var completedChange = owner.Execute<AntonRaidBattleChange?>(() =>
         {
-            if (raidCombat is not { } raid || raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
+            if (raidCombat is not { } raid || raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
                 receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
                 receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
                 fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
@@ -204,7 +204,7 @@ internal sealed partial class GameSession
     // 纯生命周期writer在自身owner短读取之后执行，不在本分队owner/Battle/Party领域锁内扩锁或等待SQL。
     internal bool CommitPendingLukePhase(ILukeRaidLifecycleStore store)
     {
-        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke or RaidKind.Prey } raid ? raid.Battle : null);
+        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar } raid ? raid.Battle : null);
         if (battle?.PendingLukeSettlement() is not { } candidate) return false;
         var receipt = store.CommitLukePhase(candidate);
         _ = battle.AcceptLukeSettlement(candidate, receipt);
@@ -241,9 +241,9 @@ internal sealed partial class GameSession
                 return old is not null && (old.Prepared.Card == card || raid.Battle.MatchesAntonCardReplay(old.Prepared, card))
                     ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
-            var eligibility = raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey ? raid.Battle.LukeEligibility(character.Id, phase) :
+            var eligibility = raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar ? raid.Battle.LukeEligibility(character.Id, phase) :
                 raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(character.Id, phase) : null;
-            if ((raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
+            if ((raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
             var offer = raid.Battle.HasAntonRewards
                 ? raid.Battle.SelectAntonRewardCard(raid.Actor, phase, kind, card,
