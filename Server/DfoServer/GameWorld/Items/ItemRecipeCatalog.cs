@@ -9,6 +9,7 @@ internal sealed record ItemRecipeDefinition(int BlueprintItemId, bool CatalogDir
 {
     public string? MaintainAbility { get; init; }
     public bool MaintainSocketStat { get; init; }
+    public bool SetsDisjointInstanceType { get; init; }
     public int SuccessRate { get; init; }
     public ImmutableArray<ItemMaterialCost> FailureOutputs { get; init; } = [];
     public byte? MakingType { get; init; }
@@ -96,6 +97,7 @@ internal sealed class ItemRecipeCatalog
         // 旧chemistry/craftmanship目录也使用ID源制作请求；实体图仍可走槽位源。
         return new(file.TemplateId, file.SourceType is 0 or 2 or 5, Merge(file.Inputs), Merge(file.Outputs))
         { MaintainAbility = file.MaintainAbility, MaintainSocketStat = file.MaintainSocketStat,
+            SetsDisjointInstanceType = file.SetsDisjointInstanceType,
             SuccessRate = file.SuccessRate, FailureOutputs = Merge(file.FailureOutputs), MakingType = type, MakingLevel = checked((byte)file.MakingLevel),
             Skills = file.Skills.Select(row => new ItemMaterialCost(row.ItemId, row.Count)).ToImmutableArray() };
     }

@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -127,7 +128,7 @@ internal static class RecipeCraftTcpTests
         }
         fixture.Sql("DROP TRIGGER recipe_abort");
         await fixture.StopAsync();
-        await fixture.StartAsync();
+        await fixture.StartAsync("recipe-restart");
         using (var peer = Open(fixture))
         {
             peer.Select(ordinary.Slot);
@@ -142,6 +143,7 @@ internal static class RecipeCraftTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "设计图及制作熟练度数据库完整");
         await RunProbabilityAndCustomAsync(fixture, repository, resources);
+        await RunDisjointRecipesAsync(fixture, repository, resources);
 
         string Snapshot() => fixture.Snapshot() + JsonSerializer.Serialize(fixture.Query("SELECT * FROM item_making_skill_info ORDER BY charac_no")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
@@ -211,6 +213,86 @@ internal static class RecipeCraftTcpTests
                     "四张图使用对应概率表，原位原UID重铸并完整保留其他字段");
             }
         }
+    }
+
+    static async Task RunDisjointRecipesAsync(TcpTestFixture fixture, CharacterRepository repository, TcpTestResources resources)
+    {
+        var items = resources.ItemResources;
+        var actors = new List<(Character Actor, int Recipe, InventoryItem Source)>();
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        foreach (int id in Enumerable.Range(10311664, 6))
+        {
+            var definition = items.ItemRecipes.Get(id);
+            That(definition is { SetsDisjointInstanceType: true, Outputs.Length: 1 } &&
+                items.Items.Get(definition.Outputs[0].ItemId).Kind == ItemKind.Equipment,
+                "六个实际设计图均保存根级实例声明和唯一装备产物 " + id);
+            var actor = repository.Create(owner, CharacterCreation.Prepare("Restricted" + (id - 10311664), resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with { Level = 95 });
+            var rewards = new[] { new InventoryReward(id, 1) }.Concat(definition!.Inputs.Where(row => row.ItemId != 0)
+                .Select(row => new InventoryReward(row.ItemId, row.Count))).ToArray();
+            var grant = InventoryRewardGrantService.TryGrantBatch(actor, rewards, items.Items, items.GoldLimits, items.EpicPieces);
+            That(grant.Accepted, "实际声明的源与完整成本可准备，不以商店need material代替制作费 " + id);
+            actor = repository.CommitInventory(owner, actor, new(actor.Inventory, grant.Plan!.After with
+                { Gold = checked((uint)definition.Inputs.Where(row => row.ItemId == 0).Sum(row => row.Count)) }, "restricted_recipe_setup"));
+            actors.Add((actor, id, actor.Inventory.Items.Single(item => item.Core.ItemId == id)));
+        }
+        foreach (var entry in actors)
+        {
+            if (entry.Recipe == 10311664)
+            {
+                using var peer = Open(fixture);
+                peer.Select(entry.Actor.Slot); peer.Barrier();
+                string before = Snapshot();
+                fixture.Sql("CREATE TRIGGER fail_restricted_recipe BEFORE INSERT ON inventory_audit_log " +
+                    "WHEN NEW.action_name='recipe_craft' BEGIN SELECT RAISE(ABORT,'restricted recipe rollback'); END");
+                Send(peer, (uint)entry.Source.Position.Index, 0, 1); peer.Closed();
+                That(Snapshot() == before, "制作晚SQL失败同时回滚源、材料、实例限制、UID、revision及审计");
+                fixture.Sql("DROP TRIGGER fail_restricted_recipe");
+            }
+            using var client = Open(fixture);
+            client.Select(entry.Actor.Slot); client.Barrier();
+            string unchanged = Snapshot();
+            Send(client, (uint)entry.Source.Position.Index, 0, 1);
+            if (entry.Recipe == 10311665)
+            {
+                client.Expect(1, 25, [0, 19, 0]); client.Barrier();
+                That(Snapshot() == unchanged && items.ItemRecipes.Get(entry.Recipe) is { MaintainAbility: "normal" } recipe &&
+                    items.Items.Get(recipe.Inputs[0].ItemId).Kind == ItemKind.Material,
+                    "10311665首项材料却声明保留装备属性，原未闭合资格继续拒绝且完整保留，不猜测删除声明");
+                continue;
+            }
+            var reply = Decode(client.Expect(1, 25).Body); client.Barrier();
+            var current = Read(entry.Actor.Slot);
+            var output = current.Inventory.Items.Single(item => item.Core.ItemId == items.ItemRecipes.Get(entry.Recipe)!.Outputs[0].ItemId);
+            var expected = InventoryRewardGrantService.Create(items.Items.Get(output.Core.ItemId)) with { DisjointForbidden = true };
+            That(reply.Success == 1 && reply.Products is [{ }] && reply.Products[0].Id == output.Core.ItemId && output.Uid > 0 &&
+                output.Uid != entry.Source.Uid && output.Core == expected &&
+                !current.Inventory.Items.Any(item => item.Core.ItemId == entry.Recipe) && current.Inventory.Gold == 0,
+                "实际CMD25完整落库新装备及分解限制，只扣真实源和成本，毁装限制不凭空新增 " + entry.Recipe);
+            string committed = Snapshot();
+            client.Send(26, Build(writer =>
+                { writer.Write(output.Position.Index); writer.Write((byte)0); writer.Write((short)-1); writer.Write(0); }));
+            client.Expect(1, 26, [0, 19, 0]); client.Expect(0, 14); client.Barrier();
+            That(Snapshot() == committed, "实际制作装备经CMD26拒绝分解，且不消费产物或额外费用 " + entry.Recipe);
+        }
+        var inventories = actors.ToDictionary(entry => entry.Actor.Slot, entry => JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory));
+        await fixture.StopAsync();
+        await fixture.StartAsync("restricted-recipes-restart");
+        foreach (var entry in actors)
+        {
+            using var peer = Open(fixture);
+            peer.Select(entry.Actor.Slot); peer.Barrier();
+            That(JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory) == inventories[entry.Actor.Slot],
+                "服务重启和重登恢复完整实例/UID及未闭合图的原材料 " + entry.Recipe);
+        }
+        Character Read(ushort slot)
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repository.LoadCharacter(owner, slot);
+        }
+        string Snapshot() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
 
     static void Send(TcpPeer peer, uint source, byte mode, ushort count) => peer.Send(25,

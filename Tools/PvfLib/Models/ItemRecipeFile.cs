@@ -11,6 +11,7 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
     public ImmutableArray<ItemRecipeEntry> BeadInputs { get; init; } = [];
     public ImmutableArray<ItemRecipeEntry> FailureOutputs { get; init; } = [];
     public string? CustomUpgradeType { get; init; }
+    public bool SetsDisjointInstanceType { get; init; }
 
     public static ItemRecipeFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -56,6 +57,16 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
             sockets = socket.Values.IsEmpty;
             if (!sockets) errors.Add("配方孔位保留声明无效");
         }
+        bool disjoint = false;
+        if (Field("set disjoint instance type") is { } restriction)
+        {
+            disjoint = restriction.Values.IsEmpty && !restriction.IsBlock;
+            if (!disjoint) errors.Add("配方分解实例限制声明必须为根级空标记");
+        }
+        bool NestedRestriction(ImmutableArray<PvfTokenSection> children) => children.Any(child =>
+            child.Name == "set disjoint instance type" || NestedRestriction(child.Children));
+        if (document.Sections.Any(section => NestedRestriction(section.Children)))
+            errors.Add("配方分解实例限制声明不能嵌套");
         int chance = 0;
         if (Field("success rate") is { } rate)
         {
@@ -107,6 +118,6 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
             else errors.Add("配方强化表声明无效");
         }
         return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable())
-        { BeadInputs = beadInputs, FailureOutputs = failures, CustomUpgradeType = custom };
+        { BeadInputs = beadInputs, FailureOutputs = failures, CustomUpgradeType = custom, SetsDisjointInstanceType = disjoint };
     }
 }

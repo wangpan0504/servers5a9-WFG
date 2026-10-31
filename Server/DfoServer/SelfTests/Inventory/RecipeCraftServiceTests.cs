@@ -107,6 +107,77 @@ internal static class RecipeCraftServiceTests
         That(made.Accepted && newItem.Uid == 0 && newItem.Position.Index == 9 && newItem.Core.Attr == 4 &&
             made.Plan.After.Gold == 9800 && made.Plan.After.ItemMakingSkills.Points[2] == 1 &&
             madeReceipt!.MakingGain == new ItemMakingSkillGain(2, 0, 1), "纯材料配方新建装备，按输入扣金币并原子累计对应熟练度");
+        string[] restrictedRecipeStrings = ["[stackable type]", "[recipe]", "[input item]", "[/input item]",
+            "[output item]", "[/output item]", "[set disjoint instance type]"];
+        PvfLib.PvfToken[] restrictedTokens = [new(3, 0), new(6, 1), new(0, 1),
+            new(3, 2), new(0, Cube), new(0, 10), new(0, Cloth), new(0, 2), new(0, 0), new(0, 200), new(3, 3),
+            new(3, 4), new(0, Output), new(0, 1), new(3, 5), new(3, 6)];
+        var restrictedDefinition = ItemRecipeCatalog.Parse(PvfLib.ItemRecipeFile.Parse(Ordinary, "stackable/restricted.stk",
+            restrictedTokens, index => restrictedRecipeStrings[index]))! with { MakingType = 2, MakingLevel = 1 };
+        var restrictedService = new InventoryRecipeCraftService(new([restrictedDefinition]), catalog,
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making, random: _ => 0);
+        string restrictedBefore = System.Text.Json.JsonSerializer.Serialize(pure);
+        var restrictedMade = restrictedService.Craft(pure, 65, 0, 1, out var restrictedReceipt);
+        That(restrictedMade.Accepted && restrictedMade.Plan!.After.Items.Single(item => item.Core.ItemId == Output).Core ==
+            newItem.Core with { DisjointForbidden = true } && restrictedReceipt!.Products.SequenceEqual(madeReceipt!.Products) &&
+            System.Text.Json.JsonSerializer.Serialize(pure) == restrictedBefore,
+            "设计图根级分解声明沿实际制作保存为实例限制，完整其他属性、产物与输入快照保持");
+        That(!newItem.Core.DisjointForbidden && !newItem.Core.DestructionSoulForbidden,
+            "同模板普通设计图产物不推断分解或毁装限制");
+        var sentinel = new InventoryItem(99, new(InventoryListType.Main, 10), newItem.Core);
+        var withSentinel = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.Add(sentinel) } };
+        var separate = restrictedService.Craft(withSentinel, 65, 0, 1, out _);
+        That(separate.Accepted && separate.Plan!.After.Find(sentinel.Position) == sentinel &&
+            separate.Plan.After.Items.Single(item => item.Uid == 0).Core.DisjointForbidden,
+            "只给本次新产物打标，既有同模板哨兵不被补标");
+        var batchBlueprint = pure.Inventory.Find(BlueprintSlot)!;
+        var batchActor = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.Replace(batchBlueprint,
+            batchBlueprint with { Core = batchBlueprint.Core with { Value = 2 } }) } };
+        string batchBefore = System.Text.Json.JsonSerializer.Serialize(batchActor);
+        That(restrictedService.Craft(batchActor, 65, 0, 2, out _).Error == 23 &&
+            System.Text.Json.JsonSerializer.Serialize(batchActor) == batchBefore,
+            "装备产物继续遵守原批量限制，拒绝不扣源或材料");
+        var materialDefinition = restrictedDefinition with { BlueprintItemId = Npc, CatalogDirect = true,
+            Inputs = [new(Cloth, 1), new(0, 200)], Outputs = [new(Cube, 1)], MakingType = null, MakingLevel = 0 };
+        var materialService = new InventoryRecipeCraftService(new([materialDefinition]), catalog,
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making, random: _ => 0);
+        var materialsMade = materialService.Craft(pure, Npc, 1, 3, out var materialsReceipt);
+        That(materialsMade.Accepted && materialsReceipt!.Products is [{ ItemId: Cube, Count: 3 }] &&
+            materialsMade.Plan!.After.Find(CubeSlot)!.Core == pure.Inventory.Find(CubeSlot)!.Core with { Value = 253 } &&
+            materialsMade.Plan.After.Gold == 9400 && materialsMade.Plan.After.Find(ClothSlot)!.Core.Count == 57 &&
+            materialsMade.Plan.After.Items.All(item => !item.Core.DisjointForbidden && !item.Core.DestructionSoulForbidden),
+            "非装备批量制造保留材料合堆、数量和费用，不向材料传播装备实例限制");
+        var keepDefinition = restrictedDefinition with { BlueprintItemId = Blueprint, MakingType = null, MakingLevel = 0,
+            Inputs = [new(Target, 1), new(Cube, 100), new(Cloth, 20)], MaintainAbility = "normal", SuccessRate = 1000,
+            FailureOutputs = [new(Target, 1), new(Cloth, 1)] };
+        InventoryRecipeCraftService KeepService(bool success, bool declared = true) => new(
+            new([keepDefinition with { SetsDisjointInstanceType = declared }]), catalog,
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making,
+            random: _ => success ? 0 : 9999);
+        foreach (bool inherited in new[] { false, true })
+        {
+            var originalTarget = character.Inventory.Find(TargetSlot)!;
+            var markedTarget = originalTarget with { Core = originalTarget.Core with
+                { DisjointForbidden = inherited, DestructionSoulForbidden = inherited } };
+            var actor = character with { Inventory = character.Inventory with
+                { Items = character.Inventory.Items.Replace(originalTarget, markedTarget) } };
+            string unchanged = System.Text.Json.JsonSerializer.Serialize(actor);
+            var kept = KeepService(true).Craft(actor, 65, 0, 1, out _);
+            var expectedCore = markedTarget.Core with { ItemId = Output, EmblemSocketCount = 0, Emblem1 = 0, Emblem2 = 0,
+                SealFlag = 1, DisjointForbidden = true };
+            That(kept.Accepted && kept.Plan!.After.Find(TargetSlot) == markedTarget with { Core = expectedCore },
+                "保留属性型成功制作保留UID及完整核心、旧毁装限制，仅新增声明的分解限制");
+            var failed = KeepService(false).Craft(actor, 65, 0, 1, out var restrictedFailureReceipt);
+            That(failed.Accepted && restrictedFailureReceipt is { Success: false } && failed.Plan!.After.Find(TargetSlot) == markedTarget &&
+                System.Text.Json.JsonSerializer.Serialize(actor) == unchanged,
+                "失败返原件不施加成功产物限制，也不丢失原有实例限制或修改输入");
+            var ordinaryKeep = KeepService(true, declared: false).Craft(actor, 65, 0, 1, out _);
+            That(ordinaryKeep.Accepted && ordinaryKeep.Plan!.After.Find(TargetSlot)!.Core ==
+                expectedCore with { DisjointForbidden = inherited }, "无声明的属性保留图沿用原实例限制，不主动解除或补标");
+        }
         var sealedInventory = made.Plan.After with { Items = made.Plan.After.Items.Select(item => item.Uid == 0 ? item with { Uid = 1000 } : item).ToImmutableArray() };
         byte[] sealedAck = CompoundPackets.Result(made with { Receipt = new(pure with { Inventory = sealedInventory }, 1, 1) }, madeReceipt);
         That(newItem.Core.SealFlag == 1 && sealedAck[4 + 7 * madeReceipt!.Consumed.Length + 14] == 1,

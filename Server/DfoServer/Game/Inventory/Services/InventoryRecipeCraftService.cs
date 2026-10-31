@@ -188,6 +188,13 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
             after = grant.Plan!.After;
         }
         else after = failedGrant.Plan!.After;
+        if (success && definition.SetsDisjointInstanceType)
+        {
+            // 只限制成功制作的装备；失败返原件和未参与制作的既有同模板装备不补标。
+            after = after with { Items = after.Items.Select(item => item.Core.Kind == ItemKind.Equipment &&
+                consumedPlan.AfterIndex.Find(item.Position) is null
+                ? item with { Core = item.Core with { DisjointForbidden = true } } : item).ToImmutableArray() };
+        }
         var productPlan = new InventoryPlan(paid, after, "recipe_outputs");
         var products = ImmutableArray.CreateBuilder<RecipeProducedItem>();
         foreach (var position in productPlan.ChangedSlots)
