@@ -179,9 +179,9 @@ internal static partial class AntonRaidGapTcpTests
         That(leaderReport.Reward && memberReport.Reward, "双腿成功时两人均收到 587 Reward/0");
         foreach (int dungeon in new[] { 218, 219, 220, 221, 222, 223, 224 })
             AntonTcpProbe.RejectClosed(leader, member, dungeon);
-        That(leaderReport.Opcode596 == 0 && leaderReport.Opcode597 == 0 && leaderReport.Opcode601 == 0 &&
-            memberReport.Opcode596 == 0 && memberReport.Opcode597 == 0 && memberReport.Opcode601 == 0,
-            "双人完整阶段 0 不发 596/597/601");
+        That(leaderReport.Opcode596 > 0 && leaderReport.Opcode597 > 0 && leaderReport.Opcode601 == 1 &&
+            memberReport.Opcode596 > 0 && memberReport.Opcode597 > 0 && memberReport.Opcode601 == 1,
+            "双人阶段0均发布一次601");
         That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
             "双人开战各扣一张，进图和清 210 不再扣");
         string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs ORDER BY character_id");

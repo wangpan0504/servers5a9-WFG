@@ -8,13 +8,13 @@ internal sealed partial class AntonRaidBattle
     LukeRaidClocks.Lease? lukeClockLease;
     bool lukeClockActive;
 
-    // 仅准备已激活的正数显示值；不发送596，也不代表客户端RESET/早退清理已实现。
+    // 仅准备当前实例/阶段/代的正数剩余值；网络层分别按Luke与Anton消费者编码。
     internal uint? LukeRuleTimerSeconds(Guid instance, int phase, RaidTimer timer, long generation)
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || instance != Instance || phase != current.Phase || generation <= 0 ||
-                timer.Kind is not (1 or 2) || timer.DungeonId <= 0 ||
+            if ((Kind != RaidKind.Luke && !HasAntonRewards) || instance != Instance || phase != current.Phase || generation <= 0 ||
+                (timer.Kind is not (1 or 2) && !(HasAntonRewards && timer.Kind == 3)) || timer.DungeonId <= 0 ||
                 !script.Phases.Any(row => row.Dungeons.Any(dungeon => dungeon.Id == timer.DungeonId)) ||
                 !lukeClockActive || lukeClockLease is not { IsStopped: false } || members.Count == 0 ||
                 current.ClockFaulted || current.PhaseExpired || pendingTransition is not null || TerminalRequested(current) ||
@@ -66,12 +66,14 @@ internal sealed partial class AntonRaidBattle
     void ScheduleLukeClockLocked()
     {
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
-        if (members.Count == 0 || current.State == AntonRaidBattleState.Completed)
+        if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
         { lease.Dispose(); return; }
         if (lease.RetryRemaining is { } retryDelay && (PendingLukeSettlement() is not null || PendingAntonSettlement() is not null))
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
+        if (AntonRewardWaitRemainingLocked() is { } rewardWait)
+        { lease.Schedule(AntonMovieRemainingLocked() is { } movie && movie < rewardWait ? movie : rewardWait); return; }
         if (AntonWaitRemainingLocked() is { } wait)
         { lease.Schedule(wait); return; }
         if (pendingTransition is not null || TerminalRequested(current))
@@ -99,8 +101,17 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!ReferenceEquals(lukeClockLease, lease) || lease.IsStopped || !lukeClockActive || members.Count == 0 ||
+            if (!ReferenceEquals(lukeClockLease, lease) || lease.IsStopped || !lukeClockActive ||
+                members.Count == 0 && AntonRewardWaitRemainingLocked() is null ||
                 pendingTransition is not null) return false;
+            if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Reward)
+            {
+                if (AntonRewardWaitRemainingLocked() is { } remaining && remaining <= TimeSpan.Zero)
+                    return ExpireAntonRewardWaitLocked();
+                if (AntonMovieRemainingLocked() == TimeSpan.Zero)
+                { current = current with { AntonCardsReady = true, Revision = current.Revision + 1 }; return true; }
+                return false;
+            }
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
             if (TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。

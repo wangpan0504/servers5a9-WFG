@@ -11,7 +11,7 @@ internal sealed record RaidCombatDisplayIdentity(Game.Session.GameSession Sessio
         new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing);
 }
 
-internal static class RaidCombatProjection
+internal static partial class RaidCombatProjection
 {
     public static void Notice(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor)
     {
@@ -51,6 +51,7 @@ internal static class RaidCombatProjection
             "raid_dungeon_snapshot", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
             RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
+        PostAntonTimers(context, battle, view, Guard);
     }
 
     internal static void Selection(GameConnectionContext context, Func<bool> current)
@@ -59,6 +60,8 @@ internal static class RaidCombatProjection
         var view = map.Battle.View;
         PostAntonSnapshot(context, map.Battle, view, () => current() &&
             context.Session.StartedRaid?.InstanceId == view.Instance && context.Session.CanPublishRaidBattle(map.Actor, view));
+        if (view.State == AntonRaidBattleState.Fighting && map.Battle.HasAntonRewards)
+            PostState(context, view, map.Actor, () => current() && context.Session.CanPublishRaidBattle(map.Actor, view), "anton_selection_phase_state");
     }
 
     internal static void PostState(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor,
@@ -71,7 +74,7 @@ internal static class RaidCombatProjection
             bool Show() => current() && context.RaidDisplay != identity;
             // 587同state/phase仍会重新安装原生动画；601只判断，587成功写帧才确认。
             // 两包在本人owner内连续入队，无网络等待；仅使用Post，不用于QueuePublished的提前guard。
-            // UNIMPLEMENTED：Anton正式策略缺601业务展示列；不能借普通69/70/71或Luke结果补阶段窗口。
+            // 601使用资格提交后冻结的真实阶段统计。
             if (view.State == AntonRaidBattleState.Reward && context.Session.RaidCombatResult(view) is { } result)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result), "raid_phase_result", Show);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidCombatPackets.State(view), action, Show, () =>
@@ -79,6 +82,18 @@ internal static class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (view.State == AntonRaidBattleState.Reward && view.AntonCardsReady &&
+                context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } rewardBattle &&
+                rewardBattle.RewardPolicy(actor, view.Phase) is { } policy &&
+                rewardBattle.AntonEligibility(actor.Character, view.Phase) is { Eligible: true })
+            {
+                bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity;
+                // 023A7220不读包体；599仅切换演出。沿同一FIFO先599再两类600。
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "anton_movie_skip", Cards);
+                foreach (var offer in policy.Offers)
+                    context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
+                        RaidCombatPackets.Reward(offer.Kind, offer.Display), "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
+            }
             if (view.State == AntonRaidBattleState.Intermission &&
                 context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
             {
@@ -99,7 +114,7 @@ internal static class RaidCombatProjection
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
                     RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
             if (view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
-                context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind == RaidKind.Luke || view.Phase == 1))
+                context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind == RaidKind.Luke || battle.HasAntonRewards))
             {
                 if (battle.Kind == RaidKind.Anton)
                     context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,

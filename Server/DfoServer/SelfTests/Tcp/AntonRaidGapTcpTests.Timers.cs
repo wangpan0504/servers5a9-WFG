@@ -63,9 +63,9 @@ internal static partial class AntonRaidGapTcpTests
             clock.Advance(2399 - advanced);
             var before = AntonTcpProbe.Barrier(peer, "总deadline前一秒");
             That(before.All(packet => packet.Opcode != 24), "2400前不得退场");
-            foreach (var packet in before.Where(packet => packet.Opcode is 596 or 597))
+            foreach (var packet in before.Where(packet => packet.Opcode == 597 || packet is { Opcode: 596, Body: [0, ..] }))
             {
-                That(phase == 1, "P1不新增阶段计时投影");
+                That(phase is 0 or 1, "两阶段均按原deadline补发头时钟");
                 if (packet.Opcode == 597) Bytes(packet.Body, [0,1,0,0,0], "P2到期前槽0仍剩1秒");
                 else That(packet.Body.Length == 13 && packet.Body[0] == 0 &&
                     U32(packet.Body, 1) == 0 && U32(packet.Body, 9) == 1,
@@ -79,8 +79,11 @@ internal static partial class AntonRaidGapTcpTests
                 var packet = peer.Read(); frames.Add(packet);
                 if (packet is { Kind: 0, Opcode: 24 }) break;
             }
-            That(frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) && frames.All(packet => packet.Opcode is not (587 or 596 or 597 or 600 or 601)),
-                "本服2400秒总超时自动沿已有退场回城，不猜失败587、计时或奖励包");
+            That(frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) && frames.All(packet => packet.Opcode is not (587 or 597 or 600 or 601)) &&
+                frames.Where(packet => packet.Opcode == 596).All(packet => packet.Body.Length == 13 &&
+                    packet.Body[0] is >= 1 and <= 3 && U32(packet.Body, 9) == 1 &&
+                    U32(packet.Body, 5) < DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+                "本服2400秒总超时沿原退场回城，仅允许按图已过期596清除，不猜失败587或奖励包");
             AntonTcpProbe.Barrier(peer, "超时退场完成");
             string prefix = phase == 0 ? "phase0" : "phase1";
             That(fixture.Query($"SELECT r.state,json_extract(r.{prefix}_receipt,'$.Eligible'),json_extract(r.{prefix}_receipt,'$.Reason'),r.clear_week FROM character_raid_runs r JOIN characters c ON c.id=r.character_id WHERE c.account=$p0", account)

@@ -102,7 +102,7 @@ internal static partial class AntonRaidTcpTests
         }
         // 两个连接先并发投递再读取；同连接流水线重复请求与成员越权不能重建实例或重复扣费。
         leader.Send(666); members[1].Send(666); leader.Send(666);
-        for (int i = 0; i < 2; i++) Bytes(ReadUntil(leader, 1, 666).Body, [1], "并发流水线重复666确认同一次开战");
+        for (int i = 0; i < 2; i++) Bytes(ReadUntil(leader, 1, 666).Body, [0, 19, 0], "战斗中重复666明确拒绝且不重开");
         Bytes(ReadUntil(members[1], 1, 666).Body, [0, 8, 0], "开战后并发成员请求仍不能取得团长权限");
         That(fixture.Snapshot() == committed && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == committedInventory,
             "普通分队回应、重复开战和越权请求不重复扣费或迁移");

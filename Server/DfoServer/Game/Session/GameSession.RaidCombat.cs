@@ -106,9 +106,21 @@ internal sealed partial class GameSession
         raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } raid && StartedRaid?.InstanceId == raid.Battle.Instance
             ? (raid.Actor, raid.Battle) : null);
 
+    internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View)? AntonRaidTimerSnapshot() =>
+        owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView)?>(() =>
+            Ready && raidCombat is { Actor.IsCurrent: true, Battle.HasAntonRewards: true } raid
+                ? (raid.Actor, raid.Battle, raid.Battle.View) : null);
+
     public RaidResultDisplay? RaidCombatResult(AntonRaidBattleView view) => owner.Execute(() =>
-        raidCombat is { } raid && raid.Actor.IsCurrent && raid.Battle.IsCurrent(view)
-            ? raid.Battle.RewardPolicy(raid.Actor, view.Phase) is { PublishResult: true } policy ? policy.Result : null : null);
+    {
+        if (raidCombat is not { } raid || !raid.Actor.IsCurrent || !raid.Battle.IsCurrent(view) ||
+            raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } policy) return null;
+        if (!raid.Battle.HasAntonRewards) return policy.Result;
+        if (raid.Battle.AntonResult(view.Phase) is not { } result ||
+            raid.Battle.AntonEligibility(raid.Actor.Character, view.Phase) is not { } eligibility) return null;
+        // 86合格成员option0，无资格option1；95按是否零消费，不以显示资格替代存储屏障。
+        return result with { RawFlag = eligibility.Eligible ? (byte)0 : (byte)1 };
+    });
 
     public bool CanPublishRaidBattle(RaidActor actor, AntonRaidBattleView view) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent && raid.Battle.IsCurrent(view));

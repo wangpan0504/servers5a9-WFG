@@ -5,7 +5,7 @@ internal sealed record LukeRaidClockPolicy(string Source);
 
 // Runtime拥有，Anton复用同一有界所有者与退出回收；每实例至多一个停用/活跃timer和一个同步到期操作，不创建无界后台Task。
 internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore store, Action<string, Exception> report,
-    int capacity = 64) : IAsyncDisposable
+    int capacity = 64, Action<AntonRaidBattleView>? rewardAbandoned = null) : IAsyncDisposable
 {
     readonly object gate = new();
     readonly Dictionary<Guid, Lease> leases = [];
@@ -100,6 +100,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             {
                 if (IsStopped) return;
                 bool changed;
+                bool waitingForReward = Battle.Kind == RaidKind.Anton && Battle.HasAntonRewards &&
+                    Battle.View.State == AntonRaidBattleState.Reward;
                 try { changed = Battle.ExpireDueLukeClock(this); }
                 catch (Exception error)
                 {
@@ -135,6 +137,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                     { Battle.FaultLukeClock(this); Report("anton-settlement-fault", error); Dispose(); return; }
                 }
                 failures = 0;
+                if (changed && waitingForReward && Battle.View.State != AntonRaidBattleState.Reward)
+                    owner.NotifyRewardAbandoned(Battle.View);
                 // 接管/慢连接失败只影响该接收者，不重放SQL，不把已提交奖励倒退为失败。
                 if (!IsStopped && changed) Battle.Publish(Battle.View, error => Report("recipient", error));
             }
@@ -161,4 +165,6 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             await timer.DisposeAsync();
         }
     }
+
+    void NotifyRewardAbandoned(AntonRaidBattleView view) => rewardAbandoned?.Invoke(view);
 }

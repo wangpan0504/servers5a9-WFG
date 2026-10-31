@@ -72,10 +72,16 @@ internal static partial class AntonRaidGapTcpTests
         AssertHp(210, 0);
         AntonTcpProbe.RejectClosed(peer, null, 210);
         AssertState(report, 211, 1); AssertState(report, 216, 2);
+        Timer(2, 211, 300); Timer(1, 212, 300); Timer(1, 214, 300);
+        That(report.Timers.Any(body => body.Length == 13 && body[0] == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == 2400), "阶段0发送2400秒596");
         clock.Advance(19);
         AntonTcpProbe.RejectClosed(peer, null, 216);
         clock.Advance(1);
-        State(AntonTcpProbe.Barrier(peer, "本服秒制reserve216到期"), 216, 0);
+        var opened216 = AntonTcpProbe.Barrier(peer, "本服秒制reserve216到期");
+        State(opened216, 216, 0);
+        foreach (var packet in opened216.Where(p => p.Opcode == 596)) report.Timers.Add(packet.Body);
+        Timer(1, 216, 360); Timer(3, 216, 120);
         // 先清212/214，避免其SET1在300秒同时触发脚本的黑雾重置，覆盖211开放。
         foreach (int dungeon in new[] { 212, 214 })
         {
@@ -88,6 +94,16 @@ internal static partial class AntonRaidGapTcpTests
         }
         AntonTcpProbe.Enter(peer, catalog, 216, report, clear: true);
         AssertState(report, 216, 1);
+        Timer(2, 211, 280);
+        That(report.Timers.Any(body => body.Length == 13 && body[0] == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == 216 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(5)) < DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            "舰炮完成按原key清除攻略条；黑雾补发280秒而非重启300秒");
+        var meteor = report.Timers.Last(body => body.Length == 13 && body[0] == 3 &&
+            BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == 216);
+        That(BinaryPrimitives.ReadUInt32LittleEndian(meteor.AsSpan(9)) == 120,
+            "PVF舰炮clear只RESET1/216，不擅自删除3/216陨石计时");
         clock.Advance(149); AntonTcpProbe.RejectClosed(peer, null, 216);
         clock.Advance(1); State(AntonTcpProbe.Barrier(peer, "216重开150秒"), 216, 0);
         clock.Advance(129); AntonTcpProbe.RejectClosed(peer, null, 211);
@@ -124,9 +140,9 @@ internal static partial class AntonRaidGapTcpTests
         string afterFirst = Assets();
         Claim(1, 0, false);
         That(afterFirst == Assets() && fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "同牌回放不重复发放");
-        clock.Advance(600);
-        That(AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED奖励期休息600").All(p => p.Opcode is not (587 or 596 or 597)) &&
-            afterFirst == Assets(), "UNIMPLEMENTED：600不替代缺少的第二牌种，不自动推进Reward或发奖");
+        clock.Advance(19);
+        That(AntonTcpProbe.Barrier(peer, "结算等待截止前").All(p => p.Opcode is not (587 or 596 or 597)) &&
+            afterFirst == Assets(), "结算19秒仍允许主动领取，不提前放弃");
         // !220：回城不是领取；复用既有72退场，未完成kind仍须在候战室正式660提交。
         peer.Send(72, [1, 0]);
         var returning = AntonTcpProbe.Barrier(peer, "86重试准入失败后EPLP回候战室");
@@ -208,6 +224,15 @@ internal static partial class AntonRaidGapTcpTests
                 BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1 + index * 8)) == symbol &&
                 BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(5 + index * 8)) == expected) == 1,
                 $"583图{id}符号{symbol}剩余HP={expected}");
+        }
+
+        void Timer(byte kind, int dungeon, uint seconds)
+        {
+            That(report.Timers.Any(body => body.Length == 13 && body[0] == kind &&
+                BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == dungeon &&
+                BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == seconds &&
+                BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(5)) >= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + seconds - 2),
+                $"596类型{kind}地图{dungeon}剩余{seconds}及绝对截止");
         }
 
         string Assets() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +

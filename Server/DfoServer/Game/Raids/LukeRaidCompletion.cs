@@ -90,8 +90,14 @@ internal sealed partial class AntonRaidBattle
 
     internal static bool SameLukeOffers(ImmutableArray<RaidRewardOffer> left, ImmutableArray<RaidRewardOffer> right) =>
         !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
-            pair.First.Kind == pair.Second.Kind && pair.First.Card == pair.Second.Card && pair.First.Display.IsEmpty && pair.Second.Display.IsEmpty &&
+            pair.First.Kind == pair.Second.Kind && pair.First.Card == pair.Second.Card && SameRewardDisplay(pair.First.Display, pair.Second.Display) &&
             pair.First.Grants.SequenceEqual(pair.Second.Grants) && pair.First.LukeResult == pair.Second.LukeResult);
+    // Anton正式600含嵌套不可变数组；持久JSON往返后须比内容，不能要求空表或数组引用相同。
+    static bool SameRewardDisplay(ImmutableArray<RaidRewardDisplayRow> left, ImmutableArray<RaidRewardDisplayRow> right) =>
+        !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
+            pair.First.RawOwner == pair.Second.RawOwner && pair.First.Card == pair.Second.Card &&
+            !pair.First.Items.IsDefault && !pair.Second.Items.IsDefault && pair.First.Items.SequenceEqual(pair.Second.Items));
+
     static bool SameLukeEligibility(RaidPhaseEligibility left, RaidPhaseEligibility right) =>
         left.Instance == right.Instance && left.RaidType == right.RaidType && left.Phase == right.Phase && left.Event == right.Event &&
         left.Anchor == right.Anchor && left.Character == right.Character && left.CountsAsClear == right.CountsAsClear &&
@@ -112,8 +118,9 @@ internal sealed partial class AntonRaidBattle
             return lukePhaseCommits.TryGetValue(phase, out var committed) && committed.Members.Where(row => row.Eligible)
                 .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
         if (Kind == RaidKind.Anton && antonRewards is not null)
-            return antonPhaseCommits.TryGetValue(phase, out var antonCommitted) && antonCommitted.Where(row => row.Eligible)
-                .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
+            return antonPhaseCommits.TryGetValue(phase, out var antonCommitted) &&
+                (antonRewardsAbandoned && antonRewardPhase == phase || antonCommitted.Where(row => row.Eligible)
+                    .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind)))));
         return members.All(member => member.Value[phase].Offers.Select(offer => offer.Kind).Distinct()
             .All(kind => rewards.Contains((member.Key.Character, phase, kind))));
     }

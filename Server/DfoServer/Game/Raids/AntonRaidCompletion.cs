@@ -38,6 +38,7 @@ internal sealed partial class AntonRaidBattle
         public ImmutableArray<(ushort Character, string Account, RaidPhaseRewardPolicy Policy)> Members { get; }
         private AntonPhaseSettlement(AntonRaidBattle battle, int phase)
         {
+            battle.FreezeAntonResultLocked();
             Instance = battle.Instance; Phase = phase; Anchor = battle.lukeClock.GetUtcNow();
             TimedOut = battle.pendingTransition!.PhaseExpired;
             Week = battle.rewardWeek ?? Game.Dungeons.DungeonIncountPolicy.Period(Anchor).Week;
@@ -80,6 +81,7 @@ internal sealed partial class AntonRaidBattle
             if (pendingTransition is not { } pending) throw new InvalidOperationException("安徒恩阶段候选已丢失");
             current = pending with { Revision = current.Revision + 1 };
             pendingTransition = null;
+            AnchorAntonRewardWaitLocked();
             ScheduleLukeClockLocked();
         }
     }
