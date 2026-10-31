@@ -133,8 +133,8 @@ internal static partial class AntonRaidMapEntryTcpTests
             }
             That(sessions[0].PartyDungeon == sessions[1].PartyDungeon && scene.Entry.RaidEntry ==
                 new RaidDungeonIdentity(sessions[0].StartedRaid!.InstanceId, 0, 1) && scene.Entry.DisableClearReward &&
-                scene.Entry.DisableMonsterAndClearExperience && scene.Entry.CoinLimit == 0,
-                "实际Run绑定原Battle/阶段/分队且不授予普通经济与复活");
+                scene.Entry.DisableMonsterAndClearExperience && scene.Entry.CoinLimit == 0 && scene.Entry.AllowsCompanionAi,
+                "实际Run绑定原Battle/阶段/分队且不授予普通经济与复活，保留GM同伴资源准入");
             string loadingCommitted = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
             var loadingInstance = sessions[0].PartyDungeon;
             // 现场25B请求末字段FFFFFFFF；覆盖连续两轮15/16重试及拒绝后的合法请求。

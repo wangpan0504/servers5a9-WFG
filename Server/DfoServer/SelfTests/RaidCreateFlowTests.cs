@@ -71,7 +71,8 @@ internal static class RaidCreateFlowTests
         That(fiend is { MemberMax: 8, StartMinimum: 1, PhaseMax: 1 }, "超时空之战脚本用 FIENDWAR 标签，区内 [MEMBER MAX] 不混入");
         That(RaidCatalog.Parse(0, "x", [], id => strings[id]) is null, "缺人数标签的类型不可创建");
         That(RaidRequests.Search(new byte[17]) is { Offset: 0, RaidType: 0, Name: "" }, "攻坚搜索接受已证空名称筛选");
-        foreach (byte[] invalid in new byte[][] { [], [1], new byte[16], new byte[18] })
+        That(RaidRequests.Search([1]) is { Closed: true }, "攻坚搜索接受mode1单字节关闭");
+        foreach (byte[] invalid in new byte[][] { [], [2], [1, 0], new byte[16], new byte[18] })
             Reject<InvalidDataException>(() => RaidRequests.Search(invalid), "攻坚搜索拒绝截断、未知mode与多余正文");
         var defaults = new RaidCatalog(new[] { new RaidDefinition(0, "anton", 20, 10, 2),
             new RaidDefinition(1, "luke", 8, 1, 2), new RaidDefinition(2, "fiend", 8, 1, 1),
