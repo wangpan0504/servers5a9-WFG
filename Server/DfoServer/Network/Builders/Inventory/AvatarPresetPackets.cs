@@ -3,8 +3,8 @@ using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Network.Builders.Inventory;
 
-// 0x063D 整表：capacity:u8 + count:u8 + 记录；0x063F 单条：同一条记录。
-// 客户端按记录条数绘制预设格子（capacity 只界定可点范围），所以整表按 0..capacity-1 补齐：
+// 0x063D 整表：activeSlot:u8 + count:u8 + 记录；0x063F 单条：同一条记录。
+// 客户端按首字段恢复已应用槽与当前浏览槽，按记录条数绘制格子，所以整表按 0..capacity-1 补齐：
 // 已保存槽发真实记录，空槽发空名、零部位占位；占位只在投影层合成，永不落库。
 // 记录 = slot:u8 + nameLength:u32 + name:CP936 + partCount:u8 + 部位；
 // 部位记录与客户端读取顺序一致：partSlot:u8, itemId:u32, clearAvatarId:u32(0客户端归一成-1), color1:u16, color2:u16, 5×(type:u16, emblemId:i32)。
@@ -15,7 +15,7 @@ internal static class AvatarPresetPackets
         state.Validate();
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
-        writer.Write(state.Capacity);
+        writer.Write(state.ActiveSlot ?? (byte)0);
         writer.Write(state.Capacity);
         for (byte slot = 0; slot < state.Capacity; slot++)
         {

@@ -49,8 +49,12 @@ internal static class AvatarPresetTcpTests
             role = repository.Create(owner, new("PresetTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Job = 3, Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(3).Skills,
-                Inventory = new([worn, spare, InventoryRewardGrantService.CreateItem(coupon!.Item,
+                // 补满105格装扮包裹，真实TCP换装必须走原子互换，不能要求额外空格。
+                Inventory = new([worn, spare, .. Enumerable.Range(1, 104).Select(index =>
+                    InventoryRewardGrantService.CreateItem(legs, new(InventoryListType.Avatar, (short)index),
+                        InventoryRewardGrantService.Create(legs))), InventoryRewardGrantService.CreateItem(coupon!.Item,
                     new(InventoryListType.Main, (short)CouponSlot), InventoryRewardGrantService.Create(coupon.Item, 2))])
+                    { AvatarExpansion = 0 }
             });
         long wornUid = role.Inventory.Find(new(InventoryListType.Equipment, 3))!.Uid;
         long spareUid = role.Inventory.Find(new(InventoryListType.Avatar, 0))!.Uid;
@@ -60,7 +64,7 @@ internal static class AvatarPresetTcpTests
         {
             peer.Select();
             var initial = Parse(peer.AvatarPresetList);
-            That(initial is { Capacity: 1 } && initial.Rows.Length == 1 &&
+            That(initial is { Capacity: 1, ActiveSlot: 0 } && initial.Rows.Length == 1 &&
                 initial.Rows[0] is { Slot: 0, Name: "" } && initial.Rows[0].Parts.Length == 1 &&
                 initial.Rows[0].Parts[0] is { Slot: 3, Clear: 0, Color1: 3, Color2: 7 } &&
                 initial.Rows[0].Parts[0].ItemId == (uint)legs.Id && initial.Rows[0].Parts[0].Emblems.All(id => id is -1 or 0),
@@ -69,14 +73,14 @@ internal static class AvatarPresetTcpTests
 
             peer.Send(Rename, NameBody(0, "预设一"));
             var renamedFirst = Parse(peer.Expect(0, List).Body);
-            That(renamedFirst is { Capacity: 1 } && renamedFirst.Rows.Length == 1 &&
+            That(renamedFirst is { Capacity: 1, ActiveSlot: 0 } && renamedFirst.Rows.Length == 1 &&
                 renamedFirst.Rows[0] is { Slot: 0, Name: "预设一" } && renamedFirst.Rows[0].Parts.Length == 1 &&
                 renamedFirst.Rows[0].Parts[0].ItemId == (uint)legs.Id,
                 "已有1号橱窗改名回放整表：客户端靠整表重绘行文字，部位保留当前穿戴");
 
             peer.Send(Rename, NameBody(0, "改名"));
             var renamed = Parse(peer.Expect(0, List).Body);
-            That(renamed is { Capacity: 1 } && renamed.Rows.Length == 1 &&
+            That(renamed is { Capacity: 1, ActiveSlot: 0 } && renamed.Rows.Length == 1 &&
                 renamed.Rows[0] is { Slot: 0, Name: "改名" } && renamed.Rows[0].Parts.Length == 1 &&
                 renamed.Rows[0].Parts[0].ItemId == (uint)legs.Id, "重复改名仍回整表，部位不变");
 
@@ -91,7 +95,7 @@ internal static class AvatarPresetTcpTests
             peer.Send(515, UseBody(CouponSlot));
             peer.Expect(1, 515, AckBody(CouponSlot));
             var expanded = Parse(peer.Expect(0, List).Body);
-            That(expanded is { Capacity: 2 } && expanded.Rows.Length == 2 && expanded.Rows[0].Name == "改名" &&
+            That(expanded is { Capacity: 2, ActiveSlot: 0 } && expanded.Rows.Length == 2 && expanded.Rows[0].Name == "改名" &&
                 expanded.Rows[1] is { Slot: 1, Name: "", Parts.Length: 0 },
                 "扩展券成功ACK后回放容量2、原预设与第二格空占位，不改变预设内容");
             peer.Send(515, UseBody(CouponSlot));
@@ -101,13 +105,13 @@ internal static class AvatarPresetTcpTests
 
             peer.Send(Rename, NameBody(1, "第二格"));
             var created = Parse(peer.Expect(0, List).Body);
-            That(created is { Capacity: 2 } && created.Rows.Length == 2 && created.Rows[0].Name == "改名" &&
+            That(created is { Capacity: 2, ActiveSlot: 0 } && created.Rows.Length == 2 && created.Rows[0].Name == "改名" &&
                 created.Rows[1] is { Slot: 1, Name: "第二格" } && created.Rows[1].Parts.Length == 1 &&
                 created.Rows[1].Parts[0].ItemId == (uint)legs.Id,
                 "容量升到2后第二格可创建，整表回放让新行名字立刻可见");
             peer.Send(Exchange, [0, 1]);
             var swapped = Parse(peer.Expect(0, List).Body);
-            That(swapped.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
+            That(swapped.ActiveSlot == 1 && swapped.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
                 swapped.Rows.Single(row => row.Slot == 1).Name == "改名",
                 "0x063B交换两个已占用槽的内容，槽位身份不变");
             peer.Barrier();
@@ -115,6 +119,9 @@ internal static class AvatarPresetTcpTests
             // 交换后当前橱窗跟着内容走到1号；先选回0号橱窗，后面的换装才实时落在0号，
             // 1号保留旧快照，才能构造“选择预设按UID换回原实例”的场景。选中不改穿戴时没有库存差量。
             peer.Send(Select, [0]);
+            var sameItems = Parse(peer.Expect(0, List).Body);
+            That(sameItems is { ActiveSlot: 0, Capacity: 2 } && sameItems.Rows[0].Name == "第二格",
+                "相同装扮跨槽应用仍回整表，同步当前槽、名称、高亮与应用按钮");
             peer.Barrier();
             That(fixture.Query("SELECT json_extract(avatar_preset_state,'$.ActiveSlot') FROM characters") is [[0L]],
                 "交换后重新选中0号橱窗即时生效，不改动当前穿戴");
@@ -142,35 +149,34 @@ internal static class AvatarPresetTcpTests
 
             peer.Send(Select, [1]);
             var avatarDelta = peer.Expect(0, 14).Body;
-            That(avatarDelta[0] == 1 && U16(avatarDelta, 1) == 2 &&
-                U16(avatarDelta, 3) == 0 && U32(avatarDelta, 5) == uint.MaxValue &&
-                U16(avatarDelta, 3 + 165) == 1 && U32(avatarDelta, 5 + 165) == (uint)legs.Id,
-                "选择预设先回放装扮栏差量：当前时装离开背包、预设实例腾出的空格保留清空条目");
+            That(avatarDelta[0] == 1 && U16(avatarDelta, 1) == 1 &&
+                U16(avatarDelta, 3) == 0 && U32(avatarDelta, 5) == (uint)legs.Id,
+                "满包选择预设直接互换，装扮栏只回放原槽最终实例，不制造额外空格");
             var equipmentDelta = peer.Expect(0, 14).Body;
             That(equipmentDelta[0] == 3 && U16(equipmentDelta, 1) == 1 && U16(equipmentDelta, 3) == 3 &&
                 U32(equipmentDelta, 5) == (uint)legs.Id, "装备栏差量把预设引用的实例穿回槽位0");
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "选择预设后按Actor再Player刷新外观");
-            // 客户端应用按钮不刷新本地预览；整表回放触发纸娃娃按新穿戴重建（当前行被客户端拉回槽0）。
+            // 整表首字段同步已应用槽与浏览槽，预览按当前穿戴显示，不得越界回槽0。
             var applied = Parse(peer.Expect(0, List).Body);
-            That(applied is { Capacity: 2 } && applied.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
+            That(applied is { Capacity: 2, ActiveSlot: 1 } && applied.Rows.Single(row => row.Slot == 0).Name == "第二格" &&
                 applied.Rows.Single(row => row.Slot == 1).Name == "改名",
                 "选择预设换装后回放整表：客户端重建纸娃娃，两侧名字保持落库值");
             peer.Barrier();
             That(fixture.Query("SELECT s.item_uid FROM character_inventory_slots s WHERE s.list_type=3 AND s.slot_index=3") is [[var wornNow]] &&
                 Convert.ToInt64(wornNow) == wornUid &&
-                fixture.Query("SELECT s.item_uid FROM character_inventory_slots s WHERE s.list_type=1 AND s.slot_index=1") is [[var spareNow]] &&
+                fixture.Query("SELECT s.item_uid FROM character_inventory_slots s WHERE s.list_type=1 AND s.slot_index=0") is [[var spareNow]] &&
                 Convert.ToInt64(spareNow) == spareUid,
                 "选择预设按UID换回原实例，不重建同模板外观");
 
             // 已选中橱窗后的换装要实时回写，玩家不需要再点保存/应用。
             peer.Send(19, Build(writer =>
             {
-                writer.Write((byte)1); writer.Write((short)1); writer.Write(legs.Id); writer.Write(1);
+                writer.Write((byte)1); writer.Write((short)0); writer.Write(legs.Id); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3); writer.Write(legs.Id); writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
             }));
             peer.Expect(1, 19, Build(writer =>
             {
-                writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)1); writer.Write(1);
+                writer.Write((byte)1); writer.Write((byte)1); writer.Write((short)0); writer.Write(1);
                 writer.Write((byte)3); writer.Write((short)3);
             }));
             peer.Expect(0, 1681);
@@ -187,11 +193,14 @@ internal static class AvatarPresetTcpTests
                     "json_each(avatar_preset_state,'$.Presets') WHERE json_extract(value,'$.Slot')=1") is [[var savedUid]] &&
                 Convert.ToInt64(savedUid) == spareUid, "已选橱窗后换装实时回写该槽的部位UID");
 
+            peer.Send(Rename, NameBody(1, "改名"));
+            That(Parse(peer.Expect(0, List).Body) is { ActiveSlot: 1, Capacity: 2 },
+                "已应用第二格时改名整表保持当前槽1，不跳回第一格");
             clock.Advance(TimeSpan.FromSeconds(6));
             peer.Send(515, UseBody(CouponSlot));
             peer.Expect(1, 515, AckBody(CouponSlot));
             var third = Parse(peer.Expect(0, List).Body);
-            That(third is { Capacity: 3 } && third.Rows.Length == 3 &&
+            That(third is { Capacity: 3, ActiveSlot: 1 } && third.Rows.Length == 3 &&
                 third.Rows[2] is { Slot: 2, Name: "", Parts.Length: 0 }, "冷却结束后第二张扩展券把容量升到3并补第三格空占位");
 
             string settled = State();
@@ -220,7 +229,7 @@ internal static class AvatarPresetTcpTests
         {
             peer.Select();
             var restored = Parse(peer.AvatarPresetList);
-            That(restored is { Capacity: 3 } && restored.Rows.Length == 3 &&
+            That(restored is { Capacity: 3, ActiveSlot: 1 } && restored.Rows.Length == 3 &&
                 restored.Rows[0].Name == "第二格" && restored.Rows[1].Name == "改名" &&
                 restored.Rows[1].Parts.Length == 1 && restored.Rows[1].Parts[0].ItemId == (uint)legs.Id &&
                 restored.Rows[2] is { Slot: 2, Name: "", Parts.Length: 0 },
@@ -256,10 +265,10 @@ internal static class AvatarPresetTcpTests
 
     static PresetRow ParseRecord(byte[] body) => Parse([0, 1, .. body]).Rows[0];
 
-    // 0x063D：容量u8、条数u8、逐条记录；记录与0x063F同构，名称是u32字节数 + CP936原始字节（无结尾NUL）。
+    // 0x063D：已应用槽u8、条数u8、逐条记录；条数决定容量，记录与0x063F同构。
     static PresetTable Parse(byte[] body)
     {
-        byte capacity = body[0];
+        byte activeSlot = body[0];
         int count = body[1], at = 2;
         var rows = new PresetRow[count];
         for (int index = 0; index < count; index++)
@@ -285,10 +294,13 @@ internal static class AvatarPresetTcpTests
             rows[index] = new PresetRow(slot, name, list);
         }
         That(at == body.Length, "装扮预设回放包长度与条目数一致");
-        return new(capacity, rows);
+        return new(activeSlot, rows);
     }
 
-    readonly record struct PresetTable(byte Capacity, PresetRow[] Rows);
+    readonly record struct PresetTable(byte ActiveSlot, PresetRow[] Rows)
+    {
+        public int Capacity => Rows.Length;
+    }
     readonly record struct PresetRow(byte Slot, string Name, PartRow[] Parts);
     readonly record struct PartRow(byte Slot, uint ItemId, uint Clear, ushort Color1, ushort Color2, int[] Emblems);
 }

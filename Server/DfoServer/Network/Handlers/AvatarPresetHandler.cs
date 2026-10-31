@@ -52,8 +52,7 @@ internal sealed class AvatarPresetHandler(AvatarPresetService presets, AvatarPre
             result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
         // 0x063F只覆盖客户端缓存、不重绘行文字，只发单条会让列表停在旧名字；改名与新建必须回整表，
-        // 六行名字才会立刻跟随落库结果。整表会把客户端当前行与名称框重置为槽0（规则见SelectAsync），
-        // 名称框因此显示1号橱窗的名字，与第一行内容一致。
+        // 六行名字才会立刻跟随落库结果；首字段让当前行与名称框回到已应用橱窗。
         await projection.ListAsync(context, receipt, created ? "avatar_preset_created" : "avatar_preset_renamed");
         return CommandResult.Handled;
     }
@@ -88,14 +87,9 @@ internal sealed class AvatarPresetHandler(AvatarPresetService presets, AvatarPre
             Revision = result.Receipt?.Character.Revision });
         if (result.Receipt is not { } receipt) return CommandResult.Handled;
         await inventory.RefreshAsync(context, result);
-        // 客户端的应用按钮只发0x063A、自身不刷新装扮栏预览，纸娃娃只在整表回放触发的行刷新里
-        // 按当前穿戴重建（FUN_028563F0 -> FUN_02854D10）；缺这一帧时左边人物停在旧外观，
-        // 玩家必须再点一行才更新。穿戴确有变化才回整表；整表解析器FUN_008407B0会把当前行设成
-        // 容量值并投递UI消息0x18(capacity)，行号越界时FUN_0083e940返回槽0，因此选中行与名称框
-        // 会被拉回1号橱窗，这是客户端固定行为；纸娃娃仍按刚穿上的当前穿戴重建。
-        if (result.Plan is { } plan && plan.ChangedSlots.Any(slot =>
-                slot.List is InventoryListType.Avatar or InventoryListType.Equipment))
-            await projection.ListAsync(context, receipt, "avatar_preset_selected");
+        // 应用按钮只发0x063A。整表首字段同步已应用槽与浏览槽，并重置预览/按钮/名称；
+        // 即使两套使用完全相同的装扮，也必须回放新的当前槽，不能仅凭库存差量决定是否发包。
+        await projection.ListAsync(context, receipt, "avatar_preset_selected");
         return CommandResult.Handled;
     }
 
