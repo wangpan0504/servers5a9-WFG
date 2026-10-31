@@ -15,7 +15,7 @@ internal static class ClearAvatarTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         ClearAvatarTests.RunResources(resources.Characters, resources.ItemResources.Items);
-        ClearAvatarTests.RunAllSourceTemplates(resources.Archive, resources.ItemResources.Items);
+        var weaponTemplates = ClearAvatarTests.RunAllSourceTemplates(resources.Archive, resources.ItemResources.Items);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "clear-avatar"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         int originalCoat = resources.Characters.Get(0).DefaultAvatarEquipment[3];
@@ -25,15 +25,13 @@ internal static class ClearAvatarTcpTests
             ("ClearAura", 9, 113590006, 101590068, 0),
             ("ClearAwaken", 3, 101500878, 0, 0x11),
             ("ClearSecond", 3, 101500878, 0, 0x21) };
-        if (!resources.ItemResources.Items.ContainsEquipment(401600057))
-            TestCheck.Skip("clear-avatar.weapon-template-missing", "空武器装扮TCP：指定模板401600057未在equipment.lst登记；槽10真实TCP未执行，核心合成规则不替代该覆盖");
+        var weaponTemplate = ClearAvatarTests.SelectEmptyWeaponTemplate(weaponTemplates);
+        if (weaponTemplate is null)
+            TestCheck.Skip("clear-avatar.weapon-template-missing", "空武器装扮TCP：真实名册中没有适配职业0、95级、无所需技能的槽10克隆模板；槽10真实TCP未执行，核心合成规则不替代该覆盖");
         else
         {
-            var weapon = resources.ItemResources.Items.Get(401600057);
-            if (weapon is { CloneAvatar: true, BorrowAvatarAppearance: true, EquipmentSlot: 10 })
-                cases.Add(("ClearWeapon", 10, 401600057, 0, 0));
-            else
-                TestCheck.Skip("clear-avatar.weapon-shape-mismatch", $"空武器装扮TCP：指定模板401600057不满足夹具字段 CloneAvatar={weapon.CloneAvatar}, BorrowAvatarAppearance={weapon.BorrowAvatarAppearance}, EquipmentSlot={weapon.EquipmentSlot}；槽10真实TCP未执行");
+            cases.Add(("ClearWeapon", 10, weaponTemplate.Id, 0, 0));
+            Console.WriteLine($"Clear weapon TCP fixture: template={weaponTemplate.Id}, slot=10, job=0, level=95, minimumLevel={weaponTemplate.MinimumLevel}, jobs={weaponTemplate.Jobs}, requiredSkill={weaponTemplate.RequiredSkill}");
         }
         var roles = new List<Character>();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -51,6 +49,18 @@ internal static class ClearAvatarTcpTests
                 }
                 roles.Add(repository.Create(owner, new(row.Name, resources.Towns.Room, resources.Towns.InitialReturn)
                     { Level = 95, GrowType = row.Grow, AcceptedStoryLevel = 1, Inventory = new([.. items]) }));
+                if (row.Slot == 10)
+                {
+                    var role = roles[^1];
+                    var clone = role.Inventory.Find(new(InventoryListType.Avatar, 0))!;
+                    That(role.Job == 0 && role.Level == 95 && role.GrowType == 0 &&
+                        role.Inventory.Skins.Selected == 0 && role.Inventory.AccountSkins.Selected == 0 &&
+                        clone.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 } &&
+                        role.Inventory.Find(new(InventoryListType.Equipment, 10)) is null &&
+                        role.Inventory.Find(new(InventoryListType.Equipment, 12)) is not null &&
+                        InventoryMoveService.Allows(role, new(InventoryListType.Equipment, 10), clone.Core, resources.ItemResources.Items),
+                        "真实候选可供原角色穿戴，初始克隆无外观来源、武器装扮槽为空且普通武器独立存在");
+                }
             }
         await fixture.StartAsync();
         for (int index = 0; index < cases.Count; index++)

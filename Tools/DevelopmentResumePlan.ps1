@@ -4,7 +4,7 @@ function Get-DevelopmentGroupCatalog([string]$Repository) {
     $path = Join-Path $Repository 'Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs'
     $text = [IO.File]::ReadAllText($path)
     # 整个已审核入口文件钉住指纹，含条件编译/多声明/注释变化均拒绝，不猜C#语义。
-    if ((Get-ResultDigest $text.Replace("`r`n","`n")) -cne 'f864c3b76dd6984b08c65dbabbc5159a120c5ac1d1649041fd3fc4c9a067ecac') { throw '注册入口文件已变化，须重新审核；请使用原CLI完整入口。' }
+    if ((Get-ResultDigest $text.Replace("`r`n","`n")) -cne '3685318fc146e178c2a2f418d089014e21a4cc2846f8d61843981ca017f8d041') { throw '注册入口文件已变化，须重新审核；请使用原CLI完整入口。' }
     $groups = [regex]::Match($text, '(?s)\bGroups\s*=\s*\[(.*?)\n\s*\];')
     $targeted = [regex]::Match($text, '(?s)\bTargetedOnly\s*=\s*new\(StringComparer.Ordinal\)\s*\{(.*?)\};')
     if (-not $groups.Success -or -not $targeted.Success) { throw '当前注册表声明形状未知。' }
