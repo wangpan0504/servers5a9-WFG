@@ -16,13 +16,7 @@ internal static class InventoryRewardGrantService
         bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null,
         byte? echonGrade = null, Func<int, int>? echonDraw = null, int? quality = null)
     {
-        if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
-            throw new InvalidDataException("无效发放数量");
-        if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
-            throw new InvalidDataException("无效装备创建属性");
-        // quality 是实例品级种子（999999893+pct / 999999998），只有普通装备有；其它类型带了就拒绝，不静默丢弃。
-        if (quality is not null && template.Kind != ItemKind.Equipment)
-            throw new InvalidDataException("无效装备创建属性");
+        ValidateCreationArguments(template, count, upgrade, refinement, quality);
         var core = new ItemCore(template.Id, template.Kind, template.Kind switch
         {
             ItemKind.Avatar or ItemKind.Creature => 0,
@@ -52,6 +46,26 @@ internal static class InventoryRewardGrantService
             ? TalismanSocketPolicy.Generate(talismanColorDraw).Apply(core) : core;
     }
 
+    internal static void ValidateCreationArguments(ItemTemplate template, int count = 1, byte upgrade = 0, byte refinement = 0, int? quality = null)
+    {
+        if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
+            throw new InvalidDataException("无效发放数量");
+        if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
+            throw new InvalidDataException("无效装备创建属性");
+        // quality 是实例品级种子（999999893+pct / 999999998），只有普通装备有；其它类型带了就拒绝，不静默丢弃。
+        if (quality is not null && template.Kind != ItemKind.Equipment)
+            throw new InvalidDataException("无效装备创建属性");
+    }
+
+    // 数量是整笔发放量；统一放置器可拆堆并逐件创建装备，不把总量误当单个Core.Count。
+    internal static ushort? GrantDefinitionError(ItemTemplate template, InventoryReward reward, bool createsInstance = true)
+    {
+        if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127) return 1;
+        if (createsInstance && (template.IsPremiumService || !template.Expiration.SupportsCreation)) return 19;
+        if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0)) return 1;
+        if (createsInstance && template.Echon is not null && reward.CustomAbilityGrade is < 0 or > 3) return 19;
+        return null;
+    }
     public static InventorySnapshot CreateStarter(CharacterProfile profile) => new(
         profile.Equipment.Select(item => CreateItem(item.Template, new(InventoryListType.Equipment, item.Slot), Create(item.Template))).ToImmutableArray());
 
@@ -147,13 +161,9 @@ internal static class InventoryRewardGrantService
                 wallet = acquired.Plan!.After;
                 continue;
             }
-            if (instances is null && (template.IsPremiumService || !template.Expiration.SupportsCreation))
-                return InventoryResult.Reject(19);
-            if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
-                return InventoryResult.Reject();
             InventoryItem? incomingInstance = instances?[rewardIndex];
-            if (incomingInstance is null && template.Echon is not null && reward.CustomAbilityGrade is < 0 or > 3)
-                return InventoryResult.Reject(19);
+            if (GrantDefinitionError(template, reward, incomingInstance is null) is { } definitionError)
+                return InventoryResult.Reject(definitionError);
             bool legacyRune = incomingInstance?.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
             if (incomingInstance is not null)
             {

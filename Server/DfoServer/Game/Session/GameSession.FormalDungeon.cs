@@ -737,7 +737,8 @@ internal sealed partial class GameSession
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
                 monster.IsBlocking && monster.Source is not null &&
-                (prepareDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0)))
+                (prepareDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
+                    springTreasure is not null && SpringTreasureDropPolicy.MayDrop(entry, monster))))
             {
                 // 资源准备在owner锁外；每个真实monster保留自己的等级、类型、难度及完整数量规则。
                 DungeonDropGenerationPlan? dropGeneration;
@@ -760,7 +761,9 @@ internal sealed partial class GameSession
                 // 创建位置是已证资源位置；不将首次受击坐标冒充死亡瞬间位置。
                 // 地面RAW不携带最终库存目的槽，独立对象使用显式临时record slot0。
                 // 剧情对象可生成在负坐标，位置按协议的16位字段保留，不作为入场资格。
-                for (int ordinal = 0; ordinal < Math.Max(1, rewardGeneration?.MaximumObjects ?? dropGeneration?.MaximumObjects ?? 1); ordinal++)
+                int reservedObjects = SpringTreasureDropPolicy.ReservationCount(rewardGeneration?.MaximumObjects ?? dropGeneration?.MaximumObjects ?? 1,
+                    springTreasure is not null && SpringTreasureDropPolicy.MayDrop(entry, monster));
+                for (int ordinal = 0; ordinal < reservedObjects; ordinal++)
                 {
                     if (next == expected.Id) next++;
                     if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("地面对象预留超界");
@@ -1456,9 +1459,23 @@ internal sealed partial class GameSession
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
                     int epicBonus = EpicDropPotionBonus(Selected, now);
-                    return generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus).Generate(dungeon.Draw, now);
-                }, generation.ResourceSource, daily);
+                    var ordinary = generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus).Generate(dungeon.Draw, now);
+                    if (springTreasure is null || !SpringTreasureDropPolicy.MayDrop(dungeon.Entry, pending.Monster)) return ordinary;
+                    return ordinary.Concat(springTreasure.Generate(Selected, dungeon.Entry, pending.Monster, dungeon.Draw, now,
+                        debugSettings?.IgnoreCashShopAbsoluteExpiration == true, debugSettings?.IgnoreCashShopUsablePeriod == true)).ToArray();
+                }, generation.ResourceSource + (springTreasure is not null && SpringTreasureDropPolicy.MayDrop(dungeon.Entry, pending.Monster)
+                    ? "|" + SpringTreasureDropPolicy.Rule : ""), daily);
             }
+            else if (springTreasure is not null && SpringTreasureDropPolicy.MayDrop(dungeon.Entry, pending.Monster))
+                loot = dungeon.Ground.GetOrFreezeAssets(pending, () =>
+                {
+                    var choice = DungeonExplicitDropPolicy.Select(dungeon.Pools[pending.Monster.MonsterId],
+                        dungeon.Draw(DungeonExplicitDropPolicy.TriggerDenominator), dungeon.Draw(DungeonExplicitDropPolicy.SelectionDenominator));
+                    var ordinary = choice is null ? Array.Empty<DungeonGroundContent>() :
+                        new[] { new DungeonGroundContent(InventoryRewardGrantService.Create(choice.Template, choice.Count)) };
+                    return ordinary.Concat(springTreasure.Generate(Selected, dungeon.Entry, pending.Monster, dungeon.Draw, frozen.At,
+                        debugSettings?.IgnoreCashShopAbsoluteExpiration == true, debugSettings?.IgnoreCashShopUsablePeriod == true)).ToArray();
+                }, "explicit|" + SpringTreasureDropPolicy.Rule);
             else loot = dungeon.Ground.GetOrFreeze(pending, () =>
             {
                 var choice = DungeonExplicitDropPolicy.Select(dungeon.Pools[pending.Monster.MonsterId],

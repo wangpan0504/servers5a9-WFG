@@ -94,8 +94,13 @@ internal static class ServerRuntime
         return reader.ReadToEnd();
     }
 
-    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items) =>
-        CashShopPromotionCatalog.Parse(ReadShippedPromotionConfig(), items.CashShop, items.Items.Get);
+    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items, string? json = null) =>
+        CashShopPromotionCatalog.Parse(json ?? ReadShippedPromotionConfig(), items.CashShop, items.Items.Get,
+            rules => new PromotionConsumerValidation(items.Items, items.Boosters, items.AvatarPackages, items.CashShop,
+                items.EpicPieces, items.Contracts, items.RandomOptions, items.AttributePairs,
+                items.Creatures, items.CollectBoxes, items.LimitCubes, items.Enchantments, items.Enhancements, items.RecoveryConsumables,
+                items.Amplifications, items.AmplifyUpgrades,
+                items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287))).Validate(rules));
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
@@ -117,11 +122,7 @@ internal static class ServerRuntime
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
-        var attributePairs = IndependentAttributePairCatalog.Load(
-            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
-            itemResources.Items, itemResources.Boosters, itemResources.LimitCubes, itemResources.Enchantments,
-            itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null,
-            useBundledDefault: true);
+        var attributePairs = itemResources.AttributePairs;
         log.Write("startup", new { Stage = "Independent attribute pairs", State = "complete",
             attributePairs.Revision, attributePairs.ValidatedFamilies, Reason = attributePairs.UnavailableReason });
         // 支持模板全集在监听就绪前准备，首位玩家选角不承担STK扫描。
@@ -258,7 +259,8 @@ internal static class ServerRuntime
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
         var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);
-        var promotionPageService = enablePromotionPage && promotions is not null
+        var promotionPageService = promotions is not null && (enablePromotionPage ||
+            promotions().Activities.Any(entry => entry.Availability == PromotionAvailability.Active))
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
@@ -473,6 +475,7 @@ internal static class ServerRuntime
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         DungeonPassiveDropPolicy? passiveDrops = null;
+        SpringTreasureDropPolicy? springTreasure = null;
         EpicPieceShopService? epicPieceShop = null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
@@ -528,6 +531,12 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Otherverse rewards", State = "complete", Rule = dimensionRewards.ActiveRule,
                 dimensionDropRules.Mode, Configured = configuredDimensionDrops is not null });
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
+            if (promotions is not null && promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
+                activity.Configuration.Rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package")))
+                springTreasure = StartupStage.Run(log, "Spring treasure personal drops", () =>
+                    new SpringTreasureDropPolicy(itemResources.SpringTreasureAvatars, itemResources.Items.Get(490705287),
+                        () => promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
+                            activity.Configuration.Rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package"))));
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics);
@@ -815,7 +824,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

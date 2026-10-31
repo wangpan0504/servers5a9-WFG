@@ -16,6 +16,7 @@ internal sealed class CollectBoxEntry
     readonly ImmutableDictionary<int, CollectBoxSlotDefinition> slotsByItem;
     readonly ImmutableDictionary<int, CollectBoxExtensionDefinition> extensionsByItem;
 
+    internal bool IsPermanentSpring2020 => isPermanentSpring2020;
     public byte Index { get; }
     public int Rows { get; }
     public int SlotsPerRow { get; }

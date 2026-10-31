@@ -47,7 +47,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null,
     DfoServer.Game.Events.ServerEventService? serverEvents = null,
     DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null, SettingsProjection? settingsProjection = null,
-    DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null) : IConnectionProtocol
+    DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null,
+    DfoServer.Game.Dungeons.SpringTreasureDropPolicy? springTreasure = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -82,7 +83,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
-            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables);
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);
         if (creatures is not null && creatureProjection is not null)

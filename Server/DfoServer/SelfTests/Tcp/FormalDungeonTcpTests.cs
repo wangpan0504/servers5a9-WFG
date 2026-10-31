@@ -47,6 +47,7 @@ internal static partial class FormalDungeonTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         FormalDungeonSessionTests.VerifyLoginWearWindow(resources.Towns, resources.Archive, resources.Characters);
+        FormalDungeonSessionTests.RunSpringTreasureProducer(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         var growth = SelfTestCatalogs.Growth(resources.Archive);
         var kills = SelfTestCatalogs.KillExperience(resources.Archive);
         await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled }, Path.Combine(root, "formal-dungeon"), gm: true, resources: resources,

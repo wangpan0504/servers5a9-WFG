@@ -14,7 +14,7 @@ internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byt
     public bool VillageOnly { get; init; }
     public ImmutableHashSet<int> ExcludedTargetRarities { get; init; } = [];
     public bool AllowsTarget(ItemTemplate target) => Targets.Contains((target.Kind, target.EquipmentSlot)) &&
-        (LimitedItems.IsEmpty || LimitedItems.Contains(target.Id)) && !ExcludedTargetRarities.Contains(target.Rarity);
+        (LimitedItems.IsEmpty || LimitedItems.Contains(target.Id)) && !ExcludedTargetRarities.Contains(target.Rarity == 2 && target.IsLegacyEquipment ? 99 : target.Rarity);
 }
 internal sealed record RandomCardEnchantmentPool(ImmutableArray<int> Positions)
 {
@@ -188,7 +188,7 @@ internal sealed partial class EnchantmentCatalog
 
     public bool CanEnchantCard(int cardId, byte level, ItemTemplate target) =>
         CardTargets(cardId, level) is { } rules && rules.Targets.Contains((target.Kind, target.EquipmentSlot)) &&
-        !rules.ExcludedTargetRarities.Contains(target.Rarity);
+        !rules.ExcludedTargetRarities.Contains(target.Rarity == 2 && target.IsLegacyEquipment ? 99 : target.Rarity);
 
     sealed record CardTargetRules(ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets,
         ImmutableHashSet<int> ExcludedTargetRarities);
@@ -207,15 +207,29 @@ internal sealed partial class EnchantmentCatalog
             if (!TryRootBlock(card, "unable use rarity", out string? values) || values is null) return null;
             var labels = Regex.Matches(values, "`([^`]*)`");
             if (labels.Count == 0 || Regex.Replace(values, "`[^`]*`", "").Trim().Length != 0) return null;
+            bool rareSubtypes = false;
             foreach (Match label in labels)
             {
-                int rarity = label.Groups[1].Value switch
+                string value = label.Groups[1].Value;
+                // rare之后的normal/legacy是子类型；传承装备的禁集值为99。
+                if (rareSubtypes && value is "normal" or "legacy")
+                {
+                    excludedTargetRarities.Add(value == "legacy" ? 99 : 2);
+                    continue;
+                }
+                int rarity = value switch
                 {
                     "common" => 0, "uncommon" => 1, "rare" => 2, "unique" => 3,
                     "epic" => 4, "chronicle" => 5, "legendary" => 6, _ => -1
                 };
-                if (rarity < 0) return null; // 包括尚未证实的normal；不能丢弃未知标签后放行。
+                if (rarity < 0) return null; // 未知标签或脱离rare上下文的子类型不能被忽略。
+                if (!rareSubtypes && rarity == 2)
+                {
+                    rareSubtypes = true;
+                    continue;
+                }
                 excludedTargetRarities.Add(rarity);
+                rareSubtypes = false;
             }
         }
         var stringBlocks = Regex.Matches(MaskStrings(card), @"\[string data\](.*?)\[/string data\]", RegexOptions.Singleline);

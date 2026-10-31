@@ -692,6 +692,7 @@ internal sealed partial class ItemCatalog
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
             IsOperationHope = isEquipment && text.Has("operation hope"),
             BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
+            IsLegacyEquipment = isEquipment && text.ContainsString("item category", "legacy"),
             IsMonsterCard = !isEquipment && text.ContainsString("item category", "monster card"),
             MonsterCardBindType = ReadMonsterCardBindType(isEquipment, text),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),

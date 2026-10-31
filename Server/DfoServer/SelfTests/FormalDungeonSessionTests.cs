@@ -22,7 +22,7 @@ using System.Collections.Immutable;
 
 namespace DfoServer;
 
-internal static class FormalDungeonSessionTests
+internal static partial class FormalDungeonSessionTests
 {
     // 复用runner已打开的匹配PVF；观察明确为合成，不代表实机击杀或通知通过。
     public static Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
@@ -2636,12 +2636,12 @@ internal static class FormalDungeonSessionTests
             ? DungeonTransientReceipts.Find(Owner, snapshot.Identity) : null;
         public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0,
             DfoServer.Game.Settings.GameDebugSettings? debugSettings = null, NewCharacter? prepared = null,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null, SpringTreasureDropPolicy? springTreasure = null)
         {
             Path = System.IO.Path.Combine(root, "game.db");
             Repository = new(Path, quests);
             Owner = Owners.Acquire("formal-session", () => { });
-            Session = new(Repository, towns, Owner, questCatalog:prepared is null ? null : quests, debugSettings: debugSettings, timeProvider: timeProvider);
+            Session = new(Repository, towns, Owner, questCatalog:prepared is null ? null : quests, debugSettings: debugSettings, timeProvider: timeProvider, springTreasure: springTreasure);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
             Created = Repository.Create(Owner, prepared ?? CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });

@@ -33,6 +33,9 @@ internal sealed record DungeonEntryPlan(
     public bool RecommendedQuestClear { get; init; }
     // 公会公共积分按入场等级与普通推荐区间冻结，与冒险团推荐通关口径独立。
     public bool GuildMileageEligible { get; init; }
+    // 物理路线为可能合格成员预留；个人推荐区间按本人的入场等级冻结。
+    public bool SpringTreasurePotential { get; init; }
+    public bool SpringTreasureRecommended { get; init; }
     public int? PlayerTeam { get; init; }
     // GM伴侣：本次入场放行的地图 [ai character] 行编号。空表示未开启或该副本类型不注入；
     // 只在起始房间发送，非起始房间的行由 DungeonMonsterPlan.FromRoom 丢弃。
@@ -373,6 +376,8 @@ internal sealed record DungeonEntryPlan(
                 TerminalLayerAcceptanceId = participantTerminal?.AcceptanceId ?? Guid.Empty,
                 PassiveClearTerminalMap = null, CinematicClearTerminalMap = null, PartyRoute = shared
             };
+            plan = plan with { SpringTreasurePotential = SpringTreasureDropPolicy.IsPotential(definition, plan),
+                SpringTreasureRecommended = SpringTreasureDropPolicy.IsRecommended(definition, plan, character.Level) };
             reason = "resource-plan-ready";
             return true;
         }
@@ -795,6 +800,8 @@ internal sealed record DungeonEntryPlan(
         if (hope is not null)
             plan = plan with { Hope = hope, HopeRewardProfession = (character.Job,character.GrowType), StartFatigue = checked((ushort)hope.Catalog.FatigueValue),
                 QuestAcceptances = plan.QuestAcceptances.Add(hope.Acceptance) };
+        plan = plan with { SpringTreasurePotential = SpringTreasureDropPolicy.IsPotential(definition, plan),
+            SpringTreasureRecommended = SpringTreasureDropPolicy.IsRecommended(definition, plan, character.Level) };
         reason = "resource-plan-ready";
         return true;
     }

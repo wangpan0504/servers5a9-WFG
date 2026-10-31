@@ -30,6 +30,7 @@ internal static partial class PartyDungeonTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         OrdinaryLukePartyTests.Run(resources);
+        DfoServer.Testing.Inventory.SpringTreasureDropTests.RunPartyResources(resources.ItemResources);
         await RunLukeAsync(source, root, resources);
         await RunPreyNormalAsync(source, root, resources);
         await RunPartyAsync(source, root, resources, 2);

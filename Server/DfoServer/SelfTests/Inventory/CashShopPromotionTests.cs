@@ -150,14 +150,17 @@ internal static class CashShopPromotionTests
         var shipped = CashShopPromotionCatalog.Parse(
             DfoServer.Infrastructure.ServerRuntime.ReadShippedPromotionConfig(), shop, Template);
         var shippedEntry = shipped.Activities[0];
-        That(shipped.Activities.Length == 1 && shippedEntry.Error is null &&
+        That(shipped.Activities.Length == 1 &&
             shippedEntry.Policy is { IsPermanent: false } shippedPolicy && shippedPolicy.CounterScope == rules.Scope &&
-            shippedEntry.Configuration is { Enabled: false, RuleKind: "pilot", CarryForward: null } &&
+            shippedEntry.Configuration is { RuleKind: "pilot", CarryForward: null } &&
             new[] { 105681, 108726, 108727 }.All(id => ReferenceEquals(shipped.Product(id), shippedEntry)) &&
-            shippedEntry.Availability == PromotionAvailability.Disabled && shipped.Product(105684) is null &&
+            (shippedEntry.Configuration.Enabled
+                ? shippedEntry.Availability == PromotionAvailability.Invalid && shippedEntry.Error is not null
+                : shippedEntry.Availability == PromotionAvailability.Disabled && shippedEntry.Error is null) &&
+            shipped.Product(105684) is null &&
             CashShopPromotionCatalog.RuleSnapshot(shippedEntry.Configuration.Rules, shippedPolicy) == snapshot &&
             shippedEntry.Configuration.Rules.MaximumPurchases == 5000,
-            "发布规则保持原v1与5000套上限、三商品及九档完整快照，仍保持关闭");
+            "发布规则保持原v1/5000/三商品/九档快照；Core不以stub冒充开启消费者，Enabled时缺真实回调仍拒绝");
         string path = Path.Combine(Path.GetTempPath(), "dfo-promotion-" + Guid.NewGuid().ToString("N") + ".json");
         try
         {

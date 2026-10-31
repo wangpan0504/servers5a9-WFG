@@ -512,6 +512,8 @@ internal static partial class CashShopTcpTests
             That(cera.Length == 13 && cera[0] == 1 && U32(cera, 1) == 200000 - carts.Take(index + 1).Sum(row => row.Price),
                 "库存之后的Cera包投影本单真实完整扣费");
             peer.Expect(0, 99, [1, 0]);
+            // 本夹具直接seed旧累计，缺少前史订单；严格消费原生只读提示，不冒充完整奖项页。
+            AssertPromotionNativeUnavailableRefresh(peer.Expect(0, 108), 5000L + index, peer.ExpectedOpenEvents);
             peer.Barrier();
             var after = PromotionDelivered(fixture, "10000");
             VerifyPromotionDelivery(before, after, peer.Id);

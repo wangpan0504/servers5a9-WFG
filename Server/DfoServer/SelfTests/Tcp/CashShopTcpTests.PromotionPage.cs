@@ -106,6 +106,30 @@ internal static partial class CashShopTcpTests
         }
         await disabled.StopAsync();
 
+        // 真正的唯一loader与完整资源消费者，Active目录不再依赖诊断启动参数。
+        catalog = DfoServer.Infrastructure.ServerRuntime.LoadCashShopPromotions(items,
+            JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }));
+        That(catalog.Activities.Single().Availability == PromotionAvailability.Active &&
+            catalog.Activities.Single().Configuration.Rules.MaximumPurchases == 5000,
+            "真实loader完整消费者通过并保留5000套原规则");
+        await using var automatic = new TcpTestFixture(source,
+            Path.Combine(root, "cash-shop-promotion-page-production-default"), resources: resources,
+            promotions: () => catalog, clock: clock);
+        SeedPageBuyer(automatic);
+        await automatic.StartAsync();
+        using (var peer = Open(automatic))
+        {
+            peer.ValidateNativePromotionEvents = body => AssertPromotionNativeEvents(body, 0, false, peer.ExpectedOpenEvents);
+            peer.Select();
+            peer.Send(17, PromotionPageChatBody(PromotionPageNonceA));
+            var opened = PromotionPageFields(peer.Expect(0, 1709).Body);
+            That(opened.Length == 19 && opened[11] == "ready" && opened[12] == "0" && opened[13] == "5000",
+                "生产Runtime未传enablePromotionPage仍发布原生九档事件及实际页面快照");
+            AssertPromotionPageNames(opened, items.Items);
+            peer.Barrier();
+        }
+        await automatic.StopAsync();
+
         void SeedPageBuyer(TcpTestFixture target)
         {
             var repository = new CharacterRepository(target.Database, resources.Quests, promotions: () => catalog);
@@ -119,6 +143,13 @@ internal static partial class CashShopTcpTests
     }
 
     static void AssertPromotionNativeRefresh(WirePacket packet, long count, bool disabled, IReadOnlyList<ushort> extraEvents)
+        => AssertPromotionNativeEvents(ReadPromotionNativeRefresh(packet), count, disabled, extraEvents);
+
+    // 只有缺少前史订单的合成累计夹具使用此入口，完整校验只读页与已知原累计。
+    static void AssertPromotionNativeUnavailableRefresh(WirePacket packet, long count, IReadOnlyList<ushort> extraEvents)
+        => AssertPromotionNativeEvents(ReadPromotionNativeRefresh(packet), null, null, extraEvents, count);
+
+    static byte[] ReadPromotionNativeRefresh(WirePacket packet)
     {
         That(packet is { Kind: 0, Opcode: 108, Protected: true }, "购买刷新沿原保护压缩108发布，不重复ACK");
         using var compressed = new MemoryStream(packet.Body);
@@ -132,11 +163,15 @@ internal static partial class CashShopTcpTests
             length += read;
         }
         That(zlib.ReadByte() == -1, "购买刷新108解压有界且消费完整压缩正文");
-        AssertPromotionNativeEvents(bounded[..length], count, disabled, extraEvents);
+        return bounded[..length];
     }
 
     // 独立按已保存wire逐字段消费；不调用生产Builder构造期望或仅搜10999字符串。
     static void AssertPromotionNativeEvents(byte[] payload, long count, bool disabled, IReadOnlyList<ushort> extraEvents)
+        => AssertPromotionNativeEvents(payload, (long?)count, (bool?)disabled, extraEvents);
+
+    internal static void AssertPromotionNativeEvents(byte[] payload, long? count, bool? disabled, IReadOnlyList<ushort> extraEvents,
+        long? unavailableCount = null)
     {
         using var input = new MemoryStream(payload);
         using var reader = new BinaryReader(input, Encoding.UTF8);
@@ -165,12 +200,18 @@ internal static partial class CashShopTcpTests
             return tokens[cursor++];
         }
         int Number() => int.Parse(Take(), System.Globalization.CultureInfo.InvariantCulture);
-        That(Take() == "[image_with_itemcontrol]" && Take() == "`Interface2/cs_shop/cs_calendar.img`" &&
-            Number() == 12 && Number() == 9, "九奖使用原日历图与真实itemcontrol数");
-        int[] x = [54, 125, 196], y = [135, 203, 279];
-        for (int index = 0; index < 9; index++)
-            That(Number() == 490705441 + index && Number() == 1 && Number() == x[index % 3] && Number() == y[index / 3],
-                "九个真实礼盒itemcontrol逐档/数量/坐标完整，无占位奖励");
+        bool unavailable = tokens.Length > 0 && tokens[0] == "[text_control]";
+        That(unavailableCount is null || unavailable && unavailableCount >= 0, "合成旧累计专项必须收到原生只读页，不能混入正常奖项页");
+        That(!unavailable || count is null && disabled is null, "精确累计专项不得以不可核只读页代替真实九奖页");
+        if (!unavailable)
+        {
+            That(Take() == "[image_with_itemcontrol]" && Take() == "`Interface2/cs_shop/cs_calendar.img`" &&
+                Number() == 12 && Number() == 9, "九奖使用原日历图与真实itemcontrol数");
+            int[] x = [54, 125, 196], y = [135, 203, 279];
+            for (int index = 0; index < 9; index++)
+                That(Number() == 490705441 + index && Number() == 1 && Number() == x[index % 3] && Number() == y[index / 3],
+                    "九个真实礼盒itemcontrol逐档/数量/坐标完整，无占位奖励");
+        }
         That(Take() == "[text_control]" && Number() == 2, "累计和状态两文本控件完整");
         string[] texts = new string[2];
         for (int index = 0; index < 2; index++)
@@ -180,13 +221,38 @@ internal static partial class CashShopTcpTests
             string token;
             while ((token = Take()) != "```") words.Add(token);
             texts[index] = string.Join(' ', words);
-            That(Number() == (index == 0 ? 196 : 8) && Number() == (index == 0 ? 344 : 445) && Take() == "`COLOR_WHITE`",
+            That(Number() == (unavailable ? 8 : index == 0 ? 196 : 8) &&
+                Number() == (unavailable ? index == 0 ? 40 : 65 : index == 0 ? 344 : 445) && Take() == "`COLOR_WHITE`",
                 "两文本控件的坐标/颜色完整");
         }
-        string digits = count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        That(texts[0] == digits && texts[1] == (disabled ? "活动未开启 " : "") + "累计：" + digits +
-            " 距下档" + (count == 0 ? "2" : "1") + "套" && cursor == tokens.Length,
-            "原生显示取真实累计0/1/2与Disabled状态，正文全部消费不猜发奖位图");
+        if (unavailable)
+        {
+            That(texts[0].StartsWith("累计：", StringComparison.Ordinal) && texts[1] == "奖励状态暂不可核，请稍后重开活动页",
+                "不可核页只显示明确的未知或历史累计和固定状态提示");
+            string known = texts[0][3..];
+            That(unavailableCount is null || known == unavailableCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "合成旧累计只读页必须保留本次提交后的精确累计，不以未知或正常奖项状态代替");
+            That(known == "未知" || long.TryParse(known, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out long saved) && saved >= 0 &&
+                known == saved.ToString(System.Globalization.CultureInfo.InvariantCulture), "不可核页不伪造负值或截断累计");
+        }
+        else
+        {
+            bool actualDisabled = texts[1].StartsWith("活动未开启 ", StringComparison.Ordinal);
+            string state = actualDisabled ? texts[1][6..] : texts[1];
+            int split = state.IndexOf(' ');
+            That(state.StartsWith("累计：", StringComparison.Ordinal) && split > 3, "正常页必须保留完整累计与下一档文字");
+            string digits = state[3..split];
+            That(long.TryParse(digits, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
+                out long actualCount) && actualCount >= 0 && digits == actualCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "正常页累计为完整非负int64事实");
+            string next = actualCount >= 5000 ? "已达累计上限" : "距下档" +
+                (actualCount < 30 && actualCount % 10 == 0 ? "2" : "1") + "套";
+            That(texts[0] == (digits.Length <= 5 ? digits : "见下") && state == "累计：" + digits + " " + next &&
+                (count is null || actualCount == count) && (disabled is null || actualDisabled == disabled),
+                "已知原生页保完整累计/下一档，专项仍精确核对期望累计和Disabled状态");
+        }
+        That(cursor == tokens.Length, "原生正文全部消费，不吞未知控件或尾部token");
         That(reader.ReadByte() == 1 && reader.ReadByte() == 2, "原生活动可见位与原状态尾段项数完整");
         foreach (ushort id in new ushort[] { 2037, 2395 })
         {
