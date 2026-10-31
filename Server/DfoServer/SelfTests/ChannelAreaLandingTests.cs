@@ -173,6 +173,8 @@ internal static class ChannelAreaLandingTests
             ("PreyBack", new(59, 1, 1217, 98), new(38, 0, 622, 196), new(38, 0, 622, 196)),
             ("EvildomBack", new(67, 1, 656, 154), new(38, 0, 622, 196), new(38, 0, 622, 196)),
             ("AntonBack", new(19, 1, 819, 172), new(38, 0, 622, 196), new(38, 0, 622, 196)),
+            ("TagBack", new(62, 0, 474, 234), new(38, 0, 622, 196), new(38, 0, 622, 196)),
+            ("ImperialBack", new(48, 0, 474, 234), new(38, 0, 622, 196), new(38, 0, 622, 196)),
             ("PreyBadBack", new(59, 1, 1217, 98), new(255, 255, 0, 0), new(38, 0, 622, 196)),
             ("PreyNoBack", new(59, 1, 1217, 98), null, new(59, 1, 1217, 98)),
             ("NorthUpdate", new(39, 0, 596, 144), new(38, 0, 622, 196), new(39, 0, 596, 144)),
