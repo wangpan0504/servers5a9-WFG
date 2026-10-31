@@ -60,19 +60,20 @@ internal sealed partial class MarriageHandler
                 case 1047:
                     bool close = MarriageCoupleRequests.OpenClose(packet.Body);
                     if (close) CloseEditor(context.Session, before.Id);
-                    bool granted = close || Edit(context.Session, capture, before.Id, true);
+                    bool granted = close || Edit(context.Session, capture, before.Id, true, out _);
                     await context.Reply((CmdPacketType)command, MarriageCouplePackets.OpenCloseAck(granted ? 0 : -4, close), "marriage_storage");
                     if (granted && !close)
                         await context.Notify((NotiPacketType)1012, MarriageCouplePackets.Storage(before, 0), "marriage_storage_contents");
                     return CommandResult.Handled;
                 case 1048:
                     var move = MarriageCoupleRequests.MoveItem(packet.Body);
-                    if (Edit(context.Session, capture, before.Id, false))
-                        change = MarriageCoupleRules.Move(before, actor.Id, move.Source, move.Target, catalog);
+                    if (!Edit(context.Session, capture, before.Id, false, out int editorFailure))
+                        return await Reject(context, command, editorFailure);
+                    change = MarriageCoupleRules.Move(before, actor.Id, move.Source, move.Target, catalog);
                     break;
                 case 1049:
                     var delete = MarriageCoupleRequests.DeleteItem(packet.Body);
-                    if (Edit(context.Session, capture, before.Id, false))
+                    if (Edit(context.Session, capture, before.Id, false, out _))
                         change = MarriageCoupleRules.Delete(before, actor.Id, delete.Slot, delete.ItemId, delete.Quantity);
                     break;
                 case 1050:
@@ -103,7 +104,8 @@ internal sealed partial class MarriageHandler
         }
         if (before is null || change is null) return await Reject(context, command, -2);
         var committed = await CommitCouple(context, capture, before, change);
-        int result = committed is not null ? 0 : change.Success ? -3 : change.Result;
+        int result = committed is not null ? 0 : !change.Success ? change.Result
+            : command == 1048 ? MarriageCoupleRules.MoveInvalidRequest : -3;
         byte[] ack = command is >= 1054 and <= 1056
             ? MarriageCouplePackets.CapsuleAck(command, result, (committed?.Record ?? before).Members[actor.Id])
             : command == 1043 ? MarriageCouplePackets.DeleteCommentAck(result, comment)
@@ -122,7 +124,7 @@ internal sealed partial class MarriageHandler
             await new DfoServer.Network.Projection.MarriageProjection(store, catalog, online, timer).PublishAsync(context, record);
         }
         if (command is >= 1050 and <= 1053)
-            await PublishCouple(context, record, 1015, MarriageCouplePackets.TreeInformation(record.Tree));
+            await PublishCouple(context, record, 1015, MarriageCouplePackets.TreeInformation(record.Tree, catalog.Seeds));
         if (command == 1052)
             await context.Notify((NotiPacketType)1017, MarriageCouplePackets.HarvestRewards(change.Items
                 .Where(row => row.Count > 0).Select(row => new MarriageItemCount(row.ItemId, row.Count)).ToArray()), "marriage_tree_reward");

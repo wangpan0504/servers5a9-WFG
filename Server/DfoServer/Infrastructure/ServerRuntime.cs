@@ -230,7 +230,6 @@ internal static class ServerRuntime
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var serverItemRules = ServerItemUsageCatalog.Load(pvf);
-        var serverItemCycles = new ServerItemCycleService(serverItemRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         var epicProduction = new EpicProductionCatalog(pvf);
         var epicAbilities = new EpicProductionAbilityCatalog(pvf);
         string epicPolicyPath=Path.Combine(options.DataDirectory,"epic-production-compatibility.json");
@@ -253,6 +252,14 @@ internal static class ServerRuntime
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService, parties, presence);
         var dungeonCatalog = DungeonCatalog.Load(pvf);
+        var marriageSupply = dungeonCatalog.ContainsDungeon((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)
+            ? Game.Marriage.MarriageDungeonDailySupply.Create(dungeonCatalog.Get((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)) : null;
+        if (marriageSupply is not null && !itemResources.Items.TryGet(marriageSupply.ItemId, out _))
+        {
+            log.Write("resource_warning", new { Source = "marriage_daily_supply", Reason = "missing_ticket_template", marriageSupply.ItemId });
+            marriageSupply = null;
+        }
+        var serverItemCycles = new ServerItemCycleService(serverItemRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock, marriageSupply);
         repository.MarriageResources = marriageCatalog;
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
@@ -266,10 +273,13 @@ internal static class ServerRuntime
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
+        var inventoryBoosters = new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits,
+            itemResources.EpicPieces, debugSettings: debugSettings, contracts: itemResources.Contracts,
+            avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions, attributePairs: attributePairs);
         var totalTeamProjection = new PvpTotalTeamProjection(learning, stats, log);
         var marriageHandler = new MarriageHandler(repository, marriageCatalog, itemResources.Items,
             new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock),
-            towns, projection, online, inventoryProjection, log, clock);
+            towns, projection, online, inventoryProjection, log, characters, clock);
         var marriageScheduler = new MarriageWeddingScheduler(repository, marriageCatalog, itemResources.Items, online, marriageProjection, log, clock);
         // 装扮预设：容量/列表在选角就绪后下发；扩展券走CMD515 action216。
         var avatarPresetService = new Game.Inventory.Services.AvatarPresetService(itemResources.Items, itemResources.Contracts, towns, clock);
@@ -339,7 +349,8 @@ internal static class ServerRuntime
                 Network.Builders.GuildApplicationPackets.AccountApplications(account), "guild_account_applications", actor.IsCurrent);
         };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
-            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock);
+            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
+            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet());
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
@@ -733,9 +744,8 @@ internal static class ServerRuntime
             // 设计图制造：CMD25，配方来自 [recipe] 设计图的 [input item]/[output item]。
             new CompoundHandler(new InventoryRecipeCraftService(itemResources.ItemRecipes, itemResources.Items,
                 itemResources.EpicPieces, itemResources.GoldLimits, itemResources.ItemMakingSkills, clock), inventoryProjection, log),
-            new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
-                debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions,
-                attributePairs: attributePairs), inventoryProjection,
+            new SharedEffectItemHandler(inventoryBoosters, inventoryProjection, projection, log),
+            new BoosterHandler(inventoryBoosters, inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new VendingHandler(new InventoryVendingService(itemResources.VendingMachines, itemResources.Items, itemResources.GoldLimits,
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),

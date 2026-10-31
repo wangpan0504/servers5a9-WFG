@@ -86,6 +86,17 @@ internal sealed class QuestRewardParameterCatalog
         }
     }
 
+    // 未声明难度使用缺省100；显式未知键不等同于未声明。
+    public bool TryGetDifficultyWeight(string? key, out int weight)
+    {
+        if (key is null)
+        {
+            weight = 100;
+            return true;
+        }
+        return Difficulty.TryGetValue(key, out weight) && weight >= 0;
+    }
+
     // 04333680/6B0/E0真实getter直接使用index，不把资源第0项自动改名Lv1。
     public QuestExperienceParameter GetExperienceAtNativeIndex(int index) => index >= 0 && index < Experience.Length
         ? Experience[index] : throw new ArgumentOutOfRangeException(nameof(index), "任务EXP参数原生索引越界");

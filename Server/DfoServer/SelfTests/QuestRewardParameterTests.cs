@@ -16,6 +16,15 @@ internal static class QuestRewardParameterTests
         Check(catalog.Difficulty["g"] == 30 && catalog.Difficulty.Keys.Contains("G", StringComparer.Ordinal) &&
             !catalog.Difficulty.Keys.Contains("g", StringComparer.Ordinal) && !catalog.Difficulty.ContainsKey("unknown"),
             "字母匹配忽略大小写，原始键保持且未知键不补倍率");
+        Check(catalog.TryGetDifficultyWeight(null, out int defaultWeight) && defaultWeight == 100 &&
+            catalog.TryGetDifficultyWeight("g", out int configuredWeight) && configuredWeight == 30,
+            "未声明难度映射缺省100，显式难度沿用资源及大小写匹配规则");
+        Check(!catalog.TryGetDifficultyWeight("", out _) && !catalog.TryGetDifficultyWeight("unknown", out _),
+            "显式空键及未知键不伪装成缺省难度");
+        var negative = fixture.Tokens();
+        negative[6] = new(0, -1);
+        Check(!QuestRewardParameterCatalog.Parse(negative, fixture.Resolve).TryGetDifficultyWeight("G", out _),
+            "显式负难度倍率仍拒绝");
         Check(catalog.Experience.SequenceEqual(new QuestExperienceParameter[] { new(100, -1), new(126, 10), new(187, 0) }) &&
             catalog.Experience[0].NativeAdditionalPercent == 0 && catalog.Experience[1].NativeAdditionalPercent == 10,
             "EXP原始负值保留，仅正值作为追加倍率");

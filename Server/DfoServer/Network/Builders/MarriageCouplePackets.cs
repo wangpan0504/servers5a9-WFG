@@ -49,14 +49,14 @@ internal static class MarriageCouplePackets
         writer.Write(checked((byte)(command == 1056 ? member.CapsulesTaken : member.CapsulesOwned)));
     });
 
-    public static byte[] RoomInformation(MarriageRecord record) => Build(writer =>
+    public static byte[] RoomInformation(MarriageRecord record, IReadOnlyDictionary<int, int> seedTypes) => Build(writer =>
     {
         writer.Write(record.Furniture.Count);
         foreach (var (slot, item) in record.Furniture.OrderBy(row => row.Key))
         {
             writer.Write(slot); writer.Write(checked((uint)item.ItemId));
         }
-        Tree(writer, record.Tree);
+        Tree(writer, record.Tree, seedTypes);
     });
 
     public static byte[] Storage(MarriageRecord record, uint tail) => Build(writer =>
@@ -80,7 +80,8 @@ internal static class MarriageCouplePackets
         foreach (var update in updates) Item(writer, update);
     });
 
-    public static byte[] TreeInformation(MarriageTreeState? tree) => Build(writer => Tree(writer, tree));
+    public static byte[] TreeInformation(MarriageTreeState? tree, IReadOnlyDictionary<int, int> seedTypes) =>
+        Build(writer => Tree(writer, tree, seedTypes));
 
     public static byte[] MarriageAttributes(uint actorId, uint partnerId, byte state, byte ring, uint decorationScore) => Build(writer =>
     {
@@ -104,9 +105,12 @@ internal static class MarriageCouplePackets
 
     public static byte[] CapsuleGauge(int gauge) => Build(writer => writer.Write(checked((uint)gauge)));
 
-    static void Tree(BinaryWriter writer, MarriageTreeState? tree)
+    static void Tree(BinaryWriter writer, MarriageTreeState? tree, IReadOnlyDictionary<int, int> seedTypes)
     {
-        writer.Write(checked((uint)(tree?.Seed ?? 0))); writer.Write(checked((uint)(tree?.Expiry ?? 0)));
+        // 客户端按树index查配置，不接受种子STK编号；未知模板只隐藏显示，不清理存档。
+        int type = tree is null ? 0 : seedTypes.GetValueOrDefault(tree.Seed);
+        if (type == 0) tree = null;
+        writer.Write(checked((uint)type)); writer.Write(checked((uint)(tree?.Expiry ?? 0)));
         writer.Write(checked((uint)(tree?.Growth ?? 0))); writer.Write(checked((byte)(tree?.Waters ?? 0)));
     }
 

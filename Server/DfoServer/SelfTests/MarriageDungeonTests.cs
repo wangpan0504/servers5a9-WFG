@@ -68,6 +68,8 @@ internal static class MarriageDungeonTests
     public static void RunResources(DungeonCatalog catalog, TownCatalog? towns = null)
     {
         var definition = catalog.Get(3541);
+        That(MarriageDungeonDailySupply.Create(definition) is { ItemId: 10002609, Count: 3 },
+            "婚戒每日补票模板和目标数量来自实际夫妻副本门票声明");
         That(MarriageDungeonAdmission.ResourceMatches(definition), "实际夫妻副本类型、双人上限、禁练习与无普通经济标记完整");
         if (towns is not null)
             That(towns.MarriageDungeonEntryNpcs.Contains(20013) && towns.HasMarriageDungeonEntrance(new(39, 0, 2306, 156), new HashSet<int>()) &&

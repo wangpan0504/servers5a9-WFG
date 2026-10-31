@@ -22,6 +22,7 @@ internal sealed record MarriageInvitation
     public byte State { get; init; }
     public long SentAt { get; init; }
     public ushort InviterId { get; init; }
+    public bool CeremonyGiftsReceived { get; init; }
 }
 
 internal sealed record MarriageGuestGift

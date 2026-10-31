@@ -66,14 +66,14 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         if (record.State == 4)
         {
             await transport.Notify(1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, id), false), "marriage_capsules", Guard);
-            await transport.Notify(1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record)), "marriage_home_effects", Guard);
+            await transport.Notify(1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record), catalog.Seeds), "marriage_home_effects", Guard);
             if (capture.Character.Position is { Town: 101, Area: 0 })
             {
                 await transport.Notify(1012, MarriageCouplePackets.Storage(record, 0), "marriage_storage", Guard);
             }
         }
         else if (reason != 0)
-            await transport.Notify(1011, MarriageCouplePackets.RoomInformation(record), "marriage_home_effects_clear", Guard);
+            await transport.Notify(1011, MarriageCouplePackets.RoomInformation(record, catalog.Seeds), "marriage_home_effects_clear", Guard);
         if (record.Wedding is { State: 1 } wedding && wedding.StartsAt > timer.GetUtcNow().ToUnixTimeSeconds())
             await transport.Notify(1007, MarriageWeddingPackets.Ceremony(Wire(record), checked((ushort)wedding.InviteRemaining.GetValueOrDefault(id))),
                 "marriage_reservation", Guard);
@@ -98,14 +98,14 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         }
         if (!record.Active)
         {
-            await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(record), "marriage_home_effects_clear", Guard);
+            await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(record, catalog.Seeds), "marriage_home_effects_clear", Guard);
             return;
         }
         if (record.State == 4)
         {
             await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, capture.Character.Id), false),
                 "marriage_capsules", Guard);
-            await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record)), "marriage_home_effects", Guard);
+            await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record), catalog.Seeds), "marriage_home_effects", Guard);
             if (capture.Character.Position is { Town: 101, Area: 0 })
             {
                 await context.Notify((NotiPacketType)1012, MarriageCouplePackets.Storage(record, 0), "marriage_storage", Guard);
@@ -124,7 +124,7 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
     public async Task HomeSceneAsync(GameConnectionContext context, Character character, Func<bool> canSend)
     {
         if (character.Position is not { Town: 101, Area: 0 } || store.FindMarriage(character.Id) is not { State: 4 } record) return;
-        await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record)), "marriage_home_arrival", canSend);
+        await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record), catalog.Seeds), "marriage_home_arrival", canSend);
         await context.Notify((NotiPacketType)1012, MarriageCouplePackets.Storage(record, 0), "marriage_storage_arrival", canSend);
     }
 
@@ -138,6 +138,19 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         await context.Notify((NotiPacketType)1002, MarriageWeddingPackets.Avatar(inside ? (byte)0 : (byte)1,
             checked((byte)catalog.Ceremonies[record.Wedding.Type].AvatarType), wire.FirstName, wire.SecondName,
             hall.HallArea, 0, hall.ServerIndex), inside ? "marriage_wedding_avatar" : "marriage_wedding_avatar_clear", canSend);
+    }
+
+    public async Task DailyAsync(GameConnectionContext context)
+    {
+        context.Session.RefreshMarriageProjection();
+        if (context.Session.CaptureMarriage(false) is not { } capture ||
+            capture.Character.Marriage is not { State: 4 } record || !record.IsMember(capture.Character.Id)) return;
+        bool Guard() => context.Session.MatchesMarriage(capture, false);
+        await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, capture.Character.Id), false),
+            "marriage_capsules_daily", Guard);
+        if (capture.Character.Position is { Town: 101, Area: 0 })
+            await context.Notify((NotiPacketType)1015, MarriageCouplePackets.TreeInformation(DisplayRecord(record).Tree, catalog.Seeds),
+                "marriage_tree_daily", Guard);
     }
 
     MarriageMemberState DisplayMember(MarriageRecord record, ushort id)
@@ -160,9 +173,11 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
             checked((byte)wedding.Type), first, second);
     }
 
-    internal static byte[] Card(uint contextId, MarriageCharacterCard card)
+    internal static byte[] Card(uint contextId, MarriageCharacterCard card, IReadOnlyDictionary<byte, int>? defaults = null,
+        Func<int, bool>? isCloneAvatar = null)
     {
-        if (card.Equipment.Count != 13) throw new InvalidDataException("婚姻角色卡装备数无效");
+        if (card.Equipment.Count != 13 || card.ClearAvatarIds.Count is not (0 or 13))
+            throw new InvalidDataException("婚姻角色卡装备数无效");
         byte[] body = new byte[97];
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), contextId);
         byte[] name = CharacterName.Encoding.GetBytes(card.Recipient.Name);
@@ -170,7 +185,15 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         name.CopyTo(body, 12);
         body[42] = card.Recipient.Level; body[43] = card.Recipient.Job; body[44] = card.Recipient.GrowType;
         for (int index = 0; index < 13; index++)
-            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(45 + index * 4), card.Equipment[index]);
+        {
+            int item = card.Equipment[index];
+            if (item > 0 && isCloneAvatar?.Invoke(item) == true)
+                item = card.ClearAvatarIds.Count == 13 ? card.ClearAvatarIds[index] : 0;
+            // 原生预览以-1请求默认外观，0会覆盖掉该槽；默认表仅覆盖装扮，不伪造武器装扮来源。
+            if (item <= 0)
+                item = index <= 9 && defaults is not null ? defaults.GetValueOrDefault((byte)index, -1) : -1;
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(45 + index * 4), item);
+        }
         return MarriageWeddingPackets.CharacterAck(body);
     }
 }

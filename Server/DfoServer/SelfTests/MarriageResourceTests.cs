@@ -104,7 +104,7 @@ internal static class MarriageResourceTests
         Reject<InvalidDataException>(() => source.Parse(), message);
     }
 
-    sealed class Source
+    internal sealed class Source
     {
         readonly List<string> strings = [];
         public Dictionary<string, List<PvfToken>> Files { get; } = new(StringComparer.Ordinal);
@@ -161,6 +161,7 @@ internal static class MarriageResourceTests
             AddField(room, "position list", true, 0, 273, -255, -250, 1, 560, -250, -200);
             Tag(room, "[coupleroom item list]");
             AddField(room, "coupleroom item", true, 301, 2, 0, -5, 10, 0, 1, 1, 5, -10, 0, 0, 7, "furniture.act");
+            AddField(room, "coupleroom item", true, 302, 1, 0, 0, 0, 0, 0, 0, "floor.act");
             Tag(room, "[/coupleroom item list]");
             AddField(room, "couple room buff", true, 10, 1, "hp max", 100, 40, 2, "hp max", 100, "mp max", 100);
 

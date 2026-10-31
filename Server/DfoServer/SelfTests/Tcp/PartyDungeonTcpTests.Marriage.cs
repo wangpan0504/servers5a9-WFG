@@ -50,7 +50,11 @@ internal static partial class PartyDungeonTcpTests
         second.Send(11, Build(w => { w.Write(first.Id); w.Write((byte)0); w.Write(0u); }));
         That(All(second).All(rows => rows.Any(p => p.Opcode == 9)), "夫妻通过正式邀请组成双人队伍");
         first.Send(15, BitConverter.GetBytes(3541u));
-        That(All().All(rows => rows.Any(p => p.Kind == 1 && p.Opcode == 15)), "婚礼NPC非零15入口为双方建立正式选图");
+        var selectionOpened = All();
+        That(selectionOpened.All(rows => rows.Any(p => p.Kind == 1 && p.Opcode == 15)), "婚礼NPC非零15入口为双方建立正式选图");
+        That(selectionOpened.All(rows => rows.Count(p => p is { Kind: 0, Opcode: 27, Body.Length: 42 }) == 1 &&
+            !rows.Any(p => p.Opcode is 28 or 29)),
+            "指定NPC副本也先以一次42B空27为每位成员建立原生scene2，不靠伪造加载完成越过屏障");
         byte[] selection = Coop.Selection(3541, 0, 2);
         first.Send(16, selection);
         var entry = All(); var map = entry[0].Single(p => p.Opcode == 29).Body;

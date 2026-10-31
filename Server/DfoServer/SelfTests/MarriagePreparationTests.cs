@@ -47,6 +47,9 @@ internal static class MarriagePreparationTests
         foreach (var invalid in new[] { first with { Id = 123 }, first with { Grade = "[side]" }, first with { SubType = 23 },
             first with { IntData = [-1, 0, 5] }, first with { IntData = [-1, -1, 0] } })
             That(!QuestMarriageProgress.Preparation(invalid), "不扩大未知任务、分类、子型或选择器");
+        foreach (var invalid in new[] { first with { Id = 20738 }, second with { Id = 20739 },
+            second with { IntData = [10002610, 0] } })
+            That(!QuestMarriageProgress.Supports(invalid), "统一缺省难度不放宽婚约任务形状及材料数量校验");
         var noMap = first with { Definition = new([new("appear map", [new(0, -1, null), new(0, -1, null),
             new(0, -1, null), new(0, -1, null)], [])]) };
         var unknownMap = noMap with { Definition = new([new("appear map", [new(0, -1, null), new(0, -1, null),

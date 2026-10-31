@@ -37,12 +37,16 @@ internal static class SelfTestRunner
         EvildomWarRecoverySchemaTests.RunCore();
         EvildomWarGuideSchemaTests.RunCore();
         MarriageResourceTests.RunCore();
+        CharacterDefaultAppearanceTests.RunCore();
         MarriageCoupleTests.RunCore();
         MarriageWeddingTests.RunCore();
+        SharedEffectItemTests.RunCore();
+        Testing.Inventory.BoosterCharacterPoolTests.RunCore();
         MarriagePersistenceTests.RunCore();
         MarriagePreparationTests.RunCore();
         MarriageLifecycleTests.RunCore();
         MarriageDungeonTests.RunCore();
+        MarriageDungeonDailySupplyTests.RunCore();
         PvpArenaTests.RunCore();
         PvpMissionTests.RunCore();
         PvpArenaCatalogTests.RunCore();

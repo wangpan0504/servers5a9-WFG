@@ -58,6 +58,7 @@ internal sealed class MarriageCatalog
     public ImmutableDictionary<int, MarriageRingDefinition> Rings { get; }
     public ImmutableDictionary<(int Job, int WeddingType), ImmutableArray<int>> WeddingAvatars { get; }
     public MarriageLovePoints LovePoints { get; }
+    // [cerashop restrict item] 为仅限已婚角色购买的商城商品编号，不是STK物品编号。
     public ImmutableArray<int> CeraShopRestrictItems { get; }
     public ImmutableDictionary<int, int> Seeds { get; }
     public MarriageLetter TreeRewardLetter { get; }

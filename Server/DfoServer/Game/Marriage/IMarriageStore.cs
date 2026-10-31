@@ -6,7 +6,10 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Marriage;
 
-internal sealed record MarriageCharacterCard(MailboxRecipient Recipient, IReadOnlyList<int> Equipment);
+internal sealed record MarriageCharacterCard(MailboxRecipient Recipient, IReadOnlyList<int> Equipment)
+{
+    public IReadOnlyList<int> ClearAvatarIds { get; init; } = [];
+}
 
 internal interface IMarriageStore
 {
@@ -17,7 +20,8 @@ internal interface IMarriageStore
     MailboxRecipient? FindMarriageRecipient(ushort characterId);
     MarriageCharacterCard? FindMarriageCard(ushort characterId);
     Character CommitMarriageHallTravel(AccountOwners.Lease owner, Character expected, MarriageRecord wedding,
-        Location destination, Location? returnPoint, long now);
+        Location destination, Location? returnPoint, long now, InventoryPlan? inventory = null,
+        MarriageRecord? afterGift = null);
     IReadOnlyList<MarriageRecord> FindPendingWeddings();
     MarriageRecord CommitMarriageSettlement(MarriageRecord before, MarriageRecord after, IReadOnlyList<MailboxDelivery>? mail = null);
     // 新建仅允许双方联合提交。before=null 时 after.Revision 必须为1；更新必须恰好递增1。

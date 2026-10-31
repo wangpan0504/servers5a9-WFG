@@ -45,16 +45,25 @@ internal static class QuestCompletionPlanTests
         var preparationReward = QuestExperiencePolicy.Prepare(character, preparation, parameters);
         Check(preparationReward.DifficultyWeight == 100 && preparationReward.Amount == 100,
             "结婚准备第一步缺省难度沿用参数查询默认百分比，不阻断已达成任务交付");
-        var secondPreparation = preparation with { Id = 20738, Condition = "[seeking]", SubType = -1, IntData = [10002610, 1] };
-        Check(QuestExperiencePolicy.Prepare(character, secondPreparation, parameters) is { DifficultyWeight: 100, Amount: 100 },
-            "结婚准备第二步真实寻物形状共用缺省难度，不在取得材料后卡住交付");
-        foreach (var unsupported in new[] { preparation with { Id = 20738 }, preparation with { Grade = "[side]" },
-            preparation with { SubType = 23 }, preparation with { IntData = [-1, 0, 5] },
-            secondPreparation with { Id = 20739 }, secondPreparation with { SubType = 0 },
-            secondPreparation with { IntData = [10002610, 0] }, secondPreparation with { Difficulty = "unknown" } })
-            Reject(() => QuestExperiencePolicy.Prepare(character, unsupported, parameters), "结婚缺省难度不扩大至未知任务或畸形目标");
-        Reject(() => QuestExperiencePolicy.Prepare(character, preparation with { Difficulty = "unknown" }, parameters),
-            "结婚准备显式未知难度仍拒绝");
+        var preparationSeeking = preparation with { Id = 20738, Condition = "[seeking]", SubType = -1, IntData = [10002610, 1] };
+        var seekingReward = QuestExperiencePolicy.Prepare(character, preparationSeeking, parameters);
+        Check(seekingReward.DifficultyKey == "" && seekingReward.DifficultyWeight == 100 && seekingReward.Amount == preparationReward.Amount,
+            "结婚准备第二步寻物同样使用缺省100百分比，不因省略难度阻止收集完成后的交付");
+        foreach (var omitted in new[] { quest with { Difficulty = null },
+            preparationSeeking with { Id = 100, Grade = "[side]" },
+            preparation with { Id = 101, Grade = "[mission]", SubType = 6, IntData = [1, 0, 1] } })
+        {
+            var defaultReward = QuestExperiencePolicy.Prepare(character, omitted, parameters);
+            Check(defaultReward.DifficultyKey == "" && defaultReward.DifficultyWeight == 100 && defaultReward.Amount == 100,
+                "未声明难度统一使用默认倍率，不再按任务编号、分类或目标类型建立白名单");
+        }
+        var zeroExperience = QuestExperiencePolicy.Prepare(character,
+            preparationSeeking with { RewardType = "[expert job]", Rewards = [new(0, 1, null)] }, parameters);
+        Check(zeroExperience.DifficultyWeight == 100 && zeroExperience.Amount == 0,
+            "授职首步的零经验合同独立于统一的缺省难度映射");
+        foreach (var explicitDifficulty in new[] { preparation, preparationSeeking })
+            Reject(() => QuestExperiencePolicy.Prepare(character, explicitDifficulty with { Difficulty = "unknown" }, parameters),
+                "两步结婚准备显式未知难度仍拒绝");
         var clear = ClearFixture(character);
         Check(QuestCompletionPlan.MatchesClearedActiveQuest(character, clear), "活动槽已达成且稳定接取/clear匹配");
         Check(!QuestCompletionPlan.MatchesClearedActiveQuest(character with { CompletedQuests = [3145] }, clear), "重复已领奖拒绝");

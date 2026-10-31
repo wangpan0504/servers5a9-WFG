@@ -25,6 +25,8 @@ internal sealed partial class MarriageHandler
     {
         if (packet.Opcode == 1034) return await RequestWedding(context, capture, MarriageWeddingRequests.Request(packet.Body));
         if (packet.Opcode == 1035) return await RespondWedding(context, capture, MarriageWeddingRequests.Response(packet.Body));
+        if (packet.Opcode == 1037)
+            return await PartnerCardAsync(context, capture, MarriageWeddingRequests.Character(packet.Body));
         var actor = capture.Character;
         var before = store.FindMarriage(actor.Id);
         if (packet.Opcode == 1036)
@@ -51,13 +53,6 @@ internal sealed partial class MarriageHandler
             return wedding is null ? await Reject(context, 1041, -2) : await EnterWeddingAsync(context, capture, wedding, entry);
         }
         if (before is null) return await Reject(context, packet.Opcode, -2);
-        if (packet.Opcode == 1037)
-        {
-            uint target = MarriageWeddingRequests.Character(packet.Body);
-            // 原生客户端以0查询本人伴侣；实际收件人仍由当前角色的有效婚约确定。
-            if (target != 0 && target != before.ContextId && target != before.Other(actor.Id)) return await Reject(context, 1037, -2);
-            return await PartnerCardAsync(context, before);
-        }
         if (packet.Opcode is 1038 or 1039)
         {
             var ring = packet.Opcode == 1038 ? MarriageWeddingRequests.UpgradeRing(packet.Body) : default;

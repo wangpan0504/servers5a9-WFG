@@ -179,7 +179,9 @@ internal sealed partial class DungeonHandler
             // 与修炼场指定直入、TAG/帝国15相同：城镇直入先发42B空27建立scene2，585之后、28/29之前；已在选图的不重复打开。
             if (notice.Kind == PartyDungeonNoticeKind.RaidSelection && notice.SceneTransition)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_direct_selection_scene", Guard);
-            // 非零15已选定NPC副本，完成队伍场景投影即可，不重新打开普通副本列表。
+            // 指定副本的非零15仍需27建立scene2；空列表不改变已选目标，不能省略客户端上下文。
+            if (notice.Kind == PartyDungeonNoticeKind.Selection && notice.Option != 0 && notice.SceneTransition)
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "party_direct_selection_scene", Guard);
             // 86结果选图语义映射至95已有27场景边界，不把团本选择投影为普通副本列表。
             if (notice.Kind == PartyDungeonNoticeKind.ResultSelection && notice.SceneTransition)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_result_selection_scene", Guard);

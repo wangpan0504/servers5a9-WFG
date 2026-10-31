@@ -29,6 +29,7 @@ internal sealed partial class CharacterRepository : ICharacterRenameCardStore
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.ActivateRenameCard");
         using var tx = write.Transaction;
+        if (!CharacterRenameCard.AllowsMarriage(ReadMarriage(db, tx, expected.Id))) return null;
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -49,6 +50,7 @@ internal sealed partial class CharacterRepository : ICharacterRenameCardStore
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CompleteRenameCard");
         using var tx = write.Transaction;
+        if (!CharacterRenameCard.AllowsMarriage(ReadMarriage(db, tx, expected.Id))) return CharacterRenameFailure.Unavailable;
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);

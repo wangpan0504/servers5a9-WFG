@@ -132,7 +132,7 @@ internal sealed class InventoryEventRejectedException() : InvalidOperationExcept
 
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
 internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null, TimeProvider? clock = null,
-    bool requirePosition = false)
+    bool requirePosition = false, bool requireMarriageState = false)
 {
     readonly ushort id = character.Id;
     readonly long revision = character.Revision;
@@ -142,11 +142,14 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
     readonly byte equipmentSlots = character.EquipmentSlotFlags;
     readonly ImmutableArray<CharacterSkill> skills = character.Skills.OrderBy(skill => skill.Id).ToImmutableArray();
     readonly DfoServer.GameWorld.Towns.Location? position = requirePosition ? character.Position : null;
+    readonly (Guid? Id, byte State)? marriage = requireMarriageState
+        ? (character.Marriage?.Id, character.Marriage?.State ?? 0) : null;
 
     // 时间资格也在提交前复验，不能凭到期前的规划继续穿戴越级装备。
     public bool MatchesIdentity(Character value) => value.Id == id && value.Revision == revision && value.Job == job &&
         value.GrowType == grow && value.Level == level && value.EquipmentSlotFlags == equipmentSlots &&
-        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position);
+        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position) &&
+        (marriage is null || marriage.Value.Id == value.Marriage?.Id && marriage.Value.State == (value.Marriage?.State ?? 0));
     public bool IsExpired(long? utcSeconds = null) => qualificationExpiresAt is not null &&
         (utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) >= qualificationExpiresAt.Value;
     // 组合多个移动步骤时取最早到期；只供同一程序集内的业务规划读取。

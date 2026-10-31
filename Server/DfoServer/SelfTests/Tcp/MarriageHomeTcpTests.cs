@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Marriage;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Marriage;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
@@ -27,7 +28,10 @@ internal static class MarriageHomeTcpTests
         var furniture = catalog.Furniture.Values.First(row => !row.Placements.IsEmpty);
         ushort anchor = checked((ushort)furniture.Placements[0].PositionId);
         var seed = catalog.Seeds.First(); var tree = catalog.Trees[seed.Value];
-        int water = tree.GrowPoints.OrderByDescending(row => row.Value).First().Key;
+        int water = tree.GrowPoints.OrderBy(row => row.Value).First().Key;
+        var extraSeeds = catalog.Seeds.Where(row => row.Key != seed.Key)
+            .Select((row, index) => (Seed: row.Key, Type: row.Value, Slot: checked((ushort)(70 + index)))).ToArray();
+        long savedExpiry = clock.GetUtcNow().AddDays(tree.ExpireDays).ToUnixTimeSeconds();
         var owners = new AccountOwners();
         using (var ownerA = owners.Acquire("homea", () => { }))
         using (var ownerB = owners.Acquire("homeb", () => { }))
@@ -42,19 +46,27 @@ internal static class MarriageHomeTcpTests
                     new(0, new(InventoryListType.Main, 67), new(10002915, ItemKind.Consumable, 3)),
                     new(0, new(InventoryListType.Main, 68), new(catalog.UpgradeRingTickets[1].ItemId, ItemKind.Consumable, 1)),
                     new(0, new(InventoryListType.Main, 69), new(10002901, ItemKind.Consumable, 1))
-                })
+                }).AddRange(extraSeeds.Select(row => new InventoryItem(0,
+                    new(InventoryListType.Main, checked((short)row.Slot)), new(row.Seed, ItemKind.Consumable, 1))))
             }, "marriage_fixture"));
             b = repository.Save(ownerB, b, resources.Towns.Room, resources.Towns.InitialReturn);
             var record = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), 701, a.Id, b.Id, clock.GetUtcNow().ToUnixTimeSeconds()) with
             {
                 State = 4, MarriedAt = clock.GetUtcNow().ToUnixTimeSeconds(),
+                Tree = new() { Seed = seed.Key, Expiry = savedExpiry, WaterDay = QuestCycle.Day(clock.GetUtcNow()) },
                 Storage = ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty.Add(0, new(furniture.ItemId, 2))
             };
-            record = record with { Members = record.Members.SetItem(a.Id, new() { CapsuleGauge = catalog.GrowthCapsule.MaxGage, LovePoints = 500 }) };
+            record = record with { Members = record.Members
+                .SetItem(a.Id, new() { CapsuleGauge = catalog.GrowthCapsule.MaxGage, LovePoints = 500 })
+                .SetItem(b.Id, new() { CapsuleDay = QuestCycle.Day(clock.GetUtcNow()), CapsulesTaken = catalog.GrowthCapsule.MaxTakenCount }) };
             repository.CommitMarriageTogether(ownerA, ownerB, a, b, new(a.Inventory, a.Inventory, "marriage_fixture"),
                 new(b.Inventory, b.Inventory, "marriage_fixture"), null, record);
         }
         first.Select(); second.Select(); Flush(first); Flush(second);
+        foreach (var peer in new[] { first, second })
+            That(U32(peer.MarriageRoom, peer.MarriageRoom.Length - 13) == seed.Value &&
+                U32(peer.MarriageRoom, peer.MarriageRoom.Length - 9) == savedExpiry,
+                "登录保留旧树存档并映射原生树index，不下发种子物品编号");
         foreach (var peer in new[] { first, second })
         {
             var room = resources.Towns.Room;
@@ -62,11 +74,30 @@ internal static class MarriageHomeTcpTests
             var packets = Flush(peer);
             That(packets.Any(p => p.Opcode == 23) && packets.Any(p => p.Opcode == 1011) && packets.Any(p => p.Opcode == 1012),
                 "正式婚房入场回放家具、树和共用背包");
+            var roomBody = packets.Last(p => p.Opcode == 1011).Body;
+            That(U32(roomBody, roomBody.Length - 13) == seed.Value && U32(roomBody, roomBody.Length - 9) == savedExpiry,
+                "已有夫妻树的婚房入场发送配置index及原期限，覆盖种植后重新进房崩溃路径");
         }
         Flush(first); Flush(second);
+        first.Send(1053, []);
+        var removedTree = Flush(first); Ack(removedTree, 1053, 0); Flush(second);
+        That(removedTree.Single(p => p.Opcode == 1015).Body.SequenceEqual(new byte[13]), "移除后原生树状态完整清空");
+        first.Send(1048, Structured(Build(w => { Slot(w, 1, 0, furniture.ItemId); Slot(w, 0, anchor, furniture.ItemId); })));
+        Ack(Flush(first), 1048, -1);
+        That(repository.FindMarriage(first.Id) is { Furniture.IsEmpty: true } unopened && unopened.Storage[0].Count == 2,
+            "尚未打开编辑窗口的请求不误报爱人正在占用，也不修改家具");
         first.Send(1047, Structured([0])); Ack(Flush(first), 1047, 0); Flush(second);
         second.Send(1047, Structured([0])); Ack(Flush(second), 1047, -4);
-        first.Send(1048, Structured(Build(w => { Slot(w, 1, 0, furniture.ItemId); Slot(w, 0, anchor, 0); })));
+        string furnitureBeforePlacement = fixture.Snapshot("SELECT aggregate_json FROM marriage_records");
+        second.Send(1048, Structured(Build(w => { Slot(w, 1, 0, furniture.ItemId); Slot(w, 0, anchor, furniture.ItemId); })));
+        Ack(Flush(second), 1048, -20);
+        ushort invalidAnchor = checked((ushort)catalog.RoomPositions.Keys.First(position =>
+            !furniture.Placements.Any(row => row.PositionId == position)));
+        first.Send(1048, Structured(Build(w => { Slot(w, 1, 0, furniture.ItemId); Slot(w, 0, invalidAnchor, furniture.ItemId); })));
+        Ack(Flush(first), 1048, -22);
+        That(fixture.Snapshot("SELECT aggregate_json FROM marriage_records") == furnitureBeforePlacement,
+            "未持编辑锁与不合法摆放位置分别返回原生-20/-22，不误报伴侣丢失或修改家具");
+        first.Send(1048, Structured(Build(w => { Slot(w, 1, 0, furniture.ItemId); Slot(w, 0, anchor, furniture.ItemId); })));
         Ack(Flush(first), 1048, 0);
         var peerFurniture = Flush(second);
         uint expectedScore = checked((uint)resources.ItemResources.Items.Get(furniture.ItemId).ShopPrice.Materials.Sum(row => (long)row.Count));
@@ -75,6 +106,18 @@ internal static class MarriageHomeTcpTests
             "家具摆放后配偶收到远端属性1016，逐字段匹配已提交身份、婚戒与资源材料装饰分");
         That(repository.FindMarriage(first.Id) is { } placed && placed.Furniture[anchor].ItemId == furniture.ItemId && placed.Storage[0].Count == 1,
             "编辑锁持有者摆放一件，持久共享背包只少一件");
+        first.Send(1048, Structured(Build(w => { Slot(w, 0, anchor, furniture.ItemId); Slot(w, 1, 3, furniture.ItemId); })));
+        Ack(Flush(first), 1048, 0); Flush(second);
+        That(repository.FindMarriage(first.Id) is { Furniture.IsEmpty: true } recalled &&
+            recalled.Storage[0].Count == 1 && recalled.Storage[3].Count == 1,
+            "原生双端同编号收回至空保管槽，数据库数量守恒");
+        first.Send(1048, Structured(Build(w => { Slot(w, 1, 3, furniture.ItemId); Slot(w, 0, anchor, furniture.ItemId); })));
+        Ack(Flush(first), 1048, 0); Flush(second);
+        string furnitureBeforeReplay = fixture.Snapshot("SELECT aggregate_json FROM marriage_records");
+        first.Send(1048, Structured(Build(w => { Slot(w, 1, 3, furniture.ItemId); Slot(w, 0, anchor, furniture.ItemId); })));
+        Ack(Flush(first), 1048, -1);
+        That(fixture.Snapshot("SELECT aggregate_json FROM marriage_records") == furnitureBeforeReplay,
+            "已耗尽来源的摆放重放返回原生请求错误，不误报伴侣丢失或推进关系版本");
         first.Send(1047, Structured([1])); Ack(Flush(first), 1047, 0);
         second.Send(1047, Structured([0])); Ack(Flush(second), 1047, 0);
         second.Send(1048, Structured(Build(w => { Slot(w, 0, anchor, furniture.ItemId); Slot(w, 1, 0, furniture.ItemId); })));
@@ -85,6 +128,31 @@ internal static class MarriageHomeTcpTests
         Ack(Flush(first), 1038, 0); Flush(second);
         That(repository.FindMarriage(first.Id)!.RingLevel == 1 && fixture.Query("SELECT gold FROM characters WHERE id=$p0", first.Id) is [[10000000L]],
             "正式升级戒指只扣现有升级券，不重复扣商店售价");
+        foreach (var (peer, job) in new[] { (first, (byte)0), (second, (byte)1) })
+        {
+            int weapon = resources.Characters.Get(job).Equipment.Single(row => row.Slot == 12).Template.Id;
+            for (int i = 0; i < 6; i++)
+            {
+                bool takeOff = i % 2 == 0;
+                peer.Send(19, Build(w =>
+                {
+                    w.Write(takeOff ? (byte)3 : (byte)0); w.Write(takeOff ? (short)12 : (short)9);
+                    w.Write(weapon); w.Write(0);
+                    w.Write(takeOff ? (byte)0 : (byte)3); w.Write(takeOff ? (short)9 : (short)12);
+                    w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
+                }));
+                var refreshed = Flush(peer);
+                That(refreshed.Single(packet => packet is { Kind: 1, Opcode: 19 }).Body[0] == 1,
+                    "婚房内普通装备反复脱穿走真实库存提交");
+                var actor = refreshed.Single(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0 &&
+                    packet.Body.Length >= 123 && U16(packet.Body, 121) == peer.Id).Body;
+                That(actor[28] == 4 && actor[29] == 1 && refreshed.Any(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 1),
+                    "连续Actor/Player刷新仍携带本人的已婚状态及当前婚戒，包含双方各六次脱穿");
+                That(!refreshed.Any(packet => packet.Opcode == 1003),
+                    "普通外观刷新直接保留原生字段，不补发会清理伴侣预览的婚姻初始化");
+            }
+            Flush(first); Flush(second);
+        }
         int loveBefore = repository.FindMarriage(first.Id)!.Members[first.Id].LovePoints;
         first.Send(1039, Structured(BitConverter.GetBytes(69u))); Ack(Flush(first), 1039, 0); Flush(second);
         That(repository.FindMarriage(first.Id)!.Members[first.Id].LovePoints == loveBefore + 1,
@@ -98,18 +166,45 @@ internal static class MarriageHomeTcpTests
             fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10002797", first.Id) is [[0L]],
             "正式心意点商店购买直接入夫妻共享仓库，扣一百点且不创建主背包家具");
         first.Send(1050, Structured(Build(w => { w.Write((ushort)65); w.Write(seed.Key); })));
-        Ack(Flush(first), 1050, 0); Flush(second);
+        var plantedTree = Flush(first); Ack(plantedTree, 1050, 0);
+        var partnerTree = Flush(second);
+        That(U32(plantedTree.Single(p => p.Opcode == 1015).Body, 0) == seed.Value &&
+            partnerTree.Single(p => p.Opcode == 1015).Body.SequenceEqual(plantedTree.Single(p => p.Opcode == 1015).Body),
+            "种植成功后双方收到相同原生树index，不泄漏服务端种子存档语义");
         while (repository.FindMarriage(first.Id)!.Tree!.Growth < tree.Steps[^1].GrowPoint)
         {
             first.Send(1051, Structured(Build(w => { w.Write((ushort)66); w.Write(water); })));
             Ack(Flush(first), 1051, 0); Flush(second);
-            if (repository.FindMarriage(first.Id)!.Tree!.Waters == tree.DayWaterCount) clock.Advance(TimeSpan.FromDays(1));
+            var currentTree = repository.FindMarriage(first.Id)!.Tree!;
+            if (currentTree.Waters == tree.DayWaterCount && currentTree.Growth < tree.Steps[^1].GrowPoint)
+            {
+                string beforeWater = fixture.Snapshot("SELECT item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", first.Id);
+                first.Send(1051, Structured(Build(w => { w.Write((ushort)66); w.Write(water); })));
+                Ack(Flush(first), 1051, -6);
+                That(fixture.Snapshot("SELECT item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", first.Id) == beforeWater,
+                    "每日次数耗尽不消耗洒水壶，跨日后仍可继续成长");
+                clock.Advance(TimeSpan.FromDays(1));
+                var daily = Flush(first);
+                That(daily.Any(p => p is { Opcode: 1015, Body.Length: 13 } && p.Body[12] == 0),
+                    "持续在线跨日后，普通请求即刷新已耗尽的浇水UI，不必重登或重进婚房");
+                var partnerDaily = Flush(second);
+                That(partnerDaily.Any(p => p is { Opcode: 1018, Body.Length: 7 } && p.Body[5] == 0),
+                    "胶囊已领满的配偶跨日恢复UI领取额度，不提前改写资产或发奖");
+            }
         }
         first.Send(1052, []);
         var harvest = Flush(first); Ack(harvest, 1052, 0); Flush(second);
         That(harvest.Any(p => p.Opcode == 1017) && repository.FindMarriage(first.Id)!.Tree is null,
             "种植浇水到成熟后领取实体奖励并清树");
         first.Send(1052, []); Ack(Flush(first), 1052, -4);
+        foreach (var extra in extraSeeds)
+        {
+            first.Send(1050, Structured(Build(w => { w.Write(extra.Slot); w.Write(extra.Seed); })));
+            var planted = Flush(first); Ack(planted, 1050, 0); Flush(second);
+            That(U32(planted.Single(p => p.Opcode == 1015).Body, 0) == extra.Type,
+                "每种PVF种子均映射对应树index " + extra.Seed);
+            first.Send(1053, []); Ack(Flush(first), 1053, 0); Flush(second);
+        }
         first.Send(1054, []); Ack(Flush(first), 1054, 0); Flush(second);
         first.Send(1055, []); Ack(Flush(first), 1055, 0); Flush(second);
         second.Send(1056, []); Ack(Flush(second), 1056, 0); Flush(first);
@@ -186,7 +281,7 @@ internal static class MarriageHomeTcpTests
             // 550 DUNGEON_ENTER_COUNT_INFO、1343 ADVENTURE_INFO、1349 ADVENTURE_LV_EXP 来自 LegacyServiceDayAsync；
             // 1536 ASSAULT_MODE_DAILY_INFO 来自 AssaultServiceDayAsync。720 WEEKLY_DUNGEON_INFO_RESETDAILY 同为日切通知。
             That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 14 or 21 or 22 or 23 or 24 or 36 or 356 or 541 or 550 or 574 or 720 or 1003 or 1005 or 1011 or 1012 or 1014 or 1015 or 1016 or 1017 or 1018 or 1343 or 1349 or 1379 or 1536 or 1681 ||
-                packet.Kind == 1 && (packet.Opcode is >= 1034 and <= 1056 or 21), $"婚房只接收所属协议及场景通知，实际{packet.Kind}/{packet.Opcode}");
+                packet.Kind == 1 && (packet.Opcode is >= 1034 and <= 1056 or 19 or 21), $"婚房只接收所属协议及场景通知，实际{packet.Kind}/{packet.Opcode}");
             packets.Add(packet);
         }
         throw new InvalidDataException("Marriage home notification budget exceeded");

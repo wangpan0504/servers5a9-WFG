@@ -21,15 +21,16 @@ internal static class MarriageCoupleTests
     {
         int before = Count;
         TravelRules();
+        FurnitureMoves(new MarriageResourceTests.Source().Parse());
         byte[] comment = [7, 0, 0, 0, 4, 0, 0, 0, 0xd6, 0xd0, 0xb9, 0xfa];
         That(MarriageCoupleRequests.CommentUpdate(comment) == new MarriageCommentUpdateRequest(7, "中国"),
             "留言正文按CP936字节数解析且没有结构前缀");
         Reject<InvalidDataException>(() => MarriageCoupleRequests.CommentUpdate([.. comment, 0]), "留言多余尾字节拒绝");
         Reject<InvalidDataException>(() => MarriageCoupleRequests.CommentUpdate([7, 0, 0, 0, 1, 0, 0, 0, 0x81]), "截断CP936双字节拒绝");
-        byte[] move = [.. new byte[13], 1, 2, 0, 0x2d, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+        byte[] move = [.. new byte[13], 1, 2, 0, 0x2d, 1, 0, 0, 0, 1, 0, 0x2d, 1, 0, 0];
         var parsed = MarriageCoupleRequests.MoveItem(move);
-        That(parsed.Source == new MarriageCoupleSlot(1, 2, 301) && parsed.Target == new MarriageCoupleSlot(0, 1, 0),
-            "移动请求保留容器、槽和物品，额外13字节前缀不误作字段");
+        That(parsed.Source == new MarriageCoupleSlot(1, 2, 301) && parsed.Target == new MarriageCoupleSlot(0, 1, 301),
+            "摆放请求两端保留同一家具编号，额外13字节前缀不误作字段");
         Reject<InvalidDataException>(() => MarriageCoupleRequests.MoveItem(move.AsSpan(13)), "遗漏结构前缀拒绝");
         Reject<InvalidDataException>(() => MarriageCoupleRequests.MoveItem([.. move, 0]), "移动请求多余字节拒绝");
         move[13] = 2;
@@ -38,6 +39,15 @@ internal static class MarriageCoupleTests
         Reject<InvalidDataException>(() => MarriageCoupleRequests.Empty([0]), "无正文请求不吞掉额外字段");
 
         var record = Record() with { Storage = ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty.Add(3, new(301, 2)) };
+        var qualified = new Character(1, 0, "婚姻资格", 0, new(38, 1, 450, 234), null) { Marriage = record };
+        var qualification = new InventoryCharacterPrecondition(qualified, requireMarriageState: true);
+        That(qualification.MatchesIdentity(qualified) &&
+            !qualification.MatchesIdentity(qualified with { Marriage = null }) &&
+            !qualification.MatchesIdentity(qualified with { Marriage = record with { State = 1 } }) &&
+            qualification.MatchesIdentity(qualified with { Marriage = record with { Revision = record.Revision + 1 } }),
+            "婚姻购买资格复验关系与阶段，不因单纯心意点或家具revision变化拒绝");
+        That(new InventoryCharacterPrecondition(qualified).MatchesIdentity(qualified with { Marriage = null }),
+            "普通库存业务不额外绑定婚姻资格");
         var decorated = record with { Furniture = ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty
             .Add(1, new(301, 3)).Add(2, new(301, 1)).Add(3, new(302, 1)) };
         That(MarriageAppearance.DecorationScore(decorated, new Dictionary<int, uint> { [301] = 200, [302] = 7 }) == 407 &&
@@ -72,8 +82,13 @@ internal static class MarriageCoupleTests
         That(update.Length == 23 && update[1] == 1 && BinaryPrimitives.ReadInt32LittleEndian(update.AsSpan(2)) == 301 &&
             BinaryPrimitives.ReadUInt16LittleEndian(update.AsSpan(6)) == 2 && update[12] == 0,
             "移动通知固定23字节，字段顺序按消费者而非请求布局");
-        byte[] tree = MarriageCouplePackets.TreeInformation(new() { Seed = 7, Expiry = 8, Growth = 9, Waters = 2 });
-        That(tree.SequenceEqual(new byte[] { 7, 0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0, 2 }), "树状态原码13字节合同");
+        var seedTypes = new Dictionary<int, int> { [7] = 1 };
+        var treeState = new MarriageTreeState { Seed = 7, Expiry = 8, Growth = 9, Waters = 2 };
+        byte[] tree = MarriageCouplePackets.TreeInformation(treeState, seedTypes);
+        That(tree.SequenceEqual(new byte[] { 1, 0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0, 2 }),
+            "树状态13字节按种子映射树index，不把STK编号发给客户端");
+        That(MarriageCouplePackets.TreeInformation(treeState, new Dictionary<int, int>()).SequenceEqual(new byte[13]) &&
+            treeState.Seed == 7, "模板失效只投影空树，不发送未知index或清理原存档");
         byte[] list = MarriageCouplePackets.CommentsAck(0, 7, posted.Record.Comments);
         That(list.Length == 59 && list[0] == 1 && BinaryPrimitives.ReadInt32LittleEndian(list.AsSpan(9)) == 1 &&
             BinaryPrimitives.ReadInt32LittleEndian(list.AsSpan(51)) == 4,
@@ -115,6 +130,65 @@ internal static class MarriageCoupleTests
             PartnerTeleportDefinition.Parse(file with { Stackable = raw with { DeclaredNeededMaterials = [7000] } }, ticket) is null,
             "未知传送参数与损坏购买价格拒绝，不能猜成已支持定义");
         Console.WriteLine($"PASS {Count - before} marriage couple core assertions");
+    }
+
+    static void FurnitureMoves(MarriageCatalog catalog)
+    {
+        var stored = Record() with { Storage = ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty.Add(0, new(301, 2)) };
+        var placed = MarriageCoupleRules.Move(stored, 1, new(1, 0, 301), new(0, 1, 301), catalog);
+        That(placed.Success && placed.Record.Furniture[1] == new MarriageFurnitureStack(301, 1) &&
+            placed.Record.Storage[0].Count == 1 && placed.Record.Revision == stored.Revision + 1 &&
+            stored.Furniture.IsEmpty && stored.Storage[0].Count == 2 && placed.Items.IsEmpty,
+            "原生双端同编号可向空位置摆放一件家具，数量守恒且不修改原快照");
+        var recalled = MarriageCoupleRules.Move(placed.Record, 2, new(0, 1, 301), new(1, 3, 301), catalog);
+        That(recalled.Success && recalled.Record.Furniture.IsEmpty && recalled.Record.Storage[3].Count == 1 &&
+            recalled.Record.Storage[0].Count == 1, "原生收回家具到空保管槽也回显源编号，不要求目标编号为零");
+        var merged = MarriageCoupleRules.Move(placed.Record, 2, new(0, 1, 301), new(1, 0, 301), catalog);
+        That(merged.Success && merged.Record.Furniture.IsEmpty && merged.Record.Storage[0].Count == 2,
+            "收回家具仍可合并原保管堆叠，不重复生成道具");
+        var moved = MarriageCoupleRules.Move(stored, 1, new(1, 0, 301), new(1, 4, 0), catalog);
+        That(moved.Success && !moved.Record.Storage.ContainsKey(0) && moved.Record.Storage[4].Count == 2,
+            "保管箱内部拖动继续声明空目标为零，整堆搬移");
+        var occupied = stored with { Storage = stored.Storage.Add(1, new(301, 3)) };
+        var swapped = MarriageCoupleRules.Move(occupied, 1, new(1, 0, 301), new(1, 1, 301), catalog);
+        That(swapped.Success && swapped.Record.Storage[0].Count == 3 && swapped.Record.Storage[1].Count == 2,
+            "保管箱内部交换按目标实际物品校验，保留两堆完整数量");
+        var floor = stored with { Storage = stored.Storage.SetItem(0, new(302, 1)) };
+        var invalidPlacement = MarriageCoupleRules.Move(floor, 1, new(1, 0, 302), new(0, 1, 302), catalog);
+        That(invalidPlacement.Result == -22 && ReferenceEquals(invalidPlacement.Record, floor),
+            "地板不能放在另一种家具位置时返回原生-22，而非伴侣信息错误");
+        var full = placed.Record with { Storage = Enumerable.Range(0, MarriageCoupleRules.StorageSlots)
+            .ToImmutableDictionary(slot => (ushort)slot, _ => new MarriageFurnitureStack(302, 1)) };
+        var noSpace = MarriageCoupleRules.Move(full, 1, new(0, 1, 301), new(1, 0, 301), catalog);
+        That(noSpace.Result == -13 && ReferenceEquals(noSpace.Record, full) && noSpace.Items.IsEmpty,
+            "满保管箱无法收回或交换到合法位置时返回原生容量错误，家具不丢失");
+        var overflow = placed.Record with { Storage = placed.Record.Storage.SetItem(0, new(301, int.MaxValue)) };
+        That(MarriageCoupleRules.Move(overflow, 1, new(0, 1, 301), new(1, 0, 301), catalog).Result == -13,
+            "同物品堆叠溢出也走容量错误，不伪装成关系丢失");
+        That(MarriageCoupleRules.Move(recalled.Record, 1, new(0, 1, 301), new(1, 3, 301), catalog).Result == -1 &&
+            MarriageCoupleRules.Move(stored, 99, new(1, 0, 301), new(0, 1, 301), catalog).Result == -2,
+            "已收回来源的旧请求和无婚姻资格使用不同返回值");
+        foreach (var (result, body) in new[] { (-1, "01FFFFFFFF"), (-2, "01FEFFFFFF"), (-13, "01F3FFFFFF"),
+            (-20, "01ECFFFFFF"), (-22, "01EAFFFFFF") })
+            Bytes(MarriageCouplePackets.Result(result), Convert.FromHexString(body),
+                "1048原生失败保持01加有符号四字节结果，按实际原因编码 " + result);
+        foreach (var (record, member, from, to) in new (MarriageRecord, ushort, MarriageCoupleSlot, MarriageCoupleSlot)[]
+        {
+            (stored, 99, new(1, 0, 301), new(0, 1, 301)),
+            (stored with { State = 1 }, 1, new(1, 0, 301), new(0, 1, 301)),
+            (stored, 1, new(1, 0, 302), new(0, 1, 302)),
+            (stored, 1, new(1, 0, 301), new(0, 1, 302)),
+            (stored, 1, new(1, 0, 301), new(0, 1, 0)),
+            (stored, 1, new(1, 0, 301), new(0, 2, 301)),
+            (stored, 1, new(1, 0, 301), new(1, 4, 301)),
+            (occupied, 1, new(1, 0, 301), new(1, 1, 0)),
+            (recalled.Record, 1, new(0, 1, 301), new(1, 3, 301))
+        })
+        {
+            var rejected = MarriageCoupleRules.Move(record, member, from, to, catalog);
+            That(!rejected.Success && ReferenceEquals(rejected.Record, record) && rejected.Items.IsEmpty,
+                "非成员、未婚、错编号、越界位置、错目标语义及收回重放均拒绝且无资产或revision变化");
+        }
     }
 
     static void TravelRules()
@@ -164,7 +238,7 @@ internal static class MarriageCoupleTests
         var stored = MarriageCoupleRules.Store(record, 1, furniture.ItemId, 2, 9, catalog);
         That(stored.Success && stored.Items.Single() == new MarriageItemDelta(1, furniture.ItemId, -2, 9),
             "家具收纳携带角色与精确原背包槽扣费要求");
-        var placed = MarriageCoupleRules.Move(stored.Record, 1, new(1, 0, furniture.ItemId), new(0, anchor, 0), catalog);
+        var placed = MarriageCoupleRules.Move(stored.Record, 1, new(1, 0, furniture.ItemId), new(0, anchor, furniture.ItemId), catalog);
         That(placed.Success && placed.Record.Furniture[anchor].Count == 1 && placed.Record.Storage[0].Count == 1,
             "堆叠家具摆放一件并保留仓库余量");
         var retrieved = MarriageCoupleRules.Move(placed.Record, 2, new(0, anchor, furniture.ItemId), new(1, 0, furniture.ItemId), catalog);

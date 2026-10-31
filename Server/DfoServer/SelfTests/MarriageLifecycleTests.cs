@@ -23,6 +23,7 @@ internal static class MarriageLifecycleTests
     public static void RunCore()
     {
         int checks = Count;
+        ActorMarriageFields();
         var hall = new TownScene(39, 8, "Church/Church.map", false);
         Guid ceremony = Guid.NewGuid();
         That(hall.OwnerKey("first", 1, ceremonyId: ceremony) == hall.OwnerKey("guest", 3, ceremonyId: ceremony) &&
@@ -55,10 +56,55 @@ internal static class MarriageLifecycleTests
             body[43] == 55 && body[44] == 1 && body[45] == 0x21 &&
             BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(46)) == 10 && BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(94)) == 22,
             "角色卡独立检查ACK前导、上下文、等级职业次序及首尾装备偏移");
+        int[] worn = new int[13];
+        worn[3] = 300; worn[12] = 1200;
+        var defaults = new Dictionary<byte, int> { [0] = 100, [3] = 301, [9] = 900, [10] = 1000 };
+        byte[] defaultCard = MarriageProjection.Card(0x11223344, card with { Equipment = worn }, defaults);
+        That(BinaryPrimitives.ReadInt32LittleEndian(defaultCard.AsSpan(46)) == 100 &&
+            BinaryPrimitives.ReadInt32LittleEndian(defaultCard.AsSpan(46 + 3 * 4)) == 300 &&
+            BinaryPrimitives.ReadInt32LittleEndian(defaultCard.AsSpan(46 + 9 * 4)) == 900 &&
+            BinaryPrimitives.ReadInt32LittleEndian(defaultCard.AsSpan(46 + 10 * 4)) == -1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(defaultCard.AsSpan(46 + 12 * 4)) == 1200,
+            "婚姻角色卡仅为空装扮槽填入职业默认外观，保留真实穿戴与武器槽");
+        int[] sources = new int[13];
+        sources[3] = 555;
+        worn[0] = 400; worn[10] = 400;
+        var clone = card with { Equipment = worn, ClearAvatarIds = sources };
+        byte[] cloneCard = MarriageProjection.Card(0x11223344, clone, defaults, id => id is 300 or 400);
+        That(BinaryPrimitives.ReadInt32LittleEndian(cloneCard.AsSpan(46)) == 100 &&
+            BinaryPrimitives.ReadInt32LittleEndian(cloneCard.AsSpan(46 + 3 * 4)) == 555 &&
+            BinaryPrimitives.ReadInt32LittleEndian(cloneCard.AsSpan(46 + 10 * 4)) == -1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(cloneCard.AsSpan(46 + 12 * 4)) == 1200,
+            "克隆有来源时投影来源，空来源使用默认装扮且不伪造武器装扮");
+        byte[] nativeDefaultCard = MarriageProjection.Card(0x11223344, card with { Equipment = new int[13] });
+        That(Enumerable.Range(0, 13).All(slot => BinaryPrimitives.ReadInt32LittleEndian(nativeDefaultCard.AsSpan(46 + slot * 4)) == -1),
+            "无显式默认映射的所有空槽保留原生-1，不以0覆盖客户端基础或觉醒默认");
         byte[] info = MarriageProjection.Information(complete, 1);
         That(BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(6)) == 1300 && info[4] == 4,
             "婚姻日期投影实际开场成婚时刻，不复用订婚创建时间");
         Console.WriteLine($"PASS {Count - checks} marriage lifecycle core assertions");
+    }
+
+    static void ActorMarriageFields()
+    {
+        var record = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), 123, 1, 2, 1000) with
+            { State = 4, MarriedAt = 1300, RingLevel = 2 };
+        var role = new Character(1, 0, "MarriageActor", 0, new(38, 1, 450, 234), null);
+        byte[] ordinary = DfoServer.Network.Builders.TownPackets.Actor(role, 0);
+        byte[] married = DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = record }, 0);
+        That(married[5 + 23] == 4 && married[5 + 24] == 2 && married.Length == ordinary.Length &&
+            Enumerable.Range(0, married.Length).Where(at => married[at] != ordinary[at]).SequenceEqual(new[] { 28, 29 }),
+            "Actor原生116字节头投影已婚及婚戒，只替换两字节，不改包长或无关字段");
+        foreach (var scene in new[] { DfoServer.Network.Builders.ActorSceneState.Town, DfoServer.Network.Builders.ActorSceneState.Dungeon })
+        {
+            var body = DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = record }, 0, sceneState: scene);
+            That(body[28] == 4 && body[29] == 2, "城镇及副本的全量Actor重建均保留关系状态");
+        }
+        foreach (var invalid in new[] { record with { State = 0 }, record with { FirstId = 3 } })
+        {
+            byte[] body = DfoServer.Network.Builders.TownPackets.Actor(role with { Marriage = invalid }, 0);
+            That(body[28] == 0 && body[29] == 0, "解除或不属于本人的关系不能泄漏为当前Actor婚姻身份");
+        }
     }
 
     public static void Run(MarriageCatalog catalog, ItemCatalog items)
