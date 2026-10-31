@@ -21,6 +21,7 @@ internal sealed class DungeonSpecialDropCatalog
     public const string IndependentPath = "etc/independent_drop.etc";
     public const string CardPath = "etc/independent_drop_card.etc";
     public ImmutableDictionary<int, DungeonIndependentDropRule> OrdinaryLukeCards { get; private init; } = ImmutableDictionary<int, DungeonIndependentDropRule>.Empty;
+    public ImmutableDictionary<int, ImmutableArray<DungeonIndependentDropRule>> CardsByMonster { get; }
     public const string WorldPath = "etc/worlddrop.etc";
     public ImmutableDictionary<int, ImmutableArray<DungeonIndependentDropRule>> IndependentByMonster { get; }
     public ImmutableDictionary<int, DungeonWorldDropRule> WorldByLevel { get; }
@@ -28,11 +29,13 @@ internal sealed class DungeonSpecialDropCatalog
     public DungeonSpecialDropCompatibility Compatibility { get; }
 
     private DungeonSpecialDropCatalog(IEnumerable<DungeonIndependentDropRule> independent, IEnumerable<DungeonWorldDropRule> world,
-        ImmutableArray<string> missing)
+        ImmutableArray<string> missing, IEnumerable<DungeonIndependentDropRule>? cards = null)
     {
         IndependentByMonster = independent.GroupBy(row => row.MonsterId).ToImmutableDictionary(group => group.Key, group => group.ToImmutableArray());
         WorldByLevel = world.ToImmutableDictionary(row => row.Level);
         MissingPaths = missing;
+        CardsByMonster = (cards ?? []).GroupBy(row => row.MonsterId)
+            .ToImmutableDictionary(group => group.Key, group => group.ToImmutableArray());
         var rows = IndependentByMonster.Values.SelectMany(values => values).ToArray();
         Compatibility = new(missing, rows.Count(row => row.ListFlag == 2), rows.Count(row => row.EnemyType != 0),
             WorldByLevel.Values.Count(row => row.ReservedValue != 0));
@@ -43,16 +46,18 @@ internal sealed class DungeonSpecialDropCatalog
         var missing = ImmutableArray.CreateBuilder<string>();
         var independent = pvf.Contains(IndependentPath) ? ParseIndependent(pvf.ReadTokens(IndependentPath), pvf.ResolveString) : MissingIndependent();
         var world = pvf.Contains(WorldPath) ? ParseWorld(pvf.ReadTokens(WorldPath), pvf.ResolveString) : MissingWorld();
-        var cards = pvf.Contains(CardPath) ? ParseOrdinaryLukeCards(pvf.ReadTokens(CardPath), pvf.ResolveString) : MissingCards();
-        return new(independent, world, missing.ToImmutable()) { OrdinaryLukeCards = cards };
-        ImmutableDictionary<int, DungeonIndependentDropRule> MissingCards()
-        { missing.Add(CardPath); return ImmutableDictionary<int, DungeonIndependentDropRule>.Empty; }
+        bool hasCards = pvf.Contains(CardPath);
+        var cards = hasCards ? ParseIndependent(pvf.ReadTokens(CardPath), pvf.ResolveString, cardTable: true) : MissingCards();
+        return new(independent, world, missing.ToImmutable(), cards)
+        { OrdinaryLukeCards = hasCards ? OrdinaryLukeCardsFrom(cards) : ImmutableDictionary<int, DungeonIndependentDropRule>.Empty };
+        ImmutableArray<DungeonIndependentDropRule> MissingCards()
+        { missing.Add(CardPath); return []; }
         IEnumerable<DungeonIndependentDropRule> MissingIndependent() { missing.Add(IndependentPath); return []; }
         IEnumerable<DungeonWorldDropRule> MissingWorld() { missing.Add(WorldPath); return []; }
     }
 
     internal static DungeonSpecialDropCatalog Create(IEnumerable<DungeonIndependentDropRule> independent,
-        IEnumerable<DungeonWorldDropRule> world) => new(independent, world, []);
+        IEnumerable<DungeonWorldDropRule> world, IEnumerable<DungeonIndependentDropRule>? cards = null) => new(independent, world, [], cards);
 
     internal static ImmutableArray<DungeonIndependentDropRule> ParseIndependent(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, bool cardTable = false)
     {
@@ -88,10 +93,12 @@ internal sealed class DungeonSpecialDropCatalog
 
     // 只保留已批准的24张普通卢克卡；3按本服兼容解释为单物品，4仅解析边界，不启用。
     internal static ImmutableDictionary<int, DungeonIndependentDropRule> ParseOrdinaryLukeCards(
-        IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+        IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
+        OrdinaryLukeCardsFrom(ParseIndependent(tokens, resolve, cardTable: true));
+
+    static ImmutableDictionary<int, DungeonIndependentDropRule> OrdinaryLukeCardsFrom(IEnumerable<DungeonIndependentDropRule> source)
     {
-        var rows = ParseIndependent(tokens, resolve, cardTable: true)
-            .Where(row => row.ItemId is >= 10159145 and <= 10159168).ToArray();
+        var rows = source.Where(row => row.ItemId is >= 10159145 and <= 10159168).ToArray();
         if (rows.Length != 24 || rows.Select(row => row.ItemId).Distinct().Count() != 24 ||
             rows.Select(row => row.MonsterId).Distinct().Count() != 24 || rows.Any(row =>
                 row.EnemyType != 0 || row.ListFlag != 3 || !row.ListValues.IsEmpty ||

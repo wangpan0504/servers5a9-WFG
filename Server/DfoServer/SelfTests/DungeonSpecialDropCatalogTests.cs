@@ -8,6 +8,7 @@ internal static class DungeonSpecialDropCatalogTests
 {
     public static void RunCore()
     {
+        PandemoniumRegionalDropTests.RunCore();
         int checks = Count;
         var names = new Dictionary<int, string>();
         PvfToken Tag(string value) { int key = names.Count + 1; names.Add(key, value); return new(3, key); }

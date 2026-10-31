@@ -19,6 +19,7 @@ internal static partial class HarlemMaterialDropTests
         int before = Count;
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
+        PandemoniumRegionalDropTests.RunResources(pvf, dungeons, rooms, items);
         var growth = Testing.SelfTestCatalogs.Growth(pvf, skills);
         var kills = Testing.SelfTestCatalogs.KillExperience(pvf);
         var drops = DungeonMonsterDropCatalog.Load(pvf);
