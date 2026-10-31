@@ -230,8 +230,138 @@ internal static class AvatarPackageTcpTests
                 new AvatarDetail { Socket0 = new(239, -1), Socket1 = new(239, -1) },
                 "金秋光环与特殊皮肤完整详情持久化两个多色空孔，其余孔及期限保持零");
         }
+        await RunOrdinaryWeaponLifecycleAsync(source, root, resources);
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
         string State() => Snapshot(fixture) + JsonSerializer.Serialize(fixture.Query("SELECT item_uid,detail FROM inventory_creature_details ORDER BY item_uid"));
+    }
+
+    // 保留原Job15跨职业领取；另用合法Job14真实开413，不手造或复制奖励UID。
+    static async Task RunOrdinaryWeaponLifecycleAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        const int weaponId = 415600033;
+        var items = resources.ItemResources.Items;
+        var template = items.Get(weaponId);
+        That(template is { Kind: ItemKind.Avatar, EquipmentSlot: 10, CloneAvatar: false },
+            "413已发武器走普通槽10，不借用透明克隆武器夹具");
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "ordinary-weapon-lifecycle"), gm: true, resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new("ObservedBox", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 14, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(14).Skills,
+                Inventory = new([new(0, Bag(68), InventoryRewardGrantService.Create(items.Get(490705413), shopExpiration: true))])
+            });
+        await fixture.StartAsync();
+        BoosterTcpTests.SetExpirationDebug(fixture, true);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            peer.Send(160, Convert.FromHexString("4400010000000900A18DC5180000"));
+            BoosterTcpTests.ExpectAck(peer, 490705413, 68, [(weaponId, 1)]);
+            BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 68, -1, 0);
+            CheckAvatarRows(peer.Expect(0, 14).Body, [new(weaponId, 0)]);
+            peer.Barrier();
+        }
+        InventoryItem[] original;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var character = repository.List(owner).Single();
+            That(character.Job == 14 && (template.Jobs & (1 << character.Job)) != 0 &&
+                InventoryMoveService.WearLevelSatisfied(character, template, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+                "普通武器真实领取角色符合资源职业与等级资格，跨职领取不代替可穿戴");
+            original = character.Inventory.Items.OrderBy(item => item.Uid).ToArray();
+            That(original.Length == 1 && original[0].Core.ItemId == weaponId,
+                "新fixture只存本次真实CMD160发出的唯一武器实例，源413已扣尽");
+        }
+        var weapon = original.Single(item => item.Core.ItemId == weaponId);
+        var worn = new InventorySlot(InventoryListType.Equipment, 10);
+        That(weapon is { Uid: > 0, Position.List: InventoryListType.Avatar, Core.ExpireTime: 0, Avatar.ExpireTime: 0 } &&
+            weapon.Avatar.ClearAvatarId == 0 && weapon.Avatar.ClearAvatarSourceUid == 0 && original.All(item => item.Position.List != InventoryListType.Equipment),
+            "413永久type4产物保真实UID和普通详情，夹具初始没有其他穿戴");
+        byte[] bagRow, playerRow;
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(); peer.Barrier();
+            VerifyPlayer(entry[3].Body, false);
+            bagRow = AvatarRow(peer.SpecialContainers[1].Body, weaponId, full: true);
+            playerRow = Move(peer, weapon.Position, worn);
+            Move(peer, worn, weapon.Position);
+            Bytes(Move(peer, weapon.Position, worn), playerRow, "同UID普通武器重穿恢复完全相同的130B Player条目");
+        }
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(); peer.Barrier();
+            Bytes(VerifyPlayer(entry[3].Body, true), playerRow, "断线重连恢复同普通武器完整Player条目");
+            VerifyPersisted(worn);
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync("ordinary-weapon-rebuilt");
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(); peer.Barrier();
+            Bytes(VerifyPlayer(entry[3].Body, true), playerRow, "实际服务实例重建后恢复同普通武器完整Player条目");
+            VerifyPersisted(worn);
+            Move(peer, worn, weapon.Position);
+        }
+        VerifyPersisted(weapon.Position);
+
+        byte[] Move(TcpPeer peer, InventorySlot from, InventorySlot to)
+        {
+            peer.Send(19, Build(writer =>
+            {
+                writer.Write((byte)from.List); writer.Write(from.Index); writer.Write(weaponId); writer.Write(1);
+                writer.Write((byte)to.List); writer.Write(to.Index); writer.Write(0); writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
+            }));
+            peer.Expect(1, 19, Build(writer =>
+            {
+                writer.Write((byte)1); writer.Write((byte)from.List); writer.Write(from.Index); writer.Write(1);
+                writer.Write((byte)to.List); writer.Write(to.Index);
+            }));
+            var cleared = peer.Expect(0, 1681).Body;
+            That(cleared.Length == 168 && cleared[0] == 1 && U16(cleared, 1) == 1 &&
+                U16(cleared, 3) == weapon.Position.Index && U32(cleared, 5) == uint.MaxValue,
+                "普通武器穿卸只清对应包裹格，完整165B装扮条目不截断");
+            if (to.List == InventoryListType.Avatar)
+                Bytes(AvatarRow(peer.Expect(0, 1681).Body, weaponId), bagRow,
+                    "普通武器卸下回填原165B核心、五孔、颜色与永久期限");
+            That(peer.Expect(0, 0x063F).Body[0] == 0, "普通武器穿卸同步原1号橱窗内容");
+            var actor = peer.Expect(0, 2).Body;
+            int actorAt = 134 + NameWidth("ObservedBox");
+            That(actor[actorAt - 1] == (to == worn ? 1 : 0) &&
+                (to != worn || actor[actorAt] == 10 && U32(actor, actorAt + 1) == weaponId && U32(actor, actorAt + 16) == 0),
+                "Actor安装或移除真实普通槽10，不制造克隆来源");
+            byte[] row = VerifyPlayer(peer.Expect(0, 2).Body, to == worn);
+            peer.Barrier();
+            VerifyPersisted(to);
+            return row;
+        }
+        void VerifyPersisted(InventorySlot position)
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var actual = new CharacterRepository(fixture.Database).List(owner).Single().Inventory.Items.OrderBy(item => item.Uid).ToArray();
+            var expected = original.Select(item => item.Uid == weapon.Uid ? item with { Position = position } : item).ToArray();
+            That(JsonSerializer.Serialize(actual) == JsonSerializer.Serialize(expected),
+                "每步新Repository重开保持完整库存UID、完整Core/Avatar/Creature，只有指定武器位置改变");
+        }
+        byte[] VerifyPlayer(byte[] body, bool equipped)
+        {
+            That(body[126] == (equipped ? 1 : 0), "普通武器Player穿戴数量准确，卸下不保留幽灵槽10");
+            if (!equipped) { That(U32(body, 127) == 0, "空穿戴列表之后立即是原克隆称号字段"); return []; }
+            var row = body.AsSpan(127, 130).ToArray();
+            That(row[0] == 10 && U32(row, 1) == weaponId && U32(row, 5) == 0 && row[9] == weapon.Core.Attr &&
+                U16(row, 10) == weapon.Core.Durability && U16(row, 12) == weapon.Core.Extension121 && U32(row, 14) == 0,
+                "Player普通槽10保真实ID、永久期限及完整前缀，不替换外观ID");
+            That(U32(row, 26) == 30 && U32(row, 60) == 4, "普通武器沿130B宽度携带完整五孔和颜色RAW");
+            var details = weapon.Avatar!;
+            var sockets = new[] { details.Socket0, details.Socket1, details.Socket2, details.Socket3, details.Socket4 };
+            for (int index = 0; index < sockets.Length; index++)
+                That(U16(row, 30 + index * 6) == (sockets[index].Type == 239 ? 0xFFEF : sockets[index].Type) &&
+                    U32(row, 32 + index * 6) == unchecked((uint)sockets[index].EmblemId), "普通武器逐孔保留真实孔型和空徽章标记");
+            That(U16(row, 64) == details.Color1 && U16(row, 66) == details.Color2 &&
+                U32(row, 87) == 4 && U32(row, 95) == 8 && U32(row, 108) == 5 && U32(row, 117) == 1 && U32(row, 122) == 4 &&
+                U32(body, 257) == 0, "普通武器五个尾RAW严格闭合130B，未挤占后继克隆称号字段");
+            return row;
+        }
     }
 
     static async Task RunMailAsync(ServerOptions source, string root, TcpTestResources resources, AvatarPackageCatalog packages)
