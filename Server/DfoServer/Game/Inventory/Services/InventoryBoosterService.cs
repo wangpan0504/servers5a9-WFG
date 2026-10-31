@@ -63,6 +63,13 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return result;
         var reward = opened!.Rewards.Single();
         var plan = result.Plan!;
+        if (reward.ItemId == 0)
+        {
+            if (plan.After.Gold - (long)grantBefore!.Gold != reward.Count)
+                return InventoryResult.Reject(4);
+            receipt = new(request.Slot, default, 0, reward.Count);
+            return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems } };
+        }
         var grantBeforeIndex = new InventoryIndex(grantBefore!);
         var destinations = plan.After.Items.Where(item => item.Core.ItemId == reward.ItemId &&
             item.Core.Count - PriorCount(item) > 0).ToArray();
@@ -406,6 +413,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         boosters.DirectActivationItems.Contains(id) || boosters.Get(id) is not { Available: true, Selection: not null })
                         return InventoryResult.Reject(19);
                 }
+                // 类型0有限池的0号为金币，经钱包规划和ACK27备选数量发布，不占实体槽位。
+                if (lottery && id == 0 && definition.AllowsLotteryGold)
+                    continue;
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
                     catalog.Get(id).HasAcquisitionEffect ||
