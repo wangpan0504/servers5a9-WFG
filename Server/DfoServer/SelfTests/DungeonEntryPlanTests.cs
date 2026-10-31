@@ -16,6 +16,7 @@ internal static class DungeonEntryPlanTests
 {
     internal static void RunCore()
     {
+        MooncreekDifficulty();
         var start = new DungeonMap("map", new(0, 0), 1001, "map/start.map");
         var boss = new DungeonMap("boss", new(1, 0), 1002, "map/boss.map");
         var maze = new DungeonMaze(0, 2, 1, "BB EE", [start.Position], [boss.Position], [start, boss],
@@ -55,6 +56,28 @@ internal static class DungeonEntryPlanTests
         That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze with { QuestConnectionTokens = [new(0, 0), new(0, 100), new(0, 2)] }] },
             character, 17, 100, 1, out _, out var connectionReason) && connectionReason == "quest-maze-unavailable",
             "非-1连接第三字段保留精确难度匹配，不擅自解释成最低难度");
+    }
+
+    static void MooncreekDifficulty()
+    {
+        foreach (int id in new[] { 3200,3201,3202 })
+        {
+            var definition = new DungeonDefinition(id,"dungeon/event/dragon_kurun_kor/sample.dgn",84,87,[],
+                [new("difficulty",[new(0,1)])]);
+            That(Enumerable.Range(0,6).All(value => definition.AllowsDifficulty((byte)value,false) == (value == 1)),
+                "月轮山三图仅接受资源固定难度1，不扩大到普通0或其它难度");
+            foreach (var sections in new DungeonRawSection[][]
+            {
+                [], [new("difficulty",[])], [new("difficulty",[new(7,1)])], [new("difficulty",[new(0,2)])],
+                [.. definition.RawSections,new("difficulty",[new(0,1)])],
+                [.. definition.RawSections,new("designate dungeon difficulty",[new(0,0)])]
+            })
+                That(!Enumerable.Range(0,6).Any(value => (definition with { RawSections=sections }).AllowsDifficulty((byte)value,false)),
+                    "月轮山缺失、畸形、重复或冲突的难度声明不能借特殊规则放行");
+            That(!(definition with { Id=3203 }).AllowsDifficulty(1,false) &&
+                !(definition with { Path="dungeon/other/sample.dgn" }).AllowsDifficulty(1,false),
+                "其它编号和资源路径不沿用月轮山固定难度规则");
+        }
     }
 
     static void QuestDifficultyRoutes(DungeonCatalog catalog, QuestCatalog quests)

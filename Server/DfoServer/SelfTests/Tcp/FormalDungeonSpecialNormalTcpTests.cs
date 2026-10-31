@@ -21,6 +21,7 @@ internal static partial class FormalDungeonTcpTests
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"special-normal-entry"),gm:true,resources:resources);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
+        MooncreekDungeonTcpTests.Verify(fixture,resources);
         VerifyBossRushEntry(fixture,resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
