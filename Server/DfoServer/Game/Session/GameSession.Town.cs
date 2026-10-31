@@ -52,6 +52,16 @@ internal sealed partial class GameSession
         TravelReason = plan.Reason;
         if (pendingRental is not null || HasPendingTownQuestCommit || !plan.Accepted)
             return null;
+        // 等待区只允许当前真实魔界大战队伍进入；拒绝必须发生在保存位置和发布切图之前。
+        if (ChannelEntry?.Type == 54 && Selected?.Position is { Town: 67, Area: 1 } &&
+            plan.Position is { Town: 67, Area: 2 } &&
+            (CurrentParty?.Invoke() is not { Settings.Kind: 5 } party ||
+             !party.Members.Any(member => ReferenceEquals(member.Actor.Session, this) &&
+                 member.Actor.Epoch == SelectionEpoch && member.IsCurrent())))
+        {
+            TravelReason = "evildom-war-party-required";
+            return null;
+        }
         var saved = SaveTownPosition(Selected!, plan.Position!, plan.Return);
         if (saved is null) { TravelReason = "guild-membership-required"; return null; }
         Selected = saved;

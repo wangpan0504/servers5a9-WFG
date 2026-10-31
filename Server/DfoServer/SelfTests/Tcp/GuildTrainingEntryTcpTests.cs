@@ -60,7 +60,7 @@ internal static class GuildTrainingEntryTcpTests
         for (int attempt = 0; attempt < 2; attempt++)
         {
             using var peer = Open(fixture, gamePort: ChannelTcpTests.Endpoints(fixture)[channel], channelNumber: channel);
-            peer.Select(tagEvildom: imperial ? [1403, 1400, 1632, 1393, 1394] : [1677, 1678, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: imperial ? [1403, 1400, 1632, 1393, 1394] : [1677, 1678, 1393, 1394]);
             peer.Send(1426); Drain(peer);
             if (imperial)
             {

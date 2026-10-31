@@ -157,6 +157,11 @@ internal static class EvildomWarChannelTests
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "魔界大战频道选角在赛丽亚房间，出门: " + s.TravelReason);
             That(s.Selected!.Position == hall, "出门一次即到 67/1 广场，不需要第二次门");
+            var unchanged = s.Selected;
+            That(!s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) &&
+                s.TravelReason == "evildom-war-party-required" && ReferenceEquals(s.Selected, unchanged),
+                "未组队不能进入等待区，不写位置或重新传送当前地图");
+            BindParty(s);
             That(s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) &&
                 s.Travel(new(Town, 1, hallBack.X, hallBack.Y, 5, Town, 2, 0)) && s.Travel(new(Town, 0, gate.X, gate.Y, 5, Town, 1, 0)) &&
                 s.Travel(new(Town, 1, hall.X, hall.Y, 5, Town, 0, 0)) && s.Selected!.Position == hall && s.Selected.Return == streetReturn,
@@ -173,12 +178,20 @@ internal static class EvildomWarChannelTests
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "魔界大战频道选角在赛丽亚房间，出门: " + s.TravelReason);
             That(s.Selected!.Position == hall, "正式选角出门一次落到艾尔丁纪念馆 67/1 广场");
+            BindParty(s);
             That(s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) && s.Selected!.Return == streetReturn,
                 "67/1 走到选图区域 67/2，返回地区不变: " + s.TravelReason);
             var receipt = s.EnterFormalDungeon(checked((uint)dungeon), 0, 0, catalog, rooms, null, itemResources.Items, _ => 0, itemResources.EpicPieces);
             results[dungeon] = receipt is null ? s.LastFormalDungeonRejection ?? "null" : "entered";
             Console.WriteLine($"EVILDOM {dungeon} {results[dungeon]}");
             s.ReturnToRoster();
+        }
+        void BindParty(GameSession s)
+        {
+            var parties = new DfoServer.Game.Party.PartyService(repo);
+            s.CurrentParty = () => parties.Current(s);
+            That(parties.SetInformation(s, 0, DfoServer.Game.Party.PartySettings.Default with { Kind = 5, KindArgument = 0 }).Accepted,
+                "等待区回归使用真实单成员魔界大战队伍");
         }
         // 67/2 的 TheEvildomWar_Town00.map 只有通往 67/1 的 movable 行，没有 -1 -1 选图门（剧情版 68/2 Waiting 图有
         // 1076 155 50 210 -1 -1，最后防线 115/1 有 1260 82 50 250 -1 -1）；可走区域只有 virtual movable area 16 154 1100 190，

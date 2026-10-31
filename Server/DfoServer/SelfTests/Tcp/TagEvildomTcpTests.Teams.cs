@@ -36,13 +36,13 @@ internal static partial class TagEvildomTcpTests
         byte[] two = TeamRows(0, 1, 3, 2, -1, -1), three = TeamRows(0, 1, 3, 2, 5, 4);
         using (var peer = Open(fixture, gamePort: port, channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             string firstOnly = Configuration();
             // 已有第一队时登录三、四、三不会凭登录顺序暗改第二队；提示必须导向真实设置窗口。
             foreach (ushort index in new ushort[] { 2, 3, 2 })
             {
                 ReturnToSelection(peer);
-                peer.Select(index, tagEvildom: [1677, 1678, 1709]);
+                peer.Select(index, room: false, tagEvildom: [1677, 1678, 1709]);
                 byte[] body = peer.TagEvildomInfo[^1].Body;
                 int titleLength = checked((int)U32(body, 0));
                 int textLength = checked((int)U32(body, 4 + titleLength));
@@ -62,12 +62,12 @@ internal static partial class TagEvildomTcpTests
             Save(two, 1);
             That(Configuration() == saved, "重复保存第二队不推进配置revision");
             ReturnToSelection(peer);
-            peer.Select(3, tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(3, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[2].Body, [2, 3, 2, 2], "重选第二队队首后安装第二队原始名册索引");
             RequestTeamRoster(peer);
             Save(three, 2);
             ReturnToSelection(peer);
-            peer.Select(5, tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(5, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, three, "第三队保存与重选完整恢复全部三队");
             Bytes(peer.TagEvildomInfo[2].Body, [2, 5, 2, 4], "第三队按客户端提交反序安装双角色");
             RequestTeamRoster(peer);
@@ -84,7 +84,7 @@ internal static partial class TagEvildomTcpTests
             {
                 string before = Configuration();
                 ReturnToSelection(peer);
-                peer.Select(selection.Index, tagEvildom: [1677, 1678, 1393, 1394]);
+                peer.Select(selection.Index, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
                 Bytes(peer.TagEvildomInfo[0].Body, three, "已有队伍切换后仍完整恢复三队原始成员");
                 byte standby = selection.Team switch { 0 => 1, 1 => 2, _ => 4 };
                 Bytes(peer.TagEvildomInfo[2].Body, [2, (byte)selection.Index, 2, standby],
@@ -97,11 +97,11 @@ internal static partial class TagEvildomTcpTests
                 saved = Configuration();
             }
             ReturnToSelection(peer);
-            peer.Select(4, tagEvildom: [1677, 1678, 1709]);
+            peer.Select(4, room: false, tagEvildom: [1677, 1678, 1709]);
             That(Configuration() == saved, "只登录备用成员不倒置或重新分配已有队伍");
             ReturnToSelection(peer);
-            peer.Select(5, tagEvildom: [1677, 1678, 1393, 1394]);
-            ExitRoom(peer, republish: true);
+            peer.Select(5, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
+            VerifyDirectEntry(peer);
             EnterTag(peer, 9608, uint.MaxValue);
             ReturnTag(peer);
 
@@ -116,7 +116,7 @@ internal static partial class TagEvildomTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture, gamePort: ChannelTcpTests.Endpoints(fixture)[46], channelNumber: 46))
         {
-            peer.Select(5, tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(5, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, three, "服务重开和重新选角保留三队及第三队选择");
             Bytes(peer.TagEvildomInfo[2].Body, [2, 5, 2, 4], "重开服务后仍使用真实第三队");
             RequestTeamRoster(peer);

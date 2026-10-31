@@ -14,7 +14,7 @@ internal static partial class TagEvildomTcpTests
             "(SELECT item_uid FROM character_inventory_slots WHERE character_id=$p1 AND list_type=3)",
             fixture.UtcNow.ToUnixTimeSeconds() - 1, standby.Id);
         using var peer = Open(fixture, gamePort: port, channelNumber: 46);
-        peer.Select(tagEvildom: [1677, 1678, 1709]);
+        peer.Select(room: false, tagEvildom: [1677, 1678, 1709]);
         string before = fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration") +
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
         peer.Send(1662, Setting(0, 2)); peer.Expect(1, 1662, [0, 19, 0]); peer.Expect(0, 1709); peer.Barrier();
@@ -22,11 +22,11 @@ internal static partial class TagEvildomTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid"),
             "过期备用穿戴在1662成功前明确拒绝，不半写配置或偷偷删资产");
         ReturnToSelection(peer);
-        peer.Select(2, tagEvildom: [1677, 1678, 1709]);
+        peer.Select(2, room: false, tagEvildom: [1677, 1678, 1709]);
         That(fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3", standby.Id) is [[0L]],
             "真正登录备用执行原有Expiry事务清理过期穿戴");
         ReturnToSelection(peer);
-        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); peer.Barrier();
+        peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]); peer.Barrier();
         return Task.CompletedTask;
     }
 
@@ -65,7 +65,7 @@ internal static partial class TagEvildomTcpTests
             "ON CONFLICT(account) DO UPDATE SET revision=revision+1,premium_contracts=excluded.premium_contracts",
             fixture.Options.DevelopmentAccount, "{\"27\":" + (now - 1) + "}");
         using var peer = Open(fixture, gamePort: port, channelNumber: 46);
-        peer.Select(expertContract: true, premiumContracts: true, tagEvildom: [1677, 1678, 1709]);
+        peer.Select(expertContract: true, premiumContracts: true, room: false, tagEvildom: [1677, 1678, 1709]);
         string configuration = fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration");
         string learning = fixture.Snapshot("SELECT * FROM character_skill_points WHERE character_id=$p0 ORDER BY context", standby.Id) +
             fixture.Snapshot("SELECT * FROM character_skill_bindings WHERE character_id=$p0 ORDER BY context,slot", standby.Id);
@@ -75,12 +75,12 @@ internal static partial class TagEvildomTcpTests
             fixture.Snapshot("SELECT * FROM character_skill_bindings WHERE character_id=$p0 ORDER BY context,slot", standby.Id),
             "1662成功前拒绝未规范化备用，保留配置与资产，不在Builder中伪退款或先ACK再缺1394");
         ReturnToSelection(peer);
-        peer.Select(2, expertContract: true, premiumContracts: true, tagEvildom: [1677, 1678, 1709]);
+        peer.Select(2, expertContract: true, premiumContracts: true, room: false, tagEvildom: [1677, 1678, 1709]);
         That(fixture.Query("SELECT level FROM character_skill_bindings WHERE character_id=$p0 AND context=0 AND skill_id=5", standby.Id) is [[long rank]] && rank == ordinary &&
             fixture.Query("SELECT sp FROM character_skill_points WHERE character_id=$p0 AND context=0", standby.Id) is [[long sp]] && sp == normalized.Trees[0].Sp,
             "真正登录备用沿既有权威事务回退等级和返还真实SP，非TAG隐藏修改");
         ReturnToSelection(peer);
-        peer.Select(expertContract: true, premiumContracts: true, tagEvildom: [1677, 1678, 1393, 1394]);
+        peer.Select(expertContract: true, premiumContracts: true, room: false, tagEvildom: [1677, 1678, 1393, 1394]);
         That(peer.Id == primary.Id && peer.TagEvildomInfo[^1].Opcode == 1394, "到期备用规范化后队首重登恢复1393→1394，不永久缺血蓝资料");
         peer.Barrier();
         return Task.CompletedTask;

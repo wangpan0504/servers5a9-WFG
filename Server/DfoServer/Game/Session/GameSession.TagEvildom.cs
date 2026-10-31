@@ -119,7 +119,9 @@ internal sealed partial class GameSession
         catch (InvalidDataException) { return ((TagEvildomProjection?)null, "invalid-team-shape"); }
         if (reason != "ready") return ((TagEvildomProjection?)null, reason);
         var committed = store.CommitTagEvildomConfiguration(owner, before, desired, TagEvildomPeriod.At(now));
-        tagEvildomPair = null;
+        // 原样保存不改变已安装的双Actor；直达准备场景后不再依赖出房请求重装资料。
+        if (committed.Revision != before.Revision || members is null || committed.Teams[committed.SelectedTeam].Empty)
+            tagEvildomPair = null;
         if (members is null || committed.Teams[committed.SelectedTeam].Empty) tagEvildomManualReset = true;
         return (snapshot with { State = snapshot.State with { Configuration = committed } }, "committed");
     });

@@ -645,5 +645,27 @@ internal static class EvildomWarTcpTests
             "广场不是房间式区域，出门后不再发返回城镇取角色Return的1379");
         That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[67L, 1L, 656L, 154L]],
             "落点已作为角色位置提交");
+        string before = fixture.Snapshot("SELECT * FROM characters WHERE id=$p0", peer.Id);
+        byte[] door = Build(writer =>
+        {
+            writer.Write((byte)67); writer.Write((byte)2); writer.Write((ushort)40); writer.Write((ushort)249);
+            writer.Write((byte)5); writer.Write((ushort)67); writer.Write((ushort)1); writer.Write(0u); writer.Write((byte)0);
+        });
+        peer.Send(36, door);
+        peer.Expect(1, 36, [0, 1, 0, 67, 2]); peer.Expect(0, 1709); peer.Barrier();
+        That(fixture.Snapshot("SELECT * FROM characters WHERE id=$p0", peer.Id) == before,
+            "未组队右门返回失败及提示，不发送23/24、不写角色位置和revision");
+        peer.Send(12, Build(writer =>
+        {
+            writer.Write((byte)0); writer.Write((byte)0); writer.Write(3); writer.Write("war"u8);
+            writer.Write((byte)4); writer.Write(0u); writer.Write((byte)5); writer.Write((ushort)0); writer.Write((byte)0);
+            writer.Write((byte)5); writer.Write((ushort)0); writer.Write((byte)7);
+        })); Drain(peer);
+        peer.Send(36, door);
+        var entered = Drain(peer);
+        That(entered.Any(packet => packet is { Kind: 0, Opcode: 23 } && packet.Body[2] == 67 && packet.Body[3] == 2) &&
+            entered.Any(packet => packet is { Kind: 0, Opcode: 24 }) &&
+            fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[67L, 2L]],
+            "真实创建魔界大战队伍后右门可进入等待区");
     }
 }

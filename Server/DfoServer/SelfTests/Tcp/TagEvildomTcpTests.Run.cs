@@ -79,9 +79,9 @@ internal static partial class TagEvildomTcpTests
         long initialMailCount = 0;
         using (var peer = Open(fixture, gamePort: port, channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, Teams(0, 1), "两名合格角色首次入城即提交编队，进图按钮所需1393已发出");
-            ExitRoom(peer, republish: true);
+            VerifyDirectEntry(peer);
             // 保留正常任务邀请邮件；本次通关只允许在已存在邮箱上新增一封，不把其它业务邮件算成重复奖励。
             initialMailCount = (long)fixture.Query("SELECT count(*) FROM mailbox_messages")[0][0]!;
             string economy = Economy(fixture);
@@ -151,7 +151,7 @@ internal static partial class TagEvildomTcpTests
         }
         using (var peer = Open(fixture, gamePort: port, channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677,1678,1393,1394]);
+            peer.Select(room: false, tagEvildom: [1677,1678,1393,1394]);
             That(fixture.Query("SELECT count(*) FROM mailbox_messages") is [[long totalMail]] && totalMail == initialMailCount + 1 &&
                 fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[1L]],
                 "真实重连仅恢复持久邮件/保护，不把遗留admitted或旧终点当新通关");
