@@ -136,7 +136,9 @@ internal sealed partial class GameSession
     public InventoryResult PlanAndCommitBooster(Func<Character, InventoryResult> plan,
         DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places, int itemId = 0) =>
         PlanAndCommitInventory(plan, 19, requireTown: false, allowSettlement: false, additionalGuard: () =>
-            places.PendingRule is null && (!places.Village && !places.SeriaRoom ||
+            places.PendingRule is null && (!places.Village && !places.SeriaRoom && !places.Dungeon ||
+                places.Dungeon && Phase == SessionPhase.Dungeon && formalDungeon is { } dungeon &&
+                    (!places.ExcludeAssault || dungeon.Assault is null) ||
                 Phase == SessionPhase.Town && (places.Village || places.SeriaRoom && Selected is { } character &&
                     towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)))), consumableItemId: itemId);
 

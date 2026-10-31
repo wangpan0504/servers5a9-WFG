@@ -139,7 +139,9 @@ internal static class BoosterQualificationTests
         const string open = "[action usable place]\n", close = "\n[/action usable place]";
         That(BoosterCatalog.ParseUsePlaces(open + "`[seria room]`" + close) is { Village: false, SeriaRoom: true, PendingRule: null },
             "仅房间声明不能放宽成整个Town");
-        foreach (string bad in new[] { open, open + "`[village]`", open + "`[dungeon]`" + close,
+        That(!session.PlanAndCommitBooster(Noop, BoosterCatalog.ParseUsePlaces(open + "`[dungeon]`" + close)).Accepted,
+            "仅副本声明不能意外在城镇开放");
+        foreach (string bad in new[] { open, open + "`[village]`", open + "`[unknown]`" + close,
             open + "`[village]` 1" + close, open + "`[village]` `[village]`" + close,
             open + "`[village]`" + close + open + "`[seria room]`" + close,
             "[nested]\n" + open + "`[village]`" + close + "\n[/nested]" })

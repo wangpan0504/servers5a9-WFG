@@ -16,6 +16,7 @@ internal static class BoosterTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         Inventory.BoosterTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+        Inventory.BoosterDungeonPlacesTests.Run(resources.Towns, resources.ItemResources);
         var itemResources = resources.ItemResources;
         var resourceWalletBox = itemResources.Boosters.Get(2683799);
         That(resourceWalletBox.Available && resourceWalletBox.Selection is null && resourceWalletBox.PackageRewards.IsDefaultOrEmpty &&
@@ -359,6 +360,7 @@ internal static class BoosterTcpTests
         await RestrictedOrdinaryAsync(fixture, resources, repo, owners);
         CharacterPool(fixture,resources,repo,owners);
         PlainCooldown(fixture, resources, repo, owners, clock);
+        DungeonPlaces(fixture, resources, repo, owners);
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
@@ -626,6 +628,98 @@ internal static class BoosterTcpTests
             fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id")+
             fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
+    static void DungeonPlaces(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const int sourceId = 10305518;
+        int[] rewards = [100390019, 100331725];
+        var items = resources.ItemResources.Items;
+        var candidate = CharacterCreation.Prepare("DungeonBox", resources.Characters.Get(0), resources.Towns.Room,
+            resources.Towns.InitialReturn, resources.Learning.Get);
+        var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
+        var sentinel = InventoryRewardGrantService.Create(items.Get(rewards[0]), utcNow: fixture.UtcNow) with { Marker16 = 23 };
+        Character created;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            created = repo.Create(owner, candidate with
+            {
+                Level = 20, AcceptedStoryLevel = 1,
+                InitialLearning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0, 0, 20,
+                    candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(20) }, resources.Learning),
+                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+                    .Add(new(0, Bag(9), sentinel))
+                    .Add(new(0, Bag(65), InventoryRewardGrantService.Create(items.Get(sourceId), 3, fixture.UtcNow)))
+                    .Add(new(0, Bag(67), InventoryRewardGrantService.Create(items.Get(490014072), utcNow: fixture.UtcNow))) }
+            });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            string before = State();
+            fixture.Sql("CREATE TRIGGER fail_dungeon_box AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='booster_open' BEGIN SELECT RAISE(ABORT,'dungeon box rollback'); END");
+            SendOpen(peer, 65, 1); peer.Closed();
+            That(State() == before, "并列副本地点礼包晚SQL失败回滚源、双奖励、限制位、UID、审计和revision");
+            fixture.Sql("DROP TRIGGER fail_dungeon_box");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            OpenAndVerify(peer, 1);
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            RejectSource(peer, 65, "Loading阶段不能消费副本礼包");
+            FormalDungeonTcpTests.Load(peer);
+            RejectSource(peer, 67, "仅城镇与房间礼盒在已加载正式副本仍拒绝");
+            OpenAndVerify(peer, 2);
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(created.Slot)[4].Body;
+            var saved = Read();
+            That(saved.Inventory.Find(Bag(65))!.Core.Count == 1 && saved.Inventory.Find(Bag(9))!.Core == sentinel,
+                "重连保留实际剩余源和未打标同模板哨兵，不补奖或回滚旧库存");
+            foreach (int id in rewards)
+            {
+                var granted = saved.Inventory.Items.Where(item => item.Core.ItemId == id && item.Core.DisjointForbidden).ToArray();
+                That(granted.Length == 2 && granted.All(item => item.Uid > 0 && item.Core == Expected(id)) &&
+                    granted.All(item => Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123)
+                        .Any(at => U16(full, at) == item.Position.Index && U32(full, at + 2) == id)),
+                    "城镇和副本各一次完整双奖励持久化并由重连123B库存行恢复 " + id);
+            }
+            peer.Barrier();
+        }
+        ItemCore Expected(int id) => InventoryRewardGrantService.Create(items.Get(id), utcNow: fixture.UtcNow) with { DisjointForbidden = true };
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single(role => role.Id == created.Id);
+        }
+        void RejectSource(TcpPeer peer, short slot, string reason)
+        {
+            string before = State();
+            SendOpen(peer, slot, 1); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(State() == before, reason + "，源、所有奖励与账本均不变");
+        }
+        void OpenAndVerify(TcpPeer peer, int opened)
+        {
+            SendOpen(peer, 65, 1);
+            ExpectAck(peer, sourceId, 65, [(100390019, 1), (100331725, 1)]);
+            byte[] delta = peer.Expect(0, 14).Body;
+            That(U16(delta, 1) == 3, "真实CMD160每次只同步源和两份完整奖励");
+            Entry(delta, 65, sourceId, 3 - opened);
+            foreach (int id in rewards)
+            {
+                int at = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123).Single(at => U32(delta, at + 2) == id);
+                Entry(delta, (short)U16(delta, at), id, 999_999_998);
+            }
+            peer.Barrier();
+            var saved = Read();
+            That(saved.Inventory.Find(Bag(9))!.Core == sentinel && rewards.All(id =>
+                    saved.Inventory.Items.Count(item => item.Core.ItemId == id && item.Core == Expected(id)) == opened),
+                "完整奖励与分解限制只赋予本次新建实例，原同模板装备保持不变");
+        }
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
     static void PlainCooldown(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners,
         ConsumableUseSessionTests.FakeClock clock)
     {
