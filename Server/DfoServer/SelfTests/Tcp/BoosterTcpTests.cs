@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -297,6 +298,7 @@ internal static class BoosterTcpTests
                 "重连恢复黎明结晶单开及批量开启的完整奖励数量");
             peer.Barrier();
         }
+        CharacterPool(fixture,resources,repo,owners);
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
@@ -309,6 +311,98 @@ internal static class BoosterTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+    static void CharacterPool(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const int sourceId = 490704573;
+        var items = resources.ItemResources;
+        var now = DateTimeOffset.UtcNow;
+        var source = InventoryRewardGrantService.Create(items.Items.Get(sourceId),utcNow:now);
+        var expired = InventoryRewardGrantService.Create(items.Items.Get(sourceId),utcNow:now.AddDays(-31));
+        That(source.ExpireTime == now.AddDays(30).ToUnixTimeSeconds() && expired.IsExpired(now.ToUnixTimeSeconds()),
+            "TCP代表角色的正常与过期源均由真实30天模板创建");
+        Character created;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount,() => { }))
+            created = repo.Create(owner,new("CharactorTcp",resources.Towns.Room,resources.Towns.InitialReturn)
+            { Job = 15, GrowType = 0x23, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                Inventory = new([new(0,Bag(65),source),new(0,Bag(66),expired)],Gold:12345) });
+        var pool = items.Boosters.Get(sourceId).Pools.Single(pool => pool.JobTag == ItemCatalog.JobTag(created.Job));
+        var range = ItemSlotBoundService.Range(ItemKind.Emblem,created.Inventory);
+        SetExpirationDebug(fixture,false);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            string before = State();
+            fixture.Sql("CREATE TRIGGER fail_charactor_tcp BEFORE INSERT ON character_inventory_slots WHEN NEW.character_id="+created.Id+
+                " AND NEW.list_type=0 AND NEW.slot_index="+range.Start+" BEGIN SELECT RAISE(ABORT,'charactor TCP rollback'); END");
+            SendOpen(peer,65,1);
+            peer.Closed();
+            That(State() == before,"真实charactor奖励槽晚SQL失败不发成功ACK或delta，源、完整核心、槽、钱包、审计与UID序列回滚");
+            fixture.Sql("DROP TRIGGER fail_charactor_tcp");
+        }
+        InventoryItem reward;
+        byte[] rewardRow;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            var before = Read();
+            That(before.Inventory.Find(Bag(65)) is { Uid: > 0, Core: var savedSource } && savedSource == source,
+                "SQL故障重连后恢复同一个完整30天源");
+            SendOpen(peer,65,1);
+            byte[] ack = peer.Expect(1,160).Body;
+            int id = ack.Length == 26 ? (int)U32(ack,18) : 0;
+            That(pool.Rewards.Any(row => row.Weight > 0 && row.ItemId == id && row.Count == 1),
+                "非零职业觉醒角色仅从本职业真实charactor池发奖");
+            That(ack.SequenceEqual(Build(writer =>
+            { writer.Write((byte)1); writer.Write((byte)0); writer.Write(sourceId); writer.Write((short)65);
+                writer.Write(0); writer.Write(0); writer.Write((ushort)1); writer.Write(id); writer.Write(1); })),
+                "普通6B CMD160沿18B成功头与8B单奖，完整ACK逐字节核对");
+            var saved = Read();
+            reward = saved.Inventory.Items.Single(item => item.Core.Kind == ItemKind.Emblem);
+            var template = items.Items.Get(id);
+            That(saved.Inventory.Find(Bag(65)) is null && saved.Revision == before.Revision+1 && reward.Uid > 0 &&
+                reward.Position.List == InventoryListType.Main && reward.Position.Index >= range.Start && reward.Position.Index <= range.End &&
+                reward.Core == InventoryRewardGrantService.Create(template,utcNow:now) && reward.Core.ExpireTime == 0 && saved.Inventory.Gold == 12345,
+                "ACK与SQL唯一完整永久Emblem一致，源仅耗一次，存入正式Emblem页且获得正UID");
+            // 该族新Emblem只有ID/数量/模板耐久与封装位；独立金样写其余109B为零，不调用生产Builder。
+            rewardRow = Build(writer =>
+            { writer.Write(reward.Position.Index); writer.Write(id); writer.Write(1); writer.Write((byte)0);
+                writer.Write(template.Durability); writer.Write(template.AttachType.Contains("[sealing]",StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0);
+                writer.Write(new byte[109]); });
+            peer.Expect(0,14,Build(writer =>
+            { writer.Write((byte)0); writer.Write((ushort)2); writer.Write((short)65); writer.Write(-1);
+                writer.Write(new byte[117]); writer.Write(rewardRow); }));
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(created.Slot)[4].Body;
+            int count = U16(full,3);
+            That(full[0] == 0 && full.Length == 5+count*123,"重登NOTI13保留完整Main行宽");
+            int at = Enumerable.Range(0,count).Select(index => 5+index*123).Single(index => U16(full,index) == reward.Position.Index);
+            That(full[at..(at+123)].SequenceEqual(rewardRow) && Read().Inventory.Find(reward.Position) == reward &&
+                !Enumerable.Range(0,count).Select(index => 5+index*123).Any(index => U16(full,index) == 65),
+                "重登逐字节恢复永久奖励，SQL正UID和完整核心不变，已耗源不再投影");
+            foreach (short slot in new short[] { 65,66 })
+            {
+                string before = State();
+                SendOpen(peer,slot,1); peer.Expect(1,160,[0,19,0]); peer.Barrier();
+                That(State() == before,"耗尽或已过期并可能被选角清理的源不再发奖，连接保持正常："+slot);
+            }
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount,() => { });
+            return new CharacterRepository(fixture.Database).List(owner).Single(role => role.Id == created.Id);
+        }
+        string State() => fixture.Snapshot("SELECT * FROM characters ORDER BY id")+
+            fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid")+
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index")+
+            fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account")+
+            fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind")+
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id")+
+            fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id")+
+            fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     internal static void SetExpirationDebug(TcpTestFixture fixture, bool enabled)

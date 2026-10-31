@@ -4,10 +4,16 @@ using System.Text.RegularExpressions;
 
 namespace DfoServer.GameWorld.Items;
 
-// `[grow type]` 行宽：职业标签、最低/最高等级、转职分支、抽数，其后物品/权重/数量。
+// `[grow type]` 五字段头含转职分支；`[charactor]` 四字段头按职业筛池，其后均为物品/权重/数量。
 internal static class BoosterGrowTypePools
 {
-    public static bool TryParse(string data, out BoosterPool? pool, out string? pending)
+    public static bool TryParse(string data, out BoosterPool? pool, out string? pending) =>
+        TryParse(data, false, out pool, out pending);
+
+    public static bool TryParseCharacter(string data, out BoosterPool? pool, out string? pending) =>
+        TryParse(data, true, out pool, out pending);
+
+    static bool TryParse(string data, bool character, out BoosterPool? pool, out string? pending)
     {
         pool = null;
         pending = null;
@@ -18,20 +24,22 @@ internal static class BoosterGrowTypePools
         if (job.Length < 3 || job[0] != '[' || job[^1] != ']' ||
             !Enumerable.Range(0, 16).Any(index => string.Equals(ItemCatalog.JobTag((byte)index), job, StringComparison.OrdinalIgnoreCase)))
             return Fail("转职奖池职业无效", out pending);
-        if (tokens.Length < 5)
+        int header = character ? 4 : 5;
+        int grow = -1;
+        if (tokens.Length < header)
             return Fail("转职奖池行宽无效", out pending);
         if (!int.TryParse(tokens[1], out int minimum) || minimum < 0 ||
             !int.TryParse(tokens[2], out int maximum) || maximum < minimum ||
-            !int.TryParse(tokens[3], out int grow) || grow is < 0 or > 15 ||
-            !int.TryParse(tokens[4], out int draws) || draws <= 0)
+            (!character && (!int.TryParse(tokens[3], out grow) || grow is < 0 or > 15)) ||
+            !int.TryParse(tokens[header - 1], out int draws) || draws <= 0)
             return Fail("转职奖池等级、分支或抽数无效", out pending);
-        if (tokens.Length == 5)
+        if (tokens.Length == header)
             return true;
-        if ((tokens.Length - 5) % 3 != 0)
+        if ((tokens.Length - header) % 3 != 0)
             return Fail("转职奖池行宽无效", out pending);
         var rows = new List<(int Id, decimal Weight, int Count)>();
         int scale = 0;
-        for (int i = 5; i < tokens.Length; i += 3)
+        for (int i = header; i < tokens.Length; i += 3)
         {
             if (!int.TryParse(tokens[i], out int id) || id <= 0 || !int.TryParse(tokens[i + 2], out int count) || count <= 0 ||
                 !decimal.TryParse(tokens[i + 1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) ||
@@ -53,7 +61,8 @@ internal static class BoosterGrowTypePools
                     JobTag = job,
                     MinimumLevel = minimum,
                     MaximumLevel = maximum,
-                    GrowType = grow
+                    GrowType = grow,
+                    IsCharacterPool = character
                 };
             return true;
         }
