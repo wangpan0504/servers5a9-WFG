@@ -13,12 +13,12 @@ internal static class CharacterSelection
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null) => owner.Execute(() =>
     {
-        bool leavingBeastTown = ChannelAreaLanding.LeavesBeastTown(channel, character.Position);
-        if (leavingBeastTown) resumeTown = false;
+        bool leavingRetiredTown = ChannelAreaLanding.LeavesRetiredTown(character.Position);
+        if (leavingRetiredTown) resumeTown = false;
         // 专属中央公园的旧位置/返回地区归回正常中央公园；仍由目录核对等级、任务及房间门口。
         // 频道专属街区已有普通返回地区时，从共享房间解析该记忆，不能让当前街区覆盖它。
         // 无返回地区的旧存档仍从原地区恢复；决斗场与五陵继续使用共享房间默认地区。
-        var returnSource = leavingBeastTown
+        var returnSource = leavingRetiredTown
             ? new Location(ChannelAreaLanding.CentralParkTown, 1, 0, 0)
             : character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ||
               character.Return is not null && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position.Town)
@@ -48,7 +48,7 @@ internal static class CharacterSelection
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
             // 旧存档可能把战舰街区记成返回地区；共享房间的 1379 与出门都取它，按初始地区修复，位置保持不变。
-            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.BeastTown or ChannelAreaLanding.XianVillageTown })
+            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.LegacyRetiredTown or ChannelAreaLanding.XianVillageTown })
                 character = repository.Save(owner, character, character.Position,
                     towns.ResolveRoomReturn(towns.Room, OrdinaryDistrict(character.Return), character.Level, completed));
         }
@@ -97,7 +97,7 @@ internal static class CharacterSelection
         Location? OrdinaryDistrict(Location? saved) => saved?.Town switch
         {
             ChannelAreaLanding.AntonTown or ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown => null,
-            ChannelAreaLanding.BeastTown => new(ChannelAreaLanding.CentralParkTown, 1, 0, 0),
+            ChannelAreaLanding.LegacyRetiredTown => new(ChannelAreaLanding.CentralParkTown, 1, 0, 0),
             _ => saved
         };
     });

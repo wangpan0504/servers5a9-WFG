@@ -73,7 +73,38 @@ internal sealed partial class GameSession
     public bool CanPublishRaidWaiting(RaidActor actor, byte type, RaidWaiting[] rows) => actor.IsCurrent &&
         raidRegistry?.IsWaitingSnapshot(actor.Channel, type, rows) == true;
 
-    void InvalidateRaids(bool disconnected = false)
+    // 单次退出的已提交回执，不存入Session，也不按角色号查找接管者。
+    internal sealed class DepartureNotices
+    {
+        internal RaidRegistry? Registry;
+        internal RaidRemovalNotices? Removal;
+        internal AntonRaidBattle? Battle;
+        internal AntonRaidDisconnectFact? Disconnect;
+
+        internal void CommitDisconnect()
+        {
+            var fact = Disconnect; Disconnect = null;
+            if (fact is not null) Registry?.CommitAntonDisconnect(fact);
+        }
+
+        internal void Publish(Exception? earlier = null)
+        {
+            var registry = Registry; var removal = Removal; var battle = Battle;
+            Registry = null; Removal = null; Battle = null;
+            List<Exception> failures = [];
+            try { if (removal is not null) registry!.PublishRemoval(removal); }
+            catch (Exception error) { failures.Add(error); }
+            try { if (battle?.Kind == RaidKind.Luke) battle.Publish(battle.View); }
+            catch (Exception error) { failures.Add(error); }
+            if (failures.Count == 0) return;
+            // 保留先发生的业务异常及全部发布异常；发布故障不能截断已经提交的本地失效。
+            if (earlier is not null) failures.Insert(0, earlier);
+            if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+            throw new AggregateException(failures);
+        }
+    }
+
+    void InvalidateRaids(DepartureNotices notices, bool disconnected = false)
     {
         // 魔界大战开战记录随选角代次失效（CurrentEvildomWar 比较 SelectionEpoch），这里只清战斗状态。
         var registry = raidRegistry;
@@ -89,8 +120,12 @@ internal sealed partial class GameSession
         raidDungeonAdmission = null;
         raidRegistry = null;
         partyDungeonRun = null;
-        registry?.RemoveSession(this, SelectionEpoch);
-        if (fact is not null) registry?.CommitAntonDisconnect(fact);
+        if (registry is not null)
+        {
+            notices.Registry = registry;
+            notices.Removal = registry.RemoveSessionNotices(this, SelectionEpoch);
+        }
+        notices.Disconnect = fact;
         preparedAntonDisconnect = null;
     }
 }

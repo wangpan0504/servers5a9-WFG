@@ -233,7 +233,6 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 
 定向组名以 [TCP 入口](Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs)为准；省略组名执行全部网络集成组。原 `quests` 已拆为互不共享数据库的 `quest-lifecycle`、`quest-extras`、`quest-chains`、`quest-chain-settlement`、`quest-metro` 五组，`quests` 仍作为五组的别名；原 `packet-capture` 的 HTTP 只读入口部分拆为 `packet-http`。`dungeon-settlement`、`inventory-persistence` 是已有自测的定向入口，`resource-survey` 是全量普查，均需显式指定。每组结果记录断言数、耗时、本组触发的共享资源加载耗时（`ResourceLoadMs`）、fixture 启动到就绪的次数与耗时（`FixtureStarts`/`FixtureStartMs`）及驱动提交量、工作集、期间分配量，内含共享资源和同进程服务；独立进程阶段的 `memory.json` 记录工作集峰值与停服前提交量。这些指标不等价于泄漏证明或进程树硬上限。
 
-`quest-hell-challenge` 默认保留深渊与魔兽资格任务的完整 TCP 矩阵。匹配资源缺少魔兽 5927 会面所需 town31 默认场景 NPC598 时，仅可显式选择 `quest-hell-challenge-without-beast-meeting`：它报告该正向场景 `SKIP`，仍执行深渊场景、5927 缺前置拒绝及哈林/阿尔伯特后续检查；若依赖存在则照常执行正例。该定向结果不等于默认完整组通过，不捕获或忽略解析、SQL、协议等其它失败。
 
 Windows、macOS 和 Linux 共用入口，仅报告实际运行的平台。纯文档修改只检查链接、路径、锚点、内容与 diff，不要求构建、自测或服务重启；缺少匹配资产时说明未执行项。
 

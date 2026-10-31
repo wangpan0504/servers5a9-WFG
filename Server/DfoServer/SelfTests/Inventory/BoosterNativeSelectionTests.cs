@@ -222,6 +222,9 @@ internal static class BoosterNativeSelectionTests
             var definition = resources.Boosters.Get(sourceId);
             That(definition.Available && definition.PendingRule is null, "真实普通类型源保持Available且无Pending " + sourceId + ":" + definition.PendingRule);
             That(definition.Selection is not null, "真实普通类型源保留选择定义 " + sourceId);
+            if (sourceId == 10098016)
+                That(definition is { CoolTime: 1000, CoolGroup: null, CooltimeMaintenance: null },
+                    "真实10098016原始声明仅cool time 1000，无组与维护位，仍产生会话冷却");
             var selection = definition.Selection!;
             That(selection.SelectionCount is 0 or 1 && selection.Categories.All(category => category.PendingRule is null),
                 "真实源保留count0全领或count1单选及完整分类 " + sourceId + ":" + selection.SelectionCount);
@@ -254,6 +257,10 @@ internal static class BoosterNativeSelectionTests
                                 ExpireTime = ExpectedExpiration(template.Expiration, now)
                             };
                             var expected = role.Inventory with { Items = [new(0, position, expectedCore)] };
+                            // stackable/10098001/10098016.stk 明示1000毫秒；独立字面期望，不复制实际计划或调用生产冷却策略。
+                            if (sourceId == 10098016)
+                                expected = expected with { ConsumableStates =
+                                    [new(ConsumableStateKind.Cooldown, 10098016, checked(now.ToUnixTimeMilliseconds() + 1000), 0, -10098016)] };
                             That(result.Accepted && result.Plan is not null && Json(result.Plan.After) == Json(expected) &&
                                 receipt!.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(choice.ItemId, choice.Count) }) &&
                                 result.Plan.ChangedCurrencies.IsEmpty && result.Plan.OverflowItems.IsEmpty && Json(role) == before,

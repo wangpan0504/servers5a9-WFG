@@ -164,8 +164,6 @@ internal static partial class StackableActionCatalog
         ["[gunblader story book]"] = 191,
         ["[open cashshop]"] = 192,
         ["[jumping lv]"] = 193,
-        ["[beast dungeon reset]"] = 194,
-        ["[add beast incount]"] = 195,
         ["[epic production plus count]"] = 196,
         ["[avatar transport stone]"] = 197,
         ["[change text balloon]"] = 198,

@@ -29,7 +29,7 @@ internal static class DungeonDropControlTests
             snapshot.Resolve(entry with { RaidEntry = new(Guid.NewGuid(), 1, 0) }) == raid,
             "剧情根据任务路线，攻坚根据正式RaidEntry，范围规则覆盖全局");
         foreach (var excluded in new[] { entry with { IsPractice = true }, entry with { IsTutorial = true },
-            entry with { IsBossRush = true }, entry with { IsTagEvildom = true }, entry with { BeastMode = true },
+            entry with { IsBossRush = true }, entry with { IsTagEvildom = true },
             entry with { DungeonId = 11006 }, entry with { DungeonId = 11008 } })
             That(snapshot.Resolve(excluded) == global, "专用玩法不冒充白图范围");
         settings.Replace([], false);

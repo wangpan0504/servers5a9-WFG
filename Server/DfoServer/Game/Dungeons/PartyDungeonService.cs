@@ -158,7 +158,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null,
-        bool beastMode = false, Action<string, byte>? onRejected = null)
+        Action<string, byte>? onRejected = null)
     {
         var party = parties.Current(leader);
         if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
@@ -177,7 +177,6 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         {
             hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo || previous.Entry.IsInfernoParty;
             hellLegend = previous.Entry.IsHellLegend;
-            beastMode = previous.Entry.BeastMode;
             questId = dungeon == previous.Entry.DungeonId &&
                 leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
                 ? previous.Entry.QuestId : 0;
@@ -191,7 +190,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
-                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, beastMode, allowDimensionHidden);
+                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, allowDimensionHidden);
                 if (plan is null)
                 {
                     if (member.Actor.Session.LastFormalDungeonRejection is { } reason)

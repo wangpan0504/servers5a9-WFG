@@ -88,7 +88,7 @@ internal static class SpringTreasureDropTests
             SpringTreasureDropPolicy.IsPotential(definition, entry), "严格推荐区间及队长不合格时仍预留个人成员容量");
         That(!SpringTreasureDropPolicy.IsRecommended(definition with { Id = 530 }, entry with { DungeonId = 530 }, 90), "已证黎明裂缝排除");
         foreach (var excluded in new[] { entry with { IsPractice = true }, entry with { IsTutorial = true }, entry with { IsQuestReplay = true },
-            entry with { BeastMode = true }, entry with { IsOrdinaryLuke = true }, entry with { IsOrdinaryPrey = true },
+            entry with { IsOrdinaryLuke = true }, entry with { IsOrdinaryPrey = true },
             entry with { IsCosmo = true }, entry with { IsInfernoParty = true }, entry with { IsTagEvildom = true },
             entry with { IsImperialArena = true }, entry with { IsBossRush = true }, entry with { QuestId = 123 },
             entry with { HellPartyMode = 1 }, entry with { IsAncientInfinite = true } })

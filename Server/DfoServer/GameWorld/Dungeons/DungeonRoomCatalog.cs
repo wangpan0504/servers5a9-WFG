@@ -108,17 +108,6 @@ internal sealed class DungeonRoomCatalog
         return paths.AsReadOnly();
     }
 
-    public DungeonRoomDefinition? TryBeastMap(int mapId, int x, int y, int dungeonId)
-    {
-        if (mapId <= 0 || !maps.TryGetValue(mapId, out string? path) || !archive.Contains(path)) return null;
-        var source = archive;
-        var tokens = source.ReadTokens(path);
-        var roomMonsters = ReferenceEquals(source, archive) ? monsters : DungeonCatalog.ParseDirectory(source.ReadTokens("monster/monster.lst"), source.ResolveString, "monster");
-        var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
-        return ParseResource(new("map", new(x, y), mapId, path), tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
-            requirePassiveDefinitions: false, ResolveAiCharacter, allowUnresolvedSpecialMetadata: true);
-    }
-
     public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true, bool allowUnresolvedSpecialMetadata = false)
     {
         string path = PvfArchive.NormalizePath(map.Path);

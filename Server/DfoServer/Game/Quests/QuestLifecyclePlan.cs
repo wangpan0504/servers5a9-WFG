@@ -379,16 +379,7 @@ internal sealed class QuestLifecyclePlan
     internal static readonly int[] HarlemSeekingIds = [6053, 6056, 6059];
 
     internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 &&
-        (HarlemSeeking(quest) || BeastSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
-
-    // 魔兽材料任务10000（beast_acce_01）同样声明`seeking / sub type 0`，但[sub type]的含义与黑市EXP相同：
-    // 服务端寻物只读int data物品/数量对与真实库存。它比6053/6056/6059多一个约束——[dungeon info]整组只指向
-    // 首版原图310–314或兼容网关5335–5339（参数-1）；整组五图必须完整，不能混用两组或缺项。
-    internal static bool BeastSeeking(StoryQuest quest) => quest is { Id: 10000, Condition: "[seeking]", SubType: 0, RewardType: "[item]" } &&
-        ValidSeeking(quest) && quest.Definition is { Diagnostics.Length: 0, Dungeons.Length: 5 } definition &&
-        definition.Dungeons.All(row => row.Parameter == -1) &&
-        (definition.Dungeons.Select(row => row.DungeonId).Order().SequenceEqual(Enumerable.Range(BeastDungeonRotation.FirstDungeonId, 5)) ||
-         definition.Dungeons.Select(row => row.DungeonId).Order().SequenceEqual(Enumerable.Range(BeastDungeonRotation.FirstGatewayDungeonId, 5)));
+        (HarlemSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
 
     internal static bool HarlemSeeking(StoryQuest quest) => quest is { Condition: "[seeking]", SubType: 0, Grade: "[side]", RewardType: "[item]" } &&
         HarlemSeekingIds.Contains(quest.Id) && quest.MainQuest is null && quest.IntData.Count == 2 && quest.IntData[1] == 3 && ValidSeeking(quest) &&

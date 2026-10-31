@@ -405,6 +405,17 @@ internal static class LukeRaidClockTests
         readonly object gate = new();
         long stamp;
         internal int Callbacks;
+        // 只读指定团本one-shot的已登记截止；不把其它Runtime定时器当作Luke重排证据。
+        internal (Guid Instance, long Due)[] PendingDeadlines
+        {
+            get
+            {
+                lock (gate) return timers.Where(timer => !timer.Stopped && !timer.Inert && timer.Due != long.MaxValue &&
+                    timer.State is LukeRaidClocks.Lease).Select(timer =>
+                    (((LukeRaidClocks.Lease)timer.State!).Battle.Instance, timer.Due)).ToArray();
+            }
+        }
+
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() { lock (gate) return stamp; }
         public override DateTimeOffset GetUtcNow() => (origin ?? DateTimeOffset.Parse("2026-10-25T00:00:00Z")).AddMilliseconds(GetTimestamp());

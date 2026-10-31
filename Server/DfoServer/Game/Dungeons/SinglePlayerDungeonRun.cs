@@ -52,19 +52,8 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     public DungeonRunResult Result { get; } = result;
     internal int DummyStageIndex { get; } = dummyStageIndex;
     internal DfoServer.Game.TagEvildom.TagEvildomClearFact? TagEvildomClear { get; init; }
-    internal DungeonRoomClearFact? BeastRoomClear { get; init; }
-    internal BeastStageRewardPlan? BeastStageReward { get; private set; }
-    internal bool BeastStageRewardFrozen { get; private set; }
     internal int? ImperialArenaRound { get; init; }
 
-    internal void FreezeBeastStageReward(BeastStageRewardPlan? plan)
-    {
-        if (plan is not null && !ReferenceEquals(plan.Prepared, this) ||
-            BeastStageRewardFrozen && !ReferenceEquals(BeastStageReward, plan))
-            throw new InvalidOperationException("原死亡的阶段奖励规划已冻结，不能替换");
-        BeastStageReward = plan;
-        BeastStageRewardFrozen = true;
-    }
 }
 
 // 正式战斗组件持有的能力对象。协议 handler 不创建权威，也不把客户端死亡字段变成此事件。
@@ -92,9 +81,7 @@ internal sealed class ConfirmedDungeonMonsterDeath
 internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms, IReadOnlyList<DungeonRouteConnection> Connections)
 {
     public int? PassiveClearTarget { get; init; }
-    public IReadOnlyList<BeastEncounterRoom> BeastEncounters { get; init; } = [];
-    public IReadOnlyList<DungeonMonsterPlan> AllRooms => BeastEncounters.Count == 0 ? Rooms :
-        Rooms.Concat(BeastEncounters.Select(row => row.Plan)).ToArray();
+    public IReadOnlyList<DungeonMonsterPlan> AllRooms => Rooms;
 }
 
 internal sealed partial class SinglePlayerDungeonRun
@@ -110,8 +97,6 @@ internal sealed partial class SinglePlayerDungeonRun
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
         public bool Loaded { get; set; }
-        public int BeastStage { get; init; } = -1;
-        public ushort? BeastBossKey { get; init; }
         public bool Cleared => Altar is { } altar ? altar.Completed :
             Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
     }
@@ -126,10 +111,6 @@ internal sealed partial class SinglePlayerDungeonRun
     private readonly Room[] dummyRooms;
     private int activeDummyStage;
     private readonly Room[] allRooms;
-    private readonly Dictionary<(DungeonPoint Sentinel, int Stage), Room> beastCandidates;
-    private readonly Dictionary<DungeonPoint, int> beastBindings = [];
-    private int beastCompletedStages;
-    internal int BeastStageAt(DungeonPoint point) => beastBindings.GetValueOrDefault(point, -1);
     private readonly Dictionary<DungeonPoint, Room> conditionalRooms;
     private int storyStageIndex;
     private DungeonPoint storyBossPosition;
@@ -302,12 +283,7 @@ internal sealed partial class SinglePlayerDungeonRun
         conditionalRooms = route.Rooms.Where(plan => plan.Room.Map.IsConditional).ToDictionary(plan => plan.Room.Map.Position,plan => new Room(plan));
         dummyRooms = entry.Maze.DummyStages.Select(map => baseRooms.FirstOrDefault(room => room.Plan.Room.Map == map) ??
             new Room(route.Rooms.Single(plan => plan.Room.Map == map))).ToArray();
-        beastCandidates = route.BeastEncounters.ToDictionary(row => (row.Sentinel, row.Stage), row => new Room(row.Plan)
-        {
-            BeastStage = row.Stage,
-            BeastBossKey = row.Plan.Monsters.Single(monster => monster.MonsterId == row.BossId && monster.IsBoss && monster.IsBlocking).ObjectKey
-        });
-        allRooms = baseRooms.Concat(dummyRooms).Concat(layeredRooms.Values).Concat(conditionalRooms.Values).Concat(beastCandidates.Values).Distinct().ToArray();
+        allRooms = baseRooms.Concat(dummyRooms).Concat(layeredRooms.Values).Concat(conditionalRooms.Values).Distinct().ToArray();
         passiveClearTarget = route.PassiveClearTarget;
         if (ResolvePassiveLayerTerminal() is { } passiveTerminal)
             this.entry = entry with { PassiveClearTerminalMap = passiveTerminal.Plan.Room.Map };
@@ -319,8 +295,6 @@ internal sealed partial class SinglePlayerDungeonRun
             this.entry = entry with { BossMap = cinematicBoss.Plan.Room.Map };
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
-        if (BeastEncounterPlan.IsNative(entry) && current.Plan.Room.Map.Kind == "Beast")
-            current = BindBeastRoom(entry.StartMap.Position);
         storyStageIndex = entry.StartMap.StoryStageIndex;
         // 只有完整MAP级dummy链拥有动态标记，普通剧情分段保留原终点坐标。
         storyDummyBosses = storyRooms.Length >= 2 && storyRooms.SkipLast(1).All(room =>
@@ -344,8 +318,6 @@ internal sealed partial class SinglePlayerDungeonRun
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
         if (approvedRoute is null || combatAuthority is null)
             return false;
-        if (!BeastEncounterPlan.Validate(entry, approvedRoute.BeastEncounters))
-        { reason = "invalid: 原图魔兽六阶段候选不完整"; return false; }
         if ((entry.DungeonId == 4000 || entry.Maze.IsLostLand || entry.LostLand is not null) &&
             (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null || entry.QuestId != 0 ||
                 entry.Difficulty != 0 || entry.IsPractice || entry.IsQuestReplay || entry.HellPartyMode != 0 || entry.PartyRoute is not null ||
@@ -397,14 +369,13 @@ internal sealed partial class SinglePlayerDungeonRun
             reason = "invalid: 普通猎杀路线与原请求接取身份不一致";
             return false;
         }
-        if (entry.BeastMode != (entry.Maze.BeastLayout is not null) ||
-            entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" &&
-                !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") && !(entry.BeastMode && entry.BaseBossMap.Kind == "Beast") ||
+        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" &&
+                !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
             entry.Maze.ConditionalMaps.Any(map => !map.IsConditional || entry.Maze.BossEntrance is null ||
                 !maps.Any(source => source.Position == map.Position && source.Kind == map.Kind)) ||
             maps.Any(map => map.Position.X < 0 || map.Position.Y < 0 || map.Position.X >= entry.Maze.Width || map.Position.Y >= entry.Maze.Height ||
-                map.Kind is not ("map" or "boss") && !(entry.BeastMode && map.Kind == "Beast")) || approvedRoute.Rooms.Count == 0 ||
+                map.Kind is not ("map" or "boss")) || approvedRoute.Rooms.Count == 0 ||
             approvedRoute.Rooms.Count != maps.Concat(entry.Maze.DummyStages).Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps).Distinct().Count() ||
             approvedRoute.Rooms.Select(plan => plan.Room.Map).Distinct().Count() != approvedRoute.Rooms.Count ||
             approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map) && !entry.Maze.DummyStages.Contains(plan.Room.Map) &&
@@ -465,7 +436,7 @@ internal sealed partial class SinglePlayerDungeonRun
             {
                 // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。伴侣行按同一放行集合复验。
                 resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
-                    entry.BeastMode ? entry.MonsterBasisLevel : entry.BasisLevel,
+                    entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
                     companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
@@ -612,12 +583,8 @@ internal sealed partial class SinglePlayerDungeonRun
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
             current.Elevator is { Completed: false } || (entry.LostLand is null && !current.Cleared) || HasPendingLayer() ||
             !CanMoveHopeOrOrdinary(target) ||
-            !rooms.TryGetValue(target, out Room? next) ||
-            BeastEncounterPlan.IsNative(entry) && next.Plan.Room.Map.Kind == "Beast" &&
-                !beastBindings.ContainsKey(target) && (beastCompletedStages != beastBindings.Count || beastBindings.Count >= 6))
+            !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
-        if (BeastEncounterPlan.IsNative(entry) && next.Plan.Room.Map.Kind == "Beast" && !beastBindings.ContainsKey(target))
-            next = BindBeastRoom(target);
         acceptedActions.Add(actionId, new(expected, "move", target));
         bool replaceVisited = false;
         if (activeDummyStage < dummyRooms.Length && dummyRooms[activeDummyStage].Plan.Room.Map.Position == target)
@@ -788,8 +755,6 @@ internal sealed partial class SinglePlayerDungeonRun
             CurrentLivingMonster(confirmed.MonsterKey) is null)
             return new(DungeonRunOutcome.Rejected);
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
-        bool beastStageClears = current.BeastStage >= 0 && current.BeastBossKey == confirmed.MonsterKey &&
-            current.BeastStage == beastCompletedStages;
         bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
             !HasPendingBossDeaths(confirmed.MonsterKey);
         // TAG终末尚无自己的到账合同；真实怪物死亡可提交，但不能产生普通翻牌/任务通关许可。
@@ -807,8 +772,8 @@ internal sealed partial class SinglePlayerDungeonRun
             tagSettles |= imperialRound == opponents.Length;
         }
         // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
-        ushort[] culled = current.Altar is null && (settles || tagSettles || conditionClears || beastStageClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
-            (conditionClears || beastStageClears || !monster.IsBoss) &&
+        ushort[] culled = current.Altar is null && (settles || tagSettles || conditionClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
+            (conditionClears || !monster.IsBoss) &&
             monster.ObjectKey != confirmed.MonsterKey && !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray() : [];
         // 中途任务目标保留原Boss与结算；仅最后可信阻挡死亡推进清房epoch。
         bool clearsQuestRoom = tagEvildom is null && !settles && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsQuestReplay &&
@@ -842,12 +807,6 @@ internal sealed partial class SinglePlayerDungeonRun
             }, nextStage)
             {
                 TagEvildomClear = tagSettles && TagEvildomAdmission is not null ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission) : null,
-                // 阶段房不限于中途任务目标房；末房清退的阻挡怪也属于本次可信清房。
-                BeastRoomClear = beastStageClears || entry.BeastMode && !BeastEncounterPlan.IsNative(entry) && target.IsBlocking && current.Plan.Monsters.All(monster =>
-                    !monster.IsBlocking || monster.ObjectKey == confirmed.MonsterKey || current.Dead.Contains(monster.ObjectKey) ||
-                    current.Culled.Contains(monster.ObjectKey) || culled.Contains(monster.ObjectKey))
-                    ? new(nextIdentity, entry.DungeonId, current.Plan.Room.Map,
-                        Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null,
                 ImperialArenaRound = imperialRound
             };
         return new(DungeonRunOutcome.Accepted, pendingDeath);
@@ -903,8 +862,6 @@ internal sealed partial class SinglePlayerDungeonRun
         combatSequences.Add(confirmed.CombatSequence);
         deaths.Add(confirmed.EventId, confirmed);
         committedPreparations.Add(prepared);
-        if (current.BeastStage >= 0 && prepared.BeastRoomClear is not null)
-            beastCompletedStages++;
         activeDummyStage = prepared.DummyStageIndex;
         storyBossPosition = prepared.Result.Snapshot.BossPosition;
         identity = prepared.Result.Snapshot.Identity;
@@ -1169,17 +1126,6 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
-        if (entry.BeastMode)
-        {
-            if (BeastEncounterPlan.IsNative(entry))
-                return current.BeastStage == 5 && beastCompletedStages == 5 && current.BeastBossKey == preparedMonsterKey;
-            // 魔兽没有普通固定Boss点；六间阶段房全部真实清完后，最后一间才签发通关事实。
-            var stages = allRooms.Where(room => room.Plan.Room.Map.Kind == "Beast").ToArray();
-            return current.Plan.Room.Map.Kind == "Beast" && stages.Length > 0 && stages.All(room => room.Loaded &&
-                room.Plan.Monsters.Any(monster => monster.IsBlocking) && room.Plan.Monsters.All(monster =>
-                    !monster.IsBlocking || room.Dead.Contains(monster.ObjectKey) || room.Culled.Contains(monster.ObjectKey) ||
-                    ReferenceEquals(room,current) && monster.ObjectKey == preparedMonsterKey));
-        }
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

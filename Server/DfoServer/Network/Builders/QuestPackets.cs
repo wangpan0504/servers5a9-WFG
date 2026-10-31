@@ -110,7 +110,7 @@ internal static class QuestPackets
     public static byte[] Finish(ushort questId, byte conditionType, uint experience,
         IReadOnlyList<QuestConsumedItemProjection> consumed, uint gold, IReadOnlyList<QuestRewardItemProjection> rewards, byte? growType = null,
         IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0, bool hellChallenge = false,
-        bool creatureEvolution = false, byte? expertJobType = null, bool beastQualification = false)
+        bool creatureEvolution = false, byte? expertJobType = null)
     {
         if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 5 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 67 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
@@ -118,10 +118,10 @@ internal static class QuestPackets
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||
             growType is not null && (rewards.Count != 0 || currencies?.Count > 0) ||
             tpAmount is not (0 or 2) || tpAmount != 0 && (growType is not null || rewards.Count != 0 || currencies?.Count > 0) ||
-            (hellChallenge || creatureEvolution || beastQualification) && (growType is not null || tpAmount != 0 || rewards.Count != 0 || currencies?.Count > 0) ||
-            hellChallenge && creatureEvolution || beastQualification && (hellChallenge || creatureEvolution) ||
+            (hellChallenge || creatureEvolution) && (growType is not null || tpAmount != 0 || rewards.Count != 0 || currencies?.Count > 0) ||
+            hellChallenge && creatureEvolution ||
             expertJobType is { } expert && (expert is < 1 or > 4 || growType is not null || tpAmount != 0 ||
-                hellChallenge || creatureEvolution || beastQualification || rewards.Count != 0 || currencies?.Count > 0))
+                hellChallenge || creatureEvolution || rewards.Count != 0 || currencies?.Count > 0))
             throw new InvalidDataException("普通任务交付投影超出已确认合同");
         byte[] rows = FixedRewardRows(rewards,currencies);
         using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
@@ -155,10 +155,10 @@ internal static class QuestPackets
             writer.Write((byte)29);
             return bytes.ToArray();
         }
-        if (hellChallenge || beastQualification)
+        if (hellChallenge)
         {
-            // 0237807B的mode3/31经ID2D1打开资格窗；31按任务+40C显示魔兽控件，不读物品count，金币另由14校准。
-            writer.Write((byte)(beastQualification ? 31 : 3));
+            // 0237807B的mode3经ID2D1打开深渊资格窗，不读物品count，金币另由14校准。
+            writer.Write((byte)3);
             return bytes.ToArray();
         }
         if (creatureEvolution)

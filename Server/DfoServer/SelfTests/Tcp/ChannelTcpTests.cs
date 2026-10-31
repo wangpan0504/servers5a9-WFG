@@ -43,7 +43,7 @@ internal static class ChannelTcpTests
                 ("Antwer", 22), ("impossible", 11), ("seatrain", 22), ("stormpass", 22),
                 ("timedoor", 22), ("powerstation", 22), ("attackzone", 18), ("trade", 3),
                 ("noblsky", 22), ("CastleofDead", 22), ("crack", 11), ("sainthorn", 26), ("pvp", 8),
-                ("harlem", 22), ("east harlem", 22), ("fiendwar", 45), ("pvp", 24), ("evildom_war", 54), ("prey", 50), ("xian_village", 56), ("dnfaos_free", 63), ("dnfaos_rank", 62), ("evildom_gathering", 53), ("tag_tournament", 39), ("beast", 40)
+                ("harlem", 22), ("east harlem", 22), ("fiendwar", 45), ("pvp", 24), ("evildom_war", 54), ("prey", 50), ("xian_village", 56), ("dnfaos_free", 63), ("dnfaos_rank", 62), ("evildom_gathering", 53), ("tag_tournament", 39)
             ];
             foreach (var (group, type) in groups)
                 That(Regex.IsMatch(decoded, @"(?m)^\d+ `<(?:\d+::)?[A-Za-z0-9_]+>` " + type + @" `\[" + Regex.Escape(group) + @"\]` "),

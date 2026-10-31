@@ -61,8 +61,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
                 commit.ProfessionGrowType,commit.Currencies.Where(row => !QuestCurrencyReward.HasBalanceNotice(row.Kind)).Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
                     row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge,
-                creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)), expertJobType: commit.ExpertJobType,
-                beastQualification: QuestCharacterReward.TryBeastQualification(quests.Get(commit.QuestId)));
+                creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)), expertJobType: commit.ExpertJobType);
         // 转职/觉醒先装载已提交技能快照，ACK34会据此重建本地技能；沿S4A21的前置通知顺序。
         bool profession = commit.ProfessionGrowType is not null;
         bool expertJob = commit.ExpertJobType is not null;

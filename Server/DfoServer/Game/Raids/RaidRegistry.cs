@@ -34,6 +34,7 @@ internal sealed record RaidWaiting(RaidActor Actor, byte Type);
 internal sealed record RaidInvitation(RaidActor Source, RaidActor Target, uint Raid, uint Peer, DateTimeOffset Expires);
 internal sealed record RaidJoinResult(bool Accepted, RaidInvitation? Invitation = null, RaidChange? Change = null);
 internal sealed record RaidDirectoryChange(RaidParty? Party = null, RaidWaiting? Waiting = null, bool Removed = false);
+internal sealed record RaidRemovalNotices(ImmutableArray<RaidWaiting> Waiting, ImmutableArray<RaidChange> Changes);
 
 // 进程内招募聚合；锁内不访问数据库、不取得账号锁、不等待网络。业务先持原owner，双人操作按既有锁序。
 internal sealed partial class RaidRegistry
@@ -308,7 +309,10 @@ internal sealed partial class RaidRegistry
     }
 
     // 可在旧generation收尾调用，只按原Session/epoch移除，绝不按角色号删除接管者。
-    public void RemoveSession(GameSession session, long epoch)
+    public void RemoveSession(GameSession session, long epoch) => PublishRemoval(RemoveSessionNotices(session, epoch));
+
+    // 生命周期在原owner内只提交；通知由最外层owner释放后的收尾发布。
+    internal RaidRemovalNotices RemoveSessionNotices(GameSession session, long epoch)
     {
         List<RaidChange> changes = [];
         List<RaidWaiting> removedWaiting = [];
@@ -324,8 +328,13 @@ internal sealed partial class RaidRegistry
                 ReferenceEquals(p.Value.Source.Session, session) && p.Value.Source.Epoch == epoch ||
                 ReferenceEquals(p.Value.Target.Session, session) && p.Value.Target.Epoch == epoch).Select(p => p.Key).ToArray()) invitations.Remove(key);
         }
-        foreach (var row in removedWaiting) PublishDirectory(new(Waiting: row, Removed: true));
-        foreach (var change in changes) Publish(change);
+        return new(removedWaiting.ToImmutableArray(), changes.ToImmutableArray());
+    }
+
+    internal void PublishRemoval(RaidRemovalNotices notices)
+    {
+        foreach (var row in notices.Waiting) PublishDirectory(new(Waiting: row, Removed: true));
+        foreach (var change in notices.Changes) Publish(change);
     }
 
     public RaidInvitation? Invite(RaidActor source, RaidActor target, uint peer)

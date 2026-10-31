@@ -35,7 +35,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
-        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, 333, .. openEvents];
+        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, .. openEvents];
         if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
@@ -407,18 +407,25 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         DfoServer.Game.Party.PartySnapshot? departedParty = null;
         long returnedEpoch = 0;
-        bool returning = context.Owner.Execute(() =>
+        var notices = new DfoServer.Game.Session.GameSession.DepartureNotices();
+        Exception? failure = null;
+        bool returning;
+        try
         {
-            if (canReturn?.Invoke() == false) return false;
-            departedParty = parties?.Current(context.Session);
-            context.Session.ReturnToRoster();
-            returnedEpoch = context.Session.SelectionEpoch;
-            context.Activity?.Reset();
-            return true;
-        });
+            returning = context.Owner.Execute(() =>
+            {
+                if (canReturn?.Invoke() == false) return false;
+                departedParty = parties?.Current(context.Session);
+                context.Session.ReturnToRoster(notices);
+                returnedEpoch = context.Session.SelectionEpoch;
+                context.Activity?.Reset();
+                return true;
+            });
+        }
+        catch (Exception error) { failure = error; throw; }
+        finally { notices.Publish(failure); }
         if (!returning) return;
         if (context.LostLand is not null) await context.LostLand.StopAsync();
-        if (context.Beast is not null) await context.Beast.StopAsync();
         parties?.Detach(context.Session);
         await DetachAsync(context);
         if (departedParty is not null)
@@ -489,7 +496,6 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
-        if (CanSend() && context.Beast is { } beastDisplay) await beastDisplay.RefreshAsync();
         if (CanSend()) GuildDungeonPartyBuffProjection.Post(context, clear: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。

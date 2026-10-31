@@ -18,11 +18,6 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
-        if (maze.BeastLayout is { } beast && (maze.Width != beast.Width || maze.Height != beast.Height ||
-            maze.Greed != beast.Greed || !maze.MapSpecification.SequenceEqual(beast.Maps) ||
-            !maze.Starts.SequenceEqual([beast.Start]) ||
-            !maze.Bosses.SequenceEqual(beast.Maps.Where(map => map.Kind == "Beast").TakeLast(1).Select(map => map.Position))))
-            return Unsupported("魔兽路线与冻结资源布局不一致");
         // 夫妻单房保留资源BB；身份由严格资源池绑定，不能变成普通图越界出口的豁免。
         if (maze.WeddingCoupleRoom is { } wedding && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } declared] && declared == wedding &&
@@ -55,7 +50,7 @@ internal sealed record DungeonStaticTopology(
         var maps = new Dictionary<DungeonPoint, DungeonMap>();
         foreach (var map in maze.MapSpecification)
         {
-            if (map.Kind is not ("map" or "boss") && !(maze.BeastLayout is not null && map.Kind == "Beast") ||
+            if (map.Kind is not ("map" or "boss") ||
                 map.Id < 0 || string.IsNullOrWhiteSpace(map.Path))
                 return Unsupported("地图身份或种类未支持");
             if (map.Position.X < 0 || map.Position.X >= grid.Width || map.Position.Y < 0 || map.Position.Y >= grid.Height ||

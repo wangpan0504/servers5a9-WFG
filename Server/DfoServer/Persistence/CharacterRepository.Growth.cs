@@ -36,8 +36,6 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");
         var death = prepared.Death;
         var identity = death.Identity;
-        var beastReward = prepared.BeastStageReward;
-        beastReward?.Verify(expected, prepared, questDrops);
         if (equipmentGrowth is not null && (!ReferenceEquals(equipmentGrowth.Expected, expected) ||
             equipmentGrowth.EventId != death.EventId || equipmentGrowth.Identity != identity))
             throw new InvalidDataException("装备成长不是原死亡和角色的冻结规划");
@@ -76,13 +74,12 @@ internal sealed partial class CharacterRepository
             }
         }
         var current = duplicate || equipmentGrowth is not null ? Require(db, tx, owner.Account, expected.Name)
-            : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops, beastReward is not null);
+            : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("成长角色或账号已变化");
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
         {
-            SaveOrVerifyBeastStageReward(db, tx, owner, beastReward, verifyOnly: true);
             VerifyFrozenDungeonLoot(db, tx, owner, expected.Id, prepared.Death.EventId, loot);
             CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot, verifyOnly: true);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
@@ -95,7 +92,7 @@ internal sealed partial class CharacterRepository
             var replayEquipment = equipmentGrowth?.Changes.Where(change =>
                 current.Inventory.Find(change.After.Position) == change.After).ToImmutableArray() ?? [];
             return new DungeonGrowthCommit(current, true, gained, proficiencyGained)
-                { CommittedBonuses = replayBonuses, BeastRewardSlots = beastReward?.ChangedSlots ?? [], EquipmentChanges = replayEquipment };
+                { CommittedBonuses = replayBonuses, EquipmentChanges = replayEquipment };
         }
         var committedBonuses = RevalidateGuildExperience(db, tx, owner.Account, expected.Id, reward.Bonuses,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -111,8 +108,7 @@ internal sealed partial class CharacterRepository
             !current.Skills.OrderBy(skill => skill.Id).SequenceEqual(expected.Skills.OrderBy(skill => skill.Id)))
             throw new InvalidOperationException("成长revision或完整学习前提已变化");
         command.Parameters.AddWithValue("$account", owner.Account);
-        SaveOrVerifyBeastStageReward(db, tx, owner, beastReward, verifyOnly: false);
-        var inventory = beastReward?.Inventory ?? questDrops?.Inventory;
+        var inventory = questDrops?.Inventory;
         if (inventory is not null)
             ValidateInventoryPlan(expected, inventory);
         var inventoryPlan = inventory;
@@ -213,7 +209,7 @@ internal sealed partial class CharacterRepository
         tx.Commit();
         CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
-            { CommittedBonuses = committedBonuses, BeastRewardSlots = beastReward?.ChangedSlots ?? [], EquipmentChanges = equipmentGrowth?.Changes ?? [] };
+            { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [] };
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,

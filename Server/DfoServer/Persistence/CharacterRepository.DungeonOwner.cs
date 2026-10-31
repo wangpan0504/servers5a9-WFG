@@ -147,7 +147,6 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         CommitHopeAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
-        CommitBeastAdmission(db, tx, owner, expected, charge);
         if (fatigueBefore is not null && fatigueAfter is not null)
         {
             using var command = db.CreateCommand();

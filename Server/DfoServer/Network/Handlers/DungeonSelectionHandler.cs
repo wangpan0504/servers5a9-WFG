@@ -343,12 +343,6 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (dungeon == 0)
         {
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
-            // 仅刷新专属魔兽选择界面的五项；普通地图不接收同号魔兽次数，时钟沿Session准入。
-            foreach (var count in context.Session.BeastSelectionCounts())
-            {
-                await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Remaining, 0),
-                    "beast_dungeon_daily_count", CanSend);
-            }
         }
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);

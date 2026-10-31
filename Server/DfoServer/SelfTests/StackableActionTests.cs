@@ -65,9 +65,9 @@ internal static class StackableActionTests
     public static void RunCore()
     {
         int checks = Count;
-        That(StackableActionCatalog.ClientTypes.Count == 196 &&
-            StackableActionCatalog.ClientTypes.Values.Distinct().Count() == 196,
-            "匹配ARAD标签和实际返回动作号一一对应，不拿字符串资源索引冒充动作号");
+        That(StackableActionCatalog.ClientTypes.Count == 194 &&
+            StackableActionCatalog.ClientTypes.Values.Distinct().Count() == 194,
+            "保留的ARAD标签和实际动作号一一对应，退役两项不重编号其余动作");
         foreach (var (label, parser) in StackableActionCatalog.Parsers)
         {
             var parsed = StackableActionCatalog.Parse(new(label, [-1, 0, 42]));
@@ -83,6 +83,7 @@ internal static class StackableActionTests
             ("[add fatigue]", 58), ("[quest clear]", 77), ("[change creature]", 64), ("[creature growth]", 107),
             ("[first awaken clear]", 119), ("[second awaken clear]", 122), ("[any quest clear]", 130),
             ("[open aura skin slot]", 127), ("[open creature skin slot]", 224), ("[jumping lv]", 193),
+            ("[epic production plus count]", 196), ("[avatar transport stone]", 197),
             ("[add skin storage]", 199), ("[level up ticket]", 39), ("[class change]", 49)
         })
         {
@@ -91,6 +92,22 @@ internal static class StackableActionTests
             That(StackableActionCatalog.TryType(label, out uint actual) && actual == type &&
                 StackableActionCatalog.Matches(raw, type) && !StackableActionCatalog.Matches(raw, type + 1),
                 "动作身份统一核对源STK而不是相信请求中宣称的功能 " + label);
+        }
+        foreach (var (label, type) in new (string, uint)[]
+        {
+            ("[beast dungeon reset]", 194), ("[add beast incount]", 195)
+        })
+        {
+            var raw = new StackableFile(123, "stackable/retired-fixture.stk", null, null, null, null, null, null, [])
+                { ActionDeclaration = new(label, [1]) };
+            That(!StackableActionCatalog.TryType(label, out _) && !StackableActionCatalog.Parsers.ContainsKey(label) &&
+                !StackableActionCatalog.ClientTypes.Values.Contains(type) && !StackableActionCatalog.Matches(raw, type),
+                "退役动作标签与旧动作号均不注册或匹配 " + label);
+            var retired = StackableActionCatalog.ParseFile(raw);
+            That(retired is
+                { Status: StackableActionParseStatus.UnknownLabel, Identity.ClientType: null, Arguments: null, Parser: null } &&
+                ReferenceEquals(retired.Declaration,raw.ActionDeclaration) && StackableActionCatalog.Arguments(raw) is null,
+                "退役声明保留未知身份，不生成可执行参数 " + label);
         }
         That(!StackableActionCatalog.TryType("[not implemented action]", out _) &&
             !StackableActionCatalog.TryType("[ADD FATIGUE]", out _), "未知或不同大小写的动作不猜测成已实现动作");

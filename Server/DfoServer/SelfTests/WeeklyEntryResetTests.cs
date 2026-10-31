@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-// 账号刷新地下城入场次数：覆盖角色日/周次数、账号次数（日键与任意周起点）、冒险团面板、魔兽、强袭、
+// 账号刷新地下城入场次数：覆盖角色日/周次数、账号次数（日键与任意周起点）、冒险团面板、历史退役记录、强袭、
 // 魔界塔当日入场、悲叹塔账号额度与角色当日通关锁、祭坛/绝望当日入场回执、卢克团本周通关、再战魔界周次数。
 // 旧周期行、其他账号、次元裂缝的每日奖励进度、普通卢克的当日楼层顺序保持原样。
 public static class WeeklyEntryResetTests
@@ -24,7 +24,7 @@ public static class WeeklyEntryResetTests
         var now = DateTimeOffset.UtcNow;
         int panelWeek = WeeklyDungeonPolicy.WeekKey(now);
         var period = DungeonIncountPolicy.Period(now);
-        int beastDay = ShopPurchaseCount.Today(now);
+        int serviceDay = ShopPurchaseCount.Today(now);
         int assaultDay = AssaultModeEntryPolicy.DayKey(DateTimeOffset.Now);
         var accountPeriods = DungeonIncountPolicy.CurrentAccountPeriods(now);
         int otherWeekday = accountPeriods[2];
@@ -51,9 +51,9 @@ public static class WeeklyEntryResetTests
               ('other',400000018,20180215,3),
               ('receiver',400000016,{period.Week},5);
             INSERT INTO character_beast_dungeon_entries(character_id,account,day,dungeon_id,used) VALUES
-              ({otherId},'other',{beastDay},310,1),
-              ({otherId},'other',{beastDay - 1},311,2),
-              ({receiverId},'receiver',{beastDay},310,1);
+              ({otherId},'other',{serviceDay},310,1),
+              ({otherId},'other',{serviceDay - 1},311,2),
+              ({receiverId},'receiver',{serviceDay},310,1);
             INSERT INTO character_assault_daily(character_id,account,day,clear_count,hidden_count) VALUES
               ({otherId},'other',{assaultDay},2,1),
               ({senderId},'sender',{assaultDay - 1},2,0),
@@ -61,9 +61,9 @@ public static class WeeklyEntryResetTests
             INSERT INTO character_crack_daily(character_id,account,day,clear_count,daily_reward) VALUES
               ({otherId},'other',{assaultDay},2,1);
             INSERT INTO account_dazzlement_tower_bindings(account,slot,week,character_id,last_entry_day) VALUES
-              ('other',1,{panelWeek},{otherId},{beastDay}),
+              ('other',1,{panelWeek},{otherId},{serviceDay}),
               ('other',2,20180215,NULL,0),
-              ('receiver',1,{panelWeek},{receiverId},{beastDay});
+              ('receiver',1,{panelWeek},{receiverId},{serviceDay});
             INSERT INTO account_grief_tower(account,game_day,used) VALUES
               ('other',{griefDay},2),
               ('receiver',{griefDay},1);
@@ -71,12 +71,12 @@ public static class WeeklyEntryResetTests
               ({otherId},'other',{griefDay},1,5,'11111111111111111111111111111111',1),
               ({receiverId},'receiver',{griefDay},1,3,'22222222222222222222222222222222',1);
             INSERT INTO dungeon_special_entry_receipts(character_id,account,instance_id,task_attempt,service_day,kind,dungeon_id,layer,gold,revision) VALUES
-              ({otherId},'other','33333333333333333333333333333333',1,{beastDay},1,11006,0,0,1),
-              ({otherId},'other','44444444444444444444444444444444',2,{beastDay},3,11008,1,0,1),
-              ({receiverId},'receiver','55555555555555555555555555555555',1,{beastDay},1,11006,0,0,1);
+              ({otherId},'other','33333333333333333333333333333333',1,{serviceDay},1,11006,0,0,1),
+              ({otherId},'other','44444444444444444444444444444444',2,{serviceDay},3,11008,1,0,1),
+              ({receiverId},'receiver','55555555555555555555555555555555',1,{serviceDay},1,11006,0,0,1);
             INSERT INTO dungeon_despair_progress(character_id,account,next_layer,last_clear_day,clear_count) VALUES
-              ({otherId},'other',2,{beastDay},1),
-              ({receiverId},'receiver',2,{beastDay},1);
+              ({otherId},'other',2,{serviceDay},1),
+              ({receiverId},'receiver',2,{serviceDay},1);
             INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,phase1_event,phase1_anchor,phase1_receipt,clear_week) VALUES
               ({otherId},'other','66666666666666666666666666666666',1,'fixture',0,2,'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1',0,json_object(),{panelWeek}),
               ({otherId},'other','77777777777777777777777777777777',1,'fixture',0,2,'e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2',0,json_object(),20180215),
@@ -102,7 +102,6 @@ public static class WeeklyEntryResetTests
             cleared.GetProperty("CharacterDailyRows").GetInt32() == 1 &&
             cleared.GetProperty("CharacterWeeklyRows").GetInt32() == 1 &&
             cleared.GetProperty("AccountRows").GetInt32() == 3 &&
-            cleared.GetProperty("BeastRows").GetInt32() == 1 &&
             cleared.GetProperty("AssaultRows").GetInt32() == 1,
             "结果按存储分类只统计本账号当前周期的行");
 
@@ -122,10 +121,10 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000018") is 3L &&
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='receiver' AND dungeon=400000016") is 5L,
             "账号次数清日键与任意周起点，旧周期和其他账号不动");
-        That(f.Query($"SELECT count(*) FROM character_beast_dungeon_entries WHERE account='other' AND day={beastDay}") is 0L &&
-            f.Query($"SELECT used FROM character_beast_dungeon_entries WHERE account='other' AND day={beastDay - 1}") is 2L &&
-            f.Query($"SELECT used FROM character_beast_dungeon_entries WHERE account='receiver' AND day={beastDay}") is 1L,
-            "魔兽只删本账号当日，前一日和其他账号保留");
+        That(f.Query($"SELECT count(*) FROM character_beast_dungeon_entries WHERE account='other' AND day={serviceDay}") is 1L &&
+            f.Query($"SELECT used FROM character_beast_dungeon_entries WHERE account='other' AND day={serviceDay - 1}") is 2L &&
+            f.Query($"SELECT used FROM character_beast_dungeon_entries WHERE account='receiver' AND day={serviceDay}") is 1L,
+            "退役玩法历史记录不参与当前重置，本账号当日、前一日和其他账号均保留");
         That(f.Query($"SELECT clear_count FROM character_assault_daily WHERE account='other' AND day={assaultDay}") is 0L &&
             f.Query($"SELECT hidden_count FROM character_assault_daily WHERE account='other' AND day={assaultDay}") is 0L &&
             f.Query($"SELECT clear_count FROM character_assault_daily WHERE account='sender' AND day={assaultDay - 1}") is 2L &&
@@ -146,7 +145,7 @@ public static class WeeklyEntryResetTests
             "新增覆盖的玩法按存储分类只统计本账号当前周期的行");
         That(Scalar($"SELECT last_entry_day FROM account_dazzlement_tower_bindings WHERE account='other' AND slot=1") == 0 &&
             Scalar($"SELECT last_entry_day FROM account_dazzlement_tower_bindings WHERE account='other' AND slot=2") == 0 &&
-            Scalar($"SELECT last_entry_day FROM account_dazzlement_tower_bindings WHERE account='receiver'") == beastDay,
+            Scalar($"SELECT last_entry_day FROM account_dazzlement_tower_bindings WHERE account='receiver'") == serviceDay,
             "魔界塔清本账号本周绑定行的当日入场，旧周与其他账号不动");
         That(Scalar($"SELECT game_day FROM account_grief_tower WHERE account='other'") == 1 &&
             Scalar($"SELECT used FROM account_grief_tower WHERE account='other'") == 0 &&
@@ -155,13 +154,13 @@ public static class WeeklyEntryResetTests
             Scalar($"SELECT layer FROM character_grief_tower WHERE character_id={otherId}") == 5 &&
             Scalar($"SELECT used FROM account_grief_tower WHERE account='receiver'") == 1,
             "悲叹塔清账号日额度与角色当日通关锁，楼层进度与其他账号不动");
-        That(Scalar($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='other' AND service_day={beastDay}") == 0 &&
+        That(Scalar($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='other' AND service_day={serviceDay}") == 0 &&
             Scalar($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='other' AND service_day=1") == 2 &&
-            Scalar($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='receiver' AND service_day={beastDay}") == 1,
+            Scalar($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='receiver' AND service_day={serviceDay}") == 1,
             "祭坛/绝望当日入场回执挪出当日计数，回执行本身与其他账号保留");
         That(Scalar($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={otherId}") == 0 &&
             Scalar($"SELECT next_layer FROM dungeon_despair_progress WHERE character_id={otherId}") == 2 &&
-            Scalar($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={receiverId}") == beastDay,
+            Scalar($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={receiverId}") == serviceDay,
             "绝望清当日通关日，楼层进度与其他账号不动");
         That(Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='66666666666666666666666666666666'") == 1 &&
             Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='77777777777777777777777777777777'") == 20180215 &&

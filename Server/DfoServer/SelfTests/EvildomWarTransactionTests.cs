@@ -152,7 +152,6 @@ internal static class EvildomWarTransactionTests
 
     sealed class EntryStore(IPartyDungeonStore store) : IPartyDungeonStore
     {
-        public Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> rows) => store.CommitBeastDungeonLoading(rows);
         public Action? AfterEntry { get; set; }
         public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations)
         {

@@ -15,7 +15,7 @@ namespace DfoServer.Testing;
 // 每次换频道后按客户端随后的same-area位置回放与移动核对服务端接受。
 internal static partial class RaidChannelLandingTcpTests
 {
-    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 5927, 3280];
+    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 3280];
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -52,44 +52,9 @@ internal static partial class RaidChannelLandingTcpTests
             fixture.Snapshot(returnSql, character.Id) == beforePreyReturn,
             "普雷1426一次出门保存59/1完整位置，原普通返回地区五字段不变");
         Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/1）");
-        Location ordinaryReturn;
-        // 分支依据原始城镇登记，不用被测目录是否漏装来降低期望。
-        // 2026-10-29 正式PVF移除魔兽资源：魔兽换频道与回房段按资源在位判定暂时屏蔽，其余频道段照跑。
-        if (!BeastFixtures.Enabled(resources))
-        {
-            BeastFixtures.Skip("raid-channel-landing 魔兽段");
-            return;
-        }
-        if (PvfScript.List(resources.Archive.ReadText("town/town.lst")).ContainsKey(51))
-        {
-            That(resources.Towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] { 0, 1, 2 }),
-                "原始城镇索引已登记51时必须完整装载0/1/2三区，不能把漏组降为缺输入");
-            Switch(49, land: true, town: 38, "团队频道→魔兽49（独立谓词，先进共享房间再出门到51/2）", area: 1, exit: 51);
-            That(fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0", character.Id) == "[[51,2]]",
-                "完整输入的真实换频道与1426出门仍须落到魔兽等待区51/2");
-            ordinaryReturn = resources.Towns.ResolveRoomReturn(new(31,1,0,0),null,character.Level,
-                character.CompletedQuests.ToHashSet());
-            That(ordinaryReturn.Town == 31,"实际进入51后，普通频道选角归回正常中央公园，仍须有合法的31城镇返回门口");
-        }
-        else
-        {
-            var decision = ChannelAreaLanding.Decide(resources.Towns, new(new(2, 49), 40, "[beast]"), 95,
-                character.CompletedQuests.ToHashSet());
-            That(!resources.Towns.Areas.Keys.Any(key => key.Item1 == 51) &&
-                decision is { Spot: null, Reason: "town-not-in-catalog" },
-                "真实缺城镇51时魔兽频道落点精确拒绝，不从原生物理地图猜造等待区");
-            // 前面的卢克出门已把普通返回地区更新为32/3；后续专属城镇保留该门口，不再沿用CreateRaider初始38/0。
-            string returnBefore = fixture.Snapshot(returnSql, character.Id);
-            That(returnBefore == "[[32,3,754,211,0]]",
-                "进入缺资源魔兽频道前保存卢克路径后的真实普通返回门口32/3(754,211,0)");
-            Switch(49, land: true, town: 38, "团队频道→魔兽49（缺51时落点拒绝，共享房间按原返回地区出门；非魔兽落点正向）", area: 1, exit: 32);
-            That(fixture.Snapshot("SELECT town,area,x,y,direction,return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", character.Id) == "[[32,3,754,211,0,32,3,754,211,0]]" &&
-                fixture.Snapshot(returnSql, character.Id) == returnBefore,
-                "缺51时1379与1426沿原普通返回门口32/3落库，返回五字段逐字节保持，不宣称魔兽等待区成功");
-            // 此分支从未到51，普通频道不能触发LeavesBeastTown归回31；严格保留已证32/3五字段。
-            ordinaryReturn = new(32,3,754,211,0);
-        }
-        Switch(normal, land: true, town: 38, $"魔兽→普通回房、1379及1426连接已证返回地区{ordinaryReturn.Town}/{ordinaryReturn.Area}", area: 1, exit: ordinaryReturn.Town);
+        That(!endpoints.ContainsKey(49), "真实监听目录不再发布退役49频道");
+        var ordinaryReturn = new Location(32,3,754,211,0);
+        Switch(normal, land: true, town: 38, "团本频道返回普通房间并沿已保存地区出门", area: 1, exit: ordinaryReturn.Town);
         string expectedReturn = $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X},{ordinaryReturn.Y},{ordinaryReturn.Direction}]]";
         That(fixture.Snapshot(positionSql,character.Id) == expectedReturn && fixture.Snapshot(returnSql,character.Id) == expectedReturn,
             "普通频道1379及1426之后完整位置和返回五字段与实际资源分支的唯一预期一致");
@@ -127,8 +92,8 @@ internal static partial class RaidChannelLandingTcpTests
             That(location[0] == (channel == 19 ? 19 : 38) && location[1] == (channel == 19 ? 0 : 1),
                 $"频道 {channel} 普通选角绑定真实初始地区，事件初始化不改变落点");
             peer.Barrier();
-            That(peer.EventInfoPayload.Length == 163 + 15 * peer.ExpectedOpenEvents.Length,
-                $"频道 {channel} EVENT_INFO 同时保留2037、红包2378、乔纳森2395及卢克282/超时空2449/普雷414/安徒恩181与诺兰2532");
+            // 完整逐字段核对原八项活动、启用的零累计促销页及状态尾段；额外退役333或未知记录同样失败。
+            CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0, false, peer.ExpectedOpenEvents);
             That(peer.CompletedQuestHistory.Length > 0, $"频道 {channel} 下发已完成任务表");
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
             fixture.Sql("UPDATE characters SET town=38,area=0,x=629,y=196 WHERE id=$p0", character.Id);
@@ -157,8 +122,6 @@ internal static partial class RaidChannelLandingTcpTests
             // 1379 只在入城位置是房间图时下发：保留快照看原位置，落点看频道落点区域。
             bool room = resources.Towns.IsRoom(land ? new Location(town!.Value, area, 0, 0) : Position(), completed);
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
-            if (channel == 49) That(peer.LoginEndpoint.Length > 3 && peer.LoginEndpoint[3] == 40,
-                "真实LOGIN帧保留魔兽类型40，不因目录已配置而遗漏实际应答");
             // 本夹具只有一名角色，TAG准备场景下发空编队目录，不虚造双角色。
             ushort[]? tagNotices = channel switch { 48 => [1403, 1400, 1632], 46 => [1677, 1678], _ => null };
             var packets = land

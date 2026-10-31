@@ -33,7 +33,6 @@ internal sealed partial class GameSession
         }
         if (endingDungeon)
         {
-            ReleaseBeastDungeonReservation();
             formalDungeon?.Run.CancelTagEvildom();
             ReleaseCurrentRaidDungeon();
             ReleaseCurrentEvildomWarDungeon();

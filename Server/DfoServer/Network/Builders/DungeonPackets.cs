@@ -155,10 +155,9 @@ internal static class DungeonPackets
 
     // NOTI27 在 023D8AC0 的空列表足迹：计数字段为 0 时不读列表项，共 42 字节。
     // 顺序是 u32、u32、u8、u32、u8、u8、u8、u32、u16、u16、u32、u8、u8、u32、u32、u8、u16、u8。
-    // 末字节是选图候选列表的计数：023D9B5E 读 u8 计数，随后每项 int32 逐个 push_back 进客户端魔兽 manager 的 id 列表。
-    // 该列表为空时客户端没有任何候选副本，世界地图只画底图不画气球；魔兽地图46的五个气球5335–5339就靠它下发。
+    // 退役玩法候选列表保留计数字节0，不缩短或移动包体。
     public static byte[] SelectionNotice(int hellLegendDungeon = 0, int griefLayer = 0, ushort despairLayer = 0,
-        IReadOnlyList<ushort>? incompleteHellQuestMemberSlots = null, IReadOnlyList<int>? selectionCandidates = null)
+        IReadOnlyList<ushort>? incompleteHellQuestMemberSlots = null)
     {
         if (hellLegendDungeon < 0) throw new ArgumentOutOfRangeException(nameof(hellLegendDungeon));
         if (griefLayer is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(griefLayer));
@@ -166,11 +165,8 @@ internal static class DungeonPackets
         if (count > 8 || incompleteHellQuestMemberSlots is { } slots &&
             (slots.Any(slot => slot > 7) || slots.Distinct().Count() != count))
             throw new ArgumentOutOfRangeException(nameof(incompleteHellQuestMemberSlots));
-        int candidates = selectionCandidates?.Count ?? 0;
-        if (candidates > byte.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(selectionCandidates));
         int tailOffset = count * 2;
-        byte[] body = new byte[42 + tailOffset + candidates * 4];
+        byte[] body = new byte[42 + tailOffset];
         // 023D8EF7读取countA；非空名单清除深渊按钮资格，并在条件成立时显示原生dstr 5431。
         body[8] = (byte)count;
         for (int i = 0; i < count; i++)
@@ -181,10 +177,7 @@ internal static class DungeonPackets
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39 + tailOffset),checked((ushort)griefLayer));
         if (despairLayer > 100) throw new ArgumentOutOfRangeException(nameof(despairLayer));
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(20 + tailOffset), despairLayer);
-        body[41 + tailOffset] = (byte)candidates;
-        for (int i = 0; i < candidates; i++)
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(42 + tailOffset + i * 4),
-                checked((uint)selectionCandidates![i]));
+        body[41 + tailOffset] = 0;
         return body;
     }
 

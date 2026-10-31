@@ -65,7 +65,7 @@ internal sealed class DungeonDropControlSnapshot
     static bool IsOrdinary(DungeonEntryPlan entry) => entry.IsOrdinary && entry.RaidEntry is null &&
         !entry.IsTutorial && !entry.IsPractice && !entry.IsTrainingRoom && !entry.IsClassExperience &&
         !entry.IsTournament && !entry.IsAltar && !entry.IsDespair && !entry.Maze.IsGriefTower &&
-        !entry.IsBossRush && !entry.BeastMode && entry.LostLand is null && !entry.IsTagSystem &&
+        !entry.IsBossRush && entry.LostLand is null && !entry.IsTagSystem &&
         entry.Hope is null && entry.Dimension is null && entry.Marriage is null;
 
     public static DungeonDropGenerationPlan Apply(DungeonDropGenerationPlan plan, DungeonDropMultipliers? rates)
