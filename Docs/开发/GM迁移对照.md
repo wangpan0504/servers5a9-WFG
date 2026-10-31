@@ -1,17 +1,10 @@
 # GM 迁移对照
 
-内嵌 GM 网页的功能清单与进度。早期曾对照朋友工具 S5A9GmTool 的接口清单；该工具已被用户判定为不完善，后续不再作为依据，改以服务端自己的模型和 PvfLib 实现，能复用现有能力的优先复用。实际引用过其代码的只有 ImagePack（图标读取）与属性映射表（见仓库根的 THIRD-PARTY 说明，保留 MIT 许可）。下面“逐接口对照”表是早期状态记录，状态列以当前实现为准。
+GM 管理接口的功能清单与进度。早期曾对照朋友工具 S5A9GmTool 的接口清单；该工具已被用户判定为不完善，后续不再作为依据，改以服务端自己的模型和 PvfLib 实现，能复用现有能力的优先复用。实际引用过其代码的只有 ImagePack（图标读取）与属性映射表（见仓库根的 THIRD-PARTY 说明，保留 MIT 许可）。下面“逐接口对照”表是早期状态记录，状态列以当前实现为准。
 
 ## 部署与启动
 
-| 项目 | 状态 | 说明 |
-| --- | --- | --- |
-| 服务端内嵌 GM 网页（`--gm-web-port`，仅 127.0.0.1） | 已完成 | 七个模块页面 + 活动页；读取、邮件发放、入包发放、删除/清空、任务、SP/TP、钱包、等级、转职、改名、删除角色、活动、快捷物品、小退等写操作均二次确认并写审计；见下表 |
-| `Tools/ServerLauncher` 传入 `--gm-web-port` 并打开内嵌网页 | 已完成 | 沿用 `launcher.local.json` 的 `GmPort`/`GmWebPort` |
-| 启动器自带 `GmWebHost` | 已停用 | `GmWebHost.cs` 保留，仅被 `--selftest-gm` 旧测试引用，待用户确认后删除 |
-| `Build-Server.ps1`、`start-server.bat/.sh`、`Start-Server.ps1` | 已完成 | 默认带 `--gm-web-port` 并说明地址 |
-| `Tools/GmWeb`（`gm_web.py`、`index.html`） | 待删除 | 已标注，等用户确认；未删除 |
-| 95JP-Launcher（独立仓库） | 已完成（分支 feat/builtin-gm-web） | 服务端 `--help` 含 `--gm-web-port` 时传参并打开内嵌网页，否则沿用旧逻辑 |
+GM 管理界面由 95JP 启动器的 WPF 页面提供。服务端保留 `--gm-port` TCP 命令和 `--gm-web-port` 本机 HTTP JSON 接口；旧 GM 静态资产、Python 代理及 ServerLauncher 浏览器入口已移除。接口清单仍按下表记录，页面历史描述不表示保留浏览器版本。
 
 ## 朋友工具接口对照（S5A9GmTool/Program.cs）
 
@@ -92,7 +85,7 @@ headless Edge（CDP）读取 computed style：系统浅色、系统深色、已�
 2. 图标目录目前靠环境变量或自动搜索；如需页面内配置，可再加 `--gm-image-packs` 选项。
 3. 邮件金币上限：发放时按收件人当前等级的携带上限拦截；领取时服务端仍按领取时的背包金币与上限再校验，超限则邮件保留，不会丢币。
 4. 新邮件提醒：GM 发邮件成功后调用在线会话的 `NotifyMailbox`（MAILBOX_ALARM）；仅对该账号当前在线且已选中该角色的会话生效，离线角色在下次进入时由未读邮件数提示。
-5. 删除 `Tools/GmWeb` 与 `GmWebHost.cs` 须等用户确认。
+5. `Tools/GmWeb` 与 `GmWebHost.cs` 已按用户要求删除。
 
 ## 候选功能落地情况（第三轮）
 

@@ -96,7 +96,8 @@ internal static partial class DevelopmentGm
                 kind = item.Core.Kind.ToString(), count = item.Core.IsStackable ? item.Core.Value : 1,
                 upgrade = item.Core.Kind == ItemKind.Equipment ? item.Core.Attr & 31 : 0, refine = item.Core.Kind == ItemKind.Equipment ? item.Core.GenuineUpgrade : 0,
                 amplifyType = item.Core.AmplifyType, amplifyValue = item.Core.AmplifyValue, ability = item.Core.Kind == ItemKind.Avatar ? item.Core.Durability : 0,
-                isSealed = item.Core.SealFlag != 0, expire = item.ExpireTime
+                isSealed = item.Core.SealFlag != 0, expire = item.ExpireTime,
+                deletable = InventoryDeleteService.CanGmDelete(inventory, item), locked = item.Core.EquipmentLockId != 0
             })
         });
     }

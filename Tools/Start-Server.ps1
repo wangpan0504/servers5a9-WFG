@@ -46,7 +46,7 @@ foreach($name in @('stop.request','ready.json')){
 $run=Join-Path $logs ((Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $run|Out-Null
 $arguments=@('--server-ip',$ServerIp,'--channel-port',"$ChannelPort",'--game-port',"$GamePort",'--gm-port',"$GmPort")
-if($GmPort -gt 0 -and $GmWebPort -gt 0){$arguments+=@('--gm-web-port',"$GmWebPort");Write-Host "GM web (embedded): http://127.0.0.1:$GmWebPort/"}
+if($GmPort -gt 0 -and $GmWebPort -gt 0){$arguments+=@('--gm-web-port',"$GmWebPort");Write-Host "GM data API (loopback): port $GmWebPort"}
 if($ListenIp){$arguments+=@('--listen-ip',$ListenIp)}
 if($PacketCapture){$arguments+='--packet-capture';if($CaptureDirectory){$arguments+=[IO.Path]::GetFullPath($CaptureDirectory)}}
 # Start-Process 在 Windows 拼接命令行；保留带空格路径和末尾反斜杠。

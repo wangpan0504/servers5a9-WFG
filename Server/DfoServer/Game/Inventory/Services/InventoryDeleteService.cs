@@ -42,24 +42,30 @@ internal static class InventoryDeleteService
         return new(true, 0, new InventoryPlan(before, after, reason)
             { PreserveMaterials = preserveMaterials });
     }
-    public static InventoryResult Plan(InventorySnapshot before, InventorySlot position, int value, int count)
+    public static bool CanGmDelete(InventorySnapshot before, InventoryItem item) =>
+        item.Position.List != InventoryListType.Equipment &&
+        !(before.ShieldDeck.Items[0] != 0 && item.Position == InventoryKnightShieldService.MainSlot) &&
+        TryDelete(item, item.Core.ItemId, item.Core.Count, out _, includeAccountCargo: true);
+
+    public static InventoryResult Plan(InventorySnapshot before, InventorySlot position, int value, int count, bool includeAccountCargo = false)
     {
         if (before.ShieldDeck.Items[0] != 0 && position == InventoryKnightShieldService.MainSlot)
             return InventoryResult.Reject();
         var item = before.Find(position);
-        if (!TryDelete(item, value, count, out var remaining))
+        if (!TryDelete(item, value, count, out var remaining, includeAccountCargo))
             return InventoryResult.Reject();
         var after = before with { Items = remaining is null ? before.Items.Remove(item!) : before.Items.Replace(item!, remaining) };
         return new(true, 0, new(before, after, "delete_item"));
     }
 
     // 单实例规则供批量工作集复用；此处不创建快照，也不改变传入实例。
-    public static bool TryDelete(InventoryItem? item, int value, int count, out InventoryItem? remaining)
+    public static bool TryDelete(InventoryItem? item, int value, int count, out InventoryItem? remaining, bool includeAccountCargo = false)
     {
         remaining = null;
         // 不同丢弃入口在 value 字段分别发送核心数量或物品 ID；槽位与
         // 当前快照才是实例身份。时装则发送递减的剩余秒数。
-        if (item is null || ItemSlotBoundService.IsEquippedRune(item.Position) || !Allows(item.Position.List) || value < 0 ||
+        if (item is null || ItemSlotBoundService.IsEquippedRune(item.Position) ||
+            !(Allows(item.Position.List) || includeAccountCargo && item.Position.List == InventoryListType.AccountCargo) || value < 0 ||
             item.Avatar is null && value != item.Core.Value && value != item.Core.ItemId ||
             item.Core.EquipmentLockId != 0)
             return false;

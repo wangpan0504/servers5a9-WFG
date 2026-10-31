@@ -120,10 +120,6 @@ internal static partial class GmWebServer
             await next();
         });
         if (!management) return;
-        app.MapGet("/", () => Results.Text(Assets.Text("index.html"), "text/html; charset=utf-8"));
-        app.MapGet("/assets/{name}", (string name) => Assets.Find(name) is { } asset
-            ? Results.Text(asset.Text, asset.Type) : Results.NotFound());
-        app.MapGet("/favicon.ico", () => Results.NoContent());
         app.MapGet("/api/status", () => Results.Json(data.Status()));
         app.MapGet("/api/online", () => Results.Json(data.Online()));
         app.MapGet("/api/accounts", () => Results.Json(data.Accounts()));
@@ -507,19 +503,12 @@ internal static partial class GmWebServer
     // 内嵌静态资源：只允许白名单文件名。
     static class Assets
     {
-        static readonly Regex Name = new("^[a-z0-9-]+\\.(js|css)$", RegexOptions.Compiled);
         public static string Text(string file)
         {
             using var stream = typeof(GmWebServer).Assembly.GetManifestResourceStream("DfoServer.GmWeb." + file)
                 ?? throw new InvalidDataException("程序集缺少内嵌 GM 资源：" + file);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();
-        }
-        public static (string Text, string Type)? Find(string file)
-        {
-            if (!Name.IsMatch(file)) return null;
-            try { return (Text(file), file.EndsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8"); }
-            catch (InvalidDataException) { return null; }
         }
     }
 }

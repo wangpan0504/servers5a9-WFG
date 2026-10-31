@@ -13,7 +13,7 @@
     <ProjectReference Include="../../Tools/PvfLib/PvfLib.csproj" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
-    <EmbeddedResource Include="GmWeb/*.html;GmWeb/*.css;GmWeb/*.js" LogicalName="DfoServer.GmWeb.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="GmWeb/recharge.html" LogicalName="DfoServer.GmWeb.%(Filename)%(Extension)" />
     <EmbeddedResource Include="SelfTests/Fixtures/luke-scene-contract-vectors.json" LogicalName="DfoServer.SelfTests.LukeSceneContractVectors" />
     <EmbeddedResource Include="SelfTests/Fixtures/promotion-page-contract-vectors.json" LogicalName="DfoServer.SelfTests.PromotionPageContractVectors" />
     <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />

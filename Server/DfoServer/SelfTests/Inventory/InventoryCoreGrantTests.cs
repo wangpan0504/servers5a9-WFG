@@ -18,6 +18,20 @@ internal static class InventoryCoreGrantTests
     public static void RunCore()
     {
         int checks = Count;
+        var gmCargo = new InventoryItem(710, new(InventoryListType.AccountCargo, 1), new ItemCore(490013209, ItemKind.Consumable, 10));
+        var gmBefore = new InventorySnapshot([gmCargo]);
+        That(!InventoryDeleteService.Plan(gmBefore, gmCargo.Position, gmCargo.Core.ItemId, 10).Accepted,
+            "普通客户端丢弃仍拒绝账号金库");
+        var gmDeleted = InventoryDeleteService.Plan(gmBefore, gmCargo.Position, gmCargo.Core.ItemId, 10, includeAccountCargo: true);
+        That(InventoryDeleteService.CanGmDelete(gmBefore, gmCargo) && gmDeleted.Accepted &&
+            gmDeleted.Plan!.After.Items.IsEmpty && gmDeleted.Plan.AccountCargoChanged && gmBefore.Items.Length == 1,
+            "GM账号金库删除规划标记共享修订且保持原快照");
+        var lockedCargo = gmCargo with { Core = gmCargo.Core with { EquipmentLockId = 7 } };
+        That(!InventoryDeleteService.CanGmDelete(new([lockedCargo]), lockedCargo) &&
+            !InventoryDeleteService.Plan(new([lockedCargo]), lockedCargo.Position, lockedCargo.Core.ItemId, 10, includeAccountCargo: true).Accepted,
+            "GM账号金库同样保留锁定物品");
+        var wornCargo = gmCargo with { Position = new(InventoryListType.Equipment, 12) };
+        That(!InventoryDeleteService.CanGmDelete(new([wornCargo]), wornCargo), "GM不允许删除穿戴物品");
         var stackTemplate = Template(1000, ItemKind.Consumable, 100);
         var equipmentTemplate = Template(101010438, ItemKind.Equipment, 1);
         var core = FullCore(stackTemplate, 3);

@@ -164,7 +164,7 @@ dotnet run --project Server/DfoServer -c Debug --no-build -- --packet-capture
 | 路径 | 内容 |
 |---|---|
 | [Server/DfoServer](Server/DfoServer) | 服务端主程序、业务、协议、持久化与内置 C# 测试 |
-| [Tools](Tools) | 后台启停、仓库检查和可选开发 GM 网页工具 |
+| [Tools](Tools) | 后台启停、仓库检查和本机 GM 管理接口 |
 | [Docs/README.md](Docs/README.md) | 按模块查找业务、协议、资源和开发文档 |
 | [AGENTS.md](AGENTS.md) | agent 阅读顺序、修改边界与交付要求 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 开发准备、源码导航、验证及协作流程 |
