@@ -12,7 +12,7 @@ internal static partial class TagEvildomTcpTests
     {
         fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.ExpireTime',$p0) WHERE item_uid IN " +
             "(SELECT item_uid FROM character_inventory_slots WHERE character_id=$p1 AND list_type=3)",
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 1, standby.Id);
+            fixture.UtcNow.ToUnixTimeSeconds() - 1, standby.Id);
         using var peer = Open(fixture, gamePort: port, channelNumber: 46);
         peer.Select(tagEvildom: [1677, 1678, 1709]);
         string before = fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration") +
@@ -32,7 +32,7 @@ internal static partial class TagEvildomTcpTests
 
     static Task VerifyExpiredStandbyAsync(TcpTestFixture fixture, TcpTestResources resources, int port, Character primary, Character standby)
     {
-        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long now = fixture.UtcNow.ToUnixTimeSeconds();
         var definition = resources.Learning.Get(0, 5);
         int Cap(int extra)
         {
@@ -44,7 +44,13 @@ internal static partial class TagEvildomTcpTests
         That(contracted > ordinary, "当前PVF95级确有达人额外资格，不能用低等级用例替代TAG备用到期");
         var active = standby.Learning with { ExpertContractExpiresAt = now + 3600 };
         int before = active.Trees[0].Skills.Single(skill => skill.Id == 5).Level;
-        var purchase = SkillLearning.Plan(0, 0, 95, active, new(0, 0, [new(5, false, checked((byte)(contracted - before)))]), resources.Learning);
+        // 期限和资格沿同一fixture时钟；Catalog重载内部读墙钟，改用其既有显式资格规划入口。
+        int contractLevels = resources.Learning.ActiveExpertContractLevels(active.ExpertContractExpiresAt, now);
+        var synchronized = SkillPointLedger.Synchronize(0, 0, 95, active, resources.Learning, contractLevels);
+        var purchase = SkillLearning.Plan(0, 0, 95, synchronized, new(0, 0, [new(5, false, checked((byte)(contracted - before)))]),
+            resources.Learning.Get, SkillPointLedger.FreeBaseline(0, 0, 95, resources.Learning, contractLevels),
+            synchronized.BonusSp is int bonus ? checked(resources.Learning.TotalSp(95) + bonus) : null, contractLevels,
+            synchronized.BonusTp is int tpBonus ? checked(resources.Learning.TotalTp(95) + tpBonus) : null);
         That(purchase.Success, "95级在有效达人下真实规划付费技能而非捏造超上限等级");
         var stale = purchase.State! with { ExpertContractExpiresAt = now - 1 };
         var normalized = SkillPointLedger.Synchronize(0, 0, 95, stale, resources.Learning);

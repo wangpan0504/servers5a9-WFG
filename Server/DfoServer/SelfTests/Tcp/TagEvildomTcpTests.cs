@@ -17,7 +17,7 @@ internal static partial class TagEvildomTcpTests
         int checks = Count;
         await GuildTrainingEntryTcpTests.VerifySoloAsync(source, root, resources, imperial: false);
         ResourceRewards(resources);
-        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T08:00:00+08:00"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         var profile = resources.Characters.Get(0);

@@ -38,7 +38,8 @@ internal static class GuildTrainingEntryTcpTests
 
     internal static async Task VerifySoloAsync(ServerOptions source, string root, TcpTestResources resources, bool imperial)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, imperial ? "imperial-training" : "tag-training"), resources: resources);
+        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T08:00:00+08:00"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, imperial ? "imperial-training" : "tag-training"), resources: resources, clock: clock);
         ushort primary;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
