@@ -61,7 +61,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             return $"Channel {Value("ChannelName")} listening on TCP {Value("Channel")}\n" +
                 $"Game server listening on TCP {Value("Game")}\nAdvertised game endpoint: {Value("AdvertisedGame")}\n" +
                 $"Native transport listening on TCP {Value("Native")}\n" +
-                $"GM control: {Value("Gm")}\nGM web: {Value("GmWeb")}\nGM packet queries: {Value("GmPacketQueries")}\nPacket HTTP: {Value("PacketHttp")}\nPacket capture: {Value("PacketCapture")}\nServer log: {Value("ServiceLog")}";
+                $"GM control: {Value("Gm")}\nGM web: {Value("GmWeb")}\nClient web/recharge: {Value("RechargeWeb")}\nGM packet queries: {Value("GmPacketQueries")}\nPacket HTTP: {Value("PacketHttp")}\nPacket capture: {Value("PacketCapture")}\nServer log: {Value("ServiceLog")}";
         if (kind == "server_ready")
         {
             // 版本/提交号/存档版本只有真正启动的宿主会带；自测等精简调用点维持原来的一行。

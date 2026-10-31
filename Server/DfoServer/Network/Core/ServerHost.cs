@@ -16,7 +16,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     IDisposable? guildEconomy = null, IDisposable? guildTeleport = null, IDisposable? guildNpcs = null,
     Func<CancellationToken, Task>? runGuildHallWait = null, Func<CancellationToken, Task>? runWorld = null,
     IAsyncDisposable? gameplayTimers = null, int saveVersion = 0,
-    Func<ushort, DfoServer.Game.Raids.LukeRaidDisconnectCandidate?>? lukeRejoinCandidate = null, Task? managementReady = null)
+    Func<ushort, DfoServer.Game.Raids.LukeRaidDisconnectCandidate?>? lukeRejoinCandidate = null, Task? managementReady = null,
+    Func<bool>? rechargeWebAvailable = null)
 {
     // 本地宿主诊断；没有对应网络路由，返回值不包含可变领域对象。
     internal bool HasLukeRejoinDiagnostics => lukeRejoinCandidate is not null;
@@ -72,14 +73,16 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 hallWait = runGuildHallWait(lifetime.Token);
             if (hallWait.IsFaulted) await hallWait;
             var primary = gameChannels.Bound.Single(row => row.Endpoint.Entry.Identity.Number == GameWorld.Channels.ChannelCatalog.PrimaryChannelNumber);
+            int rechargePort = rechargeWebAvailable?.Invoke() == false ? 0 : options.RechargeWebPort;
+            int gmWebPort = rechargePort == 0 && options.GmWebPort == options.RechargeWebPort ? 0 : options.GmWebPort;
             log.Write("listening", new { ChannelName = "#ch." + primary.Endpoint.Entry.Identity.Number,
                 Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
                 AdvertisedGame = $"{options.AdvertisedAddress}:{options.GamePort}",
                 Native = native is null ? "disabled" : native.Listener.LocalEndpoint.ToString(),
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
-                GmWeb = options.GmWebPort == 0 ? "disabled" : $"127.0.0.1:{options.GmWebPort}",
-                RechargeWeb = $"http://127.0.0.1:{options.RechargeWebPort}",
-                GmPacketQueries = options.GmWebPort == 0 ? "disabled" : $"http://127.0.0.1:{options.GmWebPort}/api/packets",
+                GmWeb = gmWebPort == 0 ? "disabled" : $"{options.ListenAddress}:{gmWebPort}",
+                RechargeWeb = rechargePort == 0 ? "disabled" : $"http://{options.ListenAddress}:{rechargePort}",
+                GmPacketQueries = gmWebPort == 0 ? "disabled" : $"http://{options.ListenAddress}:{gmWebPort}/api/packets",
                 PacketHttp = options.PacketHttpPort == 0 ? "disabled" : $"127.0.0.1:{options.PacketHttpPort}",
                 PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
                 ServiceLog = Path.Combine(options.LogDirectory, "server.jsonl") });
@@ -88,7 +91,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             log.Flush();
             File.WriteAllText(Path.Combine(options.LogDirectory, "ready.json"), JsonSerializer.Serialize(new
             {
-                options.ChannelPort, options.GamePort, options.GmPort, options.GmWebPort, options.RechargeWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
+                options.ChannelPort, options.GamePort, options.GmPort, GmWebPort = gmWebPort, RechargeWebPort = rechargePort,
+                ConfiguredRechargeWebPort = options.RechargeWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
                 options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints,
                 NativePort = native?.Port ?? 0,
                 // 构建标识：程序集版本、构建提交号（源码 zip 构建为空）与存档 schema 版本。

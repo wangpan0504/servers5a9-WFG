@@ -14,12 +14,13 @@ internal static partial class GmWebServer
 
         async Task Query(HttpContext http, bool records = false)
         {
-            string authority = $"127.0.0.1:{http.Connection.LocalPort}";
+            string authority = new HostString(http.Connection.LocalIpAddress!.ToString(), http.Connection.LocalPort).ToString();
             string localhost = $"localhost:{http.Connection.LocalPort}";
+            bool loopback = http.Connection.RemoteIpAddress is { } peer && System.Net.IPAddress.IsLoopback(peer);
             string? host = http.Request.Host.Value;
             string origin = http.Request.Headers.Origin.ToString();
-            if (host != authority && host != localhost || origin.Length != 0 &&
-                origin != "http://" + authority && origin != "http://" + localhost)
+            if (host != authority && !(loopback && host == localhost) || origin.Length != 0 &&
+                origin != "http://" + authority && !(loopback && origin == "http://" + localhost))
             {
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
