@@ -7,6 +7,8 @@ internal static class EmotionTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        var titles = new DfoServer.GameWorld.Quests.TitleCatalog(resources.Archive, resources.Quests);
+        EmotionSelectionTests.RunResources(resources.Archive, titles);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "emotion"), resources: resources);
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
@@ -31,12 +33,19 @@ internal static class EmotionTcpTests
         string saved = fixture.Snapshot();
         actor.Send(254, [1, 0]); actor.Expect(1, 254, [1, 1, 0]); actor.Barrier(); observer.Barrier();
         actor.Send(254, [255, 255]); actor.Expect(1, 254, [0, 1, 0]); actor.Barrier();
-        actor.Send(254, [10, 0]); actor.Expect(1, 254, [0, 1, 0]); actor.Barrier();
+        actor.Send(254, [10, 0]); actor.Expect(1, 254, [0, 3, 0]); actor.Barrier();
+        actor.Send(254, [232, 3]); actor.Expect(1, 254, [0, 3, 0]); actor.Barrier();
+        actor.Send(254, [233, 3]); actor.Expect(1, 254, [0, 3, 0]); actor.Barrier();
         That(fixture.Snapshot() == saved, "重复、无效及锁定心情不写库，也不截断成成功");
         actor.Send(7); actor.Expect(0, 6); actor.Expect(1, 7, [1]); actor.Expect(0, 2);
         observer.SendBarrier(); observer.Batch((0, 6), (1, 1347));
+        int section = titles.Sections.Single(pair => pair.Value.Emotion == 10).Key;
+        Execute($"INSERT INTO character_title_sections SELECT id,account,{section},1 FROM characters WHERE name='MoodFirst'");
         var replay = actor.Select();
         That(U16(replay[2].Body, 119) == 1, "重新选角从数据库回放心情");
+        actor.Send(254, [10, 0]); actor.Expect(1, 254, [1, 10, 0]);
+        That(U16(actor.Expect(0, 2).Body, 119) == 10, "持久章节资格回放后选择真实称号心情成功，不再误报不存在");
+        actor.Barrier();
         actor.Send(254, [0, 0]); actor.Expect(1, 254, [1, 0, 0]); actor.Expect(0, 2);
         actor.Send(3, [0]); actor.Expect(1, 3, [1]); actor.Closed();
         using var restarted = Open(fixture, "moodowner");
