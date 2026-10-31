@@ -9,6 +9,11 @@ namespace DfoServer.Game.Dungeons;
 internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, DimensionRewardCatalog catalog, ItemCatalog items, DimensionDropRules? configuredRules = null)
 {
     public const string Rule = "otherverse-rewards-server-compat-v1";
+    public const string AuraRule = "otherverse-aura-equal-local-v1";
+    public const string HolyAuraRule = "otherverse-holy-aura-personal-v1";
+    public const string BossMaterialRule = "otherverse-boss-material-personal-v1";
+    public const string CardSetRule = "otherverse-card-set-only-v1";
+    public const string IfliusRule = "otherverse-iflius-video-v1";
     readonly DimensionDropRules rules = Validated(configuredRules ?? DimensionDropRules.Default);
     public string ActiveRule => rules.Rule;
     static DimensionDropRules Validated(DimensionDropRules value) { value.Validate(); return value; }
@@ -22,11 +27,9 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
 
     public ItemCore? Card(int dungeon, byte job, byte grow, Func<int, int> draw, DateTimeOffset now)
     {
-        if (!dimension.Tiers.TryGetValue(dungeon, out int tier)) throw new InvalidDataException("异界翻牌缺副本档位");
-        var rates = catalog.CardRates[tier];
-        if (draw(100) >= rates.RewardPercent) return null;
-        bool set = draw(100) < rates.SetPercent;
-        var pool = Pool(job, grow, set);
+        if (!dimension.Tiers.ContainsKey(dungeon)) throw new InvalidDataException("异界翻牌缺副本档位");
+        // 本人查询确认：现代异界通关翻牌必出套装，不再回退裂魂散件。
+        var pool = Pool(job, grow, true);
         return pool.TotalWeight == 0 ? null : DungeonDropCreation.Create(pool.Select(draw(pool.TotalWeight)), 1, draw, now);
     }
 
@@ -69,12 +72,60 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
             !monster.CanReportDeath || monster.IsFriendly || monster.AiCharacter is not null) return plan;
         bool boss = monster.IsBoss && monster.SourceMap is { } map && entry.IsTerminalMap(map);
         bool named = !monster.IsBoss && (monster.Source?.IsNamed == true || entry.NamedMonsters.Contains(monster.MonsterId));
-        if (!boss && !named) return plan;
+        bool iflius = monster.MonsterId is 107000256 or 107000257 or 107000258;
+        if (!boss && !named && !iflius) return plan;
+        var trials = plan.Trials.ToBuilder();
+        if (iflius)
+        {
+            // 依普利乌斯是随机奖励怪物，不是终点领主；截图显示基础材料按多个独立堆叠掉落。
+            AddMaterialStacks(3311, 3, 10);
+            AddMaterialStacks(10303569, 4, 6);
+            AddMaterialStacks(3330, 4, 5);
+            AddMaterialStacks(10000204, 2, 8);
+            var rare = dimension.HiddenRewards.Where(row => row.Tier == admission.Tier)
+                .Select(row => new DungeonWeightedDropItem(items.Get(row.Item), row.Value)).ToArray();
+            if (rare.Length > 0)
+                trials.Add(new(1, new DungeonItemDropPool(rare), 1, 1, ProbabilityDenominator: 1));
+            return new(plan.ResourceSource + ";" + ActiveRule + ";" + DimensionRewardCatalog.PoolPath + ";" + IfliusRule,
+                trials, plan.ReferenceQuality, plan.Amplification);
+        }
         var profession = entry.DimensionRewardProfession ?? throw new InvalidDataException("异界掉落缺少本人冻结职业");
         var tier = rules.Tiers[admission.Tier];
-        var trials = plan.Trials.ToBuilder();
+        // 材料按当前档位资源发放。绿名固定3311×7、10303569×5；领主不保留基础1份。
         if (boss)
-            foreach (var material in dimension.Materials.Where(row => row.Tier == admission.Tier)) AddMaterial(material.Item, 1);
+        {
+            AddMaterialStacks(3311, tier.Boss.ShardStacks, tier.Boss.ShardStackSize);
+            if (dimension.Materials.Any(row => row.Tier == admission.Tier && row.Item == 10303569))
+                AddMaterialStacks(10303569, tier.Boss.MemoryStacks, tier.Boss.MemoryStackSize);
+        }
+        else
+        {
+            foreach (var material in dimension.Materials.Where(row => row.Tier == admission.Tier))
+            {
+                int count = material.Item switch
+                {
+                    3311 => tier.Named.Shards,
+                    10303569 => tier.Named.Memories,
+                    _ => 1
+                };
+                AddMaterial(material.Item, count);
+            }
+        }
+        // 本人拍板：绿名每次额外100%掉落1个普通三色气息，三色等权各1/3。
+        if (named)
+        {
+            trials.Add(new(1, new DungeonItemDropPool([
+                new DungeonWeightedDropItem(items.Get(1254), 1),
+                new DungeonWeightedDropItem(items.Get(1255), 1),
+                new DungeonWeightedDropItem(items.Get(1256), 1)]), 1, 1, ProbabilityDenominator: 1));
+            // 本人拍板：难度1/2/3追加神圣气息概率1%/5%/10%，触发后三色等权抽1个。
+            if (tier.Named.HolyAuraPercent > 0)
+                trials.Add(new(tier.Named.HolyAuraPercent, new DungeonItemDropPool([
+                    new DungeonWeightedDropItem(items.Get(10090758), 1),
+                    new DungeonWeightedDropItem(items.Get(10090759), 1),
+                    new DungeonWeightedDropItem(items.Get(10090760), 1)]), 1, 1, ProbabilityDenominator: 100));
+        }
+
         if (rules.ExtraEntryEquipment || admission.DailyBefore.DailyUsed < admission.Catalog.DailyLimit)
         {
             var normal = Pool(profession.Job, profession.Grow, false);
@@ -85,20 +136,27 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
             if (EquipmentTrial(normal, set, equip, rate) is { } trial)
                 for (int index = 0; index < count; index++) trials.Add(trial);
         }
-        AddMaterial(3311, boss ? tier.Boss.Shards : tier.Named.Shards);
         if (boss && admission.Tier == 2 && !catalog.Legendary.IsEmpty)
             trials.Add(new(1, new DungeonItemDropPool(catalog.Legendary.Select(id => new DungeonWeightedDropItem(items.Get(id), 1))),
                 1, 1, ProbabilityDenominator: 100));
-        if (boss && admission.HiddenBoss)
-            trials.Add(new(1, new DungeonItemDropPool(dimension.HiddenRewards.Where(row => row.Tier == admission.Tier)
-                .Select(row => new DungeonWeightedDropItem(items.Get(row.Item), row.Value))), 1, 1, ProbabilityDenominator: 1));
-        return new(plan.ResourceSource + ";" + ActiveRule + ";" + DimensionRewardCatalog.PoolPath,
-            trials, plan.ReferenceQuality, plan.Amplification);
+
+        string source = plan.ResourceSource + ";" + ActiveRule + ";" + DimensionRewardCatalog.PoolPath;
+        if (named) source += ";" + AuraRule + ";" + HolyAuraRule;
+        if (boss) source += ";" + BossMaterialRule;
+
+        return new(source, trials, plan.ReferenceQuality, plan.Amplification);
 
         void AddMaterial(int id, int count)
         {
             if (count > 0) trials.Add(new(1, new DungeonItemDropPool([new DungeonWeightedDropItem(items.Get(id), 1)]),
                 count, count, ProbabilityDenominator: 1));
+        }
+
+        void AddMaterialStacks(int id, int stacks, int size)
+        {
+            if (stacks <= 0 || size <= 0) return;
+            trials.Add(new(1, new DungeonItemDropPool([new DungeonWeightedDropItem(items.Get(id), 1)]),
+                size, size, ProbabilityDenominator: 1, Attempts: stacks));
         }
     }
 

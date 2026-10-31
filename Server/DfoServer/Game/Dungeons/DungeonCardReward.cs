@@ -89,8 +89,10 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         {
             var policy = dimensionRewards ?? throw new NotSupportedException("异界远古缺少专属翻牌策略");
             var item = dungeon.IsModernDimension ? policy.Card(dungeon.Id, job, grow, Next, now) : policy.AncientCard(dungeon.Id, Next, now, ancientBonus);
+            string cardSource = (dungeon.IsAncientInfinite ? "etc/ancientgate.etc" : DimensionRewardCatalog.PoolPath) + ";" + dungeon.Path;
+            if (dungeon.IsModernDimension) cardSource += ";" + DimensionRewardPolicy.CardSetRule;
             return new(checked((int)Math.Max(1, amount)), item, DimensionRewardPolicy.Rule,
-                (dungeon.IsAncientInfinite ? "etc/ancientgate.etc" : DimensionRewardCatalog.PoolPath) + ";" + dungeon.Path, now.ToUnixTimeSeconds());
+                cardSource, now.ToUnixTimeSeconds());
         }
         // 专表只属于资源里写了行的团本。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，

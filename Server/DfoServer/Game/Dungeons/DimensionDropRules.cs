@@ -5,9 +5,11 @@ using System.Text.Json.Serialization;
 
 namespace DfoServer.Game.Dungeons;
 
-// 本服拍板数值；与翻牌资源合同独立，启动后不可变。
-internal sealed record DimensionNamedDropRules(int Equip = 100, int Set = 0, int Shards = 0);
-internal sealed record DimensionBossDropRules(int Count = 2, int Set = 0, int Shards = 0);
+// 绿名材料、普通三色气息、神圣气息概率及领主整组材料均为本人拍板，非原版还原。
+internal sealed record DimensionNamedDropRules(int Equip = 100, int Set = 0, int Shards = 7, int Memories = 5,
+    int HolyAuraPercent = 1);
+internal sealed record DimensionBossDropRules(int Count = 2, int Set = 0,
+    int ShardStacks = 3, int ShardStackSize = 7, int MemoryStacks = 5, int MemoryStackSize = 4);
 internal sealed record DimensionTierDropRules(DimensionNamedDropRules Named, DimensionBossDropRules Boss);
 internal sealed record DimensionDropRules
 {
@@ -17,9 +19,9 @@ internal sealed record DimensionDropRules
     public ImmutableDictionary<int, DimensionTierDropRules> Tiers { get; init; } =
         new Dictionary<int, DimensionTierDropRules>
         {
-            [0] = new(new(60, 0), new(2, 0)),
-            [1] = new(new(80, 10), new(2, 15)),
-            [2] = new(new(100, 15), new(2, 20))
+            [0] = new(new(60, 0, 7, 5, 1), new(2, 0)),
+            [1] = new(new(80, 10, 7, 5, 5), new(2, 15)),
+            [2] = new(new(100, 15, 7, 5, 10), new(2, 20))
         }.ToImmutableDictionary();
     public static DimensionDropRules Default { get; } = new();
     [JsonIgnore]
@@ -53,7 +55,10 @@ internal sealed record DimensionDropRules
             Tiers is null || !Tiers.Keys.Order().SequenceEqual([0, 1, 2]) || Tiers.Values.Any(t =>
                 t is null || t.Named is null || t.Boss is null ||
                 t.Named.Equip is < 0 or > 100 || t.Named.Set is < 0 or > 100 || t.Named.Shards is < 0 or > 100 ||
-                t.Boss.Count is < 0 or > 4 || t.Boss.Set is < 0 or > 100 || t.Boss.Shards is < 0 or > 100))
+                t.Named.Memories is < 0 or > 100 || t.Named.HolyAuraPercent is < 0 or > 100 ||
+                t.Boss.Count is < 0 or > 4 || t.Boss.Set is < 0 or > 100 || t.Boss.ShardStacks is < 0 or > 100 ||
+                t.Boss.ShardStackSize is < 0 or > 1000 || t.Boss.MemoryStacks is < 0 or > 100 ||
+                t.Boss.MemoryStackSize is < 0 or > 1000))
             throw new InvalidDataException("异界掉落模式、来源、三档概率或数量无效");
     }
 }
