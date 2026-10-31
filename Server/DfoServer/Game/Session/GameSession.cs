@@ -217,6 +217,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 修复旧版本把普通街道保留在决斗频道的存档；同类型重连也不能继续恢复错误城镇。
             if (ChannelEntry is not null && ChannelAreaLanding.IsPvpType(ChannelEntry.Type) && character.Position.Town != 10)
                 resumed = false;
+            // 旧版在共享房间下线的TAG角色也须进入本频道准备场景，不能恢复旧错误落点。
+            if (ChannelEntry?.Type is 39 or 53 &&
+                character.Position.Town != (ChannelEntry.Type == 39 ? 48 : 62))
+                resumed = false;
             character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry);
             TownSnapshotResumed = resumed;
             if (ChannelEntry is not null)

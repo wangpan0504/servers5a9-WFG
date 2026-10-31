@@ -49,7 +49,7 @@ internal static class ChannelAreaLanding
     internal const int AntonRaidType = 0x17;
 
     // 进入频道（选角或不保留快照的换频道）时是否直接落到频道地区；其余频道出生赛丽亚房间。
-    internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type == AntonRaidType || IsPvpType(channel.Type);
+    internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type is AntonRaidType or 39 or 53 || IsPvpType(channel.Type);
 
     // 01EB55E0 调用 03EF95B0；决斗频道与普通频道的快照谓词不同，不能恢复普通城镇。
     internal static bool IsPvpType(int type) => type is 4 or 5 or 8 or 13 or 24;
@@ -222,7 +222,7 @@ internal static class ChannelAreaLanding
             // 异界沿原船尾；远古与圣者之鸣号频道一致，先落赛丽亚房间 17/0，出门经甲板 17/1、船头 17/3 走到镇魂曲大厅 17/5。
             // 不直接落 17/5：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落点会跳过赛丽亚房间。
             return name switch { "impossible" or "crack" => (17, 2), "ancient" => (17, 0), "deathtower" => (38, 5), _ => null };
-        // 再战频道仍按原生38/1入城；此为本服RoomExit业务落点，非客户端03B876C0的默认映射。
+        // 再战频道直接进入准备场景；仍由当前PVF校验落点，不依赖共享房间出门。
         // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
         if (type == 53)
             return (62, 0);

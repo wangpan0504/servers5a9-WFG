@@ -42,8 +42,13 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         log.Write("travel", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, Requested = requested, session.Selected?.Position, session.Selected?.Revision });
         if (accepted)
             await projection.TravelAsync(context, receipt!);
-        else if (session.TravelReason == "guild-membership-required")
-            await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "guild_hall_admission_denied");
+        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required")
+        {
+            await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "town_admission_denied");
+            if (session.TravelReason == "evildom-war-party-required")
+                await context.Notify(NotiPacketType.AAS_TIPS, DfoServer.Network.Builders.ServerNoticePackets.Build(
+                    "魔界大战", "请先创建或加入魔界大战队伍。"), "evildom_war_party_required");
+        }
         return CommandResult.Handled;
     }
 

@@ -57,7 +57,7 @@ internal static partial class TagEvildomTcpTests
             That(peer.LoginEndpoint[3] == 53, "再战真实频道LOGIN类型53，不借魔界大战54或普通频道");
             // 选角前不应公布城镇名册；后续SELECT严格包序同时验证没有迟到1408。
             peer.Send(1470);
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, populated, "无编队的合格双角色入城提交第一支队伍并下发54B");
             Bytes(peer.TagEvildomInfo[1].Body, status, "无通关事实的真实1678初态46B");
             ValidateProjection(peer.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
@@ -65,8 +65,8 @@ internal static partial class TagEvildomTcpTests
             That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long seededFirst, long seededSecond, 1L]] &&
                 seededFirst == expectFirst && seededSecond == expectSecond,
                 "首次入城按名册把当前角色配为队首、下一名95级角色配为队友，保存稳定ID");
-            That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[38L, 1L]],
-                "type53仍按本版原生落38/1，不伪称默认62/0");
+            That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[62L, 0L]],
+                "type53直接落62/0准备场景，不经过共享房间38/1");
             string assets = Assets();
             string configuration = fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration");
             RequestTeamRoster(peer);
@@ -86,9 +86,9 @@ internal static partial class TagEvildomTcpTests
             That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long sameFirst, long sameSecond, 1L]] &&
                 sameFirst == expectFirst && sameSecond == expectSecond && Assets() == assets,
                 "重复保存同一对稳定ID不推进配置版本，也不改角色资产");
-            ExitRoom(peer, republish: true);
+            VerifyDirectEntry(peer);
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[62L, 0L]],
-                "真实53房间出口通过当前PVF准入和gate落中央竞技场62/0，并在新位置重发双角色资料");
+                "真实53选角直接落中央竞技场62/0，旧出房请求不切图或重发双角色资料");
             // 修理只改主角自己的装备耐久与角色金币，账号钱包版本不变，已装的双Actor仍然有效；线上2026-10-28
             // 02:54:54修理后两次入场都被拒绝，一次修理不能变成重登要求。
             long gold = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0", primary.Id)[0][0]!;
@@ -130,7 +130,7 @@ internal static partial class TagEvildomTcpTests
             peer.Expect(1, 15, [0, 1, 0]); peer.Expect(0, 1709); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
             // ACK1663后等待原生7，不能服务端再主动小退一次。
             ReturnToSelection(peer);
-            peer.Select(tagEvildom: [1677, 1678]); peer.Barrier();
+            peer.Select(room: false, tagEvildom: [1677, 1678]); peer.Barrier();
             RequestTeamRoster(peer);
             peer.Send(1662, Setting(0, 2)); peer.Expect(1, 1662, Accepted(populated));
             ReadConfiguration(peer, populated, status);
@@ -138,22 +138,22 @@ internal static partial class TagEvildomTcpTests
             peer.Expect(0, 1677, empty); peer.Expect(0, 1678, status);
             peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             // 主动清空后的同一次选角保持空队，不把当前角色再写成队友。新连接才重新配队。
-            peer.Select(tagEvildom: [1677, 1678]); peer.Barrier();
+            peer.Select(room: false, tagEvildom: [1677, 1678]); peer.Barrier();
             Bytes(peer.TagEvildomInfo[0].Body, empty, "同一次登录里主动清空后重选保持空队");
             That(peer.Id == primary.Id, "空1662走完整既有小退与新名册，随后可正常重选无旧active资料残留发送");
             ReturnToSelection(peer);
-            peer.Select(3, tagEvildom: [1677, 1678]); ExitRoom(peer, republish: false);
+            peer.Select(3, tagEvildom: [1677, 1678]); peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
             That(fixture.Query("SELECT town FROM characters WHERE name='TagTooLow'") is [[38L]],
                 "93级不因新增频道跳过Stadium原有94级准入");
         }
         using (var peer = Open(fixture, gamePort: endpoints[46], channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, populated, "新连接遇到空选中队时再次配第一支合格队伍");
             ValidateProjection(peer.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
             ReturnToSelection(peer);
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
-            ExitRoom(peer, republish: true);
+            peer.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
+            VerifyDirectEntry(peer);
             peer.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)1); })); peer.Closed();
         }
         using (var ordinary = Open(fixture))
@@ -165,7 +165,7 @@ internal static partial class TagEvildomTcpTests
         }
         using (var recovered = Open(fixture, gamePort: endpoints[46], channelNumber: 46))
         {
-            recovered.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            recovered.Select(room: false, tagEvildom: [1677, 1678, 1393, 1394]);
             ValidateProjection(recovered.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
             recovered.Send(1663, [0]); recovered.Closed();
         }
@@ -184,10 +184,10 @@ internal static partial class TagEvildomTcpTests
     }
 
     static void ReturnToSelection(TcpPeer peer) { peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2); }
-    static void ExitRoom(TcpPeer peer, bool republish = false)
+    static void VerifyDirectEntry(TcpPeer peer)
     {
-        peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24);
-        if (republish) { peer.Expect(0, 1677); peer.Expect(0, 1678); peer.Expect(0, 1393); peer.Expect(0, 1394); }
+        // 已直接处于准备场景，旧出房请求不得重新切图或重复安装双角色。
+        peer.Send(1426);
         peer.Barrier();
     }
     // trailer 是25B16的末位u32：普通副本固定0，再战魔界/帝国竞技场实机发0xFFFFFFFF，两者都必须能入场。

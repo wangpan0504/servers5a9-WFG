@@ -26,6 +26,14 @@ internal static partial class RaidChannelLandingTcpTests
         var Switch = Switcher(fixture, resources, endpoints, character);
 
         byte normal = endpoints.Keys.Min();
+        Switch(48, land: true, town: 48, "普通→帝国竞技场直接进入48/0准备场景");
+        Switch(48, land: false, town: null, "帝国同频道重连保留正确准备场景");
+        Switch(normal, land: true, town: 38, "帝国→普通仍回共享房间及原普通地区", area: 1, exit: 38);
+        Switch(46, land: true, town: 62, "普通→再战魔界直接进入62/0准备场景");
+        Switch(46, land: false, town: null, "再战同频道重连保留正确准备场景");
+        fixture.Sql("UPDATE characters SET town=38,area=1,x=433,y=311 WHERE id=$p0", character.Id);
+        Switch(46, land: true, town: 62, "同类型重连修复旧版共享房间落点");
+        Switch(normal, land: true, town: 38, "再战→普通仍回共享房间及原普通地区", area: 1, exit: 38);
         // 用户确认：换频道先到赛丽亚房间 38/1，再出门才是对应地区。只有安徒恩 0x17（ARAD 03B87FE0 起始地点 19/0）直接落战舰。
         // 团本页签谓词相同（01EB5AF0）的换频道客户端保留城镇快照，服务端保留原位置；在赛丽亚房间里互换则出门按新频道落点。
         Switch(19, land: true, town: 19, "普通→安徒恩 19（0x17 直接落 19/0）");
@@ -151,9 +159,11 @@ internal static partial class RaidChannelLandingTcpTests
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
             if (channel == 49) That(peer.LoginEndpoint.Length > 3 && peer.LoginEndpoint[3] == 40,
                 "真实LOGIN帧保留魔兽类型40，不因目录已配置而遗漏实际应答");
+            // 本夹具只有一名角色，TAG准备场景下发空编队目录，不虚造双角色。
+            ushort[]? tagNotices = channel switch { 48 => [1403, 1400, 1632], 46 => [1677, 1678], _ => null };
             var packets = land
-                ? peer.Select(character.Slot, prepared: true, nativeSwitch: true, room: room)
-                : peer.Select(character.Slot, prepared: true, resumeTown: true, room: room);
+                ? peer.Select(character.Slot, prepared: true, nativeSwitch: true, room: room, tagEvildom: tagNotices)
+                : peer.Select(character.Slot, prepared: true, resumeTown: true, room: room, tagEvildom: tagNotices);
             peer.Barrier();
             // 包序由 TcpPeer.Select 逐包核对：落点走普通选角序列，保留快照走换频道 1379/124/24 恢复序列。
             var actor = packets.Single(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0).Body;

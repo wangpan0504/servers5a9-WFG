@@ -43,7 +43,7 @@ internal static class ImperialArenaTcpTests
         {
             That(peer.LoginEndpoint[3] == 39, "帝国频道真实LOGIN类型39");
             // 首次入城编队为空时按当前角色为队首自动配队：客户端没有 runtimeActor 时头像、队伍设置和入场按钮全部失效。
-            peer.Select(tagEvildom: [1403, 1400, 1632, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1403, 1400, 1632, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, [0, 0, 0], "帝国初始未购买日券");
             Opponents(peer.TagEvildomInfo.Single(packet => packet.Opcode == 1400).Body,
                 ImperialArenaDailyRoute.Create(catalog, ImperialArenaPeriod.At(clock.GetUtcNow())));
@@ -71,10 +71,10 @@ internal static class ImperialArenaTcpTests
             That(fixture.Query("SELECT count(*) FROM account_imperial_arena_configuration") is [[0L]], "无效编队不落库");
             peer.Send(1460, [2, 0, 2, 2]); peer.Expect(1, 1460, [1, 2, 0, 2, 2]);
             peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
-            peer.Select(tagEvildom: [1403, 1400, 1632, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: [1403, 1400, 1632, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[3].Body, [2, 0, 2, 2], "帝国双Actor保留真实名册索引");
-            peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
-            That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", first.Id) is [[48L, 0L]], "帝国实际出门城镇48/0");
+            peer.Send(1426); peer.Barrier();
+            That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", first.Id) is [[48L, 0L]], "帝国选角直接落城镇48/0，旧出房请求不切图");
             peer.Send(1463); peer.Expect(1, 1463, [1, 0, 0, 0, 0, 0]);
             peer.Send(1464); peer.Expect(1, 1464, [0, 19, 0]); peer.Barrier();
             for (int day = 0; day < 2; day++)
@@ -175,7 +175,7 @@ internal static class ImperialArenaTcpTests
                 "断线结算故障保留完整冻结差额，旧owner不提交半封邮件");
             fixture.Sql("DROP TRIGGER imperial_disconnect_abort");
             bool recover = fixture.Query("SELECT count(*) FROM account_imperial_arena_rewards WHERE mail_id=0") is [[long pending]] && pending > 0;
-            peer.Select(tagEvildom: recover ? [99, 1403, 1400, 1632, 1393, 1394] : [1403, 1400, 1632, 1393, 1394]);
+            peer.Select(room: false, tagEvildom: recover ? [99, 1403, 1400, 1632, 1393, 1394] : [1403, 1400, 1632, 1393, 1394]);
             Bytes(peer.TagEvildomInfo.Single(packet => packet.Opcode == 1403).Body, [1, 2, 3], "重登恢复本日困难券及三回合已清头像遮罩");
             That(fixture.Query("SELECT first,second FROM account_imperial_arena_configuration") is [[long a, long b]] &&
                 a == first.Id && b == second.Id, "数据库保存稳定身份而非名册索引");
