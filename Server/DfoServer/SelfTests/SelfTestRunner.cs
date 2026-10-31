@@ -17,6 +17,7 @@ internal static class SelfTestRunner
         await GmWebServerTests.RunClientPagesAsync();
         CharacterRenameCardTests.RunCore();
         BattlePassCatalogTests.RunCore();
+        BattlePassRequestTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
         LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
