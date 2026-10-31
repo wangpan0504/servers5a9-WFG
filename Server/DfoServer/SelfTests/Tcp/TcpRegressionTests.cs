@@ -269,6 +269,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("sleepy-hollow-socket", FormalDungeonTcpTests.RunSleepyHollowAsync),
+        ("pandemonium-regional-drops", FormalDungeonTcpTests.RunRegionalDropsAsync),
         ("sleepy-hollow-materials", (_, _, resources) =>
         {
             SleepyHollowMaterialDropTests.RunCore();
