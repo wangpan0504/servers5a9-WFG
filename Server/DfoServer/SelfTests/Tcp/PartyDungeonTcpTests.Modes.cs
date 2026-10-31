@@ -16,6 +16,13 @@ internal static partial class PartyDungeonTcpTests
     internal static async Task RunQuestAndHellAsync(ServerOptions source,string root,TcpTestResources resources)
     {
         HellApcFactionTests.RunResources(resources);
+        LegacyHellDropTests.RunResources(resources.Archive, resources.Towns, resources.ItemResources);
+        RiftEpicDropTests.RunResources(resources.Archive, resources.ItemResources);
+        RiftMaterialDropTests.RunResources(resources);
+        HarlemMaterialDropTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
+            resources.ItemResources, resources.Quests, resources.Learning);
+        DungeonSpecificCardRewardsTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
+            resources.ItemResources, resources.Quests, resources.Learning);
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"party-modes"),resources:resources);
         await fixture.StartAsync();
         foreach (var (questId,dungeonId) in new (ushort,uint)[] { (5934,291100318),(6032,291100319),(3842,191) })

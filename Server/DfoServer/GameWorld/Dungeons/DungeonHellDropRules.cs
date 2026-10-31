@@ -27,11 +27,14 @@ internal sealed class DungeonHellDropRules
             for (int at = 0; at + 6 < prob.Length; at += 7) rules.rates.Add((prob[at], prob[at + 1], prob[(at + 2)..(at + 7)]));
         if (sections.TryGetValue("basis of rarity dicision", out var rarity) && rarity.Length >= 1)
         {
-            // 行 B 的末项 1000002 比前一项 1000001 大、行内非单调的情况按"取前缀最大值"修正（单调夹紧），否则稀有度池阈值校验会拒绝。
+            // 百万抽样之外的1000001/1000002是不可命中的哨兵，不应让有效分布超出分母。
+            // 先归一到实际抽样范围再保持前缀单调；否则史诗药剂会把完整深渊分布误判为不支持。
             for (int row = 0; row < rarity[0] && 1 + (row + 1) * 7 <= rarity.Length; row++)
             {
                 var values = rarity[(1 + row * 7)..(1 + (row + 1) * 7)];
-                for (int i = 1; i < values.Length; i++) values[i] = Math.Max(values[i], values[i - 1]);
+                if (values.Any(value => value < 0)) throw new InvalidDataException("深渊稀有度阈值不能为负或包含非整数");
+                for (int i = 0; i < values.Length; i++)
+                    values[i] = Math.Max(Math.Min(values[i], 1000000), i == 0 ? 0 : values[i - 1]);
                 rules.rarityRows.Add(values);
             }
         }
