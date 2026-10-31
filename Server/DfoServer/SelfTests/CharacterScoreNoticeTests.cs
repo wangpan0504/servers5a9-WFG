@@ -62,6 +62,13 @@ internal static class CharacterScoreNoticeTests
             var box = DevelopmentGm.PrepareCharacterScoreNotice(f.Request, target, f.Calculate, _ => f.Clock.Utc + 3);
             That(box.ExpiresAt == f.Clock.Utc + 3, "选中箱更早3秒期限也约束提示");
         }
+        using (var f = new Fixture(expiring: true, skinSlots: true))
+        {
+            var target = new ChatProbeConnection(1, f.Session, (_, _, _) => { }) { GuardedProbe = (_, _, _, _) => true };
+            var details = DevelopmentGm.PrepareCharacterScoreNotice(f.Request, target, f.Calculate, _ => null);
+            That(details.Profile == CharacterInvestmentScore.CompleteWornProfile && details.ExpiresAt == f.Clock.Utc + 4,
+                "v2.4光环及宠物幻化参与最早详情期限，不能继续使用旧外观排除");
+        }
         using (var f = new Fixture())
         {
             var score = f.Calculate(CharacterInvestmentScore.Capture(f.Session.Selected!, f.Clock.Utc));
@@ -91,7 +98,7 @@ internal static class CharacterScoreNoticeTests
             "真实疲劳日切提交替换Selected后拒绝原评分，即使分值未变");
         var fresh = f.Session.CaptureCharacterScoreNotice("notice", "NoticeHero");
         That(f.Session.CharacterScoreNoticeStatus(fresh, f.Clock.Utc + 10) == "ready" &&
-            f.Calculate(fresh.Snapshot).Profile == CharacterInvestmentScore.QualityProfile &&
+            f.Calculate(fresh.Snapshot).Profile == CharacterInvestmentScore.CompleteWornProfile &&
             f.Calculate(fresh.Snapshot).Score == f.Calculate(capture.Snapshot).Score,
             "疲劳日切后的新快照可评分，不把疲劳余额混入建设分");
         f.Clock.Advance(5);
@@ -186,9 +193,9 @@ internal static class CharacterScoreNoticeTests
         public DevelopmentRequest Request => DevelopmentRequest.Parse("character-score-notice NoticeHero", "notice");
         readonly Dictionary<int, ItemTemplate> templates = [];
         readonly bool currentProfile;
-        public Fixture(bool expiring = false, bool serviceDays = false)
+        public Fixture(bool expiring = false, bool serviceDays = false, bool skinSlots = false)
         {
-            currentProfile = serviceDays;
+            currentProfile = serviceDays || skinSlots;
             var point = new Location(1, 0, 10, 10);
             var map = new TownMap("notice.map", [new(new(0, 0, 20, 20), [], [])], [], false, []);
             var towns = new TownCatalog(new() { [(1, 0)] = new(1, 0, 1, [], [], [], point, map, [], []) }, point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
@@ -203,9 +210,9 @@ internal static class CharacterScoreNoticeTests
             templates[2] = templates[1] with { Id = 2, EquipmentSlot = 13, Rarity = 99 };
             if (expiring)
             {
-                items.Add(new(0, new(InventoryListType.Equipment, 0), new(3, ItemKind.Avatar, 0)) { Avatar = new() { ExpireTime = checked((int)Clock.Utc + 6) } });
-                items.Add(new(0, new(InventoryListType.Equipment, 26), new(4, ItemKind.Creature, 0)) { Creature = new() { ExpireTime = checked((int)Clock.Utc + 4) } });
-                templates[3] = templates[1] with { Id = 3, Kind = ItemKind.Avatar, EquipmentSlot = 0, Grade = 1 };
+                items.Add(new(0, new(InventoryListType.Equipment, (short)(skinSlots ? 11 : 0)), new(3, ItemKind.Avatar, 0)) { Avatar = new() { ExpireTime = checked((int)Clock.Utc + 6) } });
+                items.Add(new(0, new(InventoryListType.Equipment, (short)(skinSlots ? 33 : 26)), new(4, ItemKind.Creature, 0)) { Creature = new() { ExpireTime = checked((int)Clock.Utc + 4) } });
+                templates[3] = templates[1] with { Id = 3, Kind = ItemKind.Avatar, EquipmentSlot = (byte)(skinSlots ? 9 : 0), Grade = 1 };
                 templates[4] = templates[1] with { Id = 4, Kind = ItemKind.Creature, EquipmentSlot = 26 };
             }
             repository.Create(Owner, new("NoticeHero", point, point)
@@ -228,7 +235,7 @@ internal static class CharacterScoreNoticeTests
             id => templates[id], (_, _, _, _) => true, _ => true, _ => null, _ => null, _ => null,
             _ => throw new InvalidDataException("empty box"), (_, _) => false,
             currentProfile ? _ => throw new InvalidDataException("empty chronicle") : null,
-            currentProfile ? (_, _) => throw new InvalidDataException("empty dimension") : null, includeQualitySeedTier: currentProfile);
+            currentProfile ? (_, _) => throw new InvalidDataException("empty dimension") : null, includeQualitySeedTier: currentProfile, includeAllWorn: currentProfile);
         public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
     }
 }

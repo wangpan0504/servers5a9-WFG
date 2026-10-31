@@ -42,8 +42,18 @@ internal static class MachineCharacterScoreTests
         string maximum = Read(MachineCharacterScorePackets.Build(Nonce, ushort.MaxValue, long.MaxValue,
             new string('p', 48), new string('v', 32), "complete", int.MaxValue, true, 10000));
         That(maximum.Split('|').Length == 10 && Encoding.ASCII.GetByteCount(maximum) <= 600, "最大合法字段仍在客户端十段/600字节边界内");
-        That(Read(MachineCharacterScorePackets.Build(Nonce, 0, 0, "character-investment", "v2.3", "complete", 0, false, 1)) ==
-            "1|0123456789abcdef0123456789abcdef|0|0|character-investment|v2.3|complete|0|0|1", "当前规则版本及合法零分的黄金正文");
+        That(Read(MachineCharacterScorePackets.Build(Nonce, 0, 0, "character-investment", "v2.4", "complete", 0, false, 1)) ==
+            "1|0123456789abcdef0123456789abcdef|0|0|character-investment|v2.4|complete|0|0|1", "当前规则版本及合法零分的黄金正文");
+        using (var fixture = new CharacterScoreNoticeTests.Fixture(expiring: true, skinSlots: true))
+        {
+            byte[]? sent = null;
+            var capture = fixture.Session.CaptureCharacterScoreNotice("notice", "NoticeHero");
+            CharacterScoreProjection.Send(fixture.Session, capture, fixture.Calculate, _ => null,
+                (_, body, _, _) => { sent = body; return true; }, Nonce);
+            var fields = Read(sent!).Split('|');
+            That(fields.Length == 10 && fields[4] == "character-investment" && fields[5] == "v2.4" && fields[9] == "4000",
+                "真实v2.4投影保留十段正文，版本和幻化期限同步");
+        }
         Reject(() => MachineCharacterScorePackets.Build(Nonce, 0, 0, "p", "v", "complete", -1, false, 1));
         Reject(() => MachineCharacterScorePackets.Build(Nonce, 0, 0, "p", "v", "unknown", 0, false, 1));
         foreach (int ttl in new[] { 0, -1, 10001 }) Reject(() => MachineCharacterScorePackets.Build(Nonce, 42, 0, "p", "v", "complete", 0, false, ttl));

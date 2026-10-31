@@ -295,7 +295,7 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 - `POST /api/story {account,name,level,confirm}`：设置剧情等级（0–95），调用已有 `story` 命令并写审计。
 - 物品索引缓存版本升到 3（新增武器子类字段），首次启动会重建一次 `gm-index-items.json`。
 
-`character-score <角色>`：只读查询 `character-investment/v2`，包含十二装备基础层及称号、时装、宠物、勋章、附魔、徽章、护石符文、收集箱、套装等逐来源建设明细。沿用账号/角色归属与owner快照边界，不修改资产。空模块为0；Partial说明已安装来源仍有缺失或非法定义，不可当完整排名。旧 `equipment-score` 仍返回十二装备v1。规则与限制见[角色属性](../模块/角色属性.md#本服角色建设分-v2)，此命令不是客户端自助查询或原生战斗力面板。
+`character-score <角色>`：只读查询 `character-investment/v2.4`，包含十二装备基础层及称号、时装、宠物、勋章、附魔、徽章、护石符文、收集箱、套装等逐来源建设明细。沿用账号/角色归属与owner快照边界，不修改资产。空模块为0；Partial说明已安装来源仍有缺失或非法定义，不可当完整排名。v2.4 补全光环、宠物幻化及额外普通装备打造，详见角色属性的 v2.4 变更说明。旧 `equipment-score` 仍返回十二装备v1。规则与限制见[角色属性](../模块/角色属性.md#本服角色建设分-v2)，此命令不是客户端自助查询或原生战斗力面板。
 
 `character-score-notice <角色>`：管理触发当前在线就绪角色的建设分摘要，沿用账号归属验证，使用与 `character-score` 相同的真实 v2 计算。通过既有 AAS_TIPS 弹框投递，不接管聊天文本，也不自动在登录或换装时弹出。结果 `queued` 只表示发送队列已接受，`DeliveryConfirmed=false`，不确认客户端接收/显示；`queue_rejected`、`expired` 或身份变化状态需手动重新查询。摘要优先显示 Partial/封顶、分数及版本，UTF-8 正文最多600字节；完整逐来源明细仍查 JSON。
 

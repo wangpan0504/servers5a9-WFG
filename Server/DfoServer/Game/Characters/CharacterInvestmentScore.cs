@@ -26,6 +26,7 @@ internal static class CharacterInvestmentScore
     public const string ChronicleProfile = "character-investment/v2.1";
     public const string DimensionEnergyProfile = "character-investment/v2.2";
     public const string QualityProfile = "character-investment/v2.3";
+    public const string CompleteWornProfile = "character-investment/v2.4";
     static readonly string[] Modules = ["equipment", "title", "avatar", "pet", "artifact", "medal", "gem",
         "enchant", "random-title", "emblem", "talisman", "rune", "collectbox", "set", "auxiliary", "cosmetic", "random-option", "chronicle", "emancipation", "quality"];
 
@@ -50,14 +51,17 @@ internal static class CharacterInvestmentScore
         Func<int, EquipmentSetInvestmentMetadata?> set, Func<int, TalismanDefinition?> talisman,
         Func<int, RuneDefinition?> rune, Func<byte, CollectBoxEntry> collectBox, Func<ItemTemplate, byte, bool> randomOption,
         Func<ChronicleOption, ChronicleInvestmentMetadata>? chronicle = null,
-        Func<ItemTemplate, byte, DimensionEnergyInvestmentMetadata>? dimensionEnergy = null, bool includeQualitySeedTier = false)
+        Func<ItemTemplate, byte, DimensionEnergyInvestmentMetadata>? dimensionEnergy = null, bool includeQualitySeedTier = false,
+        bool includeAllWorn = false)
     {
         if (dimensionEnergy is not null && chronicle is null)
             throw new ArgumentException("v2.2须同时提供已支持的气息目录", nameof(chronicle));
         if (includeQualitySeedTier && dimensionEnergy is null)
             throw new ArgumentException("v2.3须同时提供已支持的次元目录", nameof(dimensionEnergy));
-        string profile = includeQualitySeedTier ? QualityProfile : dimensionEnergy is not null ? DimensionEnergyProfile : chronicle is null ? Profile : ChronicleProfile;
-        var basis = EquipmentInvestmentScore.Calculate(snapshot.Equipment, template);
+        if (includeAllWorn && !includeQualitySeedTier)
+            throw new ArgumentException("v2.4须同时开启品质档位", nameof(includeAllWorn));
+        string profile = includeAllWorn ? CompleteWornProfile : includeQualitySeedTier ? QualityProfile : dimensionEnergy is not null ? DimensionEnergyProfile : chronicle is null ? Profile : ChronicleProfile;
+        var basis = EquipmentInvestmentScore.Calculate(snapshot.Equipment, template, includeAllWorn);
         var parts = ImmutableArray.CreateBuilder<CharacterInvestmentPart>();
         CharacterInvestmentResult Result(bool invalid = false) => new(profile, basis.CharacterId, basis.CharacterRevision,
             basis.ObservedAt, invalid ? "Invalid" : basis.Partial || parts.Any(p => p.Partial) ? "Partial" : "Complete",
@@ -107,23 +111,37 @@ internal static class CharacterInvestmentScore
             short slot = item.Position.Index;
             if (item.Position.List != InventoryListType.Equipment) continue;
             string source = $"equipment:{slot}/uid:{item.Uid}";
-            if (slot is 11 or 33) { Add("cosmetic", source, 0, note: "appearance_only_no_double_count"); continue; }
-            string module = slot switch { <= 10 and >= 0 => "avatar", 13 => "title", 26 => "pet", >= 27 and <= 29 => "artifact",
+            if (!includeAllWorn && slot is 11 or 33) { Add("cosmetic", source, 0, note: "appearance_only_no_double_count"); continue; }
+            string module = slot switch { <= 11 and >= 0 => "avatar", 13 => "title", 26 or 33 => "pet", >= 27 and <= 29 => "artifact",
                 32 => "medal", 34 or 35 => "talisman", 24 or 30 => "auxiliary", _ => "equipment" };
             if (item.IsExpired(basis.ObservedAt)) { Add(module, source, 0, note: "expired_excluded"); continue; }
+            if (includeAllWorn && slot == 31)
+            { Add(module, source, 0, true, note: "slot_without_wear_contract"); continue; }
             Try(module, source, () =>
             {
                 item.ValidateDetails(allocating: false);
                 var t = Get(item.Core.ItemId);
                 ItemKind expected = module switch { "avatar" => ItemKind.Avatar, "pet" => ItemKind.Creature,
                     "artifact" => ItemKind.CreatureEquipment, "medal" => ItemKind.GuildMedal, "talisman" => ItemKind.Talisman, _ => ItemKind.Equipment };
-                if (t.Kind != expected || item.Core.Kind != expected || (module == "talisman" ? t.EquipmentSlot != 34 : t.EquipmentSlot != slot) ||
+                bool matchesSlot = module == "talisman" ? t.EquipmentSlot == 34 : t.EquipmentSlot == slot;
+                if (includeAllWorn)
+                    matchesSlot |= slot == 11 && t.EquipmentSlot is 9 or 11 || slot == 33 && t.EquipmentSlot == 26 || slot == 24 && t.EquipmentSlot == 12;
+                if (t.Kind != expected || item.Core.Kind != expected || !matchesSlot ||
                     module == "equipment" && !EquipmentInvestmentScore.Slots.Contains(slot))
                     throw new InvalidDataException("穿戴宿主槽位不符");
                 switch (module)
                 {
-                    case "title": Tier(module, source, t.Rarity, [300, 350, 425, 525, 700, 475, 625]); break;
-                    case "auxiliary": Tier(module, source, t.Rarity, [300, 350, 425, 525, 700, 475, 625]); break;
+                    case "title":
+                    case "auxiliary":
+                        if (includeAllWorn)
+                        {
+                            var row = new InvestmentItem(item.Uid, slot, t.Id, item.Core.Upgrade, item.Core.AmplifyType,
+                                item.Core.AmplifyValue, item.Core.GenuineUpgrade, item.ExpireTime, item.Core.Durability);
+                            var score = EquipmentInvestmentScore.Calculate(new(basis.CharacterId, basis.CharacterRevision, basis.ObservedAt, [row]), template, true);
+                            Add(module, source, score.Score ?? 0, score.Partial, score.ScoreCapped, "extended_equipment_base_and_crafting");
+                        }
+                        else Tier(module, source, t.Rarity, [300, 350, 425, 525, 700, 475, 625]);
+                        break;
                     case "avatar":
                         if (item.Avatar is null) throw new InvalidDataException("时装详情缺失");
                         Tier(module, source, t.Grade, [50, 100, 200, 350]); break;
@@ -144,16 +162,42 @@ internal static class CharacterInvestmentScore
                 valid.Add(slot, (item, t));
             });
         }
+        if (includeAllWorn)
+        {
+            // 基础层也须服从完整宿主校验，详情非法不能留下独立的基础打造分。
+            var rows = basis.Slots.Select(row => row.Uid is not null && !valid.ContainsKey(row.Slot) &&
+                !row.Notes.Contains("expired_excluded") ? row with
+                { Base = 0, Enhancement = 0, Amplification = 0, Score = 0, Partial = true,
+                    Notes = [.. row.Notes, "invalid_worn_host"] } : row).ToImmutableArray();
+            basis = basis with { Slots = rows, Score = rows.Sum(row => row.Score), Partial = rows.Any(row => row.Partial),
+                Status = rows.Any(row => row.Partial) ? "Partial" : "Complete" };
+            parts.RemoveAt(0);
+            parts.Insert(0, new("equipment", EquipmentInvestmentScore.Profile, basis.Score ?? 0, basis.Partial, basis.ScoreCapped, "covered"));
+        }
         foreach (var (slot, pair) in valid.OrderBy(p => p.Key))
         {
             var item = pair.Item;
             var core = item.Core;
             string source = $"equipment:{slot}/uid:{item.Uid}";
-            if (includeQualitySeedTier && core.Kind == ItemKind.Equipment && EquipmentInvestmentScore.Slots.Contains(slot))
+            // 非普通装备的强化也是已保存投入；勋章原有每级10分不重复奖励。
+            if (includeAllWorn && core.Kind != ItemKind.Equipment && core.Kind != ItemKind.GuildMedal && core.Upgrade != 0)
+            {
+                int upgrade = Math.Min((int)core.Upgrade, 15);
+                Add("enhancement", source, 20 * upgrade + 5 * Math.Max(upgrade - 10, 0) * Math.Max(upgrade - 10, 0),
+                    cap: core.Upgrade > 15, note: "installed_non_equipment_upgrade");
+            }
+            if (includeAllWorn && core.Kind != ItemKind.Equipment && (core.AmplifyType != 0 || core.AmplifyValue != 0))
+            {
+                if (core.AmplifyType is >= 1 and <= 4 && core.AmplifyValue > 0)
+                    Add("enhancement", source + "/amplification", 10 * Math.Min((int)core.Upgrade, 15), cap: core.Upgrade > 15);
+                else if (core.AmplifyType is not (>= 0x81 and <= 0x84) || core.AmplifyValue == 0)
+                    Add("enhancement", source, 0, true, note: "invalid_amplification_excluded");
+            }
+            if (includeQualitySeedTier && core.Kind == ItemKind.Equipment && (includeAllWorn || EquipmentInvestmentScore.Slots.Contains(slot)))
             {
                 var quality = EquipmentQualitySeedResolver.Resolve(core.Value);
                 // 不重复乘武器权重；零属性模板也按本服seed规则计，不推断原生UI适用性。
-                parts.Add(new("quality", source, 25 * quality.Tier, false, false, "standard_equipment_seed_tier_investment")
+                parts.Add(new("quality", source, 25 * quality.Tier, false, false, includeAllWorn ? "worn_equipment_seed_tier_investment" : "standard_equipment_seed_tier_investment")
                 { RuleVersion = profile, Quality = quality });
             }
             else if (core.Kind == ItemKind.Equipment)
@@ -175,7 +219,8 @@ internal static class CharacterInvestmentScore
                     string location = source + $"/chronicle:{index}/id:{option.Id}/job:{option.Job}/grow:{option.GrowType}/slot:{option.EquipmentType}/number:{option.Number}";
                     Try("chronicle", location, () =>
                     {
-                        if (core.Kind != ItemKind.Equipment || option.Id <= 0 || option.EquipmentType != slot)
+                        if (core.Kind != ItemKind.Equipment || option.Id <= 0 ||
+                            option.EquipmentType != (includeAllWorn ? pair.Template.EquipmentSlot : slot))
                             throw new InvalidDataException("气息已提交宿主不符");
                         var definition = chronicle(option);
                         if (!definition.Valid)
