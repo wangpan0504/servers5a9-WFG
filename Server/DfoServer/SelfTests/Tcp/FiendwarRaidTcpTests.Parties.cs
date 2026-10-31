@@ -48,6 +48,7 @@ internal static partial class FiendwarRaidTcpTests
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
             uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
             byte server = checked((byte)(raidKey >> 24));
+            if (count == 1) VerifyNameHistory(fixture, resources, repository, leader, server);
             That(!RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4), "可单人开战的完整团队面板不显示引导标记");
             foreach (var (peer, index) in peers.Skip(1).Select((peer, index) => (peer, index)))
             {

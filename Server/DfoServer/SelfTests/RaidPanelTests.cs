@@ -10,6 +10,14 @@ internal static class RaidPanelTests
 {
     internal static void RunCore()
     {
+        var other = DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 1, 39]);
+        That(other == new DfoServer.Network.Parsers.RaidOtherUserRequest(2, 0x1234, 1, 39), "821保留完整目标定位与曾用名模式");
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 1]));
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 1, 39, 0]));
+        Bytes(CharacterNameHistoryPackets.RaidList([new("旧名", 0x12345678)], 2, 39, 0x1234),
+            [39, 2, 0x34, 0x12, 1, 4, 0, 0, 0, 0xBE, 0xC9, 0xC3, 0xFB, 2, 0x78, 0x56, 0x34, 0x12],
+            "761消费4字节头后完整读取真实旧名、服索引和时间，不套736的裸行表");
+        Bytes(CharacterNameHistoryPackets.RaidList([], 2, 39, 0x1234), [39, 2, 0x34, 0x12, 0], "761空历史明确清窗");
         That(DfoServer.Network.Parsers.RaidRequests.Search([1]).Closed, "833原生关闭模式只有单字节，不冒充新查询");
         Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.Search([1, 0]));
         var user = DfoServer.Network.Parsers.RaidRequests.CheckUser([2, 0x34, 0x12, 39]);
