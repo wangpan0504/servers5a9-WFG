@@ -106,10 +106,10 @@ internal static class QuestAutoMeetTests
                             !QuestEligibility.Evaluate(transferred with { CompletedQuests = [] },quest,actual).Eligible,
                             "祝贺任务不跳过未转职、错误职业或真实前置："+quest.Id);
                         That(!QuestEligibility.CharacterRequirements(transferred,quest with { RewardType = "[grow type]" },actual).Eligible &&
-                            !QuestEligibility.CharacterRequirements(transferred,quest with { SubType = -1 },actual).Eligible &&
+                            !QuestEligibility.CharacterRequirements(transferred,quest with { SubType = 0 },actual).Eligible &&
                             !QuestEligibility.CharacterRequirements(transferred,quest with { Definition = definition with
                                 { TargetCharacters = definition.TargetCharacters.Add(new(target.Job,0,-1)) } },actual).Eligible,
-                            "真实转职奖励、普通会面与混合目标不借用祝贺例外："+quest.Id);
+                            "真实转职奖励、未知会面子型与混合目标不借用祝贺例外："+quest.Id);
                     }
                 }
                 That(quest.MinimumLevel == 1 || !QuestEligibility.Evaluate(character with { Level = (byte)(quest.MinimumLevel-1) },quest,actual).Eligible,
@@ -118,7 +118,26 @@ internal static class QuestAutoMeetTests
 
             That(ordinary.Where(QuestEligibility.TransferredAutoMeet).Select(q => q.Id).Order().SequenceEqual(
                 new[] {2637,2912,4427,4428,4429,4430,4431,4432,4433,4434,4435,4728,6927}),
-                "新版资源13条明确首转后的接取型祝贺会面，普通sub-1不扩展");
+                "新版资源13条接取型转职祝贺保持原接取归零规则");
+            var knight = actual.Get(12764);
+            That(knight is { Condition: "[meet npc]", SubType: -1, Npc: 1, IntData: [1] } &&
+                QuestEligibility.TransferredAutoMeet(knight), "守护者转职祝贺采用普通会面，而非接取型目标");
+            foreach (byte branch in new byte[] { 1, 2, 3, 4 })
+                foreach (byte awakening in new byte[] { 0, 16, 32 })
+                {
+                    var character = new Character(1,0,"Knight",1,towns.Room,null)
+                    {
+                        Job = 12, GrowType = (byte)(branch+awakening), Level = (byte)knight.MinimumLevel,
+                        CompletedQuests = [12757]
+                    };
+                    var accepted = QuestLifecyclePlan.Accept(character,knight,actual,items.Items,items.GoldLimits,
+                        items.EpicPieces,DateTimeOffset.UtcNow);
+                    That(accepted.ActiveAfter is [{ QuestId: 12764, ConditionState: 1, AcceptanceId: var identity }] && identity != Guid.Empty,
+                        "真实守护者四分支及觉醒阶段可以接取祝贺，但须继续实际会面");
+                    TestCheck.Reject<InvalidDataException>(() => QuestLifecyclePlan.Accept(character with { CompletedQuests = [] },
+                        knight,actual,items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow),
+                        "普通转职祝贺不补造前置完成记录");
+                }
 
             using (var f = Fixture())
             {

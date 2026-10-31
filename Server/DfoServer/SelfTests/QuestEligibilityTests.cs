@@ -17,6 +17,19 @@ internal static class QuestEligibilityTests
         var next = Quest(101) with { Definition = new QuestDefinition([]) { PrerequisiteGroups = [[100, 102], [103]] } };
         var catalog = new QuestCatalog(new[] { first, next, Quest(102), Quest(103) }.ToDictionary(quest => quest.Id));
         That(QuestEligibility.Evaluate(origin, first, catalog).Visible, "普通资格允许Lv1未完成任务");
+        var congratulations = first with { Grade = "[common unique]", SubType = -1,
+            Definition = new([]) { JobChange = 1, TargetCharacters = [new("[knight]", 1, -1),new("[knight]", 2, -1)] } };
+        foreach (byte grow in new byte[] { 1, 2, 17, 18, 33, 34 })
+            That(QuestEligibility.Evaluate(origin with { Job = 12, GrowType = grow }, congratulations, catalog).Visible &&
+                QuestStateProgress.Type(congratulations) is null,
+                "普通转职祝贺允许匹配已转职及觉醒角色，但保留实际NPC会面目标");
+        foreach (var rejected in new[] { origin with { Job = 12 }, origin with { Job = 0, GrowType = 1 },
+            origin with { Job = 12, GrowType = 3 } })
+            That(!QuestEligibility.Evaluate(rejected, congratulations, catalog).Eligible,
+                "转职祝贺仍拒绝未转职、其它职业和不匹配分支");
+        That(!QuestEligibility.TransferredAutoMeet(congratulations with { SubType = 0 }) &&
+            !QuestEligibility.TransferredAutoMeet(congratulations with { RewardType = "[grow type]" }),
+            "未知会面子类型及真实转职奖励不使用祝贺资格");
         var levelGate = first with { MinimumLevel = 13 };
         That(!QuestEligibility.Evaluate(origin, levelGate, catalog).Eligible &&
             QuestEligibility.Evaluate(origin, levelGate, catalog, mode: QuestEligibilityMode.IgnoreMinimumLevel).Eligible,

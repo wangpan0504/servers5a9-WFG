@@ -83,6 +83,7 @@ internal sealed class QuestLifecyclePlan
                 quests.TryGet(row.QuestId,out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
                 (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 &&
                     QuestClearEligibility.MatchesClearMap(quest, entry, clear) &&
+                    QuestClearEligibility.HasRequiredActors(quest,run,sceneClear.Result.Snapshot) &&
                     (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
                  (QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature ||
                     QuestAutoDailyPlan.Supports(quest)) &&

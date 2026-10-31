@@ -81,6 +81,17 @@ internal static class QuestClearEligibilityTests
             roomRun!.CompleteLoading(roomRun.Snapshot.Identity,Guid.NewGuid());
             roomRun.Move(roomRun.Snapshot.Identity,Guid.NewGuid(),middle.Position);
             roomRun.CompleteLoading(roomRun.Snapshot.Identity,Guid.NewGuid());
+            var protectedMap = QuestEligibilityTests.Quest(2706) with
+                { Condition = "[clear map]", SubType = 0, IntData = [middle.Id,friend.MonsterId] };
+            Check(QuestClearEligibility.IsSingleMap(protectedMap) &&
+                QuestClearEligibility.HasRequiredActors(protectedMap,roomRun,roomRun.Snapshot),
+                "sub0单地图目标要求真实存活友方APC");
+            Check(!QuestClearEligibility.HasRequiredActors(protectedMap,roomRun,roomRun.Snapshot with { LivingMonsters = [20,21] }) &&
+                !QuestClearEligibility.HasRequiredActors(protectedMap with { IntData = [middle.Id,999] },roomRun,roomRun.Snapshot) &&
+                !QuestClearEligibility.IsSingleMap(protectedMap with { IntData = [middle.Id] }) &&
+                !QuestClearEligibility.IsSingleMap(protectedMap with { IntData = [middle.Id,0] }) &&
+                !QuestClearEligibility.IsSingleMap(protectedMap with { SubType = 1 }),
+                "死亡、缺失APC与未知目标形状不能借用普通清图资格");
             var initial = roomRun.Snapshot.Identity;
             var partial = roomRun.PrepareConfirmedDeath(roomAuthority.Death(initial,20)).Pending!;
             Check(partial.Result.RoomClearFact is null && partial.Result.ClearFact is null,"少一敌人不产生任何清房或通关事实");

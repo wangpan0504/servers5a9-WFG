@@ -173,6 +173,15 @@ internal sealed partial class SinglePlayerDungeonRun
     public DungeonLoadingFact? LastLoadingFact { get; private set; }
     internal DungeonEntryPlan Entry => entry;
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
+    // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
+    internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => allRooms.Where(room => room.Loaded)
+        .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
+            monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
+
+    internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) => allRooms.Any(room => room.Loaded &&
+        room.Plan.Monsters.Any(monster => monster.MonsterId == id && monster.AiCharacter is not null && monster.IsFriendly &&
+            !room.Dead.Contains(monster.ObjectKey) && !room.Culled.Contains(monster.ObjectKey) &&
+            (!ReferenceEquals(room,current) || snapshot.LivingMonsters.Contains(monster.ObjectKey))));
     internal bool HasPendingDeath => pendingDeath is not null || pendingPassiveClear is not null;
     internal bool HasPendingPassiveClear => pendingPassiveClear is not null;
     internal uint DungeonId => entry.DungeonId;
@@ -224,8 +233,11 @@ internal sealed partial class SinglePlayerDungeonRun
     // 友方、非敌对对象退场只更新显示集合，不加入持久击杀或清图事实；未知key不改变实例。
     internal void RetireNonCombatObject(ushort key)
     {
-        if (pendingPassiveClear is null && current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath))
-            current.Dead.Add(key);
+        if (HasPendingDeath || pendingSettlement is not null) return;
+        var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
+            allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
+                monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
+        room?.Dead.Add(key);
     }
     SinglePlayerDungeonPhase phase = SinglePlayerDungeonPhase.Loading;
     // 截止瞬间停止新战斗与移动，不依赖后台任务何时取得命令门；已准备的事务仍由原回执确认。

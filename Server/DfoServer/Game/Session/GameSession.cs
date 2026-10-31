@@ -46,14 +46,22 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public Character? Selected
     {
         get => selected;
-        private set { InvalidateGuildHallWait(selected, value); selected = value; }
+        private set { InvalidateGuildHallWait(selected, value); TrackHiddenQuestArea(selected, value); selected = value; }
     }
     public bool Ready { get; private set; }
     SessionPhase phase = SessionPhase.Unselected;
     public SessionPhase Phase
     {
         get => phase;
-        private set { if (phase != value) guildHallWait = null; phase = value; }
+        private set
+        {
+            if (phase != value)
+            {
+                guildHallWait = null;
+                hiddenAreaEnteredAt = value == SessionPhase.Town ? HiddenQuestTimestamp() : null;
+            }
+            phase = value;
+        }
     }
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";

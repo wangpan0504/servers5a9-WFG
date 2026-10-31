@@ -18,6 +18,8 @@ internal static class QuestHiddenNpcDialogueTests
         var quests = SelfTestCatalogs.Quests(pvf); var quest = quests.Get(2699);
         var skills = SelfTestCatalogs.SkillLearning(pvf); var growth = SelfTestCatalogs.Growth(pvf,skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
+        QuestProtectedMapTests.Run(towns,pvf,characters,items,quests,skills,growth);
+        QuestStandbyEntryTests.Run(towns,characters,items,quests,skills,growth,parameters);
         That(QuestHiddenEntry.NpcDialogueShape(quest) && quest.Definition!.Values("npc dialog")[0].Value == 480 &&
             quest.IntData.SequenceEqual([58]) && QuestHiddenEntry.Direct(quest,quests),"2699保留真实NPC480入口与NPC58会面目标");
         VerifyClearedDialogue(towns,characters,items,quests,skills,growth,parameters);
