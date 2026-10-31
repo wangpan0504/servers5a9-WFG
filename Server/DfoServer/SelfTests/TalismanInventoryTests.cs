@@ -136,6 +136,8 @@ internal static class TalismanInventoryTests
             refinedCore.Rune == originalCore.Rune && refinedCore.Extension119 == originalCore.Extension119 &&
             refinedCore.Extension114.Flag == originalCore.Extension114.Flag && (refinedCore.Extension114.Value >> 24) == 0xFE,
             "重锻按品级足额扣料，仅替换三孔颜色，其他完整实例字段保留");
+        That(refinedCore == target.Core && refined.Plan.ChangedSlots.SequenceEqual(new[] { material.Position }),
+            "重锻允许抽回原孔色并照常扣料，值未变的目标不进入通用库存差量，回执后仍须恢复目标显示");
         That(!service.Refine(Character(target, material with { Core = material.Core with { Value = 1 } }), new(121, 0), costs, Now).Accepted,
             "重锻材料不足不返回扣料计划");
 

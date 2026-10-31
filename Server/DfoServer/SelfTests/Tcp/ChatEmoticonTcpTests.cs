@@ -62,7 +62,8 @@ internal static class ChatEmoticonTcpTests
             Use(alpha,65);
             alpha.Expect(1,515,Build(w=>{w.Write((byte)1);w.Write((ushort)65);w.Write((byte)0);w.Write(199);}));
             ExpectStorage(alpha,[410000046]);
-            alpha.Expect(0,1559,Build(w=>{w.Write((byte)2);w.Write((byte)3);w.Write(410000046);w.Write((byte)3);w.Write(410000009);}));
+            // 最近获得是完整替换：新记录在前，仍有效且无历史时间的旧表情补在末尾。
+            alpha.Expect(0,1559,Build(w=>{w.Write((byte)2);foreach(int id in new[]{410000046,410000009}){w.Write((byte)3);w.Write(id);}}));
             alpha.Expect(0,1558,Build(w=>{w.Write((byte)3);w.Write(new byte[16]);}));alpha.Barrier();
             That(Count(65)==1 && AccountState().Emoticons is [{SkinId:410000046,ExpiresAt:0}],"单ID解锁券只扣一张并保存账号所有权");
             string before=fixture.Snapshot();Use(alpha,65);alpha.Expect(1,515);alpha.Barrier();

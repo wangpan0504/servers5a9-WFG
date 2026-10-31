@@ -83,7 +83,7 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             SaveOrVerifyBeastStageReward(db, tx, owner, beastReward, verifyOnly: true);
-            VerifyCachedDungeonLoot(owner, expected.Id, prepared.Death.EventId, loot);
+            VerifyFrozenDungeonLoot(db, tx, owner, expected.Id, prepared.Death.EventId, loot);
             CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot, verifyOnly: true);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             current = ObserveMarriageClearInTransaction(db, tx, owner, run, prepared, current, MarriageResources, verifyOnly: true);
@@ -91,6 +91,7 @@ internal sealed partial class CharacterRepository
             var replayBonuses = ReadCommittedGuildExperience(db, tx, expected.Id, death.EventId, reward.Bonuses);
             tx.Commit();
             // 提交返回丢失时Session仍持有旧装备；仅回放与已落库结果完全一致的成长投影，不再次写资产。
+            CacheDungeonLoot(owner, expected, prepared, loot);
             var replayEquipment = equipmentGrowth?.Changes.Where(change =>
                 current.Inventory.Find(change.After.Position) == change.After).ToImmutableArray() ?? [];
             return new DungeonGrowthCommit(current, true, gained, proficiencyGained)
@@ -171,7 +172,7 @@ internal sealed partial class CharacterRepository
         SaveCommittedGuildExperience(db, tx, expected.Id, death.EventId, committedBonuses);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot);
-        CacheDungeonLoot(owner, expected, prepared, loot);
+        SaveFrozenDungeonLoot(db, tx, owner, expected, prepared, loot);
         current = ObserveMarriageClearInTransaction(db, tx, owner, run, prepared, current, MarriageResources);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
         if (quests is not null)
@@ -210,6 +211,7 @@ internal sealed partial class CharacterRepository
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
         tx.Commit();
+        CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
             { CommittedBonuses = committedBonuses, BeastRewardSlots = beastReward?.ChangedSlots ?? [], EquipmentChanges = equipmentGrowth?.Changes ?? [] };
     });

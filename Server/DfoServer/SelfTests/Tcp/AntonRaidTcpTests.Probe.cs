@@ -87,6 +87,51 @@ internal static partial class AntonRaidTcpTests
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 596) &&
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 597),
             "server.jsonl 有进图210、Reward和586，完整领取后有休息596/597");
+        // 两种真实奖励均领取后进入休息态；计时按剩余值校验，不固定真实时钟秒数或重复投影次数。
+        var stateAndTimers = events.Where(row => row.GetProperty("Kind").GetString() == "send" &&
+            row.GetProperty("Detail").GetProperty("Kind").GetInt32() == 0 &&
+            row.GetProperty("Detail").GetProperty("Opcode").GetInt32() is 587 or 596 or 597).ToArray();
+        uint waitLimit = checked((uint)(catalog.Script.Headers.Single(row => row.Tag == "[phase break time]").Values.Single().Number - 5));
+        string? state = null;
+        byte[]? timer = null;
+        uint previousSeconds = waitLimit;
+        int pairs = 0;
+        long previousSendAt = 0;
+        foreach (var row in stateAndTimers)
+        {
+            var detail = row.GetProperty("Detail");
+            int opcode = detail.GetProperty("Opcode").GetInt32();
+            byte[] body = Convert.FromHexString(detail.GetProperty("Body").GetString()!);
+            long sentAt = DateTimeOffset.Parse(row.GetProperty("Time").GetString()!).ToUnixTimeSeconds();
+            if (opcode == 587)
+            {
+                That(timer is null, "休息计时596之后须先有597，不能跨状态配对");
+                state = detail.GetProperty("Body").GetString();
+            }
+            else if (opcode == 596)
+            {
+                That(state == "0500" && timer is null && detail.GetProperty("Action").GetString() == "anton_wait_timer" &&
+                    body.Length == 13 && body.AsSpan(0, 5).SequenceEqual(new byte[5]) &&
+                    U32(body, 9) > 0 && U32(body, 9) <= previousSeconds,
+                    "596只在587休息态/phase0后发送13字节待命计时，保留字段为零且不延长剩余时间");
+                long preparedAt = (long)U32(body, 5) - U32(body, 9);
+                That(preparedAt >= previousSendAt && preparedAt <= sentAt,
+                    "596结束Unix秒减剩余秒落在前帧写后与本帧写后之间，不限制合法写入耗时");
+                timer = body;
+            }
+            else
+            {
+                That(timer is not null && state == "0500" && detail.GetProperty("Action").GetString() == "anton_wait_remaining" &&
+                    body.Length == 5 && body[0] == 1 && U32(body, 1) > 0 && U32(body, 1) <= U32(timer!, 9),
+                    "597跟在本次596后，精确5字节、休息slot1，剩余秒不增大");
+                previousSeconds = U32(body, 1);
+                timer = null;
+                pairs++;
+            }
+            previousSendAt = sentAt;
+        }
+        That(timer is null && pairs > 0 && pairs == report.Opcode596 && pairs == report.Opcode597,
+            "真实收包与日志均有完整596/597待命计时对，不允许孤立计时或漏收");
         peer.Dispose();
         await fixture.StopAsync();
         await fixture.StartAsync("reopened");

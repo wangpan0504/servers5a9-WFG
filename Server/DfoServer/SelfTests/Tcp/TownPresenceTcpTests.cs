@@ -214,7 +214,11 @@ internal static class TownPresenceTcpTests
                     // 即使历史为空也恢复世界地图显示标记，严格消费21后的完整356。
                     replacement.Expect(0,356,TownPackets.CompletedQuests(role));
                 }
-                replacement.Barrier(replacement.ReadChatEmoticons);
+                // 接管后GM升级改变表情资格，严格消费本次刷新末尾的完整411，再等待屏障。
+                if (fixture.ExpectedChatEmoticons(replacement.Id) is { } expectedChatEmoticons &&
+                    !expectedChatEmoticons.SequenceEqual(replacement.ChatEmoticonInfo))
+                    replacement.ReadChatEmoticons(replacement.Read());
+                replacement.Barrier();
                 if (fixture.ExpectedChatEmoticons(replacement.Id) is { } expectedEmoticons)
                     Bytes(replacement.ChatEmoticonInfo, expectedEmoticons, "接管后GM升级刷新真实表情资格与账号指令");
                 That(fixture.Snapshot("SELECT level,x FROM characters WHERE account='alpha'") == "[[40,461]]", "movement retains GM update after takeover");

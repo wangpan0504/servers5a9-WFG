@@ -1016,6 +1016,11 @@ CREATE TABLE character_dungeon_drop_batches(
   task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
   map_id INTEGER NOT NULL,monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 1 AND 65535),
   rule_id TEXT NOT NULL,resource_source TEXT NOT NULL,object_count INTEGER NOT NULL CHECK(object_count BETWEEN 0 AND 500),
+  freeze_format INTEGER NOT NULL DEFAULT 0 CHECK(freeze_format IN(0,1)),
+  combat_sequence INTEGER CHECK(combat_sequence IS NULL OR combat_sequence>0),
+  committed_epoch INTEGER CHECK(committed_epoch IS NULL OR committed_epoch>0),
+  map_snapshot TEXT CHECK(map_snapshot IS NULL OR (json_valid(map_snapshot) AND json_type(map_snapshot)='object')),
+  uses_collection INTEGER CHECK(uses_collection IS NULL OR uses_collection IN(0,1)),
   PRIMARY KEY(character_id,event_id),UNIQUE(character_id,event_id,instance_id),UNIQUE(character_id,instance_id,monster_key),
   FOREIGN KEY(character_id,event_id) REFERENCES character_dungeon_growth_receipts(character_id,event_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
@@ -1035,11 +1040,14 @@ CREATE TABLE character_dungeon_drop_pickups(
   destination_slot INTEGER,item_uid INTEGER,after_core TEXT,
   currency_kind INTEGER,amount INTEGER NOT NULL CHECK(amount>0),after_balance INTEGER,account_revision INTEGER,
   revision INTEGER NOT NULL CHECK(revision>0),
-  CHECK((destination_slot IS NOT NULL AND item_uid IS NOT NULL AND destination_slot BETWEEN 0 AND 351 AND item_uid>0 AND
+  receipt_format INTEGER NOT NULL DEFAULT 0 CHECK(receipt_format IN(0,1)),
+  destination_list INTEGER CHECK(destination_list IS NULL OR destination_list BETWEEN 0 AND 255),
+  epic_piece TEXT CHECK(epic_piece IS NULL OR (json_valid(epic_piece) AND json_type(epic_piece)='object')),
+  CHECK((epic_piece IS NULL AND ((destination_slot IS NOT NULL AND item_uid IS NOT NULL AND destination_slot BETWEEN 0 AND 351 AND item_uid>0 AND
     after_core IS NOT NULL AND json_valid(after_core) AND json_type(after_core)='object' AND currency_kind IS NULL AND
     after_balance IS NULL AND account_revision IS NULL) OR
     (destination_slot IS NULL AND item_uid IS NULL AND after_core IS NULL AND currency_kind IS NOT NULL AND currency_kind BETWEEN 0 AND 18 AND
-    after_balance IS NOT NULL AND after_balance>=0 AND account_revision IS NOT NULL AND account_revision>=0)),
+    after_balance IS NOT NULL AND after_balance>=0 AND account_revision IS NOT NULL AND account_revision>=0))) OR (epic_piece IS NOT NULL AND destination_slot IS NULL AND item_uid IS NULL AND after_core IS NULL AND currency_kind IS NULL AND after_balance IS NULL AND account_revision IS NULL AND json_type(epic_piece,'$.Index') IS 'integer' AND json_extract(epic_piece,'$.Index')>=0 AND json_type(epic_piece,'$.PieceId') IS 'integer' AND json_extract(epic_piece,'$.PieceId')>0 AND json_type(epic_piece,'$.Amount') IS 'integer' AND json_extract(epic_piece,'$.Amount')=amount AND json_type(epic_piece,'$.Balance') IS 'integer' AND json_extract(epic_piece,'$.Balance')>=amount AND json_type(epic_piece,'$.BookRevision') IS 'integer' AND json_extract(epic_piece,'$.BookRevision')>0)),
   PRIMARY KEY(character_id,instance_id,ground_key),
   FOREIGN KEY(character_id,event_id,instance_id,ground_key) REFERENCES character_dungeon_drop_objects(character_id,event_id,instance_id,ground_key),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));

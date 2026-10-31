@@ -1,3 +1,7 @@
+using Microsoft.Data.Sqlite;
+using DfoServer.Persistence;
+using DfoServer.Game.Session;
+using DfoServer.Game.Accounts;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reflection;
@@ -276,6 +280,7 @@ internal static class LotteryTests
         var freedOpen = service.OpenLottery(freed, new(0, 117), out var freedReceipt, now);
         That(freedOpen.Accepted && freedReceipt!.RewardSlot == Bag(117) && freedOpen.Plan!.After.Find(Bag(3))!.Core.Count == 1,
             "最后一罐释放原格后合法发奖且仍精确扣材");
+        RunTreasureProductContinuation(resources);
         Console.WriteLine($"PASS {Count - checks} 袖珍罐材料解析、资格、权重与冻结规划断言");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now);
     }
@@ -514,6 +519,148 @@ internal static class LotteryTests
         Console.WriteLine($"PASS {Count - checks} 符文箱声明、抽取表与真实资源断言");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now, shopExpiration: true);
     }
+    // 仅补真实持久产物的用途连接；测试骰值0由现有EdgeRandom注入，不是天然抽样。
+    public static void RunTreasureProductContinuation(TcpTestResources resources)
+    {
+        int checks = Count;
+        const int pot = 490705287, material = 490705286, child = 490705288, equipment = 100050817;
+        var items = resources.ItemResources;
+        var now = DateTimeOffset.UtcNow;
+        var random = new EdgeRandom { Values = new Queue<long>(new long[] { 0 }) };
+        var service = new InventoryBoosterService(items.Items, items.Boosters, items.GoldLimits, items.EpicPieces,
+            random, contracts: items.Contracts);
+        var childDefinition = items.Boosters.Get(child);
+        That(childDefinition.Selection is { SelectionCount: 1 } selection &&
+            selection.Categories.Any(row => row.Category == 0 && row.Subcategory == 0 && row.PendingRule is null &&
+                row.Rewards.Any(reward => reward.ItemId == equipment && reward.Count == 1)),
+            "保存288原category0允许100050817一件，不从产品自身猜选项");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-tpc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool fixtureCompleted = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("treasure-product-continuation", () => { });
+            var created = repo.Create(owner, new("TreasureLink", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, GrowType = 1, Level = 95,
+                Inventory = new([new(0, Bag(117), Core(pot)), new(0, Bag(3), Core(material, 2))], Gold: 12345)
+            });
+            var session = new GameSession(repo, resources.Towns, owner);
+            session.Select(created.Slot);
+            session.MarkReady();
+            var seeded = session.Selected!;
+            var seedUids = seeded.Inventory.Items.Select(item => item.Uid).ToHashSet();
+            byte[] lotteryBody = new byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(lotteryBody.AsSpan(2), 117);
+            var lotteryRequest = BoosterRequests.ReadLottery(lotteryBody);
+            var lottery = service.OpenLottery(seeded, lotteryRequest, out var lotteryReceipt, now);
+            That(lottery.Accepted && lotteryReceipt is { ItemId: child, Count: 1 } && lottery.Plan is not null &&
+                random.Values!.Count == 0 && random.Calls == 1 && random.Bounds.SequenceEqual(new long[] { 100000 }),
+                "显式注入0/100000测试骰，由正式287解析和OpenLottery取得288，不强写奖励");
+            var lotteryPlan = lottery.Plan!;
+            That(session.PlanAndCommitBooster(_ => lottery, service.UsePlaces(pot), pot).Accepted,
+                "原287冻结计划沿正式Session与库存SQL提交");
+            var afterLottery = session.Selected!;
+            var produced = afterLottery.Inventory.Find(lotteryReceipt!.RewardSlot)!;
+            var remainingMaterial = afterLottery.Inventory.Find(Bag(3))!;
+            That(produced.Core.ItemId == child && produced.Uid > 0 && !seedUids.Contains(produced.Uid) &&
+                produced == (lotteryPlan.After.Find(produced.Position)! with { Uid = produced.Uid }) &&
+                !afterLottery.Inventory.Items.Any(item => item.Core.ItemId == pot) && remainingMaterial.Core.Count == 1 &&
+                remainingMaterial.Uid == seeded.Inventory.Find(Bag(3))!.Uid && afterLottery.Revision == seeded.Revision + 1,
+                "真实288获新持久UID，原罐耗尽且286仅扣一份、材料UID不变");
+            var reopened = new CharacterRepository(path);
+            var persisted = reopened.List(owner).Single();
+            That(JsonSerializer.Serialize(persisted) == JsonSerializer.Serialize(afterLottery) &&
+                persisted.Inventory.Find(produced.Position) == produced, "重开仓储保存288实际UID/Core/槽及完整角色");
+            var continuation = new GameSession(reopened, resources.Towns, owner);
+            continuation.Select(created.Slot);
+            continuation.MarkReady();
+            var expected = continuation.Selected!;
+            var source = expected.Inventory.Find(produced.Position)!;
+            That(source == produced && source.Uid == produced.Uid, "下游取重读的同一288实例，不Create子盒替代");
+            byte[] body = new byte[14];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(body, source.Position.Index);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), 1);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8), equipment);
+            var request = BoosterRequests.Read(body);
+            That(request.Slot == source.Position.Index && request.Count == 1 &&
+                request.Selection is { Category: 0, Subcategory: 0 } selected && selected.ItemIds.SequenceEqual(new[] { equipment }),
+                "正式CMD160解析实际288槽和保存category0/100050817回显，未固定产物槽");
+            var opened = service.Open(expected, request, out var childReceipt, now);
+            That(opened.Accepted && opened.Plan is not null && childReceipt is not null && random.Calls == 1 &&
+                opened.Plan.After.Items.Count(item => item.Core.ItemId == equipment) == 1 &&
+                !opened.Plan.After.Items.Any(item => item.Uid == source.Uid) &&
+                opened.Plan.After.Find(Bag(3)) == remainingMaterial,
+                "同一持久288源正式Open选择装备，286不再次消费且不再抽样");
+            var plan = opened.Plan!;
+            string snapshot = Snapshot(), frozen = JsonSerializer.Serialize(plan.After);
+            Query("CREATE TRIGGER fail_treasure_continuation BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=100050817 BEGIN SELECT RAISE(ABORT,'treasure continuation rollback'); END");
+            bool rejected = false;
+            try { continuation.PlanAndCommitBooster(_ => opened, service.UsePlaces(child), child); }
+            catch (Exception error) when (error is InvalidOperationException or SqliteException) { rejected = true; }
+            That(rejected && Snapshot() == snapshot && ReferenceEquals(continuation.Selected, expected) &&
+                random.Calls == 1 && JsonSerializer.Serialize(plan.After) == frozen,
+                "子盒晚期SQL失败保原产物UID/材料/Core/版本/审计/UID序列及原冻结计划");
+            Query("DROP TRIGGER fail_treasure_continuation");
+            That(continuation.PlanAndCommitBooster(_ => opened, service.UsePlaces(child), child).Accepted,
+                "子盒回滚后仅提交同一冻结计划一次，不新建源或重抽");
+            var completed = continuation.Selected!;
+            var reward = completed.Inventory.Items.Single(item => item.Core.ItemId == equipment);
+            var expectedCore = new ItemCore(equipment, ItemKind.Equipment, 999_999_998)
+                { Durability = 28, SealFlag = 0, ExpireTime = 0 };
+            That(completed.Revision == expected.Revision + 1 && reward.Uid > 0 && reward.Uid != source.Uid &&
+                !seedUids.Contains(reward.Uid) && reward.Core == expectedCore && reward.Avatar is null && reward.Creature is null &&
+                reward == (plan.After.Find(reward.Position)! with { Uid = reward.Uid }) &&
+                !completed.Inventory.Items.Any(item => item.Core.ItemId is pot or child) &&
+                completed.Inventory.Find(Bag(3)) == remainingMaterial && completed.Inventory.Items.Length == 2 && random.Calls == 1,
+                "100050817完整Core/满耐久28/独立新UID保留，288耗尽且286余一份不变");
+            That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(completed),
+                "重开仓储保持连续两次提交的最终装备、材料和全部实例信息");
+            snapshot = Snapshot();
+            BoosterReceipt? replayReceipt = null;
+            var replay = continuation.PlanAndCommitBooster(character => service.Open(character, request, out replayReceipt, now),
+                service.UsePlaces(child), child);
+            That(!replay.Accepted && replayReceipt is null && Snapshot() == snapshot && random.Calls == 1,
+                "原288耗尽请求重放不再发装备、不再次扣材料或分配UID");
+            lotteryReceipt = null;
+            var potReplay = continuation.PlanAndCommitBooster(character => service.OpenLottery(character, lotteryRequest, out lotteryReceipt, now),
+                service.UsePlaces(pot), pot);
+            That(!potReplay.Accepted && lotteryReceipt is null && Snapshot() == snapshot && random.Calls == 1 &&
+                Query("PRAGMA integrity_check") is "ok", "原287耗尽请求重放拒绝且临时库完整");
+            fixtureCompleted = true;
+            string Snapshot() => JsonSerializer.Serialize(new CharacterRepository(path).List(owner)) + ":" +
+                Query("SELECT count(*) FROM inventory_audit_log") + ":" +
+                Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        catch
+        {
+            fixtureCompleted = false;
+            throw;
+        }
+        finally
+        {
+            if (fixtureCompleted)
+            {
+                SqliteConnection.ClearAllPools();
+                Directory.Delete(root, true);
+            }
+            else Console.Error.WriteLine("TREASURE_PRODUCT_CONTINUATION_FIXTURE_RETAINED " + root);
+        }
+        Console.WriteLine($"PASS {Count - checks} 宝藏罐实际产物UID到自选子盒用途连续提交断言");
+        ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now);
+    }
+
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     sealed class EdgeRandom : Random
     {

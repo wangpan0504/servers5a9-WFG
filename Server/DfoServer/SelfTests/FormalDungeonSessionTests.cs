@@ -1094,10 +1094,10 @@ internal static class FormalDungeonSessionTests
                 f.Session.ReturnToRoster();
             }
             Check(wraps >= 2 && f.Read().DungeonState!.LastAttempt == 500 &&
-                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_objects")) == 0 &&
-                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_pickups")) == 0 && f.Count() == pickupRuns &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_objects")) == 15 * pickupRuns &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=1")) == pickupRuns && f.Count() == pickupRuns &&
                 Convert.ToInt64(f.Query("SELECT count(*) FROM pragma_foreign_key_check")) == 0,
-                "500次真实Session入场跨过多轮65535，实际资产和成长保留，旧SQL明细不增长且外键完整");
+                "500次真实Session入场跨过多轮65535，实际资产、成长及各实例完整冻结保留且外键完整");
         }
 
         void CacheLifecycle()
@@ -1110,8 +1110,7 @@ internal static class FormalDungeonSessionTests
             Check(f.Session.CachedGameContexts == 0 && f.Session.GetState() == UserState.Town,
                 "角色在城镇时没有副本缓存");
             string[] retired = ["character_dungeon_fatigue_receipts", "character_dungeon_loot_receipts",
-                "character_dungeon_pickup_receipts", "character_dungeon_drop_batches", "character_dungeon_drop_objects",
-                "character_dungeon_drop_pickups", "character_dungeon_passive_pickups"];
+                "character_dungeon_pickup_receipts", "character_dungeon_passive_pickups"];
             f.Sql($$"""
                 INSERT INTO character_dungeon_fatigue_receipts VALUES(
                   {{f.Created.Id}},'formal-session','ffffffffffffffffffffffffffffffff',1,42,1,1,'ignored-history',0,1,'{}','{}')
@@ -1141,8 +1140,11 @@ internal static class FormalDungeonSessionTests
                 f.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits)
                     .Outcome == DungeonRunOutcome.Rejected &&
                 retired.All(table => Convert.ToInt64(f.Query("SELECT count(*) FROM " + table)) ==
-                    (table == "character_dungeon_fatigue_receipts" ? 1 : 0)),
-                "七张旧表阻止新增仍可扣疲劳、冻结掉落、金币入账和拒绝重复，历史行完全不处理");
+                    (table == "character_dungeon_fatigue_receipts" ? 1 : 0)) &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE freeze_format=1")) == 1 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_objects")) == 1 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=1")) == 1,
+                "四张退役明细仍禁止新增，原死亡完整冻结与实际拾取各持久一次，旧疲劳行不处理");
             Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.CachedGameContexts == 0 &&
                 f.Session.GetState() == UserState.Town && DungeonTransientReceipts.Find(f.Owner, first.Snapshot.Identity) is null,
                 "正式回城结束缓存和临时回执，保留已提交的角色资产");
@@ -1468,7 +1470,7 @@ internal static class FormalDungeonSessionTests
                 }
             }
             Check(seenBoss == 1 && f.Count() == deaths &&
-                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_batches")) == 0 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE freeze_format=1")) == deaths &&
                 f.Transient!.Loot.Values.Count(value => value.ResourceIdentity == "明示Boss规则") == 1,
                 "普通/Boss分别记账，全部死亡集合与成长同事务保留正确规则来源");
         }

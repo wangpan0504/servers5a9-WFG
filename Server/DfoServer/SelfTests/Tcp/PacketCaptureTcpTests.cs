@@ -45,11 +45,11 @@ internal static class PacketCaptureTcpTests
     }
 
     // 原 packet-capture 后半段：独立 fixture 与端口，拆为 packet-http 组以便与文件抓包并行。
-    public static async Task RunHttpAsync(ServerOptions source, string root)
+    public static async Task RunHttpAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         string credential = Credential;
-        await using var httpFixture = new TcpTestFixture(source, Path.Combine(root, "packet-http"), packetHttp: true);
-        await httpFixture.StartAsync();
+        await using var httpFixture = new TcpTestFixture(source, Path.Combine(root, "packet-http"), resources: resources, packetHttp: true);
+        await httpFixture.StartAsync(isolatedProcess: true);
         using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{httpFixture.Options.PacketHttpPort}"), Timeout = TimeSpan.FromSeconds(5) };
         TestCheck.That((await Read("/health")).GetProperty("status").GetString() == "ok", "真实服务启动HTTP只读入口");
         var initial = await Read("/api/status");

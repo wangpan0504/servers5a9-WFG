@@ -5,6 +5,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Skills;
+using DfoServer.Game.Tutorials;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
@@ -76,7 +77,7 @@ internal static class DungeonDropCollectionRepositoryTests
                 "集合冻结没有提前入包或保留半份SQL结果");
             Sql("DROP TRIGGER collection_fail");
             var committed = repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot);
-            That(committed.Character.Revision == reserved.Revision + 1 && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
+            That(committed.Character.Revision == reserved.Revision + 1 && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 5 &&
                 DungeonTransientReceipts.Find(owner, run.Snapshot.Identity)!.Grounds.Count == 5 &&
                 ground.GetOrFreezeAssets(pending, () => { draws++; return []; }) == loot && draws == 1,
                 "原事件精确重试保留实体、数量钱包、碎片及金币的五件冻结来源，不重抽");
@@ -122,8 +123,8 @@ internal static class DungeonDropCollectionRepositoryTests
                     That(result.Destination == new InventorySlot(InventoryListType.Main, 65) &&
                         lostResult.Destination == result.Destination && lostResult.ItemUid == result.ItemUid && result.ItemUid > 0 &&
                         result.Character.Inventory.Find(result.Destination) is { } stored && stored.Uid == result.ItemUid && stored.Core == item.Core &&
-                        Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0,
-                        "集合消耗品实际写入背包槽65，缓存回放保持同槽、真实UID和完整核心，不写旧SQL明细");
+                        Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 1,
+                        "集合消耗品实际写入背包槽65，持久回放保持同槽、真实UID和完整核心及SQL回执");
                 if (result.Currency == CurrencyKind.ClearCube)
                     That(result.Amount == 7 && result.ItemUid == 0 && result.Character.Inventory.AccountWallet.Revision == current.Inventory.AccountWallet.Revision + 1,
                         "账号材料提交返回实际余额版本，不用临时实体UID伪造入账");
@@ -146,7 +147,7 @@ internal static class DungeonDropCollectionRepositoryTests
                 That(ground.ConfirmPickup(pickup), "逐件提交后确认原准备，其他物品仍可拾取");
                 current = result.Character;
             }
-            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0 &&
+            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 5 &&
                 DungeonTransientReceipts.Find(owner, run.Snapshot.Identity)!.Pickups.Values.Count(value => value.Committed) == 5 &&
                 current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
                 current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 7 &&
@@ -171,9 +172,9 @@ internal static class DungeonDropCollectionRepositoryTests
                 DatabaseSchemaTests.RewindRaidLifecycle(path);
                 Sql($"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
                 var upgraded = new CharacterRepository(path).LoadCharacter(owner, current.Slot);
-                That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
-                    Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0 && SkillRepositoryTests.Equal(upgraded, current),
-                    $"真实已到账v{sourceVersion}集合升级保留四件完整Core、UID、金币与账号钱包，不重建或重复授予");
+                That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 5 &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 5 && SkillRepositoryTests.Equal(upgraded, current),
+                    $"真实已到账v{sourceVersion}集合升级保留五件完整Core、UID、金币、账号钱包与图鉴，不重建或重复授予");
             }
             var highPreparation = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 21));
             That(highPreparation.Outcome == DungeonRunOutcome.Accepted && highPreparation.Pending is not null,
@@ -193,7 +194,7 @@ internal static class DungeonDropCollectionRepositoryTests
             var highReplay = repository.CommitDungeonPickup(owner, highGrowth.Character, highPickup, highPlan.Plan!);
             That(highResult.ItemUid > int.MaxValue && highReplay.Duplicate && highReplay.ItemUid == highResult.ItemUid &&
                 highResult.Character.Inventory.Find(highResult.Destination)?.Core == highGround.Core &&
-                Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0,
+                Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 6,
                 "怪物掉落的64位内部UID原样入库和重放，不写入客户端装备品级或改变完整Core");
             That(ground.ConfirmPickup(highPickup) && SkillRepositoryTests.Equal(new CharacterRepository(path)
                 .LoadCharacter(owner, highResult.Character.Slot), highResult.Character), "高UID怪物拾取重开恢复完整资产");
@@ -304,6 +305,520 @@ internal static class DungeonDropCollectionRepositoryTests
             command.ExecuteNonQuery();
         }
 
+    }
+
+    public static void RunDurableReceipts(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+    {
+        RunDurableDeathReplay(towns, pvf, characters, resources);
+        RunDurablePickupReplay(towns, pvf, characters, resources);
+        RunDurableEmptyReplay(towns, pvf, characters, resources);
+        RunDurableLateRollback(towns, pvf, characters, resources);
+        RunDurableTutorial(towns, pvf, characters, resources);
+        RunDurableSchemaUpgrade();
+        Run(towns, pvf, characters, resources);
+    }
+
+    public static void RunDurableSchemaUpgrade()
+    {
+        int checks = Count;
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-durable-schema-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        bool completed = false;
+        try
+        {
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("durable-schema", () => { });
+            var role = repository.Create(owner, new NewCharacter("DurableDB", new(38, 0, 1677, 222), null)
+                { DungeonState = CharacterDungeonState.NewOrdinary });
+            string[] batchColumns = ["freeze_format", "combat_sequence", "committed_epoch", "map_snapshot", "uses_collection"];
+            string[] pickupColumns = ["receipt_format", "destination_list", "epic_piece"];
+            using (var db = Open())
+            using (var tx = db.BeginTransaction())
+            {
+                using var command = db.CreateCommand(); command.Transaction = tx;
+                command.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_dungeon_drop_pickups'";
+                string currentSql = (string)command.ExecuteScalar()!;
+                string published = DungeonDropCollectionSchema.PickupDefinition;
+                int currentStart = currentSql.IndexOf("CHECK((epic_piece", StringComparison.Ordinal);
+                int currentEnd = currentSql.IndexOf("PRIMARY KEY(", currentStart, StringComparison.Ordinal);
+                int publishedStart = published.IndexOf("CHECK((destination_slot", StringComparison.Ordinal);
+                int publishedEnd = published.IndexOf("PRIMARY KEY(", publishedStart, StringComparison.Ordinal);
+                SqliteMigrations.ReplaceTableConstraint(db, tx, "character_dungeon_drop_pickups",
+                    currentSql[currentStart..currentEnd].TrimEnd(), published[publishedStart..publishedEnd].TrimEnd());
+                tx.Commit();
+            }
+            foreach (string column in batchColumns) Sql("ALTER TABLE character_dungeon_drop_batches DROP COLUMN " + column);
+            foreach (string column in pickupColumns) Sql("ALTER TABLE character_dungeon_drop_pickups DROP COLUMN " + column);
+            Sql($$"""
+                INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,
+                  map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,
+                  before_level,after_level,before_experience,after_experience,revision)
+                  VALUES({{role.Id}},'durable-schema','legacy-event','legacy-instance',0,1,1,76126,20,1,1,1,'legacy','legacy',1,3,1,1,0,1,1);
+                INSERT INTO character_dungeon_drop_batches(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,
+                  map_id,monster_key,rule_id,resource_source,object_count)
+                  VALUES({{role.Id}},'durable-schema','legacy-event','legacy-instance',0,1,1,76126,20,'legacy','原冻结',1);
+                INSERT INTO character_dungeon_drop_objects VALUES({{role.Id}},'legacy-event','legacy-instance',0,400,'{}',0,100,100,0);
+                INSERT INTO character_dungeon_drop_pickups(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,
+                  destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
+                  VALUES({{role.Id}},'durable-schema','legacy-event',400,'legacy-instance',1,1,3,2147483649,'{}',NULL,1,NULL,NULL,1);
+                CREATE INDEX durable_legacy_index ON character_dungeon_drop_objects(core);
+                CREATE TRIGGER durable_legacy_guard BEFORE INSERT ON character_dungeon_drop_objects
+                  WHEN NEW.gold_amount=99 BEGIN SELECT RAISE(ABORT,'legacy guard'); END;
+                PRAGMA user_version=159;
+                """);
+            // 第二张表的未知同名列使最终结构核验失败，前一张表的全部ALTER亦须回滚。
+            Sql("ALTER TABLE character_dungeon_drop_pickups ADD COLUMN destination_list TEXT");
+            Reject<InvalidDataException>(() => new CharacterRepository(path), "v160拒绝未知同名列，不以列名存在替代结构合同");
+            That(Query("PRAGMA user_version") == 159 &&
+                Query("SELECT count(*) FROM pragma_table_info('character_dungeon_drop_batches') WHERE name='freeze_format'") == 0 &&
+                Query("SELECT count(*) FROM pragma_table_info('character_dungeon_drop_pickups') WHERE name='receipt_format'") == 0 &&
+                Query("SELECT item_uid FROM character_dungeon_drop_pickups") == 2147483649 &&
+                SkillRepositoryTests.Equal(repository.LoadCharacter(owner, role.Slot), role),
+                "v160晚期失败回滚前面新增列和版本，真实旧UID与角色资产保留");
+            Sql("ALTER TABLE character_dungeon_drop_pickups DROP COLUMN destination_list");
+            var upgraded = new CharacterRepository(path);
+            That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion &&
+                Query("SELECT freeze_format FROM character_dungeon_drop_batches") == 0 &&
+                Query("SELECT receipt_format FROM character_dungeon_drop_pickups") == 0 &&
+                Query("SELECT item_uid FROM character_dungeon_drop_pickups") == 2147483649 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE resource_source='原冻结' AND map_snapshot IS NULL") == 1 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_objects WHERE core='{}' AND ground_key=400") == 1 &&
+                Query("SELECT count(*) FROM sqlite_schema WHERE name IN ('durable_legacy_index','durable_legacy_guard')") == 2 &&
+                Query("SELECT count(*) FROM pragma_foreign_key_check") == 0 &&
+                SkillRepositoryTests.Equal(upgraded.LoadCharacter(owner, role.Slot), role),
+                "真实v159升级保留旧行、完整64位UID、索引触发器及角色，不补发或提升历史格式");
+            var reopened = new CharacterRepository(path);
+            That(Query("SELECT count(*) FROM character_dungeon_drop_batches") == 1 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 1 &&
+                SkillRepositoryTests.Equal(reopened.LoadCharacter(owner, role.Slot), role),
+                "v160重开不重复迁移、不扩充旧回执或资产");
+            completed = true;
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, recursive: true);
+            else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
+        }
+        Console.WriteLine($"PASS {Count - checks} 持久冻结v159升级保留与DDL回滚断言");
+
+        long Query(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            return Convert.ToInt64(command.ExecuteScalar());
+        }
+        void Sql(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection Open()
+        {
+            var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open(); return db;
+        }
+    }
+
+    public static void RunDurableTutorial(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+    {
+        int checks = Count;
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-durable-tutorial-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        bool completed = false;
+        try
+        {
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("durable-tutorial", () => { });
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            var fixture = SkillRepositoryTests.Fixture("DurableTutor", towns, characters, learning) with
+                { DungeonState = CharacterDungeonState.NewOrdinary, Tutorial = new(3) };
+            var reserved = repository.ReserveDungeonAttempt(owner, repository.Create(owner, fixture), 500);
+            var map = new DungeonMap("boss", new(0, 0), 76126, "map/durable-tutorial-fixture.map");
+            var maze = new DungeonMaze(0, 1, 1, "合成训练冻结仓储", [map.Position], [map.Position], [map], []);
+            var entry = new DungeonEntryPlan(reserved.Id, reserved.Revision, 3, 0, byte.MaxValue, 0, maze, map, map)
+                { IsTutorial = true };
+            var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
+                "[fixed]", "[normal]", "monster/durable-tutorial-fixture.mob");
+            var monsters = new DungeonMonsterPlan(new(map, [source, source], [], []),
+                [new(0, 20, 1, 3, source), new(1, 21, 1, 3, source)]);
+            var authority = new FixtureAuthority();
+            That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([monsters], []), authority, out var run, out _),
+                "训练确定掉落沿原Quest0、训练模式与可信死亡入口");
+            var ground = new DungeonGroundState(run!, [monsters],
+                [new(20, 400, map, 100, 100, 0), new(21, 401, map, 100, 100, 0)], "明确合成训练来源");
+            That(run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
+                "训练死亡在原Run完成加载后准备");
+            var pending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 20)).Pending!;
+            var now = DateTimeOffset.UtcNow;
+            var core = InventoryRewardGrantService.Create(resources.Items.Get(1000), 1, now);
+            int draws = 0;
+            var loot = ground.GetOrFreeze(pending, () => { draws++; return core; });
+            var original = loot.Ground!;
+            var reward = new DungeonExperienceReward("fixture-only", DungeonKillExperienceCatalog.ResourcePath, 1, 3, 1);
+            var progress = CharacterGrowthPlan.AddExperience(reserved, reward.Amount, growth).Plan!;
+            var plan = new TutorialCheckpointPlan(reserved, pending.Death.EventId, pending.Death.Identity,
+                map.Id, "death", pending.Death.MonsterKey, reward.Amount,
+                new(reserved.Inventory, reserved.Inventory, "tutorial_death"),
+                reserved.Tutorial! with { Completed = pending.Result.ClearFact is not null }, reserved.Position, progress)
+                { Death = pending, DeathReward = reward, Loot = loot };
+            Reject<InvalidDataException>(() => repository.CommitTutorialCheckpoint(owner, plan with
+                { Loot = new(loot.Death, loot.CommittedIdentity, loot.Map, original with { ResourceIdentity = "changed-source" }) }),
+                "训练单件冻结不能把对象来源与父死亡来源保存成不同值");
+            Reject<InvalidDataException>(() => repository.CommitTutorialCheckpoint(owner, plan with
+                { Loot = new(loot.Death, loot.CommittedIdentity, loot.Map, original with { UsesCollectionLedger = true }) }),
+                "训练单件对象不能混用集合身份合同");
+            Sql("CREATE TRIGGER durable_tutorial_fail BEFORE INSERT ON character_tutorial_receipts BEGIN SELECT RAISE(ABORT,'late tutorial receipt failure'); END");
+            Reject<SqliteException>(() => repository.CommitTutorialCheckpoint(owner, plan),
+                "训练最终receipt失败须回滚已写成长、状态及确定冻结");
+            That(SkillRepositoryTests.Equal(repository.LoadCharacter(owner, reserved.Slot), reserved) &&
+                Query("SELECT count(*) FROM character_tutorial_receipts") == 0 &&
+                Query("SELECT count(*) FROM character_dungeon_growth_receipts") == 0 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_batches") == 0 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
+                DungeonTransientReceipts.FindLoot(owner, reserved.Id, pending.Death.EventId) is null &&
+                ground.FindAvailable(run.Snapshot.Identity, 400) is null,
+                "训练晚期回滚不留下资产、revision、持久头或提前发布的缓存");
+            Sql("DROP TRIGGER durable_tutorial_fail");
+            var committed = repository.CommitTutorialCheckpoint(owner, plan);
+            That(!committed.Duplicate && committed.Character.Revision == reserved.Revision + 1 &&
+                committed.Character.Tutorial == plan.After &&
+                Query("SELECT count(*) FROM character_tutorial_receipts") == 1 &&
+                Query("SELECT count(*) FROM character_dungeon_growth_receipts") == 1 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE freeze_format=1 AND uses_collection=0") == 1 &&
+                Query("SELECT count(*) FROM character_dungeon_drop_objects") == 1,
+                "同一训练准备重试只提交一次成长、状态和单件完整冻结");
+            DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+            var reopened = new CharacterRepository(path);
+            var replay = reopened.CommitTutorialCheckpoint(owner, plan);
+            That(replay.Duplicate && SkillRepositoryTests.Equal(replay.Character, committed.Character) && draws == 1 &&
+                ReferenceEquals(ground.GetOrFreeze(pending, () => { draws++; return null; }), loot),
+                "训练清cache重开仓储仍按SQL重放确定冻结，不重奖或重抽");
+            Reject<InvalidDataException>(() => reopened.CommitTutorialCheckpoint(owner, plan with { Loot = null }),
+                "训练重放不能省略原确定冻结");
+            Reject<InvalidDataException>(() => reopened.CommitTutorialCheckpoint(owner, plan with
+                { Loot = new(loot.Death, loot.CommittedIdentity, loot.Map, original with { Content = new(core with { Value = 2 }) }) }),
+                "训练重放不能改变原单件Core或数量");
+            That(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted && ground.PublishCommitted(pending, loot),
+                "训练事务重放后沿原Run确认并发布原单件");
+            var pickup = ground.PreparePickup(run.Snapshot.Identity, original)!;
+            var pickupPlan = DungeonPickupPlanning.Item(replay.Character, original.Content, resources.Items.Get(core.ItemId),
+                resources.GoldLimits, resources.EpicPieces, now);
+            That(pickupPlan.Accepted, "训练单件沿原正式拾取规划");
+            DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+            var collected = reopened.CommitDungeonPickup(owner, replay.Character, pickup, pickupPlan.Plan!);
+            DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+            var replayedPickup = new CharacterRepository(path).CommitDungeonPickup(owner, replay.Character, pickup, pickupPlan.Plan!);
+            That(replayedPickup.Duplicate && replayedPickup.ProjectionCurrent && replayedPickup.ItemUid == collected.ItemUid &&
+                SkillRepositoryTests.Equal(replayedPickup.Character, collected.Character) &&
+                collected.Character.Inventory.Find(collected.Destination) is { } actual && actual.Core == core && actual.Uid == collected.ItemUid &&
+                Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=1") == 1 &&
+                ground.ConfirmPickup(pickup) && draws == 1,
+                "训练来源与单件实际拾取都从持久事实重放，UID及完整Core只到账一次");
+            completed = true;
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, recursive: true);
+            else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
+        }
+        Console.WriteLine($"PASS {Count - checks} 训练确定冻结回滚与持久重放SQLite断言");
+
+        long Query(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            return Convert.ToInt64(command.ExecuteScalar());
+        }
+        void Sql(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection Open()
+        {
+            var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open(); return db;
+        }
+    }
+
+    public static void RunDurableDeathReplay(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+        => RunDurableReceiptCase(towns, pvf, characters, resources, 0);
+
+    public static void RunDurablePickupReplay(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+        => RunDurableReceiptCase(towns, pvf, characters, resources, 1);
+
+    public static void RunDurableEmptyReplay(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+        => RunDurableReceiptCase(towns, pvf, characters, resources, 2);
+
+    public static void RunDurableLateRollback(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
+        => RunDurableReceiptCase(towns, pvf, characters, resources, 3);
+
+    static void RunDurableReceiptCase(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources, int scenario)
+    {
+        int checks = Count;
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-durable-drop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        bool completed = false;
+        try
+        {
+            var repository = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("durable-drop-fixture", () => { });
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            var fixture = SkillRepositoryTests.Fixture("DurableDrop", towns, characters, learning) with
+            {
+                DungeonState = CharacterDungeonState.NewOrdinary,
+                ActiveMainQuests = [new(0, 3145, 1)]
+            };
+            var reserved = repository.ReserveDungeonAttempt(owner, repository.Create(owner, fixture), 500);
+            var map = new DungeonMap("boss", new(0, 0), 76126, "map/durable-collection-fixture.map")
+                { CandidateIds = [76126], CandidateWeights = [1] };
+            var maze = new DungeonMaze(0, 1, 1, "合成持久集合仓储", [map.Position], [map.Position], [map], []);
+            var entry = new DungeonEntryPlan(reserved.Id, reserved.Revision, 3, 3145, 0, 0, maze, map, map);
+            var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
+                "[fixed]", "[normal]", "monster/durable-collection-fixture.mob");
+            var monsters = new DungeonMonsterPlan(new(map, [source, source], [], []),
+                [new(0, 20, 1, 3, source), new(1, 21, 1, 3, source)]);
+            var authority = new FixtureAuthority();
+            That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([monsters], []), authority, out var run, out _),
+                "持久集合沿既有Run与可信死亡入口，不建立第二死亡入口");
+            var reservations = Enumerable.Range(0, 5).Select(index => new DungeonGroundReservation(20,
+                checked((uint)(400 + index)), map, 100, 100, 0, index))
+                .Append(new DungeonGroundReservation(21, 405, map, 100, 100, 0)).ToArray();
+            var ground = new DungeonGroundState(run!, [monsters], reservations, "明确合成持久集合来源");
+            That(run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
+                "持久集合使用完成加载的合法Run");
+            var pending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 20)).Pending!;
+            var now = DateTimeOffset.UtcNow;
+            DungeonGroundContent[] contents = scenario == 2 ? [] :
+            [
+                new(InventoryRewardGrantService.Create(resources.Items.Get(1000), 3, now)),
+                new(InventoryRewardGrantService.Create(resources.Items.Get(3037), 7, now)),
+                new(null, 25),
+                new(DungeonDropCreation.Create(resources.Items.Get(31440), 1, _ => 0, now,
+                    amplification: new EquipmentAmplificationDropPolicy(resources.Amplifications.Rules))),
+                new(InventoryRewardGrantService.Create(resources.Items.Get(10300000), 3, now))
+            ];
+            int draws = 0;
+            var loot = ground.GetOrFreezeAssets(pending, () => { draws++; return contents; }, "fixture/durable-death-v1");
+            var reward = new DungeonExperienceReward("fixture-only", DungeonKillExperienceCatalog.ResourcePath, 1, 3, 1);
+
+            if (scenario == 3)
+            {
+                Sql("CREATE TRIGGER durable_object_fail AFTER INSERT ON character_dungeon_drop_objects WHEN NEW.ordinal=4 BEGIN SELECT RAISE(ABORT,'late durable object failure'); END");
+                Reject<SqliteException>(() => repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot),
+                    "最后一件冻结对象SQL失败须回滚同笔成长和前面全部冻结对象");
+                That(Query("SELECT count(*) FROM character_dungeon_growth_receipts") == 0 &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_batches") == 0 &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
+                    SkillRepositoryTests.Equal(repository.LoadCharacter(owner, reserved.Slot), reserved) &&
+                    ground.FindAvailable(run.Snapshot.Identity, 400) is null,
+                    "晚期冻结失败没有半笔成长、半个集合、提前入包或提前发布");
+                Sql("DROP TRIGGER durable_object_fail");
+            }
+
+            var committed = repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot);
+            That(committed.Character.Revision == reserved.Revision + 1 &&
+                committed.Character.Inventory.Gold == reserved.Inventory.Gold &&
+                committed.Character.Inventory.Items.SequenceEqual(reserved.Inventory.Items),
+                "死亡提交仅形成原冻结资产，拾取前不提前发放实体或金币");
+
+            if (scenario is 0 or 2)
+            {
+                DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                var reopened = new CharacterRepository(path);
+                DungeonGrowthCommit? replay = null;
+                try { replay = reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot); }
+                catch (InvalidDataException error) when (error.Message == "本实例的临时冻结掉落缺失，不能恢复旧副本") { }
+                That(replay is not null, "清缓存并重开仓储后必须从原死亡事务重放完整冻结，不依赖瞬态掉落缓存");
+                That(replay!.Duplicate && SkillRepositoryTests.Equal(replay.Character, committed.Character) && draws == 1,
+                    "清掉原临时缓存后，同合法pending从SQL重放完整死亡结果且不重复经验或抽样");
+                Sql("UPDATE character_dungeon_drop_batches SET freeze_format=0");
+                DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot),
+                    "历史格式冻结头不能因同event或同数值key被升级成当前恢复资格");
+                That(SkillRepositoryTests.Equal(reopened.LoadCharacter(owner, reserved.Slot), committed.Character) &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE freeze_format=0") == 1,
+                    "拒绝历史格式保留原历史行及实际角色资产");
+                Sql("UPDATE character_dungeon_drop_batches SET freeze_format=1");
+                That(ReferenceEquals(ground.GetOrFreezeAssets(pending, () => { draws++; return []; }, "fixture/durable-death-v1"), loot) && draws == 1,
+                    "原Run保留同一冻结结果，结果重放不调用另一份生成器");
+                Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth),
+                    "已持久冻结的结果不能在死亡重放时省略，空集合也不是未规划");
+                Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                    new(loot.Death, loot.CommittedIdentity with { Epoch = loot.CommittedIdentity.Epoch + 1 }, loot.Map,
+                        loot.Grounds, loot.ResourceIdentity)), "死亡重放核对冻结结果的提交后epoch");
+                Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                    new(loot.Death, loot.CommittedIdentity, loot.Map, loot.Grounds, "changed-source")),
+                    "死亡重放核对完整来源身份");
+                Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                    new(loot.Death, loot.CommittedIdentity, loot.Map with { CandidateWeights = [2] }, loot.Grounds, loot.ResourceIdentity)),
+                    "持久地图身份不只比较map_id，也保留候选值与权重");
+                if (scenario == 0)
+                {
+                    var first = loot.Grounds[0];
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                        new(loot.Death, loot.CommittedIdentity, loot.Map, loot.Grounds.RemoveAt(3), loot.ResourceIdentity)),
+                        "持久死亡重放不能截掉金币或装备尾项");
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                        new(loot.Death, loot.CommittedIdentity, loot.Map,
+                            loot.Grounds.SetItem(0, first with { Content = new(first.Core with { Value = 4 }) }), loot.ResourceIdentity)),
+                        "持久死亡重放不能改变原三件数量或完整Core");
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                        new(loot.Death, loot.CommittedIdentity, loot.Map,
+                            loot.Grounds.SetItem(0, first with { DeathIdentity = first.DeathIdentity with { TaskAttempt = 2 } }), loot.ResourceIdentity)),
+                        "持久死亡重放不能借用同数值key的另一attempt");
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth,
+                        new(loot.Death, loot.CommittedIdentity, loot.Map,
+                            loot.Grounds.SetItem(0, first with { Reservation = first.Reservation with { X = 101 } }), loot.ResourceIdentity)),
+                        "持久死亡重放保留原地面坐标和预留身份");
+                }
+                That(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted && ground.PublishCommitted(pending, loot),
+                    "SQL死亡重放完成后仍沿原Run确认并发布原对象");
+                That(ground.Snapshot.Items.Length == (scenario == 2 ? 0 : 5) &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_batches") == 1 &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_objects") == (scenario == 2 ? 0 : 5),
+                    "空集合有持久死亡头且零对象；命中保留五个独立对象");
+            }
+            else
+            {
+                That(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted && ground.PublishCommitted(pending, loot),
+                    "完整冻结提交后才开放逐件拾取");
+                Sql("INSERT INTO sqlite_sequence(name,seq) SELECT 'character_inventory_items',2147483647 " +
+                    "WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='character_inventory_items')");
+                Sql("UPDATE sqlite_sequence SET seq=2147483647 WHERE name='character_inventory_items'");
+                That(committed.Character.Inventory.Items.Length == 0 &&
+                    Query("SELECT count(*) FROM character_inventory_items") == 0 &&
+                    Query("SELECT count(*) FROM sqlite_sequence WHERE name='character_inventory_items'") == 1 &&
+                    Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'") == int.MaxValue,
+                    "空库存拾取夹具明确建立唯一的64位UID序列前置");
+                Character current = committed.Character;
+                foreach (var item in loot.Grounds)
+                {
+                    var pickup = ground.PreparePickup(run.Snapshot.Identity, item)!;
+                    var plan = item.IsGold ? DungeonPickupPlanning.Gold(current, item.Content, resources.GoldLimits) :
+                        DungeonPickupPlanning.Item(current, item.Content, resources.Items.Get(item.Core.ItemId), resources.GoldLimits, resources.EpicPieces, now);
+                    That(plan.Accepted, "冻结道具、账号材料、金币与装备均沿真实拾取规划");
+                    if (scenario == 3 && item.Reservation.Ordinal is 0 or 4)
+                    {
+                        Sql("CREATE TRIGGER durable_pickup_fail AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'late durable pickup failure'); END");
+                        Reject<SqliteException>(() => repository.CommitDungeonPickup(owner, current, pickup, plan.Plan!, resources.EpicPieces),
+                            "实际拾取receipt晚期失败须回滚已写库存、UID和revision");
+                        That(SkillRepositoryTests.Equal(repository.LoadCharacter(owner, current.Slot), current) &&
+                            Query("SELECT count(*) FROM character_dungeon_drop_pickups") == item.Reservation.Ordinal &&
+                            repository.LoadCharacter(owner, current.Slot).Inventory.EpicPieces.Same(current.Inventory.EpicPieces),
+                            "拾取晚期失败没有库存、UID、账号图鉴或去重半笔");
+                        Sql("DROP TRIGGER durable_pickup_fail");
+                        DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                    }
+                    var before = current;
+                    var result = repository.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                    var reopened = new CharacterRepository(path);
+                    var replay = reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    That(replay.Duplicate && replay.ProjectionCurrent && replay.Destination == result.Destination &&
+                        replay.ItemUid == result.ItemUid && replay.Currency == result.Currency && replay.Amount == result.Amount &&
+                        replay.EpicPiece == result.EpicPiece &&
+                        SkillRepositoryTests.Equal(replay.Character, result.Character),
+                        "拾取成功后清cache并重开Repository只回放实际UID、槽、数量和当前资产");
+                    if (item.Reservation.Ordinal == 4)
+                    {
+                        That(result.ItemUid == 0 && result.Currency is null &&
+                            result.EpicPiece is { PieceId: 10300000, Amount: 3, Balance: 3 } piece &&
+                            piece.BookRevision == before.Inventory.EpicPieces.Revision + 1 &&
+                            replay.Character.Inventory.Items.SequenceEqual(before.Inventory.Items) &&
+                            replay.Character.Inventory.EpicPieces.Get(piece.Index) == 3,
+                            "碎片真实图鉴余额及bookRevision持久重放，不伪造实体UID或货币");
+                        Sql("UPDATE character_dungeon_drop_pickups SET epic_piece=json_set(epic_piece,'$.Index',99) WHERE ground_key=" + item.Reservation.GroundKey);
+                        DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces),
+                            "碎片JSON索引必须与原冻结物品及实际资源目录一致，不能借另一图鉴条目重放");
+                        Sql("UPDATE character_dungeon_drop_pickups SET epic_piece=json_set(epic_piece,'$.Index',0) WHERE ground_key=" + item.Reservation.GroundKey);
+                        var saved = reopened.Save(owner, replay.Character, replay.Character.Position, replay.Character.Return);
+                        DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                        var late = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                        That(late.Duplicate && !late.ProjectionCurrent && late.EpicPiece == result.EpicPiece &&
+                            SkillRepositoryTests.Equal(late.Character, saved),
+                            "碎片回执晚到保留当前角色revision，只关闭过期投影而不重复加图鉴");
+                        result = result with { Character = saved };
+                    }
+                    if (item.Reservation.Ordinal is 0 or 3)
+                        That(result.ItemUid > int.MaxValue && result.Character.Inventory.Find(result.Destination) is { } actual &&
+                            actual.Uid == result.ItemUid && actual.Core == item.Core,
+                            "持久拾取receipt保留64位UID及原完整Core，三件消耗品不变一件");
+                    if (item.Reservation.Ordinal == 0)
+                    {
+                        Sql("UPDATE character_dungeon_drop_pickups SET receipt_format=0");
+                        DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces),
+                            "历史格式拾取回执不能充当当前格式的去重成功");
+                        That(SkillRepositoryTests.Equal(reopened.LoadCharacter(owner, before.Slot), result.Character) &&
+                            Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=0") == 1,
+                            "拒绝历史拾取保留真实UID、数量与历史回执");
+                        Sql("UPDATE character_dungeon_drop_pickups SET receipt_format=1");
+                    }
+                    var changedContent = item.IsGold ? new DungeonGroundContent(null, 26) :
+                        new DungeonGroundContent(item.Core with { Value = item.Core.Value + 1 });
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before,
+                        new(pickup.Identity, item with { Content = changedContent }), plan.Plan!, resources.EpicPieces),
+                        "已领取key重放仍复验原完整内容，不能以receipt绕过来源校验");
+                    Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before,
+                        new(pickup.Identity with { InstanceId = Guid.NewGuid() }, item), plan.Plan!, resources.EpicPieces),
+                        "同数值key不能借另一实例回放原拾取");
+                    DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
+                    var twice = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    That(twice.Duplicate && twice.ItemUid == result.ItemUid &&
+                        SkillRepositoryTests.Equal(twice.Character, result.Character) && ground.ConfirmPickup(pickup),
+                        "反复失去临时receipt也只消费一次原地面对象");
+                    current = twice.Character;
+                }
+                That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 5 &&
+                    current.Revision == committed.Character.Revision + 6 &&
+                    current.Inventory.EpicPieces.Get(0) == 3 &&
+                    current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
+                    current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == reserved.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) + 7 &&
+                    current.Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
+                    current.Inventory.Items.Single(item => item.Core.ItemId == 31440 && item.Position.List == InventoryListType.Main).Core == contents[3].Item &&
+                    draws == 1, "五件资产及五个持久拾取各一次，重复结果不增加数量、经验或抽样");
+            }
+            completed = true;
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, recursive: true);
+            else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
+        }
+        Console.WriteLine($"PASS {Count - checks} 持久冻结与拾取真实SQLite断言 case={scenario}（原Run仍在，非跨OS恢复）");
+
+        SqliteConnection Open()
+        {
+            var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            return db;
+        }
+        long Query(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            return Convert.ToInt64(command.ExecuteScalar());
+        }
+        void Sql(string sql)
+        {
+            using var db = Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
     }
 
     sealed class FixtureAuthority : DungeonCombatAuthority

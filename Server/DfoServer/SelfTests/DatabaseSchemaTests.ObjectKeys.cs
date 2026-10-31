@@ -83,9 +83,11 @@ internal static partial class DatabaseSchemaTests
             VALUES({{id}},'key-schema','{{eventId}}','{{instance}}',0,{{attempt}},1,1,256,1,1,1,'test','test',1,3,1,1,0,1,1);
             INSERT INTO character_dungeon_loot_receipts VALUES({{id}},'key-schema','{{eventId}}','{{instance}}',{{attempt}},1,1,256,'test','test',511,'{}',0,0,0);
             INSERT INTO character_dungeon_pickup_receipts VALUES({{id}},'key-schema','{{eventId}}',511,'{{instance}}',{{attempt}},1,0,121,1,'{}',1);
-            INSERT INTO character_dungeon_drop_batches VALUES({{id}},'key-schema','{{eventId}}','{{instance}}',0,{{attempt}},1,1,256,'test','test',1);
+            INSERT INTO character_dungeon_drop_batches(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,object_count)
+              VALUES({{id}},'key-schema','{{eventId}}','{{instance}}',0,{{attempt}},1,1,256,'test','test',1);
             INSERT INTO character_dungeon_drop_objects VALUES({{id}},'{{eventId}}',{{objectInstance}}0,512,NULL,1,0,0,0);
-            INSERT INTO character_dungeon_drop_pickups VALUES({{id}},'key-schema','{{eventId}}',512,'{{instance}}',{{attempt}},1,NULL,NULL,NULL,0,1,1,0,1);
+            INSERT INTO character_dungeon_drop_pickups(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
+              VALUES({{id}},'key-schema','{{eventId}}',512,'{{instance}}',{{attempt}},1,NULL,NULL,NULL,0,1,1,0,1);
             INSERT INTO character_dungeon_passive_pickups VALUES({{id}},'key-schema',513,'{{instance}}',{{attempt}},1,NULL,1,NULL,NULL,NULL,0,1,1,0,1);
             """);
     }
