@@ -76,6 +76,18 @@ internal static class AvatarPortraitTests
         var v2 = Img(2, null, (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, false), (1, 1, 0, 0, new byte[] { 0x1F, 0x80 }, false));
         BinaryPrimitives.WriteInt32LittleEndian(v2.AsSpan(32 + 16), 4);
         That(ImgFrameReader.TryRead(v2, 1, out var v2b) && v2b!.Rgba[2] == 255 && v2b.Rgba[0] == 0, "v2 未压缩帧忽略声明长度，第二帧取到正确像素");
+        That(NpkImageDecoder.TryDecodeFrame(v2, 1, out int v2Width, out int v2Height, out var v2Icon) &&
+            v2Width == 1 && v2Height == 1 && v2Icon.AsSpan().SequenceEqual(v2b!.Rgba), "v2 图标与纸娃娃读取第二个未压缩帧一致");
+        That(!NpkImageDecoder.TryDecodeFrame(v2[..^1], 1, out _, out _, out _), "v2 截断像素不得当空白成功");
+        var packedV2 = Img(2, null, (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, true), 0);
+        That(NpkImageDecoder.TryDecodeFrame(packedV2, 1, out _, out _, out var packedIcon) && packedIcon[0] == 255,
+            "v2 压缩帧与链接帧保留红色像素");
+        var cropped = Img(2, null, (2, 1, -1, 0, new byte[] { 0x00, 0xFC, 0x1F, 0x80 }, false));
+        BinaryPrimitives.WriteInt32LittleEndian(cropped.AsSpan(32 + 28), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(cropped.AsSpan(32 + 32), 1);
+        That(NpkImageDecoder.TryDecodeFrame(cropped, 0, out int croppedWidth, out int croppedHeight, out var croppedIcon) &&
+            croppedWidth == 1 && croppedHeight == 1 && croppedIcon.AsSpan().SequenceEqual(new byte[] { 0, 0, 255, 255 }),
+            "v2 图标保留小画布定位和负坐标裁剪");
         var loop = Img(4, [palette], 1, 0);
         That(!ImgFrameReader.TryRead(loop, 0, out _), "链接环被拒绝");
         // 旧解码入口（物品图标）对 v4/v6 也可用，并按 ≤256 画布放置。

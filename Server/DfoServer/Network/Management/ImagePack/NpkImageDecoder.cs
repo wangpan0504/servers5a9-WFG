@@ -79,6 +79,16 @@ namespace DfoServer.Network.Management.ImagePack
                 var keyY = BitConverter.ToInt32(blob, pos + 24);
                 var maxWidth = BitConverter.ToInt32(blob, pos + 28);
                 var maxHeight = BitConverter.ToInt32(blob, pos + 32);
+                // 未压缩 v2 帧的声明 size 可能是 4，但 1×1 的 16 位像素实际只占 2 字节。
+                // 与纸娃娃读取器一致：仅标记 6 使用声明的压缩长度。
+                if (compressed != 6)
+                {
+                    var pixels = (long)frameWidth * frameHeight;
+                    var bytesPerPixel = type == TypeArgb8888 ? 4 : 2;
+                    if (frameWidth <= 0 || frameHeight <= 0 || pixels > int.MaxValue / bytesPerPixel)
+                        return false;
+                    size = (int)(pixels * bytesPerPixel);
+                }
                 if (size < 0 || pixelCursor + size > blob.Length)
                     return false;
                 frames[i] = FrameInfo.Pixels(type, compressed, frameWidth, frameHeight, (int)pixelCursor, size, keyX, keyY, maxWidth, maxHeight);
@@ -167,7 +177,7 @@ namespace DfoServer.Network.Management.ImagePack
         {
             var raw = new byte[frame.Size];
             Buffer.BlockCopy(blob, frame.PixelOffset, raw, 0, frame.Size);
-            var payload = frame.Compressed != 0 ? TryInflate(raw) : raw;
+            var payload = frame.Compressed == 6 ? TryInflate(raw) : raw;
             if (payload == null)
                 payload = raw;
 
