@@ -507,8 +507,12 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
             var hopeRewards = new OperationHopeRewardPolicy(new OperationHopeRewardCatalog(pvf,itemResources.Items),itemResources.Items);
+            string? configuredDimensionDrops = Environment.GetEnvironmentVariable("DFO_OTHERVERSE_DROP_RULES");
+            var dimensionDropRules = DimensionDropRules.Parse(configuredDimensionDrops ?? "{}");
             var dimensionRewards = new DimensionRewardPolicy(incounts?.Dimension ?? throw new InvalidDataException("Missing dimension dungeon catalog"),
-                new DimensionRewardCatalog(pvf, itemResources.Items), itemResources.Items);
+                new DimensionRewardCatalog(pvf, itemResources.Items), itemResources.Items, dimensionDropRules);
+            log.Write("startup", new { Stage = "Otherverse rewards", State = "complete", Rule = dimensionRewards.ActiveRule,
+                dimensionDropRules.Mode, Configured = configuredDimensionDrops is not null });
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,

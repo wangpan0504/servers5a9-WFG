@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.Game.Dungeons;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -75,7 +77,7 @@ internal static partial class PartyDungeonTcpTests
         var completed = modern.Quests.Concat(modern.AnyQuests).Concat(modern.Default.DungeonGates.SelectMany(gate => gate.Quests)).Distinct().ToArray();
         var gate = modern.Map(completed.ToHashSet()).DungeonGates.First(row => row.Conditions.Length == 0 && row.Quests.All(completed.Contains)).Bounds;
         using var success = new Coop(fixture, resources, "dimok", new(17, 2, (ushort)(gate.X + gate.Width / 2), (ushort)(gate.Y + gate.Height / 2)),
-            completed, 95, 2, rewards: [new(3332, 100)]);
+            completed, 95, 2, rewards: [new(3332, 100)], memberJobs: [0, 1]);
         var current = DungeonIncountPolicy.Period(DateTimeOffset.UtcNow);
         fixture.Sql("INSERT INTO character_dungeon_incount(character_id,account,dungeon,day,daily_used,week,weekly_used) VALUES($p0,$p1,7100,$p2,2,$p3,2)",
             success.Peers[1].Id, "dimok1", current.Day, current.Week);
@@ -89,5 +91,52 @@ internal static partial class PartyDungeonTcpTests
         That(entered.All(rows => !rows.Any(packet => packet.Opcode == 550 && U32(packet.Body, 0) is >= 7165 and <= 7179) && rows.Any(packet => packet is { Kind: 0, Opcode: 815, Body.Length: 9 })),
             "组队入场发布个人815，不伪造通用550");
         success.Load();
+        var rewardCatalog = new DimensionRewardCatalog(resources.Archive, resources.ItemResources.Items);
+        var chronicle = rewardCatalog.Professions.Values.SelectMany(r => r.Normal.Concat(r.Set)).ToHashSet();
+        var namedIds = maze.MapSpecification!.SelectMany(m => SelfTestCatalogs.Rooms(resources.Archive).Get(m, requirePassiveDefinitions: false).Monsters)
+            .Where(m => m.IsNamed && m.RankKind != "[boss]").Select(m => m.MonsterId).ToHashSet();
+        int namedDeaths = 0, bossDeaths = 0;
+        var path = QuestStoryRouteTests.Path(maze.StaticTopology, new(success.Map[0], success.Map[1]), new(success.Information[8], success.Information[9]));
+        for (int room = 0; room < path.Length; room++)
+        {
+            var map = success.Map;
+            foreach (int at in Enumerable.Range(0, map[18]).Select(i => 19 + 22 * i).Where(at => map[at + 21] == 0 && map[at + 13] != 9))
+            {
+                ushort key = U16(map, at + 6);
+                bool boss = map[at + 13] == 3 && room == path.Length - 1;
+                bool named = !boss && namedIds.Contains((int)U32(map, at + 8));
+                var report = FormalDungeonTcpTests.Death(key, success.Peers[0].Id, map[at + 12]);
+                success.Peers[0].Send(39, report);
+                var deaths = success.All();
+                for (int member = 0; member < success.Peers.Length; member++)
+                {
+                    var loot = deaths[member].Single(p => p is { Kind: 0, Opcode: 38 } && U16(p.Body) == key).Body;
+                    var own = rewardCatalog.Professions[(member, 1)];
+                    int count = 0;
+                    for (int ordinal = 0; ordinal < U16(loot, 2); ordinal++)
+                    {
+                        int offset = 4 + ordinal * 131;
+                        int id = (int)U32(loot, offset + 6);
+                        if (!chronicle.Contains(id)) continue;
+                        That(own.Normal.Contains(id) || own.Set.Contains(id), "R6 TCP不同职业成员只收到本人异界职业池");
+                        count++;
+                        uint ground = U32(loot, offset);
+                        byte[] pickup = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
+                        var peer = success.Peers[member]; peer.Send(43, pickup);
+                        var received = success.All(peer);
+                        That(received[member].Any(p => p is { Kind: 1, Opcode: 43, Body: [1] }) &&
+                            received.Where((_, index) => index != member).All(rows => !rows.Any(p => p is { Kind: 0, Opcode: 39 } && U32(p.Body) == ground)),
+                            "R6 TCP本人领取装备不清除另一成员地面");
+                    }
+                    if (named || boss) That(count >= (boss ? 2 : 1), "TCP勇士绿名一件、终点Boss两件个人装备");
+                }
+                if (named) namedDeaths++;
+                if (boss) bossDeaths++;
+                success.Peers[1].Send(39, report);
+                That(success.All(success.Peers[1]).All(rows => !rows.Any(p => p is { Kind: 0, Opcode: 38 })), "重复死亡不重抽个人掉落");
+            }
+            if (room + 1 < path.Length) { success.Move((byte)path[room + 1].X, (byte)path[room + 1].Y); success.Load(); }
+        }
+        That(namedDeaths > 0 && bossDeaths == 1, "TCP实际经过真实绿名与终点Boss");
     }
 }

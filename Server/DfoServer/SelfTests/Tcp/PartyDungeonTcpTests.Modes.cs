@@ -284,7 +284,7 @@ internal static partial class PartyDungeonTcpTests
         public Coop(TcpTestFixture fixture,TcpTestResources resources,string prefix,Location position,int[] done,byte level,int count,
             int tickets=0,bool withoutHellQuest=false,int stones=0,
             IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? rewards=null,
-            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? leaderRewards=null)
+            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? leaderRewards=null, byte[]? memberJobs=null)
         {
             this.fixture=fixture;
             Peers=new TcpPeer[count];
@@ -294,10 +294,11 @@ internal static partial class PartyDungeonTcpTests
             {
                 string account=prefix+i;
                 using var owner=new AccountOwners().Acquire(account,() => { });
-                var candidate=CharacterCreation.Prepare("C"+prefix[..Math.Min(prefix.Length,8)]+i,resources.Characters.Get(0),position,position,resources.Learning.Get);
-                var learning=SkillPointLedger.Synchronize(0,0,level,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(level) },resources.Learning);
+                byte job = memberJobs?[i] ?? 0;
+                var candidate=CharacterCreation.Prepare("C"+prefix[..Math.Min(prefix.Length,8)]+i,resources.Characters.Get(job),position,position,resources.Learning.Get);
+                var learning=SkillPointLedger.Synchronize(job, memberJobs is null ? (byte)0 : (byte)1,level,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(level) },resources.Learning);
                 var repo=new CharacterRepository(fixture.Database);
-                var role=repo.Create(owner,candidate with { Level=level,AcceptedStoryLevel=level,InitialLearning=learning,
+                var role=repo.Create(owner,candidate with { GrowType = memberJobs is null ? (byte)0 : (byte)1, Level=level,AcceptedStoryLevel=level,InitialLearning=learning,
                     CompletedQuests=withoutHellQuest && i==1 ? done.Except([6080]).ToArray() : done });
                 if (FormalDungeonTcpTests.HasIncompleteHellQuest(resources, role)) blocked.Add((ushort)i);
                 if (tickets>0) role=repo.CommitInventory(owner,role,new(role.Inventory,role.Inventory with { Items=role.Inventory.Items.Add(

@@ -1,3 +1,4 @@
+using DfoServer.GameWorld.Dungeons;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -38,7 +39,7 @@ internal static partial class FormalDungeonTcpTests
                 var bounds = area.Map(done.ToHashSet()).DungeonGates.First(gate => gate.Conditions.Length == 0 && gate.Quests.All(done.Contains)).Bounds;
                 var position = new Location(17, areaId, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
                 var seed = CharacterCreation.Prepare(name, resources.Characters.Get(0), position, position, resources.Learning.Get);
-                var actor = repository.Create(owner, seed with { Level = 95, AcceptedStoryLevel = 95,
+                var actor = repository.Create(owner, seed with { GrowType = 1, Level = 95, AcceptedStoryLevel = 95,
                     CompletedQuests = done, InitialLearning = seed.InitialLearning with { Experience = resources.Growth.GetLevelStartExperience(95) } });
                 return InventoryService.Commit(repository, owner, actor, grants.Grant(actor,
                     areaId == 5 ? [new(3037, 1000), new(3332, 100)] : [new(3332, 100)]));
@@ -72,11 +73,34 @@ internal static partial class FormalDungeonTcpTests
             peer.Select(modern.Slot, prepared: true, resumeTown: true, room: false);
             Bytes(peer.DimensionEntranceState!, [0,0,0,0,5,0,0,0,0], "失败重连回放原815额外次数");
             SelectEntrance(peer);
-            peer.Send(16, Entry(7165, 0)); peer.Expect(0, 28); peer.Expect(0, 29);
+            peer.Send(16, Entry(7167, 2)); var info = peer.Expect(0, 28).Body; var map = peer.Expect(0, 29).Body;
             Drain(peer);
             That(peer.DimensionEntranceState is { Length: 9 } state && U32(state, 0) == 1 && U32(state, 4) == 5 && state[8] <= 1,
                 "现代实际副本入场计一次基本次数，不发送虚构550");
-            Load(peer); Drain(peer);
+            var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(7167).Mazes.Single(m => m.SourceOrdinal == info[7]);
+            var route = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), new(info[8], info[9]));
+            var own = new DimensionRewardCatalog(resources.Archive, items.Items).Professions[(0, 1)];
+            bool bossSeen = false;
+            for (int room = 0; room < route.Length; room++)
+            {
+                Load(peer); Drain(peer);
+                foreach (int at in Enumerable.Range(0, map[18]).Select(i => 19 + 22 * i).Where(at => map[at + 21] == 0 && map[at + 13] != 9))
+                {
+                    ushort key = U16(map, at + 6); peer.Send(39, Death(key, peer.Id, map[at + 12]));
+                    var notices = new List<WirePacket>(); QuestLifecycleTcpTests.DrainNotifications(peer, notices.Add);
+                    byte[] loot = notices.Single(p => p is { Kind: 0, Opcode: 38 } && U16(p.Body) == key).Body;
+                    if (map[at + 13] != 3 || room != route.Length - 1) continue;
+                    That(Enumerable.Range(0, U16(loot, 2)).Count(i => own.Normal.Contains((int)U32(loot, 10 + i * 131)) ||
+                        own.Set.Contains((int)U32(loot, 10 + i * 131))) >= 2, "TCP单人勇士终点Boss至少两件本人职业异界装");
+                    bossSeen = true;
+                }
+                if (room + 1 < route.Length)
+                {
+                    byte[] move = new byte[100]; move[0] = (byte)route[room + 1].X; move[1] = (byte)route[room + 1].Y;
+                    peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body; Drain(peer);
+                }
+            }
+            That(bossSeen, "TCP单人实际完成终点Boss死亡");
             Return(peer);
         }
         if (!ancientAvailable)
