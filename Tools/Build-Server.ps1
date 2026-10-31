@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-构建 Windows x64 自包含服务端及启动器，保留运行目录中的存档与日志。
+Build the self-contained Windows x64 server and launcher, preserving data and logs.
 .PARAMETER OutputDirectory
-运行目录，默认 dist/win-x64。相对路径以仓库根目录为基准。
+Runtime directory, default dist/win-x64. Relative paths are based on the repository root.
 .PARAMETER PvfPath
-首次运行所需的 Script.pvf；仅在运行目录尚无该文件时复制，不替换已有资源。
+Optional initial Script.pvf; copied only when missing, never replacing existing resources.
 .PARAMETER SingleFile
-将启动器和服务端托管依赖合并为一个 S5A9Server.exe，默认输出 dist/win-x64-single。
+Bundle launcher and server into S5A9Server.exe, default dist/win-x64-single.
 .PARAMETER PackageVersion
-仅与 SingleFile 同用，生成可分发 ZIP 和 SHA256，默认输出 dist/releases。输出目录必须为空，不读取运行数据。
+With SingleFile, create a ZIP and SHA256 in an empty directory (default dist/releases), without runtime data.
 #>
 [CmdletBinding()]
 param(
@@ -19,11 +19,14 @@ param(
     [ValidateLength(1, 64)][string]$PackageVersion
 )
 $ErrorActionPreference = 'Stop'
+# ASCII source avoids Windows PowerShell 5.1 ANSI decoding of UTF-8 without BOM.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $package = $PSBoundParameters.ContainsKey('PackageVersion')
 $windows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 if ($package -and (-not $SingleFile -or $PSBoundParameters.ContainsKey('PvfPath'))) {
-    throw '分发打包必须使用 -SingleFile，不能传入 PvfPath。'
+    throw 'Packaging requires -SingleFile and does not accept PvfPath.'
 }
 if ($SingleFile -and -not $PSBoundParameters.ContainsKey('OutputDirectory')) {
     $OutputDirectory = if ($package) { 'dist/releases' } else { 'dist/win-x64-single' }
@@ -48,7 +51,7 @@ function Assert-NoLinks([string]$Path) {
         if (Test-Path -LiteralPath $current) {
             $item = Get-Item -LiteralPath $current -Force
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                throw "运行目录及其父目录不能是目录链接：$current"
+                throw "Runtime directories and their parents must not be links: $current"
             }
         }
         $current = Split-Path $current -Parent
@@ -62,78 +65,82 @@ function Write-Step([string]$Message) {
 function Invoke-Dotnet([string[]]$Arguments) {
     $label = "dotnet $($Arguments[0]) $(Split-Path -Leaf $Arguments[1])"
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    Write-Step "开始：$label"
+    Write-Step "Start: $label"
     & dotnet @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "dotnet 执行失败，退出码：$LASTEXITCODE" }
-    Write-Step ("结束：{0}，耗时 {1:N1} 秒" -f $label, $watch.Elapsed.TotalSeconds)
+    if ($LASTEXITCODE -ne 0) { throw "dotnet failed, exit code: $LASTEXITCODE" }
+    Write-Step ("Done: {0}, elapsed {1:N1} seconds" -f $label, $watch.Elapsed.TotalSeconds)
 }
 
-# 自检进程带超时：超时则结束进程树并明确报错，避免 CI 无输出地挂住。
+# Self-checks have a deadline; terminate their process tree on timeout and report failure.
 function Invoke-SelfCheck([string]$Name, [string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 60) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    Write-Step "开始自检：$Name（超时 $TimeoutSeconds 秒）"
+    Write-Step "Self-check: $Name (timeout $TimeoutSeconds seconds)"
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        try { $process.Kill($true) } catch { Write-Warning "结束自检进程失败：$($_.Exception.Message)" }
-        throw "自检超时：$Name 在 $TimeoutSeconds 秒内未退出，已强制结束（PID $($process.Id)）。"
+        try {
+            # .NET Framework has no Process.Kill(bool); taskkill is provided by Windows.
+            & (Join-Path $env:SystemRoot 'System32/taskkill.exe') /PID $process.Id /T /F | Out-Null
+            if ($LASTEXITCODE -ne 0 -and -not $process.HasExited) { throw 'taskkill failed' }
+        } catch { Write-Warning "Failed to terminate self-check: $($_.Exception.Message)" }
+        throw "Self-check timed out: $Name exceeded $TimeoutSeconds seconds (PID $($process.Id))."
     }
     $process.WaitForExit()
-    Write-Step ("结束自检：{0}，退出码 {1}，耗时 {2:N1} 秒" -f $Name, $process.ExitCode, $watch.Elapsed.TotalSeconds)
+    Write-Step ("Self-check done: {0}, exit code {1}, elapsed {2:N1} seconds" -f $Name, $process.ExitCode, $watch.Elapsed.TotalSeconds)
     return $process
 }
 
 function Remove-Stage {
     $resolvedStage = (Resolve-Path -LiteralPath $stage).Path
     if (-not (Test-Within $resolvedStage $buildRoot) -or $resolvedStage -eq $buildRoot) {
-        throw '临时目录边界检查失败，未清理。'
+        throw 'Temporary directory boundary check failed; nothing removed.'
     }
-    # 保留 artifacts 供下次增量发布，只删除本次输出。
+    # Preserve artifacts for incremental publishing; remove only this output.
     foreach ($name in 'publish', 'launcher', 'archive') {
         $path = Join-Path $resolvedStage $name
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
 }
 
-if (-not $windows -and -not $package) { throw '本机运行目录只能在 Windows 上构建；非 Windows 仅支持 -SingleFile -PackageVersion。' }
+if (-not $windows -and -not $package) { throw 'Runtime directories require Windows; other platforms only support -SingleFile -PackageVersion.' }
 $output = Get-FullPath $OutputDirectory
 if ((Test-Within $root $output) -or $output -eq [IO.Path]::GetPathRoot($output).TrimEnd([IO.Path]::DirectorySeparatorChar)) {
-    throw '输出目录不能是磁盘根目录、仓库根目录或仓库的父目录。'
+    throw 'Output must not be a drive root, repository root, or repository ancestor.'
 }
 foreach ($name in @('Server', 'Tools', 'Docs', '.git', '.idea', '.forgejo', 'build')) {
     if (Test-Within $output (Join-Path $root $name)) {
-        throw "输出目录不能放在源码、工具或临时构建目录中：$name"
+        throw "Output must not be inside source, tools, or build directories: $name"
     }
 }
 Assert-NoLinks $output
 if (Test-Path -LiteralPath $output) {
-    if (-not (Test-Path -LiteralPath $output -PathType Container)) { throw '输出路径必须是目录。' }
+    if (-not (Test-Path -LiteralPath $output -PathType Container)) { throw 'Output path must be a directory.' }
     if ($package -and @(Get-ChildItem -LiteralPath $output -Force).Count) {
-        throw '分发打包要求空输出目录，不能使用已有运行目录或覆盖旧包。'
+        throw 'Packaging requires an empty directory; do not use a runtime directory or overwrite an existing package.'
     }
     if (@(Get-ChildItem -LiteralPath $output -Force).Count -and
         -not (Test-Path -LiteralPath (Join-Path $output $(if ($SingleFile) { $program } else { 'DfoServer.dll' })) -PathType Leaf)) {
-        throw '已有非空目录与本次发布模式不匹配；请选择空目录或同一模式的运行目录。'
+        throw 'Nonempty output does not match this publish mode; choose an empty directory or the same runtime mode.'
     }
     foreach ($item in Get-ChildItem -LiteralPath $output -Recurse -Force) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            throw "输出目录包含链接，无法安全备份或更新：$($item.FullName)"
+            throw "Output contains a link and cannot be safely backed up or updated: $($item.FullName)"
         }
     }
 }
 $sourcePvf = $null
 if ($PvfPath) {
     $sourcePvf = Get-FullPath $PvfPath
-    if (-not (Test-Path -LiteralPath $sourcePvf -PathType Leaf)) { throw "PVF 文件不存在：$sourcePvf" }
+    if (-not (Test-Path -LiteralPath $sourcePvf -PathType Leaf)) { throw "PVF file not found: $sourcePvf" }
 }
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw '请先安装 .NET 10 SDK。' }
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'Install .NET 10 SDK first.' }
 $sdks = & dotnet --list-sdks
 if ($LASTEXITCODE -ne 0 -or -not @($sdks | Where-Object { $_ -match '^10\.' }).Count) {
-    throw '构建需要 .NET 10 SDK；仅安装 Runtime 不够。'
+    throw 'Building requires .NET 10 SDK; the runtime alone is insufficient.'
 }
 
-# 先发布到独立临时目录，编译失败不覆盖现有程序与玩家数据。
+# Publish to staging first; failed compilation must not overwrite programs or player data.
 $buildRoot = Join-Path $root 'build'
-# 固定发布目录：保留 artifacts 以便增量编译，只重建 publish/launcher/archive 输出；顺带清理旧版 publish-<GUID> 残留。
+# Keep incremental artifacts; rebuild publish/launcher/archive and remove legacy publish-<GUID> output.
 $stage = Join-Path $buildRoot 'publish'
 if (Test-Path -LiteralPath $buildRoot) {
     Get-ChildItem -LiteralPath $buildRoot -Directory | Where-Object { $_.Name -match '^publish-[0-9a-f]{32}$' } | ForEach-Object {
@@ -145,7 +152,7 @@ foreach ($leftover in 'publish', 'launcher', 'archive') {
     if (Test-Path -LiteralPath $leftoverPath) { Remove-Item -LiteralPath $leftoverPath -Recurse -Force }
 }
 $payload = Join-Path $stage 'publish'
-Write-Host "发布 Windows x64 Release 自包含程序，运行目录：$output"
+Write-Host "Publishing self-contained Windows x64 Release; runtime directory: $output"
 if (-not $SingleFile) {
     Invoke-Dotnet @('publish', (Join-Path $root 'Server/DfoServer/DfoServer.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
@@ -170,31 +177,31 @@ $requiredFiles = if ($SingleFile) { @($program) } else {
 }
 foreach ($name in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) {
-        throw "发布文件缺失：$name；临时产物保留在 $stage"
+        throw "Missing published file: $name; staging retained at $stage"
     }
 }
 if (-not $windows) {
-    Write-Warning '本次为 Windows 交叉编译，未执行 Windows EXE 启动及内置 GM 检查；不代表客户端验收通过。'
+    Write-Warning 'Cross-compiling for Windows; Windows EXE and GM checks were not run. Game verification is pending.'
 } elseif ($SingleFile) {
-    $serverCheck = Invoke-SelfCheck '服务端 --server --help' (Join-Path $payload $program) @('--server', '--help')
-    if ($serverCheck.ExitCode -ne 0) { throw "内置服务端启动检查失败；临时产物保留在 $stage" }
+    $serverCheck = Invoke-SelfCheck 'server --server --help' (Join-Path $payload $program) @('--server', '--help')
+    if ($serverCheck.ExitCode -ne 0) { throw "Embedded server startup check failed; staging retained at $stage" }
 } else {
     & (Join-Path $payload $program) --help
-    if ($LASTEXITCODE -ne 0) { throw "发布程序启动检查失败；临时产物保留在 $stage" }
+    if ($LASTEXITCODE -ne 0) { throw "Published program startup check failed; staging retained at $stage" }
 }
 if ($windows) {
-    $launcherCheck = Invoke-SelfCheck '启动器 --help' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--help')
-    if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
-    $gmCheck = Invoke-SelfCheck '内置 GM 接口 --selftest-gm' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--selftest-gm')
-    if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
+    $launcherCheck = Invoke-SelfCheck 'launcher --help' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--help')
+    if ($launcherCheck.ExitCode -ne 0) { throw "Launcher check failed; staging retained at $stage" }
+    $gmCheck = Invoke-SelfCheck 'embedded GM --selftest-gm' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--selftest-gm')
+    if ($gmCheck.ExitCode -ne 0) { throw "Embedded GM check failed; staging retained at $stage" }
 }
 
 if ($package) {
-    # 只收集明确列出的程序与说明，不压缩运行目录，避免夹带资源、存档、配置或日志。
+    # Package only the listed programs and notices, excluding runtime resources, saves, settings and logs.
     $revision = & git -C $root rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw '无法确定源码提交。' }
+    if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw 'Cannot determine the source revision.' }
     $changes = & git -C $root status --porcelain --untracked-files=normal
-    if ($LASTEXITCODE -ne 0) { throw '无法检查源码状态。' }
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot check source status.' }
     $archiveRoot = Join-Path $stage 'archive'
     New-Item -ItemType Directory -Path $archiveRoot | Out-Null
     Copy-Item -LiteralPath (Join-Path $payload $program) -Destination $archiveRoot
@@ -209,31 +216,31 @@ if ($package) {
         ($metadata | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     $instructions = @"
 S5A9Server $PackageVersion (Windows x64)
-解压到独立目录，双击 S5A9Server.exe 打开启动器，无需另装 .NET。
-自行准备匹配客户端的 Script.pvf，并在启动器中选择资源和存档目录。
-本包不包含客户端、PVF、玩家数据库、日志及本机配置。
-更新前正常停服并关闭启动器，更新 EXE 及许可文件，保留原 Data、Logs 和配置。
-命令行帮助：S5A9Server.exe --server --help
-本软件采用 AGPL-3.0-only；分发时保留 LICENSE、THIRD-PARTY-NOTICES.md、THIRD-PARTY.md 和 LICENSES 目录。
-上游源码基线：https://codeberg.org/deadbeef7799/ServerS5A9/archive/$revision.zip
-本地修改包须另行提供包含实际改动的完整对应源码。
-源码提交与 Windows 启动检查状态见 build-info.json；自动检查不代替客户端验收。
+Extract to a separate directory and open S5A9Server.exe. No separate .NET runtime is required.
+Provide Script.pvf matching your client, then select the resource and save directories in the launcher.
+This package excludes the client, PVF, player databases, logs and local settings.
+Before updating, stop the server and close the launcher. Update EXE and licenses; preserve Data, Logs and settings.
+Command-line help: S5A9Server.exe --server --help
+Licensed under AGPL-3.0-only. Distribute LICENSE, THIRD-PARTY-NOTICES.md, THIRD-PARTY.md and LICENSES.
+Upstream source: https://gitgud.io/licocon/servers5a9/-/archive/$revision/servers5a9-$revision.zip
+Modified packages must provide the complete corresponding source including their changes.
+Source revision and Windows startup status are in build-info.json. Automated checks do not replace game verification.
 "@
     [IO.File]::WriteAllText((Join-Path $archiveRoot 'README.txt'), $instructions, [Text.UTF8Encoding]::new($true))
     New-Item -ItemType Directory -Path $output -Force | Out-Null
     $archive = Join-Path $output "S5A9Server-$PackageVersion-win-x64.zip"
     $archivePaths = @($program, 'README.txt', 'build-info.json') + $licensePaths
-    Write-Step '开始：压缩 ZIP'
+    Write-Step 'Start: compress ZIP'
     Compress-Archive -LiteralPath @($archivePaths | ForEach-Object { Join-Path $archiveRoot $_ }) -DestinationPath $archive
-    Write-Step '结束：压缩 ZIP'
+    Write-Step 'Done: compress ZIP'
     $stream = [IO.File]::OpenRead($archive)
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $sha256.Dispose() }
     [IO.File]::WriteAllText(($archive + '.sha256'), "$hash  $([IO.Path]::GetFileName($archive))`n", [Text.UTF8Encoding]::new($false))
     Remove-Stage
-    Write-Host "分发包：$archive"
-    Write-Host "SHA256：$archive.sha256"
+    Write-Host "Package: $archive"
+    Write-Host "SHA256: $archive.sha256"
     return
 }
 
@@ -243,18 +250,18 @@ $guard = $null
 $launcherGuard = $null
 $backup = $null
 try {
-    # 持有服务端同一实例锁，覆盖期间服务端也不能打开数据库。
+    # Hold the server instance locks to prevent database access while updating.
     try {
         $guard = [IO.File]::Open((Join-Path $data 'server.lock'),
             [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
         $launcherGuard = [IO.File]::Open((Join-Path $data 'launcher.lock'),
             [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch {
-        throw '运行目录正被占用或不可写。请正常停止服务并关闭启动器后重新构建；未覆盖程序和存档。'
+        throw 'Runtime directory is busy or not writable. Stop the server and close the launcher before rebuilding; programs and saves were not overwritten.'
     }
     $savedData = @(Get-ChildItem -LiteralPath $data -Force | Where-Object { $_.Name -notin @('server.lock', 'launcher.lock') })
     if ($savedData.Count) {
-        # 整个 Data 备份包含 SQLite 的 WAL/SHM 和 PVF；实例锁不属于存档。
+        # Back up Data including SQLite WAL/SHM and PVF, excluding instance locks.
         $backupRoot = $output + '.backups'
         Assert-NoLinks $backupRoot
         $backup = Join-Path $backupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -263,7 +270,7 @@ try {
         foreach ($item in $savedData) {
             Copy-Item -LiteralPath $item.FullName -Destination $backupData -Recurse -Force
         }
-        Write-Host "更新前 Data 备份：$backup"
+        Write-Host "Pre-update Data backup: $backup"
     }
     foreach ($item in Get-ChildItem -LiteralPath $payload -Force) {
         if ($item.Name -in @('Data', 'Logs', 'launcher.local.json')) { continue }
@@ -277,7 +284,7 @@ try {
     }
     $targetPvf = Join-Path $pvfDirectory 'Script.pvf'
     if (Test-Path -LiteralPath $targetPvf -PathType Leaf) {
-        Write-Host "保留已有 PVF：$targetPvf"
+        Write-Host "Preserving existing PVF: $targetPvf"
     } else {
         if (-not $sourcePvf -and -not $SingleFile -and (Test-Path -LiteralPath (Join-Path $payload 'Data/Pvf/Script.pvf') -PathType Leaf)) {
             $sourcePvf = Join-Path $payload 'Data/Pvf/Script.pvf'
@@ -285,11 +292,11 @@ try {
         if ($sourcePvf) { Copy-Item -LiteralPath $sourcePvf -Destination $targetPvf }
     }
     if ($SingleFile) {
-        $installedCheck = Invoke-SelfCheck '安装目录 --server --help' (Join-Path $output $program) @('--server', '--help')
-        if ($installedCheck.ExitCode -ne 0) { throw '运行目录中的单文件程序启动检查失败。' }
+        $installedCheck = Invoke-SelfCheck 'installed --server --help' (Join-Path $output $program) @('--server', '--help')
+        if ($installedCheck.ExitCode -ne 0) { throw 'Installed single-file startup check failed.' }
     } else {
         & (Join-Path $output $program) --help
-        if ($LASTEXITCODE -ne 0) { throw '运行目录中的程序启动检查失败。' }
+        if ($LASTEXITCODE -ne 0) { throw 'Installed startup check failed.' }
     }
     $launcherConfig = Join-Path $output 'launcher.local.json'
     if (-not $SingleFile -and -not (Test-Path -LiteralPath $launcherConfig)) {
@@ -299,31 +306,31 @@ try {
             GmEnabled = $true; GmPort = 23102; GmWebPort = 23103
         }
         [IO.File]::WriteAllText($launcherConfig, ($defaults | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-        Write-Host "已生成默认启动配置：$launcherConfig"
+        Write-Host "Created default launcher settings: $launcherConfig"
     } elseif (Test-Path -LiteralPath $launcherConfig) {
-        Write-Host "保留已有启动配置：$launcherConfig"
+        Write-Host "Preserving existing launcher settings: $launcherConfig"
     }
 } catch {
-    Write-Warning "构建/更新未完成，临时产物保留在 $stage；Data 和 Logs 不会被删除。"
-    if ($backup) { Write-Warning "更新前 Data 备份：$backup" }
+    Write-Warning "Build/update did not finish; staging retained at $stage. Data and Logs are preserved."
+    if ($backup) { Write-Warning "Pre-update Data backup: $backup" }
     throw
 } finally {
     if ($launcherGuard) { $launcherGuard.Dispose() }
     if ($guard) { $guard.Dispose() }
 }
 
-# 仅删除本次创建、且经绝对路径核对位于 build 内的临时产物。
+# Remove only this staging output after validating its absolute path within build.
 Remove-Stage
 if ($SingleFile) {
-    Write-Host "构建完成。单程序：$output\$program"
-    Write-Host '分发时复制 EXE、LICENSE、THIRD-PARTY-NOTICES.md、THIRD-PARTY.md 和 LICENSES 目录；无需附带 DLL、Resources、Sqlite 或启动脚本。PVF 和存档仍由启动界面选择。'
+    Write-Host "Build complete. Single executable: $output\$program"
+    Write-Host 'Distribute the EXE, LICENSE, THIRD-PARTY-NOTICES.md, THIRD-PARTY.md and LICENSES; no additional DLL, Resources, Sqlite or startup script is required. Select PVF and saves in the launcher.'
 } else {
-    Write-Host "构建完成。双击启动器：$output\DfoLauncher.exe"
-    Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
+    Write-Host "Build complete. Open launcher: $output\DfoLauncher.exe"
+    Write-Host "start-server.bat opens the launcher without arguments; with arguments it starts the command-line server."
 }
-Write-Host "默认本机连接：127.0.0.1，频道 TCP 23100，游戏 TCP 23101；实际设置读取 launcher.local.json。"
-Write-Host "GM 数据接口仅监听本机，使用 95JP 启动器原生 GM工具页（--gm-web-port 默认 23103）（端口以 launcher.local.json 的 GmWebPort 为准）。"
-Write-Host "存档：$data\game.db；日志：$output\Logs。后续构建请始终使用同一输出目录。"
+Write-Host "Default local connection: 127.0.0.1, channel TCP 23100, game TCP 23101; settings are read from launcher.local.json."
+Write-Host "GM data API listens on localhost only; use the native 95JP launcher GM page (--gm-web-port default 23103; see GmWebPort in launcher.local.json)."
+Write-Host "Saves: $data\game.db; logs: $output\Logs. Reuse the same output directory for later builds."
 if (-not (Test-Path -LiteralPath $targetPvf -PathType Leaf)) {
-    Write-Warning "尚未准备资源，请将匹配客户端的 Script.pvf 放到 $targetPvf 后再启动。"
+    Write-Warning "Resources are missing. Place matching Script.pvf at $targetPvf before starting."
 }
