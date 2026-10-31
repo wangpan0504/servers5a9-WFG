@@ -30,16 +30,20 @@ internal static partial class RaidChannelLandingTcpTests
         // 团本页签谓词相同（01EB5AF0）的换频道客户端保留城镇快照，服务端保留原位置；在赛丽亚房间里互换则出门按新频道落点。
         Switch(19, land: true, town: 19, "普通→安徒恩 19（0x17 直接落 19/0）");
         Switch(normal, land: true, town: 38, "安徒恩→普通（进赛丽亚房间，出门到艾尔文 38/0）", area: 1, exit: 38);
-        Switch(20, land: true, town: 38, "普通→卢克 20（进赛丽亚房间，出门 32/0）", area: 1, exit: 32);
-        Switch(39, land: false, town: null, "卢克 20→超时空之战 39（同为团本页签，客户端保留 32/0）");
-        Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（0x36 谓词不同，出门 67/0）", area: 1, exit: 67);
+        Switch(20, land: true, town: 38, "普通→卢克 20（进赛丽亚房间，出门 32/3）", area: 1, exit: 32);
+        Switch(39, land: false, town: null, "卢克 20→超时空之战 39（同为团本页签，客户端保留 32/3）");
+        Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（0x36 谓词不同，出门 67/1）", area: 1, exit: 67);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，留在房间）", area: 1);
         Switch(39, land: false, town: null, "普雷 42→超时空之战 39（房间快照保留，出门 115/0）", exit: 115);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
-        Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/0）", area: 1, exit: 59);
-        Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/0）");
         const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
         const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
+        string beforePreyReturn = fixture.Snapshot(returnSql, character.Id);
+        Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/1）", area: 1, exit: 59);
+        That(fixture.Snapshot(positionSql, character.Id) == "[[59,1,1217,98,0]]" &&
+            fixture.Snapshot(returnSql, character.Id) == beforePreyReturn,
+            "普雷1426一次出门保存59/1完整位置，原普通返回地区五字段不变");
+        Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/1）");
         Location ordinaryReturn;
         // 分支依据原始城镇登记，不用被测目录是否漏装来降低期望。
         // 2026-10-29 正式PVF移除魔兽资源：魔兽换频道与回房段按资源在位判定暂时屏蔽，其余频道段照跑。
@@ -202,7 +206,7 @@ internal static partial class RaidChannelLandingTcpTests
         // 没有旧频道历史也不能把普通街道当作五陵快照；先入共享房间，再按五陵出口到 117/1。
         Switch(43, land: true, town: 38, "普通街道→五陵 43（先进赛丽亚房间）", area: 1, exit: 117);
         // 魔界大战 0x36 的 vt+0x4C 与 0x38 不同：客户端不留快照，进赛丽亚房间，出门按频道落点。
-        Switch(41, land: true, town: 38, "五陵 43→魔界大战 41（出门 67/0）", area: 1, exit: 67);
+        Switch(41, land: true, town: 38, "五陵 43→魔界大战 41（出门 67/1）", area: 1, exit: 67);
         Switch(43, land: true, town: 38, "魔界大战 41→五陵 43（出门 117/1 入口图）", area: 1, exit: 117);
         // 有频道历史时不再按 117 非专属城镇误判为普通频道，离开五陵也进共享房间。
         Switch(normal, land: true, town: 38, "五陵 43→普通（恢复普通房间）", area: 1);
@@ -232,7 +236,7 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(44, land: true, town: 38, "普通→勇士对决-自由 44（出门 119）", area: 1, exit: 119);
         Switch(45, land: false, town: null, "勇士对决-自由 44→排位 45（同为团本页签）");
         Switch(39, land: false, town: null, "勇士对决-排位 45→超时空之战 39（同为团本页签）");
-        Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（出门 67/0）", area: 1, exit: 67);
+        Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（出门 67/1）", area: 1, exit: 67);
         Switch(45, land: true, town: 38, "魔界大战 41→勇士对决-排位 45（出门 119）", area: 1, exit: 119);
     }
 

@@ -54,6 +54,11 @@ try {
     $shared=Plan;Safe $shared
     Assert ($shared.Reasons -contains 'shared-build-registry-or-dependency-change') '共享/反射/构建仍严格范围。'
     Assert ($shared.PriorityGroups.Count -eq 1 -and $shared.PriorityGroups[0].Paths.Count -eq 2) '同组多路径合并依据，不建议重复运行同组。'
+    $chat='Server/DfoServer/Game/Chat/ChatRateLimiter.cs'
+    Write-Fixture $chat 'synthetic changed limiter'
+    $chatPlan=Plan;Safe $chatPlan
+    Assert (@($chatPlan.PriorityGroups | Where-Object Group -CEQ 'chat-rate-rules').Count -eq 1) '已审核限流调用关系只增加优先建议，不扩缓存或缩范围。'
+    [IO.File]::Delete((Join-Path $temp $chat))
     Write-Fixture $registry 'unknown registry'
     $badRegistry=Plan;Safe $badRegistry
     Assert ($badRegistry.PriorityGroups.Count -eq 0 -and $badRegistry.Reasons -contains 'registry-unreviewed') '注册变动不沿旧组建议。'

@@ -15,7 +15,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-// 普雷·伊希斯攻坚战频道（频道 42，type 50 CHANNEL_PREY_RAID，分组 [prey]，名称键 054）：落点 59/0、任务 8935 + Lv95、ACK LOGIN 类型、换频道快照。
+// 普雷·伊希斯攻坚战频道（频道 42，type 50 CHANNEL_PREY_RAID，分组 [prey]，名称键 054）：候选 59/0、出房 59/1、任务 8935 + Lv95、ACK LOGIN 类型、换频道快照。
 // 数据全部读匹配的 Script.pvf，非实机。
 internal static class PreyChannelTests
 {
@@ -42,7 +42,7 @@ internal static class PreyChannelTests
         That(Enumerable.Range(0, 6).All(area => towns.Areas.TryGetValue((Town, (byte)area), out var a) && a.Level == 95),
             "灰色墓地 59/0..59/5 都在目录且 need level 95");
 
-        // 用户决定：59/0 与 59/2 都测可站，都可站时取 59/0。
+        // 频道目录候选仍取 59/0；候选可站与共享房间实际出门到街区分别验证。
         var area0 = ChannelAreaLanding.DecideArea(towns, Town, 0, 95, cleared);
         var area2 = ChannelAreaLanding.DecideArea(towns, Town, 2, 95, cleared);
         Console.WriteLine($"ASSERT prey 59/0 {area0.Spot} {area0.Reason}; 59/2 {area2.Spot} {area2.Reason}; channel-bound {ChannelAreaLanding.IsChannelBoundTown(towns, Town)}");
@@ -60,6 +60,11 @@ internal static class PreyChannelTests
         var landing = ChannelAreaLanding.Decide(towns, prey, 95, cleared);
         That(landing.Spot == spot && landing.Reason == area0.Reason, "95 级完成 8935 落到 59/0: " + landing.Spot + " " + landing.Reason);
         Console.WriteLine($"ASSERT prey lands {landing.Spot} reason {landing.Reason}");
+        var streetExit = new Location(Town, 1, 1217, 98);
+        That(towns.IsRoom(spot, cleared) && towns.DefaultReturn(spot, cleared) == streetExit &&
+            ChannelAreaLanding.RoomExit(towns, prey, towns.Room, 95, cleared) == streetExit &&
+            !towns.IsRoom(streetExit, cleared) && towns.IsPosition(streetExit, cleared),
+            "普雷目录候选 59/0 是地区房间，共享房间一次出门直达可站街区 59/1(1217,98)");
 
         // ACK LOGIN 第 3 字节：选角前 03B55580 读 +0x1010 判 0x32 → tail[41]（+0x494）。
         byte[] plain = ChannelPackets.Endpoint("127.0.0.1", 10011, 7);
@@ -95,7 +100,10 @@ internal static class PreyChannelTests
         var repo = new CharacterRepository(path);
         using var owner = new AccountOwners().Acquire("prey", () => { });
         var street = ChannelAreaLanding.Place(towns, elven, 95, cleared)!;
-        var streetReturn = towns.ResolveRoomReturn(street, street, 95, cleared);
+        var streetReturn = new Location(38, 0, 622, 196);
+        That(towns.ResolveRoomReturn(street, street, 95, cleared) == streetReturn &&
+            !towns.IsRoom(streetReturn, cleared) && towns.IsPosition(streetReturn, cleared),
+            "初始普通返回门口固定为可站的艾尔文38/0(622,196)，不从出房结果推导期望");
         var learning = SelfTestCatalogs.SkillLearning(pvf);
         NewCharacter Role(string name, byte level, int[] quests) =>
             CharacterCreation.Prepare(name, characters.Get(0), street, streetReturn, learning.Get) with
@@ -104,19 +112,23 @@ internal static class PreyChannelTests
         var noQuest = repo.Create(owner, Role("Prey95NoQ", 95, []));
         var weak = repo.Create(owner, Role("Prey94", 94, [EnterQuest]));
 
-        // 22 -> 普雷 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门到灰色墓地 59/0。
+        // 22 -> 普雷 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门到灰色墓地街区 59/1。
         var history = new ChannelHistory();
         var session = new GameSession(repo, towns, owner, entry: prey, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
         That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
             "换入普雷频道先进赛丽亚房间，返回地区仍是原街道");
         session.MarkReady();
-        That(session.LeaveRoom() && session.Selected!.Position == spot && session.Selected.Return == streetReturn,
-            "赛丽亚房间出门到灰色墓地 59/0，返回地区仍是原街道: " + session.TravelReason);
+        That(session.LeaveRoom() && session.Selected!.Position == streetExit && session.Selected.Return == streetReturn,
+            "赛丽亚房间一次出门到灰色墓地 59/1(1217,98)，返回地区全部字段仍是原街道: " + session.TravelReason);
+        var exited = session.Selected;
+        That(!session.LeaveRoom() && session.TravelReason == "not-in-ready-room" && ReferenceEquals(session.Selected, exited),
+            "已到普雷街区后重复出房必须拒绝，位置与返回地区快照不变");
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: prey, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
-        That(session.TownSnapshotResumed && session.Selected!.Position == spot, "普雷频道之间换频道保留灰色墓地 59/0快照");
+        That(session.TownSnapshotResumed && session.Selected!.Position == streetExit && session.Selected.Return == streetReturn,
+            "普雷频道之间换频道保留灰色墓地 59/1 完整位置及原街道返回快照");
         session.ReturnToRoster();
         foreach (var other in new[] { noQuest, weak })
         {
@@ -126,25 +138,30 @@ internal static class PreyChannelTests
             That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
                 "未完成 8935 或 94 级换入普雷频道留在共享房间: " + other.Name);
             session.MarkReady();
-            That(session.LeaveRoom() && session.Selected!.Position.Town == street.Town, "未完成 8935 或 94 级换入普雷频道留在共享房间，出门回原街道: " + session.TravelReason);
+            That(session.LeaveRoom() && session.Selected!.Position == streetReturn && session.Selected.Return == streetReturn, "未完成 8935 或 94 级换入普雷频道留在共享房间，出门回原街道: " + session.TravelReason);
             session.ReturnToRoster();
         }
-        // 离开灰色墓地 59/0回普通频道：谓词不同不留快照，进赛丽亚房间，出门到普通频道落点；无落点频道出门回进入前街道。
+        // 离开灰色墓地 59/1回普通频道：谓词不同不留快照，进赛丽亚房间，普通频道出门均回持久返回地区，不按频道分组覆盖。
         session = new GameSession(repo, towns, owner, entry: elven, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
-        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room, "离开普雷频道回艾尔文频道进赛丽亚房间");
+        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
+            "离开普雷街区回普通频道时入共享房间，不能把59/1覆盖为普通返回地区");
         session.MarkReady();
-        That(session.LeaveRoom() && session.Selected!.Position is { } out1 && out1.Town == street.Town && out1.Area == street.Area && out1.X == street.X && out1.Y == street.Y,
-            "艾尔文频道赛丽亚房间出门到街道: " + session.TravelReason);
+        That(session.LeaveRoom() && session.Selected!.Position == streetReturn && session.Selected.Return == streetReturn,
+            "普通频道出门恢复艾尔文38/0(622,196)，完整位置与返回地区均保持: " + session.TravelReason);
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: prey, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
-        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room, "普通→普雷频道进赛丽亚房间");
+        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
+            "普通→普雷频道进赛丽亚房间且保留完整普通返回地区");
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: sky, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
         That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
-            "离开普雷频道到无落点频道回共享房间，返回原街道");
+            "离开普雷频道到天空之城普通频道回共享房间，返回原街道");
+        session.MarkReady();
+        That(session.LeaveRoom() && session.Selected!.Position == streetReturn && session.Selected.Return == streetReturn,
+            "天空之城普通频道出门也按持久普通返回门口，不覆盖为频道候选");
         session.ReturnToRoster();
         Console.WriteLine($"PASS {Count - before} 普雷频道、灰色墓地落点与准入断言（非实机）");
     }

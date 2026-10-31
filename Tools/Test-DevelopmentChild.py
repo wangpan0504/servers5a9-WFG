@@ -62,6 +62,7 @@ with tempfile.TemporaryDirectory(prefix='s5a9-supervisor-') as directory:
         check(receipt.is_file(), '必须生成本轮新收据，不得沿用旧终态')
         data = json.loads(receipt.read_text())
         check(data['descendantsTerminated'], '全部自有后代终态确认')
+        check('ECHILD' in data['ownership']['terminalProof'], '原subreaper必须给出内核ECHILD证明')
         return result.returncode, data, log.read_bytes()
     code, data, _ = execute('import time; data=bytearray(2*1024*1024); time.sleep(.3)')
     check(code == 0 and data['memory']['samples'] > 0 and data['memory']['sampledPeakRssBytes'] > 0, '实际自有轻量进程采样，不把读取缺失伪造为零')
@@ -92,4 +93,31 @@ with tempfile.TemporaryDirectory(prefix='s5a9-supervisor-') as directory:
     # 短期孤儿在宽限内自然完成，不把不同时间峰值当实测内存。
     code, data, _ = execute('import subprocess,sys; subprocess.Popen([sys.executable,"-c","import time; time.sleep(.1)"])')
     check(code == 0 and data['state'] == 'completed', '等待短期后代自然完成')
+    # 仅测试进程注入一次状态读取竞态/意外错误，不在正式工具中加入故障开关。
+    injector=root/'inject.py'
+    injector.write_text("""import importlib.util,pathlib,subprocess,sys,errno
+mode=sys.argv.pop(1)
+spec=importlib.util.spec_from_file_location('bounded',sys.argv.pop(1))
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+original=m.subprocess.Popen;read=pathlib.Path.read_text;state={'started':False,'injected':False}
+def start(*a,**kw):
+ p=original(*a,**kw);state['started']=True;return p
+def race(self,*a,**kw):
+ if state['started'] and not state['injected'] and self.name=='status' and self.parent.name.isdigit():
+  state['injected']=True
+  if mode=='race':raise ProcessLookupError(errno.ESRCH,'synthetic disappeared process')
+  raise OSError(errno.EIO,'synthetic I/O fault')
+ return read(self,*a,**kw)
+m.subprocess.Popen=start;pathlib.Path.read_text=race
+sys.exit(m.main())
+""")
+    for mode in ('race','unexpected'):
+        target=root/mode;target.mkdir()
+        result=subprocess.run([sys.executable,str(injector),mode,str(helper),'--working-directory',directory,'--log',str(target/'log'),'--receipt',str(target/'receipt.json'),'--timeout-seconds','4','--',sys.executable,'-c','import time;time.sleep(.3)'],timeout=15)
+        data=json.loads((target/'receipt.json').read_text())
+        check(data['descendantsTerminated'] and 'ECHILD' in data['ownership']['terminalProof'], '注入故障仍由原监督器证明后代回收')
+        if mode=='race':
+            check(result.returncode==0 and data['state']=='completed', '仅ESRCH扫描竞态可忽略')
+        else:
+            check(result.returncode!=0 and data['state']=='failed' and 'synthetic I/O fault' in data['error'] and data['traceback'], '意外错误保留原失败/堆栈，不假通过')
 print(f'PASS: {checks} synthetic Linux supervisor checks')

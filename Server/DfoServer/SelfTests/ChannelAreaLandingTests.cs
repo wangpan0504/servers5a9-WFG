@@ -167,6 +167,25 @@ internal static class ChannelAreaLandingTests
         // 1379 房间返回城镇投影与 1426 出房共用 RoomExit，普通频道不再取频道落点。
         That(ChannelAreaLanding.RoomExit(towns, sky, towns.Room, 95, northDone) is null, "普通频道的房间返回地区投影不再取频道落点");
 
+        // 只保护专属城镇已有的返回地区：普通街道照常更新，缺记忆的旧存档保持原恢复路线。
+        foreach (var (name, position, remembered, expected) in new (string, Location, Location?, Location)[]
+        {
+            ("PreyBack", new(59, 1, 1217, 98), new(38, 0, 622, 196), new(38, 0, 622, 196)),
+            ("EvildomBack", new(67, 1, 656, 154), new(38, 0, 622, 196), new(38, 0, 622, 196)),
+            ("AntonBack", new(19, 1, 819, 172), new(38, 0, 622, 196), new(38, 0, 622, 196)),
+            ("PreyBadBack", new(59, 1, 1217, 98), new(255, 255, 0, 0), new(38, 0, 622, 196)),
+            ("PreyNoBack", new(59, 1, 1217, 98), null, new(59, 1, 1217, 98)),
+            ("NorthUpdate", new(39, 0, 596, 144), new(38, 0, 622, 196), new(39, 0, 596, 144)),
+            ("PvpNoBack", new(10, 0, 474, 234), null, new(38, 0, 622, 196)),
+            ("XianNoBack", new(117, 1, 1070, 213), null, new(38, 0, 622, 196))
+        })
+        {
+            var rememberedRole = repo.Create(owner, new(name, position, remembered) { Level = 95 });
+            var restored = CharacterSelection.Prepare(repo, owner, rememberedRole, towns, northDone, null, channel: elven);
+            That(restored.Position == towns.Room && restored.Return == expected,
+                $"{name} 选角的完整返回地区符合专属记忆/普通更新/缺省恢复边界，实际={restored.Return}");
+        }
+
         var skyRole = repo.Create(owner, new("Sky", towns.Room, towns.InitialReturn));
         var stayed = CharacterSelection.Prepare(repo, owner, skyRole, towns, none, null, false, null, channel: sky);
         That(stayed.Position == towns.Room, "正式选角在条件不足时保持共享房间");
