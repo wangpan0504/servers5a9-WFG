@@ -82,8 +82,9 @@ internal static partial class FormalDungeonTcpTests
         {
             var before = State();
             peer.Send(45,Request(point,kind));
+            peer.Expect(1,45,[0,19,0]);
             Drain();
-            That(State() == before,"未清房、未声明目标及跨格kind1静默拒绝且不改库");
+            That(State() == before,"未清房、未声明目标及跨格kind1明确拒绝且不改库");
         }
         void Move(DungeonPoint point,bool cached)
         {

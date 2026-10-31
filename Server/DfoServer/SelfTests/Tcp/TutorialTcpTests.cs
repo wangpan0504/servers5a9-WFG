@@ -174,7 +174,7 @@ internal static class TutorialTcpTests
                 {
                     // 同模板第一只死亡不能替代第二只；无效过图后仍须在原房间处理真实死亡。
                     var move = new byte[100]; move[0] = 2;
-                    peer.Send(45, move); peer.Barrier();
+                    peer.Send(45, move); peer.Expect(1,45,[0,19,0]); peer.Barrier();
                     That(fixture.Query("SELECT completed FROM character_tutorial_state WHERE character_id=$p0", peer.Id) is [[0L]],
                         "枪剑士第二图未清怪不提前完成训练或进入第三图");
                 }

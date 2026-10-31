@@ -794,13 +794,23 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
             var moved = party.Move(context.Session, move.X, move.Y, move.Unknown10);
             log.Write("formal_dungeon_move", new { Connection = context.Id, Party = party.Id, Accepted = moved.Length > 0, move.X, move.Y });
+            if (moved.Length == 0)
+            {
+                await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveRejected(), "party_move_rejected");
+                return CommandResult.Handled;
+            }
             await PartyDungeonProjection.PublishAsync(moved);
             return CommandResult.Handled;
         }
         var receipt = context.Session.MoveFormalDungeon(move.X, move.Y, move.Unknown10);
         log.Write("formal_dungeon_move",new { Connection = context.Id, Accepted = receipt is not null,
             move.X, move.Y, Kind = move.Unknown10, receipt?.Snapshot.CurrentMap, receipt?.Snapshot.MapOperation, receipt?.Snapshot.MapPayload });
-        if (receipt is null) return CommandResult.Unhandled;
+        if (receipt is null)
+        {
+            // 深渊波次尚存时客户端可能已开门；静默拒绝会让它永久等待本次过图。
+            await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveRejected(), "formal_move_rejected");
+            return CommandResult.Handled;
+        }
         if (receipt.NavigationReplay) return CommandResult.Handled;
         bool published = false;
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
