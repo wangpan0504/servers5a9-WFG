@@ -25,7 +25,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         var definition = enhancements.Get(source.Core.ItemId);
         if (request.Mode == EnhancementMode.Reinforce && definition is { Available: false })
             return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
-        if (definition is null && request.Mode == EnhancementMode.Amplify)
+        if (definition is null && request.Mode is EnhancementMode.Amplify or EnhancementMode.Reinforce)
             return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
         return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition,

@@ -21,6 +21,18 @@ internal static class AmplifyUpgradeTests
     public static void RunCore()
     {
         int before = Count;
+        AmplifyUse? Reinforcement(string label, params int[] values)
+        {
+            string Resolve(int index) => index switch { -1 => "[action type]", -2 => label, -3 => "[/action type]",
+                _ => throw new InvalidOperationException() };
+            return AmplifyUpgradeCatalog.ParseUse(new([new(3,-1),new(6,-2),
+                ..values.Select(value => new PvfLib.PvfToken(0,value)),new(3,-3)], Resolve), Resolve);
+        }
+        That(Reinforcement("[portable upgrade]",0,30) is { Kind:AmplifyUseKind.Portable, Reinforce:true, MaximumUpgrade:30 } &&
+            Reinforcement("[new portable upgrade]",0,14,30000) is { Kind:AmplifyUseKind.Portable, Reinforce:true, SuccessBonusWeight:30000 } &&
+            Reinforcement("[protect equipment]") is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:0 } &&
+            Reinforcement("[new protect equipment]",10) is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:10 },
+            "便携强化及保护声明保留独立强化模式，不能套用增幅概率或消费增幅保护券");
         string ResolvePortable(int index) => index switch { -1 => "[action type]", -2 => "[new portable amplify]",
             -3 => "[/action type]", -4 => "[portable amplify]", -5 => "[action usable server type]",
             -6 => "[/action usable server type]", -7 => "[general server]", -8 => "[event server]",
@@ -280,7 +292,73 @@ internal static class AmplifyUpgradeTests
             "存在未实现使用资格的保护券时仍在随机前拒绝，不能静默跳过保护后销毁装备");
         Exact433ProtectionCommit(resources, role, service, rng, request);
         PotionBoundaries(resources, role, request);
+        PortableReinforcement(resources, role, request);
         Console.WriteLine($"PASS {Count - before} 当前PVF普通增幅、便携、幸运、金币及完整销毁规划断言");
+    }
+
+    static void PortableReinforcement(TcpTestResources resources, Character seed, EnhancementRequest request)
+    {
+        var r = resources.ItemResources;
+        foreach (int id in new[] { 2682839,2682840,10002488,10003674,10005169,10005312,10005885,10007838,10090037,490005583,490702163 })
+            That(r.AmplifyUpgrades.Get(id) is { Kind:AmplifyUseKind.Portable, Reinforce:true, PendingRule:null },
+                "全量核查各参数形状的便携强化器按自身资格接入：" + id);
+        That(r.AmplifyUpgrades.Get(7804) is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:0 } &&
+            r.AmplifyUpgrades.Get(10007840) is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:10 },
+            "旧强化保护券归零，新强化保护券保留+10，不与增幅保护混用");
+        var rules = r.AmplifyUpgrades.ReinforceRules;
+        That(rules.Steps.Length == 255 && rules.Steps[0] is { FailureWeight:0, MaterialId:3037, MaterialCount:10 } &&
+            rules.Steps[10] is { FailureWeight:75000, PenaltyType:2, PenaltyValue:3 } &&
+            rules.Steps[12] is { FailureWeight:86000, PenaltyType:3 },
+            "强化独立normal表的保级、降三级及销毁政策，不混入amplify或活动表");
+        var random = new FixedRandom(0);
+        var upgrading = new InventoryAmplifyUpgradeService(r.Items,r.AmplifyUpgrades,r.Enhancements,r.Disjoint,
+            r.GoldLimits,r.EpicPieces,resources.Towns,random,consumables:r.RecoveryConsumables);
+        var service = new InventoryEnhancementService(r.Items,r.Enhancements,r.MedalUpgrades,random,amplification:upgrading);
+        var target = seed.Inventory.Find(request.Target)!;
+        var source = new InventoryItem(3,MainSlot(65),InventoryRewardGrantService.Create(r.Items.Get(10005312),2) with { ExpireTime=0 });
+        var wrongGuard = new InventoryItem(4,MainSlot(122),InventoryRewardGrantService.Create(r.Items.Get(10007370),2) with { ExpireTime=0 });
+        var use = request with { Mode=EnhancementMode.Reinforce, MaterialSlot=65 };
+        Character Actor(byte level, int sourceId=10005312, int guardId=7804) => seed with { Inventory=new([
+            target with { Core=target.Core with { Attr=(byte)(0xE0|level), AmplifyType=0, AmplifyValue=0 } },
+            source with { Core=InventoryRewardGrantService.Create(r.Items.Get(sourceId),2) with { ExpireTime=0 } },
+            wrongGuard, new(5,MainSlot(123),InventoryRewardGrantService.Create(r.Items.Get(guardId),2) with { ExpireTime=0 })],Gold:0) };
+        foreach (var (level,roll,expected,code,guard) in new[] {
+            (0,0,1,0,7804),(9,69999,9,1,7804),(9,70000,10,0,7804),
+            (10,74999,7,2,7804),(10,75000,11,0,7804),(12,0,0,2,7804),(12,0,10,2,10007840),(12,86000,13,0,10007840) })
+        {
+            random.Value=roll;
+            var actor=Actor((byte)level,guardId:guard);
+            var result=service.Plan(actor,use,out var receipt);
+            bool protectedFailure=level==12 && code==2;
+            var original=actor.Inventory.Find(use.Target)!;
+            That(result.Accepted && receipt is { Mode:EnhancementMode.Reinforce,Path:0,GoldCost:0,MaterialRemaining:1,Refunds.IsEmpty:true } &&
+                receipt.NewLevel==expected && receipt.OutcomeCode==code && receipt.TerminalSlot==(protectedFailure?123:-1) &&
+                result.Plan!.After.Find(use.Target)==original with { Core=original.Core with { Attr=(byte)(0xE0|expected) } } &&
+                result.Plan.After.Find(MainSlot(122))==wrongGuard && result.Plan.After.Find(MainSlot(123))!.Core.Count==(protectedFailure?1:2) &&
+                result.Plan.After.Gold==0,"便携强化按普通表边界结算，只扣源一件；毁装失败才消费同类保护，完整实例保持");
+        }
+        foreach (var (roll,expected) in new[] { (60999,9),(61000,10) })
+        {
+            random.Value=roll;
+            var result=service.Plan(Actor(9,10007838),use,out var receipt);
+            That(result.Accepted && receipt!.NewLevel==expected && receipt.GoldCost==0 && receipt.MaterialRemaining==1,
+                "新便携强化器相对成功权重1.3倍，+9边界61000；不能使用增幅+9概率");
+        }
+        var unprotected=Actor(12);
+        unprotected=unprotected with { Inventory=unprotected.Inventory with { Items=unprotected.Inventory.Items.RemoveAt(3) } };
+        random.Value=0;
+        var destroyed=service.Plan(unprotected,use,out var destruction);
+        That(destroyed.Accepted && destruction is { OutcomeCode:3,TerminalSlot:-1 } &&
+            destroyed.Plan!.After.Find(use.Target) is null && destroyed.Plan.After.Find(MainSlot(122))==wrongGuard &&
+            destroyed.Plan.After.Items.All(item=>item.Uid!=target.Uid),
+            "只有增幅保护券时不错误扣券，强化销毁按原事务规划完整补偿，不发保级成功");
+        int calls=random.Calls;
+        foreach (var invalid in new[] { Actor(31),Actor(10,2682839),Actor(0,2682840) })
+            That(!service.Plan(invalid,use,out _).Accepted && random.Calls==calls,
+                "Attr五位上限和便携器声明的当前等级区间在抽签前拒绝");
+        That(!service.Plan(Actor(0),use with { Mode=EnhancementMode.Amplify },out _).Accepted &&
+            !service.Plan(seed with { Inventory=Actor(0).Inventory with { Items=Actor(0).Inventory.Items.SetItem(0,target) } },use,out _).Accepted,
+            "强化器不能用增幅请求或异次元装备，保留模式与目标资格");
     }
 
     static void PotionBoundaries(TcpTestResources resources, Character seed, EnhancementRequest request)

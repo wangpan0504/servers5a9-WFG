@@ -20,7 +20,7 @@ internal static class AmplifyUpgradeTcpTests
         var exchange = r.Items.Get(10007110);
         var range = ItemSlotBoundService.Range(exchange.Kind, 0);
         short exchangeSlot = checked((short)Enumerable.Range(range.Start, range.End - range.Start + 1)
-            .First(slot => slot is not (19 or 65 or 66 or 67 or 68 or 121)));
+            .First(slot => slot is not (19 or 20 or 65 or 66 or 67 or 68 or 69 or 70 or 121)));
         var exchangeCore = InventoryRewardGrantService.Create(exchange, 7) with { ExpireTime = 0 };
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "amplification-upgrade"), resources: resources);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -33,6 +33,9 @@ internal static class AmplifyUpgradeTcpTests
                     new(0, Bag(66), InventoryRewardGrantService.Create(r.Items.Get(10007407), 1) with { ExpireTime = 0 }),
                     new(0, Bag(67), InventoryRewardGrantService.Create(r.Items.Get(10007133), 2) with { ExpireTime = 0 }),
                     new(0, Bag(68), InventoryRewardGrantService.Create(r.Items.Get(10007839), 2) with { ExpireTime = 0 }),
+                    new(0, Bag(20), core with { AmplifyType=0, AmplifyValue=0 }),
+                    new(0, Bag(69), InventoryRewardGrantService.Create(r.Items.Get(10005312), 2) with { ExpireTime=0 }),
+                    new(0, Bag(70), InventoryRewardGrantService.Create(r.Items.Get(10007838), 1) with { ExpireTime=0 }),
                     new(0, Bag(exchangeSlot), exchangeCore)], Gold: 10_000_000)
             });
         string uid = fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid");
@@ -97,11 +100,34 @@ internal static class AmplifyUpgradeTcpTests
         }
         using (var peer = Open(fixture))
         {
+            peer.Select(); peer.Barrier();
+            string before=Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_reinforce_portable_late BEFORE INSERT ON inventory_audit_log " +
+                "WHEN NEW.action_name='equipment_reinforcement_portable' BEGIN SELECT RAISE(ABORT,'portable reinforcement rollback'); END");
+            peer.Send(80,EnhancementTests.Request(0,0,20,31440,69,[])); peer.Closed();
+            That(Snapshot()==before,"真实便携强化源和目标已写入后SQL故障整笔回滚，不提前回复成功");
+            fixture.Sql("DROP TRIGGER fail_reinforce_portable_late");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            peer.Send(80,EnhancementTests.Request(0,0,20,31440,69,[]));
+            Check(peer.Expect(1,80).Body,69,1,0,1,0,20,0,mode:0); peer.Barrier();
+            peer.Send(80,EnhancementTests.Request(0,0,20,31440,70,[]));
+            Check(peer.Expect(1,80).Body,70,0,1,2,0,20,0,mode:0); peer.Barrier();
+            That(Core(20,0)==core with { Attr=0xE2,AmplifyType=0,AmplifyValue=0 },
+                "旧便携和新便携强化沿真实CMD80原位更新，完整核心及期限保持，源分别扣一件");
+            string before=Snapshot();
+            peer.Send(80,EnhancementTests.Request(0,0,20,31440,70,[])); peer.Expect(1,80,[0,23,0]); peer.Barrier();
+            That(Snapshot()==before,"新便携强化器耗尽重放无写入，不重抽或重复扣费");
+        }
+        using (var peer = Open(fixture))
+        {
             var selected = peer.Select(); peer.Barrier();
             var full = selected.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             int at = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(index => U16(full, index) == 19);
             That(full[at + 10] == 0xEA && full[at + 19] == 3 && U16(full, at + 20) == 6 && Core(exchangeSlot,0) == exchangeCore &&
-                Core(12,3) == core with { Attr = 0xE3 },
+                Core(12,3) == core with { Attr = 0xE3 } && Core(20,0)==core with { Attr=0xE2,AmplifyType=0,AmplifyValue=0 },
                 "重新选角恢复增幅券和成功之兆的等级、完整属性，商店兑换材料数量不变");
         }
         That(fixture.Query("SELECT gold FROM characters") is [[long savedGold]] && savedGold == 10_000_000 - r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440)) &&
@@ -114,9 +140,9 @@ internal static class AmplifyUpgradeTcpTests
         string Snapshot() => fixture.Snapshot("SELECT id,revision,gold FROM characters") +
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") + fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
         static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
-        static void Check(byte[] body, short material, int remaining, byte old, byte level, byte list, short target, byte path)
+        static void Check(byte[] body, short material, int remaining, byte old, byte level, byte list, short target, byte path, byte mode=1)
         {
-            That(body.Length == 27 && body[0] == 1 && body[1] == 1 && U16(body, 2) == material && U32(body, 4) == remaining &&
+            That(body.Length == 27 && body[0] == 1 && body[1] == mode && U16(body, 2) == material && U32(body, 4) == remaining &&
                 U16(body, 8) == ushort.MaxValue && body[10] == path && body[11] == old && body[12] == 0 && body[13] == level &&
                 body[14] == list && U16(body, 15) == target && U16(body, 17) == ushort.MaxValue && U16(body, 19) == ushort.MaxValue &&
                 U32(body, 21) == 0 && body[25] == 0 && body[26] == 0, "CMD80原生27B成功完整消费，模式、路径和余量独立核对");
