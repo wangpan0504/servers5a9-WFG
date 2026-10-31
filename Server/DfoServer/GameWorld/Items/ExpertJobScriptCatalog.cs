@@ -93,10 +93,13 @@ internal sealed class ExpertJobScriptCatalog
 
     public bool IsLearned(byte job, int level, IEnumerable<int> learned, int recipe) =>
         learnable.TryGetValue(recipe, out var definition) && definition.Job == job && definition.RequiredLevel <= level &&
-        (learned.Contains(recipe) || (job is 2 or 4 && jobs[job].AutoRecipes.Any(row => row.ItemId == recipe && row.Count <= level)));
+        (learned.Contains(recipe) || (job is 1 or 2 or 4 && jobs[job].AutoRecipes.Any(row => row.ItemId == recipe && row.Count <= level)));
 
     public int[] LearnedRecipes(byte job, int level, IEnumerable<int> learned) =>
         UnlockedRecipes(job, level).Concat(job == 1 ? learned.Where(id => learnable.GetValueOrDefault(id)?.Rarity is not null) : [])
+            // 附魔资格也在自动表中，不能只从持久化的稀有度配方构造列表。
+            .Concat(job == 1 && jobs.TryGetValue(job, out var script)
+                ? script.AutoRecipes.Where(row => row.Count <= level).Select(row => row.ItemId) : [])
             .Where(id => IsLearned(job, level, learned, id)).Distinct().Order().ToArray();
 
     public byte[] LearnedRarities(IEnumerable<int> recipes) => recipes.Select(id => learnable.GetValueOrDefault(id)?.Rarity)

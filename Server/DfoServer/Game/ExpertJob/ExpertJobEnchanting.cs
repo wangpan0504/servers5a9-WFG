@@ -23,7 +23,7 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
             !source.Core.IsStackable || source.Core.Count <= 0 || target.Core.IsStackable || target.Core.Kind != ItemKind.Equipment ||
             source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 || source.IsExpired(now) || target.IsExpired(now) ||
             !scripts.TryCardRecipe(source.Core.ItemId, out var recipe) || recipe.RecipeId != recipeId ||
-            !character.ExpertJobRecipes.Contains(recipeId) || scripts.Level(1, character.ExpertJobExperience) < recipe.RequiredLevel ||
+            !scripts.IsLearned(character.ExpertJobType, scripts.Level(1, character.ExpertJobExperience), character.ExpertJobRecipes, recipeId) || scripts.Level(1, character.ExpertJobExperience) < recipe.RequiredLevel ||
             character.ExpertMachineEndurance < rules.EnchantEnduranceCost) return null;
         var sourceTemplate = items.Get(source.Core.ItemId);
         var targetTemplate = items.Get(target.Core.ItemId);

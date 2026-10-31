@@ -14,12 +14,12 @@ internal sealed class ExpertJobLearning(ExpertJobScriptCatalog scripts, ItemCata
 
     public ExpertJobLearningPlan? Plan(Character character, InventorySlot slot, int itemId)
     {
+        int level = scripts.Level(character.ExpertJobType, character.ExpertJobExperience);
+        var recipes = scripts.LearnedRecipes(character.ExpertJobType, level, character.ExpertJobRecipes);
         if (!scripts.TryLearningRecipe(itemId, out var definition) || character.ExpertJobType != definition.Job ||
-            scripts.LearnedRecipes(character.ExpertJobType, scripts.Level(character.ExpertJobType,
-                character.ExpertJobExperience), character.ExpertJobRecipes).Length >= byte.MaxValue || scripts.IsLearned(character.ExpertJobType,
-                scripts.Level(character.ExpertJobType, character.ExpertJobExperience), character.ExpertJobRecipes, itemId) ||
-            scripts.Level(character.ExpertJobType, character.ExpertJobExperience) < definition.RequiredLevel ||
-            definition.Rarity is { } rarity && scripts.LearnedRarities(character.ExpertJobRecipes).Contains(rarity))
+            recipes.Length >= byte.MaxValue || scripts.IsLearned(character.ExpertJobType, level, character.ExpertJobRecipes, itemId) ||
+            level < definition.RequiredLevel ||
+            definition.Rarity is { } rarity && scripts.LearnedRarities(recipes).Contains(rarity))
             return null;
         var source = character.Inventory.Find(slot);
         var now = Clock.GetUtcNow().ToUnixTimeSeconds();

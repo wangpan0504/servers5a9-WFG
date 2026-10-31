@@ -1271,7 +1271,11 @@ internal sealed partial class TcpPeer : IDisposable
         TestCheck.That(expansionSlots % 8 == 0 && (expansionSlots >> 3) <= 3,
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
-        if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
+        if (expertJobInfo is not null)
+        {
+            var actual = Expect(0, 205).Body;
+            TestCheck.Bytes(actual, expertJobInfo, $"NOTI205 expected={Convert.ToHexString(expertJobInfo)} actual={Convert.ToHexString(actual)}");
+        }
         if (recoveredPvpGrade is { } recoveredGrade)
             TownPresenceTcpTests.PvpGrade(Expect(0, 2).Body, recoveredGrade, recoveredPowerTitle);
         if (PvpEntry)

@@ -27,7 +27,7 @@ internal static class ExpertJobActionTcpTests
         var recipe = scripts.KnownCards(1).Order().Select(id => scripts.TryCardRecipe(id, out var row) ? row : null)
             .First(row => row is { Rarity: 1 } && items.Get(row.CardId).MinimumLevel <= 50 && resources.ItemResources.Enchantments.Get(row.BeadId) is { } definition &&
                 definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)))!;
-        int startingExperience = Enumerable.Range(0, 2000).First(xp => scripts.Level(1, xp) == 5) - 1;
+        int startingExperience = Enumerable.Range(0, 2000).First(xp => scripts.Level(1, xp) == 7) - 1;
         short cardSlot = ItemSlotBoundService.Range(items.Get(recipe.CardId).Kind, InventorySnapshot.Empty).Start;
         ushort machineId, enchanterId;
         uint fragmentCount = 0;
@@ -56,7 +56,7 @@ internal static class ExpertJobActionTcpTests
             repository.CommitInventory(owner, enchanter, grant.Plan!);
         }
         fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,3,51 FROM characters WHERE id={machineId}");
-        fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,1,{startingExperience},'[{recipe.RecipeId}]' FROM characters WHERE id={enchanterId}");
+        fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,1,{startingExperience},'[]' FROM characters WHERE id={enchanterId}");
         fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({enchanterId},0,11009,1,'11223344556677889900112233445566')");
         fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({machineId},0,10021,1,'22334455667788990011223344556677')");
         Directory.CreateDirectory(fixture.Options.DataDirectory);
@@ -132,7 +132,7 @@ internal static class ExpertJobActionTcpTests
             peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
             SendEnchant(peer, enchanterId);
             peer.Expect(0, 14); peer.Expect(0, 574); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
-            peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(5u); w.Write((uint)recipe.Rarity); }));
+            peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(7u); w.Write((uint)recipe.Rarity); }));
             peer.Barrier();
             peer.Send(599, Build(w => w.Write(enchanterId)));
             peer.Expect(1, 599, Build(w => { w.Write((byte)1); w.Write((byte)3); w.Write(enchanterId); w.Write(299u); }));
@@ -163,7 +163,15 @@ internal static class ExpertJobActionTcpTests
         void SendEnchant(TcpPeer peer, ushort actor) => peer.Send(601, Build(writer =>
         { writer.Write(actor); writer.Write(recipe.RecipeId); writer.Write((byte)2); writer.Write((byte)0); writer.Write((ushort)3); writer.Write((byte)0); writer.Write((ushort)cardSlot); }));
         byte[] EnchantInfo(uint endurance, bool qualifications = true) => Build(writer =>
-        { writer.Write((byte)0); writer.Write((byte)1); writer.Write((byte)1); writer.Write(recipe.RecipeId); writer.Write((byte)(qualifications ? 1 : 0)); if (qualifications) writer.Write(recipe.Rarity); writer.Write(endurance == 300 ? 4u : 5u); writer.Write(endurance); });
+        {
+            bool upgraded = endurance < 300;
+            int[] recipes = upgraded ? [10015129, recipe.RecipeId, 10015131] : [10015129, recipe.RecipeId];
+            byte[] rarities = qualifications ? (upgraded ? [0, recipe.Rarity, 2] : [0, recipe.Rarity]) : [2];
+            writer.Write((byte)0); writer.Write((byte)1); writer.Write((byte)recipes.Length);
+            foreach (int id in recipes) writer.Write(id);
+            writer.Write((byte)rarities.Length); writer.Write(rarities);
+            writer.Write(upgraded ? 7u : 6u); writer.Write(endurance);
+        });
         string Snapshot() => JsonSerializer.Serialize(new[] { fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid"),
             fixture.Query("SELECT * FROM character_expert_job ORDER BY character_id"), fixture.Query("SELECT * FROM character_expert_meta ORDER BY character_id"),
             fixture.Query("SELECT id,revision,gold FROM characters ORDER BY id"), fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind"),
