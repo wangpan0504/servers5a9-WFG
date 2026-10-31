@@ -434,16 +434,92 @@ internal static class BoosterTcpTests
             SendOpen(client, 65, 1); client.Expect(1, 160, [0, 19, 0]); client.Barrier();
             That(State() == consumed, "耗尽普通礼包重放不发第二份装备 " + entry.Source);
         }
-        var inventories = actors.ToDictionary(entry => entry.Actor.Slot, entry => JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory));
+        var allActors = actors.Select(entry => entry.Actor).Concat(OrdinaryParents(fixture, resources, repo, owners)).ToArray();
+        var inventories = allActors.ToDictionary(actor => actor.Slot, actor => JsonSerializer.Serialize(Read(actor.Slot).Inventory));
         await fixture.StopAsync();
         await fixture.StartAsync("ordinary-restricted-restart");
-        foreach (var entry in actors)
+        foreach (var actor in allActors)
         {
             using var client = Open(fixture);
-            client.Select(entry.Actor.Slot); client.Barrier();
-            That(JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory) == inventories[entry.Actor.Slot],
-                "四个普通礼包重启重登保持完整实例/限制/期限，不续期或复活源 " + entry.Source);
+            client.Select(actor.Slot); client.Barrier();
+            That(JsonSerializer.Serialize(Read(actor.Slot).Inventory) == inventories[actor.Slot],
+                "普通礼包与达成子盒重启重登保持完整实例/限制/期限，不续期或复活源 " + actor.Slot);
         }
+        Character Read(ushort slot)
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.LoadCharacter(owner, slot);
+        }
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
+    static Character[] OrdinaryParents(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        var items = resources.ItemResources;
+        var actors = new List<Character>();
+        foreach (int sourceId in new[] { 490011382, 490012852 })
+        {
+            Character actor;
+            using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                actor = repo.Create(owner, CharacterCreation.Prepare("ParentBox" + actors.Count, resources.Characters.Get(0),
+                    resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
+                {
+                    AcceptedStoryLevel = 1,
+                    Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(items.Items.Get(sourceId))),
+                        new(0, Bag(65), InventoryRewardGrantService.Create(items.Items.Get(1106)))], Gold: 12345)
+                });
+            actors.Add(actor);
+            if (sourceId == 490011382)
+            {
+                using var peer = Open(fixture);
+                peer.Select(actor.Slot); peer.Barrier();
+                string before = State();
+                fixture.Sql("CREATE TRIGGER fail_parent_booster BEFORE INSERT ON inventory_audit_log " +
+                    "WHEN NEW.action_name='booster_open' BEGIN SELECT RAISE(ABORT,'parent booster rollback'); END");
+                SendOpen(peer, 3, 1); peer.Closed();
+                That(State() == before, "普通父盒发双子盒晚SQL失败回滚源、完整核心、UID序列、revision及审计");
+                fixture.Sql("DROP TRIGGER fail_parent_booster");
+            }
+            using var client = Open(fixture);
+            client.Select(actor.Slot); client.Barrier();
+            var sentinel = Read(actor.Slot).Inventory.Find(Bag(65));
+            SendOpen(client, 3, 1);
+            var expected = items.Boosters.Get(sourceId).Pools.Select(pool => (Id: pool.Rewards[0].ItemId, Count: 1)).ToArray();
+            ExpectAck(client, sourceId, 3, expected);
+            var delta = client.Expect(0, 14).Body;
+            Entry(delta, 3, -1, 0); client.Barrier();
+            var received = Read(actor.Slot);
+            var children = received.Inventory.Items.Where(item => expected.Any(row => row.Id == item.Core.ItemId)).ToArray();
+            That(received.Inventory.Find(Bag(3)) is null && received.Inventory.Find(Bag(65)) == sentinel &&
+                received.Inventory.Gold == 12345 && children.Length == 2,
+                "真实普通父盒CMD160同时保存两份子盒，源只消费一次且保留哨兵和金币 " + sourceId);
+            foreach (var child in children)
+            {
+                That(child.Uid > 0 && child.Core == InventoryRewardGrantService.Create(items.Items.Get(child.Core.ItemId)) &&
+                    child.Core is { Kind: ItemKind.Consumable, DisjointForbidden: false, DestructionSoulForbidden: false,
+                        EpicExchangeOrigin: null, Extension119: 0 },
+                    "四子盒以自身完整核心落库，不代开、不带父盒装备限制或来源 " + child.Core.ItemId);
+                Entry(delta, child.Position.Index, child.Core.ItemId, 1);
+                var selection = items.Boosters.Get(child.Core.ItemId).Selection!;
+                var category = selection.Categories.First(row => row.PendingRule is null && !row.Rewards.IsEmpty);
+                var chosen = selection.SelectionCount == 0 ? category.Rewards.ToArray() : category.Rewards.Take(selection.SelectionCount).ToArray();
+                BoosterSelectionTcpTests.SendSelect(client, child.Position.Index, chosen.Select(row => row.ItemId).ToArray(),
+                    category.Category, category.Subcategory);
+                ExpectAck(client, child.Core.ItemId, child.Position.Index, chosen.Select(row => (row.ItemId, row.Count)).ToArray());
+                client.Expect(0, 14); client.Barrier();
+                var opened = Read(actor.Slot);
+                That(opened.Inventory.Find(child.Position) is null && chosen.All(row => opened.Inventory.Items.Any(item =>
+                    item.Core.ItemId == row.ItemId && item.Core.DisjointForbidden && !item.Core.DestructionSoulForbidden &&
+                    item.Core.Upgrade == row.Upgrade && item.Core.GenuineUpgrade == row.Refinement)),
+                    "四个实际子盒沿自己的选择入口生成打造和分解限制装备 " + child.Core.ItemId);
+            }
+            string committed = State();
+            SendOpen(client, 3, 1); client.Expect(1, 160, [0, 19, 0]); client.Barrier();
+            That(State() == committed, "已耗普通父盒重放不再次发子盒或装备 " + sourceId);
+        }
+        return actors.ToArray();
         Character Read(ushort slot)
         {
             using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
