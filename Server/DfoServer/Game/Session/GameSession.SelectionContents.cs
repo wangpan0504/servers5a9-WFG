@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
@@ -5,7 +6,7 @@ using DfoServer.Game.Quests;
 namespace DfoServer.Game.Session;
 
 internal sealed record SelectionContentsReceipt(CharacterRosterSnapshot Roster, byte? Index, int Day,
-    int GameDay, SelectionTowerCounts Towers, SelectionContents? Contents);
+    int GameDay, SelectionTowerCounts Towers, SelectionContents? Contents, ImmutableArray<byte> WeeklySlots);
 
 internal sealed partial class GameSession
 {
@@ -17,7 +18,7 @@ internal sealed partial class GameSession
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var state = repository.ReadSelectionContents(owner, entry, now);
         return new SelectionContentsReceipt(roster, index, ShopPurchaseCount.Today(now), QuestCycle.Day(now), rules.Towers(state),
-            entry is null ? null : rules.Character(state, entry.Id, now));
+            entry is null ? null : rules.Character(state, entry.Id, now), repository.ReadAdventureWeeklyConfig(owner));
     });
 
     public bool CanPublishSelectionContents(SelectionContentsReceipt receipt) => owner.Execute(() =>

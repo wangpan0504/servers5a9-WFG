@@ -15,6 +15,9 @@ internal static class SelectionContentsTcpTests
 {
     internal static void ExpectTowers(TcpPeer peer, TcpTestFixture fixture, TcpTestResources resources, string account)
     {
+        // 95级提示只遍历721安装的五槽；必须在1298/704前初始化，不能依赖先进入城镇。
+        var config = fixture.Query("SELECT slots FROM account_adventure_weekly_config WHERE account=$p0", account);
+        peer.Expect(0, 721, config.Length == 0 ? [0, 1, 3, 4, 6] : (byte[])config[0][0]);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var despair = dungeons.Despair;
         var grief = dungeons.GriefTower;
@@ -66,6 +69,7 @@ internal static class SelectionContentsTcpTests
                 "704完整44字节；失败重试不重复占角色基础额度，塔楼层取当前进度减一供原生加一");
             That(body.AsSpan(36,4).SequenceEqual(new byte[] {7,1,0,1}) && body[42]==1 && body[43]==2,
                 "原生尾部字段依次为泰波尔斯、普通超时空、眩惑、希望、魔界大战、公会的实际次数，日耗尽仍保留周剩余");
+            fixture.Sql("INSERT INTO account_adventure_weekly_config(account,slots) VALUES('selcounts',$p0)", new byte[] { 8, 0, 1, 3, 4 });
             peer.Send(704,[1]); ExpectTowers(peer, fixture, resources, "selcounts"); body = peer.Expect(1,704).Body;
             That(body[1] == 1 && U32(body,3) == 0 && U32(body,7) == 0 && U32(body,19) == 0 && U32(body,23) == 0,
                 "名册索引1查询真实slot7角色，未挑战角色不继承上一行次数或楼层");
@@ -91,6 +95,15 @@ internal static class SelectionContentsTcpTests
         {
             peer.Send(704,[0]); peer.Expect(1,704,[0]);
             peer.Send(692, Name("CountProbe")); peer.Expect(1,692,[1]);
+        }
+        using (var peer = Open(fixture,"selcounts"))
+        {
+            // 新连接直接悬停，尚未发送645、选角或任何入城初始化。
+            peer.Send(704,[0]); ExpectTowers(peer,fixture,resources,"selcounts"); peer.Expect(1,704);
+            fixture.Sql("UPDATE account_adventure_weekly_config SET slots=$p0 WHERE account='selcounts'", new byte[] { 255, 255, 255, 255, 255 });
+            peer.Send(704,[0]); ExpectTowers(peer,fixture,resources,"selcounts"); peer.Expect(1,704);
+            That((byte[])fixture.Query("SELECT slots FROM account_adventure_weekly_config WHERE account='selcounts'").Single()[0] is [255,255,255,255,255],
+                "选角回显保留账号显式清空的排列，不替换成默认值或写回配置");
         }
         using (var peer = Open(fixture,"selcounts")) { peer.Send(704,[]); peer.Closed(); }
         using (var peer = Open(fixture,"selcounts")) { peer.Send(704,[0,0]); peer.Closed(); }
