@@ -121,7 +121,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             else await PartyDungeonProjection.PublishAsync(selected);
             return CommandResult.Handled;
         }
-        if (entry.DungeonIndex != 0 && context.Session.ChannelEntry?.Type == 32 &&
+        if (context.Session.ChannelEntry?.Type == 32 &&
             context.Session.StartedRaid is not null && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
             var selectedParty = context.Session.CurrentParty?.Invoke();
@@ -133,6 +133,17 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                 return CommandResult.Handled;
             }
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, selectedParty.Members);
+            if (entry.DungeonIndex == 0)
+            {
+                // 这里只打开原生团本选图；图号、路线及成员资格在16经领域服务一起确认。
+                bool opened = lukeRaid is not null && !context.BlocksTownActions && selectedParty.Members.Any(member =>
+                    member.Slot == selectedParty.Leader && ReferenceEquals(member.Actor.Session, context.Session));
+                log.Write("dungeon_entry", new { Connection = context.Id, Accepted = opened, Party = true,
+                    RaidType = 1, Dungeon = 0, Reason = "luke-selection-open" });
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON,
+                    opened ? DungeonPackets.SelectionOpened() : DungeonPackets.SelectionUnavailable(), "luke_selection_open");
+                return CommandResult.Handled;
+            }
             lukeRaid?.CancelSelection(context.Session, selectedParty);
             var selected = entry.DungeonIndex <= int.MaxValue && !context.BlocksTownActions
                 ? lukeRaid?.Select(context.Session, (int)entry.DungeonIndex, selectedParty) ?? [] : [];

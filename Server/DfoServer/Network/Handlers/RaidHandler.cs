@@ -377,7 +377,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         bool accepted = party is not null && MatchesType(actor, party.Type);
         byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
             CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party), party.Started is null ? (byte)0 : (byte)2,
-            party.Started?.Phase ?? 0, RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+            party.Started?.Phase ?? 0, RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide,
+            clearCounts: RaidProjection.ClearCounts(party)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
         await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)));
         return CommandResult.Handled;
     }
@@ -428,7 +429,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         // 01DC65B0归一化参数为0/1，02173DB0明确传0；自动费用检测另发1，均不代表扣票确认。
         if (request.Body.Length != 1 || request.Body[0] > 1) return CommandResult.Unhandled;
         log.Write("raid_entry_cost_request", new { Connection = context.Id, Flag = request.Body[0] });
-        if (Actor(context) is { } actor && registry.Find(actor) is { } party && (party.Type == 0 || party.Type == 3 && party.Guide) && catalog.Find(party.Type)?.Resources?.Script.EntryCost is { } cost)
+        if (context.Session.CaptureRaidRejoinActor(registry) is { } actor && registry.Find(actor) is { Type: <= 3 } party &&
+            catalog.Find(party.Type)?.Cost(party.Guide) is { } cost)
         {
             var rows = party.Members.Where(m => m.Actor.IsCurrent).OrderBy(m => m.Slot)
                 .Select(m => AntonRaidStart.Cost(m.Actor, cost, party.Started is not null)).ToArray();

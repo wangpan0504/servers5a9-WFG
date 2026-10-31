@@ -18,6 +18,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
+    internal byte[]? RaidRosterDisplay { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。

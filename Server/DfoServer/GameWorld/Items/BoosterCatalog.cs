@@ -234,10 +234,25 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         }
         foreach (string tag in new[] { "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime",
-            "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
+            "random box", "random box removal items", "convert boost item", "check usable itemlevel",
             "battle royal", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        // 团本标记描述门票来源，购买材料与购买次数由商店负责；开启仍校验完整奖池及使用限制。
+        var raidDeclarations = Regex.Matches(tags,
+            @"\[\s*/?\s*raid\s+booster\s+item[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (raidDeclarations.Count != 0)
+        {
+            var declaration = raidDeclarations[0];
+            int start = declaration.Index + declaration.Length;
+            int end = tags.IndexOf('[', start);
+            if (type is not ("booster" or "booster selection") || raidDeclarations.Count != 1 ||
+                text.Count(value => value == '`') % 2 != 0 || declaration.Value != "[raid booster item]" ||
+                !IsRootDeclaration(tags, declaration.Index) ||
+                !int.TryParse(text[start..(end < 0 ? text.Length : end)].Trim(), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out int raidType) || raidType is < 1 or > 3)
+                return new([], "raid booster item");
+        }
         // 黎明材料和净化结晶共用的来源标记，不替代 booster info 的奖励声明。
         // 只接入匹配资源已确认的根级值1；未知形态继续拒绝。
         var daybreakDeclarations = Regex.Matches(tags,

@@ -138,7 +138,7 @@ internal static partial class AntonRaidGapTcpTests
         leader.Select(); member.Select();
         AntonRaidTcpTests.Drain(leader); AntonRaidTcpTests.Drain(member);
         leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Party")); w.Write(new byte[4]); }));
-        AntonRaidTcpTests.Until(leader, 1, 664);
+        uint raidKey = U32(AntonRaidTcpTests.Until(leader, 1, 664).Body, 1);
         member.Send(10, AntonRaidTcpTests.Peer(leader.Id, 7, true));
         AntonRaidTcpTests.Until(member, 1, 10);
         AntonRaidTcpTests.Until(leader, 0, 7);
@@ -174,6 +174,13 @@ internal static partial class AntonRaidGapTcpTests
         {
             AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear != 0,
                 loaded: clear == 0 ? () => AssertHpProjection(leader, member) : null);
+            leader.Send(1361, Build(writer => { writer.Write((byte)1); writer.Write(raidKey); }));
+            var panel = AntonTcpProbe.Barrier(leader, "双人清图后的个人计数");
+            var counts = RaidPanelTests.ReadClears(panel.Last(packet => packet is { Kind: 1, Opcode: 1361 }).Body);
+            That(counts[leader.Id] == clear + 1 && counts[member.Id] == clear + 1,
+                "安徒恩共享Run的两个已提交成员都获得一次个人计数，不依赖117报告者");
+            That(panel.All(packet => packet is not { Kind: 0, Opcode: 591 } || packet.Body.Length < 8 || U32(packet.Body, 4) != 3),
+                "计数查询和增量刷新不使用会强制打开面板的591/op3");
             if (clear != 0) continue;
             member.Send(72, [1, 2]); AntonTcpProbe.Barrier(member, "一人先退出原Run");
             AntonTcpProbe.Barrier(leader, "同步先退出成员");

@@ -50,7 +50,7 @@ internal static partial class LukeRaidRunTcpTests
                             { Experience = resources.Growth.GetLevelStartExperience(90) }, resources.Learning);
                         var role = repository.Create(owner, candidate with { Level = 90, AcceptedStoryLevel = 90, CompletedQuests = [2903, 4872], InitialLearning = learning });
                         var inventory = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
-                        InventoryService.Commit(repository, owner, role, inventory.Grant(role, [new(10159649, 1)]));
+                        InventoryService.Commit(repository, owner, role, inventory.Grant(role, [new(10162065, 1)]));
                         if (recovery && recoveryMode == 2)
                         {
                             var alternate = CharacterCreation.Prepare("LpAlt", resources.Characters.Get(0), location, location, resources.Learning.Get);
@@ -62,7 +62,7 @@ internal static partial class LukeRaidRunTcpTests
                 }
                 var leader = peers[0];
                 leader.Send(664, Build(writer => { writer.Write((byte)1); writer.Write(Name("LukeFull")); writer.Write(new byte[4]); }));
-                Until(leader, 1, 664);
+                uint raidKey = U32(Until(leader, 1, 664).Body, 1);
                 for (int index = 1; index < count; index++)
                 {
                     leader.Send(10, Peer(peers[index].Id, 0, true)); Until(leader, 1, 10); Until(peers[index], 0, 7);
@@ -75,6 +75,38 @@ internal static partial class LukeRaidRunTcpTests
                     Bytes(Until(leader, 1, 669).Body, [1], "完整生产流程分队");
                     foreach (var peer in peers) Drain(peer);
                 }
+                leader.Send(658, [0]);
+                var unavailable = Until(leader, 0, 598).Body;
+                That(U32(unavailable) == count && Enumerable.Range(0, count).All(index =>
+                    unavailable[6 + 5 * index] == 0 && U16(unavailable, 7 + 5 * index) == 0),
+                    "只持有门票盒时原生658明确未就绪，不以盒子替代门票");
+                Until(leader, 1, 658);
+                foreach (var peer in peers) Drain(peer);
+                foreach (var peer in peers)
+                {
+                    peer.Send(160, Build(writer => { writer.Write((short)65); writer.Write(1); }));
+                    var opened = Until(peer, 1, 160).Body;
+                    That(opened.Length == 26 && opened[0] == 1 && opened[1] == 0 && U32(opened, 2) == 10162065 &&
+                        U16(opened, 16) == 1 && U32(opened, 18) == 10159649 && U32(opened, 22) == 1,
+                        "真实160开卢克门票盒，产物为一张黑白的守护");
+                    var delta = Until(peer, 0, 14).Body;
+                    int ticketAt = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123)
+                        .Single(at => U32(delta, at + 2) == 10159649);
+                    int expectedExpiry = resources.ItemResources.Items.Get(10159649).Expiration.Resolve(clock.GetUtcNow());
+                    That(U32(delta, ticketAt + 56) == expectedExpiry && expectedExpiry > clock.GetUtcNow().ToUnixTimeSeconds(),
+                        "开盒差量123B写真实绝对截止，客户端能显示期限");
+                    That(fixture.Query("SELECT json_extract(item_core,'$.ExpireTime') FROM character_inventory_items " +
+                        "WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10159649", peer.Id) is [[long savedExpiry]] && savedExpiry == expectedExpiry,
+                        "盒子产出票据期限持久化，不依靠GM零期限票据");
+                    Drain(peer);
+                }
+                leader.Send(658, [1]);
+                var ready = Until(leader, 0, 598).Body;
+                That(U32(ready) == count && Enumerable.Range(0, count).All(index =>
+                    ready[6 + 5 * index] == 1 && U16(ready, 7 + 5 * index) == 1),
+                    "真实开盒后原生658自动检测查询返回全员门票就绪");
+                Until(leader, 1, 658);
+                foreach (var peer in peers) Drain(peer);
                 leader.Send(666);
                 Bytes(Until(leader, 1, 666).Body, [1], "默认Runtime直接启用完整卢克开战，无注入合成策略");
                 foreach (var peer in peers) Drain(peer);
@@ -96,14 +128,30 @@ internal static partial class LukeRaidRunTcpTests
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0", original) is [[1L]], "重返保留原实例账本，不重复扣票");
                 }
                 var members = peers.Take(4).ToArray(); var others = peers.Skip(4).ToArray();
+                int clearPhase = -1, phaseClears = 0;
                 void Run(int dungeon, byte phase)
                 {
                     var entered = Enter(members, leader, dungeon); Load(members);
+                    if (clearPhase != phase)
+                    {
+                        leader.Send(658, [0]);
+                        var costs = Until(leader, 0, 598).Body;
+                        That(U32(costs) == count && Enumerable.Range(0, count).All(index => costs[6 + 5 * index] == 2),
+                            "正式副本内费用查询仍返回全员已提交状态，不被城镇开战快照门槛清空");
+                        Until(leader, 1, 658);
+                    }
                     Clear(fixture, members, others, leader, entered[0], catalog, phase,
                         passiveTarget: dungeon == 5066 ? 64060 : dungeon == 5063 ? 64062 : null);
                     foreach (var peer in members.Where(peer => peer != leader)) Return(members, peer, true, resultCommand: true);
                     Return(members, leader, true, resultCommand: true);
                     foreach (var peer in others) Drain(peer, true);
+                    if (clearPhase != phase) { clearPhase = phase; phaseClears = 0; }
+                    phaseClears++;
+                    foreach (var peer in peers) Drain(peer, true);
+                    leader.Send(1361, Build(writer => { writer.Write((byte)1); writer.Write(raidKey); }));
+                    var counts = RaidPanelTests.ReadClears(Until(leader, 1, 1361).Body);
+                    That(members.All(peer => counts[peer.Id] == phaseClears) && others.All(peer => counts[peer.Id] == 0),
+                        "原生1361返回本阶段真实个人次数，旁观分队不冒领，阶段切换后重新计数");
                 }
                 foreach (int dungeon in new[] { 5054, 5055, 5056 }) for (int step = 0; step < 3; step++) Run(dungeon, 0);
                 string instance = (string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0", leader.Id)[0][0]!;

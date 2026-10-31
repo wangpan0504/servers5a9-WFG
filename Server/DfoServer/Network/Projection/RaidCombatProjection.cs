@@ -40,6 +40,25 @@ internal static partial class RaidCombatProjection
             return;
         }
         PostState(context, view, actor, Guard, "raid_phase_state");
+        PostRoster(context, view, actor, Guard);
+    }
+
+    static void PostRoster(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor, Func<bool> current)
+    {
+        context.Owner.Execute(() =>
+        {
+            if (!current() || context.Session.CaptureRaidRoster(actor) is not { Started: { } started } party ||
+                started.InstanceId != view.Instance || context.Session.CurrentRaidBattle(actor)?.RosterClears(view) is not { } clears) return false;
+            // 02349A20的mode1不依赖pending且不打开窗口，只替换成员表并刷新已开的面板。
+            // 591/op3会强制开窗，仅保留给原有建队、编队流程。
+            var body = RaidPackets.Information(1, party.Key, party.TitleBytes, party.Type, party.Leader,
+                DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party), clearCounts: clears);
+            bool Guard() => current() && actor.Session.HasRaidKey(actor, party.Key) &&
+                (context.RaidRosterDisplay is not { } displayed || !body.AsSpan().SequenceEqual(displayed));
+            context.Sender.Post(1, (ushort)CmdPacketType.REQUEST_RAID_INFO, body, "raid_clear_counts", Guard,
+                () => context.RaidRosterDisplay = body);
+            return true;
+        });
     }
 
     internal static void PostAntonSnapshot(GameConnectionContext context, AntonRaidBattle battle,

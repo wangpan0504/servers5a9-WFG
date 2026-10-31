@@ -187,11 +187,6 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
 
     public static RaidCostStatus Cost(RaidActor actor, RaidCost cost, bool committed = false)
     {
-        var character = actor.Session.CaptureRaidStart(actor);
-        long count = character?.Inventory.Items.Where(i => i.Position.List == InventoryListType.Main && i.Core.ItemId == cost.ItemId)
-            .Sum(i => (long)i.Core.Count) ?? 0;
-        // 客户端仅在不足状态用有符号u16比较数量；足额时尾值不参与该比较。
-        return new(actor.Character, committed ? (byte)2 : count >= cost.Count ? (byte)1 : (byte)0,
-            (short)Math.Min(count, short.MaxValue));
+        return actor.Session.CaptureRaidCost(actor, cost, committed);
     }
 }

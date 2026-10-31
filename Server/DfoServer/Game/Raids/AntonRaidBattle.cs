@@ -295,6 +295,7 @@ internal sealed partial class AntonRaidBattle
             var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
             entries.Remove((fact.Identity.InstanceId, fact.Identity.CharacterId));
+            RecordRosterClear(entry.Phase, fact.Identity.CharacterId);
             CommitBattleCandidate(before, after);
             return new(before, current);
         }
@@ -328,6 +329,7 @@ internal sealed partial class AntonRaidBattle
                 Dungeons = before.Dungeons.SetItem(dungeon, remaining == 0 ? RaidDungeonState.Clear : RaidDungeonState.Open) },
                 remaining == 0 ? dungeon : null, hp != remaining ? definition.HpSymbol : null, null);
             run.ClearFacts.Add(actor, fact);
+            if (run.RosterContributions.Add(actor.Character)) RecordRosterClear(run.Phase, actor.Character);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
             CommitBattleCandidate(before, after);
             return new(before, current);

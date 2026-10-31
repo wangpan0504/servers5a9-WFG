@@ -199,13 +199,17 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 return CommandResult.Handled;
             }
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, selectedParty.Members);
-            bool valid = lukeRaid is not null && partyDungeons is not null && context.Session.HasLukeRaidSelection &&
+            bool valid = lukeRaid is not null && partyDungeons is not null &&
                 selection.Parameter == 2 && selection.Unknown5 == 0 && selection.Unknown7 == 0 && selection.Unknown8 == 0 &&
                 selection.Unknown9 == ushort.MaxValue && selection.Unknown11 == 0 && selection.Unknown15 == 0 &&
-                selection.Unknown16 == 0 && selection.Unknown20 == 0 && selection.Unknown21 == 0;
+                selection.Unknown16 == 0 && selection.Unknown20 == 0 && selection.Unknown21 is 0 or uint.MaxValue;
             PartyDungeonNotice[] entered = [];
             try
             {
+                // 原生候战室先发15=0，目标图只在16确定；沿同一领域准入安装选择，不提前占图。
+                if (valid && !context.Session.HasLukeRaidSelection)
+                    valid = selection.DungeonIndex <= int.MaxValue &&
+                        lukeRaid!.Select(context.Session, (int)selection.DungeonIndex, selectedParty).Length > 0;
                 if (valid) entered = partyDungeons!.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
                     dungeons, rooms, null, null, null, null);
             }

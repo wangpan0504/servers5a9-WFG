@@ -45,6 +45,7 @@ internal static class RaidCreateFlowTests
 
         // 多人聚合保留key/槽位及精确Session清理；重复创建不再替换已有成员。
         RaidMemberTests.RunCore();
+        RaidPanelTests.RunCore();
         AntonRaidStartTests.RunCore();
         AntonRaidRejoinTests.RunCore();
         LukeRaidRejoinTests.RunCore();
@@ -93,6 +94,7 @@ internal static class RaidCreateFlowTests
     {
         int before = Count;
         var catalog = RaidCatalog.Load(pvf);
+        RaidPanelTests.RunResources(pvf);
         That(catalog.Find(0) is { MemberMax: 20, StartMinimum: 10, PhaseMax: 2 } anton && anton.Path.EndsWith("anton.etc"),
             "安徒恩 RAID MEMBER MAX 20、最低 10 人");
         That(catalog.Find(1) is { MemberMax: 8, StartMinimum: 1, PhaseMax: 2 }, "卢克 8 人");

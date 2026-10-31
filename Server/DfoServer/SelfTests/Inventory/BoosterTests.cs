@@ -52,6 +52,7 @@ internal static class BoosterTests
             itemResources.Boosters.Get(10312270).Pools is [{ Rewards: [{ ItemId: 10305892, Count: 10 }] }],
             "同类外盒保留真实内层净化结晶和直接十个结晶两种不同用途");
         BoosterBatchRandomTests.Run(That);
+        BoosterRaidTicketTests.RunResources(towns, itemResources);
         BoosterGrowTypeTests.Run(towns, itemResources);
         BoosterRandomOptionTests.Run(towns, itemResources);
         OrdinaryTenSourceResources(towns, itemResources);
