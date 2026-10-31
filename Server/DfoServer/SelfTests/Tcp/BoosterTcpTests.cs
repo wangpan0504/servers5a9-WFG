@@ -354,6 +354,7 @@ internal static class BoosterTcpTests
                 "重连后不恢复已消费婚礼箱");
             peer.Barrier();
         }
+        await RestrictedOrdinaryAsync(fixture, resources, repo, owners);
         CharacterPool(fixture,resources,repo,owners);
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
@@ -368,6 +369,91 @@ internal static class BoosterTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
+    static async Task RestrictedOrdinaryAsync(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        Inventory.BoosterDisjointInstanceTests.RunOrdinary(resources.Towns, resources.ItemResources);
+        var items = resources.ItemResources;
+        var actors = new List<(Character Actor, int Source, InventoryItem Sentinel)>();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        foreach (int id in new[] { 490014072, 490014073, 490704552, 490704553 })
+        {
+            int first = items.Boosters.Get(id).Pools[0].Rewards[0].ItemId;
+            var now = DateTimeOffset.UtcNow;
+            var actor = repo.Create(owner, CharacterCreation.Prepare("RestBox" + actors.Count, resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
+            {
+                AcceptedStoryLevel = 1,
+                Inventory = new([new(0, Bag(65), InventoryRewardGrantService.Create(items.Items.Get(id), utcNow: now)),
+                    new(0, Bag(9), InventoryRewardGrantService.Create(items.Items.Get(first), utcNow: now))], Gold: 12345)
+            });
+            actors.Add((actor, id, actor.Inventory.Find(Bag(9))!));
+        }
+        foreach (var entry in actors)
+        {
+            if (entry.Source == 490014072)
+            {
+                using var peer = Open(fixture);
+                peer.Select(entry.Actor.Slot); peer.Barrier();
+                string before = State();
+                fixture.Sql("CREATE TRIGGER fail_restricted_booster BEFORE INSERT ON inventory_audit_log " +
+                    "WHEN NEW.action_name='booster_open' BEGIN SELECT RAISE(ABORT,'restricted booster rollback'); END");
+                SendOpen(peer, 65, 1); peer.Closed();
+                That(State() == before, "普通限制三件套晚SQL失败回滚源、本次完整核心/期限、UID、revision与审计");
+                fixture.Sql("DROP TRIGGER fail_restricted_booster");
+            }
+            using var client = Open(fixture);
+            client.Select(entry.Actor.Slot); client.Barrier();
+            long earliest = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+            SendOpen(client, 65, 1);
+            var expectedRewards = items.Boosters.Get(entry.Source).Pools.Select(pool => (Id: pool.Rewards[0].ItemId, Count: 1)).ToArray();
+            ExpectAck(client, entry.Source, 65, expectedRewards);
+            var delta = client.Expect(0, 14).Body;
+            Entry(delta, 65, -1, 0);
+            client.Barrier();
+            var current = Read(entry.Actor.Slot);
+            var outputs = current.Inventory.Items.Where(item => item.Uid != entry.Sentinel.Uid).ToArray();
+            That(current.Inventory.Find(Bag(65)) is null && current.Inventory.Find(Bag(9)) == entry.Sentinel &&
+                current.Inventory.Gold == 12345 && outputs.Length == 3 && outputs.All(item => item.Uid > 0) &&
+                outputs.Select(item => item.Core.ItemId).Order().SequenceEqual(expectedRewards.Select(row => row.Id).Order()),
+                "真实CMD160整套三件落库且保留普通同模板哨兵和金币，源耗尽 " + entry.Source);
+            foreach (var output in outputs)
+            {
+                var createdAt = DateTimeOffset.FromUnixTimeSeconds(output.Core.ExpireTime).AddDays(-30);
+                var expected = InventoryRewardGrantService.Create(items.Items.Get(output.Core.ItemId), utcNow: createdAt)
+                    with { DisjointForbidden = true };
+                That(output.Core == expected && output.Core.ExpireTime >= earliest &&
+                    output.Core.ExpireTime <= DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds(),
+                    "实际十二件完整核心及30天期限，只带分解限制且无毁装灵魂限制 " + output.Core.ItemId);
+                Entry(delta, output.Position.Index, output.Core.ItemId, output.Core.Value);
+                string committed = State();
+                client.Send(26, Build(writer => { writer.Write(output.Position.Index); writer.Write((byte)0); writer.Write((short)-1); writer.Write(0); }));
+                client.Expect(1, 26, [0, 19, 0]); client.Expect(0, 14); client.Barrier();
+                That(State() == committed, "实际普通礼包限期装备拒分解且资产不变 " + output.Core.ItemId);
+            }
+            string consumed = State();
+            SendOpen(client, 65, 1); client.Expect(1, 160, [0, 19, 0]); client.Barrier();
+            That(State() == consumed, "耗尽普通礼包重放不发第二份装备 " + entry.Source);
+        }
+        var inventories = actors.ToDictionary(entry => entry.Actor.Slot, entry => JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory));
+        await fixture.StopAsync();
+        await fixture.StartAsync("ordinary-restricted-restart");
+        foreach (var entry in actors)
+        {
+            using var client = Open(fixture);
+            client.Select(entry.Actor.Slot); client.Barrier();
+            That(JsonSerializer.Serialize(Read(entry.Actor.Slot).Inventory) == inventories[entry.Actor.Slot],
+                "四个普通礼包重启重登保持完整实例/限制/期限，不续期或复活源 " + entry.Source);
+        }
+        Character Read(ushort slot)
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.LoadCharacter(owner, slot);
+        }
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
     static void CharacterPool(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
     {
         const int sourceId = 490704573;
