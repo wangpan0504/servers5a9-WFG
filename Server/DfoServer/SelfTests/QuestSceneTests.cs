@@ -90,6 +90,39 @@ internal static class QuestSceneTests
             }
             That(f.Session.ReadClearedQuest(3054)?.Clear is { MapId: 76136 } && f.Session.Phase == SessionPhase.Settlement,
                 "中途新接子任务获得同实例末次死亡的持久清图凭据");
+            if (mode == "normal")
+            {
+                var beforeDialogue = f.Read();
+                That(f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth) is null &&
+                    Finish(3146).Outcome == QuestFinishOutcome.Rejected && Finish(3054).Outcome == QuestFinishOutcome.Rejected &&
+                    Same(beforeDialogue,f.Read()), "末杀只达成清图条件，自动收尾或提前34不发父奖励、不关闭NPC子任务");
+                That(f.Session.SettleFormalDungeon(beforeDialogue.Id,99,99,[1,2,3,4],dungeons,
+                    SelfTestCatalogs.ClearExperience(pvf),growth).Outcome == DungeonRunOutcome.Accepted, "本实例真实结算提交");
+                var beforeCard = f.Read();
+                That(Finish(3146).Outcome == QuestFinishOutcome.Rejected && Same(beforeCard,f.Read()), "已结算未翻牌仍不能交付父任务");
+                That(f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null &&
+                    Finish(3146).Outcome == QuestFinishOutcome.Rejected && f.Session.SelectFormalDungeonFreeCard(0,0) is not null,
+                    "仅展示牌面不等于已翻牌，真实免费牌领取才满足时机");
+                var beforeParent = f.Read();
+                var terminalClear = f.Session.ReadClearedQuest(3054)!.Clear;
+                That(QuestCompletionPlan.Prepare(beforeParent,quests.Get(3146),ushort.MaxValue,quests,parameters,
+                    items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow,
+                    terminalClear:terminalClear with { MapId = 76131 }).Plan is null, "父交付不能合并伪造目标地图的子凭据");
+                f.Sql("CREATE TRIGGER parent_dialogue_abort AFTER INSERT ON character_quest_completion_receipts WHEN NEW.quest_id=3146 BEGIN SELECT RAISE(ABORT,'parent dialogue rollback'); END");
+                TestCheck.Reject<SqliteException>(() => Finish(3146), "末段SQL失败同时回滚父奖励、父子清槽和完成记录");
+                That(Same(beforeParent,f.Read()), "父子合并交付失败不留半份完成或资产");
+                f.Sql("DROP TRIGGER parent_dialogue_abort");
+                var parentAtNpc = Finish(3146);
+                That(parentAtNpc.Receipt?.Commit is { ConditionType:44 } &&
+                    f.Query("SELECT json_extract(plan_snapshot,'$.TerminalClear.Clear.MapId') FROM character_quest_completion_receipts WHERE quest_id=3146") is 76136L &&
+                    f.Read().CompletedQuests.Contains(3146) && f.Read().CompletedQuests.Contains(3054) && f.Read().ActiveMainQuests.Length == 0 &&
+                    Finish(3146).Outcome == QuestFinishOutcome.AlreadyCompleted,
+                    "翻牌后的原生父34同事务交付实际末清图子任务与父奖励且仅一次");
+                That(f.Session.ReturnFromFormalDungeon() is not null, "对话交付后仍可正常退出");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                That(Same(f.Session.Selected!,f.Read()) && f.Read().CompletedQuests.Contains(3054), "合并父子交付重登完整恢复");
+                continue;
+            }
             // 复现da：清图后没有33/34，断线回城时仍保留本次接取的真实清图凭据。
             That(f.Session.ReturnFromFormalDungeon() is not null,"零奖励清图子任务未交付时可正常回城");
             if (mode == "completedParent")

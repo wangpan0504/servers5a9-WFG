@@ -36,7 +36,8 @@ internal sealed class QuestCompletionPlan
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
         int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null,
-        ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null, QuestMailPlan? resourceMail = null)
+        ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null, QuestMailPlan? resourceMail = null,
+        QuestClearReceipt? terminalClear = null)
     {
         ResourceMail = resourceMail;
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
@@ -70,6 +71,7 @@ internal sealed class QuestCompletionPlan
         HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
         ClosedChildren = closedChildren;
         CompletedChild = completedChild;
+        TerminalClear = terminalClear;
         CascadeMarkerQuestId = QuestRelationProgress.CascadeMarker(quest,quests);
         SyncedQuestIds = (CascadeMarkerQuestId is { } synced && QuestRelationProgress.IsAccountSyncMarker(quests.Get(synced))
             ? new[] { synced } : []).Except(expected.AccountCompletedQuests).ToImmutableArray();
@@ -95,11 +97,17 @@ internal sealed class QuestCompletionPlan
             snapshot["ResourceMail"] = JsonSerializer.SerializeToNode(ResourceMail);
             Snapshot = snapshot.ToJsonString();
         }
-        if (completedChild is not null)
+        if (completedChild is not null && terminalSeeking is not null)
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
             snapshot["TerminalSeeking"] = JsonSerializer.SerializeToNode(new {
                 Acceptance = completedChild, terminalSeeking!.Path, terminalSeeking.IntData, terminalSeeking.Rewards });
+            Snapshot = snapshot.ToJsonString();
+        }
+        if (terminalClear is not null)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot["TerminalClear"] = JsonSerializer.SerializeToNode(new { Acceptance = completedChild, Clear = terminalClear });
             Snapshot = snapshot.ToJsonString();
         }
         if (StagePlan is not null)
@@ -198,6 +206,7 @@ internal sealed class QuestCompletionPlan
     public bool HellChallenge { get; }
     public ImmutableArray<ActiveMainQuest> ClosedChildren { get; }
     public ActiveMainQuest? CompletedChild { get; }
+    public QuestClearReceipt? TerminalClear { get; }
     public byte TargetGrowType => ProfessionGrowType ?? Expected.GrowType;
     public CharacterLearningState TargetLearning => RewardLearning ?? GrowthPlan?.Learning ?? Expected.Learning;
     public byte TargetLevel => GrowthPlan?.TargetLevel ?? Expected.Level;
@@ -227,7 +236,7 @@ internal sealed class QuestCompletionPlan
         QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
         GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false,
-        ExpertJobScriptCatalog? expertJobs = null, int? pvpGrade = null)
+        ExpertJobScriptCatalog? expertJobs = null, int? pvpGrade = null, QuestClearReceipt? terminalClear = null)
     {
         try
         {
@@ -270,6 +279,21 @@ internal sealed class QuestCompletionPlan
                     throw new InvalidDataException("顺序末子任务需要原接取、已达成条件及全部前序完成记录");
                 terminalSeeking = terminal;
             }
+            if (QuestRelationProgress.TerminalClearDialogue(quest,quests) is { } finalClear &&
+                !expected.CompletedQuests.Contains(finalClear.Id) &&
+                quest.IntData.Where(id => id != finalClear.Id).All(expected.CompletedQuests.Contains))
+            {
+                completedChild = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == finalClear.Id);
+                if (completedChild is not { ConditionState: 0 } || active.ConditionState > 1 || terminalClear is null ||
+                    terminalClear.QuestId != finalClear.Id || !MatchesClearedActiveQuest(expected,terminalClear) ||
+                    (finalClear.Condition == "[clear map]"
+                        ? !QuestClearEligibility.IsSingleMap(finalClear) || !QuestClearEligibility.MatchesClearMap(finalClear,terminalClear) ||
+                            finalClear.DungeonIndex is >= 0 && terminalClear.DungeonId != finalClear.DungeonIndex
+                        : !QuestDungeonClearProgress.ContainsDungeon(finalClear,terminalClear.DungeonId) || terminalClear.MapId <= 0) ||
+                    !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != completedChild).ToArray() },finalClear,quests).Eligible)
+                    throw new InvalidDataException("末清图子任务需要原接取和目标地图的持久通关凭据");
+            }
+            else if (terminalClear is not null) throw new InvalidDataException("此父任务不能合并末清图子任务");
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
@@ -552,7 +576,8 @@ internal sealed class QuestCompletionPlan
                     new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
                     gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
                     QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage,
-                    expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking, resourceMail: resourceMail);
+                    expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking, resourceMail: resourceMail,
+                    terminalClear: terminalClear);
             }
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");

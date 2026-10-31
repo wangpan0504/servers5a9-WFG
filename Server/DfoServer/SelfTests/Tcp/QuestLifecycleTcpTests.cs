@@ -693,13 +693,25 @@ internal static class QuestLifecycleTcpTests
                     peer.Send(33,[33,0,74,12,1,0]); peer.Expect(1,33,[1,74,12,1,0,0,0]); peer.Barrier();
                     peer.Send(31,[31,0,238,11]); peer.Expect(1,31,[1,238,11,1,0,0,0,0]); Drain();
                     ClearRooms([(0,1),(1,1),(2,1),(3,1),(4,1)]);
-                    That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2") is [[3146L,0L]] &&
-                        extra.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=2 AND quest_id=3054") is [[3054L]],
-                        "真实清图直接闭合3054并更新父任务，不依赖客户端发送33或34");
+                    That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2 ORDER BY quest_id") is [[3054L,0L],[3146L,1L]] &&
+                        extra.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=2 AND quest_id=3054").Length == 0,
+                        "真实清图只达成3054条件，保留NPC子任务及父剩余1，不提前触发父领奖");
+                    string beforeEarly = extra.Snapshot();
+                    peer.Send(33,[33,0,74,12,0,0]); peer.Expect(1,33,[1,74,12,1,0,0,0]); Drain();
+                    That(extra.Snapshot() == beforeEarly,"父33保留末子对话及实际条件，不单独归档末清图任务");
+                    peer.Send(34,[34,0,74,12,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+                    That(extra.Snapshot() == beforeEarly, "末杀后提前父34拒绝且无任务或资产改写");
                     peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
+                    beforeEarly = extra.Snapshot();
+                    peer.Send(34,[34,0,74,12,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+                    That(extra.Snapshot() == beforeEarly, "结算已提交但翻牌前的父34仍拒绝");
+                    peer.Send(69); peer.Expect(1,69,[1]); peer.Send(70); peer.Expect(1,70);
+                    peer.Send(71,[0,0]); peer.Expect(1,71); Drain();
                     peer.Send(34,[34,0,74,12,255,255,1,0,255,255]); That(Finished(peer).Body[0] == 1,"3146实际两个子任务完成后领取父奖励"); Drain();
-                    That(extra.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=2 AND quest_id IN(3157,3054) ORDER BY quest_id") is [[3054L,0L],[3157L,0L]],
-                        "NPC对话与清图子任务均保存唯一零经验完成回执");
+                    That(extra.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=2 AND quest_id=3157") is [[3157L,0L]] &&
+                        extra.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=2 AND quest_id IN(3054,3146) ORDER BY quest_id") is [[3054L],[3146L]] &&
+                        extra.Query("SELECT json_extract(plan_snapshot,'$.TerminalClear.Clear.MapId') FROM character_quest_completion_receipts WHERE character_id=2 AND quest_id=3146") is [[76136L]],
+                        "对话后父奖励与末清图子完成同事务保存实际76136凭据，3157仍为唯一零经验回执");
                     peer.Send(31,[31,0,75,12]); peer.Expect(1,31,[1,75,12,1,0,0,0,0]); Drain();
                     That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2") is [[3147L,1L]],
                         "fixture 已接取真实剧情后继3147，后续15沿其合法资源路线进入");
@@ -1930,10 +1942,12 @@ internal static class QuestLifecycleTcpTests
                 FormalDungeonTcpTests.Load(peer);
             }
             That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
-                    is [[3146L,0L]] &&
+                    is [[3146L,1L],[3054L,0L]] &&
                 fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3054",peer.Id)
-                    is [[3054L]],"独立连图fixture真实清图完成子任务并更新父条件");
+                    is [],"独立连图fixture保留末清图对话，不提前发父奖励");
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); DrainNotifications(peer);
+            peer.Send(69); peer.Expect(1,69,[1]); peer.Send(70); peer.Expect(1,70);
+            peer.Send(71,[0,0]); peer.Expect(1,71); DrainNotifications(peer);
             peer.Send(34,[34,0,74,12,255,255,1,0,255,255]);
             That(Finished(peer).Body[0] == 1,"独立连图fixture真实交付3146父任务"); DrainNotifications(peer);
             peer.Send(31,[31,0,75,12]); peer.Expect(1,31,[1,75,12,1,0,0,0,0]); DrainNotifications(peer);
@@ -2104,6 +2118,13 @@ internal static class QuestLifecycleTcpTests
                 That(change.Mode == 0 && (growth is null || change.Sp == U16(growth,13+2*change.Context) &&
                     change.Tp == U16(growth,17+2*change.Context)),"剧情成长成功差量保持原生结构及绝对SP/TP，不忽略失败ACK");
                 restoreContext = change.Context == 1;
+                continue;
+            }
+            if (packet is { Kind: 1, Opcode: 33 })
+            {
+                That(packet.Body.Length == 7 && packet.Body[0] == 1 && U16(packet.Body,1) is > 0 and < 30000,
+                    "死亡条件原位33严格保留成功头、任务编号及完整四字节条件，不吞失败ACK");
+                observe?.Invoke(packet);
                 continue;
             }
             if (packet.Kind == 0 && packet.Opcode == 1760)

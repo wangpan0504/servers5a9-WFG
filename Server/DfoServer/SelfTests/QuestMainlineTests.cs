@@ -79,7 +79,10 @@ internal static class QuestMainlineTests
         var parent = Enter(3,3146);
         That(f.Session.ObserveFormalPassiveTrigger(3157,new(0x10,0,0),new string('D',64),rooms)?.Commit is not null,
             "新角色父任务路线按匹配客户端右侧NPC对话33事件推进首个子任务，无普通死亡报告");
-        Finish(3157); Accept(3054); Clear(parent); Finish(3054); Finish(3146); Return();
+        Finish(3157); Accept(3054); Clear(parent);
+        That(f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null &&
+            f.Session.SelectFormalDungeonFreeCard(0,0) is not null, "连续主线先完成真实结算翻牌，再交托比对话任务");
+        Finish(3054); Finish(3146); Return();
         ClearQuest(3147); ClearQuest(3148); Meeting(4875); ClearQuest(3149); ClearQuest(3150); ClearQuest(3151);
         Meeting(3152); Meeting(3153); Meeting(6929);
         var beforeTransfer = f.Read();
