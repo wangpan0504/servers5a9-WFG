@@ -211,9 +211,33 @@ internal static partial class RaidChannelLandingTcpTests
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         var character = CreateRaider(fixture, resources, "SpecLand");
+        // 哈林街道仍要求完成5936；往返夹具准备真实准入条件，不绕过地区门禁。
+        fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($p0,5936)", character.Id);
+        character = character with { CompletedQuests = character.CompletedQuests.Append(5936).Distinct().ToArray() };
         var Switch = Switcher(fixture, resources, endpoints, character);
         byte normal = endpoints.Keys.Min();
-        // 没有旧频道历史也不能把普通街道当作五陵快照；先入共享房间，再按五陵出口到 117/1。
+        // 原频道编号与普通地区是不同身份：CH37可以从中央公园或哈林进入再战，返回仍须保留各自地区。
+        foreach (byte district in new byte[] { 31, 54 })
+        {
+            var home = resources.Towns.ResolveRoomReturn(new(district, 1, 0, 0), null, character.Level,
+                DfoServer.Game.Quests.QuestEligibility.Completed(character));
+            That(home.Town == district, "再战往返夹具使用真实普通地区的房间出口");
+            fixture.Sql("UPDATE characters SET town=$p1,area=$p2,x=$p3,y=$p4,return_town=$p1,return_area=$p2,return_x=$p3,return_y=$p4,return_direction=0 WHERE id=$p0",
+                character.Id, home.Town, home.Area, home.X, home.Y);
+            Switch(37, land: false, town: null, "再战前连接原普通频道37");
+            string remembered = fixture.Snapshot("SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", character.Id);
+            foreach (var special in new (byte Channel, byte Town)[] { (46, 62), (48, 48) })
+            {
+                // 上游共享初次落点策略：普通频道进入 46/48 直达准备场景 62/0、48/0，不经赛丽亚房间。
+                Switch(special.Channel, land: true, town: special.Town, "普通频道37进入特殊准备场景", area: 0);
+                That(fixture.Snapshot("SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", character.Id) == remembered,
+                    "再战准备场景不覆盖进入前的普通地区及完整房间出口");
+                Switch(37, land: true, town: 38, "再战退出回原频道37的赛丽亚房间再出门", area: 1, exit: district);
+                That(fixture.Snapshot("SELECT town,area,x,y,direction FROM characters WHERE id=$p0", character.Id) == remembered,
+                    "回原频道房间出门后完整位置等于进入特殊频道前的返回地区，不被频道主题或准备场景改写");
+            }
+        }
+        // 普通街道不能当作五陵快照；先入共享房间，再按五陵出口到 117/1。
         Switch(43, land: true, town: 38, "普通街道→五陵 43（先进赛丽亚房间）", area: 1, exit: 117);
         // 魔界大战 0x36 的 vt+0x4C 与 0x38 不同：客户端不留快照，进赛丽亚房间，出门按频道落点。
         Switch(41, land: true, town: 38, "五陵 43→魔界大战 41（出门 67/1）", area: 1, exit: 67);

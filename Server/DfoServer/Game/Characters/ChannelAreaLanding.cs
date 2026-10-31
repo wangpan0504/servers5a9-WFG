@@ -198,10 +198,12 @@ internal static class ChannelAreaLanding
             towns.RoomPortals.All(portal => portal.Town != town);
     }
 
+    // 帝国竞技场48、再战魔界62的出口由客户端触发“返回之前频道”，资源里的出城连接不能当作普通街区连接。
+    // 两个准备场景与频道专属城镇一样保留进入前的普通返回地区。
     // 共享房间的返回地区只能落在普通地区：频道起始城镇（只能经频道进入的城镇与安徒恩直达战舰）的街区不参与，
     // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
     internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
-        town is AntonTown or BeastTown or PvpTown or XianVillageTown || IsChannelBoundTown(towns, town);
+        town is AntonTown or BeastTown or PvpTown or XianVillageTown or 48 or 62 || IsChannelBoundTown(towns, town);
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
 
