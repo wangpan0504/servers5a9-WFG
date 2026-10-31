@@ -350,6 +350,27 @@ internal static partial class TownProtocolTcpTests
 
                 Travel(peer, trip);
             }
+            // 实收配置模式进入/退出包；截屏模式使用同一HUD返回链，不能要求地图内额外放置exit town NPC。
+            peer.Travel(39, 4, 438, 372, 39, 2);
+            peer.Send(35, Move(438, 354)); peer.Barrier();
+            foreach (var (mode, npc) in new (byte, uint)[] { (37, 490), (36, 590) })
+            {
+                That(!towns.HasNpcExit(new(mode, 0, 111, 181), quests), "酒馆HUD出口不依赖NPC exit town声明");
+                peer.Travel(mode, 0, 111, 181, 39, 4, npc: npc);
+                peer.Send(35, Move(459, 290)); peer.Barrier();
+                string before = fixture.Snapshot();
+                peer.Send(36, Area(39, 4, 439, 354, mode, 0));
+                peer.Send(36, Area(39, 2, 438, 354, mode, 0));
+                peer.Send(36, Area(39, 4, 438, 354, mode, 1));
+                peer.Barrier();
+                That(fixture.Snapshot() == before, "酒馆退出仍拒绝伪造坐标、目标区域及来源区域，且不写库");
+                peer.Travel(39, 4, 438, 354, mode, 0);
+                That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) == "[[39,4,438,354]]",
+                    "配置与截屏模式退出23/24和持久落点均恢复本次NPC入场前的精确位置");
+                before = fixture.Snapshot();
+                peer.Send(36, Area(39, 4, 438, 354, mode, 0)); peer.Barrier();
+                That(fixture.Snapshot() == before, "酒馆退出成功消耗来源票据，重复请求不写库");
+            }
         }
 
         That(serverEvents.Override(ServerEventService.NolanVisibilityId, null) is { Active: true, Schedule: { OverrideActive: null } },
