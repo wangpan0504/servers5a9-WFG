@@ -7,6 +7,7 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Builders;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
@@ -19,6 +20,12 @@ internal static class CharacterRenameCardTests
     public static void RunCore()
     {
         int before = Count;
+        That(CharacterRequests.TryNameHistory([0x34, 0x12, 5], out var historyTarget) && historyTarget == 0x1234 &&
+            !CharacterRequests.TryNameHistory([0x34, 0x12, 3], out _), "CMD8模式5请求曾用名，模式3仍为角色资料");
+        Reject<InvalidDataException>(() => CharacterRequests.TryNameHistory([1, 0, 5, 0], out _), "曾用名不吞额外尾部");
+        Bytes(CharacterNameHistoryPackets.List([new("旧名", 0x12345678)], 2),
+            [1, 4, 0, 0, 0, 0xBE, 0xC9, 0xC3, 0xFB, 2, 0x78, 0x56, 0x34, 0x12], "736原生行数、GBK名字、服索引及Unix时间");
+        Bytes(CharacterNameHistoryPackets.List([], 0), [0], "无真实历史也清空旧窗口内容");
         That(CharacterRenameRequests.Use([65, 0]) == 65, "509读取原生Main槽u16");
         var body = Body(2, "旧名字", "新名字");
         That(CharacterRenameRequests.Complete(body) == new CharacterRenameRequest(2, "旧名字", "新名字", 1),
@@ -40,9 +47,10 @@ internal static class CharacterRenameCardTests
             { Inventory = new([new(0, new(InventoryListType.Main, 65), new(2660698, ItemKind.Consumable, 3))]) });
             repository.Create(other, new("TakenName", role.Position, null));
             string initial = Snapshot();
-            Sql("DROP TABLE character_rename_pending; PRAGMA user_version=155");
+            Sql("DROP TABLE character_rename_pending; DROP TABLE character_name_history; PRAGMA user_version=155");
             repository = new(path);
-            That(Snapshot() == initial && !repository.ListRoster(owner).Single().RenamePending, "v155升级只建立空资格表，保留角色与资产");
+            That(Snapshot() == initial && !repository.ListRoster(owner).Single().RenamePending && repository.ReadNameHistory(owner, role.Id).IsEmpty,
+                "v155升级建立空资格和曾用名表，不伪造历史，保留角色与资产");
             Sql("CREATE TRIGGER rename_activate_abort BEFORE INSERT ON character_rename_pending BEGIN SELECT RAISE(ABORT,'activate rollback'); END");
             Reject<SqliteException>(() => repository.ActivateRenameCard(owner, role, Plan(role)), "资格写入晚期失败");
             That(Snapshot() == initial, "扣卡与revision在资格SQL失败后全部回滚");
@@ -63,6 +71,7 @@ internal static class CharacterRenameCardTests
             Sql("CREATE TRIGGER rename_complete_abort BEFORE DELETE ON character_rename_pending BEGIN SELECT RAISE(ABORT,'complete rollback'); END");
             Reject<SqliteException>(() => repository.CompleteRenameCard(owner, role, "NewName"), "清资格晚期SQL失败");
             That(Snapshot() == pending, "清资格失败回滚新名、revision与全部资格");
+            That(repository.ReadNameHistory(owner, role.Id).IsEmpty, "失败改名不能留下曾用名");
             Sql("DROP TRIGGER rename_complete_abort");
             var stale = role;
             role = repository.Save(owner, role, role.Position, role.Return);
@@ -73,13 +82,24 @@ internal static class CharacterRenameCardTests
             var saved = repository.LoadCharacter(owner, role.Slot);
             That(saved.Name == "NewName" && saved.Id == role.Id && JsonSerializer.Serialize(saved.Inventory) == JsonSerializer.Serialize(role.Inventory) &&
                 !repository.ListRoster(owner).Single().RenamePending, "改名保留角色ID、槽位及原资产并清资格");
+            That(repository.ReadNameHistory(owner, role.Id) is [{ Name: "OldName", ChangedAt: > 0 }] &&
+                repository.ReadNameHistory(other, role.Id).IsEmpty, "更名卡保存真实旧名并按账号隔离查询");
             That(repository.CompleteRenameCard(owner, saved, "Again") == CharacterRenameFailure.Unavailable,
                 "无资格不能再次改名");
+            saved = repository.Rename(owner, saved, "中文名");
+            var history = repository.ReadNameHistory(owner, role.Id);
+            That(history.Select(row => row.Name).SequenceEqual(["NewName", "OldName"]), "GM改名同样记历史，按revision逆序而非秒级时间排序");
+            saved = repository.Rename(owner, saved, "中文名");
+            That(repository.ReadNameHistory(owner, role.Id).SequenceEqual(history), "同名GM操作不制造虚假历史");
+            Sql("CREATE TRIGGER rename_history_abort BEFORE INSERT ON character_name_history BEGIN SELECT RAISE(ABORT,'history rollback'); END");
+            Reject<SqliteException>(() => repository.Rename(owner, saved, "Rollback"), "曾用名写入失败须回滚GM改名");
+            That(repository.LoadCharacter(owner, saved.Slot).Name == "中文名" && repository.ReadNameHistory(owner, role.Id).SequenceEqual(history), "历史与名称原子提交");
+            Sql("DROP TRIGGER rename_history_abort");
             role = repository.ActivateRenameCard(owner, saved, Plan(saved))!;
             repository = new(path);
-            That(repository.ListRoster(owner).Single().RenamePending, "重开仓储恢复待改名资格");
+            That(repository.ListRoster(owner).Single().RenamePending && repository.ReadNameHistory(owner, role.Id).SequenceEqual(history), "重开仓储恢复待改名资格与历史");
             repository.Delete(owner, repository.LoadDeletionTarget(owner, role.Slot));
-            That(!repository.ListRoster(owner).Any(), "删除角色一并删除待改名资格，不留外键孤儿");
+            That(!repository.ListRoster(owner).Any() && repository.ReadNameHistory(owner, role.Id).IsEmpty, "删除角色一并删除待改名资格和历史，不留外键孤儿");
             VerifySession();
             Sql("DROP TABLE character_rename_pending; CREATE TABLE character_rename_pending(unknown INTEGER)");
             Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "启动拒绝同名损坏资格表");
