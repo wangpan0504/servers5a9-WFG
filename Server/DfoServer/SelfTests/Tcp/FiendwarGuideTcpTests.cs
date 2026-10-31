@@ -72,6 +72,10 @@ internal static class FiendwarGuideTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0 AND raid_type=2 AND state=2", peer.Id)
                 is [[long completed]] && completed == route + 1, "原单世界终杀提交真实共享type2通关");
             That(clears[2] == (1u, (uint)route + 1), "真实终杀后主动刷新漩涡日周次数，无需重新登录");
+            peer.Send(1403, [0, 0]);
+            var adventure = Read().Single(row => row is { Kind: 1, Opcode: 1403 }).Body;
+            That(adventure[0] == 1 && U32(adventure, 19 + 32) == (uint)route + 1,
+                "引导两条原路线从同一真实终局账本投影冒险团累计，不随日周期清零");
             foreach (byte kind in new byte[] { 1, 0 })
             {
                 peer.Send(660, [kind, 0]);

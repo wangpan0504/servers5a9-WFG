@@ -153,6 +153,18 @@ internal static class AdventureCoreTests
         var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, ack: true);
         That(ack[0] == 1 && ack.AsSpan(1, 2).SequenceEqual(new byte[2]) && ack.Length == info.Length + 1,
             "ACK1403保留成功前缀与选角owner0");
+        var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue) };
+        foreach (bool isAck in new[] { false, true })
+        {
+            byte[] content = AdventurePackets.Information(42, raids, catalog, [], ack: isAck);
+            int prefix = isAck ? 19 : 18;
+            That(BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LukeRaidClearOffset)) == 65536 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.MetroRaidClearOffset)) == 70000 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.PreyRaidClearOffset)) == uint.MaxValue &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.RecommendedClearOffset)) == 12 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DuelWinOffset)) == 0,
+                "通知和ACK的三类团本使用完整u32，空代表不清通关累计，不串写推荐与未接内容");
+        }
         byte[] refresh = AdventurePackets.Refresh(42, snapshot.State, catalog);
         That(refresh.Length == 50 && BinaryPrimitives.ReadUInt32LittleEndian(refresh.AsSpan(2)) == 40 &&
             BinaryPrimitives.ReadUInt64LittleEndian(refresh.AsSpan(14)) == snapshot.State.Experience, "1349只使用40B实体状态");
@@ -198,6 +210,7 @@ internal static class AdventureCoreTests
                 "UPDATE character_dungeon_state SET recommended_dungeon_clears=30000 WHERE character_id=2");
             That(repo.ReadAdventure(owner, catalog, now).ContentCounts[AdventureContent.RecommendedDungeon] == ushort.MaxValue,
                 "账号内容计数按u16饱和，不因累计溢出回绕");
+            RaidContentCounts(repo, owner, catalog, now, db);
             Execute(db, "UPDATE account_adventures SET name='测试团',revision=7");
             using (var writer = db.BeginTransaction(deferred: false))
             {
@@ -219,6 +232,47 @@ internal static class AdventureCoreTests
             That(repo.ReadAdventure(current, catalog, now).State.Name == "other", "查询按账号隔离，不借用其他账号名称");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    static void RaidContentCounts(CharacterRepository repo, AccountOwners.Lease owner, AdventureCatalog catalog,
+        DateTimeOffset now, SqliteConnection db)
+    {
+        That(repo.ReadAdventure(owner, catalog, now).RaidClears == default, "没有真实终局时三类团本累计保持0");
+        // 两个角色、两个历史周、不同类型，另加未完成/失败与安徒恩终局，验证账号及类型边界。
+        var rows = new (int Character, int Type, int State, int Week)[]
+        {
+            (1, 1, 2, 20260101), (2, 1, 2, 20260108),
+            (1, 2, 2, 20260101), (2, 2, 2, 20260108), (2, 2, 2, 20260101),
+            (1, 3, 2, 20260101), (1, 0, 2, 20260101),
+            (1, 1, 0, 0), (1, 2, 1, 0), (2, 3, 1, 0)
+        };
+        int instance = 1;
+        foreach (var row in rows)
+        {
+            string final = row.State == 2 ? row.Type == 2
+                ? $",phase0_event,phase0_anchor,phase0_receipt,clear_week) VALUES({row.Character},'adventure','{instance:x32}',{row.Type},'fixture',0,2,'{instance:x32}',1,'{{}}',{row.Week})"
+                : $",phase1_event,phase1_anchor,phase1_receipt,clear_week) VALUES({row.Character},'adventure','{instance:x32}',{row.Type},'fixture',0,2,'{instance:x32}',1,'{{}}',{row.Week})"
+                : $") VALUES({row.Character},'adventure','{instance:x32}',{row.Type},'fixture',0,{row.State})";
+            Execute(db, "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state" + final);
+            instance++;
+        }
+        That(repo.ReadAdventure(owner, catalog, now).RaidClears == new AdventureRaidClears(2, 3, 1),
+            "团本按账号汇总所有历史周，仅统计合资格终局，不混入安徒恩、入场和失败");
+        That(repo.ReadAdventure(owner, catalog, now.AddDays(30)).RaidClears == new AdventureRaidClears(2, 3, 1) &&
+            Query(db, "SELECT count(*) FROM character_raid_runs") is 10L,
+            "重复查询及跨日周不重置累计，不产生写入或重复通关");
+        new AuthenticationService(new AuthenticationRepository(db.DataSource)).Create("other-adventure", "fixture-password");
+        using var other = new AccountOwners().Acquire("other-adventure", () => { });
+        repo.Create(other, new("OtherHero", new(1, 0, 10, 10), null));
+        Execute(db, """
+            INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,
+              phase0_event,phase0_anchor,phase0_receipt,clear_week)
+            SELECT id,account,'ffffffffffffffffffffffffffffffff',2,'fixture',0,2,
+              'ffffffffffffffffffffffffffffffff',1,'{}',20260101 FROM characters WHERE account='other-adventure'
+            """);
+        That(repo.ReadAdventure(owner, catalog, now).RaidClears == new AdventureRaidClears(2, 3, 1) &&
+            repo.ReadAdventure(other, catalog, now).RaidClears == new AdventureRaidClears(0, 1, 0),
+            "只读团本累计严格按账号隔离");
     }
 
     static void Migrate()
