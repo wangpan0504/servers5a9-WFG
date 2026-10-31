@@ -319,6 +319,7 @@ internal static class QuestCompletionRepositoryTests
             DfoServer.Game.Adventure.AdventureRepresentativePlan plan, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.CommitAdventureRepresentative(owner, plan, catalog, now);
         public DfoServer.Game.Adventure.AdventureSnapshot ReadAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now) => inner.ReadAdventure(owner, catalog, now);
         public int ReadAdventureLevel(AccountOwners.Lease owner) => inner.ReadAdventureLevel(owner);
+        public SelectionContentsState ReadSelectionContents(AccountOwners.Lease owner, CharacterRosterEntry? expected, DateTimeOffset now) => inner.ReadSelectionContents(owner, expected, now);
         public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Adventure.AdventureWeeklyCharacter> ReadAdventureWeeklyRoster(
             AccountOwners.Lease owner, int week) => inner.ReadAdventureWeeklyRoster(owner, week);
         public System.Collections.Immutable.ImmutableArray<byte> ReadAdventureWeeklyConfig(AccountOwners.Lease owner) => inner.ReadAdventureWeeklyConfig(owner);

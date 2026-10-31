@@ -15,6 +15,12 @@ internal sealed record DeleteCharacterRequest(ushort RosterIndex, string Confirm
 internal sealed record ChangeCharacterSlotRequest(uint IndexA, uint IndexB);
 internal static class CharacterRequests
 {
+    public static byte Contents(ReadOnlySpan<byte> body)
+    {
+        // 03B5BB00 → 03BDF720固定写一个u8，是已发布名册行序而非持久slot。
+        if (body.Length != 1) throw new InvalidDataException("选角副本次数请求必须是一个名册索引字节");
+        return body[0];
+    }
     public static void AllServerRoster(ReadOnlySpan<byte> body)
     {
         if (!body.IsEmpty) throw new InvalidDataException("跨大区编队名册请求正文必须为空");

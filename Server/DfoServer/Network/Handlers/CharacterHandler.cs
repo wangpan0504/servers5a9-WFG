@@ -26,7 +26,8 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null,
     ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null,
     PvpTotalTeamProjection? totalTeamProjection = null, PvpMissionProjection? pvpMissions = null,
-    DfoServer.Game.Pvp.PvpMissionBook? missionBook = null, ItemCatalog? renameItems = null) : IGameCommandModule
+    DfoServer.Game.Pvp.PvpMissionBook? missionBook = null, ItemCatalog? renameItems = null,
+    SelectionContentsProjection? selectionContents = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -39,6 +40,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.REQUEST_ALL_SERVER_CHARACINFO, AllServerRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, HiddenRosterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CONTENTS_PLAY_INFO, ContentsAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.USE_RENAME_CARD, UseRenameCardAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHANGE_CHARAC_NAME, RenameCharacterAsync, nameof(CharacterHandler));
@@ -280,6 +282,15 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         bool Guard() => context.Session.SelectionEpoch == epoch && context.Session.CheckState(DfoServer.Game.Session.UserState.CharacterSelect);
         await context.Reply(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, CharacterPackets.HiddenRoster(), "hidden_character_roster", Guard);
         if (adventure is not null && Guard()) await adventure.InformationAsync(context);
+        if (selectionContents is not null && Guard()) await selectionContents.TowersAsync(context);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ContentsAsync(GameConnectionContext context, Packet request)
+    {
+        byte index = CharacterRequests.Contents(request.Body);
+        if (selectionContents is null) return CommandResult.Unhandled;
+        await selectionContents.CharacterAsync(context, index);
         return CommandResult.Handled;
     }
 

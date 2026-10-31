@@ -156,7 +156,7 @@ internal static partial class TownProtocolTcpTests
             peer.Expect(1, 692, [1]);
         }
 
-        DeleteCharacters(fixture);
+        DeleteCharacters(fixture, resources);
         var nolanRestart = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
 
         using (var waiting = Open(fixture))
