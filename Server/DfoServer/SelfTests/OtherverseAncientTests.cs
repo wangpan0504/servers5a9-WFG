@@ -1,3 +1,4 @@
+using DfoServer.GameWorld.Items;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -22,6 +23,7 @@ internal static class OtherverseAncientTests
 {
     public static void RunCore()
     {
+        RunDropRulesCore();
         Bytes(DungeonEnterCountPackets.Dimension(3, 4, 1), [3, 0, 0, 0, 4, 0, 0, 0, 1], "815独立编码九字节金样");
         Bytes(DungeonEnterCountPackets.Ancient(500), [244, 1, 0, 0], "772独立编码四字节能量");
         var now = new DateTimeOffset(2026, 10, 27, 1, 0, 0, TimeSpan.Zero);
@@ -36,6 +38,123 @@ internal static class OtherverseAncientTests
         That(AncientGateProgression.Energy(inventory, now) == 0, "领取后能量归零");
         inventory = inventory with { DailyBoosterUses = AncientGateProgression.Prepare(inventory, now).After };
         That(AncientGateProgression.Energy(inventory, now.AddDays(1)) == 0, "次日能量按既有六点业务日自然重置");
+    }
+
+    static void RunDropRulesCore()
+    {
+        That(DimensionDropRules.Parse("{}").Tiers[2] == DimensionDropRules.Default.Tiers[2], "默认空JSON保留v2表");
+        foreach (string invalid in new[] { "{\"mode\":\"unknown\"}", "{\"tiers\":{\"2\":{\"named\":{\"equip\":101}}}}",
+            "{\"tiers\":{\"0\":{\"boss\":{\"count\":-1}}}}", "{\"setRateSource\":\"unknown\"}" })
+            Reject<InvalidDataException>(() => DimensionDropRules.Parse(invalid), "R7 非法规则启动解析拒绝");
+        var patch = DimensionDropRules.Parse("{\"tiers\":{\"1\":{\"named\":{\"set\":12}}}}");
+        That(patch.Tiers[1].Named is { Equip: 80, Set: 12, Shards: 0 } && patch.Tiers[2].Boss.Count == 2,
+            "配置局部覆盖保留各档其余默认值");
+    }
+
+    // 与TCP异界组共享只读资源，先核对真实MOB标记，再测试专用计划，避免另起服务。
+    internal static void RunDropRegression(PvfArchive pvf, ItemResources items)
+    {
+        RunDropRulesCore();
+        var dimension = DungeonIncountCatalog.Load(pvf).Dimension!;
+        var catalog = new DimensionRewardCatalog(pvf, items.Items);
+        var policy = new DimensionRewardPolicy(dimension, catalog, items.Items);
+        var dungeons = SelfTestCatalogs.Dungeons(pvf);
+        var rooms = SelfTestCatalogs.Rooms(pvf);
+        foreach (int tier in Enumerable.Range(0, 3))
+        {
+            int count = dimension.Tiers.Where(row => row.Value == tier).Sum(row =>
+                dungeons.Get(row.Key).Mazes.SelectMany(maze => maze.MapSpecification ?? []).SelectMany(map => rooms.Get(map, requirePassiveDefinitions: false).Monsters)
+                .Count(m => m.RankKind != "[boss]" && PvfScript.Integers(new PvfDocument(pvf.ReadText(m.Path)).Section("is named monster")) is [1]));
+            That(count > 0, $"R1 真实PVF每档存在MOB命名声明 tier={tier}, count={count}");
+        }
+        using var f = new Fixture(pvf, TownCatalog.Load(pvf), items, DungeonIncountCatalog.Load(pvf), 2);
+        var entry = f.Enter(7167, 2, bound => bound == 10000 ? 9999 : 0).Entry with { DimensionRewardProfession = (0, 1) };
+        var source = dungeons.Get(7167).Mazes.SelectMany(maze => maze.MapSpecification ?? []).SelectMany(map => rooms.Get(map, requirePassiveDefinitions: false).Monsters
+            .Select(m => (Map: map, Monster: m))).First(row => row.Monster.RankKind != "[boss]" &&
+                PvfScript.Integers(new PvfDocument(pvf.ReadText(row.Monster.Path)).Section("is named monster")) is [1]);
+        var named = new DungeonPlannedMonster(0, 500, source.Monster.MonsterId, 95, source.Monster)
+            { SourceMap = source.Map };
+        That(named.Source!.IsNamed, "R1 MOB命名标记冻结进入Source，未借用强化限制");
+        var empty = new DungeonDropGenerationPlan("regression", []);
+        var plan = policy.Extend(empty, entry, named);
+        That(plan.ResourceSource.Contains("otherverse-rewards-server-v2"), "v2计划标记实际规则");
+        That(plan.Trials.Length == 1, "R1 勇士绿名本人有一次职业装备判定");
+        var boss = named with { Source = source.Monster with { RankKind = "[boss]", Modifiers = [] }, SourceMap = entry.BossMap };
+        var bossPlan = policy.Extend(empty, entry, boss);
+        int equipment = bossPlan.Generate(_ => 0, DateTimeOffset.UtcNow).Count(row => row.Item is { } item &&
+            catalog.Professions[(entry.DimensionRewardProfession!.Value.Job, entry.DimensionRewardProfession.Value.Grow & 15)].Set.Contains(item.ItemId));
+        That(equipment == 2, "R2 勇士Boss两次判定可命中套装池");
+        var now = DateTimeOffset.UtcNow;
+        foreach (int tier in Enumerable.Range(0, 3))
+        {
+            var current = entry with { Dimension = entry.Dimension! with { Tier = tier } };
+            var n = policy.Extend(empty, current, named).Trials.Single();
+            That(n.Threshold == new[] { 60, 80, 100 }[tier] && n.ProbabilityDenominator == 100,
+                "绿名三档掉装概率不借翻牌字段");
+            foreach (var actor in new[] { named, boss })
+            {
+                var selected = policy.Extend(empty, current, actor);
+                if (tier == 0)
+                    That(selected.Generate(_ => 0, now).Where(r => r.Item is { Kind: ItemKind.Equipment })
+                        .All(r => catalog.Professions[(0, 1)].Normal.Contains(r.Item!.ItemId)), "R3 普通档从不进入套装池");
+                var extra = current with { Dimension = current.Dimension! with { DailyBefore = new(dimension.DailyLimit, 0) } };
+                var noEquipment = policy.Extend(empty, extra, actor);
+                That(!noEquipment.Generate(_ => 0, now).Any(r => r.Item is { } item && catalog.Professions.Values.Any(p => p.Normal.Contains(item.ItemId) || p.Set.Contains(item.ItemId))), "R4 追加次数禁止职业装备");
+                if (actor.IsBoss) That(noEquipment.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 3311) == true), "R4 材料保留");
+            }
+        }
+        var compatibility = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"mode\":\"compat-v1\"}"));
+        That(ReferenceEquals(compatibility.Extend(empty, entry, named), empty), "R5 兼容绿名保持原计划");
+        foreach (bool hidden in new[] { false, true })
+        foreach (int tier in Enumerable.Range(0, 3))
+        {
+            var current = entry with { Dimension = entry.Dimension! with { Tier = tier, HiddenBoss = hidden, DailyBefore = new(10, 0) } };
+            var actual = compatibility.Extend(empty, current, boss);
+            var expected = new List<DungeonDropTrial>();
+            foreach (var material in dimension.Materials.Where(row => row.Tier == tier))
+                expected.Add(new(1, Pool([material.Item]), 1, 1, ProbabilityDenominator: 1));
+            expected.Add(new(1, Pool(catalog.Professions[(0, 1)].Normal), 1, 1, ProbabilityDenominator: 1));
+            if (tier == 2) expected.Add(new(1, Pool(catalog.Legendary), 1, 1, ProbabilityDenominator: 100));
+            if (hidden) expected.Add(new(1, new DungeonItemDropPool(dimension.HiddenRewards.Where(r => r.Tier == tier)
+                .Select(r => new DungeonWeightedDropItem(items.Items.Get(r.Item), r.Value))), 1, 1, ProbabilityDenominator: 1));
+            That(actual.Trials.Length == expected.Count && actual.Trials.Zip(expected).All(pair =>
+                pair.First with { Items = pair.Second.Items } == pair.Second &&
+                pair.First.Items!.Entries.SequenceEqual(pair.Second.Items!.Entries)), "R5 compat-v1逐项保留旧顺序、池、权重、概率、数量");
+            That(actual.ResourceSource == "regression;otherverse-rewards-server-compat-v1;" + DimensionRewardCatalog.PoolPath,
+                "R5 兼容来源保持旧字符串");
+        }
+        foreach (var key in new[] { (Job: (byte)0, Grow: (byte)1), (Job: (byte)1, Grow: (byte)1) })
+        {
+            var own = policy.Extend(empty, entry with { DimensionRewardProfession = key }, boss);
+            var allowed = catalog.Professions[(key.Job, key.Grow)];
+            That(own.Trials.Where(t => !t.RarityPools.IsDefaultOrEmpty).SelectMany(t => t.RarityPools)
+                .SelectMany(r => r.CandidatePools).SelectMany(p => p.Entries).All(r => allowed.Normal.Contains(r.Template.Id) || allowed.Set.Contains(r.Template.Id)),
+                "R6 不同职业个人计划不串池");
+        }
+        // 当前PVF没有单空套装行，显式合成空池验证同一生产组装入口，不能靠空循环声称回退已覆盖。
+        var normalPool = Pool(catalog.Professions[(0, 1)].Normal);
+        var emptyPool = Pool([]);
+        var fallbackTrial = DimensionRewardPolicy.EquipmentTrial(normalPool, emptyPool, 100, 100);
+        That(fallbackTrial is not null && new DungeonDropGenerationPlan("synthetic-empty-set", [fallbackTrial])
+            .Generate(_ => 0, now).Single().Item is { } fallback && catalog.Professions[(0, 1)].Normal.Contains(fallback.ItemId),
+            "R8 强制套装命中但池空时实际生成散件");
+        That(DimensionRewardPolicy.EquipmentTrial(emptyPool, emptyPool, 100, 100) is null, "R8 两池空不创建装备trial");
+        That(policy.Extend(empty, entry with { DimensionRewardProfession = (255, 15) }, named).Trials.IsEmpty,
+            "R8 两池都空跳过不抛");
+        foreach (var actor in new[] { named with { IsFriendly = true }, named with { IsBlocking = false },
+            named with { AiCharacter = new(1, [], "[monster]", "[normal]", "synthetic", 95) } })
+            That(ReferenceEquals(policy.Extend(empty, entry, actor), empty), "R9 友方、非法死亡、APC不掉");
+        That(ReferenceEquals(policy.Extend(empty, entry with { IsPractice = true }, boss), empty), "R9 练习不掉");
+        That(ReferenceEquals(policy.Extend(empty, entry with { Dimension = null }, boss), empty), "R9 非异界不掉");
+        var card = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"setRateSource\":\"card\"}"));
+        That(card.Extend(empty, entry, named).Trials.Single().RarityPools.Single().AlternatePermille == catalog.CardRates[2].SetPercent * 10,
+            "显式card来源沿翻牌套装率");
+        var extraPolicy = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"extraEntryEquipment\":true}"));
+        That(extraPolicy.Extend(empty, entry with { Dimension = entry.Dimension! with { DailyBefore = new(10, 0) } }, named).Trials.Length == 1,
+            "显式追加开关允许装备");
+        Console.WriteLine("PASS #899 R1-R9 资源及个人掉落计划（非TCP客户端验收）");
+        DungeonItemDropPool Pool(IEnumerable<int> ids) => new(ids.Select(id => new DungeonWeightedDropItem(items.Items.Get(id), 1)));
+
     }
 
     public static void Run(PvfArchive pvf, ItemResources items)

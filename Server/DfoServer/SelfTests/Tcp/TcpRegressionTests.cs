@@ -248,6 +248,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("operation-hope", FormalDungeonTcpTests.RunOperationHopeAsync),
+        ("otherverse-drop-rules", (_, _, resources) => { OtherverseAncientTests.RunDropRegression(resources.Archive, resources.ItemResources); return Task.CompletedTask; }),
         ("otherverse-ancient", FormalDungeonTcpTests.RunOtherverseAncientAsync),
         ("party-otherverse-ancient", PartyDungeonTcpTests.RunOtherverseAncientAsync),
         ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
@@ -518,6 +519,7 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "otherverse-drop-rules",
         "settings-snapshot-rules",
         "equipment-power-rules",
         "frame-crc-rules",
