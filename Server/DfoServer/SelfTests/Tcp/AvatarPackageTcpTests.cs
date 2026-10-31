@@ -124,10 +124,135 @@ internal static class AvatarPackageTcpTests
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
     }
 
+    static async Task RunOmittedDimensionsAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        const int boxId = 10101850, avatarId = 101580477;
+        const short sourceSlot = 66, sentinelSlot = 67;
+        byte[] body = Convert.FromHexString("4200010000000000BDFE0D0601BDFE0D060000");
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "omitted-dimensions-gift"), gm: true, resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var sourceCore = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(boxId));
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("OmittedGift", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 4, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(sourceSlot), sourceCore), new(0, Bag(sentinelSlot), sourceCore)], Gold: 321)
+            });
+        await fixture.StartAsync();
+        BoosterTcpTests.SetExpirationDebug(fixture, false);
+        long sourceUid = Convert.ToInt64(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=66").Single().Single());
+        InventoryItem sentinel;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            sentinel = repo.List(owner).Single().Inventory.Items.Single(item => item.Position == Bag(sentinelSlot));
+
+        // 原事务先写核心、完整详情及槽，再写审计；只在单奖全部写完后注入指定晚故障。
+        fixture.Sql("""
+            CREATE TRIGGER fail_omitted_dimensions BEFORE INSERT ON inventory_audit_log BEGIN
+              SELECT CASE WHEN
+                (SELECT count(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=101580477)=1 AND
+                (SELECT count(*) FROM inventory_avatar_details a JOIN character_inventory_items i USING(item_uid)
+                 WHERE json_extract(i.item_core,'$.ItemId')=101580477)=1 AND
+                (SELECT count(*) FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                 WHERE s.list_type=1 AND s.slot_index=0 AND json_extract(i.item_core,'$.ItemId')=101580477)=1 AND
+                (SELECT count(*) FROM character_inventory_slots WHERE list_type=0 AND slot_index=66)=0
+              THEN RAISE(ABORT,'omitted dimensions late rollback')
+              ELSE RAISE(ABORT,'omitted dimensions late prerequisite missing') END;
+            END
+            """);
+        string before;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier(); before = State();
+            peer.Send(160, body); peer.Closed();
+        }
+        That(State() == before, "真实省略维数19B在单奖核心、详情及槽写完后的晚审计故障整笔回滚，源、哨兵、金币、钱包、UID及版本不变，无成功ACK");
+        fixture.Sql("DROP TRIGGER fail_omitted_dimensions");
+
+        byte[] committed;
+        string wallet;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier(); wallet = Wallet();
+            long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters").Single().Single());
+            peer.Send(160, body);
+            BoosterTcpTests.ExpectAck(peer, boxId, sourceSlot, [(avatarId, 1)]);
+            byte[] main = peer.Expect(0, 14).Body;
+            BoosterTcpTests.Entry(main, sourceSlot, -1, 0);
+            That(U16(main, 1) == 1, "省略维数正常领取只清空指定源格，不消费同ID哨兵");
+            byte[] avatars = peer.Expect(0, 14).Body;
+            CheckAvatarRows(avatars, [new(avatarId, 0)]);
+            committed = AvatarRow(avatars, avatarId);
+            Bytes(committed.AsSpan(123, 34), Convert.FromHexString(
+                "1E000000EFFFFFFFFFFFEFFFFFFFFFFF000000000000000000000000000000000000"),
+                "实际type4皮肤保永久双M、原生FFEF空徽章及后三孔关闭，不套源/其它叶期限");
+            peer.Barrier();
+            That(Convert.ToInt64(fixture.Query("SELECT revision FROM characters").Single().Single()) == revision + 1 && Wallet() == wallet,
+                "完整单奖与源一次提交，type表Cera4400不成为礼包额外扣费");
+            before = State();
+            peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(State() == before, "真实19B耗尽重放拒绝，不消费另一个同ID源或重复奖励、UID、审计及版本");
+        }
+        InventoryItem awarded;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var inventory = repo.List(owner).Single().Inventory;
+            awarded = inventory.Items.Single(item => item.Core.ItemId == avatarId);
+            That(inventory.Gold == 321 && inventory.Items.Length == 2 &&
+                inventory.Items.Single(item => item.Uid == sentinel.Uid) == sentinel && inventory.Items.All(item => item.Uid != sourceUid) &&
+                awarded.Uid > 0 && awarded.Uid != sentinel.Uid && awarded.Position == new InventorySlot(InventoryListType.Avatar, 0) &&
+                awarded.Core == new ItemCore(avatarId, ItemKind.Avatar, checked((int)awarded.Uid)) &&
+                awarded.Core.Durability == 0 && awarded.Core.ExpireTime == 0 && awarded.ExpireTime == 0 &&
+                awarded.Avatar == new AvatarDetail { Socket0 = AvatarSocket.Empty(239), Socket1 = AvatarSocket.Empty(239) },
+                "省略源发奖完整保存唯一UID、原能力0和永久双M详情，哨兵/金币不变且源UID注销");
+        }
+        using (var peer = Open(fixture)) CheckReconnect(peer);
+        await fixture.StopAsync();
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'omitted dimensions late rollback'.";
+        }) == 1, "唯一故障断线精确来自原奖已写后的指定晚审计错误，不是缺前提或其他SQL失败");
+        string persisted = State();
+        await fixture.StartAsync("reopened");
+        using (var peer = Open(fixture)) CheckReconnect(peer);
+        await fixture.StopAsync();
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var inventory = repo.List(owner).Single().Inventory;
+            That(inventory.Items.Single(item => item.Uid == awarded.Uid) == awarded &&
+                inventory.Items.Single(item => item.Uid == sentinel.Uid) == sentinel,
+                "重连及同进程服务重建恢复原UID、完整核心、位置和永久双M，不重新发奖");
+        }
+        That(State() == persisted && fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[1L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[2L, 2L]] &&
+            fixture.Query("SELECT count(*) FROM mailbox_messages") is [[0L]] &&
+            fixture.Query("SELECT count(*) FROM mailbox_attachments") is [[0L]],
+            "省略源服务重建后资产及账号钱包逐字恢复，不重复奖励或溢出邮寄");
+
+        void CheckReconnect(TcpPeer peer)
+        {
+            peer.Select();
+            byte[] page = peer.SpecialContainers.Single(packet => packet.Opcode == 13 && packet.Body[0] == 1).Body;
+            CheckAvatarRows(page, [new(avatarId, 0)], full: true);
+            Bytes(AvatarRow(page, avatarId, full: true), committed, "永久奖励重连及服务重建165B完整行逐字保持，无倒计时归零重建");
+            peer.Barrier();
+        }
+        string Wallet() => JsonSerializer.Serialize(new[]
+        {
+            fixture.Query("SELECT * FROM account_wallets ORDER BY account"),
+            fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind"),
+            fixture.Query("SELECT count(*) FROM currency_audit_log")
+        });
+        string State() => JsonSerializer.Serialize(new[] { Snapshot(fixture), Wallet() });
+    }
+
     public static async Task RunObservedSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await GiftCompatibilityTcpTests.RunAsync(source, root, resources);
         await MixedAvatarPackageTcpTests.RunAsync(source, root, resources);
+        await RunOmittedDimensionsAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "observed-selections"), gm: true, resources: resources);
         var items = resources.ItemResources.Items;
         var repository = new CharacterRepository(fixture.Database);
