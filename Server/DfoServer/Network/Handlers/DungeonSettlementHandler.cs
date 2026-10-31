@@ -427,13 +427,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 普通普雷终末没有后继选图；沿既有单人/组队回城提交释放实例与结算占用。
         if (option == 1 && current.Entry.IsOrdinaryPrey && current.Entry.DungeonId == 400000046)
             option = (byte)DungeonResultOption.ReturnTown;
+        uint? retryTarget = option == 0 ? OrdinaryDungeonContinuation.Target(current.Entry, dungeons) : current.Entry.DungeonId;
+        if (option == 0 && retryTarget is null) option = (byte)DungeonResultOption.ReturnTown;
         if (context.Session.PartyDungeon is { } party)
         {
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
             (string Reason, byte MemberSlot)? rejectedRetry = null;
             PartyDungeonNotice[] notices = option switch
             {
-                0 when partyDungeons is not null => partyDungeons.Enter(context.Session, current.Entry.DungeonId,
+                0 when partyDungeons is not null && retryTarget is { } target => partyDungeons.Enter(context.Session, target,
                     current.Entry.Difficulty, dungeons, rooms, drops, items, pieces, null,
                     onRejected: (reason, slot) => rejectedRetry = (reason, slot))
                     .Select(n => n with { State = 1 }).ToArray(),

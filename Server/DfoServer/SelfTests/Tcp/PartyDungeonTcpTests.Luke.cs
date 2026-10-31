@@ -96,5 +96,17 @@ internal static partial class PartyDungeonTcpTests
         group.Settle();
         That(group.Peers.All(peer=>fixture.Query("SELECT day,progress FROM character_luke_normal_progress WHERE character_id=$p0",peer.Id)
             is [[long savedDay,1L]] && savedDay==day),"两人各自真实结算，只推进共同入场日；重复早图不降队长进度");
+        foreach (var peer in group.Peers)
+        {
+            peer.Send(69); group.All(peer); peer.Send(70); group.All(peer); peer.Send(71,[0,0]); group.All(peer);
+        }
+        alpha.Send(72,[1,0]);
+        var continued = group.All();
+        That(continued.All(rows => rows.Any(packet => packet is {Kind:1,Opcode:72,Body:[1,1,0]}) &&
+            rows.Single(packet => packet is {Kind:0,Opcode:28}).Body is { } body && U32(body) == 5102 &&
+            rows.Count(packet => packet is {Kind:0,Opcode:29}) == 1),"队长F10全员进入湮灭之圣所，保留各自费用与前序检查");
+        string entered = fixture.Snapshot();
+        alpha.Send(72,[1,0]); group.All();
+        That(fixture.Snapshot() == entered,"组队加载中的旧续图请求不再次建立实例或扣费");
     }
 }

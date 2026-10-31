@@ -34,11 +34,14 @@ internal static partial class FormalDungeonTcpTests
             .Concat(Enumerable.Range(5102,5).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:false)))
             .Concat(Enumerable.Range(5101,6).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false,RetryWithoutTicket:false)))
             .Concat([(Id:9595,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:true)])
+            .Concat(new[] {9596,9597,9599,9600,9601,9602,9603,9604,9605,9606,9607}
+                .Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false,RetryWithoutTicket:false)))
             .Concat(preyRoute.Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:false))))
         {
             var definition = dungeons.Get(sample.Id);
             bool luke = definition.IsOrdinaryLuke;
             bool prey = definition.IsOrdinaryPrey;
+            bool anton = definition.IsOrdinaryAnton;
             var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Id));
             var done = new HashSet<int>(area.Quests);
@@ -52,7 +55,8 @@ internal static partial class FormalDungeonTcpTests
             var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
             var position = new Location(area.Town,area.Area,(ushort)(walk.X+walk.Width/2),(ushort)(walk.Y+walk.Height/2));
             // 最后防线独立账号不继承普通频道历史，避免把副本准入用例变成跨类型换频道测试。
-            string account = sample.Id == 400000016 ? "entry608fiendwar" : prey ? "entryprey"+sequence : luke ? "entryluke"+sequence : fixture.Options.DevelopmentAccount;
+            string account = sample.Id == 400000016 ? "entry608fiendwar" : prey ? "entryprey"+sequence : luke ? "entryluke"+sequence :
+                anton && sample.Id != 9595 ? "entryanton"+sequence : fixture.Options.DevelopmentAccount;
             Character created;
             using (var owner = new AccountOwners().Acquire(account,() => { }))
             {
@@ -98,7 +102,7 @@ internal static partial class FormalDungeonTcpTests
             }
             else
                 peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
-            ushort questId = prey ? (ushort)8926 : sample.Id == 9595 ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
+            ushort questId = prey ? (ushort)8926 : anton ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
@@ -202,7 +206,7 @@ internal static partial class FormalDungeonTcpTests
             }
             var map = peer.Expect(0,29).Body;
             That(U32(info,0) == sample.Id && info[4] == 2 && U32(map,14) == (sample.Id switch
-                { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => prey ? (uint)definition.Mazes.Single().MapSpecification!.Single(m => m.Position == definition.Mazes.Single().Starts.Single()).Id : 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
+                { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => prey || anton ? (uint)definition.Mazes.Single().MapSpecification!.Single(m => m.Position == definition.Mazes.Single().Starts.Single()).Id : 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
             if (definition.OrdinaryEntryTicket is { } paidTicket)
             {
                 peer.Expect(0,14);
@@ -307,12 +311,43 @@ internal static partial class FormalDungeonTcpTests
                     "失败原因确为入场材料耗尽，不由其它资格拒绝替代");
                 continue;
             }
-            if (prey && sample.Id == PreyNormalCatalog.FinalDungeon)
+            if (prey || luke || anton)
             {
-                peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]);
-                peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
-                That(fixture.Query("SELECT progress FROM character_prey_normal_progress WHERE character_id=$p0",peer.Id) is [[5L]],
-                    "本体下一图走回城释放实例且保留五图结算");
+                uint? expectedNext = prey ? preyRoute.IndexOf(sample.Id) < 4 ? (uint)preyRoute[preyRoute.IndexOf(sample.Id)+1] : null :
+                    luke ? sample.Id < 5106 ? (uint)sample.Id + 1 : null : sample.Id switch
+                    {9595 => 9596u,9596 => 9597u,9597 => 9599u, >= 9599 and <= 9602 => (uint)sample.Id+4,
+                        >= 9603 and <= 9606 => 9607u, _ => null};
+                peer.Send(72,[1,0]);
+                var continued = PartyDungeonTcpTests.Drain(peer).ToList();
+                if (luke && !sample.Explicit && expectedNext is not null)
+                {
+                    That(continued.Any(packet => packet is {Kind:1,Opcode:72,Body:[1,1,2]}) &&
+                        continued.Any(packet => packet is {Kind:0,Opcode:24}) &&
+                        continued.All(packet => packet.Opcode is not (28 or 29)) &&
+                        fixture.Events().Any(row => row.GetProperty("Kind").GetString() == "formal_dungeon_return" &&
+                            row.GetProperty("Detail").TryGetProperty("RejectReason",out var reason) && reason.GetString() == "fatigue-exhausted"),
+                        "单次八疲劳已耗尽时拒绝下一图并回城，不能免费续图");
+                }
+                else if (expectedNext is { } nextDungeon)
+                {
+                    int ack = continued.FindIndex(packet => packet is { Kind:1,Opcode:72,Body:[1,1,0] });
+                    int transition = continued.FindIndex(packet => packet is { Kind:0,Opcode:27 });
+                    int dungeonInfo = continued.FindIndex(packet => packet is { Kind:0,Opcode:28 });
+                    int startMap = continued.FindIndex(packet => packet is { Kind:0,Opcode:29 });
+                    That(ack >= 0 && transition > ack && dungeonInfo > transition && startMap > dungeonInfo &&
+                        U32(continued[dungeonInfo].Body) == nextDungeon && continued.Count(packet => packet is {Kind:0,Opcode:29}) == 1,
+                        "真实F10按72、27、28、29进入顺序下一图，未重复当前图");
+                    string entered = fixture.Snapshot();
+                    peer.Send(72,[1,0]); PartyDungeonTcpTests.Drain(peer);
+                    That(fixture.Snapshot() == entered,"加载中重复旧结算续图不跳图、不重复扣费或预留实例");
+                    peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+                }
+                else
+                {
+                    That(continued.Any(packet => packet is { Kind:1,Opcode:72,Body:[1,1,2] }) &&
+                        continued.Any(packet => packet is {Kind:0,Opcode:24}) &&
+                        continued.All(packet => packet.Opcode is not (28 or 29)),"普通序列终点F10回城，不重进终图或循环到首图");
+                }
             }
             else
             {

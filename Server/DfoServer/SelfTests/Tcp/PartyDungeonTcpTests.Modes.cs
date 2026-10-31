@@ -108,6 +108,7 @@ internal static partial class PartyDungeonTcpTests
         }
 
         VerifyOrdinaryMaterialRejection();
+        VerifyOrdinaryMaterialRejection(continueToNext: true);
         VerifyCinematic();
         VerifyPassiveSequence();
 
@@ -209,7 +210,7 @@ internal static partial class PartyDungeonTcpTests
             That(group.All().All(r => r.Any(p => p is {Kind:0,Opcode:27})),"传奇深渊和超星空终点保留全队祭坛选图出口");
         }
 
-        void VerifyOrdinaryMaterialRejection()
+        void VerifyOrdinaryMaterialRejection(bool continueToNext = false)
         {
             const int dungeon = 9595;
             const ushort quest = 2683;
@@ -222,9 +223,10 @@ internal static partial class PartyDungeonTcpTests
             if (!options.Any(option => option.QuestId == -1)) completed.Add(options.First(option => !option.InProgress).QuestId);
             completed.UnionWith(entrance.Map(completed).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
             var bounds = entrance.Map(completed).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(completed.Contains)).Bounds;
-            using var group = new Coop(fixture, resources, "material", new(entrance.Town, entrance.Area,
+            using var group = new Coop(fixture, resources, continueToNext ? "matnext" : "material", new(entrance.Town, entrance.Area,
                 (ushort)(bounds.X + bounds.Width / 2), (ushort)(bounds.Y + bounds.Height / 2)), completed.ToArray(), 95, 2,
-                leaderRewards: [new(ticket.ItemId, ticket.Count)]);
+                rewards: continueToNext ? [new(ticket.ItemId, ticket.Count * 2)] : null,
+                leaderRewards: continueToNext ? null : [new(ticket.ItemId, ticket.Count)]);
             foreach (var peer in group.Peers)
             {
                 peer.Send(31, [31, 0, (byte)(quest & 0xff), (byte)(quest >> 8)]);
@@ -235,6 +237,23 @@ internal static partial class PartyDungeonTcpTests
             string before = fixture.Snapshot();
             group.Peers[0].Send(16, Coop.Selection(dungeon, quest, 2));
             var rejected = group.All();
+            if (continueToNext)
+            {
+                group.ReadEntry(rejected); group.Load();
+                var maze = definition.Mazes.Single();
+                var route = QuestStoryRouteTests.Path(maze.StaticTopology,new(group.Map[0],group.Map[1]),
+                    new(group.Information[8],group.Information[9]));
+                foreach (var point in route.Skip(1))
+                { group.Clear(); group.Move((byte)point.X,(byte)point.Y); group.Load(); }
+                group.Clear(); group.Settle();
+                foreach (var peer in group.Peers)
+                { peer.Send(69); group.All(peer); peer.Send(70); group.All(peer); peer.Send(71,[0,0]); group.All(peer); }
+                group.Peers[0].Send(72,[1,0]);
+                That(group.All().All(rows => rows.Any(packet => packet is {Kind:1,Opcode:72,Body:[1,1,0]}) &&
+                    U32(rows.Single(packet => packet is {Kind:0,Opcode:28}).Body) == 9596),
+                    "普通安徒恩组队从黑雾之源续到震颤的大地，不继承上一图显式任务号");
+                return;
+            }
             That(rejected[0].Any(packet => packet is { Kind: 1, Opcode: 16 } && packet.Body.SequenceEqual(new byte[] { 0, 27, 0, 1 })) &&
                 rejected.All(rows => rows.All(packet => packet.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
                 "普通副本队员缺入场材料回复队伍提示，队长持有的材料和全队状态不变");

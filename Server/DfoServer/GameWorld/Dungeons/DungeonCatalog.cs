@@ -436,6 +436,8 @@ internal sealed class DungeonCatalog
     public EkernCycleCatalog EkernCycle => ekernCycle.Value;
     private readonly Lazy<PreyNormalCatalog> preyNormal;
     public PreyNormalCatalog PreyNormal => preyNormal.Value;
+    private readonly Lazy<AntonNormalSequenceCatalog> antonNormalSequence;
+    public AntonNormalSequenceCatalog AntonNormalSequence => antonNormalSequence.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
@@ -447,6 +449,7 @@ internal sealed class DungeonCatalog
         enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         ekernCycle = new(() => EkernCycleCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         preyNormal = new(() => PreyNormalCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
+        antonNormalSequence = new(() => AntonNormalSequenceCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);

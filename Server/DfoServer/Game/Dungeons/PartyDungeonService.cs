@@ -177,7 +177,8 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo || previous.Entry.IsInfernoParty;
             hellLegend = previous.Entry.IsHellLegend;
             beastMode = previous.Entry.BeastMode;
-            questId = leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
+            questId = dungeon == previous.Entry.DungeonId &&
+                leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
                 ? previous.Entry.QuestId : 0;
         }
         AntonRaidBattle.DungeonReservation? raidReservation = null;
