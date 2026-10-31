@@ -11,12 +11,11 @@ internal sealed class LauncherForm : Form
     readonly TextBox serverIp = new() { Text = "127.0.0.1", Dock = DockStyle.Fill, AccessibleName = "服务地址" };
     readonly NumericUpDown channel = Port(23100, "频道端口"), game = Port(23101, "游戏端口");
     readonly CheckBox enableGm = new() { Text = "启用 GM 工具（仅本机）", AutoSize = true, AccessibleName = "启用 GM 工具" };
-    readonly NumericUpDown gmPort = Port(23102, "GM 命令端口"), gmWebPort = Port(23103, "GM 网页端口");
+    readonly NumericUpDown gmPort = Port(23102, "GM 命令端口"), gmWebPort = Port(23103, "GM 接口端口");
     readonly TextBox pvf = new() { Dock = DockStyle.Fill, AccessibleName = "PVF 文件" };
     readonly TextBox data = new() { Dock = DockStyle.Fill, AccessibleName = "存档目录" };
     readonly Button choosePvf = Button("选择文件…"), chooseData = Button("选择目录…");
     readonly Button start = Button("启动服务"), stop = Button("停止服务"), copy = Button("复制地址"), logs = Button("打开日志目录");
-    readonly Button openGm = Button("打开 GM 网页");
     readonly Label status = new() { Text = "未启动", AutoSize = true, ForeColor = Color.DimGray, Anchor = AnchorStyles.Right };
     readonly GroupBox settings = new() { Text = "启动设置", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(16) };
     readonly TextBox addresses = new() { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None,
@@ -27,7 +26,7 @@ internal sealed class LauncherForm : Form
     readonly ConcurrentQueue<string> pendingLogs = new();
     readonly System.Windows.Forms.Timer refresh = new() { Interval = 100 };
     ServerProcess? server;
-    string? gmWebUrl; // 服务端内嵌 GM 网页地址（启动器不再自己托管网页）
+    string? gmWebUrl; // 服务端内嵌 GM 接口地址（仅供原生界面通信）
     CancellationTokenSource? starting;
     Task? transition;
     State state;
@@ -87,16 +86,16 @@ internal sealed class LauncherForm : Form
         fields.SetColumnSpan(enableGm, 4);
         fields.Controls.Add(FieldLabel("GM 端口"), 0, 5);
         fields.Controls.Add(gmPort, 1, 5);
-        fields.Controls.Add(FieldLabel("网页端口"), 2, 5);
+        fields.Controls.Add(FieldLabel("接口端口"), 2, 5);
         fields.Controls.Add(gmWebPort, 3, 5);
-        var note = new Label { Text = "空存档目录会新建 game.db。GM 仅供本机管理；勾选后启动服务，再点击“打开 GM 网页”，GM 网页内嵌在服务端中，无需安装 Python。",
+        var note = new Label { Text = "空存档目录会新建 game.db。GM 仅供本机管理；原生管理界面请使用 95JP 启动器的 GM工具页。",
             Dock = DockStyle.Fill, ForeColor = Color.DimGray, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
         fields.Controls.Add(note, 0, 6);
         fields.SetColumnSpan(note, 4);
         settings.Controls.Add(fields);
         layout.Controls.Add(settings, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-        actions.Controls.AddRange([start, stop, openGm, copy, logs]);
+        actions.Controls.AddRange([start, stop, copy, logs]);
         layout.Controls.Add(actions, 0, 2);
         var connections = new GroupBox { Text = "连接地址", Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 12) };
         connections.Controls.Add(addresses);
@@ -148,16 +147,6 @@ internal sealed class LauncherForm : Form
             try { Clipboard.SetText(addresses.Text); WriteLog("连接地址已复制。"); }
             catch (System.Runtime.InteropServices.ExternalException) { WriteLog("剪贴板正被占用，请稍后再试。"); }
         };
-        openGm.Click += (_, _) =>
-        {
-            if (state != State.Running || gmWebUrl is null || closeRequested) return;
-            try
-            {
-                Process.Start(new ProcessStartInfo(gmWebUrl) { UseShellExecute = true });
-                WriteLog("GM 网页：" + gmWebUrl);
-            }
-            catch (System.ComponentModel.Win32Exception error) { WriteLog("无法打开浏览器，请使用连接地址中的 GM 网页地址：" + error.Message); }
-        };
         logs.Click += (_, _) =>
         {
             string directory = Path.Combine(root, "Logs");
@@ -200,11 +189,11 @@ internal sealed class LauncherForm : Form
             if (options.GmEnabled)
             {
                 gmWebUrl = $"http://127.0.0.1:{options.GmWebPort}/";
-                WriteLog("GM 网页（服务端内嵌）：" + gmWebUrl);
+                WriteLog("GM 接口（服务端内嵌）：" + gmWebUrl);
             }
             string ip = ready.AdvertisedAddress ?? options.ServerIp;
             addresses.Text = $"频道：{ip}:{ready.ChannelPort}\r\n游戏：{ip}:{ready.GamePort}\r\n存档：{ready.DataDirectory ?? Path.GetFullPath(options.DataDirectory, root)}";
-            if (gmWebUrl is not null) addresses.Text += $"\r\nGM 网页：{gmWebUrl}";
+            if (gmWebUrl is not null) addresses.Text += $"\r\nGM 接口：{gmWebUrl}";
             try
             {
                 var remembered = options with { PvfPath = PortablePath(options.PvfPath), DataDirectory = PortablePath(options.DataDirectory) };
@@ -266,7 +255,7 @@ internal sealed class LauncherForm : Form
         if (closeRequested)
             return;
         closeRequested = true;
-        start.Enabled = stop.Enabled = openGm.Enabled = false;
+        start.Enabled = stop.Enabled = false;
         starting?.Cancel();
         if (transition is not null)
             await transition;
@@ -284,7 +273,6 @@ internal sealed class LauncherForm : Form
         stop.Enabled = value is State.Starting or State.Running && !closeRequested;
         stop.Text = value == State.Starting ? "取消启动" : "停止服务";
         copy.Enabled = value == State.Running;
-        openGm.Enabled = value == State.Running && gmWebUrl is not null && !closeRequested;
         status.Text = text ?? value switch { State.Idle => "未启动", State.Starting => "正在启动…", State.Running => "运行中", _ => "正在停止…" };
         status.ForeColor = text == "启动失败" ? Color.Firebrick : value switch
         {

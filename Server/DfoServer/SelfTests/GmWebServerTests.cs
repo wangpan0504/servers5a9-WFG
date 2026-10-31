@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text;
@@ -94,18 +94,13 @@ internal static class GmWebServerTests
             try { page = await http.GetAsync("/"); break; }
             catch (HttpRequestException) { await Task.Delay(100); }
         }
-        string html = await page.Content.ReadAsStringAsync();
-        TestCheck.That(page is { IsSuccessStatusCode: true } && html.Contains("S5A9 GM") && html.Contains("/assets/app.js"), "GM 页面可访问并引用模块脚本");
-        TestCheck.That(page.Headers.CacheControl?.NoStore == true, "GM 响应禁止缓存");
-        TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM 页面带内容安全策略");
-        foreach (string asset in new[] { "app.js", "api.js", "ui.js", "picker.js", "drawer-char.js", "p-overview.js", "p-accounts.js", "p-grant.js",
-            "p-quests.js", "p-mail.js", "p-items.js", "p-audit.js", "gm.css" })
-        {
-            var response = await http.GetAsync("/assets/" + asset);
-            TestCheck.That(response.IsSuccessStatusCode && response.Content.Headers.ContentType!.MediaType == (asset.EndsWith("css") ? "text/css" : "text/javascript"), "内嵌资源 " + asset);
-        }
-        TestCheck.That((await http.GetAsync("/assets/missing.js")).StatusCode == HttpStatusCode.NotFound, "未知资源 404");
-        TestCheck.That((await http.GetAsync("/assets/..%2Findex.html")).StatusCode == HttpStatusCode.NotFound, "资源名白名单拒绝路径穿越");
+        TestCheck.That(page.StatusCode == HttpStatusCode.NotFound, "GM接口不提供旧网页");
+        TestCheck.That(page.Headers.CacheControl?.NoStore == true, "GM响应禁止缓存");
+        TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM接口保留内容安全策略");
+        foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
+            TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
+        TestCheck.That(!typeof(GmWebServer).Assembly.GetManifestResourceNames().Any(name =>
+            name.StartsWith("DfoServer.GmWeb.", StringComparison.Ordinal) && !name.EndsWith("recharge.html", StringComparison.Ordinal)), "程序集不再包含旧GM网页资产");
         var status = await http.GetFromJsonAsync<JsonElement>("/api/status");
         TestCheck.That(status.GetProperty("pid").GetInt32() == 1 && status.GetProperty("gmWebPort").GetInt32() == 4, "状态接口返回进程与端口信息");
         int beforeQueries = data.Commands.Count;

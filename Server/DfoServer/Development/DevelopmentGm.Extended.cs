@@ -669,8 +669,9 @@ internal static partial class DevelopmentGm
         var after = before;
         foreach (var (item, uid) in targets)
         {
-            if (item is null || item.Uid != uid) return InventoryResult.Reject();
-            var result = InventoryDeleteService.Plan(after, item.Position, item.Core.ItemId, item.Core.Count);
+            if (item is null || item.Uid != uid || !InventoryDeleteService.CanGmDelete(after, item)) return InventoryResult.Reject();
+            // GM 显式允许账号金库；普通丢弃入口保持原容器限制。
+            var result = InventoryDeleteService.Plan(after, item.Position, item.Core.ItemId, item.Core.Count, includeAccountCargo: true);
             if (!result.Accepted) return result;
             after = result.Plan!.After;
         }

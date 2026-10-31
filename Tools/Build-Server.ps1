@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 构建 Windows x64 自包含服务端及启动器，保留运行目录中的存档与日志。
 .PARAMETER OutputDirectory
@@ -185,7 +185,7 @@ if (-not $windows) {
 if ($windows) {
     $launcherCheck = Invoke-SelfCheck '启动器 --help' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--help')
     if ($launcherCheck.ExitCode -ne 0) { throw "启动器检查失败；临时产物保留在 $stage" }
-    $gmCheck = Invoke-SelfCheck '内置 GM 网页 --selftest-gm' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--selftest-gm')
+    $gmCheck = Invoke-SelfCheck '内置 GM 接口 --selftest-gm' (Join-Path $payload $(if ($SingleFile) { $program } else { 'DfoLauncher.exe' })) @('--selftest-gm')
     if ($gmCheck.ExitCode -ne 0) { throw "内置GM网页检查失败；临时产物保留在 $stage" }
 }
 
@@ -322,7 +322,7 @@ if ($SingleFile) {
     Write-Host "无参数的 start-server.bat 也会打开启动器；带参数时直接运行命令行服务。"
 }
 Write-Host "默认本机连接：127.0.0.1，频道 TCP 23100，游戏 TCP 23101；实际设置读取 launcher.local.json。"
-Write-Host "GM 网页已内嵌在服务端（启动器启用 GM 时自动传 --gm-web-port，只监听 127.0.0.1）：http://127.0.0.1:23103/（端口以 launcher.local.json 的 GmWebPort 为准）。"
+Write-Host "GM 数据接口仅监听本机，使用 95JP 启动器原生 GM工具页（--gm-web-port 默认 23103）（端口以 launcher.local.json 的 GmWebPort 为准）。"
 Write-Host "存档：$data\game.db；日志：$output\Logs。后续构建请始终使用同一输出目录。"
 if (-not (Test-Path -LiteralPath $targetPvf -PathType Leaf)) {
     Write-Warning "尚未准备资源，请将匹配客户端的 Script.pvf 放到 $targetPvf 后再启动。"

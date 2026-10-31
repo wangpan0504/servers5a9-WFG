@@ -37,11 +37,11 @@
 
 ## 积分商城活动
 
-沿同一GM命令管理266：`event status 266`、`event on 266`、`event off 266`、`event auto 266`和`event schedule 266 <开始> <结束>`。命令入口、显式时区和覆盖语义与64相同；未配置时间表且无强制开启时关闭。在线已选角色在开关及时间边界接收完整108和开启后的706，不要求重登；返回选角的连接在下次入城恢复。关闭会阻止新积分购买及消费返分，不删除原积分、购买记录或重置累计；普通点券购买仍可继续。GM网页的现有固定按钮未扩展，266使用上述命令入口。资源、消费与额度见[积分商城](../模块/背包与装备.md#积分商城)。
+沿同一GM命令管理266：`event status 266`、`event on 266`、`event off 266`、`event auto 266`和`event schedule 266 <开始> <结束>`。命令入口、显式时区和覆盖语义与64相同；未配置时间表且无强制开启时关闭。在线已选角色在开关及时间边界接收完整108和开启后的706，不要求重登；返回选角的连接在下次入城恢复。关闭会阻止新积分购买及消费返分，不删除原积分、购买记录或重置累计；普通点券购买仍可继续。266使用上述命令入口。资源、消费与额度见[积分商城](../模块/背包与装备.md#积分商城)。
 
 ## 开发模拟充值
 
-充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP80；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理网页与充值设为相同端口时共用一次绑定。监听仍沿用内置站点的本机边界；端口占用导致明确启动失败，不悄悄跳过。普通路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
+充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP80；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理接口与充值设为相同端口时共用一次绑定。监听仍沿用内置站点的本机边界；端口占用导致明确启动失败，不悄悄跳过。普通路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
 
 当前提供开发模拟加值，不连接支付平台、不产生真实扣款。页面只接受原生CMD65票据和`ticketKey`，没有手选账号、UID或默认10000回退。有效票据绑定当前连接generation、选角epoch及角色，十分钟失效；重新开页、换角、断线和接管使旧票据失效。票据与实际加值在原owner内验证和提交；状态查询只读持久钱包，不安装未知提交结果的旧快照。
 
@@ -145,41 +145,13 @@ dotnet run --project Server/DfoServer -- --gm appearance 测试角色
 
 剑影这类实验角色仍用[离线准备](离线实验角色.md)。本工具只改已经存在的角色，不创建 Lv95 任务集，也不代替那次准备的备份和审计。
 
-## 4. 单独的本机网页
+## 4. 本机管理接口
 
-GM 网页内嵌在服务进程中：服务端以 `--gm-web-port <端口>` 启动即在 `127.0.0.1` 提供页面（默认 0 = 关闭，须与频道、游戏、GM 命令端口都不同），复用已加载的 PVF 和同一存档仓库，无需 Python 或独立进程。通常 `--gm-port` 与 `--gm-web-port` 一起传，例如 `./start-server.bat --gm-port 23102 --gm-web-port 23103`，浏览器打开 `http://127.0.0.1:23103/`。无参数运行 `start-server.bat/.sh` 时默认带这两个端口并打印地址。
+服务端以 `--gm-port 23102 --gm-web-port 23103` 提供本机 TCP 命令与 HTTP JSON 接口。`--gm-web-port` 沿用现有配置键，仅监听 `127.0.0.1`；根路径及旧 `/assets/` 页面返回 404，不再内嵌 GM 页面、脚本或浏览器入口。玩家通过独立 95JP 启动器的原生 GM工具页操作。
 
-GM 网页同一 HTTP 端口同时提供收发包记录、客户端过滤与抓包状态查询，不需要额外开启包查询监听；路径、安全边界和保留上限见[包体抓包](环境与配置.md#包体抓包)。GM 命令端口仍为行文本 TCP，不承载 HTTP。
+HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=true` 及审计要求。它复用当前服务的资源和仓储，提供背包、邮件、角色、掉落清单、包查询等能力。独立充值页面使用另外的充值端口，按原配置运行。
 
-GM 网页的物品图标读取客户端 `ImagePacks2`：设置环境变量 `DFO_IMAGEPACKS2` 指向该目录，未设置时从程序目录向上搜索（含各级子目录与孙目录）；找不到时页面显示占位图标，不影响其他功能。删除物品/清空容器/删邮件/直接入包在命令层只允许离线（选角）角色，网页在角色在线时会在确认窗提示并先强制小退再执行，不会直接改在线角色的存档。邮件发放成功后会提醒在线的收件角色（MAILBOX_ALARM）。
-
-Windows 启动器（`Tools/ServerLauncher`，即单 EXE 的界面）勾选“启用 GM 工具（仅本机）”后，启动服务时向服务端传入 `--gm-port` 和 `--gm-web-port`（沿用 `launcher.local.json` 的 `GmPort`/`GmWebPort`，默认 23102/23103，旧配置缺少 GM 字段时保持关闭），“打开 GM 网页”按钮打开 `http://127.0.0.1:{GmWebPort}/`。启动器不再自己托管网页，原 `GmWebHost.cs` 已停用，仅保留给 `--selftest-gm` 的旧测试，待确认后删除。停服后才能改变 GM 开关或端口。内嵌页面只监听 `127.0.0.1`；写命令返回不明时先读取状态核对，不自动重试。`--selftest-gm` 检查配置兼容、传给服务端的参数及旧代理的兼容测试，只使用隔离的合成监听，不操作玩家数据。
-
-网页“商城调试”和“疲劳调试”卡片无需选择角色，初次读取服务端状态后才允许切换。应用后显示服务端返回的实际状态；“读取状态”可查看其他管理操作后的值，作用范围及重启恢复行为直接显示在卡片中。定向 `--selftest-tcp gm-debug` 验证两个默认值、关闭恢复疲劳规则及服务重建。
-
-内嵌网页包含概览 #overview、账号与角色 #accounts、角色工作台 #char、物品库 #items、任务 #quests、成套发放 #grant、邮件 #mail、活动 #events、审计日志 #audit，左侧导航加 Ctrl+K 命令面板，点行弹出右侧角色抽屉。写操作（邮件发放物品/套装/金币、强制小退、金币/等级/转职）都在抽屉或确认框内二次确认，要求自定义请求头 X-GM-Request 与 confirm=true，并追加到数据目录 gm-audit.jsonl（时间、本机操作者、对象、命令、前后摘要、返回）。其余写操作列入 [GM迁移对照](GM迁移对照.md) 的待做清单。
-
-“活动”页提供诺兰常驻的显示、隐藏及恢复默认显示，无需输入GM命令；设置保存后，重新选择角色或换频道刷新。黄金卡牌双倍保留独立开关和起止时间。`GET /api/events`兼容原64查询，`GET /api/events?id=2532`读取诺兰状态；`POST /api/events`仅接受64或2532，2532只允许on/off/auto，写操作的审计前后摘要读取本次活动编号。
-
-**待删除：**[GmWeb](../../Tools/GmWeb/gm_web.py)（Python 版，含 `index.html`）已被服务端内嵌 GM 网页取代，保留仅供迁移期对照，待用户确认后删除（见 [GM迁移对照](GM迁移对照.md)）。下文仍可临时使用：它只在 `127.0.0.1` 提供页面，把表单转成同一行 GM 命令。服务端须通过 `--gm-port` 打开本机端口，网页的 `--gm-port` 指向相同端口，默认 23102。与内嵌网页同时使用时选择不同网页端口。
-
-在仓库根目录执行：
-
-```powershell
-python3 Tools/GmWeb/gm_web.py --gm-port 23102
-```
-
-浏览器打开 `http://127.0.0.1:23103`。`--port` 可改网页端口，默认 23103，且不能与 `GmPort` 相同。自检不启动游戏服务：
-
-```powershell
-python3 Tools/GmWeb/gm_web.py --self-check
-```
-
-网页分为角色概览、物品与背包、等级与职业、任务与技能、会员与契约、全服调试六个页签，左侧固定账号/角色列表与结果区，结果区保留最近20条命令记录。物品页可先`item-info`查询名称、种类与堆叠上限，普通装备才开放强化输入；“读取背包”按容器筛选只读列表，点击行回填道具ID。等级/职业重置及清空任务执行前再次确认。会员页调用已有`contract`、`black-diamond`、`gold-card`，全服页额外提供活动64的状态/开/关/恢复时间表，时间区间仍用命令行`event schedule`。网页只拼接已有命令行，所有校验与事务仍在服务端。
-
-网页选择角色后读取当前基础职业的分支及觉醒名称，分别下拉选择，不要求手工计算grow字节。普通基础分支只有未觉醒；特殊职业按实际CHR声明提供觉醒选项。界面沿用已有卡片、颜色、间距和控件样式，调整按钮标明重置技能，角色摘要显示主树SP/TP。此旧网页仅编辑当前基础职业分支；完整基础职业名册与跨job转换由下述内嵌HTTP接口提供，不伪造本版未声明的分支。
-
-已有完整双技能树的角色，单项技能编辑只覆盖两树已存在的同ID等级且保留SP/TP；新增没有正式资源槽位资格的ID及删除最后绑定拒绝。未初始化旧角色保留原编辑合同。等级/职业重置使用前述完整重建事务，不替代[在线学习](../模块/技能学习.md)或正常升级。验证入口为DevelopmentGmTests、DevelopmentAssetTests（含`items`/`item-info`/强化发放）、CharacterProgressResetTests及隔离TCP组`gm-progress`、`gm-assets`；网页代理自检与当前客户端重新选角验收分别报告。
+`Tools/ServerLauncher --selftest-gm` 检查配置、端口及启动参数；旧 Python 代理、HTML 和已停用的代理主机均已移除。
 
 ## 第二轮移植：检索、货币、发放、清理、邮箱与任务
 
@@ -225,13 +197,13 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 ## 默认邮件发放
 
-- 网页发放默认“系统邮件”，直接入包是显式的次选项；邮件发放不经角色会话，角色在游戏中也可发放，重新选择角色后领取。
+- 原生界面发放默认“系统邮件”，直接入包是显式的次选项；邮件发放不经角色会话，角色在游戏中也可发放，重新选择角色后领取。
 - 整套邮件发放超过 10 件时按顺序拆成多封，每封各自原子投递；整套不是全有或全无，若中途某封失败，返回已投递的邮件编号并标记 `partial`。
 
 
-## 称号簿、属性、金库与高级筛选（内嵌 GM 网页）
+## 称号簿、属性、金库与高级筛选（原生 GM 界面）
 
-- 称号：命令 title-list <角色> [分类或关键字]（只读）、title-complete <角色> <成就ID,...|all|book|book:分类>（直接完成成就并发放称号、奖励与邮件；须在选角界面，网页可先强制小退）。
+- 称号：命令 title-list <角色> [分类或关键字]（只读）、title-complete <角色> <成就ID,...|all|book|book:分类>（直接完成成就并发放称号、奖励与邮件；须在选角界面，原生界面可先强制小退）。
 - 属性：stats <角色>，服务端只计算等级与转职的基础属性，不含装备、技能、称号、套装修正。
 - 本服装备建设分：`equipment-score <角色>`，只读服务器穿戴快照，返回版本、捕获revision、12槽分项及Complete/Partial/Invalid和封顶提示；[规则与排除项](../模块/角色属性.md#本服装备建设分-v1)。不写存档，不是原版战斗力或玩家原生面板。
 - 账号金库：currency <角色> vault-gold set|add|sub <数量>（上限为当前容量档位，在线安全）；item-clear 支持容器 AccountCargo。
@@ -242,33 +214,30 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 - `skill-list <角色>`：技能名称（PVF）、等级与 SP/TP，只读，在线离线都可。
 - `exp-table`：Lv1..95 起始累计经验与升级所需经验，只读。
-- 网页新增 `POST /api/exp`（按累计经验设等级）、`POST /api/disconnect`（断开账号连接）、`GET /api/audit` 的筛选与 CSV 导出。
+- 本机接口提供 `POST /api/exp`（按累计经验设等级）、`POST /api/disconnect`（断开账号连接）、`GET /api/audit` 的筛选与 CSV 导出。
 - 称号成就对在线角色可直接完成（同步内存快照，客户端画面重新选角后刷新）。
 
-## 扩展装备栏（GM 网页接口）
+## 扩展装备栏（本机管理接口）
 
 基础职业接口：`GET /api/professions`返回`{ok:true,data:{baseJobChange:true,jobs:[{job,name,branches:[{branch,name,awakenings:[{stage,name,growType}]}]}]}}`，名册来自本次实际加载的职业资源。`POST /api/job`继续要求`X-GM-Request: 1`及`confirm:true`；请求`{account,name,job,branch,awakening,confirm:true}`显式提供`job`时执行`profession`，省略时保留原`grow`行为。离线、穿戴和资源组合拒绝按原错误响应返回并写入审计，不先强制断线。
 
 - `GET /api/characters/{account}/{name}/equip-slots`：只读，返回 `{ok, data:{name, rev, flags, added:0, changed:false, slots:{support, magicStone, earring, aura, creatureSkin}}}`。
 - `POST /api/equip-slots`，请求头 `X-GM-Request: 1`，JSON `{account, name, flags, returnFirst?, confirm:true}`。`flags` 只能是 1、2、3、16、17、18、19 之一（1/2/16 的组合），其他值返回 400。角色在游戏中时默认返回 400「角色正在游戏中」；`returnFirst=true` 先强制小退再执行，响应带 `returned:true`。成功 `data` 同上，`added` 为本次新开的位，`changed=false` 表示所选位早已开启。小退与开栏各写一条审计（动作 `force-return`、`equip-slots`）。
 
-## 黑钻会员（GM 网页接口）
+## 黑钻会员（本机管理接口）
 
 - `POST /api/black-diamond`，请求头 `X-GM-Request: 1`，JSON `{account, name, days, confirm:true}`；`days` 0–3650，0 表示清空该账号黑钻到期时间。与命令行 `black-diamond <角色> <天数>` 同一提交入口，写入账号钱包契约类型 56，账号下所有角色共享；天数按「现在 + 天数」覆盖到期时间，不是叠加。审计动作 `black-diamond`，前后摘要取 `wallet`。
-- `wallet <角色>` 的 JSON 增加 `blackDiamondExpiresAt`（Unix 秒）与 `blackDiamond`（当前是否有效）；网页“基础”钱包区与“快捷操作 → 黑钻会员”据此显示状态。
+- `wallet <角色>` 的 JSON 增加 `blackDiamondExpiresAt`（Unix 秒）与 `blackDiamond`（当前是否有效）；原生界面的特权卡据此显示状态。
 
-## 副职业类型与等级（GM 网页接口）
+## 副职业类型与等级（本机管理接口）
 
 - 命令：`expert-job <角色>` 只读，返回 `{name, rev, type, typeLabel, expertness, level, maxLevel}`；`expert-job <角色> <类型1-4> <等级1-11>` 写入。类型编号取自 `character/expertjob.lst`：1 附魔师、2 炼金术师、3 分解师、4 控偶师。
 - 服务端只持久化累计熟练度（`character_expert_job.expertness`），客户端按 PVF `[expertness exp]` 阈值换算显示等级。写入 N 级时落该等级的最低阈值；本版四职业阈值相同：Lv1=0、Lv2=20、Lv3=133、Lv4=246、Lv5=359、Lv6=472、Lv7=585、Lv8=698、Lv9=811、Lv10=939、Lv11=1067。没有资格时新建行，已有资格时改类型与熟练度，同一事务校验 revision；改类型保留已学附魔设计图。
 - `POST /api/expert-job`，请求头 `X-GM-Request: 1`，JSON `{account, name, type, level, confirm:true}`；`type` 1–4，`level` 1–11。审计动作 `expert-job`，前后摘要取只读命令 `expert-job <角色>`。在线角色经会话 owner 提交并同步在线快照，客户端回到选角并再次进入后刷新等级显示。
 
-## GM 网页：索引预热、分页与 UX（摘要）
-- 启动即后台预热物品/任务/词条索引并缓存到存档目录（`gm-index-*.json`，按 PVF 大小+修改时间校验），前端只在真正构建时提示。
-- 物品、审计、账号、任务均为服务端分页（`page`/`pageSize`，审计用 `X-Total-Count`）。
-- 稀有度显示为 普通/高级/稀有/神器/史诗/勇者/传说；零命中词条置灰。
-- 任务页：状态筛选、按 PVF `[grade]` 分类（无法归类为“其他”）、勾选批量完成、“全部完成”二次确认并审计。全部完成与跨页全选不含每日/重复；这两类请单独 `quest-add`（当天周期）或不要永久完成。
-- 顶部全局角色选择器与整页角色工作台；只有危险操作二次确认。详见 `GM迁移对照.md`。
+## 管理接口索引与分页
+
+物品、任务与词条索引按需预热并缓存至存档目录（`gm-index-*.json`）；物品、审计、账号与任务使用服务端分页。原生界面交互由启动器仓库维护。
 
 ## 团本入场时段（团队频道卡）
 
@@ -276,7 +245,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 时段内的卡在入城/换频道时通过 `NOTI EVENT_INFO` 下发事件 282 / 2449 / 414，去掉「非可入场时间」。已在城镇的角色要换一次频道或重新选角才刷新。
 - 例：全天开放超时空漩涡（每天 00:00–24:00）：`{"luke":[],"hyperspace":[{"weekday":1,"start":"00:00","end":"24:00"},…,{"weekday":7,"start":"00:00","end":"24:00"}],"prey":[]}`。协议细节见[帧与频道](../协议/帧与频道.md#团队频道三张卡卢克--超时空漩涡--普雷伊希斯)。
 
-## 纸娃娃（只读，GM 网页接口）
+## 纸娃娃（只读，本机管理接口）
 
 按角色**当前已保存**的外观合成站立帧 PNG，供 WPF 等前端显示。只读：不改库、不写审计；试穿只在内存里替换部位。需要客户端 `ImagePacks2`（`DFO_IMAGEPACKS2` 或自动搜索，同物品图标）。
 

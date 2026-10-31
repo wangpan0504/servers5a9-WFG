@@ -188,6 +188,27 @@ internal static class DevelopmentGmExtendedTests
         string reference = (int)target.Position.List + ":" + target.Position.Index + ":";
         TestCheck.That(Answer("item-delete Other " + reference + (target.Uid + 1)).StartsWith("ERR ") && Load().Inventory.Items.Length == count, "UID不符整批保留");
         TestCheck.That(Answer("item-delete Other " + reference + target.Uid).StartsWith("OK ") && Load().Inventory.Items.Length == count - 1, "单件删除");
+        // 实际玩家的消耗品分类混有普通背包、宠物消耗品和账号金库。
+        using (var cargoLease = f.Owners.Acquire("other", () => { }))
+        {
+            var current = f.Repository.LoadCharacter(cargoLease, 0);
+            var after = current.Inventory with { Items = current.Inventory.Items.AddRange(new InventoryItem[] {
+                new InventoryItem(0, new(InventoryListType.AccountCargo, 0), new(490013209, ItemKind.Consumable, 10)),
+                new InventoryItem(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 20))}) };
+            f.Repository.CommitInventory(cargoLease, current, new InventoryPlan(current.Inventory, after, "test_gm_mixed_delete"));
+        }
+        var mixedBefore = Load();
+        var mixed = mixedBefore.Inventory.Items.Where(item => item.Position.List == InventoryListType.AccountCargo ||
+            item.Position.List == InventoryListType.Pet && item.Position.Index == 189 || item.Core.ItemId == 3175).ToArray();
+        string MixedRef(InventoryItem item) => $"{(int)item.Position.List}:{item.Position.Index}:{item.Uid}";
+        string mixedRefs = string.Join(',', mixed.Select(MixedRef));
+        TestCheck.That(Answer("item-delete Other " + mixedRefs + ",0:352:999999").StartsWith("ERR ") &&
+            Load().Inventory.Items.SequenceEqual(mixedBefore.Inventory.Items), "混合容器包含失效UID时所有容器均不变");
+        TestCheck.That(Answer("item-delete Other " + mixedRefs).StartsWith("OK "), "GM混合背包宠物及账号金库原子删除");
+        var mixedAfter = Load();
+        TestCheck.That(mixed.All(item => mixedAfter.Inventory.Find(item.Position) is null) &&
+            mixedAfter.Inventory.AccountCargo.Revision > mixedBefore.Inventory.AccountCargo.Revision,
+            "重新读库确认全部删除并提升共享金库修订");
         TestCheck.That(Json(Answer("item-clear Other 0")).GetProperty("deleted").GetInt32() > 0 &&
             Load().Inventory.Items.All(item => item.Position.List != InventoryListType.Main), "分类清理整栏原子删除");
 
