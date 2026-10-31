@@ -25,6 +25,7 @@ internal static partial class PartyDungeonTcpTests
             resources.ItemResources, resources.Quests, resources.Learning);
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"party-modes"),resources:resources);
         await fixture.StartAsync();
+        VerifyHellRoomMoveRecovery(fixture, resources);
         foreach (var (questId,dungeonId) in new (ushort,uint)[] { (5934,291100318),(6032,291100319),(3842,191) })
         {
             var quest = resources.Quests.Get(questId);

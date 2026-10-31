@@ -489,6 +489,9 @@ internal static class DungeonPackets
 
     public static byte[] MoveAccepted() => [1];
 
+    // 02333990失败分支清除场景+1AC8的过图等待位；19沿通用拒绝，不借成功ACK放行活怪房。
+    public static byte[] MoveRejected() => [0, 19, 0];
+
     // ACK42 成功标志为 1。回城位置仍由已经确认的 NOTI24 携带。
     public static byte[] GiveUpAccepted() => [1];
 

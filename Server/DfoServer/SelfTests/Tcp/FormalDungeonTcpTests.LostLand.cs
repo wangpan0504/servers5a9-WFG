@@ -83,9 +83,9 @@ internal static partial class FormalDungeonTcpTests
                 That(sea[0] == 7 && sea[1] == 9 && sea[13] == 1 && U32(sea,14) == 11214,
                     "实收水旋风请求沿完整资源链进入海域，保留正式ACK45和29包序");
                 Load(peer); peer.Barrier();
-                peer.Send(45,water); peer.Barrier();
+                peer.Send(45,water); peer.Expect(1,45,[0,19,0]); peer.Barrier();
                 var wrongSource = new byte[100]; wrongSource[0] = 8; wrongSource[1] = 6;
-                peer.Send(45,wrongSource); peer.Barrier();
+                peer.Send(45,wrongSource); peer.Expect(1,45,[0,19,0]); peer.Barrier();
                 var returnWater = new byte[100]; returnWater[0] = 9; returnWater[1] = 6;
                 peer.Send(45,returnWater); peer.Expect(1,45,[1]);
                 var port = peer.Expect(0,29).Body;
@@ -101,7 +101,7 @@ internal static partial class FormalDungeonTcpTests
                     var step = peer.Expect(0,29).Body;
                     That(step[0] == x && step[1] == y,"真实TCP沿普通门及已有传送抵达公主房");
                     Load(peer); peer.Barrier();
-                    if (x == 1 && y == 8) { peer.Send(45,rescue); peer.Barrier(); }
+                    if (x == 1 && y == 8) { peer.Send(45,rescue); peer.Expect(1,45,[0,19,0]); peer.Barrier(); }
                 }
                 peer.Send(45,rescue); peer.Expect(1,45,[1]);
                 var rescued = peer.Expect(0,29).Body;

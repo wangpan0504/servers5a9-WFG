@@ -87,6 +87,7 @@ internal static class QuestHarlemRidingTcpTests
                 {
                     peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
                 }
+                else peer.Expect(1,45,[0,19,0]);
                 Drain();
             }
             void Drain() => drain(peer,packet =>

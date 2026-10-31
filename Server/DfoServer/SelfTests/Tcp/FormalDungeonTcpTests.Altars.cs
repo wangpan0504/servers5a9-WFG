@@ -214,6 +214,7 @@ internal static partial class FormalDungeonTcpTests
                         move[0] = checked((byte)target.X);
                         move[1] = checked((byte)target.Y);
                         peer.Send(45, move);
+                        peer.Expect(1,45,[0,19,0]);
                         peer.Barrier();
                     }
                     if (id == 11006) peer.Send(258);
