@@ -14,6 +14,20 @@ internal static class BoosterUsePlacesTests
     public static void RunCore()
     {
         const string open = "[action usable place]\n", close = "\n[/action usable place]";
+        That(BoosterCatalog.ParseUsePlaces(open + "`[village]` `[seria room]` `[dungeon]`" + close).PendingRule is null,
+            "副本与城镇、房间并列的合法地点不能导致整份礼包被拒绝");
+        foreach (string bodyPlace in new[] { "`[dungeon]`", "`[dungeon]` `[village]`", "`[seria room]` `[dungeon]`" })
+        {
+            var place = BoosterCatalog.ParseUsePlaces(open + bodyPlace + close);
+            That(place.PendingRule is null && place.Dungeon && place.Village == bodyPlace.Contains("[village]") &&
+                place.SeriaRoom == bodyPlace.Contains("[seria room]"), "副本允许位保留独立正向地点，不能补造城镇权限");
+        }
+        foreach (string invalid in new[] { "`[dungeon]` `[dungeon]`", "`[dungeon]` `[unknown]`" })
+            That(BoosterCatalog.ParseUsePlaces(open + invalid + close).PendingRule is not null,
+                "新增副本位不放宽重复或未知地点");
+        That(BoosterCatalog.ParseUsePlaces(open + "`[dungeon]` `[dont use assult]`" + close) is
+            { Dungeon: true, ExcludeAssault: true, Village: false, SeriaRoom: false, PendingRule: null },
+            "明确允许副本时仍保留突击排除位，不将其忽略为通用副本许可");
         const string body = "`[seria room]` `[village]` `[dont use assult]`";
         // 合成模板验证地点与奖励合同；真实资源完整性由资源回归另行核对。
         foreach (var (sourceId, hatId, jobs) in new (int, int, string)[]

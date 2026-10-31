@@ -8,7 +8,11 @@ using PvfLib;
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record BoosterReward(int ItemId, long Weight, int Count);
-internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null);
+internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null)
+{
+    public bool Dungeon { get; init; }
+    public bool ExcludeAssault { get; init; }
+}
 internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards)
 {
     public string? JobTag { get; init; }
@@ -508,13 +512,13 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             !IsRootDeclaration(tags, declarations[0].Index)) return new(PendingRule: "礼包使用地点声明未闭合或不唯一");
         int start = declarations[0].Index + declarations[0].Length;
         string body = text[start..declarations[1].Index];
-        if (!Regex.IsMatch(body, @"^\s*(?:`\[(?:village|seria room|dont use assult)\]`\s*)+$"))
+        if (!Regex.IsMatch(body, @"^\s*(?:`\[(?:village|seria room|dungeon|dont use assult)\]`\s*)+$"))
             return new(PendingRule: "礼包使用地点包含未支持声明");
         var values = Regex.Matches(body, "`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
         if (values.Length != values.Distinct().Count()) return new(PendingRule: "礼包使用地点重复");
-        bool village = values.Contains("[village]"), seriaRoom = values.Contains("[seria room]");
-        if (!village && !seriaRoom) return new(PendingRule: "礼包使用地点缺少允许地点");
-        return new(village, seriaRoom);
+        bool village = values.Contains("[village]"), seriaRoom = values.Contains("[seria room]"), dungeon = values.Contains("[dungeon]");
+        if (!village && !seriaRoom && !dungeon) return new(PendingRule: "礼包使用地点缺少允许地点");
+        return new(village, seriaRoom) { Dungeon = dungeon, ExcludeAssault = dungeon && values.Contains("[dont use assult]") };
     }
 
     internal static bool IsRootDeclaration(string tags, int declarationIndex)
