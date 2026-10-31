@@ -15,6 +15,7 @@ internal static class SelfTestRunner
     {
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         CharacterRenameCardTests.RunCore();
+        BattlePassCatalogTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
         ClientRequestSequenceTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
@@ -399,6 +400,7 @@ internal static class SelfTestRunner
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         BeastDungeonEntryTests.RunMaps(pvf);
+        BattlePassCatalogTests.Run(pvf);
         BeastDungeonEntryTests.RunAccessoryQuest(pvf, itemResources);
         MarriageResourceTests.Run(pvf);
         var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
