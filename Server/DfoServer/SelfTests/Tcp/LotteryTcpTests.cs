@@ -17,6 +17,7 @@ internal static class LotteryTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         LotteryTests.Run(resources);
+        FiniteJarTests.RunResources(resources.ItemResources, resources.Towns);
         var items = resources.ItemResources;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery"), gm: true, resources: resources);
         var repo = new CharacterRepository(fixture.Database);
@@ -108,6 +109,7 @@ internal static class LotteryTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "袖珍罐数据库完整性");
         await MaterialCostAsync(source, root, resources);
         await RestrictedPotsAsync(source, root, resources);
+        await FiniteGoldAsync(source, root, resources);
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, shopExpiration: true);
         short SourceSlot()
         {
@@ -119,6 +121,73 @@ internal static class LotteryTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
+    static async Task FiniteGoldAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        const int pot = 490001063;
+        var items = resources.ItemResources;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery-finite-gold"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new("GoldPot", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(117), InventoryRewardGrantService.Create(items.Items.Get(pot), 2))], Gold: 12345)
+            });
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            string before = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_gold_pot BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'gold pot rollback'); END");
+            Send(peer, 117);
+            peer.Closed();
+            That(Snapshot() == before, "金币开罐晚SQL失败原子保留源、金币、版本、审计和UID");
+            fixture.Sql("DROP TRIGGER fail_gold_pot");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            for (int opened = 1; opened <= 2; opened++)
+            {
+                Send(peer, 117);
+                byte[] ack = peer.Expect(1, 27).Body;
+                That(ack.Length == 130 && ack[0] == 1 && U16(ack, 1) == 117 &&
+                    ack.AsSpan(3, 123).IndexOfAnyExcept((byte)0) == -1 && U32(ack, 126) == 100000,
+                    "真实金币ACK27零奖励记录和末尾十万增量");
+                byte[] delta = peer.Expect(0, 14).Body;
+                BoosterTcpTests.Entry(delta, 117, opened == 1 ? pot : -1, opened == 1 ? 1 : 0);
+                BoosterTcpTests.Entry(delta, 0, 0, 12345 + opened * 100000);
+                peer.Barrier();
+                That(fixture.Query("SELECT gold FROM characters") is var saved &&
+                    Convert.ToInt64(saved.Single()[0]) == 12345 + opened * 100000 &&
+                    fixture.Query("SELECT count(*) FROM character_inventory_items") is var inventory &&
+                    Convert.ToInt64(inventory.Single()[0]) == (opened == 1 ? 1 : 0),
+                    "真实钱包到账与源消费同提交，金币不创建实体；商店材料不重复扣费");
+            }
+            string exhausted = Snapshot();
+            Send(peer, 117);
+            peer.Expect(1, 27, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == exhausted, "金币罐耗尽重放不重复加钱");
+        }
+        string committed = Snapshot();
+        await fixture.StopAsync();
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            peer.Barrier();
+            That(Snapshot() == committed && fixture.Query("PRAGMA integrity_check") is [["ok"]],
+                "金币罐重启与重登保持真实金币及已消费源");
+        }
+        await fixture.StopAsync();
+        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+
     static async Task RestrictedPotsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         const int pot = 490002024;

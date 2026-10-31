@@ -44,6 +44,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
     public ItemMaterialCost? LotteryUseNeedItem { get; init; }
+    public bool AllowsLotteryGold { get; init; }
     // [legacy] 的随机礼盒只带族/档，产物池由 etc/runesystem.etc 的 [random choose info] 决定。
     public (int Family, int Tier)? RuneBox { get; init; }
     public int CoolTime { get; init; }
@@ -296,8 +297,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         if (type == "upgradable legacy")
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
-            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$"))
+            string lotteryType = PvfScript.Section(text, "stackable type").Trim();
+            if (!Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
                 return new([], "袖珍罐子类型待确认");
+            bool allowsGold = lotteryType.EndsWith('0');
             var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);
             if (data.Count != 1 || Regex.Matches(tags, @"\[int data\]").Count != 1 ||
                 Regex.Matches(tags, @"\[/int data\]").Count != 1)
@@ -307,7 +310,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], "袖珍罐奖池行宽无效");
             var rewards = ImmutableArray.CreateBuilder<BoosterReward>();
             for (int i = 0; i < tokens.Length; i += 3)
-                if (!int.TryParse(tokens[i], out int id) || id <= 0 ||
+                if (!int.TryParse(tokens[i], out int id) || id < 0 || (id == 0 && !allowsGold) ||
                     !int.TryParse(tokens[i + 1], out int weight) || weight < 0 ||
                     !int.TryParse(tokens[i + 2], out int count) || count <= 0)
                     return new([], "袖珍罐物品、权重或数量无效");
@@ -317,7 +320,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 ? new([new(1, rewards.ToImmutable())], Lottery: true,
                     // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
                     NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
-                    { LotteryUseNeedItem = lotteryUseNeedItem, SetsDisjointInstanceType = setsDisjointInstanceType,
+                    { LotteryUseNeedItem = lotteryUseNeedItem, AllowsLotteryGold = allowsGold, SetsDisjointInstanceType = setsDisjointInstanceType,
                         ForbidsDestructionSouls = setsDisjointInstanceType }
                 : new([], "袖珍罐总权重为零");
         }
