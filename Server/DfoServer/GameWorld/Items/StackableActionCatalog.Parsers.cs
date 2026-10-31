@@ -39,7 +39,8 @@ internal static partial class StackableActionCatalog
                 "[change creature]" or "[creature growth]" or "[kaleido]" or "[gold kaleido box]" or
                 "[fixed probability kaleido]" or "[portable genuine damage upgrade upgrede]" or
                 "[emancipate growth item upgrade]" or "[portable amplify]" or "[new portable amplify]" or
-                "[lucky enchant deed]" or "[amplify protect equipment]" or "[new amplify protect equipment]"
+                "[lucky enchant deed]" or "[amplify protect equipment]" or "[new amplify protect equipment]" or
+                "[portable upgrade]" or "[new portable upgrade]" or "[protect equipment]" or "[new protect equipment]"
                     or "[rent point]" or "[repair coupon]" or "[repair equipment]" or "[change creature random]" or "[creature effect]"
                     or "[creature use item]" or "[extend item period]" or "[creature transport stone]" or "[add mileage]" or "[add avatar socket]"
                     or "[add guildmileage]" or "[increase guild exp fund]"

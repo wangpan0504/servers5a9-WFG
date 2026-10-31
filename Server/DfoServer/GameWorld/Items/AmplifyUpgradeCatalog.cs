@@ -50,11 +50,13 @@ internal sealed class AmplifyUpgradeCatalog
     readonly Func<int, string> resolve;
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly Lazy<AmplifyUpgradeRules> rules;
+    readonly Lazy<AmplifyUpgradeRules> reinforceRules;
     readonly Lazy<ImmutableArray<LuckyAmplifyStep>> lucky;
     readonly Lazy<ImmutableArray<LuckyAmplifyStep>> luckyReinforce;
     readonly Lazy<UpgradeDestroyBonus> companionBonus;
     readonly ConcurrentDictionary<int, Lazy<AmplifyUse?>> uses = new();
     public AmplifyUpgradeRules Rules => rules.Value;
+    public AmplifyUpgradeRules ReinforceRules => reinforceRules.Value;
     public ImmutableArray<LuckyAmplifyStep> Lucky => lucky.Value;
     public ImmutableArray<LuckyAmplifyStep> LuckyReinforce => luckyReinforce.Value;
     public UpgradeDestroyBonus CompanionBonus => companionBonus.Value;
@@ -65,6 +67,7 @@ internal sealed class AmplifyUpgradeCatalog
     {
         this.read = read; this.resolve = resolve; this.stackable = stackable;
         rules = new(() => Parse(read("etc/amplifyupgrade.etc"), resolve));
+        reinforceRules = new(() => Parse(read("etc/upgrade.etc"), resolve, reinforce: true));
         lucky = new(() => ParseLucky(read("etc/chn_lucky_enchant_deed.etc"), resolve));
         luckyReinforce = new(() => ParseLucky(read("etc/chn_lucky_enchant_deed.etc"), resolve, reinforce: true));
         companionBonus = new(() => ParseBonus(read("etc/upgrade.etc"), resolve));
@@ -78,10 +81,11 @@ internal sealed class AmplifyUpgradeCatalog
         catch { uses.TryRemove(new KeyValuePair<int, Lazy<AmplifyUse?>>(id, pending)); throw; }
     }
 
-    internal static AmplifyUpgradeRules Parse(PvfTokenDocument document, Func<int, string> resolve)
+    internal static AmplifyUpgradeRules Parse(PvfTokenDocument document, Func<int, string> resolve, bool reinforce = false)
     {
         var tables = document.Sections.Where(row => row.Name == "table").SelectMany(row => row.Children)
-            .Where(row => row.Name == "table type" && row.Values.Length != 0 && row.Values[0].Type == 6 && resolve(row.Values[0].Value) == "amplify").ToArray();
+            .Where(row => row.Name == "table type" && row.Values.Length != 0 && row.Values[0].Type == 6 &&
+                resolve(row.Values[0].Value) == (reinforce ? "normal" : "amplify")).ToArray();
         Require(tables.Length == 1);
         var rows = AmplificationFiles.UpgradeRows(tables[0]);
         Require(rows.Length >= 31 && rows.All(row => row.FailureWeight is >= 0 and <= 100000 && row.PenaltyType is >= 1 and <= 3 &&
@@ -131,6 +135,8 @@ internal sealed class AmplifyUpgradeCatalog
         string name = raw.Label;
         AmplifyUse? result = name switch
         {
+            "[portable upgrade]" or "[new portable upgrade]" => new(AmplifyUseKind.Portable) { Reinforce = true },
+            "[protect equipment]" or "[new protect equipment]" => new(AmplifyUseKind.Protection) { Reinforce = true },
             "[portable amplify]" => new(AmplifyUseKind.Portable),
             "[new portable amplify]" => new(AmplifyUseKind.Portable),
             "[lucky enchant deed]" when values is [1] => new(AmplifyUseKind.Lucky, MaximumUpgrade: 14),
@@ -143,7 +149,7 @@ internal sealed class AmplifyUpgradeCatalog
         Require(raw.HasIntegerArguments && parsed.Status == StackableActionParseStatus.Parsed && values is not null);
         if (result.Kind == AmplifyUseKind.Portable)
         {
-            bool boosted = name == "[new portable amplify]";
+            bool boosted = name is "[new portable amplify]" or "[new portable upgrade]";
             Require(values!.Count == (boosted ? 3 : 2) && values[0] >= 0 && values[1] >= values[0] &&
                 (!boosted || values[2] >= 0));
             result = result with { MinimumUpgrade = values[0], MaximumUpgrade = values[1],
@@ -151,7 +157,7 @@ internal sealed class AmplifyUpgradeCatalog
         }
         else if (result.Kind == AmplifyUseKind.Protection)
         {
-            Require(name == "[amplify protect equipment]" ? values!.Count == 0 : values is [>= 0 and <= 30]);
+            Require(name is "[amplify protect equipment]" or "[protect equipment]" ? values!.Count == 0 : values is [>= 0 and <= 30]);
             result = result with { RetainLevel = values!.Count == 1 ? values[0] : 0 };
         }
         if (!AllowsGeneralServer(document, resolve)) return result with { PendingRule = "action usable server type" };

@@ -39,13 +39,16 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             return InventoryResult.Reject(RejectCode);
 
         var use = upgrades.Get(source.Core.ItemId);
-        bool lucky = reinforce || request.Mode == EnhancementMode.LuckyAmplify;
+        bool lucky = request.Mode == EnhancementMode.LuckyAmplify || reinforce && use?.Kind == AmplifyUseKind.Lucky;
         byte old = target.Core.Upgrade;
-        if (use?.PendingRule is not null || (lucky ? use?.Kind != AmplifyUseKind.Lucky || use.Reinforce != reinforce : use is { Kind: not AmplifyUseKind.Portable }))
+        if (use?.PendingRule is not null || use is not null && use.Reinforce != reinforce ||
+            reinforce && use is null ||
+            (lucky ? use?.Kind != AmplifyUseKind.Lucky : use is { Kind: not AmplifyUseKind.Portable }))
             return InventoryResult.Reject(RejectCode);
         if (use is not null && !AllowsUse(use, character, target, template))
             return InventoryResult.Reject(RejectCode);
-        var rules = upgrades.Rules;
+        // 便携强化读取普通normal表；幸运强化仍只使用自己的三段权重。
+        var rules = reinforce && !lucky ? upgrades.ReinforceRules : upgrades.Rules;
         if (old >= rules.Steps.Length || rules.MaximumLevels.TryGetValue(template.Rarity, out int maximum) && old >= maximum)
             return InventoryResult.Reject(RejectCode);
         var step = rules.Steps[old];
@@ -55,7 +58,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         if (!lucky && consumables is not null)
             failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
                 EnhancementPotionPolicy.ActiveBonusWeight(before.ConsumableStates, consumables.EnhancementPotions,
-                    EnhancementPotionMode.Amplify, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()));
+                    reinforce ? EnhancementPotionMode.Reinforce : EnhancementPotionMode.Amplify,
+                    (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()));
         if (!portable && !lucky && source.Core.ItemId != step.MaterialId)
             return InventoryResult.Reject(RejectCode);
         int count = portable || lucky ? 1 : step.MaterialCount;
@@ -74,7 +78,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             bool unresolvedProtection = false;
             foreach (var candidate in before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.IsStackable &&
                 item.Uid != source.Uid && item.Core.EquipmentLockId == 0 && !item.IsExpired(now)).OrderBy(item => item.Position.Index))
-                if (upgrades.Get(candidate.Core.ItemId) is { Kind: AmplifyUseKind.Protection } rule)
+                if (upgrades.Get(candidate.Core.ItemId) is { Kind: AmplifyUseKind.Protection } rule && rule.Reinforce == reinforce)
                 {
                     if (rule.PendingRule is not null) { unresolvedProtection = true; continue; }
                     if (AllowsUse(rule, character, target, template) && !items.Get(candidate.Core.ItemId).UseForbidden)
@@ -85,7 +89,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             {
                 // 先规划完整销毁补偿及容量，再抽本次升级结果，不能靠满包拒绝失败来免费重抽。
                 var rewards = DisjointResultCalculator.Calculate(disjoint, template, rng).ToList();
-                foreach (var bonus in new[] { rules.Bonus, upgrades.CompanionBonus })
+                foreach (var bonus in reinforce ? new[] { rules.Bonus } : new[] { rules.Bonus, upgrades.CompanionBonus })
                     if (bonus.Count(template, old) is > 0 and var bonusCount) rewards.Add(new(bonus.ItemId, bonusCount));
                 var released = paid with { Items = paid.Items.Remove(target) };
                 foreach (var reward in rewards)
@@ -129,7 +133,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             request.Target, request.MaterialSlot, source.Core.Count - count, old, outcome.Level, outcome.Code == 0)
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true,
             TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
-        return new(true, 0, new(before, after, reinforce ? "equipment_reinforcement_lucky" : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
+        return new(true, 0, new(before, after, reinforce ? lucky ? "equipment_reinforcement_lucky" : "equipment_reinforcement_portable" : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
             "equipment_amplification_npc", new(character, deadline, clock)));
     }
 
