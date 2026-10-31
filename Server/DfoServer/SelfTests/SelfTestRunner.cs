@@ -107,6 +107,7 @@ internal static class SelfTestRunner
         LimitCubeTests.RunCore();
         IndependentAttributePairTests.RunCore();
         EnchantmentTests.RunCore();
+        Testing.Inventory.LotteryGoldCostTests.RunCore();
         EnhancementTests.RunCore();
         AmplificationTests.RunCore();
         AmplifyUpgradeTests.RunCore();

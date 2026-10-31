@@ -12,12 +12,13 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class LotteryTcpTests
+internal static partial class LotteryTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         LotteryTests.Run(resources);
         FiniteJarTests.RunResources(resources.ItemResources, resources.Towns);
+        LotteryGoldCostTests.RunResources(resources.ItemResources, resources.Towns);
         var items = resources.ItemResources;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery"), gm: true, resources: resources);
         var repo = new CharacterRepository(fixture.Database);
@@ -110,6 +111,7 @@ internal static class LotteryTcpTests
         await MaterialCostAsync(source, root, resources);
         await RestrictedPotsAsync(source, root, resources);
         await FiniteGoldAsync(source, root, resources);
+        await GoldCostAsync(source, root, resources);
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, shopExpiration: true);
         short SourceSlot()
         {
