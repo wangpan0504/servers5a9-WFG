@@ -135,6 +135,14 @@ internal sealed partial class DungeonHandler
                 departure.Character.Id, departure.Character.Position });
             return;
         }
+        if (notice.Kind == PartyDungeonNoticeKind.AntonHp)
+        {
+            if (notice.AntonHp is { } hp && notice.Scene is { } hpScene && context.Session.PartyDungeon is { } hpRun)
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MONSTER_HP, RaidCombatPackets.AntonHp(hp),
+                    "anton_monster_hp", () => notice.Recipient.IsCurrent() && ReferenceEquals(context.Session.PartyDungeon, hpRun) &&
+                        hpRun.IsAntonHpCurrent(hp) && context.Session.CanPublishFormalDungeon(hpScene) && context.Session.RaidCombatView() is { State: DfoServer.Game.Raids.AntonRaidBattleState.Fighting, PhaseExpired: false });
+            return;
+        }
         if (notice.Kind == PartyDungeonNoticeKind.MemberLeft)
         {
             await context.Notify(NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(notice.Peer), "party_dungeon_member_left");

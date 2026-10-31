@@ -103,6 +103,14 @@ internal sealed partial class GameSession
     internal AntonRaidBattle? CurrentRaidBattle(RaidActor actor) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent ? raid.Battle : null);
 
+    internal (FormalDungeonReceipt Scene, byte Squad)? CaptureAntonHp() =>
+        owner.Execute<(FormalDungeonReceipt, byte)?>(() =>
+            Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } raid &&
+            raid.Battle.View is { State: AntonRaidBattleState.Fighting, PhaseExpired: false } view &&
+            formalDungeon is { Entry.RaidEntry: { Kind: RaidKind.Anton, Squad: >= 1 and <= 5 } entry, Run.ClearFact: null } dungeon &&
+            entry.InstanceId == raid.Battle.Instance && entry.Phase == view.Phase && CanMoveWithParty()
+                ? (FormalReceipt(), entry.Squad) : null);
+
     internal RaidKind? RaidCombatKind() => owner.Execute(() => raidCombat is { Actor.IsCurrent: true } raid ? (RaidKind?)raid.Battle.Kind : null);
 
     internal bool RaidPhaseProgress => owner.Execute(() => raidCombat is { Battle.PhaseProgress: true });

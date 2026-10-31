@@ -21,6 +21,34 @@ internal static partial class AntonRaidGapTcpTests
         await RunPartyAsync(source, root, resources);
     }
 
+    static void AssertHpProjection(TcpPeer leader, TcpPeer? member = null)
+    {
+        uint context = 0x12345678;
+        foreach (uint value in new uint[] { 100, 99, 0 })
+        {
+            // 两成员交替上报；两条百分比保留原顺序，第二次切换C以排除旧上下文值混用。
+            var reporter = value == 99 ? member ?? leader : leader;
+            if (value == 99) context++;
+            reporter.Send(695, Build(w => { w.Write(context); w.Write((byte)2); w.Write(value); w.Write(99u); }));
+            var expected = Build(w =>
+            {
+                w.Write((byte)1); w.Write((ushort)1); w.Write(member is null ? (byte)1 : (byte)2);
+                w.Write(leader.Id); if (member is not null) w.Write(member.Id);
+                w.Write(0u); w.Write(context); w.Write((byte)2); w.Write(value); w.Write(99u);
+            });
+            foreach (var peer in member is null ? new[] { leader } : new[] { leader, member })
+            {
+                var received = AntonTcpProbe.Barrier(peer, "695百分比投影" + value);
+                Bytes(received.Single(p => p is { Kind: 0, Opcode: 634 }).Body, expected,
+                    "634使用分队1、当前成员、已用币0、当前C与完整原序百分比");
+                That(received.All(p => p.Opcode is not (115 or 586 or 601)), "HP0只更新展示，不提交Boss死亡或奖励");
+            }
+        }
+        leader.Send(695, Build(w => { w.Write(context); w.Write((byte)1); w.Write(101u); }));
+        That(AntonTcpProbe.Barrier(leader, "越界百分比不发布").All(p => p.Opcode != 634), "101不能污染634百分比");
+        if (member is not null) That(AntonTcpProbe.Barrier(member, "越界队员屏障").All(p => p.Opcode != 634), "拒绝报告不向队员发布");
+    }
+
     static async Task RunTicketsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = await BootAsync(source, root, resources, "anton-raid-gap-ticket",
@@ -144,7 +172,8 @@ internal static partial class AntonRaidGapTcpTests
         var memberReport = new AntonTcpProbe.AntonProbeReport();
         for (int clear = 0; clear < 4; clear++)
         {
-            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear != 0);
+            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear != 0,
+                loaded: clear == 0 ? () => AssertHpProjection(leader, member) : null);
             if (clear != 0) continue;
             member.Send(72, [1, 2]); AntonTcpProbe.Barrier(member, "一人先退出原Run");
             AntonTcpProbe.Barrier(leader, "同步先退出成员");

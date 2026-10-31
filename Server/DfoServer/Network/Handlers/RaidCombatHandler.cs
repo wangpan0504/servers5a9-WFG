@@ -44,12 +44,15 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         return CommandResult.Handled;
     }
 
-    Task<CommandResult> HpAsync(GameConnectionContext context, Packet request)
+    async Task<CommandResult> HpAsync(GameConnectionContext context, Packet request)
     {
-        try { _ = RaidRequests.MonsterHp(request.Body); }
-        catch (InvalidDataException) { return Task.FromResult(CommandResult.Unhandled); }
-        // 原始HP字段的单位未闭合；不将客户端0当死亡，不回送猜测的634。
-        return Task.FromResult(context.Session.RaidCombatView() is null ? CommandResult.Unhandled : CommandResult.Handled);
+        RaidMonsterHpRequest report;
+        try { report = RaidRequests.MonsterHp(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (context.Session.RaidCombatKind() == RaidKind.Anton && context.Session.PartyDungeon is { } party)
+            await DfoServer.Network.Projection.PartyDungeonProjection.PublishAsync(
+                party.ReportAntonHp(context.Session, report.RawValue, report.RawEntries));
+        return context.Session.RaidCombatView() is null ? CommandResult.Unhandled : CommandResult.Handled;
     }
 
     async Task<CommandResult> RewardAsync(GameConnectionContext context, Packet request)
