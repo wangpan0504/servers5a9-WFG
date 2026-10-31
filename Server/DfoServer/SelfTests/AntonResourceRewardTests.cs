@@ -25,8 +25,15 @@ internal static class AntonResourceRewardTests
             "非空正式奖励声明必须提供共享奖池目录，不能退回原箱绕过依赖校验");
         var first = factory.Create(false, _ => 0);
         var last = factory.Create(true, weight => weight - 1);
-        That(first.Length == 2 && first.All(phase => phase.Source == AntonResourceRewards.Source && !phase.PublishResult),
-            "正式两阶段本服政策记录来源，601未知列不发布");
+        That(first.Length == 2 && first.All(phase => phase.Source == AntonResourceRewards.Source && phase.PublishResult),
+            "正式两阶段本服政策记录来源，601正式策略发布");
+        var copy = System.Text.Json.JsonSerializer.Deserialize<RaidPhaseRewardPolicy>(
+            System.Text.Json.JsonSerializer.Serialize(first[0]))!;
+        That(AntonRaidBattle.SameLukeOffers(first[0].Offers, copy.Offers), "600嵌套展示JSON往返按内容确认");
+        var row = copy.Offers[0].Display[0];
+        var changed = copy.Offers[0] with { Display = [row with { Items = row.Items.SetItem(0,
+            row.Items[0] with { RawFlag = 1 }) }] };
+        That(!AntonRaidBattle.SameLukeOffers(first[0].Offers, copy.Offers.SetItem(0, changed)), "600展示尾列改变仍拒绝回执");
         for (int index = 0; index < 2; index++)
         {
             var rows = script.Phases[index].Rewards;
@@ -34,7 +41,7 @@ internal static class AntonResourceRewardTests
             var normal = first[index].Offers.Single(offer => offer.Kind == 1);
             var pcroom = last[index].Offers.Single(offer => offer.Kind == 1);
             That(first[index].Offers.Select(offer => offer.Kind).Order().SequenceEqual(new byte[] { 0, 1 }) &&
-                normal.Card == 0 && first[index].Offers.All(offer => offer.Display.IsEmpty), "两个独立牌种沿已证0/1请求，未知600展示列保持空");
+                normal.Card == 0 && first[index].Offers.All(offer => offer.Display is [{ Card: 0 }] && offer.Display[0].Items.Length == offer.Grants.Length), "两个独立牌种沿已证0/1请求，600展示冻结正式产物");
             That(normal.Grants is [{ ItemId: 10304529 } fate, { ItemId: 10093974, Count: 6 }] &&
                 fate.Count == (index == 0 ? 30 : 45), "86单池解析映射现网95产物数量，不发配置箱");
             That(pcroom.Grants is [{ ItemId: 10304529 }, { ItemId: 10093974, Count: 11 }, { ItemId: 10093974, Count: 6 }],

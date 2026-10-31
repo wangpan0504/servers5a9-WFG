@@ -19,6 +19,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<int, LukeRouteProgress> LukeRoutes { get; init; } = ImmutableDictionary<int, LukeRouteProgress>.Empty;
     // 仅显式设施报告兼容模式使用，键最多为三个已证设施符号；随候选原子提交。
     public ImmutableDictionary<string, long> LukeFacilityWriteEpochs { get; init; } = ImmutableDictionary<string, long>.Empty;
+    public bool AntonCardsReady { get; init; }
     public bool AntonPreparing { get; init; }
     public long AntonWaitAnchor { get; init; }
     public int AntonWaitSeconds { get; init; }
@@ -77,7 +78,7 @@ internal sealed partial class AntonRaidBattle
             }
             else if (antonRewards is not null)
             {
-                if (!Join(actor, antonRewards.Create(actor.Session.PremiumPcRoom))) return false;
+                if (!Join(actor, antonRewards.Create(actor.Session.PremiumPcRoom, character: actor.Character))) return false;
                 originalAntonMembers.Add(actor.Character, actor);
             }
             else members.Add(actor, []);
@@ -162,6 +163,9 @@ internal sealed partial class AntonRaidBattle
         if (antonRewards is not null && (AntonHeaderSeconds("[phase break time]") is <= 5 or > 86400 ||
             AntonHeaderSeconds("[start delay time]") is <= 0 or > 86400))
             throw new InvalidDataException("安徒恩休息或准备时长不完整");
+        if (antonRewards is not null && (script.Headers.SingleOrDefault(row => row.Tag == "[movie end time]") is not { } movie ||
+            movie.Values.Length < script.Phases.Length || movie.Values.Any(value => value.Number is <= 0 or > 86400)))
+            throw new InvalidDataException("安徒恩结算等待时长不完整");
         if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))

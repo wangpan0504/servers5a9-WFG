@@ -45,6 +45,44 @@ internal static class AntonRaidTimerTests
         PendingHatcheryAfterVolcano();
         TimeoutRetry();
         IntermissionPreparation();
+        RewardWaitDetached();
+
+        void RewardWaitDetached()
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false);
+            var service = new LukeRaidClocks(clock, store, (_, error) => throw error);
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215);
+                Settle(battle, store);
+                clock.Advance(10);
+                var settled = battle.View;
+                That(settled.AntonCardsReady, "2秒演出事件与20秒截止分别处理");
+                // 同候选重放不得续期；最后一人离团后仍保留原Reward兜底时钟。
+                SettleReplay();
+                That(battle.DetachStart(actor), "结算中移除最后成员");
+                clock.Advance(9);
+                That(battle.View.State == AntonRaidBattleState.Reward, "离团不能提前放弃全部奖励");
+                clock.Advance(1);
+                That(battle.View is { State: AntonRaidBattleState.Intermission, Phase: 0, AntonWaitSeconds: 595 },
+                    "最后成员离团或断线也能到期推进，不能永久卡Reward");
+                That(battle.AntonEligibility(actor.Character, 0)!.Eligible,
+                    "放弃不篡改已持久化资格或伪装实际发奖");
+                var advanced = battle.View;
+                clock.FireQueued(); clock.Advance(1);
+                That(ReferenceEquals(advanced, battle.View), "空团推进后回收时钟，旧回调不得重复推进");
+
+                void SettleReplay()
+                {
+                    var candidate = store.Seen.Single();
+                    battle.AcceptAntonSettlement(candidate, store.CommitAntonPhase(candidate));
+                    That(ReferenceEquals(settled, battle.View), "原候选重复回执不改变结算视图");
+                }
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
 
         void IntermissionPreparation()
         {

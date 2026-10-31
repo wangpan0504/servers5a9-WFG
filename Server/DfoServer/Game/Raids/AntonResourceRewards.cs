@@ -48,7 +48,7 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
         throw new InvalidDataException("安徒恩箱内奖池未命中");
     }
 
-    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, Func<int, int>? draw = null)
+    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, Func<int, int>? draw = null, ushort character = 0)
     {
         if (script.Phases.Length != 2 || !script.Issues.IsEmpty) throw new InvalidDataException("安徒恩奖励缺少两阶段声明");
         var result = ImmutableArray.CreateBuilder<RaidPhaseRewardPolicy>(2);
@@ -71,13 +71,15 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
             int selected = (draw ?? RandomNumberGenerator.GetInt32)(weight);
             if (selected < 0 || selected >= weight) throw new InvalidDataException("安徒恩奖励随机值越界");
             var winner = squad.First(row => (selected -= row.RawB) < 0);
-            // 023B2A54..2AAA无条件连续读取601全部10B。KB-20261026T063752-4691836ed4
-            // 仅证明C秒显示、D整数、E动画，D/E/F没有正式取值来源；下列占位不发布，不能发短前缀。
-            // UNIMPLEMENTED：587 state3仅调整战况窗口，不能代替601保存结果及打开0xE5窗口。
-            // 需要匹配构建双腿结束的完整601/660/600样本，不能为触发翻牌而发布本占位值。
+            // LIVE-VERIFY：95按类别/牌位/物品ID显示；code=0普通项、flag=0不点亮特殊效果。
+            // 只展示本成员正式Card0冻结产物，不开放其它牌位或代领。
+            RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants,
+                [new(character, 0, grants.Select(item => new RaidRewardDisplayItem(0,
+                    checked((uint)item.ItemId), checked((ushort)item.Count), 0)).ToImmutableArray())]);
             result.Add(new(Source,
-                [new(1, 0, fixedGrants.ToImmutable(), []), new(0, 0, [ResolveReward(winner.ItemId, draw)], [])],
-                new(0, checked((byte)index), 0, 0, 0, 0)) { PublishResult = false });
+                [Offer(1, fixedGrants.ToImmutable()), Offer(0, [ResolveReward(winner.ItemId, draw)])],
+                new(0, checked((byte)index), 0, 0, 2, 0)));
+
         }
         return result.MoveToImmutable();
     }

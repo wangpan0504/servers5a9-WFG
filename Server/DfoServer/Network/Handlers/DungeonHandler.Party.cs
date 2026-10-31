@@ -245,6 +245,7 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "anton_loading_information_replay", Current);
                 await context.Notify(NotiPacketType.START_MAP,
                     DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "anton_loading_map_replay", Current);
+                RaidCombatProjection.AntonTimersForScene(context, Current);
                 break;
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
@@ -291,6 +292,7 @@ internal sealed partial class DungeonHandler
                 foreach (var count in scene.EnterCounts)
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
                 if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
+                RaidCombatProjection.AntonTimersForScene(context, Current);
                 break;
             case PartyDungeonNoticeKind.Loaded:
                 if (scene.NavigationReplay) break;

@@ -16,7 +16,7 @@ internal static class RaidRewardRules
 internal sealed record RaidRewardDisplayItem(byte RawCode, uint ItemId, ushort DisplayValue, byte RawFlag);
 internal sealed record RaidRewardDisplayRow(ushort RawOwner, byte Card, ImmutableArray<RaidRewardDisplayItem> Items);
 // 601：KB-20261026T063752-4691836ed4，C只证秒制显示，D只证整数，E只证rank动画选择。
-// Seconds不证明起止时刻，Rank不证明评分公式，RawFlag不证明已领奖；正式策略缺列时禁止补零发布。
+// 读宽不独立证明业务值；Anton在结算候选冻结阶段用时/死亡，RawFlag不表示已领奖。
 internal sealed record RaidResultDisplay(byte Result, byte Phase, uint Seconds, ushort RawValue, byte Rank, byte RawFlag);
 internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<InventoryReward> Grants,
     ImmutableArray<RaidRewardDisplayRow> Display)
@@ -26,7 +26,7 @@ internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<Inve
 }
 internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result)
 {
-    // 正式安徒恩601业务列未闭合，保留已证587窗口，不发布占位的601字段。
+    // 策略可显式禁用结果；正式Anton在资格提交后绑定真实阶段统计。
     public bool PublishResult { get; init; } = true;
 }
 internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, byte Card, ushort Character,

@@ -42,6 +42,17 @@ internal static class RaidCombatPackets
         return body;
     }
 
+    // 频道23/25的01DD076A保存(end-seconds,end)，不使用Luke的now+seconds分支。
+    public static byte[] AntonDungeonTimer(int kind, int dungeon, uint seconds, uint end)
+    {
+        if (kind is < 1 or > 3 || dungeon <= 0 || seconds is 0 or > 86400)
+            throw new ArgumentOutOfRangeException(nameof(seconds));
+        byte[] body = AntonWaitTimer(seconds, end);
+        body[0] = checked((byte)kind);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(1), dungeon);
+        return body;
+    }
+
     public static byte[] AntonWaitRemaining(byte slot, uint seconds)
     {
         byte[] body = PhaseRemaining(seconds); body[0] = slot; return body;

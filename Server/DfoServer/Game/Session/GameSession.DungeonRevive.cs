@@ -46,6 +46,9 @@ internal sealed partial class GameSession
         formalDungeon!.Run.CancelRidable();
         formalDungeon!.CharacterDead = !blessing;
         formalDungeon.DeathSerial++;
+        if (formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton &&
+            raidCombat is { Battle.Kind: Raids.RaidKind.Anton } raid)
+            raid.Battle.RecordAntonDeath(raid.Actor);
         return FormalReceipt() with { AutomaticRevival = blessing };
     });
 

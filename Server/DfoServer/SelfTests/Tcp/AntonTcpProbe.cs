@@ -36,7 +36,7 @@ internal static class AntonTcpProbe
           --digest <32位hex>         登录摘要，默认与自测 NativeLoginWire.Digest 相同
           --character <角色名>       默认 AntProbe
           --channel <号>             默认 19
-          --server-log <server.jsonl>  跑完后核对该文件里的 210 / anton_phase_progress / 586，且没有 596/597
+          --server-log <server.jsonl>  跑完后核对该文件里的 210 / anton_phase_progress / 586 与本轮596/597
           --stop-after start|enter|phase   默认 phase
           --steps start,enter,phase,reward,card  按顺序选择步骤；自动执行前置步骤，与 --stop-after 互斥
                                       reward 检查重复清图；card 检查正式资源奖励、幂等回放及阶段1推进
@@ -211,7 +211,7 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException("213/215 清完后没有见到 Reward 态 587 [3,0]");
         if (report.Opcode586 == 0)
             throw new InvalidOperationException("阶段推进没有 586");
-        if (report.Opcode596 != 0 || report.Opcode597 != 0 || report.Opcode601 != 0)
+        if (report.Opcode596 == 0 || report.Opcode597 == 0 || report.Opcode601 != 1)
             throw new InvalidOperationException($"不应发送 596/597/601，实际 596={report.Opcode596} 597={report.Opcode597} 601={report.Opcode601}");
         FinishStep(report, elapsed, "phase", "39/45/117/586/587 state=Reward phase=0");
         if (stopAfter is "reward" or "card")
@@ -251,7 +251,7 @@ internal static class AntonTcpProbe
                 foreach (var display in cards.Where(packet => packet is { Kind: 0, Opcode: 600 }))
                 {
                     // 01DC8BA7/01DC8BB6读取kind/count；未知8B物品列不补零、不借Luke16B。
-                    if (!display.Body.SequenceEqual(new byte[] { request[0], 0 }))
+                    if (display.Body.Length < 6 || display.Body[0] != request[0] || display.Body[1] != 1 || display.Body.Length != 6 + 8 * display.Body[5])
                         throw new InvalidOperationException("正式600尚无完整展示列，只允许已证空列表骨架");
                     if (!accepted || cards.IndexOf(display) >= cards.FindIndex(packet => packet is { Kind: 1, Opcode: 660 }))
                         throw new InvalidOperationException("600必须在资产提交后的ACK660之前写出");
@@ -263,7 +263,7 @@ internal static class AntonTcpProbe
             report.CardUnavailable = available != true;
             FinishStep(report, elapsed, "card", report.CardUnavailable
                 ? "UNIMPLEMENTED: no configured offer; no success ACK/600/601; connection alive"
-                : "660 (1,0)/(0,0) + duplicates committed/replayed; ACK=01; 600=empty; 601/display fields UNIMPLEMENTED");
+                : "660 (1,0)/(0,0) + duplicates committed/replayed; ACK=01; 600=frozen grants; 601=phase statistics");
         }
         peer.Send(42);
         Note(report, Flush(peer, "42 Reward 返回候战室"));
@@ -616,10 +616,16 @@ internal static class AntonTcpProbe
                 report.States.Add(packet.Body.ToArray());
             }
             else if (packet is { Kind: 0, Opcode: 583 }) report.Symbols.Add(packet.Body.ToArray());
-            else if (packet.Opcode == 596) report.Opcode596++;
+            else if (packet.Opcode == 596) { report.Opcode596++; report.Timers.Add(packet.Body.ToArray()); }
             else if (packet.Opcode == 597) report.Opcode597++;
             else if (packet is { Kind: 0, Opcode: 600 }) report.Opcode600++;
-            else if (packet.Opcode == 601) report.Opcode601++;
+            else if (packet.Opcode == 601)
+            {
+                if (packet.Body.Length != 10 || packet.Body[0] != 0 || packet.Body[1] > 1 ||
+                    packet.Body[8] is < 2 or > 5 || packet.Body[9] != 0)
+                    throw new InvalidOperationException("601必须为成功10B、合法阶段/rank/option");
+                report.Opcode601++;
+            }
             if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)
                 report.Maps.Add(packet.Body.ToArray());
         }
@@ -674,10 +680,10 @@ internal static class AntonTcpProbe
                 if (value == 597) send597 = true;
             }
         }
-        if (report.Entered210 && !entry || report.Reward && (!phase || !send586) || send596 || send597)
+        if (report.Entered210 && !entry || report.Reward && (!phase || !send586) || report.Opcode596 > 0 && !send596 || report.Opcode597 > 0 && !send597)
             throw new InvalidOperationException(
                 $"server.jsonl 断言失败 entry210={entry} phase={phase} send586={send586} send596={send596} send597={send597}");
-        Console.WriteLine($"server.jsonl: entry210={entry} phase={phase} send586={send586}, no 596/597");
+        Console.WriteLine($"server.jsonl: entry210={entry} phase={phase} send586={send586}, send596={send596}, send597={send597}");
     }
 
     static int Seed(ServerOptions options, ProbeArgs parsed)
@@ -798,6 +804,7 @@ internal static class AntonTcpProbe
         public List<string> Steps { get; } = [];
         public List<byte[]> States { get; } = [];
         public List<byte[]> Symbols { get; } = [];
+        public List<byte[]> Timers { get; } = [];
         public List<byte[]> Maps { get; } = [];
         public string Summary() =>
             $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 600={Opcode600} 601={Opcode601} rejectedCards={RejectedCards} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";

@@ -89,6 +89,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
             Instance = recovery?.Instance, Run = recovery?.Run, Error = RaidPackets.CreateUnavailable });
         // 副本协议668仅证明key:u32与空成功体；状态提交可完成，未知恢复包序仍不发猜测成功。
         await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
+        if (recovery?.Restored == true)
+            RaidCombatProjection.AntonTimersForScene(context, () => actor.IsCurrent, replayState: false);
         return CommandResult.Handled;
     }
 
@@ -137,10 +139,26 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         if (party?.Leader == actor.Character && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } battle &&
             battle.View.State == AntonRaidBattleState.Intermission)
         {
-            if (!battle.PrepareAntonNextPhase(actor)) return CommandResult.Unhandled;
+            if (!battle.PrepareAntonNextPhase(actor))
+            {
+                await context.Reply(CmdPacketType.START_RAID, RaidPackets.StartFailure(RaidPackets.StartUnavailable),
+                    "anton_phase2_unavailable", () => actor.IsCurrent);
+                return CommandResult.Handled;
+            }
             log.Write("anton_phase2_preparing", new { Connection = context.Id, battle.Instance, Reason = "leader" });
             await context.Reply(CmdPacketType.START_RAID, [1], "anton_phase2_preparing", () => actor.IsCurrent);
             battle.Publish(battle.View);
+            return CommandResult.Handled;
+        }
+        if (party?.Started is not null && definition?.Type == 0)
+        {
+            // 复用95已有666失败WORD 0x13；专用Reward错误码仍UNIMPLEMENTED。
+            ushort error = party.Leader == actor.Character ? RaidPackets.StartUnavailable : RaidPackets.StartNotLeader;
+            log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Accepted = false,
+                Error = error, Reason = "anton-current-state-cannot-start",
+                State = context.Session.CurrentRaidBattle(actor)?.View.State.ToString() });
+            await context.Reply(CmdPacketType.START_RAID, RaidPackets.StartFailure(error),
+                "anton_start_state_rejected", () => actor.IsCurrent);
             return CommandResult.Handled;
         }
         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);

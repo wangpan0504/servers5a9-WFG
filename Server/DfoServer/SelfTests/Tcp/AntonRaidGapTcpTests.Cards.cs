@@ -19,21 +19,25 @@ internal static partial class AntonRaidGapTcpTests
         Denied([1, 0], "没有Battle不能以660生成奖励");
 
         var report = AntonTcpProbe.Play(peer, Catalog(resources), "reward");
-        That(report.Reward && report.Opcode601 == 0,
-            "UNIMPLEMENTED：真实Reward不补601业务列，重复117不生成600完整展示");
+        That(report.Reward && report.Opcode601 == 1,
+            "真实Reward发布一次完整601，重复117不重开");
+        clock.Advance(1);
+        That(AntonTcpProbe.Barrier(peer, "演出未满2秒").All(p => p.Opcode is not (599 or 600)), "演出1秒不发牌");
+        clock.Advance(1);
+        var opened = AntonTcpProbe.Barrier(peer, "演出2秒首开翻牌");
+        That(opened.Count(p => p.Opcode == 599) == 1 && opened.Count(p => p.Opcode == 600) == 2 &&
+            opened.FindIndex(p => p.Opcode == 599) < opened.FindIndex(p => p.Opcode == 600), "601后2秒按599→600首开");
+        foreach (var packet in opened.Where(p => p.Opcode == 600))
+            That(packet.Body.Length >= 14 && packet.Body[1] == 1 && packet.Body[4] == 0 &&
+                packet.Body.Length == 6 + 8 * packet.Body[5], "600成员行与8B物品计数闭合");
         // 不重新抽奖；直接读资格事务已经冻结的原计划，随机结果以数据库为准。
         string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
         That(frozen.Contains("10304529") && frozen.Contains("10093974") && !frozen.Contains("10304474") &&
             !frozen.Contains("490703082"), "86单池算法按95现网PVF冻结实际材料，不把配置容器作为发奖物品");
-        string waiting = State();
-        int callbacks = clock.Callbacks;
-        // 未发任何660时跨过休息600和阶段总限2400，不能由旧时钟代替领取。
-        clock.Advance(3000);
-        var idle = AntonTcpProbe.Barrier(peer, "Reward无领取跨过休息及总限");
-        That(idle.All(p => p.Opcode is not (587 or 596 or 597 or 600 or 601)) &&
-            waiting == State() && clock.Callbacks == callbacks &&
-            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
-            "Reward未领取不发奖、不自动推进、不执行旧阶段时钟；601展示仍UNIMPLEMENTED");
+        peer.Send(666);
+        var deniedStart = AntonTcpProbe.Barrier(peer, "Reward中666明确拒绝");
+        Bytes(deniedStart.Single(p => p is { Kind: 1, Opcode: 666 }).Body, [0, 19, 0],
+            "Reward中666复用不可开始错误0x13，不能确认已开始");
         foreach (byte[] body in new byte[][] { [], [1], [1, 0, 0], [2, 0], [1, 1], [0, 255] })
             Denied(body, "畸形长度或未配置kind/card不伪造展示和成功");
 
@@ -41,7 +45,7 @@ internal static partial class AntonRaidGapTcpTests
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "首牌提交真实资产回执");
         That(first.FindIndex(p => p.Opcode == 14) >= 0 &&
             first.FindIndex(p => p.Opcode == 14) < first.FindIndex(p => p.Opcode == 600),
-            "库存真实UID投影先于空600展示和ACK660");
+            "库存真实UID投影先于600展示和ACK660");
         string assets = State();
         Claim(1, advances: false);
         That(assets == State(), "同阶段同牌只回放原回执，不增发或重抽");
@@ -71,7 +75,8 @@ internal static partial class AntonRaidGapTcpTests
                 replay.All(p => p.Opcode is not (600 or 601)) && assets == State(),
                 "旧阶段660可确认原资产，不能把600/601装入新阶段窗口");
         }
-        Console.WriteLine("UNIMPLEMENTED anton-card600-601: 601 C origin/D meaning/E formula/F meaning; 600 owner/code/flag and complete display allocation");
+        clock.Advance(20);
+        That(AntonTcpProbe.Barrier(peer, "旧20秒截止").All(p => p is not { Opcode: 587, Body: [5,0] }), "选牌推进后旧截止不能重复处理");
 
         string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") +
             fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY phase,kind") +
@@ -91,7 +96,7 @@ internal static partial class AntonRaidGapTcpTests
             peer.Send(660, [kind, 0]);
             var packets = AntonTcpProbe.Barrier(peer, "正式660领奖kind" + kind);
             var display = packets.Single(p => p is { Kind: 0, Opcode: 600 });
-            Bytes(display.Body, [kind, 0], "UNIMPLEMENTED：保留既有空600合同，不用资产数量补未知展示行");
+            That(display.Body[0] == kind && display.Body[1] == 1 && display.Body.Length == 6 + 8 * display.Body[5], "600展示正式冻结奖励");
             That(packets.Count(p => p is { Kind: 1, Opcode: 660, Body: [1] }) == 1 && packets.All(p => p.Opcode != 601) &&
                 packets.IndexOf(display) < packets.FindIndex(p => p is { Kind: 1, Opcode: 660 }),
                 "合法660资产提交后先600再ACK01，不补601业务列");

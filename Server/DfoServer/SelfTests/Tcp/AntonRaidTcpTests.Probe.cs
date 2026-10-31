@@ -57,16 +57,16 @@ internal static partial class AntonRaidTcpTests
         var report = AntonTcpProbe.Play(peer, catalog, AntonTcpProbe.StopAfterForSteps("start,enter,phase,reward,card"));
         That(report.Steps.SequenceEqual(new[] { "start", "enter", "phase", "reward", "card" }) && !report.CardUnavailable,
             "探针跑完五个步骤，正式资源奖励已提交并推进阶段1");
-        That(report.RejectedCards == 2 && report.Opcode600 > 0 && report.Opcode601 == 0,
-            "正式翻牌拒绝无配置kind/card；600只发空列表且先于ACK，601业务列保持UNIMPLEMENTED");
+        That(report.RejectedCards == 2 && report.Opcode600 > 0 && report.Opcode601 == 1,
+            "正式翻牌拒绝无配置kind/card；600展示冻结产物且先于ACK，601仅首开");
         That(assets != fixture.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10096296 ORDER BY 1,2") &&
             gold == fixture.Snapshot("SELECT id,gold FROM characters ORDER BY id") &&
             fixture.Query("SELECT count(*),count(DISTINCT kind) FROM character_raid_reward_receipts") is [[2L, 2L]] &&
             fixture.Query("SELECT count(DISTINCT phase) FROM character_raid_reward_receipts") is [[1L]],
             "真实Reward实际发放两种独立资源奖励，重复请求不增回执，保留开战扣票");
         That(report.Started && report.Entered210 && report.Reward && report.Opcode586 > 0 &&
-                report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,
-            "假客户端跑完开战、210 和 Reward：" + report.Summary());
+                report.Opcode596 > 0 && report.Opcode597 > 0 && report.Opcode601 == 1,
+            "假客户端领取后进入休息并收到原596/597：" + report.Summary());
         That(fixture.Query("SELECT town, area FROM characters WHERE name='AntProbe'") is [[19L, 2L]] &&
             fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],
             "开战扣一张门票并留在 19/2，进图不再扣票");
@@ -84,8 +84,9 @@ internal static partial class AntonRaidTcpTests
                 row.GetProperty("Detail").GetProperty("PhaseSuccess").GetInt32() == 1 &&
                 row.GetProperty("Detail").GetProperty("State").GetString() == "Reward") &&
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 586) &&
-            !events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() is 596 or 597),
-            "server.jsonl 有进图 210、anton_phase_progress Reward 和 586，没有 596/597");
+            events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 596) &&
+            events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 597),
+            "server.jsonl 有进图210、Reward和586，完整领取后有休息596/597");
         peer.Dispose();
         await fixture.StopAsync();
         await fixture.StartAsync("reopened");

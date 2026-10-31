@@ -68,7 +68,7 @@ internal static partial class AntonRaidTcpTests
         peer.Send(12, Build(w => { w.Write((byte)0); w.Write((byte)0); w.Write(Name("Party : 1")); w.Write((byte)4);
             w.Write(uint.MaxValue); w.Write((byte)5); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)7); }));
         Drain(peer);
-        peer.Send(666); Bytes(Until(peer, 1, 666).Body, [1], "单人重复开战幂等确认"); Drain(peer);
+        peer.Send(666); Bytes(Until(peer, 1, 666).Body, [0, 19, 0], "单人战斗中重复开战明确拒绝"); Drain(peer);
         That(fixture.Snapshot() == saved && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == inventory,
             "普通12回应与重复666不重扣、不迁移或重建资产");
         for (int round = 0; round < 2; round++)
