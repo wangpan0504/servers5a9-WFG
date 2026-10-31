@@ -16,13 +16,16 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
     public static int EpicFragmentRolls(byte mode, byte dungeonDifficulty) => (mode == 1 ? 1 : 0) + new[] { 5, 6, 8, 9, 10 }[Math.Min((int)dungeonDifficulty, 4)];
 
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, int basisLevel, byte mode, int rolls,
-        byte dungeonDifficulty = 0, bool suppressEpicFragments = false, DungeonItemDropPool? epicEquipment = null)
+        byte dungeonDifficulty = 0, bool suppressEpicFragments = false, DungeonItemDropPool? epicEquipment = null,
+        int? fragmentRolls = null, (int Minimum, int Maximum)? equipmentRange = null)
     {
         if (rolls <= 0 || rules.Rate(basisLevel, mode) is not { } rate || rules.Rarity(mode) is not { } rarity ||
             rules.GradeRange(basisLevel) is not { } range) return plan;
+        var epicRange = equipmentRange ?? range;
         var pools = Enumerable.Range(0, 7).Select(index => new DungeonDropRarityPool(rarity[index],
             index == 4 && epicEquipment is not null ? epicEquipment :
-                candidates.EquipmentLevelPool(range.Minimum, range.Maximum, index))).ToImmutableArray();
+                candidates.EquipmentLevelPool(index == 4 ? epicRange.Minimum : range.Minimum,
+                    index == 4 ? epicRange.Maximum : range.Maximum, index))).ToImmutableArray();
         var trial = new DungeonDropTrial(Math.Clamp(rate + 1, 0, Denominator), null, 1, 1, ProbabilityDenominator: Denominator,
             RarityPools: pools, Attempts: rolls);
         var trials = plan.Trials.Append(trial);
@@ -30,10 +33,10 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
         // 候选权重来自碎片模板，等级区间来自本次深渊资源引用；数量不冒充原服服务端公式。
         if (!suppressEpicFragments && epicFragments is not null && epicFragmentPermille > 0)
         {
-            var fragments = epicFragments.Pool(range.Minimum, range.Maximum);
+            var fragments = epicFragments.Pool(epicRange.Minimum, epicRange.Maximum);
             if (fragments.TotalWeight > 0)
                 trials = trials.Append(new DungeonDropTrial(epicFragmentPermille, fragments, 1, 1, ProbabilityDenominator: 1000,
-                    Attempts: EpicFragmentRolls(mode, dungeonDifficulty)));
+                    Attempts: fragmentRolls ?? EpicFragmentRolls(mode, dungeonDifficulty)));
         }
         return new(epicEquipment is null ? plan.ResourceSource : plan.ResourceSource + ";" + HarlemHellEpicDropPolicy.Rule,
             trials, plan.ReferenceQuality, plan.Amplification);

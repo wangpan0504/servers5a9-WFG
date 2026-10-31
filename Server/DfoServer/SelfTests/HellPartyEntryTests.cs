@@ -49,6 +49,7 @@ internal static class HellPartyEntryTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
+        LegacyHellDropTests.RunResources(pvf, towns, items);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         foreach(var pair in InfernoQuestUnlock.Pairs)
             That(quests.Get(pair.InfernoQuest).Prerequisites.SequenceEqual([pair.IntroductionQuest]) &&
@@ -534,10 +535,10 @@ internal static class HellPartyEntryTests
             "时间广场真实PVF深渊史诗候选为85/90级，排除截图80级grade86辅助装备");
 
         That(hellRules is not null && hellRules.Rate(91, 1) == 875 && hellRules.Rate(50, 4) == 1000 && hellRules.Rate(10, 1) == 0 &&
-            hellRules.Rarity(1) is { } rarityA && rarityA[1] == 599000 && rarityA[6] == 1000001 &&
-            hellRules.Rarity(2) is { } rarityB && rarityB.Zip(rarityB.Skip(1)).All(pair => pair.Second >= pair.First) && rarityB[6] == 1000002 &&
+            hellRules.Rarity(1) is { } rarityA && rarityA[1] == 599000 && rarityA[6] == 1000000 &&
+            hellRules.Rarity(2) is { } rarityB && rarityB.Zip(rarityB.Skip(1)).All(pair => pair.Second >= pair.First) && rarityB[6] == 1000000 &&
             hellRules.GradeRange(90) == (84, 92),
-            "etc/itemdropinfo_monster_hell.etc：概率 875/1000/0、稀有度行 A 原样、行 B 单调夹紧、90 级装备等级区间 [84,92]");        Console.WriteLine("HellPartyEntryTests: " + (Count - checks) + " checks");
+            "etc/itemdropinfo_monster_hell.etc：概率875/1000/0、稀有度归一到百万抽样且保持有效分布、90级装备区间[84,92]");        Console.WriteLine("HellPartyEntryTests: " + (Count - checks) + " checks");
     }
 
     // 从起点沿真实连接走到终点的房间序列（不含起点，末项是终点房）。

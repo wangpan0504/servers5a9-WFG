@@ -504,6 +504,16 @@ internal static class ServerRuntime
             string? configuredBonuses = Environment.GetEnvironmentVariable("DFO_HARLEM_ABYSS_BONUS_RULES");
             var bonusRules = HarlemAbyssBonusRules.Parse(configuredBonuses ?? "{}");
             var abyssBonuses = new HarlemAbyssBonusDropPolicy(bonusRules, harlemEpics, itemResources.Items.Get);
+            var legacyBonusRules = HarlemAbyssBonusRules.Parse(Environment.GetEnvironmentVariable("DFO_LEGACY_HELL_BONUS_RULES") ?? "{}");
+            var legacyHell = new LegacyHellDropPolicy(towns, itemResources.Items.Get, legacyBonusRules, dungeonCatalog.InfernoDungeons);
+            string? configuredRiftMaterials = Environment.GetEnvironmentVariable("DFO_PANDEMONIUM_RIFT_MATERIAL_RULES");
+            var riftMaterials = PandemoniumRiftMaterialRules.Parse(configuredRiftMaterials ?? "{}");
+            var riftEpics = new DungeonRiftEpicDropPolicy(dropCandidates,
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get),
+                itemResources.EpicPieceDrops.Pool(85, 90), itemResources.Items.Get(DungeonRiftEpicDropPolicy.RefinedTerraniumId),
+                riftMaterials);
+            log.Write("startup", new { Stage = "Pandemonium material rewards", State = "complete",
+                Rule = DungeonRiftEpicDropPolicy.MaterialRule, Rules = riftMaterials, Configured = configuredRiftMaterials is not null });
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
             var hopeRewards = new OperationHopeRewardPolicy(new OperationHopeRewardCatalog(pvf,itemResources.Items),itemResources.Items);
@@ -516,7 +526,7 @@ internal static class ServerRuntime
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
-                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings);
+                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics);
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = 1000;
@@ -548,6 +558,7 @@ internal static class ServerRuntime
                 LegendEpicList = HarlemHellEpicDropPolicy.NormalList, LegendRareRule = HarlemHellEpicDropPolicy.RareRule,
                 EpicBranches = epicRules, EpicBranchesConfigured = configuredEpics is not null,
                 AbyssBonusRule = HarlemAbyssBonusDropPolicy.Rule, AbyssBonusRules = bonusRules, AbyssBonusConfigured = configuredBonuses is not null,
+                LegacyHellRule = LegacyHellDropPolicy.Rule, LegacyHellBonusRules = legacyBonusRules,
                 WeaponCandidates = harlemEpics.Weapons!.Entries.Length, TayberrsCandidates = harlemEpics.Tayberrs!.Entries.Length,
                 SuperCandidates = harlemEpics.Super!.Entries.Length, CosmoCandidates = harlemEpics.Cosmo!.Entries.Length, CosmoRewardRolls = cosmoRewards.RewardRolls,
                 NormalEpicCandidates = harlemEpics.Normal.Entries.Length, LegendEpicCandidates = harlemEpics.Normal.Entries.Length,

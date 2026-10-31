@@ -188,6 +188,20 @@ internal static class DungeonDropRuleCatalogTests
             "时间广场深渊按装备最低等级选85/90级候选，排除grade命中的80/95级并保留相对权重");
         That(levelPlan.Trials.Single() is { Threshold: 876, ProbabilityDenominator: 1001, Attempts: 8 },
             "修正候选等级不改深渊命中率、分母及奖励骰数");
+        var enhanced = levelPlan.WithEpicDropBonus(100);
+        That(enhanced.Trials.Single().RarityPools[^1].Threshold == 1000000 &&
+            enhanced.Trials.Single().RarityPools[4].Threshold - enhanced.Trials.Single().RarityPools[3].Threshold == 14000 &&
+            enhanced.Trials.Single() with { RarityPools = levelPlan.Trials.Single().RarityPools } == levelPlan.Trials.Single(),
+            "真实深渊1000001哨兵归一后支持史诗药剂，史诗区间7000增至14000且不改触发率和骰数");
+        int boundary = enhanced.Trials.Single().RarityPools[3].Threshold;
+        var boostedAssets = enhanced.Generate(bound => bound == 1000000 ? boundary : 0, DateTimeOffset.UnixEpoch);
+        That(boostedAssets.Length == 8 && boostedAssets.All(asset => asset.Item?.ItemId == 8500) &&
+            levelPlan.Generate(bound => bound == 1000000 ? boundary : 0, DateTimeOffset.UnixEpoch).IsEmpty,
+            "药剂新增区间真实生成原候选史诗，未使用药剂时该边界不掉史诗");
+        Reject<InvalidDataException>(() => DungeonHellDropRules.Parse("[basis of rarity dicision] 1 0 -1 0 0 0 0 1000000"),
+            "哨兵兼容不能掩盖负数稀有度资源");
+        LegacyHellDropTests.RunCore(parsed, entry, fragmentCatalog, fragmentHell);
+        RiftEpicDropTests.RunCore(parsed, entry);
         That(levelPlan.Trials.Single().RarityPools[0].Items.Entries.IsEmpty &&
             new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
                 [dungeon difficulty drop prob] 90 90 335 875 1000 1400 1000

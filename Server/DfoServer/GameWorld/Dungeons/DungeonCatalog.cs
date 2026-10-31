@@ -75,6 +75,8 @@ internal sealed record DungeonMaze(
     public bool IsUltimateAltar { get; init; }
     public bool IsDimensionHiddenBoss { get; init; }
     public bool IsAncientInfiniteVariant { get; init; }
+    // 时空裂缝特殊迷宫额外产两片史诗碎片；身份取当前maze声明，不按地图或领主名称猜测。
+    public bool IsInfernoSpecial { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     public DungeonMap? WeddingCoupleRoom { get; init; }
@@ -98,7 +100,7 @@ internal sealed record DungeonMaze(
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
-        IsBossRush == other.IsBossRush && SameEntrance(BossEntrance, other.BossEntrance);
+        IsBossRush == other.IsBossRush && IsInfernoSpecial == other.IsInfernoSpecial && SameEntrance(BossEntrance, other.BossEntrance);
 
     static bool SameEntrance(DungeonBossEntrance? left, DungeonBossEntrance? right) =>
         left is null || right is null ? left is null && right is null :
@@ -448,6 +450,10 @@ internal sealed class DungeonCatalog
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
+    // 裂缝1/2/3资源是同一地区的不同子变体，选图只列第一份；奖励核查不能只覆盖选图入口。
+    public IEnumerable<DungeonDefinition> InfernoDungeons => dungeons.Where(pair =>
+        pair.Value.StartsWith("dungeon/infernomode/", StringComparison.OrdinalIgnoreCase))
+        .Select(pair => Get(pair.Key)).Where(definition => definition.IsInfernoDungeon);
     internal string? DungeonPath(int id) => dungeons.GetValueOrDefault(id);
     internal string? MapPath(int id) => maps.GetValueOrDefault(id);
 
@@ -1028,6 +1034,7 @@ internal sealed class DungeonCatalog
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
                 IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),
                 IsAncientInfiniteVariant = mazeSections.Any(row => row.Tag == "infinite difficulty"),
+                IsInfernoSpecial = mazeSections.Any(row => row.Tag == "inferno special" && row.Tokens.Count == 0),
                 HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
             HellLegendPath = HellParty() is { LegendMapId: > 0 } legendRoom ? mapPaths[legendRoom.LegendMapId] : null };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };
