@@ -53,7 +53,7 @@ namespace DfoServer.Network.Management.ImagePack
                         var row = i * 264;
                         var offset = BitConverter.ToInt32(table, row);
                         var size = BitConverter.ToInt32(table, row + 4);
-                        if (offset < 0 || size <= 0 || offset + (long)size > fileLength)
+                        if (offset < 0 || size <= 0 || size > ImgBudget.MaxImgBytes || offset + (long)size > fileLength)
                             continue;
 
                         var nameBytes = new byte[256];

@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Text;
 
 namespace DfoServer.Network.Management.ImagePack
@@ -22,20 +21,6 @@ namespace DfoServer.Network.Management.ImagePack
             width = 0;
             height = 0;
             rgba = null;
-            return TryDecodeFrame(blob, frameIndex, new HashSet<int>(), out width, out height, out rgba);
-        }
-
-        private static bool TryDecodeFrame(
-            byte[] blob,
-            int frameIndex,
-            HashSet<int> visiting,
-            out int width,
-            out int height,
-            out byte[] rgba)
-        {
-            width = 0;
-            height = 0;
-            rgba = null;
             if (blob == null || blob.Length < 32 || frameIndex < 0)
                 return false;
             if (!Encoding.ASCII.GetString(blob, 0, 15).StartsWith("Neople Img File", StringComparison.Ordinal))
@@ -47,9 +32,10 @@ namespace DfoServer.Network.Management.ImagePack
             // v4/v6 调色板格式由本仓库自写的 ImgFrameReader 解码，再按同样规则放到画布上。
             if (version == 4 || version == 6)
                 return TryDecodePaletted(blob, frameIndex, out width, out height, out rgba);
-            if (version != 2 || frameCount <= 0 || frameIndex >= frameCount)
+            // #959：先按预算与帧表容量校验，再分配帧数组。
+            if (version != 2 || !ImgBudget.FrameTableFits(frameCount, indexLength) || frameIndex >= frameCount)
                 return false;
-            if (indexLength <= 0 || 32L + indexLength > blob.Length)
+            if (32L + indexLength > blob.Length)
                 return false;
 
             var frames = new FrameInfo[frameCount];
@@ -96,14 +82,13 @@ namespace DfoServer.Network.Management.ImagePack
                 pixelCursor += size;
             }
 
-            return TryMaterialize(blob, frames, frameIndex, visiting, out width, out height, out rgba);
+            return TryMaterialize(blob, frames, frameIndex, out width, out height, out rgba);
         }
 
         private static bool TryMaterialize(
             byte[] blob,
             FrameInfo[] frames,
             int frameIndex,
-            HashSet<int> visiting,
             out int width,
             out int height,
             out byte[] rgba)
@@ -111,14 +96,20 @@ namespace DfoServer.Network.Management.ImagePack
             width = 0;
             height = 0;
             rgba = null;
-            if (frameIndex < 0 || frameIndex >= frames.Length || !visiting.Add(frameIndex))
+            if (frameIndex < 0 || frameIndex >= frames.Length)
                 return false;
 
+            // #959：链接帧迭代跟随，最多 frames.Length 跳，长链不耗栈、环被拒绝。
             var frame = frames[frameIndex];
-            if (frame.IsLink)
-                return TryMaterialize(blob, frames, frame.LinkIndex, visiting, out width, out height, out rgba);
+            for (var hops = 0; frame.IsLink; hops++)
+            {
+                if (hops >= frames.Length || frame.LinkIndex < 0 || frame.LinkIndex >= frames.Length)
+                    return false;
+                frame = frames[frame.LinkIndex];
+            }
 
-            if (frame.Width <= 0 || frame.Height <= 0 || frame.Size <= 0)
+            if (frame.Width <= 0 || frame.Height <= 0 || frame.Size <= 0
+                || frame.Width > ImgBudget.MaxSide || frame.Height > ImgBudget.MaxSide)
                 return false;
 
             var pixels = DecodePixels(blob, frame);
@@ -175,11 +166,20 @@ namespace DfoServer.Network.Management.ImagePack
 
         private static byte[] DecodePixels(byte[] blob, FrameInfo frame)
         {
-            var raw = new byte[frame.Size];
-            Buffer.BlockCopy(blob, frame.PixelOffset, raw, 0, frame.Size);
-            var payload = frame.Compressed == 6 ? TryInflate(raw) : raw;
-            if (payload == null)
-                payload = raw;
+            byte[] payload;
+            if (frame.Compressed == 6)
+            {
+                // #959：只展开 w×h×每像素字节；zlib 损坏直接失败，不把压缩字节当像素。
+                var needed = frame.Width * frame.Height * (frame.Type == TypeArgb8888 ? 4 : 2);
+                payload = ImgBudget.Inflate(blob, frame.PixelOffset, frame.Size, needed);
+                if (payload == null)
+                    return null;
+            }
+            else
+            {
+                payload = new byte[frame.Size];
+                Buffer.BlockCopy(blob, frame.PixelOffset, payload, 0, frame.Size);
+            }
 
             switch (frame.Type)
             {
@@ -197,24 +197,6 @@ namespace DfoServer.Network.Management.ImagePack
                         : null;
                 default:
                     return null;
-            }
-        }
-
-        private static byte[] TryInflate(byte[] raw)
-        {
-            try
-            {
-                using (var input = new MemoryStream(raw))
-                using (var zlib = new ZLibStream(input, CompressionMode.Decompress))
-                using (var output = new MemoryStream())
-                {
-                    zlib.CopyTo(output);
-                    return output.ToArray();
-                }
-            }
-            catch (InvalidDataException)
-            {
-                return null;
             }
         }
 

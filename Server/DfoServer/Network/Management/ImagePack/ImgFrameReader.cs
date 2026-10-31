@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.IO.Compression;
 using System.Text;
 
 namespace DfoServer.Network.Management.ImagePack;
@@ -15,7 +14,7 @@ internal sealed record ImgFrame(int Width, int Height, int KeyX, int KeyY, int C
 internal static class ImgFrameReader
 {
     const int TypeArgb1555 = 0x0E, TypeArgb4444 = 0x0F, TypeArgb8888 = 0x10, TypeLink = 0x11;
-    const int MaxFrames = 100_000, MaxColors = 4096, MaxPalettes = 256, MaxSide = 4096;
+    const int MaxColors = 4096, MaxPalettes = 256, MaxSide = ImgBudget.MaxSide;
 
     readonly record struct Entry(bool Link, int Target, int Type, int Compression, int Width, int Height, int Offset, int Size, int KeyX, int KeyY, int MaxWidth, int MaxHeight);
 
@@ -43,7 +42,7 @@ internal static class ImgFrameReader
         if (version is not (2 or 4 or 6) || frameIndex < 0) return false;
         var span = blob.AsSpan();
         int indexLength = I32(span, 16), count = I32(span, 28);
-        if (count is <= 0 or > MaxFrames || frameIndex >= count || indexLength <= 0) return false;
+        if (!ImgBudget.FrameTableFits(count, indexLength) || frameIndex >= count) return false;
         int pos = 32;
         byte[][] palettes = [];
         if (version == 4) palettes = [ReadPalette(span, ref pos)];
@@ -83,9 +82,12 @@ internal static class ImgFrameReader
             entry = entries[entry.Target];
         }
         if (entry.Width is <= 0 or > MaxSide || entry.Height is <= 0 or > MaxSide || entry.Size <= 0) return false;
-        byte[] raw = blob.AsSpan(entry.Offset, entry.Size).ToArray();
-        byte[] payload = entry.Compression == 6 ? Inflate(raw) ?? raw : raw;
         int pixels = entry.Width * entry.Height;
+        // #959：压缩帧最多展开 w×h×4 字节（调色板/16 位/32 位都不超过），zlib 损坏直接失败。
+        byte[]? payload = entry.Compression == 6
+            ? ImgBudget.Inflate(blob, entry.Offset, entry.Size, pixels * 4)
+            : blob.AsSpan(entry.Offset, entry.Size).ToArray();
+        if (payload is null) return false;
         byte[]? rgba;
         if (version != 2 && entry.Type == TypeArgb1555 && payload.Length == pixels && palettes.Length > 0)
             rgba = FromPalette(payload, palettes[palette >= 0 && palette < palettes.Length ? palette : 0]);
@@ -167,16 +169,4 @@ internal static class ImgFrameReader
         }
     }
 
-    static byte[]? Inflate(byte[] raw)
-    {
-        try
-        {
-            using var input = new MemoryStream(raw);
-            using var zlib = new ZLibStream(input, CompressionMode.Decompress);
-            using var output = new MemoryStream();
-            zlib.CopyTo(output);
-            return output.ToArray();
-        }
-        catch (InvalidDataException) { return null; }
-    }
 }
