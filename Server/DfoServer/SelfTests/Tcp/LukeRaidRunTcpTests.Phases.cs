@@ -54,6 +54,9 @@ internal static partial class LukeRaidRunTcpTests
                         "全部旧Run正式退出后，八名已登记成员各收到一份已证10B阶段结果");
                     That(result.Any(packet=>packet is {Kind:0,Opcode:587}&&packet.Body.SequenceEqual(new byte[]{3,phase})),
                         "阶段SQL成功与退出屏障之后才发布Reward状态");
+                    var counts = result.Where(packet=>packet is {Kind:0,Opcode:1446}).ToArray();
+                    That(counts.Length==(phase==1?8:0) && counts.All(packet=>RaidPanelTests.ReadWeeklyClears(packet.Body)[1]==(1u,1u)),
+                        "卢克只在真实整团终结后向八名成员刷新日周已用数，首阶段不占通关数");
                 }
                 else That(!result.Any(packet=>packet.Opcode==601),"HP尚未归零不提前显示阶段结果");
             }

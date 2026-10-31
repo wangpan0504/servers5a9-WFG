@@ -110,8 +110,8 @@ internal static class RaidPackets
         writer.Write(state);                 // +0x28
         writer.Write(phase);                 // +0x30
         writer.Write(0u);                    // +0x34
-        // +DC 回填 CREATE_RAID +210；普雷必须在开战后仍保留引导标记。旧团本沿用既有旗标。
-        writer.Write(guide || raidType != 3 && canStart ? (byte)1 : (byte)0);
+        // +DC 回填 CREATE_RAID +210；漩涡/普雷的团队与引导不能借可开战状态串模式。
+        writer.Write(guide || raidType is not (2 or 3) && canStart ? (byte)1 : (byte)0);
         writer.Write(new byte[8]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
         WriteMember(writer, leader, leaderName, leaderSquad);
     }

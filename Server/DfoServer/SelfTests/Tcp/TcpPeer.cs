@@ -99,6 +99,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
     public byte[] SeriaLuckInfo { get; private set; } = [];
+    public byte[] RaidWeeklyClearInfo { get; private set; } = [];
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
     public byte[] EventInfoPayload { get; private set; } = [];
@@ -1345,9 +1346,9 @@ internal sealed partial class TcpPeer : IDisposable
             SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
                 gauge.Body[0] <= 40 && gauge.Body[0] % 5 == 0, "幸运值初始通知使用普通CRC/序号，两端阶段一致且不超8");
-            // 01DD61C0读u8 n及每项10B；第四项安徒恩类型0也明确下发已用0。
-            Expect(0, 1446, [4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            // 初始化使用真实持久次数；具体日周用量由各团本生命周期回归断言。
+            RaidWeeklyClearInfo = Expect(0, 1446).Body;
+            RaidPanelTests.ReadWeeklyClears(RaidWeeklyClearInfo);
             Expect(0, 1232, [0]); // POST_CHARAC_INFO：单字节消费者释放团本窗口初始忙状态。
         }
 

@@ -44,7 +44,7 @@ internal sealed class SelectionContentsRules(TowerOfDespairCatalog despair, Grie
             incounts.Dimension is { } dimension ? Usage(dimension.DailyRow.CountKey).DailyUsed : 0,
             griefUsed, state.Grief.Layer - 1, [.. Enumerable.Range(0, 4).Select(kind =>
                 state.RaidClears.Where(row => row.Kind == kind && row.Week ==
-                    (kind == 1 && lukeCycle is not null ? lukeCycle.Key(now) : DungeonIncountPolicy.Period(now).Week))
+                    RaidClearCounts.Week((byte)kind, now, lukeCycle))
                     .Sum(row => row.Count))],
             Remaining(400000016), Remaining(291100320), state.Dazzlement.UsedToday(character, DazzlementTowerAdmission.At(now)),
             Remaining(8523), war is null ? 0 : Remaining(war.IncountDungeon, war.WeeklyLimit), Remaining(8500));

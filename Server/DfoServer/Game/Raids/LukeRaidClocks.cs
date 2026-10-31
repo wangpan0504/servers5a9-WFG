@@ -159,6 +159,19 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                     catch (Exception error)
                     { Battle.FaultLukeClock(this); Report("anton-settlement-fault", error); Dispose(); return; }
                 }
+                if (!IsStopped && Battle.PendingFiendwarFailure() is { } fiendwar)
+                {
+                    try
+                    {
+                        if (store is not IFiendwarFailureStore failureStore) throw new InvalidOperationException("漩涡时钟缺少失败退票存储");
+                        failureStore.CommitFiendwarFailure(fiendwar);
+                        Battle.AcceptFiendwarFailure(fiendwar); changed = true;
+                    }
+                    catch (Exception error) when (store.IsRetryable(error))
+                    { failures = failures == int.MaxValue ? failures : failures + 1; Report("fiendwar-refund", error); return; }
+                    catch (Exception error)
+                    { Battle.FaultLukeClock(this); Report("fiendwar-refund-fault", error); Dispose(); return; }
+                }
                 failures = 0;
                 if (changed && waitingForReward && Battle.View.State != AntonRaidBattleState.Reward)
                     owner.NotifyRewardAbandoned(Battle.View);

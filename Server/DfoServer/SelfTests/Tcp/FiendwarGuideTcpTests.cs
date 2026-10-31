@@ -40,7 +40,9 @@ internal static class FiendwarGuideTcpTests
         var guide = modes.FiendwarGuide!;
         using var peer = Open(fixture, "fwguide", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
         var symbols = new Dictionary<uint, uint>();
-        peer.Select(); Read();
+        var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
+        Select();
+        That(clears.Count == 4 && clears[2] == (0u, 0u), "初次登录四类团本次数初始化为真实零记录");
         for (int route = 0; route < 2; route++)
         {
             peer.Send(1426); Read();
@@ -69,6 +71,7 @@ internal static class FiendwarGuideTcpTests
             }
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0 AND raid_type=2 AND state=2", peer.Id)
                 is [[long completed]] && completed == route + 1, "原单世界终杀提交真实共享type2通关");
+            That(clears[2] == (1u, (uint)route + 1), "真实终杀后主动刷新漩涡日周次数，无需重新登录");
             foreach (byte kind in new byte[] { 1, 0 })
             {
                 peer.Send(660, [kind, 0]);
@@ -81,7 +84,11 @@ internal static class FiendwarGuideTcpTests
                 peer.Send(1426); Read(); Create(false); peer.Send(666);
                 That(Read().Any(row => row is { Kind: 1, Opcode: 666, Body: [0, ..] }), "引导通关占用团队同一日资格");
                 peer.Send(665, BitConverter.GetBytes(peer.Id)); Read();
+                peer.Send(7); Read(); Select();
+                That(clears[2] == (1u, 1u), "重登从已提交生命周期恢复日周次数，不重置为零");
                 clock.Advance(86400);
+                peer.Send(7); Read(); Select();
+                That(clears[2] == (0u, 1u), "漩涡次日只重置日额度，保留周二周期内已通关数");
             }
         }
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=2", peer.Id) is [[4L]],
@@ -92,7 +99,7 @@ internal static class FiendwarGuideTcpTests
         Seed(1); Seed(2);
         for (ushort slot = 1; slot <= 2; slot++)
         {
-            peer.Send(7); Read(); peer.Select(slot); Read(); peer.Send(1426); Read();
+            peer.Send(7); Read(); Select(slot); peer.Send(1426); Read();
             Create(true); Move(1, 33); peer.Send(666);
             bool admitted = Read().Any(row => row is { Kind: 1, Opcode: 666, Body: [1] });
             That(admitted == (slot == 1), "同账号每周只允许两名不同角色绑定引导");
@@ -104,10 +111,26 @@ internal static class FiendwarGuideTcpTests
             peer.Send(665, BitConverter.GetBytes(peer.Id)); Read();
         }
 
+        FiendwarFailureTcpTests.Run(fixture, resources, clock);
+
         void Create(bool single)
         {
             peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwGuide")); writer.Write(new byte[] { single ? (byte)1 : (byte)0, 0, 0, 0 }); }));
-            That(Read().Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "原生664模式字段创建对应团队或引导");
+            var created = Read();
+            That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "原生664模式字段创建对应团队或引导");
+            That(RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4) == single,
+                "创建面板显示实际团队或引导模式");
+            uint key = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
+            peer.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(key); }));
+            var information = Read().Single(row => row is { Kind: 1, Opcode: 1361 }).Body;
+            That(RaidPanelTests.ReadGuideFlag(information, 6) == single, "详情面板与创建记录模式一致");
+            peer.Send(833, Build(writer =>
+            {
+                writer.Write((byte)0); writer.Write(0u); writer.Write(0x100u); writer.Write(2u); writer.Write(Name("FwGuide"));
+            }));
+            var search = Read().Single(row => row is { Kind: 0, Opcode: 756 }).Body;
+            That(U32(search, 0) == 1 && U32(search, 8) == 1 && U32(search, 12) == key &&
+                RaidPanelTests.ReadGuideFlag(search, 12) == single, "原生招募搜索返回真实团队或引导记录");
         }
         void Move(int from, int to, bool accepted = true)
         {
@@ -120,11 +143,20 @@ internal static class FiendwarGuideTcpTests
         }
         void Clear(int dungeon, int route)
         {
-            peer.Send(15, BitConverter.GetBytes(dungeon));
-            That(Read().Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "引导区域打开独立选图");
+            bool direct = dungeon == 5350;
+            if (!direct)
+            {
+                peer.Send(15, BitConverter.GetBytes(dungeon));
+                var selected = Read();
+                That(selected.Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }) &&
+                    selected.Count(row => row is { Kind: 0, Opcode: 27 }) == 1, "引导区域先打开独立原生选图场景");
+            }
             byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone(); BinaryPrimitives.WriteInt32LittleEndian(request, dungeon);
             peer.Send(16, request); var entered = Read();
             That(entered.Any(row => row is { Kind: 0, Opcode: 28 }), "引导正式选图进入：" + dungeon);
+            That(entered.Count(row => row is { Kind: 0, Opcode: 27 }) == (direct ? 1 : 0) &&
+                (!direct || entered.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < entered.FindIndex(row => row is { Kind: 0, Opcode: 28 })),
+                "引导直接16先发27再加载，已有15场景不重开");
             var info = entered.Single(row => row is { Kind: 0, Opcode: 28 }).Body;
             var map = entered.Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             var definition = guide.EntryCatalog!.Find(dungeon)!;
@@ -154,9 +186,18 @@ internal static class FiendwarGuideTcpTests
                 }
             }
         }
+        void Select(ushort slot = 0)
+        {
+            peer.Select(slot);
+            foreach (var (type, usage) in RaidPanelTests.ReadWeeklyClears(peer.RaidWeeklyClearInfo)) clears[type] = usage;
+            Read();
+        }
+
         List<WirePacket> Read()
         {
             var rows = AntonTcpProbe.Barrier(peer, "fiendwar guide");
+            foreach (var row in rows.Where(row => row is { Kind: 0, Opcode: 1446 }))
+                foreach (var (type, usage) in RaidPanelTests.ReadWeeklyClears(row.Body)) clears[type] = usage;
             foreach (var row in rows.Where(row => row is { Kind: 0, Opcode: 1530, Body.Length: > 0 }))
                 for (int index = 0; index < row.Body[0]; index++) symbols[U32(row.Body, 1 + 8 * index)] = U32(row.Body, 5 + 8 * index);
             return rows;

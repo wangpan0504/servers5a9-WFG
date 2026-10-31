@@ -10,6 +10,15 @@ internal static class RaidPanelTests
 {
     internal static void RunCore()
     {
+        var boundary = new DateTimeOffset(2026, 11, 3, 6, 0, 0, TimeSpan.FromHours(8));
+        var before = DfoServer.Game.Raids.RaidClearCounts.Periods(boundary.AddSeconds(-1));
+        var after = DfoServer.Game.Raids.RaidClearCounts.Periods(boundary);
+        That(before[2].Week == 20261027 && after[2].Week == 20261103 &&
+            before[0].Week == after[0].Week && after[2].DayStart - before[2].DayStart == 86400,
+            "漩涡周二06点同时重置日周，其他团本不跟随错误重置");
+        var custom = new DfoServer.Game.Raids.RaidWeeklyCycle(DayOfWeek.Saturday, new(6, 0), TimeSpan.FromHours(8));
+        That(DfoServer.Game.Raids.RaidClearCounts.Periods(boundary, custom)[1].Week == custom.Key(boundary),
+            "卢克次数显示使用实际开战策略周期");
         var strings = new List<string>();
         RaidDefinition Parse(params object[] source)
         {
@@ -46,6 +55,43 @@ internal static class RaidPanelTests
             var counts = ReadClears(counted);
             That(counts[7] == 9 && counts[9] == 255, "独立读包保留个人计数而非全团图数");
         }
+        foreach (bool guide in new[] { false, true })
+        foreach (bool canStart in new[] { false, true })
+        {
+            byte[] title = "panel"u8.ToArray(), name = "leader"u8.ToArray();
+            (ushort Character, byte[] Name, byte Squad)[] members = [(7, name, 0)];
+            var records = new[]
+            {
+                (RaidPackets.RaidList(123, title, 2, 7, name, canStart: canStart, guide: guide), 4),
+                (RaidPackets.UpdateRecord(123, title, 2, 7, name, canStart: canStart, guide: guide), 8),
+                (RaidPackets.Information(2, 123, title, 2, 7, name, members, canStart: canStart, guide: guide), 6),
+                (RaidPackets.SearchResults(1, 0, [(123, title, 2, 7, name, 0, canStart, 1)], guide ? new HashSet<uint> { 123 } : null), 12)
+            };
+            foreach (var (body, offset) in records)
+                That(ReadGuideFlag(body, offset) == guide, "漩涡列表、更新、信息及搜索只投影实际引导模式，不借可开战串模式");
+        }
+    }
+
+    internal static bool ReadGuideFlag(byte[] body, int recordOffset)
+    {
+        int titleLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(recordOffset + 4)));
+        int at = checked(recordOffset + 15 + titleLength);
+        That(body.Length > at && body[at] <= 1, "原生团记录模式位宽度与位置有效");
+        return body[at] == 1;
+    }
+
+    internal static Dictionary<byte, (uint Daily, uint Weekly)> ReadWeeklyClears(byte[] body)
+    {
+        That(body.Length > 0 && body[0] == 4 && body.Length == 41, "四类团本次数保留完整原生行宽");
+        var result = new Dictionary<byte, (uint, uint)>();
+        for (int index = 0; index < body[0]; index++)
+        {
+            int offset = 1 + index * 10;
+            That(body[offset] < 4 && body[offset + 9] == 0, "次数类型有效且未猜造引导子表");
+            That(result.TryAdd(body[offset], (BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset + 1)),
+                BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset + 5)))), "次数表类型不能重复");
+        }
+        return result;
     }
 
     internal static Dictionary<ushort, byte> ReadClears(byte[] body)

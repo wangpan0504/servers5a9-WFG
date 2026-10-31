@@ -44,13 +44,44 @@ internal static partial class FiendwarRaidTcpTests
             }
             var leader = peers[0];
             leader.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("Fiend")); writer.Write(new byte[4]); }));
-            That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
-            foreach (var peer in peers.Skip(1))
+            var created = Drain(leader);
+            That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
+            uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
+            That(!RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4), "可单人开战的完整团队面板不显示引导标记");
+            foreach (var (peer, index) in peers.Skip(1).Select((peer, index) => (peer, index)))
             {
-                leader.Send(10, AntonRaidTcpTests.Peer(peer.Id, 0, true)); Drain(leader); Drain(peer);
-                peer.Send(11, AntonRaidTcpTests.Peer(leader.Id, 0, false));
-                That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 11, Body: [1, ..] }), "真实邀请进入八人攻坚名册");
+                var requester = index % 2 == 0 ? leader : peer;
+                var responder = index % 2 == 0 ? peer : leader;
+                requester.Send(10, AntonRaidTcpTests.Peer(responder.Id, 0, true)); Drain(requester); Drain(responder);
+                responder.Send(11, AntonRaidTcpTests.Peer(requester.Id, 0, false));
+                That(Drain(responder).Any(row => row is { Kind: 1, Opcode: 11, Body: [1, ..] }), "真实邀请或申请进入八人攻坚名册");
+                if (responder != peer) Drain(peer);
                 foreach (var other in peers.Where(other => other != peer)) Drain(other);
+            }
+            leader.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(raidKey); }));
+            That(!RaidPanelTests.ReadGuideFlag(Drain(leader).Single(row => row is { Kind: 1, Opcode: 1361 }).Body, 6),
+                "完整名册信息在一人、四人、八人时均保持团队模式");
+            if (count == 4)
+            {
+                leader.Send(670, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwPanel")); writer.Write((byte)0); }));
+                That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 670, Body: [1] }), "漩涡团长通过原面板改名");
+                foreach (var peer in peers.Skip(1)) Drain(peer);
+                leader.Send(669, Build(writer => { writer.Write(1u); writer.Write((uint)peers[1].Id); writer.Write(0u); }));
+                That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 669, Body: [1] }), "漩涡面板真实委任团长");
+                foreach (var peer in peers.Skip(1)) Drain(peer);
+                leader.Send(666);
+                That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 666, Body: [0, ..] }), "旧团长开战被拒绝，不扣费");
+                peers[1].Send(669, Build(writer => { writer.Write(1u); writer.Write((uint)leader.Id); writer.Write(0u); }));
+                That(Drain(peers[1]).Any(row => row is { Kind: 1, Opcode: 669, Body: [1] }), "新团长可通过原面板重新委任");
+                foreach (var peer in peers.Where(peer => peer != peers[1])) Drain(peer);
+                leader.Send(665, BitConverter.GetBytes(peers[3].Id));
+                That(!Drain(leader).Any(row => row is { Kind: 1, Opcode: 665 }), "踢人不向团长发送关闭自身面板的退团回包");
+                That(Drain(peers[3]).Any(row => row is { Kind: 1, Opcode: 665, Body: [1, 1] }), "被踢者收到强制退出面板通知");
+                foreach (var peer in peers.Skip(1).Take(2)) Drain(peer);
+                peers[3].Send(10, AntonRaidTcpTests.Peer(leader.Id, 0, true)); Drain(peers[3]); Drain(leader);
+                leader.Send(11, AntonRaidTcpTests.Peer(peers[3].Id, 0, false));
+                That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 11, Body: [1, ..] }), "被踢者可重新申请，团长接受后恢复真实名册");
+                foreach (var peer in peers.Skip(1)) Drain(peer);
             }
             leader.Send(666);
             That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 666, Body: [1] }), "多人不预设路线分队也能开团");
@@ -59,7 +90,7 @@ internal static partial class FiendwarRaidTcpTests
             if (count == 4) Reconnect(3);
             foreach (var (peer, index) in peers.Select((peer, index) => (peer, index))) Move(peer, index < 4 ? 15 : 17);
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
-            var entry = Enter(first, 15);
+            var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
             // 本场四币由不同角色依次消耗；第五次不能借个人计数重新获得额度。
             for (int index = 0; index <= 4; index++)
@@ -258,19 +289,28 @@ internal static partial class FiendwarRaidTcpTests
             // 八人时另一线路仍持续接收全团战况，不能把数百个合法广播积到最后才读。
             foreach (var other in peers.Where(other => other != peer)) Drain(other);
         }
-        List<WirePacket>[] Enter(TcpPeer[] team, int area)
+        List<WirePacket>[] Enter(TcpPeer[] team, int area, bool direct = false)
         {
             foreach (var peer in team) returned.Remove(peer.Id);
             int dungeon = raid.Fiendwar!.Areas[area].DungeonId;
-            team[0].Send(15, BitConverter.GetBytes(dungeon));
-            var selected = team.Select(Drain).ToArray();
-            That(selected[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "同区域四人自动临时成队并接受15");
+            if (!direct)
+            {
+                team[0].Send(15, BitConverter.GetBytes(dungeon));
+                var selected = team.Select(Drain).ToArray();
+                That(selected[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "同区域四人自动临时成队并接受15");
+                That(selected.All(frames => frames.Count(row => row is { Kind: 0, Opcode: 27 }) == 1), "团队15先为每名成员建立一次原生选图场景");
+            }
             byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone();
             BinaryPrimitives.WriteInt32LittleEndian(request, dungeon); team[0].Send(16, request);
             var rows = team.Select(Drain).ToArray();
             var map = rows[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             foreach (var frames in rows)
+            {
+                That(frames.Count(row => row is { Kind: 0, Opcode: 27 }) == (direct ? 1 : 0) &&
+                    (!direct || frames.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < frames.FindIndex(row => row is { Kind: 0, Opcode: 28 })),
+                    "团队直接16先发27再加载，已有15场景不重开");
                 Bytes(frames.Single(row => row is { Kind: 0, Opcode: 29 }).Body, map, "同遭遇共用真实地图、种子和怪物键");
+            }
             Load(team); return rows;
         }
         void Load(TcpPeer[] team)

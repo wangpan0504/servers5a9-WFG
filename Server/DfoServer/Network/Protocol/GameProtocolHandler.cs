@@ -84,7 +84,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure);
-        var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
+            { RaidClearLukeCycle = projection.RaidClearLukeCycle };
         context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
