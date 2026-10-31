@@ -58,6 +58,27 @@ internal static class BossRushTests
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         That(dungeons.Get(337).TimeoutSeconds == 120 && dungeons.BossRush.Bosses.SequenceEqual(catalog.Bosses),
             "目录懒加载与 337 时限共用同一份专表");
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        int offset = 0;
+        var assigned = new List<int>();
+        foreach (var map in dungeons.Get(337).Mazes.Single().MapSpecification!)
+        {
+            var room = rooms.Get(map, requirePassiveDefinitions:false);
+            var replaced = rooms.WithBossRushMonsters(room,catalog,offset);
+            var plan = DungeonMonsterPlan.FromRoom(replaced,ushort.MaxValue,1,95);
+            That(room.Monsters.All(monster => monster.MonsterId == 1) &&
+                replaced.Monsters.Select(monster => monster.RawValues[0]).SequenceEqual(plan.Monsters.Where(monster => monster.Source is not null).Select(monster => monster.MonsterId)),
+                "337替换同步源行和计划模板，原始共享房间仍保留占位怪");
+            for (int i = 0; i < room.Monsters.Count; i++)
+                That(replaced.Monsters[i].RawValues.Skip(1).SequenceEqual(room.Monsters[i].RawValues.Skip(1)) &&
+                    replaced.Monsters[i].RankKind == room.Monsters[i].RankKind && replaced.Monsters[i].Path != room.Monsters[i].Path,
+                    "替换更新真实MOB路径并保留位置、等级及品级");
+            assigned.AddRange(replaced.Monsters.Select(monster => monster.MonsterId));
+            offset += room.Monsters.Count;
+        }
+        That(assigned.SequenceEqual(catalog.Bosses),"24个战斗槽完整消费专表，无重复或遗漏，起点不消耗名单");
+        var scored = new BossRushRunState(catalog,120000);
+        That(assigned.All(scored.TryScore) && scored.Rank == 4,"替换后的全部模板可计分并推进至最高段位");
         Console.WriteLine($"PASS {Count - checks} BossRush 专表计分与段位抽签");
     }
 

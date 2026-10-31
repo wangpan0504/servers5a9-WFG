@@ -515,7 +515,7 @@ internal sealed partial class GameSession
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
         if (war?.Battle.View.Hidden?.Dungeon == entry.DungeonId) entry = entry with { IsEvildomWarHidden = true };
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
-            training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance);
+            training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance,entry.IsBossRush ? catalog.BossRush : null);
         if (prepared is not null && bossBuff is not null)
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
         if (prepared is not null && entry.Maze.IsGriefTower)
@@ -547,7 +547,7 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
-        uint? partyFirstKey = null, Guid? partyInstance = null)
+        uint? partyFirstKey = null, Guid? partyInstance = null, BossRushCatalog? bossRush = null)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
@@ -559,7 +559,7 @@ internal sealed partial class GameSession
             try
             {
                 return PrepareFormalDungeonKeyRange(expected, epoch, entry, rooms, drops, items, draw, pieces,
-                    first, prepareDrops, tutorialReturn, tutorialScenes, crackRewards, shared, partyInstance);
+                    first, prepareDrops, tutorialReturn, tutorialScenes, crackRewards, shared, partyInstance, bossRush);
             }
             catch (DungeonObjectKeyOverflowException)
             {
@@ -575,7 +575,7 @@ internal sealed partial class GameSession
         uint firstObjectKey,
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Location? tutorialReturn, TutorialScenes? tutorialScenes, CrackDimensionRewardServices? crackRewards,
-        PartyDungeonPreparation? shared, Guid? partyInstance)
+        PartyDungeonPreparation? shared, Guid? partyInstance, BossRushCatalog? bossRush)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
@@ -647,6 +647,7 @@ internal sealed partial class GameSession
         }
         var plans = new List<DungeonMonsterPlan>();
         var beastEncounters = new List<BeastEncounterRoom>();
+        int bossRushOffset = 0;
         uint next = firstObjectKey;
         uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
         try
@@ -656,6 +657,11 @@ internal sealed partial class GameSession
             {
                 if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("整条路线对象key超界");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
+                if (entry.IsBossRush)
+                {
+                    room = rooms.WithBossRushMonsters(room, bossRush ?? throw new InvalidDataException("BossRush 专表未装配"), bossRushOffset);
+                    bossRushOffset += room.Monsters.Count;
+                }
                 if (entry.LostLand is not null) room = rooms.WithLostLandWarps(room);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
                 // 实验性（#259）：比赛副本在唯一比赛图上追加四轮对手（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
@@ -682,6 +688,8 @@ internal sealed partial class GameSession
                 plans.Add(plan);
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0 || plan.HellWaves.Count > 0) next = plan.NextObjectKey;
             }
+            if (entry.IsBossRush && bossRushOffset != bossRush!.Bosses.Length)
+                return RejectFormal("boss-rush-monster-count-mismatch");
             if (BeastEncounterPlan.IsNative(entry))
             {
                 foreach (var sentinel in entry.Maze.MapSpecification!.Where(map => map.Kind == "Beast"))
