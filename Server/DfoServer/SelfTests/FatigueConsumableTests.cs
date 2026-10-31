@@ -60,7 +60,8 @@ internal static class FatigueConsumableTests
         var clock = new ConsumableUseSessionTests.FakeClock();
         var service = new FatigueConsumableService(items.Items, towns, clock);
         foreach (var (id, amount, daily) in new[] { (7456, 40, 1), (7518, 10, 0), (7644, 6, 0), (7645, 6, 0), (2682613, 1, 3),
-            (8079, 30, 0), (8221, 20, 0), (2600026, 30, 1), (2600413, 30, 0) })
+            (8079, 30, 0), (8221, 20, 0), (2600026, 30, 1), (2600413, 30, 0),
+            (490001834, 1, 0), (490004967, 50, 1), (490004968, 156, 1), (490009065, 30, 1) })
             That(items.Items.FatigueConsumable(id) is { } definition && definition.Amount == amount && definition.DailyLimit == daily,
                 "不同目录、数量与日限次的疲劳药自动读取同一标签 " + id);
         That(items.Items.FatigueConsumable(Sample) is { Amount: 10, CoolTime: 86400000, CooltimeMaintenance: 7 } &&
@@ -103,7 +104,8 @@ internal static class FatigueConsumableTests
         using (var f = Make(used: 5))
             That(f.Session.UseFatigueConsumable(Slot, service).Outcome == ConsumableUseOutcome.Rejected && f.Read().Inventory.Find(Slot) is not null,
                 "不足完整10点不吞道具，不采用旧126门槛");
-        using (var f = Make(used: 120, itemId: 7456))
+        foreach (var (itemId, amount, level) in new[] { (7456, 40, (byte)1), (490004967, 50, (byte)50) })
+        using (var f = Make(used: 120, itemId: itemId, level: level))
         {
             That(f.Session.UseFatigueConsumable(Slot, service).Outcome == ConsumableUseOutcome.Committed &&
                 f.Read().Inventory.DailyBoosterUses.Single().Used == 1, "资源日限次和疲劳、冷却同库存提交");
@@ -114,8 +116,8 @@ internal static class FatigueConsumableTests
                 QuestCompletionRepositoryTests.Same(before, f.Read()), "冷却到期、换实例和重选不能绕过资源日限次");
             clock.Advance(TimeSpan.FromDays(1));
             That(f.Session.UseFatigueConsumable(Second, service).Outcome == ConsumableUseOutcome.Committed &&
-                f.Read().Inventory.DailyBoosterUses.Single().Used == 1 && f.Read().Fatigue!.Used == 40,
-                "新服务日恢复额度，按资源40点再次恢复，不重放前一日使用");
+                f.Read().Inventory.DailyBoosterUses.Single().Used == 1 && f.Read().Fatigue!.Used == 120 - 2 * amount,
+                "新服务日恢复额度，按资源恢复量再次恢复，不重放前一日使用");
         }
         using (var f = Make(used: 120, itemId: 7456))
         {
@@ -132,11 +134,12 @@ internal static class FatigueConsumableTests
         }
         Console.WriteLine($"PASS {Count - checks} 主动疲劳恢复资源、冷却及真实事务断言");
 
-        QuestOrdinaryCompletionTests.Fixture Make(bool lost = false, int used = 50, int itemId = Sample)
+        QuestOrdinaryCompletionTests.Fixture Make(bool lost = false, int used = 50, int itemId = Sample, byte level = 1)
         {
             var f = new QuestOrdinaryCompletionTests.Fixture(towns, characters, skills, growth, parameters, items, QuestEligibilityTests.Quest(100),
                 materialCount: 0, loseResult: lost, active: [], configure: candidate => candidate with
                 {
+                    Level = level,
                     Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.AddRange(new[]
                     {
                         new InventoryItem(0, Slot, new(itemId, ItemKind.Consumable, 1) { ExpireTime = 2145852000 }),

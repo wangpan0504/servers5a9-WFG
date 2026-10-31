@@ -42,7 +42,7 @@ internal sealed record LevelUpTicketDefinition(int TemplateId, int MinimumLevel,
         var rolls = ImmutableArray.CreateBuilder<LevelUpAmountWeight>();
         if (raw.HasBoosterInfo)
         {
-            if (action.Parameters.Count != 1 || raw.DeclaredBoosterEtc is not { Count: >= 4 } entries ||
+            if (raw.DeclaredBoosterEtc is not { Count: >= 4 } entries ||
                 entries[0] != 1 || (entries.Count - 1) % 3 != 0) return null;
             for (int i = 1; i < entries.Count; i += 3)
             {

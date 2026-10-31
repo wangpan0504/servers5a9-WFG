@@ -50,11 +50,16 @@ internal static class ClassChangeTests
             "动作、等级、职业及禁转声明共同解释，兑换材料不属于使用资格");
         That(ClassChangeTicketDefinition.Parse(raw with { ActionDeclaration = new("[class change]", [4]) }, template)?.FixedTarget == 4,
             "固定目标参数不是未确认字段，不收窄已有回转券");
+        That(ClassChangeTicketDefinition.Parse(raw with
+            { DeclaredActionUsableServerTypes = ["[starter server]", "[general server]", "[event server]"] }, template) is not null,
+            "允许普通服的券不因同时声明新手服而被误拒绝");
         foreach (var invalid in new[]
         {
             raw with { ActionDeclaration = new("[class change]", [1, 2]) }, raw with { ActionDeclaration = new("[quest clear]", []) },
             raw with { DeclaredDontChangeGrowTypes = [0] }, raw with { DeclaredDontChangeGrowTypes = [16, 1] },
             raw with { DeclaredUsableFirstGrowTypes = [6] }, raw with { DeclaredActionUsableServerTypes = null },
+            raw with { DeclaredActionUsableServerTypes = ["[starter server]"] },
+            raw with { DeclaredActionUsableServerTypes = ["[general server]", "[unknown server]"] },
             raw with { DeclaredActionUsablePlaces = null }, raw with { HasMaximumLevel = true, DeclaredMaximumLevel = null }
         }) That(ClassChangeTicketDefinition.Parse(invalid, template) is null, "缺失、畸形或其他动作不能取得互转资格");
         Console.WriteLine($"PASS {Count - checks} 职业互转解析、完整回包及资源边界断言");

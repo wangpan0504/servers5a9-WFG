@@ -298,6 +298,62 @@ internal static class BoosterTcpTests
                 "重连恢复黎明结晶单开及批量开启的完整奖励数量");
             peer.Barrier();
         }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repo.List(owner).Single(role => role.Name == "SoulBox");
+            InventoryService.Commit(repo, owner, current, InventoryRewardGrantService.TryGrantBatch(current,
+                [new(10002631, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
+        }
+        (int Id, int Count)[] weddingRewards = [(2683422, 1), (101600020, 1), (10002901, 100), (10002611, 1), (10002612, 1)];
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(1)[4].Body;
+            short slot = (short)U16(full, Enumerable.Range(0, U16(full, 3)).Select(i => 5 + i * 123)
+                .Single(at => U32(full, at + 2) == 10002631));
+            string before = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_wedding_box BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'wedding box rollback'); END");
+            SendOpen(peer, slot, 1);
+            peer.Closed();
+            That(Snapshot() == before, "职业婚礼箱SQL失败保留源、全部奖励及审计，不提前成功");
+            fixture.Sql("DROP TRIGGER fail_wedding_box");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(1)[4].Body;
+            short slot = (short)U16(full, Enumerable.Range(0, U16(full, 3)).Select(i => 5 + i * 123)
+                .Single(at => U32(full, at + 2) == 10002631));
+            SendOpen(peer, slot, 1);
+            ExpectAck(peer, 10002631, slot, weddingRewards);
+            Entry(peer.Expect(0, 14).Body, slot, -1, 0);
+            byte[] delta = peer.Expect(0, 14).Body;
+            foreach (var reward in weddingRewards.Where(reward => reward.Id != 101600020))
+                That(Enumerable.Range(0, U16(delta, 1)).Select(i => 3 + i * 123)
+                    .Any(at => U32(delta, at + 2) == reward.Id && U32(delta, at + 6) == reward.Count),
+                    "职业婚礼箱普通背包差量包含完整奖励 " + reward.Id);
+            byte[] avatar = peer.Expect(0, 14).Body;
+            That(avatar[0] == 1 && U16(avatar, 1) == 1 && avatar.Length == 168 && U32(avatar, 5) == 101600020,
+                "婚礼武器装扮通过独立容器发完整165B实例");
+            peer.Barrier();
+            string consumed = Snapshot();
+            SendOpen(peer, slot, 1);
+            peer.Expect(1, 160, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == consumed, "婚礼箱源耗尽后不能重复发奖");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(1)[4].Body;
+            foreach (var reward in weddingRewards.Where(reward => reward.Id != 101600020))
+                That(Enumerable.Range(0, U16(full, 3)).Select(i => 5 + i * 123)
+                    .Any(at => U32(full, at + 2) == reward.Id && U32(full, at + 6) == reward.Count),
+                    "重连恢复婚礼箱普通背包完整奖励 " + reward.Id);
+            byte[] avatar = peer.SpecialContainers[1].Body;
+            That(avatar[0] == 1 && U16(avatar, 3) == 1 && avatar.Length == 170 && U32(avatar, 7) == 101600020,
+                "重连从装扮容器恢复婚礼武器装扮完整实例");
+            That(!Enumerable.Range(0, U16(full, 3)).Select(i => 5 + i * 123).Any(at => U32(full, at + 2) == 10002631),
+                "重连后不恢复已消费婚礼箱");
+            peer.Barrier();
+        }
         CharacterPool(fixture,resources,repo,owners);
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");

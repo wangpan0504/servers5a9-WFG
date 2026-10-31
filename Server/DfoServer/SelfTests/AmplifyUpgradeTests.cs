@@ -22,10 +22,26 @@ internal static class AmplifyUpgradeTests
     {
         int before = Count;
         string ResolvePortable(int index) => index switch { -1 => "[action type]", -2 => "[new portable amplify]",
-            -3 => "[/action type]", -4 => "[portable amplify]", _ => throw new InvalidOperationException() };
+            -3 => "[/action type]", -4 => "[portable amplify]", -5 => "[action usable server type]",
+            -6 => "[/action usable server type]", -7 => "[general server]", -8 => "[event server]",
+            -9 => "[unknown server]", -10 => "[extra]", -11 => "[/extra]", _ => throw new InvalidOperationException() };
         AmplifyUse? Portable(bool boosted, params int[] values) => AmplifyUpgradeCatalog.ParseUse(new(
             [new(3,-1), new(6,boosted ? -2 : -4), .. values.Select(value => new PvfLib.PvfToken(0,value)), new(3,-3)],
             ResolvePortable), ResolvePortable);
+        AmplifyUse? ServerUse(params PvfLib.PvfToken[] suffix) => AmplifyUpgradeCatalog.ParseUse(new(
+            [new(3,-1),new(6,-4),new(0,0),new(0,30),new(3,-3),..suffix], ResolvePortable), ResolvePortable);
+        That(ServerUse(new(3,-5),new(6,-7),new(3,-6)) is { PendingRule:null, MaximumUpgrade:30 } &&
+            ServerUse(new(3,-5),new(6,-7),new(6,-8),new(3,-6)) is { PendingRule:null },
+            "普通服增幅器接受唯一完整且包含general server的声明，保留原升级范围");
+        foreach (var suffix in new PvfLib.PvfToken[][]
+        {
+            [new(3,-5),new(6,-8),new(3,-6)], [new(3,-5),new(6,-9),new(3,-6)],
+            [new(3,-5),new(6,-7),new(6,-7),new(3,-6)], [new(3,-5),new(3,-6)],
+            [new(3,-5),new(0,0),new(3,-6)], [new(3,-5),new(6,-7)],
+            [new(3,-5),new(6,-7),new(3,-6),new(3,-5),new(6,-7),new(3,-6)],
+            [new(3,-10),new(3,-5),new(6,-7),new(3,-6),new(3,-11)]
+        }) That(ServerUse(suffix) is { PendingRule:not null },
+            "活动专服、未知、重复、空、坏类型、残缺及嵌套的服务器资格不能被当作普通服放行");
         That(Portable(true,0,14,30000) is { Kind:AmplifyUseKind.Portable, MinimumUpgrade:0, MaximumUpgrade:14, SuccessBonusWeight:30000 } &&
             Portable(false,0,50) is { Kind:AmplifyUseKind.Portable, MaximumUpgrade:50, SuccessBonusWeight:0 } &&
             Portable(true,0,14,0) is { SuccessBonusWeight:0 }, "新便携动作保留三个整数，旧动作及零加成不扩大基础成功率");
@@ -81,6 +97,10 @@ internal static class AmplifyUpgradeTests
         EnhancementTests.RunResources(resources.ItemResources, resources.ItemResources.Enhancements);
         int before = Count;
         var r = resources.ItemResources;
+        foreach (int id in new[] { 490011012,490011266,490011334,490011881,490012050,490012067,490012459,
+            490012568,490012611,490012697,490013119,490013124,490013325 })
+            That(r.AmplifyUpgrades.Get(id) is { Kind:AmplifyUseKind.Portable, PendingRule:null },
+                "全量普查命中的普通服一次性增幅器均可按原限制消费：" + id);
         var rules = r.AmplifyUpgrades.Rules;
         That(rules.Steps.Length == 255 && rules.Steps[0] is { FailureWeight: 0, MaterialId: 3242, MaterialCount: 1 } &&
             rules.Steps[10] is { FailureWeight: 60000, PenaltyType: 3, MaterialCount: 11 }, "当前PVF普通amplify表按24列读取，不误选new amplify表");

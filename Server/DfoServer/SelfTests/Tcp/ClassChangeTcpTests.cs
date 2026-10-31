@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Persistence;
 using DfoServer.Network.Builders;
@@ -13,8 +14,18 @@ internal static class ClassChangeTcpTests
         int checks = Count;
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "class-change"), resources: resources);
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
+        foreach (int id in new[] { 2660701, 10099314, 10099788 })
+            That(resources.ItemResources.Items.ClassChangeTicket(id) is { MinimumLevel: 15, MaximumLevel: 50 },
+                "同时声明新手服与普通服的真实互转券保留等级限制 " + id);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            repository.Create(owner, ClassChangeTests.CharacterFixture(resources));
+        {
+            var candidate = ClassChangeTests.CharacterFixture(resources);
+            repository.Create(owner, candidate with { Inventory = candidate.Inventory with
+            {
+                Items = candidate.Inventory.Items.Select(item => item.Position.Index == 65
+                    ? item with { Core = item.Core with { ItemId = 2660701 } } : item).ToImmutableArray()
+            } });
+        }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {

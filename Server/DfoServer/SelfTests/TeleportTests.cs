@@ -49,6 +49,11 @@ internal static class TeleportTests
         Reject<InvalidDataException>(() => TeleportRequests.Solo(new byte[16]), "470未知追加字段拒绝");
         That(TeleportCatalog.ReadPotion(new(PotionText)) is { MinimumLevel: 60, CoolTime: 10000 } &&
             TeleportCatalog.ReadAura(new(AuraText)) == new AuraAbilityDefinition(AuraAbilityKind.SoloTeleport, 420), "资源药剂毫秒与光环秒分别保留");
+        That(TeleportCatalog.ReadPotion(new(PotionText.Replace("[minimum level]\n60\n", ""))) is { MinimumLevel: 0, CoolTime: 10000 },
+            "未声明最低等级的瞬移药按堆叠物品默认0处理，不误拒绝正常无等级限制药剂");
+        foreach (string value in new[] { "", "bad", "-1", "96", "1 2" })
+            That(TeleportCatalog.ReadPotion(new(PotionText.Replace("\n60\n", "\n" + value + "\n"))) is null,
+                "明确声明但损坏或越界的最低等级不得使用缺省规则");
         That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]` 420", "[none]`"))) == new AuraAbilityDefinition(AuraAbilityKind.None, 0),
             "`[none]`光环被识别为有光环但无传送能力，不等同于未知声明");
         That(TeleportRequests.Party(Convert.FromHexString("27030F03CD000501")) == new PartyTeleportRequest(new(39, 3, 783, 205, 5), 1) &&
@@ -270,6 +275,10 @@ internal static class TeleportTests
     // 真实PVF：黑市入口 54/2（[dungeon gate] 49 哈林）不在 2600014 的 int data 内。
     public static void RunResources(TownCatalog towns, DfoServer.Infrastructure.ItemResources itemResources)
     {
+        foreach (int id in new[] { 490007514, 490008100, 490009401, 490010436, 490011461 })
+            That(itemResources.Items.Get(id).MinimumLevel == 0 &&
+                itemResources.Teleports.Potion(id) is { MinimumLevel: 0, CoolTime: 10000, DungeonMaps.Count: > 0 },
+                "真实瞬移药缺省等级保持模板与传送目录一致，保留冷却和地图集合 " + id);
         foreach (var (id, expected) in new[]
         {
             (101590218, new AuraAbilityDefinition(AuraAbilityKind.None, 0)),

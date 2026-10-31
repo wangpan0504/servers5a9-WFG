@@ -29,7 +29,7 @@ internal static class AmplifyUpgradeTcpTests
                 Job = 2, Level = 75, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(2).Skills,
                 Inventory = new([new(0, Bag(19), core), new(0, new(InventoryListType.Equipment, 12), core),
                     new(0, Bag(121), InventoryRewardGrantService.Create(r.Items.Get(3242), 1)),
-                    new(0, Bag(65), InventoryRewardGrantService.Create(r.Items.Get(10005313), 1) with { ExpireTime = 0 }),
+                    new(0, Bag(65), InventoryRewardGrantService.Create(r.Items.Get(490011012), 1) with { ExpireTime = 0 }),
                     new(0, Bag(66), InventoryRewardGrantService.Create(r.Items.Get(10007407), 1) with { ExpireTime = 0 }),
                     new(0, Bag(67), InventoryRewardGrantService.Create(r.Items.Get(10007133), 2) with { ExpireTime = 0 }),
                     new(0, Bag(68), InventoryRewardGrantService.Create(r.Items.Get(10007839), 2) with { ExpireTime = 0 }),

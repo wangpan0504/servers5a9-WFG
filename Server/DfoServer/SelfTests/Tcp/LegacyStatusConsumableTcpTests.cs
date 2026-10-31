@@ -36,8 +36,8 @@ internal static class LegacyStatusConsumableTcpTests
                     new InventoryItem(0, new(InventoryListType.Main, 65), new(7180, ItemKind.Consumable, 2)),
                     new InventoryItem(0, new(InventoryListType.Main, 66), new(7181, ItemKind.Consumable, 1)),
                     new InventoryItem(0, new(InventoryListType.Main, 67), new(28, ItemKind.Consumable, 1)),
-                    new InventoryItem(0, FatigueConsumableTests.Slot, new(FatigueConsumableTests.Sample, ItemKind.Consumable, 1)),
-                    new InventoryItem(0, FatigueConsumableTests.Second, new(FatigueConsumableTests.Sample, ItemKind.Consumable, 1))
+                    new InventoryItem(0, FatigueConsumableTests.Slot, new(490001834, ItemKind.Consumable, 1)),
+                    new InventoryItem(0, FatigueConsumableTests.Second, new(490001834, ItemKind.Consumable, 1))
                 })
             } };
             role = repository.Create(owner, candidate);
@@ -81,9 +81,9 @@ internal static class LegacyStatusConsumableTcpTests
             peer.Send(515, ActionBody(action));
             peer.Expect(1, 515, [1, 68, 0, 0, 58, 0, 0, 0]);
             var fatigue = repository.LoadCharacter(reader, role.Slot).Fatigue!;
-            peer.Expect(0, 36, Build(w => { w.Write((ushort)40); w.Write((ushort)156); w.Write((ushort)0); w.Write((ushort)116); w.Write((ushort)0); }));
+            peer.Expect(0, 36, Build(w => { w.Write((ushort)49); w.Write((ushort)156); w.Write((ushort)0); w.Write((ushort)107); w.Write((ushort)0); }));
             peer.Barrier();
-            That(fatigue.Used == 40 && fatigue.Remaining == 116, "action58先消费回执，再同步同次提交的疲劳绝对余额");
+            That(fatigue.Used == 49 && fatigue.Remaining == 107, "重复类型疲劳药先消费回执，再同步同次提交的1点疲劳绝对余额");
             var cooling = action with { Slot = 69 };
             string untouched = fixture.Snapshot();
             peer.Send(515, ActionBody(cooling));
@@ -110,7 +110,7 @@ internal static class LegacyStatusConsumableTcpTests
                 "重启及重选保留币余额、原技能树与额外点数来源");
             var action = new StackableActionUseRequest(69, 0, 0, FatigueConsumableDefinition.Action, 0, 0);
             peer.Send(515, ActionBody(action)); peer.Expect(1, 515, [0, 19, 0, 69, 0, 0, 58]); peer.Barrier();
-            That(repository.LoadCharacter(reader, role.Slot).Fatigue!.Used == 40, "重启不能绕过疲劳恢复冷却");
+            That(repository.LoadCharacter(reader, role.Slot).Fatigue!.Used == 49, "重启不能绕过疲劳恢复冷却");
         }
     }
 
