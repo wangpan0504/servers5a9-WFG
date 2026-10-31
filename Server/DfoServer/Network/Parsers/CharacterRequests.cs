@@ -52,6 +52,15 @@ internal static class CharacterRequests
         target = BinaryPrimitives.ReadUInt16LittleEndian(body);
         return true;
     }
+    public static bool TryNameHistory(ReadOnlySpan<byte> body, out ushort target)
+    {
+        target = 0;
+        // 01C04BF5..01C04C19：当前服务器曾用名窗口请求actor:u16、mode5:u8。
+        if (body.Length < 3 || body[2] != 5) return false;
+        if (body.Length != 3) throw new InvalidDataException("曾用名请求长度错误");
+        target = BinaryPrimitives.ReadUInt16LittleEndian(body);
+        return true;
+    }
     public static ushort Select(ReadOnlySpan<byte> body)
     {
         if (body.Length != 2)

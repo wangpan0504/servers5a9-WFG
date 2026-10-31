@@ -289,6 +289,7 @@ internal static class SqliteMigrations
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
         new(160, "普通普雷每日分支与顺序进度", PreyNormalProgressSchema.Upgrade),
+        new(161, "角色曾用名历史", static (db, tx) => Execute(db, tx, CharacterNameHistorySchema.Definition)),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2373,6 +2374,7 @@ internal static class SqliteMigrations
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_ekern_cycle",EkernCycleSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_rename_pending",CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_name_history",CharacterNameHistorySchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_progress",GuildDungeonProgressSchema.Definition.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

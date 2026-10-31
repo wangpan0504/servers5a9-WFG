@@ -6,7 +6,7 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository : ICharacterRenamer
 {
-    // GM 改名：只改 characters.name（NOCASE 唯一）与拍卖行里冗余的卖家名；邮件历史发件人名等快照保持原样。
+    // GM 改名同事务保存曾用名并更新拍卖行冗余卖家名；邮件等历史快照保持原样。
     // 同一事务内校验 revision，被占用的名字以 InvalidDataException 返回，不改任何数据。
     public Character Rename(AccountOwners.Lease owner, Character expected, string newName) => owner.Execute(() =>
     {
@@ -29,6 +29,7 @@ internal sealed partial class CharacterRepository : ICharacterRenamer
             if (changed != 1) throw new InvalidOperationException("角色 revision 或名称已变化，请重试");
             command.CommandText = "UPDATE auction_listings SET seller_name=$new WHERE seller_character_id=$id";
             command.ExecuteNonQuery();
+            RecordFormerName(db, tx, owner, expected, newName);
             tx.Commit();
         }
         return LoadCharacter(owner, expected.Slot);

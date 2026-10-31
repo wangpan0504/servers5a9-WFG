@@ -75,6 +75,7 @@ internal sealed partial class CharacterRepository : ICharacterRenameCardStore
         command.ExecuteNonQuery();
         command.CommandText = "DELETE FROM character_rename_pending WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("角色更名资格已变化");
+        RecordFormerName(db, tx, owner, expected, newName);
         tx.Commit();
         return CharacterRenameFailure.None;
     });

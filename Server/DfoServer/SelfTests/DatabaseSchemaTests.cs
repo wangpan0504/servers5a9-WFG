@@ -2474,6 +2474,7 @@ internal static partial class DatabaseSchemaTests
             phaseStarted = Stopwatch.GetTimestamp();
             using (var db = Open(path))
             {
+                if (oldVersion < 161) Execute(db, "DROP TABLE character_name_history");
                 if (oldVersion < 156) Execute(db, "DROP TABLE character_rename_pending");
                 if (oldVersion < 153) Execute(db, "DROP TABLE character_ekern_cycle");
                 if (oldVersion is 66 or 67 or 77 or 78) RemoveEmptyPromotionFixtureSchema(db);
