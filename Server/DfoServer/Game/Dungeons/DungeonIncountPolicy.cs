@@ -67,7 +67,7 @@ internal static class DungeonIncountPolicy
 
     // 同行每个副本一条 NOTI 550，剩余相同。
     public static IEnumerable<DungeonEnterCount> Views(DungeonIncountRow row, DungeonIncountUsage usage) =>
-        row.Dungeons.Where(dungeon => dungeon > 0).Select(dungeon => View(checked((uint)dungeon), row, usage));
+        row.Dungeons.Where(dungeon => row.HasCountNotification && dungeon > 0).Select(dungeon => View(checked((uint)dungeon), row, usage));
 
     public static DungeonEnterCount View(uint dungeon, DungeonIncountRow row, DungeonIncountUsage usage) =>
         new(dungeon, (byte)Math.Min(DailyRemaining(row, usage), byte.MaxValue), (byte)Math.Min(WeeklyRemaining(row, usage), byte.MaxValue));

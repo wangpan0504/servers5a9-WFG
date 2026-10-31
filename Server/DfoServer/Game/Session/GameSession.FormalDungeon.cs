@@ -948,7 +948,7 @@ internal sealed partial class GameSession
                 consumption = plan;
             }
             if (installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
-                installing.Entry.IsAncientInfinite)
+                installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
             {
                 // 专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
