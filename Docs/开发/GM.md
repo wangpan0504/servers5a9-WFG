@@ -231,7 +231,8 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 
 ## 副职业类型与等级（本机管理接口）
 
-- 命令：`expert-job <角色>` 只读，返回 `{name, rev, type, typeLabel, expertness, level, maxLevel}`；`expert-job <角色> <类型1-4> <等级1-11>` 写入。类型编号取自 `character/expertjob.lst`：1 附魔师、2 炼金术师、3 分解师、4 控偶师。
+- 命令：`expert-job <角色>` 只读，返回 `{name, rev, type, typeLabel, expertness, level, maxLevel, machineGrade, machineEndurance}`；`expert-job <角色> <类型1-4> <等级1-11>` 写入。类型编号取自 `character/expertjob.lst`：1 附魔师、2 炼金术师、3 分解师、4 控偶师。
+- GM设置分解师等级时，在同一revision事务将分解机同步到指定等级及该等级资源声明的满耐久，写入结果和只读查询均显示机器状态；在线Selected同时更新。熟练度与机器仍是两份状态，正常游玩的分解机升级继续校验费用、职业等级和满耐久，其他职业的GM等级调整不改机器状态。
 - 服务端只持久化累计熟练度（`character_expert_job.expertness`），客户端按 PVF `[expertness exp]` 阈值换算显示等级。写入 N 级时落该等级的最低阈值；本版四职业阈值相同：Lv1=0、Lv2=20、Lv3=133、Lv4=246、Lv5=359、Lv6=472、Lv7=585、Lv8=698、Lv9=811、Lv10=939、Lv11=1067。没有资格时新建行，已有资格时改类型与熟练度，同一事务校验 revision；改类型保留已学附魔设计图。
 - `POST /api/expert-job`，请求头 `X-GM-Request: 1`，JSON `{account, name, type, level, confirm:true}`；`type` 1–4，`level` 1–11。审计动作 `expert-job`，前后摘要取只读命令 `expert-job <角色>`。在线角色经会话 owner 提交并同步在线快照，客户端回到选角并再次进入后刷新等级显示。
 

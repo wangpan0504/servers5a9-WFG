@@ -14,6 +14,8 @@ internal static class ExpertJobActionTcpTests
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
         ExpertJobActionTests.Run(resources.Towns, resources.ItemResources);
+        DevelopmentGmExtendedTests.RunResources(resources.Towns, resources.ItemResources, resources.Archive,
+            resources.Quests, resources.Characters);
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "expert-job-actions"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         var items = resources.ItemResources.Items;

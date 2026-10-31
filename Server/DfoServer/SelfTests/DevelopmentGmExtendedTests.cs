@@ -132,6 +132,35 @@ internal static class DevelopmentGmExtendedTests
         foreach (string bad in new[] { "expert-job Other 0 1", "expert-job Other 5 1", "expert-job Other 1 0", "expert-job Other 1 12", "expert-job Other 1" })
             TestCheck.That(Answer(bad).StartsWith("ERR "), "副职业参数严格拒绝: " + bad);
 
+        var fullMachine = Json(Answer("expert-job Other 3 11"));
+        var fullMachineRow = Load();
+        TestCheck.That(resources.ExpertJobs.TryRepair(3, 11, out _, out int fullEndurance) &&
+            fullMachine.GetProperty("machineGrade").GetInt32() == 11 &&
+            fullMachineRow.ExpertMachineGrade == 11 && fullMachineRow.ExpertMachineEndurance == fullEndurance &&
+            resources.ExpertJobs.Level(3, fullMachineRow.ExpertJobExperience) == 11,
+            "GM分解师满级同时持久化11级分解机及对应满耐久");
+        using (var machineLease = f.Owners.Acquire("other", () => { }))
+        {
+            var machineSession = new GameSession(f.Repository, towns, machineLease);
+            machineSession.Select(0);
+            machineSession.MarkReady();
+            var online = Json(Answer("expert-job Other 3 5", machineSession));
+            var saved = f.Repository.LoadCharacter(machineLease, 0);
+            TestCheck.That(resources.ExpertJobs.TryRepair(3, 5, out _, out int endurance) &&
+                online.GetProperty("machineGrade").GetInt32() == 5 &&
+                machineSession.Selected!.ExpertMachineGrade == 5 && machineSession.Selected.ExpertMachineEndurance == endurance &&
+                saved.ExpertMachineGrade == 5 && saved.Revision == machineSession.Selected.Revision,
+                "在线GM调整同步机器与Selected，重读存档不恢复旧机器等级");
+            var stale = saved with { Revision = saved.Revision - 1 };
+            TestCheck.Reject<InvalidOperationException>(() => f.Repository.SetExpertJob(machineLease, stale, 3, 0, (1, 300)),
+                "陈旧GM快照不能分别写入熟练度与机器等级");
+            var unchanged = f.Repository.LoadCharacter(machineLease, 0);
+            TestCheck.That(unchanged.ExpertJobExperience == saved.ExpertJobExperience &&
+                unchanged.ExpertMachineGrade == saved.ExpertMachineGrade && unchanged.ExpertMachineEndurance == saved.ExpertMachineEndurance &&
+                unchanged.Revision == saved.Revision, "陈旧快照的熟练度、机器和revision整笔回滚");
+        }
+        Json(Answer("expert-job Other 2 11"));
+
         // 账号金库：未开通（容量0）拒绝；已开通后按容量档位上限校验，同账号共享。
         TestCheck.That(Answer("currency Other vault-gold set 1").StartsWith("ERR ") && Answer("currency Other vault-gold mul 1").StartsWith("ERR "), "金库未开通或操作非法时拒绝");
         int tierLimit;

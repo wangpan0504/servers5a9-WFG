@@ -1057,10 +1057,15 @@ internal sealed partial class TcpPeer : IDisposable
                 TestCheck.That(daily.Count > 0, "Main全量之后必须初始化每日已用视图");
                 InitialDailyBoosterPackets = daily.ToArray();
             }
-            if (index == afterCargo - 2 && packet.Kind == 0 && packet.Opcode == 19)
+            if (index == 3 && packet.Kind == 0 && packet.Opcode == 19)
             {
                 SkillInfo = packet.Body;
-                ExpertContract = expertContract ? Expect(0, 66).Body : [];
+                packet = Read();
+            }
+            if (index == afterCargo - 2 && expertContract)
+            {
+                TestCheck.That(packet.Kind == 0 && packet.Opcode == 66, "达人契约仍在技能树与完整穿戴之后初始化");
+                ExpertContract = packet.Body;
                 packet = Read();
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,

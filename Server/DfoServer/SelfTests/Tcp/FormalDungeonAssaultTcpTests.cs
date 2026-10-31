@@ -17,6 +17,7 @@ internal static partial class FormalDungeonTcpTests
     // 本用例走真实 1547→15→16 强袭入场、逐房清图与结算，锁定强袭 72{1,1} 同样走 ACK72{1,1}→ACK15→NOTI3 state1→完整NOTI27。
     public static async Task RunAssaultResultMenuAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        AssaultMaterialDropTests.Run(resources.Archive, resources.ItemResources.Items);
         await RunAssaultResultMenuAsync(source, root, resources, 3, 7323, 0, true);
         await RunAssaultResultMenuAsync(source, root, resources, 3, 7323, 0);
         await RunAssaultResultMenuAsync(source, root, resources, 2, 7321, 6084);

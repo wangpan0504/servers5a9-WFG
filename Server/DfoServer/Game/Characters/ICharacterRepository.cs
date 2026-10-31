@@ -17,7 +17,8 @@ internal interface ICharacterRenamer
 // 副职业类型与累计熟练度：只由开发 GM 使用，避免所有仓库包装类都要实现。
 internal interface IExpertJobSetter
 {
-    Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience);
+    Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience,
+        (int Grade, int Endurance)? machine = null);
 }
 
 internal interface ICharacterRepository
