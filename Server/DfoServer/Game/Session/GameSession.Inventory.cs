@@ -52,6 +52,12 @@ internal sealed partial class GameSession
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(
         character => inventory.Delete(character,request,preserveMaterials: PreservesDungeonConsumables),
         requireTown: request.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo);
+    public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory) => owner.Execute(() =>
+        MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen),
+            requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
+                request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
+                !CanAccessPortableCargo()));
+
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
@@ -74,6 +80,10 @@ internal sealed partial class GameSession
         try
         {
             Selected = InventoryService.Commit(repository, owner, character, result);
+            // 升级任一仓库后，客户端搬来的仓库关闭；提交失败不提前改变资格。
+            if (Selected.Inventory.CargoCapacity != character.Inventory.CargoCapacity ||
+                Selected.Inventory.AccountCargo.Capacity != character.Inventory.AccountCargo.Capacity)
+                portableCargo = null;
         }
         catch (InventoryQualificationExpiredException)
         {
