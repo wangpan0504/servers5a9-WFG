@@ -448,6 +448,13 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         // 资格与全部候选先确认，再用同一冻结快照扣源及材料；任何失败都不抽取或修改原背包。
         var paid = definition.DailyRetainedLimit is not null ? before :
             InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
+        if (lottery && definition.LotteryGoldCost != 0)
+        {
+            ulong goldCost = (ulong)definition.LotteryGoldCost * (uint)request.Count;
+            if (goldCost > paid.Gold)
+                return InventoryResult.Reject(19) with { RejectReason = "lottery_gold_insufficient" };
+            paid = paid with { Gold = paid.Gold - (uint)goldCost };
+        }
         long? materialDeadline = null;
         if (lottery && definition.LotteryUseNeedItem is { } cost)
         {

@@ -44,6 +44,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
     public ItemMaterialCost? LotteryUseNeedItem { get; init; }
+    public uint LotteryGoldCost { get; init; }
     public bool AllowsLotteryGold { get; init; }
     // [legacy] 的随机礼盒只带族/档，产物池由 etc/runesystem.etc 的 [random choose info] 决定。
     public (int Family, int Tier)? RuneBox { get; init; }
@@ -177,6 +178,23 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         ItemMaterialCost? lotteryUseNeedItem = null;
+        uint lotteryGoldCost = 0;
+        var goldCosts = Regex.Matches(tags,
+            @"\[\s*/?\s*lottery\s+use\s+cost[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (goldCosts.Count != 0)
+        {
+            var declaration = goldCosts[0];
+            int end = declaration.Index + declaration.Length;
+            int next = tags.IndexOf('[', end);
+            // 付费金币奖励的净增量回包尚未闭合；费用只接入类型1的有限实物池。
+            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$") ||
+                goldCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
+                !declaration.Value.Equals("[lottery use cost]", StringComparison.OrdinalIgnoreCase) ||
+                !IsRootDeclaration(tags, declaration.Index) ||
+                !uint.TryParse(text[end..(next < 0 ? text.Length : next)].Trim(), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out lotteryGoldCost))
+                return new([], "袖珍罐金币费用声明无效");
+        }
         var lotteryCosts = Regex.Matches(tags,
             @"\[\s*/?\s*lottery\s+use\s+need\s+item[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
         if (lotteryCosts.Count != 0)
@@ -335,7 +353,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 ? new([new(1, rewards.ToImmutable())], Lottery: true,
                     // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
                     NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
-                    { LotteryUseNeedItem = lotteryUseNeedItem, AllowsLotteryGold = allowsGold, SetsDisjointInstanceType = setsDisjointInstanceType,
+                    { LotteryUseNeedItem = lotteryUseNeedItem, LotteryGoldCost = lotteryGoldCost,
+                        AllowsLotteryGold = allowsGold, SetsDisjointInstanceType = setsDisjointInstanceType,
                         ForbidsDestructionSouls = setsDisjointInstanceType }
                 : new([], "袖珍罐总权重为零");
         }
