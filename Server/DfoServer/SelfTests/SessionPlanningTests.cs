@@ -807,9 +807,11 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_dungeon_growth_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision) VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,1,1,1,'test','test',1,1,1,1,0,1,1);
                 INSERT INTO character_dungeon_loot_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',1,1,1,1,'test','test',1,'{}',0,0,0);
                 INSERT INTO character_dungeon_pickup_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,'instance',1,1,0,121,1,'{}',1);
-                INSERT INTO character_dungeon_drop_batches VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,'test','test',1);
+                INSERT INTO character_dungeon_drop_batches(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,object_count)
+                  VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','instance',0,1,1,1,1,'test','test',1);
                 INSERT INTO character_dungeon_drop_objects VALUES({{id}},'1234567890abcdef1234567890abcdef','instance',0,2,NULL,1,0,0,0);
-                INSERT INTO character_dungeon_drop_pickups VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',2,'instance',1,1,NULL,NULL,NULL,0,1,1,0,1);
+                INSERT INTO character_dungeon_drop_pickups(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
+                  VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',2,'instance',1,1,NULL,NULL,NULL,0,1,1,0,1);
                 INSERT INTO character_dungeon_passive_pickups VALUES({{id}},'planning',3,'1234567890abcdef1234567890abcdef',
                   1,1,NULL,1,NULL,NULL,NULL,0,1,1,0,1);
                 INSERT INTO character_quest_drop_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',0,1,'{}','[]');

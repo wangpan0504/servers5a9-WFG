@@ -56,8 +56,8 @@ internal static class GuildHallTcpTests
             "同会成员主动重新入厅，原观察者恢复其Actor或已保留Actor的地区投影");
         Drain(peer); Drain(foreign);
         master.Send(17, Chat("HallSameGuild"));
-        Bytes(master.Expect(0, 12).Body, Message("HallSameGuild"), "大厅普通聊天发送者收到原生正文");
-        Bytes(peer.Expect(0, 12).Body, Message("HallSameGuild"), "同会同厅成员收到普通聊天");
+        Bytes(master.Expect(0, 12).Body, Message(masterId, "CargoWireA", "HallSameGuild"), "大厅普通聊天发送者收到原生正文");
+        Bytes(peer.Expect(0, 12).Body, Message(masterId, "CargoWireA", "HallSameGuild"), "同会同厅成员收到普通聊天");
         That(Drain(foreign).All(packet => packet.Opcode != 12), "同地图另一公会不收到普通聊天");
         foreign.Send(17, Chat("HallOtherGuild"));
         foreign.Expect(0, 12);
@@ -157,7 +157,12 @@ internal static class GuildHallTcpTests
         packet.Body[0] == 0 && U16(packet.Body, 1) == 1 && U16(packet.Body, 121) == id;
     static byte[] Dstr(string value) => Build(writer => { byte[] text = CharacterName.Encoding.GetBytes(value); writer.Write(text.Length); writer.Write(text); });
     static byte[] Chat(string value) => Build(writer => { writer.Write((byte)3); writer.Write((ushort)4); writer.Write(0u); writer.Write(Dstr(value)); });
-    static byte[] Message(string value) => [(byte)3, 4, 0, 0, .. Dstr(value)];
+    // 默认测试频道服编号为2；下行使用真实发言人ID与名称，不回显请求中的layer=4。
+    static byte[] Message(ushort sender, string speaker, string value) => Build(writer =>
+    {
+        writer.Write((byte)3); writer.Write(sender); writer.Write((byte)2);
+        writer.Write(Dstr(value)); writer.Write(Dstr(speaker));
+    });
     static List<WirePacket> Drain(TcpPeer peer)
     {
         peer.Send(156, Dstr("HallBarrier"));

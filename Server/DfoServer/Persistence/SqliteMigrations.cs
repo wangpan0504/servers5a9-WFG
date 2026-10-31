@@ -290,6 +290,8 @@ internal static class SqliteMigrations
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
         new(160, "普通普雷每日分支与顺序进度", PreyNormalProgressSchema.Upgrade),
         new(161, "角色曾用名历史", static (db, tx) => Execute(db, tx, CharacterNameHistorySchema.Definition)),
+        // 普通普雷及曾用名已占用160/161，冻结回执顺延；旧冻结160按精确结构补齐公开迁移。
+        new(162, "完整死亡冻结与实际拾取回执", DungeonFrozenLootSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -918,7 +920,8 @@ internal static class SqliteMigrations
             string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("UID迁移缺少原拾取回执: " + table);
             string canonical = NormalizeTable(actual, table);
             if (canonical == NormalizeTable(current, table) ||
-                canonical == NormalizeTable(DungeonObjectKeySchema.Definition(current, table), table)) continue;
+                canonical == NormalizeTable(DungeonObjectKeySchema.Definition(current, table), table) ||
+                canonical == NormalizeTable(DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(current, table), table), table)) continue;
             if (canonical != NormalizeTable(previous, table))
                 throw new InvalidDataException("UID迁移不是已确认的原拾取结构: " + table);
             query.CommandText = """
@@ -1943,6 +1946,7 @@ internal static class SqliteMigrations
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
         RejectPreviousPromotionSchema(db, tx, version);
+        if (version == 160 && current >= 162) RestorePreyForFrozenLootV160(db, tx);
         // 仅接管结构精确匹配的兼容库，保留聊天配置并补齐当前正式结构。
         if (version == 154 && current >= 157 && IsChatEmoticonPreview(db, tx, version)) version = 153;
         else if (version is 156 or 157 && current >= 158 && IsChatEmoticonPreview(db, tx, version)) version = 155;
@@ -2011,6 +2015,26 @@ internal static class SqliteMigrations
         }
         ValidateSchema(db, tx);
         tx.Commit();
+    }
+
+    // 修复构建曾以160保存完整冻结结构，公开160随后用于普通普雷；只接管该已知完整形态。
+    static void RestorePreyForFrozenLootV160(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=$table";
+        query.Parameters.AddWithValue("$table", PreyNormalProgressSchema.Table);
+        if (query.ExecuteScalar() is not 0L) return;
+        string batches = DungeonDropCollectionSchema.Definition.Split(';')
+            .Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal));
+        if (!KnownTable(db, tx, DungeonFrozenLootSchema.Batches,
+                DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(batches, DungeonFrozenLootSchema.Batches), DungeonFrozenLootSchema.Batches)) ||
+            !KnownTable(db, tx, DungeonFrozenLootSchema.Pickups,
+                DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(DungeonDropCollectionSchema.PickupDefinition,
+                    DungeonFrozenLootSchema.Pickups), DungeonFrozenLootSchema.Pickups)))
+            throw new InvalidDataException("v160缺少普通普雷表且不符合已知完整冻结结构");
+        DungeonFrozenLootSchema.Validate(db, tx);
+        PreyNormalProgressSchema.Upgrade(db, tx);
     }
 
     static bool IsChatEmoticonPreview(SqliteConnection db, SqliteTransaction tx, long version)
@@ -2298,6 +2322,7 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
+        DungeonFrozenLootSchema.Validate(db, tx);
         CashShopPromotionSchema.Validate(db, tx);
         GriefTowerSchema.Validate(db, tx);
         GriefTowerSchema.ValidateClear(db, tx);
@@ -2394,7 +2419,7 @@ internal static class SqliteMigrations
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             query.Parameters.AddWithValue("$table",table);
-            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(DungeonObjectKeySchema.Definition(expected, table),table))
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(expected, table), table),table))
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         PvpRatingSchema.ValidateIndex(db, tx);

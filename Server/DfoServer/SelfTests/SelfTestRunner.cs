@@ -599,7 +599,7 @@ internal static class SelfTestRunner
         DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
-        DungeonDropCollectionRepositoryTests.Run(towns, pvf, characters, itemResources);
+        DungeonDropCollectionRepositoryTests.RunDurableReceipts(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);
         FiendwarChannelTests.Run(towns, pvf, characters, itemResources);
         RaidRosterFlagTests.RunResources(towns, pvf);

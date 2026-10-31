@@ -146,8 +146,8 @@ internal static partial class PartyDungeonTcpTests
             That(latest.All(r => r.Any(p => p is {Kind:0,Opcode:679})),"双方到达深渊房均收到完整波次模板");
             group.Clear();
             That(group.LastPackets.All(rows => rows.Any(p => p is { Kind:0,Opcode:38 })) &&
-                fixture.Query("SELECT count(*) FROM character_dungeon_drop_batches WHERE character_id IN ($p0,$p1)",
-                group.Peers[0].Id,group.Peers[1].Id) is [[0L]],"深渊波次为双方发布独立掉落，沿主线运行态账本且不重写旧持久掉落表");
+                fixture.Query("SELECT count(DISTINCT character_id) FROM character_dungeon_drop_batches WHERE freeze_format=1 AND character_id IN ($p0,$p1)",
+                group.Peers[0].Id,group.Peers[1].Id) is [[2L]],"深渊波次为双方发布独立掉落，并按各自真实死亡事务持久完整冻结");
             group.Peers[1].Send(15,BitConverter.GetBytes(291100308u));
             That(group.All(group.Peers[1]).All(r => !r.Any(p => p.Opcode==27)),"队员不能单独消费共享深渊出口");
             group.Peers[0].Send(15,BitConverter.GetBytes(291100308u));

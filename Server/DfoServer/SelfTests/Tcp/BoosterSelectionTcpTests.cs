@@ -147,6 +147,10 @@ internal static class BoosterSelectionTcpTests
             peer.Expect(1,1347,[1]);
             // GM跨过首次邀请等级后，命令提交后的刷新发送真实2670邮件，不把它当礼盒回包吞掉。
             if (!earlyMail) peer.Expect(0, 99, [1, 0]);
+            // 升级改变表情资格时，完整读取同次刷新末尾的411，不让它混入下一次开盒ACK。
+            if (fixture.ExpectedChatEmoticons(peer.Id) is { } expectedChatEmoticons &&
+                !expectedChatEmoticons.SequenceEqual(peer.ChatEmoticonInfo))
+                peer.ReadChatEmoticons(peer.Read());
             That(fixture.Query("SELECT quest_id,scope_character_id,mail_id FROM quest_eligibility_mail_dispatches WHERE account=$p0 AND scope_character_id=$p1",
                 fixture.Options.DevelopmentAccount,peer.Id) is [[2670L,long mailOwner,long mailId]] && mailOwner==peer.Id && mailId>0,
                 "升级后唯一邮件提醒对应当前角色真实2670首次资格账本");

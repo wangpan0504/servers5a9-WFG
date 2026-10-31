@@ -223,6 +223,7 @@ internal static partial class DatabaseSchemaTests
             TagEvildomUpgrade(root);
             OrdinaryLukeUpgrade(root);
             PreyNormalUpgrade(root);
+            FrozenLootVersionCollisionUpgrade(root);
             OrdinaryLukeDropUpgrade(root);
             PvpArenaResultUpgrade(root);
             PvpRatingUpgrade(root);
@@ -575,6 +576,7 @@ internal static partial class DatabaseSchemaTests
             string path = Path.Combine(root, mode + ".db");
             _ = new CharacterRepository(path);
             string[] rows;
+            string[][] columns;
             string secondary;
             using (var db = Open(path))
             {
@@ -604,7 +606,8 @@ internal static partial class DatabaseSchemaTests
                     Reject<SqliteException>(() => Execute(db, $"UPDATE {table} SET item_uid=2147483648"),
                         "旧版真实32位上限拒绝高UID，夹具不只修改版本号");
                 }
-                rows = tables.Select(table => Rows(db, table, ColumnNames(db, table))).ToArray();
+                columns = tables.Select(table => ColumnNames(db, table)).ToArray();
+                rows = tables.Select((table, index) => Rows(db, table, columns[index])).ToArray();
                 secondary = (string)Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'uid_%' ORDER BY name)")!;
                 RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_dungeon_passive_pickups; PRAGMA user_version=44");
@@ -631,9 +634,11 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(tables.Select(table => Rows(db, table, ColumnNames(db, table))).SequenceEqual(rows) &&
+                Check(tables.Select((table, index) => Rows(db, table, columns[index])).SequenceEqual(rows) &&
                     Query(db, "SELECT revision||':'||gold FROM characters") is "7:123",
-                    "UID迁移保留两类回执全部列和rowid，不重放历史插入触发器或发放资产");
+                    "UID迁移保留两类回执全部原列和rowid，不重放历史插入触发器或发放资产");
+                Check(Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=0 AND destination_list IS NULL AND epic_piece IS NULL") is 1L,
+                    "旧拾取回执只补v160默认格式及空目标列表、碎片列，保留历史领取语义");
                 Check(Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'uid_%' ORDER BY name)") is string actual &&
                     actual == secondary && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                     "UID迁移完整保留原索引、触发器与来源外键");
@@ -654,10 +659,130 @@ internal static partial class DatabaseSchemaTests
         }
     }
 
+    // 独立覆盖同编号分支库与已发布主线，不依赖Run之前的夹具或资源。
+    static void FrozenLootVersionCollisionUpgrade(string root)
+    {
+        root = Path.Combine(root, "frozen-loot-version-collision");
+        Directory.CreateDirectory(root);
+        foreach (string scenario in new[] { "source160", "master159", "master160", "master161", "master160-missing-prey", "half", "unknown", "invalid-row", "late-failure" })
+        {
+            string path = Path.Combine(root, scenario + ".db");
+            _ = new CharacterRepository(path);
+            bool published = scenario.StartsWith("master", StringComparison.Ordinal);
+            int oldVersion = scenario == "master159" ? 159 : scenario == "master161" ? 161 : 160;
+            Dictionary<string, (string[] Columns, string Rows)> beforeRows;
+            using (var db = Open(path))
+            {
+                Execute(db, """
+                    INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,experience,gold)
+                      VALUES('frozen-old',0,'FrozenOld',7,38,1,450,234,0,2,60,123);
+                    INSERT INTO account_wallets(account,revision,rental_points) VALUES('frozen-old',5,17);
+                    INSERT INTO character_dungeon_growth_receipts
+                      (character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,
+                       combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,
+                       before_level,after_level,before_experience,after_experience,revision)
+                      VALUES(1,'frozen-old','legacy','legacy-instance',3145,1,1,76121,123,
+                       99,1,20,'legacy-rule','legacy-source',1,1,2,2,40,60,7);
+                    INSERT INTO character_dungeon_drop_batches
+                      (character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,object_count)
+                      VALUES(1,'frozen-old','legacy','legacy-instance',3145,1,1,76121,123,'legacy-rule','legacy-source',1);
+                    INSERT INTO character_dungeon_drop_objects
+                      (character_id,event_id,instance_id,ordinal,ground_key,core,gold_amount,x,y,record_slot)
+                      VALUES(1,'legacy','legacy-instance',0,512,NULL,1,100,200,0);
+                    INSERT INTO character_dungeon_drop_pickups
+                      (character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,
+                       destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
+                      VALUES(1,'frozen-old','legacy',512,'legacy-instance',1,1,NULL,NULL,NULL,0,1,123,5,7);
+                    """);
+                if (published)
+                {
+                    RewindFrozenLootSchema(db);
+                    if (oldVersion < 160) Execute(db, "DROP TABLE character_prey_normal_progress");
+                    else Execute(db, "INSERT INTO character_prey_normal_progress VALUES(1,'frozen-old',20261031,3,4)");
+                    if (scenario == "master160-missing-prey") Execute(db, "DROP TABLE character_prey_normal_progress");
+                    if (oldVersion < 161) Execute(db, "DROP TABLE character_name_history");
+                    else Execute(db, "INSERT INTO character_name_history VALUES(1,'frozen-old',6,'FormerFrozen',123)");
+                }
+                else
+                {
+                    Execute(db, """
+                        UPDATE character_dungeon_drop_batches SET freeze_format=1,combat_sequence=99,committed_epoch=1,map_snapshot='{}',uses_collection=1;
+                        UPDATE character_dungeon_drop_pickups SET receipt_format=1;
+                        DROP TABLE character_prey_normal_progress;
+                        DROP TABLE character_name_history;
+                        """);
+                    if (scenario == "half") Execute(db, "ALTER TABLE character_dungeon_drop_batches DROP COLUMN map_snapshot");
+                    if (scenario == "unknown") Execute(db, "ALTER TABLE character_dungeon_drop_pickups ADD COLUMN unknown_frozen INTEGER");
+                    if (scenario == "invalid-row") Execute(db, "UPDATE character_dungeon_drop_batches SET combat_sequence=NULL");
+                    if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+                }
+                Execute(db, $"PRAGMA user_version={oldVersion}");
+                beforeRows = TableNames(db).ToDictionary(table => table,
+                    table => (ColumnNames(db, table), Rows(db, table, ColumnNames(db, table))));
+            }
+            if (scenario is "master160-missing-prey" or "half" or "unknown" or "invalid-row" or "late-failure")
+            {
+                string before = Snapshot(path);
+                RejectDatabase(() => new CharacterRepository(path));
+                Check(Snapshot(path) == before,
+                    "同编号冻结旧库不完整、未知结构、非法历史或后段失败均整笔回滚结构、版本与资产：" + scenario);
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && version >= 162,
+                    "旧冻结160与已发布159/160/161连续升级至冻结162后的当前版本：" + scenario);
+                Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_prey_normal_progress','character_name_history')") is 2L,
+                    "升级同时保留已发布普雷160与改名161结构：" + scenario);
+                foreach (var (table, original) in beforeRows)
+                    Check(Rows(db, table, original.Columns) == original.Rows,
+                        "碰撞升级保留原表全部历史行、rowid和字段：" + scenario + "/" + table);
+                Check(Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_drop_batches') WHERE name='freeze_format'") is 1L &&
+                    Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_drop_pickups') WHERE name='epic_piece'") is 1L,
+                    "已发布主线真实补建冻结列：" + scenario);
+                Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                    "碰撞升级后完整性与来源外键保持：" + scenario);
+            }
+            string saved = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == saved, "碰撞升级重开幂等，不补发历史资产：" + scenario);
+        }
+    }
+
+    // 仅用于还原发布主线162之前的真实夹具；禁止丢弃已经生成的冻结事实。
+    static void RewindFrozenLootSchema(SqliteConnection db)
+    {
+        const string batches = DungeonFrozenLootSchema.Batches;
+        const string pickups = DungeonFrozenLootSchema.Pickups;
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_drop_batches') WHERE name='freeze_format'") is 1L &&
+            Query(db, "SELECT count(*) FROM character_dungeon_drop_batches WHERE freeze_format<>0 OR combat_sequence IS NOT NULL OR committed_epoch IS NOT NULL OR map_snapshot IS NOT NULL OR uses_collection IS NOT NULL") is not 0L ||
+            Query(db, "SELECT count(*) FROM pragma_table_info('character_dungeon_drop_pickups') WHERE name='receipt_format'") is 1L &&
+            Query(db, "SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format<>0 OR destination_list IS NOT NULL OR epic_piece IS NOT NULL") is not 0L)
+            throw new InvalidOperationException("旧版夹具不能丢弃真实冻结或拾取事实");
+        string batchDefinition = DungeonDropCollectionSchema.Definition.Split(';')
+            .Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal));
+        string[] batchColumns = ColumnNames(db, batches).Where(name => name is not "\"freeze_format\"" and not "\"combat_sequence\"" and
+            not "\"committed_epoch\"" and not "\"map_snapshot\"" and not "\"uses_collection\"").ToArray();
+        string[] pickupColumns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
+        Execute(db, "PRAGMA foreign_keys=OFF");
+        try
+        {
+            ChangeReceiptDefinition(db, pickups, _ => DungeonObjectKeySchema.Definition(DungeonDropCollectionSchema.PickupDefinition, pickups), pickupColumns);
+            ChangeReceiptDefinition(db, batches, _ => DungeonObjectKeySchema.Definition(batchDefinition, batches), batchColumns);
+        }
+        finally { if (foreignKeys) Execute(db, "PRAGMA foreign_keys=ON"); }
+    }
+
     static void RewindPickupUids(SqliteConnection db)
     {
         RewindObjectKeys(db);
         RewindQuestDungeonAlternatives(db);
+        // 回退v45前的真实拾取定义，同时移除v162列及碎片分支，不能留下新旧混合夹具。
+        const string pickups = "character_dungeon_drop_pickups";
+        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        ChangeReceiptDefinition(db, pickups, _ => DungeonDropCollectionSchema.PreviousPickupDefinition, columns);
         foreach (string table in new[] { "character_dungeon_pickup_receipts", "character_dungeon_drop_pickups" })
             ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
     }
@@ -2474,6 +2599,8 @@ internal static partial class DatabaseSchemaTests
             phaseStarted = Stopwatch.GetTimestamp();
             using (var db = Open(path))
             {
+                if (oldVersion < 162) RewindFrozenLootSchema(db);
+                if (oldVersion < 160) Execute(db, "DROP TABLE character_prey_normal_progress");
                 if (oldVersion < 161) Execute(db, "DROP TABLE character_name_history");
                 if (oldVersion < 156) Execute(db, "DROP TABLE character_rename_pending");
                 if (oldVersion < 153) Execute(db, "DROP TABLE character_ekern_cycle");
@@ -3512,15 +3639,19 @@ internal static partial class DatabaseSchemaTests
             DungeonDropCollectionSchema.Upgrade(db, tx);
             tx.Commit();
         }
+        // 集合依赖夹具使用真实旧版拾取定义，不能保留v162列及碎片分支。
+        const string pickups = "character_dungeon_drop_pickups";
+        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        ChangeReceiptDefinition(db, pickups, _ => DungeonDropCollectionSchema.PreviousPickupDefinition, columns);
         Execute(db, """
             CREATE INDEX drop_dependency_index ON character_dungeon_drop_objects(core);
             CREATE TRIGGER drop_dependency_guard BEFORE INSERT ON character_dungeon_drop_objects
               WHEN NEW.gold_amount=99 BEGIN SELECT RAISE(ABORT,'集合测试触发器'); END;
-            INSERT INTO character_dungeon_drop_batches
+            INSERT INTO character_dungeon_drop_batches(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,object_count)
               SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,'legacy-rule','原批次',1
               FROM character_dungeon_growth_receipts WHERE character_id=1 AND event_id='legacy';
             INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',0,512,'{}',0,100,200,0);
-            INSERT INTO character_dungeon_drop_pickups
+            INSERT INTO character_dungeon_drop_pickups(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision)
               SELECT character_id,account,event_id,512,instance_id,task_attempt,epoch,177,1,'{}',NULL,1,NULL,NULL,8
               FROM character_dungeon_drop_batches WHERE character_id=1 AND event_id='legacy';
             """);

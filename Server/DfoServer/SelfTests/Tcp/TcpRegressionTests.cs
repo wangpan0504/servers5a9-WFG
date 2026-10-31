@@ -33,7 +33,7 @@ internal static class TcpRegressionTests
             await PacketCaptureTests.RunAsync();
             await PacketCaptureTcpTests.RunAsync(options, root);
         }),
-        ("packet-http", (options, root, _) => PacketCaptureTcpTests.RunHttpAsync(options, root)),
+        ("packet-http", PacketCaptureTcpTests.RunHttpAsync),
         ("town", TownProtocolTcpTests.RunAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),

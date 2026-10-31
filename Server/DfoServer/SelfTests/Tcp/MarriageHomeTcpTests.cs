@@ -175,6 +175,12 @@ internal static class MarriageHomeTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "婚房请求屏障成功"); return packets; }
+            if (packet is { Kind: 0, Opcode: 411 })
+            {
+                peer.ReadChatEmoticons(packet);
+                packets.Add(packet);
+                continue;
+            }
             // 假时钟跨天后的首个请求会让 ServiceDayProjection.PublishAsync 跑完整轮服务日刷新，这些都是全局日切通知，不是婚房串包：
             // 36 FATIGUE、14 UPDATE_ITEM_LIST、21 ACCEPTABLE_QUEST_LIST、356 CLEAR_QUEST_LIST、574 ACCEPTED_QUEST 来自 QuestCycleAsync；
             // 550 DUNGEON_ENTER_COUNT_INFO、1343 ADVENTURE_INFO、1349 ADVENTURE_LV_EXP 来自 LegacyServiceDayAsync；

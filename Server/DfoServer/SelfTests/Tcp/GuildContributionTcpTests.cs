@@ -71,7 +71,16 @@ internal static class GuildContributionTcpTests
             That(fixture.Query("SELECT contribution FROM guild_members WHERE character_id=$p0", id) is [[250L]],
                 "本次自然登录增加100贡献，不把旧币奖励算作贡献或公共积分");
             peer.Send(17, Chat("贡献聊天一"));
-            That(Drain(peer).Any(packet => packet.Opcode == 12) &&
+            var chat = Drain(peer).Where(packet => packet.Opcode == 65).ToArray();
+            byte[] expectedChat = Build(writer =>
+            {
+                writer.Write(new byte[] { 6, 0, 0, 0 });
+                writer.Write(GuildApplicationTests.Text("CoinMember"));
+                writer.Write((byte)2);
+                writer.Write(GuildApplicationTests.Text("贡献聊天一"));
+                writer.Write(0u);
+            });
+            That(chat.Length == 1 && chat[0].Body.AsSpan().SequenceEqual(expectedChat) &&
                 fixture.Query("SELECT contribution FROM guild_members WHERE character_id=$p0", id) is [[300L]],
                 "真实公会聊天发送成功后增加当日50贡献");
             peer.Send(17, Chat("贡献聊天二"));

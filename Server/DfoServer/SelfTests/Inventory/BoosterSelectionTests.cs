@@ -549,6 +549,9 @@ internal static class BoosterSelectionTests
                 Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
         }
         finally { Directory.Delete(root, true); }
+        RunSpring2020NestedBoxLinks(towns, characters, itemResources);
+        RunSpring2020ChildBoxOpenings(towns, characters, itemResources);
+        RunSpring2020AvatarLegalOptions(towns, characters, itemResources);
         Console.WriteLine($"PASS {Count - checks} booster selection assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
     }
@@ -1222,6 +1225,530 @@ internal static class BoosterSelectionTests
             }
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    // 外盒只生成完整子盒实例，子盒仍等待玩家下一次真实选择。
+    public static void RunSpring2020NestedBoxLinks(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
+    {
+        var fixedBox = resources.Boosters.Get(490705424);
+        int[] fixedIds = [490705422, 490705423];
+        That(fixedBox.Available && fixedBox.Selection is null && fixedBox.Pools.Length == 2 &&
+            Enumerable.Range(0, 2).All(index => fixedBox.Pools[index].Draws == 1 &&
+                fixedBox.Pools[index].Rewards.SequenceEqual(new BoosterReward[] { new(fixedIds[index], 1000, 1) })),
+            "克隆武器套装外盒保留两个独立必得池，各发一个完整子盒");
+        var selectionBox = resources.Boosters.Get(490705437);
+        That(selectionBox.Available && selectionBox.Selection is { SelectionCount: 1, Categories.Length: 1 } selection &&
+            selection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } category &&
+            category.Rewards.SequenceEqual(new BoosterChoice[] { new(490705435, 1), new(490705479, 1), new(490705436, 1) }),
+            "绝版稀有装扮外盒保留第2期、第5期和第9期三个子盒的一项选择");
+        var cases = new[]
+        {
+            (SourceId: 490705424, SelectedId: 0, RewardIds: new[] { 490705422, 490705423 }),
+            (SourceId: 490705437, SelectedId: 490705435, RewardIds: new[] { 490705435 }),
+            (SourceId: 490705437, SelectedId: 490705479, RewardIds: new[] { 490705479 }),
+            (SourceId: 490705437, SelectedId: 490705436, RewardIds: new[] { 490705436 })
+        };
+        var now = DateTimeOffset.UtcNow;
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-spring2020-nested-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool completed = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            for (int index = 0; index < cases.Length; index++)
+            {
+                var entry = cases[index];
+                var template = resources.Items.Get(entry.SourceId);
+                var role = BoosterNativeSelectionTests.ResourceRoles(towns, characters, template, now).First();
+                using var owner = owners.Acquire("spring-nested-" + index, () => { });
+                var created = repo.Create(owner, new("SpringNest" + index, towns.Room, towns.InitialReturn)
+                {
+                    Job = role.Job, GrowType = role.GrowType, Level = role.Level, Skills = role.Skills,
+                    Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(template, utcNow: now))])
+                });
+                var session = new GameSession(repo, towns, owner);
+                session.Select(created.Slot);
+                session.MarkReady();
+                var saved = session.Selected!;
+                string savedBefore = JsonSerializer.Serialize(saved);
+                string before = Snapshot();
+                BoosterOpenRequest request = entry.SelectedId == 0 ? new(3, 1) : Select(3, [entry.SelectedId]);
+                var planned = service.Open(saved, request, out var receipt, now);
+                That(planned.Accepted && planned.Plan is { OverflowItems.Length: 0 } && receipt is not null &&
+                    receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(entry.RewardIds.Order().Select(id => new BoosterGrantedItem(id, 1))) &&
+                    JsonSerializer.Serialize(saved) == savedBefore && ReferenceEquals(session.Selected, saved),
+                    "春节嵌套外盒合法请求只规划原始子盒，不修改在线快照 " + entry.SourceId + ":" + entry.SelectedId);
+                CheckChildren(planned.Plan!.After, entry.RewardIds, persisted: false);
+                string frozenAfter = JsonSerializer.Serialize(planned.Plan.After);
+                string frozenReceipt = JsonSerializer.Serialize(receipt);
+                Query("CREATE TRIGGER fail_spring_2020_nested BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=" + entry.RewardIds[^1] +
+                    " BEGIN SELECT RAISE(ABORT,'春节嵌套外盒晚期审计回滚'); END");
+                Reject(() => session.PlanAndCommitBooster(_ => planned, service.UsePlaces(entry.SourceId), entry.SourceId),
+                    "春节嵌套外盒全部实体写入后的晚期审计失败正确传播");
+                That(ReferenceEquals(session.Selected, saved) && Snapshot() == before &&
+                    JsonSerializer.Serialize(planned.Plan.After) == frozenAfter && JsonSerializer.Serialize(receipt) == frozenReceipt,
+                    "春节嵌套外盒晚期失败整笔回滚源、全部子盒、详情、版本、审计及UID序列");
+                Query("DROP TRIGGER fail_spring_2020_nested");
+                var committed = session.PlanAndCommitBooster(_ => planned, service.UsePlaces(entry.SourceId), entry.SourceId);
+                That(committed.Accepted && session.Selected!.Revision == saved.Revision + 1,
+                    "春节嵌套外盒确认回滚后同一完整计划只提交一次");
+                CheckChildren(session.Selected!.Inventory, entry.RewardIds, persisted: true);
+                That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),
+                    "春节嵌套外盒重开库后保留全部独立子盒及完整实例");
+                before = Snapshot();
+                Reject(() => repo.CommitInventory(owner, saved, planned.Plan), "春节嵌套外盒已提交的旧版本计划不能再次提交");
+                BoosterReceipt? replayReceipt = null;
+                var replay = session.PlanAndCommitBooster(character => service.Open(character, request, out replayReceipt, now),
+                    service.UsePlaces(entry.SourceId), entry.SourceId);
+                That(!replay.Accepted && replay.Plan is null && replayReceipt is null && Snapshot() == before,
+                    "春节嵌套外盒耗尽重放不再发奖、增加审计或分配UID");
+
+                string Snapshot() => JsonSerializer.Serialize(new CharacterRepository(path).List(owner)) + ":" +
+                    Query("SELECT count(*) FROM inventory_audit_log") + ":" +
+                    Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
+            }
+            That(Query("PRAGMA integrity_check") is "ok", "春节嵌套外盒临时数据库完整");
+            completed = true;
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, true);
+            else Console.Error.WriteLine("SPRING2020_NESTED_FIXTURE_RETAINED " + root);
+        }
+
+        void CheckChildren(InventorySnapshot inventory, int[] ids, bool persisted)
+        {
+            That(inventory.Items.Length == ids.Length && inventory.Items.Select(item => item.Core.ItemId).Order().SequenceEqual(ids.Order()) &&
+                inventory.Items.All(item => item.Core.Count == 1 && item.Core.Kind == ItemKind.Consumable && item.ExpireTime == 0) &&
+                (persisted ? inventory.Items.All(item => item.Uid > 0) && inventory.Items.Select(item => item.Uid).Distinct().Count() == ids.Length
+                    : inventory.Items.All(item => item.Uid == 0)),
+                "春节嵌套外盒消耗一个源，只保留所需完整子盒及正确独立UID");
+            foreach (var item in inventory.Items)
+            {
+                var template = resources.Items.Get(item.Core.ItemId);
+                var expected = InventoryRewardGrantService.CreateItem(template, item.Position,
+                    InventoryRewardGrantService.Create(template, utcNow: now));
+                That(template.AttachType.Trim() == "`[account]`" &&
+                    JsonSerializer.Serialize(item with { Uid = 0 }) == JsonSerializer.Serialize(expected),
+                    "春节嵌套子盒保留账号绑定、实际期限及全部核心详情，不替玩家选择或递归开启 " + item.Core.ItemId);
+            }
+        }
+
+        static void Reject(Action action, string message)
+        {
+            bool failed = false;
+            try { action(); }
+            catch (Exception error) when (error is SqliteException or InvalidOperationException or InvalidDataException) { failed = true; }
+            That(failed, message);
+        }
+    }
+
+    // 保存原文只证明下列精确开启边；装扮效果及徽章镶嵌仍须各自真实消费者证明。
+    public static void RunSpring2020ChildBoxOpenings(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
+    {
+        int[] emblemIds = [2500043, 2500042, 2500036, 2500039, 2500033,
+            2510043, 2510049, 2510046, 2510037, 2510040, 2520040, 2520046, 2520043, 2520037, 2520049,
+            2530049, 2530043, 2530040, 2530037, 2530046];
+        var emblemBox = resources.Boosters.Get(490705423);
+        That(emblemBox.Available && emblemBox.Selection is { SelectionCount: 1, Categories.Length: 1 } emblemSelection &&
+            emblemSelection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } emblemCategory &&
+            emblemCategory.Rewards.SequenceEqual(emblemIds.Select(id => new BoosterChoice(id, 2))),
+            "灿烂徽章子盒保留原文二十种候选，每次一种且所选数量为两个");
+        var avatarCases = new[]
+        {
+            (SourceId: 490705422, RewardId: 401500152, Type: 4, Selections: 0, Categories: 1),
+            (SourceId: 490705435, RewardId: 39173, Type: 3, Selections: 1, Categories: 48),
+            (SourceId: 490705479, RewardId: 101550535, Type: 3, Selections: 1, Categories: 24),
+            (SourceId: 490705436, RewardId: 101550645, Type: 3, Selections: 1, Categories: 30)
+        };
+        foreach (var entry in avatarCases)
+        {
+            var definition = resources.AvatarPackages.Get(entry.SourceId);
+            var category = definition.Categories.Single(row => row.Category == 0 && row.Subcategory == 0);
+            That(definition.Available && definition.SelectionCount == entry.Selections && definition.Categories.Length == entry.Categories &&
+                category.PendingRule is null && category.Rows.Contains(new AvatarPackageRow(entry.RewardId, 1, (ushort)entry.Type, 0)) &&
+                (entry.Selections != 0 || category.Rows.Length == 1),
+                "装扮子盒保留保存原文的分类数量与本次精确候选，不跨职业颜色拼接 " + entry.SourceId);
+        }
+        var cases = emblemIds.Select(id => (SourceId: 490705423, RewardId: id, Count: 2, Type: -1))
+            .Concat(avatarCases.Select(entry => (entry.SourceId, entry.RewardId, Count: 1, entry.Type))).ToArray();
+        var now = DateTimeOffset.UtcNow;
+        var boosters = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        var avatars = new InventoryAvatarPackageService(resources.Items, resources.AvatarPackages, resources.GoldLimits, resources.EpicPieces);
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-spring2020-child-open-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool completed = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            for (int index = 0; index < cases.Length; index++)
+            {
+                var entry = cases[index];
+                bool avatarPath = entry.Type >= 0;
+                var sourceTemplate = resources.Items.Get(entry.SourceId);
+                var rewardTemplate = resources.Items.Get(entry.RewardId);
+                var role = BoosterNativeSelectionTests.ResourceRoles(towns, characters, sourceTemplate, now).First();
+                AvatarPackageChoice[] choices = [];
+                AvatarPackageType? avatarType = null;
+                if (avatarPath)
+                {
+                    var definition = resources.AvatarPackages.GetAvatar(entry.RewardId);
+                    That(rewardTemplate.Kind == ItemKind.Avatar && rewardTemplate.Expiration.SupportsCreation && definition.PendingRule is null &&
+                        (definition.Types.IsEmpty || entry.Type < definition.Types.Length) && definition.Abilities.Contains(0),
+                        "本次保存默认属性零须被真实叶目录承认，未知属性或期限类型不能被测试补造 " + entry.RewardId);
+                    if (definition.RequiresAbilityChoice) choices = [new(entry.RewardId, 0)];
+                    avatarType = definition.Types.IsEmpty ? new(rewardTemplate.Expiration.Days, rewardTemplate.AvatarSockets) : definition.Types[entry.Type];
+                }
+                else
+                    That(rewardTemplate.Kind == ItemKind.Emblem, "徽章子盒实际奖励仍为徽章Kind而非替代物 " + entry.RewardId);
+                byte[] body = new byte[14 + choices.Length * 5];
+                BinaryPrimitives.WriteInt16LittleEndian(body, 3);
+                BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), 1);
+                BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8), entry.RewardId);
+                body[12] = (byte)choices.Length;
+                if (choices.Length != 0)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(13), entry.RewardId);
+                    body[17] = 0;
+                }
+                var ordinaryRequest = avatarPath ? null : BoosterRequests.Read(body);
+                var avatarRequest = avatarPath ? AvatarPackageRequests.Read(body, 1, 1) : null;
+                That(avatarPath ? avatarRequest!.ItemIds.SequenceEqual(new[] { entry.RewardId }) && avatarRequest.Choices.SequenceEqual(choices) :
+                    ordinaryRequest!.Selection!.ItemIds.SequenceEqual(new[] { entry.RewardId }),
+                    "当前请求解析器完整保留一个真实选择及必要属性选项，未声称存在该源原生抓包 " + entry.SourceId);
+                using var owner = owners.Acquire("spring-child-" + index, () => { });
+                var created = repo.Create(owner, new("SpringKid" + index, towns.Room, towns.InitialReturn)
+                {
+                    Job = role.Job, GrowType = role.GrowType, Level = role.Level, Skills = role.Skills,
+                    Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(sourceTemplate, utcNow: now))])
+                });
+                var session = new GameSession(repo, towns, owner);
+                session.Select(created.Slot);
+                session.MarkReady();
+                var saved = session.Selected!;
+                string savedBefore = JsonSerializer.Serialize(saved);
+                string before = Snapshot();
+                var planned = Open(saved, out var receipt);
+                That(planned.Accepted && planned.Plan is { OverflowItems.Length: 0 } && receipt is not null &&
+                    receipt.ItemId == entry.SourceId && receipt.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(entry.RewardId, entry.Count) }) &&
+                    JsonSerializer.Serialize(saved) == savedBefore && ReferenceEquals(session.Selected, saved),
+                    "子盒合法请求只规划本次精确奖励，未改在线快照 " + entry.SourceId + ":" + entry.RewardId);
+                CheckReward(planned.Plan!.After, persisted: false);
+                string frozenAfter = JsonSerializer.Serialize(planned.Plan.After);
+                string frozenReceipt = JsonSerializer.Serialize(receipt);
+                Query("CREATE TRIGGER fail_spring_2020_child BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=" + entry.RewardId +
+                    " BEGIN SELECT RAISE(ABORT,'春节子盒晚期审计回滚'); END");
+                Reject(() => session.PlanAndCommitBooster(_ => planned, boosters.UsePlaces(entry.SourceId), entry.SourceId),
+                    "子盒真实叶写入后的晚期审计失败正确传播");
+                That(ReferenceEquals(session.Selected, saved) && Snapshot() == before &&
+                    JsonSerializer.Serialize(planned.Plan.After) == frozenAfter && JsonSerializer.Serialize(receipt) == frozenReceipt,
+                    "子盒晚期失败整笔回滚源、叶完整详情、版本、审计及UID序列，冻结计划保持不变");
+                Query("DROP TRIGGER fail_spring_2020_child");
+                var committed = session.PlanAndCommitBooster(_ => planned, boosters.UsePlaces(entry.SourceId), entry.SourceId);
+                That(committed.Accepted && session.Selected!.Revision == saved.Revision + 1,
+                    "子盒确认回滚后同一完整计划只提交一次");
+                CheckReward(session.Selected!.Inventory, persisted: true);
+                That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),
+                    "子盒重开库后保留所选全部叶数量、容器及完整详情");
+                before = Snapshot();
+                Reject(() => repo.CommitInventory(owner, saved, planned.Plan), "子盒已提交的旧版本计划不能再次提交");
+                BoosterReceipt? replayReceipt = null;
+                var replay = session.PlanAndCommitBooster(character => Open(character, out replayReceipt), boosters.UsePlaces(entry.SourceId), entry.SourceId);
+                That(!replay.Accepted && replay.Plan is null && replayReceipt is null && Snapshot() == before,
+                    "子盒耗尽重放不发叶、不推进版本、不增加审计或分配UID");
+
+                InventoryResult Open(Character character, out BoosterReceipt? resultReceipt) => avatarPath ?
+                    avatars.Open(character, avatarRequest!, out resultReceipt, now) : boosters.Open(character, ordinaryRequest!, out resultReceipt, now);
+                string Snapshot() => JsonSerializer.Serialize(new CharacterRepository(path).List(owner)) + ":" +
+                    Query("SELECT count(*) FROM inventory_audit_log") + ":" +
+                    Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
+                void CheckReward(InventorySnapshot inventory, bool persisted)
+                {
+                    That(inventory.Items.Length == 1 && inventory.Items.Single() is var item && item.Core.ItemId == entry.RewardId &&
+                        item.Core.Count == entry.Count && item.Position.List == (avatarPath ? InventoryListType.Avatar : InventoryListType.Main) &&
+                        (persisted ? item.Uid > 0 && (avatarPath ? item.Core.Value == item.Uid : item.Core.Value == 2) : item.Uid == 0),
+                        "子盒恰好消耗一个源，只留下所选一件装扮或一栈两个徽章及正确持久UID");
+                    var reward = inventory.Items.Single();
+                    var core = InventoryRewardGrantService.Create(rewardTemplate, entry.Count, now);
+                    if (avatarType is not null)
+                    {
+                        int days = rewardTemplate.Expiration.Days > 0 ? rewardTemplate.Expiration.Days : avatarType.Days;
+                        core = core with { Durability = 0, ExpireTime = (rewardTemplate.Expiration with { Days = days }).Resolve(now, false, false) };
+                    }
+                    var expected = InventoryRewardGrantService.CreateItem(rewardTemplate, reward.Position, core);
+                    if (avatarType is not null)
+                    {
+                        var sockets = avatarType.Sockets;
+                        expected = expected with { Avatar = expected.Avatar! with
+                        {
+                            Socket0 = AvatarSocket.Empty(sockets.First), Socket1 = AvatarSocket.Empty(sockets.Second),
+                            Socket2 = AvatarSocket.Empty(sockets.Third), Socket3 = AvatarSocket.Empty(sockets.Fourth), Socket4 = AvatarSocket.Empty(sockets.Fifth)
+                        } };
+                    }
+                    var normalized = reward with { Uid = 0, Core = avatarPath ? reward.Core with { Value = 0 } : reward.Core };
+                    That(JsonSerializer.Serialize(normalized) == JsonSerializer.Serialize(expected),
+                        "子盒集成保留真实模板与期限类型生成的全部核心详情，不替代工厂或叶属性原始字段审计 " + entry.RewardId);
+                }
+            }
+            That(Query("PRAGMA integrity_check") is "ok", "春节子盒合并增量临时数据库完整");
+            completed = true;
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, true);
+            else Console.Error.WriteLine("SPRING2020_CHILD_FIXTURE_RETAINED " + root);
+        }
+
+        static void Reject(Action action, string message)
+        {
+            bool failed = false;
+            try { action(); }
+            catch (Exception error) when (error is SqliteException or InvalidOperationException or InvalidDataException) { failed = true; }
+            That(failed, message);
+        }
+    }
+
+    public static void RunSpring2020AvatarLegalOptions(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
+    {
+        // 分母来自已完成的四源真实元数据捕获，旧测试每行仅选一种属性。
+        const string expectedKeyHash = "2F40D1F5C001B0934ACA1115D869715D8B14F72ACAD40135397EA3312409AF1F";
+        int[] sourceIds = [490705422, 490705435, 490705479, 490705436];
+        int[] expectedOptions = [1, 7194, 3754, 4516];
+        int[] expectedRows = [1, 384, 192, 240];
+        int[] expectedMasks = [65535, 65535, 4095, 32767];
+        int[][] expectedDimensions = [[1], [16, 3], [12, 2], [15, 2]];
+        var cases = new List<(int SourceId, byte Category, byte Subcategory, int RowIndex, AvatarPackageRow Row, byte? Ability)>();
+        var keys = new System.Text.StringBuilder();
+        var leaves = new HashSet<int>();
+        That(characters.Jobs.Select(job => (int)job).SequenceEqual(Enumerable.Range(0, 16)), "四源消费使用实际捕获的16职业目录");
+        for (int sourceIndex = 0; sourceIndex < sourceIds.Length; sourceIndex++)
+        {
+            int sourceId = sourceIds[sourceIndex], before = cases.Count, rows = 0;
+            var source = resources.Items.Get(sourceId);
+            var definition = resources.AvatarPackages.Get(sourceId);
+            That(definition.Available && definition.SelectionCount == (sourceIndex == 0 ? 0 : 1) &&
+                definition.Dimensions.SequenceEqual(expectedDimensions[sourceIndex]) && definition.FirstGrowTypes.IsEmpty &&
+                source.Jobs == expectedMasks[sourceIndex] && source.MinimumLevel == 1 && source.MaximumLevel == int.MaxValue &&
+                source.RequiredSkill == 0 && !source.UseForbidden && Permanent(source.Expiration),
+                "四源精确形状、职业门、等级技能与期限保持metadata合同 " + sourceId);
+            That(!source.AllowsUse(0, 0), "0级不满足源门；不伪造NewCharacter不支持的等级 " + sourceId);
+            for (int grow = 0; grow <= byte.MaxValue; grow++)
+                That(definition.AllowsFirstGrowType((byte)grow), "四源未限制FirstGrowType，字节门不推断职业实现 " + sourceId + ":" + grow);
+            foreach (var category in definition.Categories.OrderBy(row => row.Category).ThenBy(row => row.Subcategory))
+            {
+                That(category.PendingRule is null && (definition.SelectionCount != 0 || category.Rows.Length == 1) &&
+                    category.Rows.Select(row => row.ItemId).Distinct().Count() == category.Rows.Length,
+                    "分类不存在Pending或同ID歧义，count0为完整单行向量 " + sourceId);
+                for (int rowIndex = 0; rowIndex < category.Rows.Length; rowIndex++)
+                {
+                    var row = category.Rows[rowIndex];
+                    var leaf = resources.Items.Get(row.ItemId);
+                    var avatar = resources.AvatarPackages.GetAvatar(row.ItemId);
+                    bool weapon = sourceId == 490705422;
+                    That(row.Count == 1 && row.Type == (weapon ? 4 : 3) && row.DefaultAbility == 0 && row.ForcedAbility is null &&
+                        leaf.Kind == ItemKind.Avatar && Permanent(leaf.Expiration) && avatar.PendingRule is null &&
+                        avatar.RequiresAbilityChoice == !weapon && (weapon ? avatar.Types.IsEmpty : avatar.Types.Length == 5) &&
+                        (avatar.Types.IsEmpty || row.Type < avatar.Types.Length),
+                        "精确坐标的类型、创建、能力选择合同 " + sourceId + ":" + row.ItemId);
+                    var selectedType = avatar.Types.IsEmpty ? new AvatarPackageType(leaf.Expiration.Days, leaf.AvatarSockets) : avatar.Types[row.Type];
+                    ushort socket = weapon ? (ushort)239 : (ushort)0;
+                    That(selectedType.Days == 0 && leaf.AvatarSockets == new AvatarSocketTypes(socket, socket, 0, 0, 0) &&
+                        selectedType.Sockets == new AvatarSocketTypes(socket, socket, 0, 0, 0),
+                        "本批选中类型均永久且孔位按捕获字面合同保留 " + row.ItemId);
+                    byte?[] abilities = avatar.RequiresAbilityChoice ? avatar.Abilities.Order().Select(value => (byte?)value).ToArray() : [null];
+                    That(abilities.Length > 0 && (weapon ? avatar.Abilities.SetEquals(new byte[] { 0 }) : true), "不把DefaultAbility当合法属性 " + row.ItemId);
+                    foreach (byte? ability in abilities)
+                    {
+                        cases.Add((sourceId, category.Category, category.Subcategory, rowIndex, row, ability));
+                        string wire = ability?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-";
+                        keys.Append(FormattableString.Invariant($"{sourceId}|{category.Category}|{category.Subcategory}|{rowIndex}|{row.ItemId}|{row.Count}|{row.Type}|{row.DefaultAbility}|-|{(avatar.RequiresAbilityChoice ? 1 : 0)}|{wire}|{ability ?? 0}\n"));
+                    }
+                    rows++;
+                    leaves.Add(row.ItemId);
+                }
+            }
+            That(rows == expectedRows[sourceIndex] && cases.Count - before == expectedOptions[sourceIndex], "逐源真实选项分母 " + sourceId);
+        }
+        string keyHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(keys.ToString())));
+        That(cases.Count == 15465 && leaves.Count == 705 && keyHash == expectedKeyHash,
+            "15465精确坐标属性选项与独立冻结有序hash相等，不按重复叶删坐标");
+        var now = DateTimeOffset.UtcNow;
+        var boosters = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        var avatars = new InventoryAvatarPackageService(resources.Items, resources.AvatarPackages, resources.GoldLimits, resources.EpicPieces);
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-spring-avatar-options-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool completed = false;
+        int requests = 0, accepted = 0, rejected = 0;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            foreach (var entry in cases) Consume(entry, 0, 1, 0, expectedAccepted: true);
+            foreach (int sourceId in sourceIds)
+            {
+                var entry = cases.First(row => row.SourceId == sourceId);
+                int sourceIndex = Array.IndexOf(sourceIds, sourceId);
+                foreach (byte job in characters.Jobs)
+                    Consume(entry, job, 1, 0, expectedAccepted: (expectedMasks[sourceIndex] & (1 << job)) != 0);
+                // 建角仅允许1..95级，正式消费检查两个合法端点；0级只核纯门。
+                Consume(entry, 0, 1, 0, expectedAccepted: true);
+                Consume(entry, 0, 95, 0, expectedAccepted: true);
+                // 低四位0已由职业门覆盖；16另经会话核对高四位编码。
+                for (byte grow = 1; grow <= 16; grow++) Consume(entry, 0, 1, grow, expectedAccepted: true);
+            }
+            var noChoice = cases.Single(row => row.SourceId == 490705422);
+            Consume((noChoice.SourceId, noChoice.Category, noChoice.Subcategory, noChoice.RowIndex, noChoice.Row, (byte?)0), 0, 1, 0, expectedAccepted: true);
+            Consume((noChoice.SourceId, noChoice.Category, noChoice.Subcategory, noChoice.RowIndex, noChoice.Row, (byte?)byte.MaxValue), 0, 1, 0, expectedAccepted: true);
+            That(requests == 15603 && accepted == 15598 && rejected == 5 && Query("PRAGMA integrity_check") is "ok",
+                "15465选项+64职业+8级别+64Grow+2哨兵；真实五个源职业负门，单库完整");
+            Console.WriteLine($"SPRING_AVATAR_OPTIONS_COMPLETE semantic=15465 requests={requests} accepted={accepted} rejected={rejected} keyHash={keyHash}");
+            completed = true;
+
+            void Consume((int SourceId, byte Category, byte Subcategory, int RowIndex, AvatarPackageRow Row, byte? Ability) entry,
+                byte job, byte level, byte grow, bool expectedAccepted)
+            {
+                int index = requests;
+                var source = resources.Items.Get(entry.SourceId);
+                var leaf = resources.Items.Get(entry.Row.ItemId);
+                var profile = characters.Get(job);
+                AvatarPackageChoice[] choices = entry.Ability is byte choice ? [new(entry.Row.ItemId, choice)] : [];
+                byte[] body = new byte[14 + choices.Length * 5];
+                BinaryPrimitives.WriteInt16LittleEndian(body, 3);
+                BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), 1);
+                body[6] = entry.Category;
+                body[7] = entry.Subcategory;
+                BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8), entry.Row.ItemId);
+                body[12] = (byte)choices.Length;
+                if (entry.Ability is byte wireAbility)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(13), entry.Row.ItemId);
+                    body[17] = wireAbility;
+                }
+                var request = AvatarPackageRequests.Read(body, 1, 1);
+                That(request.Slot == 3 && request.Count == 1 && request.Category == entry.Category && request.Subcategory == entry.Subcategory &&
+                    request.ItemIds.SequenceEqual(new[] { entry.Row.ItemId }) && request.Choices.SequenceEqual(choices), "真实CMD160解析保留精确坐标与属性 " + index);
+                using var owner = owners.Acquire("spring-avatar-" + index, () => { });
+                var created = repository.Create(owner, new("SprOpt" + index, towns.Room, towns.InitialReturn)
+                {
+                    Job = job, Level = level, GrowType = grow, Skills = profile.Skills,
+                    Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(source, utcNow: now))])
+                });
+                var session = new GameSession(repository, towns, owner);
+                try
+                {
+                    session.Select(created.Slot);
+                    session.MarkReady();
+                    var before = session.Selected!;
+                    string beforeJson = JsonSerializer.Serialize(before);
+                    string persistedBefore = expectedAccepted ? "" : JsonSerializer.Serialize(repository.List(owner));
+                    string countersBefore = expectedAccepted ? "" : Counters();
+                    BoosterReceipt? receipt = null;
+                    InventorySnapshot? plannedAfter = null;
+                    var result = session.PlanAndCommitBooster(current =>
+                    {
+                        string immutableBefore = JsonSerializer.Serialize(current);
+                        var planned = avatars.Open(current, request, out receipt, now);
+                        That(immutableBefore == JsonSerializer.Serialize(current), "每例规划不就地修改角色 " + index);
+                        if (expectedAccepted)
+                        {
+                            That(planned.Accepted && planned.Plan is { OverflowItems.Length: 0 } && planned.Plan.ChangedCurrencies.IsEmpty &&
+                                receipt is not null && receipt.ItemId == entry.SourceId && receipt.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(entry.Row.ItemId, 1) }),
+                                "每例仅规划精确一件且无溢出、额外货币或奖励 " + index);
+                            plannedAfter = planned.Plan!.After;
+                            CheckReward(plannedAfter, persisted: false);
+                        }
+                        return planned;
+                    }, boosters.UsePlaces(entry.SourceId), entry.SourceId);
+                    That(JsonSerializer.Serialize(before) == beforeJson, "提交不修改原角色快照 " + index);
+                    if (expectedAccepted)
+                    {
+                        var after = session.Selected!;
+                        That(result.Accepted && result.Plan is not null && plannedAfter is not null && after.Revision == before.Revision + 1 &&
+                            JsonSerializer.Serialize(after with { Inventory = before.Inventory, Revision = before.Revision }) == beforeJson,
+                            "只推进一次库存版本，保持角色其他字段 " + index);
+                        CheckReward(after.Inventory, persisted: true);
+                        var reward = after.Inventory.Items.Single();
+                        var normalized = after.Inventory with { Items = [reward with { Uid = 0, Core = reward.Core with { Value = 0 } }] };
+                        That(JsonSerializer.Serialize(normalized) == JsonSerializer.Serialize(plannedAfter), "完整提交库存等于原计划，仅生成真实UID " + index);
+                        accepted++;
+                    }
+                    else
+                    {
+                        That(!result.Accepted && result.Plan is null && receipt is null && ReferenceEquals(before, session.Selected) &&
+                            JsonSerializer.Serialize(repository.List(owner)) == persistedBefore && Counters() == countersBefore,
+                            "源职业负门保持整份库存、角色、版本、审计及UID序列 " + index);
+                        rejected++;
+                    }
+                    That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),
+                        "每例新Repository重开同库保留精确UID/Core/能力/期限/孔位及扣源 " + index);
+                }
+                finally { session.End(); }
+                requests++;
+                if (requests % 1000 == 0) Console.WriteLine($"SPRING_AVATAR_OPTIONS_PROGRESS requests={requests}/15603 accepted={accepted} rejected={rejected}");
+
+                void CheckReward(InventorySnapshot inventory, bool persisted)
+                {
+                    That(inventory.Items.Length == 1, "扣尽唯一源且只留一个目标装扮 " + index);
+                    var reward = inventory.Items.Single();
+                    byte ability = entry.SourceId == 490705422 ? (byte)0 : entry.Ability!.Value;
+                    ushort socket = entry.SourceId == 490705422 ? (ushort)239 : (ushort)0;
+                    That(reward.Core.ItemId == entry.Row.ItemId && reward.Core.Kind == ItemKind.Avatar && reward.Core.Count == 1 &&
+                        reward.Position == new InventorySlot(InventoryListType.Avatar, 0) && reward.Core.Durability == ability && reward.Core.ExpireTime == 0 &&
+                        (persisted ? reward.Uid > 0 && reward.Core.Value == reward.Uid : reward.Uid == 0 && reward.Core.Value == 0),
+                        "精确Item/Kind/容器首格/能力/永久期限/UID-Core身份 " + index);
+                    var core = InventoryRewardGrantService.Create(leaf, utcNow: now) with { Durability = ability, ExpireTime = 0 };
+                    var expected = InventoryRewardGrantService.CreateItem(leaf, new(InventoryListType.Avatar, 0), core);
+                    expected = expected with { Avatar = expected.Avatar! with
+                    {
+                        Socket0 = AvatarSocket.Empty(socket), Socket1 = AvatarSocket.Empty(socket),
+                        Socket2 = AvatarSocket.Empty(0), Socket3 = AvatarSocket.Empty(0), Socket4 = AvatarSocket.Empty(0)
+                    } };
+                    var normalized = reward with { Uid = 0, Core = reward.Core with { Value = 0 } };
+                    That(JsonSerializer.Serialize(normalized) == JsonSerializer.Serialize(expected), "逐例完整核心、详情及五孔相等，保留模板其他字段 " + index);
+                }
+            }
+
+            string Counters() => Query("SELECT count(*) FROM inventory_audit_log") + ":" +
+                Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        finally
+        {
+            if (completed) Directory.Delete(root, true);
+            else Console.Error.WriteLine($"SPRING_AVATAR_OPTIONS_FIXTURE_RETAINED {root} completedRequests={requests} accepted={accepted} rejected={rejected}");
+        }
+
+        static bool Permanent(ItemExpiration expiration) => expiration.SupportsCreation && expiration.Days == 0 && expiration.AbsoluteTime == 0 &&
+            expiration.DailyDelete == 0 && expiration.WeeklyDeleteDay is null;
     }
 
     static BoosterDefinition Parse(string category, int count = 1) => BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n" +

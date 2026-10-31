@@ -217,6 +217,7 @@ internal static partial class FormalDungeonTcpTests
                         ushort bossKey = U16(map, bossOffset + 6);
                         peer.Expect(0, 115, [1, 1, (byte)bossKey, (byte)(bossKey >> 8)]);
                         peer.Expect(0, 31, []);
+                        ReadChangedChatEmoticons(fixture, peer);
                         byte[] bossCheck = new byte[39];
                         BinaryPrimitives.WriteUInt16LittleEndian(bossCheck, peer.Id);
                         BinaryPrimitives.WriteUInt16LittleEndian(bossCheck.AsSpan(2), bossKey);
@@ -226,6 +227,7 @@ internal static partial class FormalDungeonTcpTests
                         peer.Barrier();
                         That(Experience(fixture, peer.Id) == experience, "117仅协调已死亡Boss，已开启结算不重复发31或经验");
                     }
+                    ReadChangedChatEmoticons(fixture, peer);
                     picked += PickupResourceDrops(fixture, peer, deathNotice, 3145);
                     string growthBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id");
                     string lootBeforeReplay = fixture.Snapshot("SELECT * FROM character_dungeon_loot_receipts ORDER BY character_id,event_id");
@@ -400,6 +402,7 @@ internal static partial class FormalDungeonTcpTests
                     U32(exp, 9) == 0 && clear.Length >= 218 && U32(clear, 0) == clearReward.BaseExperience &&
                     U32(clear, 4) == clearReward.RankExperience,
                     "正式结算34→37→35匹配宽度，显示冻结评分及已提交奖励");
+                ReadChangedChatEmoticons(fixture, peer);
                 ReadCommittedCard(fixture,peer,clear,duplicate);
             }
 
@@ -480,8 +483,9 @@ internal static partial class FormalDungeonTcpTests
                         {
                             peer.Expect(0,115,[1,1,(byte)key,(byte)(key>>8)]); peer.Expect(0,31,[]);
                         }
-                        // 升级后的411在本次成长投影之后发送；下一次击杀前按真实资格完整校验，不能当作38读取。
-                        peer.Barrier(peer.ReadChatEmoticons);
+                        // 升级后的411在成长投影后按真实资格完整校验，再用不吞包的屏障确认命令尾部。
+                        ReadChangedChatEmoticons(fixture, peer);
+                        peer.Barrier();
                     }
                 }
                 That(visited.Count == 6 && deaths == 32 && fixture.Snapshot(questQuery,peer.Id) == originalQuest,
@@ -618,6 +622,7 @@ internal static partial class FormalDungeonTcpTests
             byte[] completedQuests = peer.Expect(0, 356).Body;
             That(completedQuests.Length == 30004 && completedQuests[4 + 3145] == 1,
                 "普通领奖ACK后立即同步完成位，任务面板不依赖重新选角");
+            ReadChangedChatEmoticons(fixture, peer);
             string afterAward = fixture.Snapshot();
             string awardedAssets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             peer.Send(34, Convert.FromHexString("2200490CFFFF0100FFFF"));
@@ -778,6 +783,13 @@ internal static partial class FormalDungeonTcpTests
         That(Drain(peer).All(packet => packet.Opcode is not (28 or 29)) &&
             fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == attempts,
             "退场后迟到的重开请求不创建新实例");
+    }
+
+    // 命令已知通知全部读完后，资格全文改变时必须读取下一包411；未知包、重复包仍由原Expect拒绝。
+    static void ReadChangedChatEmoticons(TcpTestFixture fixture, TcpPeer peer)
+    {
+        if (fixture.ExpectedChatEmoticons(peer.Id) is { } expected && !expected.SequenceEqual(peer.ChatEmoticonInfo))
+            peer.ReadChatEmoticons(peer.Read());
     }
 
     static SkillPacketsTests.WireTree[] ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false, bool completedMainline = false)
@@ -1041,7 +1053,9 @@ internal static partial class FormalDungeonTcpTests
             experience += clearReward.TotalExperience;
             ReadGrowth();
             peer.ReadCardMembershipState();
-            ReadCommittedCard(fixture, peer, peer.Expect(0, 35).Body);
+            byte[] settlement = peer.Expect(0, 35).Body;
+            ReadChangedChatEmoticons(fixture, peer);
+            ReadCommittedCard(fixture, peer, settlement);
             peer.Send(69);
             peer.Expect(1, 69, [1]);
             peer.Send(70);
@@ -1120,8 +1134,9 @@ internal static partial class FormalDungeonTcpTests
                         peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]);
                         peer.Expect(0, 31, []);
                     }
+                    ReadChangedChatEmoticons(fixture, peer);
                     pickups += PickupResourceDrops(fixture, peer, death, 0);
-                    peer.Barrier(peer.ReadChatEmoticons);
+                    peer.Barrier();
                 }
             }
 
@@ -1185,6 +1200,7 @@ internal static partial class FormalDungeonTcpTests
                 if (experience[0] != currentLevel)
                 {
                     ExpectLevelRefresh(peer, experience[0], U64(experience, 1));
+                    ReadChangedChatEmoticons(fixture, peer);
                     currentLevel = experience[0];
                 }
             }
@@ -1284,6 +1300,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]);
                     peer.Expect(0, 31, []);
                 }
+                ReadChangedChatEmoticons(fixture, peer);
                 ordinaryPicked += PickupResourceDrops(fixture, peer, death, 0);
             }
         }
@@ -1309,6 +1326,7 @@ internal static partial class FormalDungeonTcpTests
         ReadGrowth(clearExperience);
         peer.ReadCardMembershipState();
         byte[] clear = peer.Expect(0, 35).Body;
+        ReadChangedChatEmoticons(fixture, peer);
         ReadCommittedCard(fixture,peer,clear);
         // 35包没有独立冒险团字段，加成按基础通关经验合并展示（见 DungeonSettlementPackets.EmptyCardReward）。
         That(U32(clear, 0) == checked(clearReward.BaseExperience + adventureBonus) && U32(clear, 4) == clearReward.RankExperience &&
@@ -1455,6 +1473,8 @@ internal static partial class FormalDungeonTcpTests
             if (pickup.Length == 18) { BinaryPrimitives.WriteUInt16LittleEndian(pickup, (ushort)ground); pickup[2] = 1; }
             else BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
             long beforeGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            long beforeReceipts = Convert.ToInt64(fixture.Query(
+                "SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]);
             peer.Send(43, pickup);
             byte[] got = peer.Expect(0, 39).Body;
             That(U32(got, 0) == ground && U16(got, 4) == peer.Id, "逐件拾取回报本次实际地面与本人身份");
@@ -1478,8 +1498,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(0, 14); peer.Expect(1, 43, [1]);
             That(Convert.ToUInt32(fixture.Query("SELECT quest_id FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1", peer.Id)[0][0]) == questId,
                 "集合拾取保留本次真实任务/普通死亡的持久成长来源，不借旧实例身份");
-            That(fixture.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0", peer.Id) is [[0L]],
-                "拾取不再写旧副本临时SQL明细");
+            That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]) == beforeReceipts + 1,
+                "拾取与资产同事务保存一次当前格式的实际回执");
             if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value,
                 "金币地面与实际余额增量一致，不制造背包UID");
             else if (CurrencyWallet.RewardKind(checked((int)itemId)) is { } currency)

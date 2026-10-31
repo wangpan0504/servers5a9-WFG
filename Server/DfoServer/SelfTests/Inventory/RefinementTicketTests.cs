@@ -26,6 +26,7 @@ internal static class RefinementTicketTests
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int start = Count;
+        RunSpring2020Ticket(towns, characters, itemResources);
         var computer = new CharacterStatComputer(characters);
         var items = itemResources.Items;
         var fixedTicket = items.Get(10007131).RefinementTicket!;
@@ -164,6 +165,102 @@ internal static class RefinementTicketTests
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - start} refinement ticket and dependent-system interface assertions");
+    }
+
+    public static void RunSpring2020Ticket(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
+    {
+        int start = Count;
+        var items = itemResources.Items;
+        var ticket = items.Get(490705409).RefinementTicket;
+        That(ticket is { Available: true, Level: 7, SuccessWeight: 10000, Additional: false, MaximumSourceLevel: -1,
+            Portable: false, MinimumItemLevel: 0, MaximumItemLevel: int.MaxValue, PendingRule: null } && ticket.AllowedItemIds.IsEmpty,
+            "spring 2020 ticket retains its complete fixed +7 metadata from matching PVF");
+        var weapon = characters.Get(0).Equipment.Single(row => row.Slot == 12).Template;
+        var core = InventoryRewardGrantService.Create(weapon) with
+        {
+            GenuineUpgrade = 8, Value = 1234567, Attr = 0xA7, SealFlag = 1, EnchantCardId = 3175,
+            EnchantUpgrade = 2, AmplifyType = 2, AmplifyValue = 21, Rune = 3, Random0 = new(1, 2, 3)
+        };
+        var random = new LastRoll();
+        var service = new InventoryRefinementService(items, itemResources.Refinement, random);
+        var request = new RefinementRequest(Bag(3), weapon.Id, 4, 0);
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-spring-refine-ticket-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        bool fixtureCompleted = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("spring-ticket", () => { });
+            repo.Create(owner, new("SpringTicket", towns.Room, towns.InitialReturn)
+            {
+                Inventory = new([new(0, Bag(3), core),
+                    new(0, Bag(4), InventoryRewardGrantService.Create(items.Get(490705409)) with { ExpireTime = 0 }),
+                    new(0, Bag(5), InventoryRewardGrantService.Create(items.Get(10007131), 2) with { ExpireTime = 0 })], Gold: 1234)
+            });
+            var saved = repo.List(owner).Single();
+            var target = saved.Inventory.Find(Bag(3))!;
+            var result = service.Refine(saved, request, out var receipt, DateTimeOffset.UtcNow);
+            That(result.Accepted && receipt is { UsedTicket: true, Succeeded: true, OldLevel: 8, NewLevel: 7,
+                MaterialSlot: 4, MaterialRemaining: 0, SourceItemId: 490705409 } && random.Calls == 1,
+                "spring fixed ticket overwrites +8 with +7 even at the last random boundary");
+            var plan = result.Plan!;
+            var expectedTarget = target with { Core = target.Core with { GenuineUpgrade = 7 } };
+            var expectedInventory = saved.Inventory with
+            {
+                Items = saved.Inventory.Items.Remove(saved.Inventory.Find(Bag(4))!).Replace(target, expectedTarget)
+            };
+            That(JsonSerializer.Serialize(plan.After) == JsonSerializer.Serialize(expectedInventory) && receipt!.Target == expectedTarget,
+                "only the chosen spring ticket and refinement level change; UID, full core, other stack and all balances remain exact");
+            string frozen = Frozen();
+            string before = Snapshot();
+            Sql("CREATE TRIGGER fail_spring_ticket BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'spring ticket rollback'); END");
+            Reject<SqliteException>(() => repo.CommitInventory(owner, saved, plan), "late spring ticket audit failure propagates");
+            That(Snapshot() == before && Frozen() == frozen && random.Calls == 1 &&
+                JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(saved),
+                "late failure rolls back complete assets, revision and audits without mutating or rerolling the frozen plan");
+            Sql("DROP TRIGGER fail_spring_ticket");
+            var committed = repo.CommitInventory(owner, saved, plan);
+            That(committed.Revision == saved.Revision + 1 && committed.Inventory.Find(Bag(3)) == expectedTarget &&
+                committed.Inventory.Find(Bag(4)) is null && committed.Inventory.Find(Bag(5)) == saved.Inventory.Find(Bag(5)) &&
+                JsonSerializer.Serialize(committed.Inventory) == JsonSerializer.Serialize(expectedInventory) && Frozen() == frozen && random.Calls == 1,
+                "the same frozen spring plan commits exactly once without a second draw");
+            var reopened = new CharacterRepository(path).List(owner).Single();
+            That(JsonSerializer.Serialize(reopened) == JsonSerializer.Serialize(committed), "reopen restores the exact committed spring ticket result");
+            string after = Snapshot();
+            Reject<InvalidOperationException>(() => repo.CommitInventory(owner, saved, plan), "old spring snapshot cannot replay its committed plan");
+            var exhausted = service.Refine(reopened, request, out var exhaustedReceipt, DateTimeOffset.UtcNow);
+            That(!exhausted.Accepted && exhaustedReceipt is null && random.Calls == 1 && Snapshot() == after && Frozen() == frozen,
+                "old plan and exhausted specified slot cannot consume the other ticket, reroll, mutate assets or add audits");
+            That(Sql("PRAGMA integrity_check") is "ok", "spring ticket transaction database remains integral");
+
+            fixtureCompleted = true;
+            string Frozen() => JsonSerializer.Serialize(plan.Before) + JsonSerializer.Serialize(plan.After) + JsonSerializer.Serialize(receipt);
+            string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Sql("SELECT count(*) FROM inventory_audit_log") + ":" + Sql("SELECT count(*) FROM currency_audit_log");
+            object? Sql(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        catch
+        {
+            fixtureCompleted = false;
+            throw;
+        }
+        finally
+        {
+            if (fixtureCompleted)
+            {
+                Directory.Delete(root, true);
+            }
+            else Console.Error.WriteLine("SPRING2020_409_FIXTURE_RETAINED " + root);
+        }
+        Console.WriteLine($"PASS {Count - start} spring 2020 refinement ticket assertions");
     }
 
     static RefinementTicketDefinition Parse(string value) => RefinementTicketDefinition.Parse(new PvfDocument("[equipment separate reinforcement ticket]\n" + value))!;

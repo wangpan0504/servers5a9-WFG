@@ -113,12 +113,22 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         // 图标完全靠回执那一刻的重画读取，因此提交后的孔位行必须先于回执到达；否则第一次操作看不到变化，
         // 要等下一次回执重画才补显。装载/卸除的源槽不在预载内：客户端在 ACK 清理时才归还拖拽预留数量，
         // 绝对差量随后补发；合成没有拖拽移动，材料格由请求体给出，必须一并预载（见 Compound）。
-        if (action.Preload() is { Length: > 0 } preload)
+        var preload = action.Preload();
+        if (preload.Length > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
                 InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, preload, index: committed.Index),
                 "talisman_result_preload", Guard);
         await context.Reply((CmdPacketType)packet.Opcode, action.Reply(committed), "talisman_committed", Guard);
         await projection.RefreshAsync(context, result);
+        // 随机重锻可能抽回原孔色；通用差量不含值未变的目标，ACK 仍会归还客户端预留。
+        if ((CmdPacketType)packet.Opcode == CmdPacketType.TALISMAN_REFINE)
+        {
+            var unchanged = preload.Where(slot => !result.Plan!.ChangedSlots.Contains(slot)).ToArray();
+            if (unchanged.Length != 0)
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                    InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, unchanged, index: committed.Index),
+                    "talisman_refine_restore", Guard);
+        }
         // 护石图鉴的符文页收到容器 46 全量（NOTI13）会重建整页：按技能筛选瞬间退回「所有技能」，
         // 页面随后失去响应。装载/卸除成功后因此改发覆盖全部 216 格的差量（NOTI14，空槽即清空条目），
         // 与拍卖行上架后的整列重发同一机制——就地冲刷客户端在拖拽期间残留的槽位状态，页面保留筛选。

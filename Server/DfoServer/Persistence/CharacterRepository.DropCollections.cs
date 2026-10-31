@@ -12,7 +12,7 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     static void CacheDropCollection(AccountOwners.Lease owner, Character expected,
-        PreparedDungeonDeath prepared, FrozenDungeonGroundDeath loot)
+        PreparedDungeonDeath prepared, FrozenDungeonGroundDeath loot, bool cache = true)
     {
         if (!ReferenceEquals(loot.Death, prepared.Death) || loot.Identity.CharacterId != expected.Id ||
             loot.CommittedIdentity != prepared.Result.Snapshot.Identity || loot.Map != prepared.Result.Snapshot.CurrentMap ||
@@ -31,7 +31,7 @@ internal sealed partial class CharacterRepository
                 !keys.Add(ground.Reservation.GroundKey))
                 throw new InvalidDataException("完整掉落集合的序号、来源或预留key非法");
         }
-        DungeonTransientReceipts.Get(owner, loot.Identity).StoreLoot(loot);
+        if (cache) DungeonTransientReceipts.Get(owner, loot.Identity).StoreLoot(loot);
     }
 
     DungeonPickupCommit CommitDropCollectionPickup(AccountOwners.Lease dbOwner, Character expected,
@@ -55,10 +55,12 @@ internal sealed partial class CharacterRepository
                 ground.Reservation.GroundKey >= state.NextObjectKey)
                 throw new InvalidDataException("特殊物品拾取不属于当前已预留实例");
         }
-        else VerifyStoredGround(db, tx, dbOwner, current.Id, ground);
-        var receipts = passive ? DungeonTransientReceipts.Get(dbOwner, prepared.Identity)
-            : DungeonTransientReceipts.Find(dbOwner, prepared.Identity)
-                ?? throw new InvalidDataException("集合拾取的原实例缓存不存在");
+        else
+        {
+            VerifyStoredGround(db, tx, dbOwner, current.Id, ground);
+            if (ReadFrozenPickup(db, tx, dbOwner, current, prepared, pieces) is { } stored) return stored;
+        }
+        var receipts = DungeonTransientReceipts.Get(dbOwner, prepared.Identity);
         if (receipts.Pickups.TryGetValue(ground.Reservation.GroundKey, out var previous))
         {
             previous.Verify(prepared);
@@ -110,8 +112,9 @@ internal sealed partial class CharacterRepository
         var cached = new DungeonTransientPickup(prepared, committed.Revision, destination, actual?.Uid ?? 0, actual?.Core,
             currency, amount, currency is { } kind ? CurrencyWallet.Get(committed.Inventory, kind) : 0,
             committed.Inventory.AccountWallet.Revision, epicPiece);
-        receipts.Pickups[ground.Reservation.GroundKey] = cached;
+        if (!passive) SaveFrozenPickup(db, tx, dbOwner, committed, prepared, destination, actual?.Uid ?? 0, actual?.Core, currency, amount, epicPiece);
         tx.Commit();
+        receipts.Pickups[ground.Reservation.GroundKey] = cached;
         cached.Committed = true;
         return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount) { EpicPiece = epicPiece };
     }

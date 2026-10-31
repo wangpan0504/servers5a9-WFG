@@ -107,8 +107,9 @@ internal sealed partial class CharacterRepository
                     reader.GetInt64(7) != plan.Experience || reader.GetInt64(8) != expected.Revision || reader.GetString(9) != snapshot)
                     throw new InvalidDataException("同一训练事件的来源或奖励发生变化");
                 reader.Close();
-                if (plan.Death is { } original) VerifyCachedDungeonLoot(owner, expected.Id, original.Death.EventId, plan.Loot);
+                if (plan.Death is { } original) VerifyFrozenDungeonLoot(db, tx, owner, expected.Id, original.Death.EventId, plan.Loot);
                 tx.Commit();
+                if (plan.Death is { } replayed) CacheDungeonLoot(owner, expected, replayed, plan.Loot);
                 return new TutorialCheckpointResult(current, true);
             }
         }
@@ -158,7 +159,7 @@ internal sealed partial class CharacterRepository
         if (plan.Death is { } death)
         {
             WriteDungeonGrowthReceipt(db, tx, owner, expected, death, plan.DeathReward!, plan.Growth!, proficiencyGained);
-            CacheDungeonLoot(owner, expected, death, plan.Loot);
+            SaveFrozenDungeonLoot(db, tx, owner, expected, death, plan.Loot);
         }
         command.Parameters["$revision"].Value = checked(expected.Revision + 1);
         command.CommandText = """
@@ -169,6 +170,7 @@ internal sealed partial class CharacterRepository
         if (committed.Revision != expected.Revision + 1 || committed.Tutorial != plan.After || committed.Position != plan.Position)
             throw new InvalidOperationException("训练持久结果与规划不一致");
         tx.Commit();
+        if (plan.Death is { } savedDeath) CacheDungeonLoot(owner, expected, savedDeath, plan.Loot);
         return new TutorialCheckpointResult(committed, false);
     });
 }
