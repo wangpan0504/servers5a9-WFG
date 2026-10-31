@@ -12,11 +12,13 @@ internal sealed record AvatarPackageRow(int ItemId, ushort Count, ushort Type, i
     public byte? ForcedAbility { get; init; }
 }
 internal sealed record AvatarPackageEquipmentRow(int ItemId, ushort Count);
+internal sealed record AvatarPackageMaterialRow(int ItemId, ushort Count);
 internal sealed record AvatarPackageCategory(byte Category, byte Subcategory, ImmutableArray<AvatarPackageRow> Rows,
     string? PendingRule = null)
 {
     public ImmutableArray<AvatarPackageEquipmentRow> EquipmentRows { get; init; } = [];
-    public int RowCount => Rows.Length + EquipmentRows.Length;
+    public ImmutableArray<AvatarPackageMaterialRow> MaterialRows { get; init; } = [];
+    public int RowCount => Rows.Length + EquipmentRows.Length + MaterialRows.Length;
 }
 internal sealed record AvatarPackageDefinition(int SelectionCount, ImmutableArray<int> Dimensions,
     ImmutableArray<AvatarPackageCategory> Categories, string? PendingRule = null)
@@ -150,6 +152,8 @@ internal sealed class AvatarPackageCatalog
             var parsed = ParseCategory(category, subcategory, body[header.Length..]);
             if (!parsed.EquipmentRows.IsEmpty && selection != 0)
                 parsed = parsed with { PendingRule = "混合装备仅支持完整分类领取" };
+            if (!parsed.MaterialRows.IsEmpty && selection != 0 && parsed.PendingRule is null)
+                parsed = parsed with { PendingRule = "混合材料仅支持完整分类领取" };
             categories.Add(parsed);
         }
         return new(selection, sizes.ToImmutable(), categories.ToImmutable()) { Recognized = recognized };
@@ -160,6 +164,7 @@ internal sealed class AvatarPackageCatalog
         AvatarPackageCategory Reject(string reason) => new(category, subcategory, [], reason);
         var rows = ImmutableArray.CreateBuilder<AvatarPackageRow>();
         var equipmentRows = ImmutableArray.CreateBuilder<AvatarPackageEquipmentRow>();
+        var materialRows = ImmutableArray.CreateBuilder<AvatarPackageMaterialRow>();
         Dictionary<int, byte>? forcedOptions = null;
         int at = 0;
         while (at < body.Length)
@@ -204,6 +209,21 @@ internal sealed class AvatarPackageCatalog
                 }
                 continue;
             }
+            if (tag == "etc")
+            {
+                const string materialEnd = "[/etc]";
+                if (!body.AsSpan(at).StartsWith(materialEnd, StringComparison.Ordinal) || values.Length == 0 || values.Length % 2 != 0)
+                    return Reject("混合材料奖励行宽或闭合标记无效");
+                at += materialEnd.Length;
+                for (int i = 0; i < values.Length; i += 2)
+                {
+                    if (!int.TryParse(values[i], out int id) || id <= 0 ||
+                        !ushort.TryParse(values[i + 1], out ushort count) || count == 0)
+                        return Reject("混合材料奖励参数超出字段范围");
+                    materialRows.Add(new(id, count));
+                }
+                continue;
+            }
             if (tag != "avatar") return Reject(tag);
             const string end = "[/avatar]";
             if (!body.AsSpan(at).StartsWith(end, StringComparison.Ordinal) || values.Length == 0 || values.Length % 4 != 0)
@@ -225,12 +245,16 @@ internal sealed class AvatarPackageCatalog
             for (int i = 0; i < rows.Count; i++) rows[i] = rows[i] with { ForcedAbility = forcedOptions[rows[i].ItemId] };
         }
         else if (rows.Any(row => row.DefaultAbility < 0)) return Reject("装扮默认属性超出字段范围");
-        if (equipmentRows.Count != 0)
+        if (equipmentRows.Count != 0 || materialRows.Count != 0)
         {
-            var ids = rows.Select(row => row.ItemId).Concat(equipmentRows.Select(row => row.ItemId)).ToArray();
+            var ids = rows.Select(row => row.ItemId).Concat(equipmentRows.Select(row => row.ItemId))
+                .Concat(materialRows.Select(row => row.ItemId)).ToArray();
             if (ids.Distinct().Count() != ids.Length) return Reject("混合奖励编号重复或跨种类冲突");
         }
-        return new(category, subcategory, rows.ToImmutable()) { EquipmentRows = equipmentRows.ToImmutable() };
+        return new(category, subcategory, rows.ToImmutable())
+        {
+            EquipmentRows = equipmentRows.ToImmutable(), MaterialRows = materialRows.ToImmutable()
+        };
     }
 
     internal static AvatarPackageItemDefinition ParseAvatar(string text,

@@ -192,6 +192,15 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                         { Error(source, row.ItemId, reason); continue; }
                         Edge(new(row.ItemId, row.Count), $"{source}/{id}:avatar:{category.Category}:{category.Subcategory}", ItemKind.Avatar, freeSource: id);
                     }
+                    foreach (var row in category.EquipmentRows)
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:equipment:{category.Category}:{category.Subcategory}", ItemKind.Equipment, freeSource: id);
+                    foreach (var row in category.MaterialRows)
+                    {
+                        var child = items.Get(row.ItemId);
+                        if (InventoryAvatarPackageService.MaterialRowDefinitionError(row, child, pieces) is { } reason)
+                        { Error(source, row.ItemId, reason); continue; }
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:material:{category.Category}:{category.Subcategory}", ItemKind.Material, freeSource: id);
+                    }
                 }
                 return;
             }
