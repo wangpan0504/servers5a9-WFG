@@ -19,6 +19,10 @@ internal sealed partial class GameSession
         public int? RewardWeek { get; set; }
     }
     RaidCombatBinding? raidCombat;
+    internal bool CanPrepareLukeNextPhase(RaidActor actor, AntonRaidBattle battle) => owner.Execute(() =>
+        CanChangeTownParty && MatchesRaidCombatActor(actor) && raidCombat is { } raid && raid.Actor == actor &&
+        ReferenceEquals(raid.Battle, battle) && formalDungeon is null && PartyDungeon is null &&
+        battle.IsLukeWaitingRoom(actor));
     internal Action<RaidRewardReceipt>? AntonAutoRewardArrived { get; set; }
     internal Func<AntonRaidBattle, int, bool>? AntonAutoRewardRequested { get; set; }
 
@@ -50,6 +54,7 @@ internal sealed partial class GameSession
         }
     }
     public Action<AntonRaidBattleView, RaidActor>? RaidBattleNoticeArrived { get; set; }
+    internal Func<RaidRewardReceipt, Task>? AutomaticRaidRewardArrived { get; set; }
 
     // START在正式开战提交后安装；MAP在安装正式副本后调用BindRaidCombatDungeon。无协议探测状态。
     public bool AttachRaidCombat(RaidActor actor, AntonRaidBattle battle, ImmutableArray<RaidPhaseRewardPolicy> policies) => owner.Execute(() =>
@@ -118,24 +123,27 @@ internal sealed partial class GameSession
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
-    // 团本单图没有普通46结算；只允许当前安徒恩已提交清图的菜单，不扩大普通翻牌资格。
-    // 安徒恩战况表在图内提交C2S72 `01 02`（回到城镇）：只允许当前Anton正式单图仍在Dungeon阶段且无待提交死亡/结算/地面操作，
+    // 团本单图没有普通46结算；卢克与安徒恩均从原Run的已提交清图事实进入返回菜单。
+    // 战况表在图内提交C2S72 `01 02`（回到城镇）：只允许当前正式团本单图仍在Dungeon阶段且无待提交死亡/结算/地面操作，
     // 复用42同一分队退场事务；不扣DGN HP、不产生ClearFact，也不代表`01 01`（进入地下城）已实现。
-    internal bool AntonDungeonBoardReturn() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Prey } &&
+    internal bool CanReturnFromRaidDungeonBoard() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid &&
         formalDungeon is { Entry.RaidEntry: not null } dungeon &&
+        dungeon.Entry.RaidEntry.Kind == raid.Battle.Kind && dungeon.Entry.RaidEntry.InstanceId == raid.Battle.Instance &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene);
 
-    internal FormalDungeonReceipt? AntonDungeonResultFocus() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Prey } &&
+    internal FormalDungeonReceipt? RaidDungeonResultFocus() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid &&
         formalDungeon is { Entry.RaidEntry: not null, Run.ClearFact: not null } dungeon &&
+        dungeon.Entry.RaidEntry.Kind == raid.Battle.Kind && dungeon.Entry.RaidEntry.InstanceId == raid.Battle.Instance &&
+        (raid.Battle.Kind != RaidKind.Luke || raid.Battle.HasDungeonContribution(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId)) &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene
             ? FormalReceipt() : null);
 
     internal bool CanRetryAntonResultDungeon() => owner.Execute(() =>
-        AntonDungeonResultFocus() is { } receipt && raidCombat is { } raid &&
+        RaidDungeonResultFocus() is { } receipt && raidCombat is { Battle.Kind: RaidKind.Anton or RaidKind.Prey } raid &&
         (raid.Battle.Kind == RaidKind.Prey ? raid.Battle.AllowsPreyEntry(checked((int)receipt.Entry.DungeonId)) :
             raid.Battle.AllowsAntonEntry(checked((int)receipt.Entry.DungeonId))));
 
@@ -301,7 +309,8 @@ internal sealed partial class GameSession
     });
 
     static bool SameLukeResultOffer(RaidRewardOffer left, RaidRewardOffer right) =>
-        left.Kind == right.Kind && left.Card == right.Card && left.LukeResult == right.LukeResult && left.Grants.SequenceEqual(right.Grants);
+        left.Kind == right.Kind && left.Card == right.Card && left.LukeResult == right.LukeResult &&
+        left.LukeAdditionalResults.SequenceEqual(right.LukeAdditionalResults) && left.Grants.SequenceEqual(right.Grants);
 
     public void ConfirmRaidRewardPublished(RaidRewardReceipt receipt)
     {

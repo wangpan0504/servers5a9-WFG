@@ -66,19 +66,25 @@ internal sealed partial class AntonRaidBattle
     void ScheduleLukeClockLocked()
     {
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
-        if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
+        if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null && LukeRewardRemainingLocked() is null &&
+            LukeRejoinRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
         { lease.Dispose(); return; }
         if (lease.RetryRemaining is { } retryDelay && (PendingLukeSettlement() is not null || PendingAntonSettlement() is not null || AntonAutoRewardDue))
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
+        if (LukeRewardRemainingLocked() is { } lukeReward)
+        { lease.Schedule(lukeReward > TimeSpan.Zero ? lukeReward : TimeSpan.FromSeconds(1)); return; }
         if (AntonRewardWaitRemainingLocked() is { } rewardWait)
         { lease.Schedule(AntonMovieRemainingLocked() is { } movie && movie < rewardWait ? movie : rewardWait); return; }
         if (AntonWaitRemainingLocked() is { } wait)
         { lease.Schedule(wait); return; }
+        if (LukeWaitRemainingLocked() is { } lukeWait)
+        { lease.Schedule(lukeWait > TimeSpan.Zero ? lukeWait : TimeSpan.FromSeconds(1)); return; }
         if (pendingTransition is not null || TerminalRequested(current))
         { lease.Schedule(Timeout.InfiniteTimeSpan); return; }
         TimeSpan? earliest = LukePhaseRemainingLocked();
+        if (LukeRejoinRemainingLocked() is { } rejoin && (earliest is null || rejoin < earliest)) earliest = rejoin;
         foreach (var timer in current.Timers)
         {
             if (!current.TimerAnchors.TryGetValue(timer.Key, out long anchor)) continue;
@@ -103,7 +109,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (!ReferenceEquals(lukeClockLease, lease) || lease.IsStopped || !lukeClockActive ||
-                members.Count == 0 && AntonRewardWaitRemainingLocked() is null ||
+                members.Count == 0 && AntonRewardWaitRemainingLocked() is null && LukeRejoinRemainingLocked() is null ||
                 pendingTransition is not null) return false;
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Reward)
             {
@@ -114,12 +120,24 @@ internal sealed partial class AntonRaidBattle
                 return false;
             }
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
+            if (Kind == RaidKind.Luke && current.State == AntonRaidBattleState.Intermission) return false;
             if (TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
 
             if (LukePhaseDueLocked())
             {
+                if (Kind == RaidKind.Luke)
+                {
+                    var candidate = current;
+                    if (!endedLukePhases.Contains(current.Phase))
+                    {
+                        candidate = Evaluate(current, null, null, null, new(RaidStageFactKind.PhaseEnd, current.Phase));
+                        endedLukePhases.Add(current.Phase);
+                    }
+                    CommitBattleCandidate(before, candidate.State == AntonRaidBattleState.Reward ? candidate : FailLukePhase(candidate));
+                    return true;
+                }
                 var expired = current with { PhaseExpired = true, Revision = current.Revision + 1,
                     Dungeons = current.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
                     Timers = ImmutableDictionary<RaidTimer, int>.Empty,

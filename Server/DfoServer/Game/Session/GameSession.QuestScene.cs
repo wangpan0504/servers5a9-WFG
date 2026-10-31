@@ -33,6 +33,16 @@ internal sealed partial class GameSession
         var room = dungeon.Run.CurrentMonsterPlan.Room;
         var same = PassiveQuestSources(room,resources,true).Where(row => row.source.ObjectId == templateId).ToArray();
         if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
+        if (dungeon.Entry.LukeEnergyObject is { } energy)
+        {
+            if (!energy.MatchesEnergy(dungeon.Entry.DungeonId, dungeon.Entry.Maze, snapshot.CurrentMap,
+                (int)templateId, same[0].ordinal)) return "luke-energy-source-not-current";
+            if (!dungeon.Run.IsPassiveClearCondition(snapshot.Identity, (int)templateId, same[0].ordinal))
+                return "luke-energy-clear-condition-unavailable";
+            if (!dungeon.Run.CanPreparePassiveClear(snapshot.Identity, (int)templateId, same[0].ordinal))
+                return "luke-energy-terminal-not-ready";
+            return "luke-energy-scene-plan-or-member-unavailable";
+        }
         int used = dungeon.QuestSceneEvents.Count(pair => pair.Key.Map == snapshot.CurrentMap && pair.Key.Template == (int)templateId && pair.Value.Committed);
         if (used == same.Length) return $"当前房间 {snapshot.CurrentMap.Id} 的物件模板 {templateId} 已消费全部 {used} 个资源槽";
         if (same.Length > 1 && !resources.ReportsQuestItemReward(same[0].source)) return $"当前房间 {snapshot.CurrentMap.Id} 有 {same.Length} 份物件模板 {templateId}，39 无任务物品声明且不能确定唯一来源";
@@ -133,7 +143,10 @@ internal sealed partial class GameSession
         bool reportsQuestDeath = resources.ReportsQuestDeath(chosen.source);
         bool recordsQuest = reportsQuestDeath || resources.ReportsQuestItemReward(chosen.source);
         bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, chosen.ordinal);
-        if (pending is null && mazeClear && current.Entry.PartyRoute is null && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
+        bool energyClear = current.Entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+            current.Entry.LukeEnergyObject?.MatchesEnergy(current.Entry.DungeonId, current.Entry.Maze, scene.CurrentMap,
+                (int)templateId, chosen.ordinal) == true;
+        if (pending is null && mazeClear && current.Entry.PartyRoute is null && !energyClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
         if (pending is null && reportedQuest is null && !recordsQuest &&
             (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;

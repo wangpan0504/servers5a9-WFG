@@ -8,12 +8,6 @@ namespace DfoServer.Game.Session;
 // 开发GM在线路由：始终在本会话 owner 内执行，不顶号；当前在游戏中的角色按调用方选择拒绝或使用已提交的 Selected。
 internal sealed partial class GameSession
 {
-    bool HasPendingDevelopmentWalletChange => pendingRental is not null || pendingConsumableUse is not null || HasPendingFormalCard || HasPendingTownQuestCommit ||
-        HasUncommittedQuestQuickClear || formalDungeon?.HasPendingFatigue == true || formalDungeon?.Run.HasPendingDeath == true ||
-        formalDungeon?.Run.HasPendingSettlement == true || formalDungeon?.Ground.HasPendingOperation == true ||
-        formalDungeon?.PendingTutorialClear is not null || pendingQuestCompletion is not null ||
-        pendingQuestLifecycle is not null || HasPendingQuestScene;
-
     // 只读查看：当前角色返回已提交的在线快照，其他角色经本 owner 读取持久状态。
     public Character InspectCharacter(string name) => owner.Execute(() => DevelopmentTarget(name, false));
 
@@ -47,7 +41,7 @@ internal sealed partial class GameSession
             throw new InvalidDataException(rejected);
         // 账号钱包由同账号角色共享；会改钱包时，当前角色也须没有待确认结果，提交后替换其钱包快照。
         bool wallet = result.Plan is { } changed && !changed.Before.AccountWallet.Same(changed.After.AccountWallet);
-        if ((selected || wallet && Selected is not null) && HasPendingDevelopmentWalletChange)
+        if ((selected || wallet && Selected is not null) && HasPendingInventoryCommit)
             throw new InvalidOperationException("当前角色有待确认的业务结果，请先完成或重新选角");
         var updated = InventoryService.Commit(repository, owner, current, result);
         if (selected)

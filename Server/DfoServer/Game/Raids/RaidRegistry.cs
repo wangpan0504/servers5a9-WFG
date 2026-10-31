@@ -121,7 +121,12 @@ internal sealed partial class RaidRegistry
             party.Members.Any(m => m.Actor.Character == fact.Character && m.Actor.IsCurrent);
     }
 
-    public int Count { get { lock (gate) return parties.Count; } }
+    void PruneEmptyLukeLocked()
+    {
+        foreach (var row in parties.Where(row => row.Value.Type == 1 && row.Value.Members.IsEmpty &&
+            rejoin?.HasLukeParty(row.Key) != true).ToArray()) parties.Remove(row.Key);
+    }
+    public int Count { get { lock (gate) { PruneEmptyLukeLocked(); return parties.Count; } } }
     public RaidParty? Find(RaidActor actor) { lock (gate) return FindCore(actor); }
     public RaidParty? FindCurrent(GameSession session, long epoch)
     { lock (gate) return parties.Values.FirstOrDefault(p => p.Members.Any(m => ReferenceEquals(m.Actor.Session, session) && m.Actor.Epoch == epoch && m.Actor.IsCurrent)); }
@@ -148,9 +153,9 @@ internal sealed partial class RaidRegistry
         }
     }
     public RaidParty? Find(uint key, ChannelIdentity channel)
-    { lock (gate) return parties.TryGetValue(key, out var party) && party.Channel == channel ? party : null; }
+    { lock (gate) { PruneEmptyLukeLocked(); return parties.TryGetValue(key, out var party) && party.Channel == channel ? party : null; } }
     public RaidParty[] List(ChannelIdentity channel, byte type)
-    { lock (gate) return parties.Values.Where(p => p.Channel == channel && p.Type == type && p.Started is null).OrderBy(p => p.Key).ToArray(); }
+    { lock (gate) { PruneEmptyLukeLocked(); return parties.Values.Where(p => p.Channel == channel && p.Type == type && p.Started is null).OrderBy(p => p.Key).ToArray(); } }
     public bool IsCurrent(RaidParty party)
     { lock (gate) return parties.TryGetValue(party.Key, out var current) && ReferenceEquals(current, party); }
     public void Observe(RaidActor actor) { lock (gate) if (actor.IsCurrent) observers[actor.Session] = actor; }
@@ -283,17 +288,18 @@ internal sealed partial class RaidRegistry
     RaidChange RemoveCore(RaidParty old, RaidActor actor, bool kicked = false)
     {
         var members = old.Members.Where(m => !Same(m.Actor, actor)).ToImmutableArray();
-        RaidParty? updated = members.IsEmpty ? null : old with
+        bool keepLuke = old.Type == 1 && old.Started is not null && rejoin?.HasLukeParty(old.Key) == true;
+        RaidParty? updated = members.IsEmpty && !keepLuke ? null : old with
         {
             Members = members,
-            Leader = old.Leader == actor.Character ? members.MinBy(m => m.Slot)!.Actor.Character : old.Leader,
+            Leader = old.Leader == actor.Character && !members.IsEmpty ? members.MinBy(m => m.Slot)!.Actor.Character : old.Leader,
             Revision = ++revision
         };
         if (updated is null) { parties.Remove(old.Key); rejoin?.DropParty(old.Key); }
         else parties[old.Key] = updated;
         foreach (var key in invitations.Where(p => p.Value.Raid == old.Key ||
             Same(p.Value.Source, actor) || Same(p.Value.Target, actor)).Select(p => p.Key).ToArray()) invitations.Remove(key);
-        return new(old, updated, actor, kicked);
+        return new(old, updated is { Members.IsEmpty: true } ? null : updated, actor, kicked);
     }
 
     // 可在旧generation收尾调用，只按原Session/epoch移除，绝不按角色号删除接管者。

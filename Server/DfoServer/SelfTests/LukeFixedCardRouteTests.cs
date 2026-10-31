@@ -11,6 +11,39 @@ namespace DfoServer;
 // 合成资源只验证显式兼容合同与真实Reserve边界，不冒充原服路线或Runtime资源验收。
 internal static class LukeFixedCardRouteTests
 {
+    internal static void RunResources(PvfArchive pvf, RaidDefinition definition)
+    {
+        int before = Count;
+        var catalog = definition.Resources!.EntryCatalog!;
+        var choices = LukeSanctumRoute.ResourceChoices(catalog);
+        var objects = LukeRaidObjectCatalog.Load(pvf, catalog, DfoServer.Testing.SelfTestCatalogs.Rooms(pvf), choices);
+        var cards = LukeSanctumRoute.Create(catalog, objects);
+        That(cards.GroupCount == 5 && choices.Count == 45 && objects.BindingCount > 0,
+            "真实资源全部五组路线及静态对象可执行核验");
+        foreach (var choice in choices)
+        {
+            int group = choice.MazeOrdinal / 3, step = choice.MazeOrdinal % 3;
+            That(cards.Maze(group, choice.Dungeon, step) == choice.MazeOrdinal, "真实三元组列和三步对应完整源maze");
+        }
+        That(catalog.Script.Phases[1].Dungeons.All(row => row.LukeLockoutType is 0 or 4 or 5), "真实P2全部图具备已证个人锁类型");
+        var budgets = LukeSanctumObjectRules.Create(catalog.Script);
+        That(budgets.Budgets.All(row => row.Cap == 5) && budgets.Tiers.Select(row => (row.Minimum, row.Maximum))
+            .SequenceEqual(new[] { (0, 5), (6, 10), (11, 15) }), "真实设施预算与完整连续三档");
+        var energyChoices = new[] { 5063, 5066 }.SelectMany(id => catalog.Find(id)!.Mazes
+            .Select(maze => (id, maze.SourceOrdinal))).ToArray();
+        var energyObjects = LukeRaidObjectCatalog.Load(pvf, catalog, DfoServer.Testing.SelfTestCatalogs.Rooms(pvf), energyChoices);
+        That(energyObjects.Issues.IsEmpty, "真实能源全部maze的Boss格根物件及直接赋值动作可核验: " +
+            string.Join(";", energyObjects.Issues) + ";" + string.Join(";", energyObjects.RoomFailures.Select(row =>
+                $"{row.Room.Map}:{row.Stage}:{row.ErrorKind}")));
+        foreach (var (id, ordinal) in energyChoices)
+        {
+            var maze = catalog.Find(id)!.Mazes.Single(row => row.SourceOrdinal == ordinal);
+            That(energyObjects.Energy(id, maze) is { IsEnergy: true } binding && binding.Symbol == (id == 5063 ? 113 : 114),
+                "能源物件唯一Boss格、原清图目标和113/114命名空间逐条对应");
+        }
+        Console.WriteLine($"PASS {Count - before} Luke full resource triplet route assertions");
+    }
+
     internal static void RunCore(RaidActor[] actors)
     {
         int before = Count;
@@ -60,6 +93,7 @@ internal static class LukeFixedCardRouteTests
         var inspection = LukeFixedCardRoute.InspectResources(options,catalog,new(rooms.ToImmutable().Remove(absentRoom),[]));
         That(inspection.Length==9 && inspection.Count(row=>!row.Problems.IsEmpty)==1 &&
             inspection.Single(row=>!row.Problems.IsEmpty).MazeOrdinal==7, "九maze诊断不因某步缺覆盖提前停止，也不签发策略");
+        DynamicRoutes();
         var battle = Battle(script);
         var identity = new RaidDungeonIdentity(battle.Instance, 0, 1, RaidKind.Luke);
         var stale = battle.CaptureLukeRoute(0, 5054, policy)!;
@@ -129,6 +163,62 @@ internal static class LukeFixedCardRouteTests
         That(ReferenceEquals(original, broken.View) && broken.CaptureLukeRoute(0, 5054, policy) == brokenLease &&
             brokenRows.All(row => !broken.HasDungeonContribution(row.Actor, row.Identity.InstanceId)), "异常不发布HP/step也不提前消费清图事实");
         Console.WriteLine($"PASS {Count - before} 显式Fixed兼容路线与lease断言");
+
+        void DynamicRoutes()
+        {
+            var dynamicScript = script with { LukeCardMapRecords = Enumerable.Range(0, 5)
+                .Select(group => new LukeCardMapRecord((byte)(group * 3), (byte)(group * 3), (byte)(group * 3))).ToImmutableArray() };
+            var dynamicCatalog = new RaidDungeonCatalog(dynamicScript, definitions, [], maps, _ => true, 1);
+            var cards = LukeSanctumRoute.Create(dynamicCatalog, objects);
+            That(LukeSanctumRoute.ResourceChoices(dynamicCatalog).Count == 45, "动态路线装配全部五组三圣所45个maze");
+            Reject<InvalidDataException>(() => LukeSanctumRoute.ResourceChoices(catalog), "动态路线拒绝重叠三元组，不将固定测试配置当原资源");
+            Reject<InvalidDataException>(() => LukeSanctumRoute.Create(dynamicCatalog,
+                new(rooms.ToImmutable().Remove(rooms.Keys.First(row => row.MazeOrdinal == 14)), [])),
+                "动态路线未抽中的组缺末步房间也拒绝装配");
+            var warpDefinition = definitions[5055];
+            var lastMaze = warpDefinition.Mazes[14];
+            RaidDungeonCatalog WithWarps(DungeonPoint source, DungeonPoint target) => new(dynamicScript,
+                definitions.SetItem(5055, warpDefinition with { Mazes = warpDefinition.Mazes.Take(14).Append(lastMaze with
+                    { WarpMaps = [new(source, target)] }).ToArray() }), [], maps, _ => true, 1);
+            That(LukeSanctumRoute.Create(WithWarps(new(1, 0), new(0, 3)), objects).GroupCount == 5,
+                "不存在目标房间的遗留warp声明不创造地图，也不阻断合法静态路线");
+            Reject<InvalidDataException>(() => LukeSanctumRoute.Create(WithWarps(new(0, 0), new(1, 0)), objects),
+                "两端均有实际房间的warp仍需单独核验，不能借静态拓扑放行");
+            var seeds = Enumerable.Range(0, 100).GroupBy(seed => new Random(seed).Next(5)).Select(group => group.First()).ToArray();
+            That(seeds.Length == 5, "确定性随机输入覆盖全部五组");
+            foreach (int seed in seeds)
+            {
+                var random = new Random(seed);
+                int expectedGroup = new Random(seed).Next(5);
+                var dynamicBattle = new AntonRaidBattle(dynamicScript, kind: RaidKind.Luke, cardRoute: cards, lukeRouteRandom: random);
+                foreach (var actor in actors) That(dynamicBattle.JoinStart(actor), "动态路线登记原八人");
+                That(dynamicBattle.CaptureLukeRoute(0, 9999, null, cards) is null, "非法选图不抽取路线组");
+                var initial = dynamicBattle.CaptureLukeRoute(0, 5054, null, cards)!;
+                That(initial.Group == expectedGroup && initial.MazeOrdinal == expectedGroup * 3, "服务端选择并冻结本团资源组");
+                var failedRows = Bindings();
+                using (var aborted = dynamicBattle.ReserveDungeon(new(dynamicBattle.Instance, 0, 1, RaidKind.Luke), 5054,
+                    failedRows, route: initial, mazeOrdinal: initial.MazeOrdinal))
+                    That(aborted is not null, "动态路线允许预留后失败撤销");
+                That(dynamicBattle.CaptureLukeRoute(0, 5054, null, cards) == initial, "失败撤销不重抽组也不推进步序");
+                foreach (int id in ids)
+                    for (int step = 0; step < 3; step++)
+                    {
+                        var lease = dynamicBattle.CaptureLukeRoute(0, id, null, cards)!;
+                        That(lease.Group == expectedGroup && lease.Step == step && lease.MazeOrdinal == expectedGroup * 3 + step,
+                            "同团三列各按已接受Clear推进且保持一组");
+                        var rows = Bindings();
+                        using (var reserve = dynamicBattle.ReserveDungeon(new(dynamicBattle.Instance, 0, 1, RaidKind.Luke), (uint)id,
+                            rows, route: lease, mazeOrdinal: lease.MazeOrdinal)!) reserve.Install();
+                        var facts = rows.Select(row => (row.Actor, new DungeonClearFact(row.Identity, (uint)id, [Guid.NewGuid()])
+                            { ClearMap = definitions[id].Mazes[lease.MazeOrdinal].MapSpecification![1] })).ToArray();
+                        That(dynamicBattle.CompleteLukeDungeon(facts) is not null && dynamicBattle.CompleteLukeDungeon(facts) is null,
+                            "动态路线同一Run仅清一次");
+                        That(!dynamicBattle.IsLukeRouteCurrent(lease), "已清图使准备见证立即失效");
+                        foreach (var row in rows) dynamicBattle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
+                    }
+                That(ids.All(id => dynamicBattle.CaptureLukeRoute(0, id, null, cards) is null), "九Run完成三圣所全部封闭");
+            }
+        }
 
         AntonRaidBattle Battle(RaidScript program)
         {

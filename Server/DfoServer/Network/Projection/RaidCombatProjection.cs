@@ -8,7 +8,7 @@ internal sealed record RaidCombatDisplayIdentity(Game.Session.GameSession Sessio
     long SelectionEpoch, ushort Character, Guid Instance, int Phase, AntonRaidBattleState State, bool AntonPreparing)
 {
     public static RaidCombatDisplayIdentity Capture(RaidActor actor, AntonRaidBattleView view) =>
-        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing);
+        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing || view.LukePreparing);
 }
 
 internal static partial class RaidCombatProjection
@@ -34,9 +34,9 @@ internal static partial class RaidCombatProjection
             if (anton.HasAntonRewards || anton.PhaseProgress)
                 PostAntonSnapshot(context, anton, view, Guard);
         }
+        context.LukePhaseExit?.Notice(view, actor);
         if (view.PhaseExpired)
         {
-            context.LukePhaseExit?.Notice(view, actor);
             return;
         }
         PostState(context, view, actor, Guard, "raid_phase_state");
@@ -150,6 +150,16 @@ internal static partial class RaidCombatProjection
                     "anton_wait_remaining", () => current() && context.RaidDisplay == identity);
                 if (view.AntonPreparing)
                     context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "anton_phase2_prepare", current);
+            }
+            if (view.State == AntonRaidBattleState.Intermission &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke)
+            {
+                // 597的key1为已证待命标题；不套用Anton绝对时钟或Luke零秒RESET。
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
+                    () => luke.LukeWaitSeconds(view) is { } seconds ? RaidCombatPackets.AntonWaitRemaining(1, seconds) : null,
+                    "luke_wait_remaining", () => current() && context.RaidDisplay == identity);
+                if (view.LukePreparing)
+                    context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "luke_phase2_prepare", current);
             }
             // 778没有阶段字段；对应587确实写出后才可按该phase解释used，不发送P1假计数。
             if (view.Phase == 1 && view.LukePhaseCoinsUsed is { } used)

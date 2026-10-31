@@ -19,6 +19,7 @@ internal sealed partial class AntonRaidBattle
         public LukeRouteLease? Route { get; init; }
         public LukeRaidObjectRegistration? Objects { get; set; }
         public LukeObjectBinding? FacilityRoom { get; set; }
+        public LukeObjectBinding? EnergyRoom { get; set; }
         public HashSet<LukeObjectBinding> ConsumedFacilities { get; } = [];
         public FacilityLedger? FacilityLedger { get; set; }
         public bool FacilityLedgerAmbiguous { get; set; }
@@ -30,6 +31,7 @@ internal sealed partial class AntonRaidBattle
         public Dictionary<RaidActor, DungeonClearFact> ClearFacts { get; } = [];
         public bool Cleared => ClearFacts.Count != 0;
         public bool AntonEnergyConfirmed { get; set; }
+        public long EnergyReturnEpoch { get; set; }
     }
     readonly Dictionary<Guid, RaidDungeonRun> dungeonRuns = [];
     AntonRaidBattleView? pendingTransition;
@@ -54,17 +56,23 @@ internal sealed partial class AntonRaidBattle
                     battle.Kind == RaidKind.Prey && (identity.Squad != 1 || actors.Length != 1 || !battle.AllowsPreyEntry(checked((int)dungeon))) ||
                     identity.Phase != battle.current.Phase || identity.Squad < 1 || identity.Squad > (battle.Kind == RaidKind.Luke ? 2 : 5) ||
                     battle.Kind == RaidKind.Anton && !battle.AntonEntryOpenLocked(checked((int)dungeon)) ||
+                    !battle.AllowsLukeThroneLocked(checked((int)dungeon)) ||
                     TerminalRequested(battle.current) || battle.LukePhaseDueLocked() || battle.pendingTransition is not null ||
                     !battle.current.Dungeons.TryGetValue(checked((int)dungeon), out var state) || state != RaidDungeonState.Open ||
                     actors.Length is < 1 or > 4 || actors.Any(actor => !actor.Actor.IsCurrent || !battle.members.ContainsKey(actor.Actor) ||
                         actor.Identity.CharacterId != actor.Actor.Character || actor.Identity.InstanceId == Guid.Empty) ||
                     actors.Select(actor => actor.Actor.Character).Distinct().Count() != actors.Length ||
                     actors.Select(actor => actor.Identity.InstanceId).Distinct().Count() != 1 ||
+                    battle.lukeEnergyObjects && dungeon is 5063 or 5066 &&
+                        (identity.Phase != 1 || objects?.Energy is null || objects.MazeOrdinal != mazeOrdinal) ||
                     battle.dungeonRuns.Count >= (battle.Kind == RaidKind.Luke ? 2 : 5) || battle.lukeRevivalReservations.Any(row => row.Squad == identity.Squad) ||
-                    battle.dungeonRuns.Values.Any(run => run.Squad == identity.Squad ||
-                        battle.Kind == RaidKind.Luke && run.Phase == identity.Phase && run.Dungeon == dungeon) ||
+                    battle.dungeonRuns.Values.Any(run => run.Squad == identity.Squad) ||
+                    battle.Kind == RaidKind.Luke && battle.dungeonRuns.Values.Any(run => run.Phase == identity.Phase &&
+                        run.Dungeon == dungeon && run.Generation != battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon))) ||
+                    battle.Kind == RaidKind.Luke && battle.dungeonRuns.Values.Count(run => run.Phase == identity.Phase && run.Dungeon == dungeon) >=
+                        battle.script.Phases[identity.Phase].Dungeons.Single(row => row.Id == dungeon).PartyMax ||
                     actors.Any(actor => battle.dungeonRuns.Values.Any(run => run.Active.Contains(actor.Actor)))) return null;
-                if (battle.UsesFixedRoute(identity.Phase)
+                if (battle.UsesLukeRoute(identity.Phase)
                     ? route is null || route.Dungeon != dungeon || route.Phase != identity.Phase || route.MazeOrdinal != mazeOrdinal || !battle.IsLukeRouteCurrent(route)
                     : route is not null) return null;
                 var run = new RaidDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
@@ -114,11 +122,11 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Luke || current.PhaseExpired || LukePhaseDueLocked() || facts.Length is < 1 or > 4 ||
                 !dungeonRuns.TryGetValue(facts[0].Fact.Identity.InstanceId, out var run) || !run.Installed ||
-                facts.Length != run.Active.Count || run.Cleared || run.Phase != current.Phase ||
+                facts.Length != run.Active.Count || run.Cleared || run.EnergyReturnEpoch != 0 || run.Phase != current.Phase ||
                 current.State != AntonRaidBattleState.Fighting || facts.Select(row => row.Actor).Distinct().Count() != facts.Length) return null;
             foreach (var row in facts)
                 if (!row.Actor.IsCurrent || !run.Active.Contains(row.Actor) || row.Fact.DungeonId != run.Dungeon ||
-                    row.Fact.ClearMap is null || row.Fact.ConfirmedDeathEvents.Count == 0 ||
+                    row.Fact.ClearMap is null || !ValidLukeClearSource(run, row.Actor, row.Fact) ||
                     !entries.TryGetValue((row.Fact.Identity.InstanceId, row.Actor.Character), out var entry) ||
                     !ReferenceEquals(entry.Run, run) || row.Fact.Identity.CharacterId != entry.Identity.CharacterId ||
                     row.Fact.Identity.QuestId != entry.Identity.QuestId || row.Fact.Identity.TaskAttempt != entry.Identity.TaskAttempt ||
@@ -132,7 +140,7 @@ internal sealed partial class AntonRaidBattle
             {
                 var definition = script.Phases[run.Phase].Dungeons.Single(d => d.Id == run.Dungeon);
                 if (!before.Symbols.TryGetValue(definition.HpSymbol, out int hp) || hp <= 0) return null;
-                if (UsesFixedRoute(run.Phase) && (run.Route is not { } lease || !IsLukeRouteCurrent(lease) || lease.ExpectedHp != hp)) return null;
+                if (UsesLukeRoute(run.Phase) && (run.Route is not { } lease || !IsLukeRouteCurrent(lease) || lease.ExpectedHp != hp)) return null;
                 int remaining = hp - 1;
                 candidate = before with { Symbols = before.Symbols.SetItem(definition.HpSymbol, remaining),
                     Dungeons = before.Dungeons.SetItem(checked((int)run.Dungeon), remaining == 0 ? RaidDungeonState.Clear : RaidDungeonState.Open) };
@@ -143,6 +151,8 @@ internal sealed partial class AntonRaidBattle
                         progress with { Step = progress.Step + 1, Revision = checked(progress.Revision + 1) }) };
                 }
                 candidate = Evaluate(candidate, remaining == 0 ? checked((int)run.Dungeon) : null, definition.HpSymbol, null);
+                if (run.EnergyRoom is { } energy)
+                    candidate = candidate with { LukeEnergySignals = candidate.LukeEnergySignals.SetItem(energy.Symbol, 1) };
             }
             candidate = ReconcileLukeRoutes(candidate);
             // 第一次ClearPhase产生Reward候选即结束旧阶段业务；随后只补原Run已提交成员事实，
@@ -182,7 +192,7 @@ internal sealed partial class AntonRaidBattle
             if (!enter && !changedMap) return null;
             var before = current;
             var candidate = before;
-            if (pendingTransition is null && before.State == AntonRaidBattleState.Fighting && CurrentObjective(run))
+            if (pendingTransition is null && before.State == AntonRaidBattleState.Fighting && run.EnergyReturnEpoch == 0 && CurrentObjective(run))
             {
                 if (enter) candidate = Evaluate(candidate, null, null, null,
                     new(RaidStageFactKind.EnterDungeon, run.Phase, checked((int)run.Dungeon)));
@@ -196,6 +206,8 @@ internal sealed partial class AntonRaidBattle
             {
                 var bindings = run.Objects?.Observe(observedRoom);
                 run.FacilityRoom = CreateFacilityRoom(run, bindings);
+                run.EnergyRoom = lukeEnergyObjects && run.Phase == 1 && bindings is [var energy] &&
+                    energy.IsEnergy && energy == run.Objects?.Energy ? energy : null;
             }
             CommitBattleCandidate(before, candidate);
             return ReferenceEquals(before, current) ? null : new(before, current);
@@ -231,6 +243,14 @@ internal sealed partial class AntonRaidBattle
 
     void CommitBattleCandidate(AntonRaidBattleView before, AntonRaidBattleView candidate)
     {
+        if (candidate.LukeEnergyOverloadEpoch > before.LukeEnergyOverloadEpoch)
+            foreach (var run in dungeonRuns.Values.Where(run => run.Phase == candidate.Phase &&
+                run.Dungeon is 5061 or 5062 && !run.Cleared))
+                run.EnergyReturnEpoch = candidate.LukeEnergyOverloadEpoch;
+        if (lukeEnergyObjects)
+            foreach (var (dungeon, symbol) in new[] { (5063, 113), (5066, 114) })
+                if (candidate.DungeonGenerations.GetValueOrDefault(dungeon) != before.DungeonGenerations.GetValueOrDefault(dungeon))
+                    candidate = candidate with { LukeEnergySignals = candidate.LukeEnergySignals.SetItem(symbol, 0) };
         if (ReferenceEquals(before, candidate)) return;
         candidate = ReconcileLukeRoutes(candidate);
         if (Kind == RaidKind.Anton && antonRewards is not null && (candidate.State == AntonRaidBattleState.Reward || candidate.PhaseExpired))

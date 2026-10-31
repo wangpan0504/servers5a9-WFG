@@ -147,7 +147,7 @@ internal static class LukeRaidResourceTests
     static void CheckRuleCapabilities(RaidResources resources)
     {
         // P1 13 / P2 27 原顺序；G只说明单条允许，不是完整原资源策略可运行。
-        string[] expected = ["STGGTGGTGGTSG", "GGGSGGGGSSSSSGGGSGSSGSSGSSG"];
+        string[] expected = ["STGGTGGTGGGSG", "GGGSGGGGSSSSSGGGSGSSGSSGSSG"];
         var script = resources.Script;
         That(script.Phases.Select(phase => phase.Rules.Length).SequenceEqual(expected.Select(value => value.Length)),
             "规则能力矩阵与本版13/27条资源逐条对齐，资源变更不能静默复用旧结论");

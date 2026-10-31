@@ -17,6 +17,7 @@ internal static class SelfTestRunner
         CharacterRenameCardTests.RunCore();
         BattlePassCatalogTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
+        LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();

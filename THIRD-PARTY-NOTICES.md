@@ -8,6 +8,7 @@
 |---|---|---|
 | [Boost.Random](https://github.com/boostorg/random/blob/develop/include/boost/random/binomial_distribution.hpp) | [BoosterBatchRandom.cs](Server/DfoServer/Game/Inventory/Services/BoosterBatchRandom.cs) 中二项分布 BTRD 拒绝采样的改写来源 | Copyright Steven Watanabe 2010；[Boost Software License 1.0](LICENSES/BSL-1.0.txt) |
 | [ServerS4A21](https://gitgud.io/rewio/ServerS4A21) | 项目架构参考 | Copyright (c) 2026 rewio；[MIT](LICENSES/ServerS4A21-MIT.txt) |
+| [90CN ServerS5A3](https://gitgud.io/16ww/servers5a3) | 卢克团队状态归属、能源完成、阶段返回与原团恢复的结构对照；参考提交`64d2852a4e52c9e4c00bb4e8504e88d9af0f4d3e`，未引入其Go源码、协议地址或奖励数值 | 原仓库包含GNU GPL v3许可正文；本项目不分发该参考源码，不将其声明为本项目自有代码 |
 | [S5A9GmTool](THIRD-PARTY.md) | 内嵌 GM 网页的功能与接口设计参考；NPK 图像处理及物品属性映射代码移植 | Copyright (c) 2026 rewio；原始 MIT 全文与移植范围见 [THIRD-PARTY.md](THIRD-PARTY.md) |
 
 `BoosterBatchRandom.cs` 保留其原版权与完整 Boost 许可。架构参考不表示本项目拥有参考项目的著作权；实际复用部分应继续保留其原声明。

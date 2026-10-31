@@ -23,6 +23,11 @@ internal static class LukeRaidObjectTests
             var action = Tokens("[TRIGGER]", "[ON SET ACTION]", "[DO BEHAVIOR]", "[ME]", 0, "[/TRIGGER]",
                 "[BEHAVIOR]", "[RAID SET SYMBOL]", symbol, "[+]", 1, "[/BEHAVIOR]");
             That(RaidObjectEvidence.SetActionIncrement(action, Resolve) == symbol, "直接ON SET ACTION单次增量声明");
+            var assignment = Tokens("[TRIGGER]", "[ON SET ACTION]", "[DO BEHAVIOR]", "[ME]", 0, "[/TRIGGER]",
+                "[BEHAVIOR]", "[RAID SET SYMBOL]", symbol, "[=]", 1, "[/BEHAVIOR]");
+            That(RaidObjectEvidence.SetActionAssignment(assignment, Resolve) == symbol &&
+                RaidObjectEvidence.SetActionIncrement(assignment, Resolve) is null &&
+                RaidObjectEvidence.SetActionAssignment(action, Resolve) is null, "赋值与增量证据互斥，不混用能源及设施操作");
             var destroy = action.ToArray(); destroy[1] = Text("[ON DESTROY]");
             That(RaidObjectEvidence.SetActionIncrement(destroy, Resolve) is null, "旧非raid ON DESTROY不能借用");
             var subtract = action.ToArray(); subtract[9] = Text("[-]");

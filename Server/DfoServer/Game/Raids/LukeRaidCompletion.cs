@@ -24,7 +24,10 @@ internal sealed record RaidWeeklyCycle(DayOfWeek Day, TimeOnly Time, TimeSpan Of
 }
 internal sealed record LukeRaidCompletionPolicy(string Source, int WeeklyClearLimit, RaidWeeklyCycle Cycle,
     ImmutableArray<LukePhaseCompletionPolicy> Phases, LukeParticipationCutoff Cutoff);
-internal sealed record LukePhaseMember(ushort Character, string Account, int CommittedRuns, bool Present);
+internal sealed record LukePhaseMember(ushort Character, string Account, int CommittedRuns, bool Present)
+{
+    public ImmutableArray<RaidRewardOffer> Offers { get; init; }
+}
 internal sealed record LukePhaseCommit(ImmutableArray<RaidPhaseEligibility> Members);
 internal interface ILukeRaidLifecycleStore
 {
@@ -72,7 +75,8 @@ internal sealed partial class AntonRaidBattle
             if (Week <= 0 || Anchor.ToUnixTimeSeconds() < 0) throw new InvalidDataException("卢克终结周期或时间无效");
             Members = battle.originalLukeMembers.Values.OrderBy(actor => actor.Character).Select(actor =>
                 new LukePhaseMember(actor.Character, actor.Owner.Account, battle.lukeParticipation.GetValueOrDefault((phase, actor.Character)),
-                    actor.IsCurrent && battle.members.ContainsKey(actor))).ToImmutableArray();
+                    actor.IsCurrent && battle.members.ContainsKey(actor))
+                    { Offers = battle.originalLukePolicies.GetValueOrDefault(actor.Character, policy.Phases.Select(p => p.Rewards).ToImmutableArray())[phase].Offers }).ToImmutableArray();
         }
         internal static LukePhaseSettlement Capture(AntonRaidBattle battle, int phase)
         {
@@ -93,6 +97,7 @@ internal sealed partial class AntonRaidBattle
         !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
             pair.First.Kind == pair.Second.Kind && pair.First.Card == pair.Second.Card && SameRewardDisplay(pair.First.Display, pair.Second.Display) &&
             pair.First.Grants.SequenceEqual(pair.Second.Grants) && pair.First.LukeResult == pair.Second.LukeResult &&
+            pair.First.LukeAdditionalResults.SequenceEqual(pair.Second.LukeAdditionalResults) &&
             pair.First.PreyDisplay.SequenceEqual(pair.Second.PreyDisplay));
     // Anton正式600含嵌套不可变数组；持久JSON往返后须比内容，不能要求空表或数组引用相同。
     static bool SameRewardDisplay(ImmutableArray<RaidRewardDisplayRow> left, ImmutableArray<RaidRewardDisplayRow> right) =>
@@ -141,7 +146,8 @@ internal sealed partial class AntonRaidBattle
                 receipt.Members.Length != candidate.Members.Length || receipt.Members.Select(row => row.Character).Distinct().Count() != receipt.Members.Length ||
                 receipt.Members.Any(row => row.Instance != Instance || row.RaidType != Kind || row.Phase != candidate.Phase ||
                     row.Event != candidate.Event || row.Anchor != candidate.Anchor.ToUnixTimeSeconds() || row.Week != candidate.Week ||
-                    row.Source != candidate.Policy.Rewards.Source || !SameLukeOffers(row.Offers, candidate.Policy.Rewards.Offers) || !candidate.Members.Any(member => member.Character == row.Character)))
+                    row.Source != candidate.Policy.Rewards.Source || !candidate.Members.Any(member => member.Character == row.Character &&
+                        SameLukeOffers(row.Offers, member.Offers))))
                 throw new InvalidDataException("卢克阶段回执不属于原密封候选");
             if (lukePhaseCommits.TryGetValue(candidate.Phase, out var previous))
             {

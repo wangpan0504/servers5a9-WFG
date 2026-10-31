@@ -228,7 +228,12 @@ internal static class LukeRaidClockTests
         var service = new LukeRaidClocks(clock, store, (_, _) => { });
         try
         {
-            var battle = new AntonRaidBattle(AntonRaidBattleTests.Script(10, 20), kind: RaidKind.Luke,
+            var program = AntonRaidBattleTests.Script(10, 20);
+            program = program with { Symbols=program.Symbols.Add("[deadline observed]",901),
+                Phases=program.Phases.SetItem(0,program.Phases[0] with {Rules=program.Phases[0].Rules.Add(new(
+                    [new("[phase end]",900,null,null,null,null,[0])],
+                    [new("[set]",901,null,"[deadline observed]",null,null,[1]),new("[fail phase]",902,null,null,null,null,[])]))}) };
+            var battle = new AntonRaidBattle(program, kind: RaidKind.Luke,
                 clock: clock, phaseTimeout: new("fixture/local-phase-seconds", [10, 20]));
             foreach (var actor in actors) That(battle.JoinStart(actor), "阶段时钟登记原成员");
             using var timer = service.Reserve(battle)!;
@@ -246,6 +251,8 @@ internal static class LukeRaidClockTests
             clock.FireQueued();
             That(battle.View.PhaseExpired && battle.View.State == AntonRaidBattleState.Fighting &&
                 battle.View.Dungeons.Values.All(value => value == RaidDungeonState.Hide), "失败独立标记并封图，不猜原生state");
+            That(battle.View.Symbols["[deadline observed]"]==1 && battle.View.Deferred.IsEmpty,
+                "阶段deadline先执行原PhaseEnd规则，再由FAIL事实触发退场，不遗留无人消费的待决动作");
             That(store.Calls == 0 && battle.PendingLukeSettlement() is null && !battle.HasPendingTransition,
                 "超时不调用奖励SQL，也不等待成功receipt屏障");
             That(battle.LukePhaseSeconds(battle.Instance, 0, 1) is null, "已失败代不再发布597");

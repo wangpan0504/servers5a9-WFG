@@ -11,6 +11,7 @@ internal sealed record AntonRaidDisconnectFact(
     public bool Attempted { get; set; }
     internal LukeRaidRejoinReservation? Luke { get; init; }
     internal AntonRaidRejoinReservation? Anton { get; init; }
+    internal long? LukeDeadlineAnchor { get; init; }
 }
 
 internal sealed record AntonRaidRejoinDecision(
@@ -22,17 +23,28 @@ internal sealed record AntonRaidRejoinDecision(
 }
 
 // 进程内保留原 Battle 仍存活时的断线身份。没有证明保留时长，不发明计时器。
-internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled = false)
+internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled = false, TimeProvider? clock = null)
 {
     readonly object gate = new();
     readonly Dictionary<ushort, AntonRaidDisconnectFact> byCharacter = [];
     public bool Enabled { get; } = enabled;
     internal bool LukeCandidatesEnabled { get; } = enabled || lukeCandidatesEnabled;
+    readonly TimeProvider timer = clock ?? TimeProvider.System;
+
+    void PruneLukeLocked()
+    {
+        foreach (var row in byCharacter.Where(row => row.Value.LukeDeadlineAnchor is { } anchor &&
+            timer.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(300)).ToArray()) byCharacter.Remove(row.Key);
+    }
+    internal long LukeAnchor => timer.GetTimestamp();
+    internal bool HasLukeParty(uint key)
+    { lock (gate) { PruneLukeLocked(); return byCharacter.Values.Any(fact => fact.Key == key && fact.Luke is not null); } }
 
     internal LukeRaidDisconnectCandidate? DescribeLukeCandidate(ushort character)
     {
         lock (gate)
         {
+            PruneLukeLocked();
             if (!byCharacter.TryGetValue(character, out var fact) || fact.Luke is not { } reservation) return null;
             return new(fact.Instance, fact.Key, fact.Slot, fact.Squad, reservation.OriginalParty.Id,
                 reservation.PartySlot, reservation.Phase, !fact.OldOwner.IsCurrent);
@@ -41,7 +53,7 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
 
     public bool HasCandidate(ushort character)
     {
-        lock (gate) return Enabled && byCharacter.ContainsKey(character);
+        lock (gate) { PruneLukeLocked(); return byCharacter.TryGetValue(character, out var fact) && (fact.Luke is null ? Enabled : LukeCandidatesEnabled); }
     }
 
     public bool Record(AntonRaidDisconnectFact fact)
@@ -49,6 +61,8 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
         if (fact.Luke is null ? !Enabled : !LukeCandidatesEnabled) return false;
         lock (gate)
         {
+            PruneLukeLocked();
+            if (fact.Luke is not null && byCharacter.Count >= 512 && !byCharacter.ContainsKey(fact.Character)) return false;
             // 旧连接的迟到收尾不能覆盖后来代次的恢复能力；同代也不能用缺少上下文的记录降级完整候选。
             if (byCharacter.TryGetValue(fact.Character, out var current) && current.Account == fact.Account &&
                 (current.OldOwner.Generation > fact.OldOwner.Generation ||
@@ -74,7 +88,7 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
 
     public AntonRaidDisconnectFact? Peek(ushort character)
     {
-        lock (gate) return byCharacter.GetValueOrDefault(character);
+        lock (gate) { PruneLukeLocked(); return byCharacter.GetValueOrDefault(character); }
     }
 
     // 835 只在同频道、原 Battle 仍存活且旧租约已释放时下发。尾部 u8/u16 语义 unknown，不在这里填业务值。

@@ -43,10 +43,16 @@ internal sealed class QuestLifecyclePlan
     internal PreparedDungeonPassiveClear? SceneClear { get; private init; }
     internal SinglePlayerDungeonRun? SceneClearRun { get; private init; }
     internal bool IsPartySceneOnly => QuestId == 0 && AcceptanceId == Guid.Empty && Action == QuestLifecycleAction.Condition &&
-        SceneEvent is { } scene && SceneClearRun is { Entry.PartyRoute: not null } run &&
+        SceneEvent is { } scene && SceneClearRun is { } run && AllowsSceneOnly(run.Entry, scene) &&
         scene.Identity.CharacterId == Expected.Id && !Inventory.Changed && ActiveAfter.SequenceEqual(Expected.ActiveMainQuests) &&
         (SceneClear is { } clear ? QuestClearEligibility.TryValidateScene(run, clear, scene) :
             run.IsPassiveClearCondition(scene.Identity, scene.TemplateId, scene.SourceOrdinal));
+
+    static bool AllowsSceneOnly(DungeonEntryPlan entry, QuestSceneEvent scene) => entry.PartyRoute is not null ||
+        entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } && entry.LukeEnergyObject is { } binding &&
+        entry.Maze.MapSpecification?.SingleOrDefault(map => map.Id == scene.MapId && binding.Room.Kind == map.Kind &&
+            binding.Room.Position == map.Position && binding.Room.Path == map.Path) is { } map &&
+        binding.MatchesEnergy(entry.DungeonId, entry.Maze, map, scene.TemplateId, scene.SourceOrdinal);
     public ImmutableArray<int> CompletedAfter { get; private init; }
     public ImmutableArray<int> AccountCompletedAfter { get; private init; }
 
@@ -105,7 +111,7 @@ internal sealed class QuestLifecyclePlan
         if (changed is null && entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] &&
             condition.TargetId == sceneEvent.TemplateId)
             changed = after.SingleOrDefault(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row, entry));
-        if (changed is null && entry.PartyRoute is not null && run is not null &&
+        if (changed is null && AllowsSceneOnly(entry, sceneEvent) && run is not null &&
             (sceneClear is not null || run.IsPassiveClearCondition(sceneEvent.Identity,sceneEvent.TemplateId,sceneEvent.SourceOrdinal)))
             return new(expected,QuestLifecycleAction.Condition,0,Guid.Empty,after,inventory,sceneEvent)
                 { SceneClear = sceneClear, SceneClearRun = run };

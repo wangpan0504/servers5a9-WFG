@@ -6,13 +6,16 @@ namespace DfoServer.Game.Raids;
 // 显式本服兼容策略：资源原值按秒解释，不声称还原原服单位、休整或死亡机制。
 internal sealed record LukeRaidPhaseTimeoutPolicy(string Source, ImmutableArray<int> Seconds)
 {
+    internal static LukeRaidPhaseTimeoutPolicy Shared95 { get; } = new("95jp/luke/phase-limits-v1", [2700, 3600])
+        { ResourceSeconds = [2100, 2400] };
+    internal ImmutableArray<int> ResourceSeconds { get; init; }
     internal bool Valid(int phases) => !string.IsNullOrWhiteSpace(Source) && !Seconds.IsDefaultOrEmpty &&
         Seconds.Length == phases && Seconds.All(value => value is > 0 and <= 86400);
 
     internal bool Matches(RaidScript script) => Valid(script.Phases.Length) &&
         script.Headers.Count(header => header.Tag == "[phase time over]") == 1 &&
         script.Headers.Single(header => header.Tag == "[phase time over]").Values
-            .Select(value => value.Number).SequenceEqual(Seconds);
+            .Select(value => value.Number).SequenceEqual(ResourceSeconds.IsDefault ? Seconds : ResourceSeconds);
 }
 
 internal sealed partial class AntonRaidBattle
@@ -40,6 +43,19 @@ internal sealed partial class AntonRaidBattle
     }
 
     bool LukePhaseDueLocked() => LukePhaseRemainingLocked() is { } remaining && remaining <= TimeSpan.Zero;
+
+    // 资源FAIL与本服deadline共用可发布的终结事实，原退场协调者负责逐人SQL与安全回城。
+    static AntonRaidBattleView FailLukePhase(AntonRaidBattleView state) => state with
+    {
+        PhaseExpired = true,
+        Dungeons = state.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
+        Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+        TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
+        TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty,
+        Deferred = ImmutableDictionary<int, RaidClause>.Empty,
+        DeferredAnchors = ImmutableDictionary<int, long>.Empty,
+        DeferredGenerations = ImmutableDictionary<int, long>.Empty
+    };
 
     internal void FaultExpiredLukePhase(Guid instance)
     {

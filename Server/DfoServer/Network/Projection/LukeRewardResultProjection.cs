@@ -16,7 +16,8 @@ internal sealed class LukeRewardResultProjection
         return context.Owner.Execute(() =>
         {
             if (result.Owner != receipt.Prepared.Character || result.Kind != receipt.Prepared.Kind || result.Card != receipt.Prepared.Card ||
-                result.Item != receipt.Offer.LukeResult || context.Session.LukeResultView(receipt) is not { } captured) return false;
+                result.Item != receipt.Offer.LukeResult || !result.AdditionalItems.SequenceEqual(receipt.Offer.LukeAdditionalResults) ||
+                context.Session.LukeResultView(receipt) is not { } captured) return false;
             var expected = RaidCombatDisplayIdentity.Capture(captured.Actor, captured.View);
             if (identity != expected) { identity = expected; written.Clear(); }
             bool Current() => identity == expected && context.Session.LukeResultView(receipt) is { } current &&

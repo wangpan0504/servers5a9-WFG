@@ -46,7 +46,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                             previous.Instance != candidate.Instance || previous.RaidType != candidate.RaidType || previous.Phase != candidate.Phase ||
                             previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Character != member.Character || previous.Week != candidate.Week || previous.Source != candidate.Policy.Rewards.Source ||
-                            !AntonRaidBattle.SameLukeOffers(previous.Offers, candidate.Policy.Rewards.Offers))
+                            !AntonRaidBattle.SameLukeOffers(previous.Offers, member.Offers))
                             throw new InvalidDataException("卢克阶段终结事件或来源发生变化");
                         result.Add(previous); continue;
                     }
@@ -72,7 +72,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 { eligible = false; reason = "phase-eligibility-limit"; }
             }
             var receipt = new RaidPhaseEligibility(candidate.Instance, candidate.RaidType, candidate.Phase, candidate.Event,
-                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, candidate.Policy.Rewards.Source, candidate.Week, candidate.Policy.Rewards.Offers);
+                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, candidate.Policy.Rewards.Source, candidate.Week, member.Offers);
             result.Add(receipt);
             // 缺行不能补造；删角后Import同id仍无原instance能力。已放弃行只记拒绝结果，不重新激活。
             if (state < 0) continue;

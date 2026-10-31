@@ -13,7 +13,18 @@ internal sealed record LukeObjectMissingAction(LukeObjectRoom Room, int ObjectOr
 }
 internal sealed record LukeObjectRouteWarning(LukeObjectDependencyRole Role, LukeObjectMissingAction Reference);
 internal sealed record LukeObjectRoomFailure(LukeObjectRoom Room, string Stage, string ErrorKind);
-internal sealed record LukeObjectBinding(LukeObjectRoom Room, int Ordinal, int ObjectId, int Symbol, int ActionOrdinal, string ActionPath);
+internal sealed record LukeObjectBinding(LukeObjectRoom Room, int Ordinal, int ObjectId, int Symbol, int ActionOrdinal, string ActionPath)
+{
+    public bool IsEnergy => Ordinal >= 0 && ActionOrdinal == 0 && (Room.Dungeon, ObjectId, Symbol, ActionPath) is
+        (5063, 64062, 113, "passiveobject/actionobject/map/luke_raid/phase2/link_obj/action/solium_light_destroy.act") or
+        (5066, 64060, 114, "passiveobject/actionobject/map/luke_raid/phase2/link_obj/action/solium_dark_destroy.act");
+
+    public bool MatchesEnergy(uint dungeon, DungeonMaze maze, DungeonMap map, int template, int ordinal) => IsEnergy &&
+        Room.Dungeon == dungeon && Room.MazeOrdinal == maze.SourceOrdinal && ObjectId == template && Ordinal == ordinal &&
+        Room.Kind == map.Kind && Room.Position == map.Position && Room.Map == map.Id && Room.Path == map.Path &&
+        maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && condition.TargetId == template &&
+        maze.Bosses.Contains(map.Position) && maze.MapSpecification?.Contains(map) == true;
+}
 
 // 仅登记已核验的静态潜在出现；不是命中、销毁或symbol写入授权。空数组表示已审无对象，null表示未覆盖。
 internal sealed class LukeRaidObjectCatalog(ImmutableDictionary<LukeObjectRoom, ImmutableArray<LukeObjectBinding>> rooms,
@@ -50,11 +61,23 @@ internal sealed class LukeRaidObjectCatalog(ImmutableDictionary<LukeObjectRoom, 
     public int RoomCount => rooms.Count;
     public int BindingCount => rooms.Values.Sum(rows => rows.Length);
 
+    public LukeObjectBinding? Energy(int dungeon, DungeonMaze maze)
+    {
+        var rows = rooms.Where(row => row.Key.Dungeon == dungeon && row.Key.MazeOrdinal == maze.SourceOrdinal)
+            .SelectMany(row => row.Value).Where(row => row.IsEnergy).ToArray();
+        return rows is [var binding] && maze.MapSpecification?.SingleOrDefault(map => map.Id == binding.Room.Map &&
+            map.Position == binding.Room.Position && map.Kind == binding.Room.Kind && map.Path == binding.Room.Path) is { } map &&
+            binding.MatchesEnergy((uint)dungeon, maze, map, binding.ObjectId, binding.Ordinal) ? binding : null;
+    }
+
     static readonly (int Dungeon, int Object, int Symbol, int Action, string SymbolName, string File)[] Supported =
     [
         (5054, 64249, 117, 0, "[birth sanctum object]", "luke_mainmchine_destroy_raid.act"),
+        (5054, 64250, 117, 0, "[birth sanctum object]", "luke_mainmchine_destroy_mistral_raid.act"),
         (5055, 64251, 118, 0, "[extinction sanctum object]", "mainmchine_destroy_raid.act"),
-        (5056, 64252, 119, 1, "[spread sanctum object]", "censor_machine_broken_front_raid.act")
+        (5056, 64252, 119, 1, "[spread sanctum object]", "censor_machine_broken_front_raid.act"),
+        (5063, 64062, 113, 0, "", "solium_light_destroy.act"),
+        (5066, 64060, 114, 0, "", "solium_dark_destroy.act")
     ];
 
     public static LukeRaidObjectCatalog Load(PvfArchive pvf, RaidDungeonCatalog catalog, DungeonRoomCatalog source,
@@ -65,18 +88,23 @@ internal sealed class LukeRaidObjectCatalog(ImmutableDictionary<LukeObjectRoom, 
         var failures = ImmutableArray.CreateBuilder<LukeObjectRoomFailure>();
         var missingActions = ImmutableArray.CreateBuilder<LukeObjectMissingAction>();
         var seen = new HashSet<LukeObjectRoom>();
-        if (catalog.Type != 1 || choices.Count > 32 || choices.Distinct().Count() != choices.Count)
+        if (catalog.Type != 1 || choices.Count > 64 || choices.Distinct().Count() != choices.Count)
             return new(result.ToImmutable(), ["luke-object-scope-invalid"]);
         foreach (var choice in choices.Where(row => Supported.Any(rule => rule.Dungeon == row.Dungeon)))
         {
-            var rule = Supported.Single(row => row.Dungeon == choice.Dungeon);
-            if (!catalog.Script.Symbols.TryGetValue(rule.SymbolName, out int symbol) || symbol != rule.Symbol)
+            var rules = Supported.Where(row => row.Dungeon == choice.Dungeon).ToArray();
+            var owner = rules[0];
+            bool energy = owner.SymbolName.Length == 0;
+            if (!energy && (!catalog.Script.Symbols.TryGetValue(owner.SymbolName, out int symbol) || symbol != owner.Symbol))
             { issues.Add($"luke-object-symbol-unavailable:{choice.Dungeon}"); continue; }
             var maze = catalog.Find(choice.Dungeon)?.Mazes.SingleOrDefault(row => row.SourceOrdinal == choice.MazeOrdinal);
             if (maze is null || maze.QuestConnectionTokens.Count != 0 || maze.MapSpecification is null ||
+                energy && (maze.ClearConditions is not [{ Type: "destroy object", Count: 1 } clear] || clear.TargetId != owner.Object) ||
                 maze.MapSpecification.Count + maze.MapAlternatives.Count > 64)
             { issues.Add($"luke-object-maze-unavailable:{choice.Dungeon}:{choice.MazeOrdinal}"); continue; }
-            foreach (var map in maze.MapSpecification.Concat(maze.MapAlternatives))
+            // 能源清图能力只属于原迷宫Boss格；其它房间仍由正式Run独立核验，不授予对象写入资格。
+            foreach (var map in maze.MapSpecification.Concat(maze.MapAlternatives)
+                .Where(map => !energy || map.Kind == "boss" && maze.Bosses.Contains(map.Position)))
             {
                 var key = new LukeObjectRoom(choice.Dungeon, choice.MazeOrdinal, map.Kind, map.Position, map.Id, map.Path);
                 if (!seen.Add(key)) { result.Remove(key); issues.Add($"luke-object-duplicate-room:{map.Id}"); continue; }
@@ -94,10 +122,12 @@ internal sealed class LukeRaidObjectCatalog(ImmutableDictionary<LukeObjectRoom, 
                     for (int ordinal = 0; ordinal < room.PassiveObjects.Count; ordinal++)
                     {
                         var obj = room.PassiveObjects[ordinal];
+                        var rule = rules.SingleOrDefault(row => row.Object == obj.ObjectId);
                         bool companion = choice.Dungeon == 5056 && obj.ObjectId == 64287;
-                        if (obj.ObjectId != rule.Object && !companion) continue;
+                        if (rule.Object == 0 && !companion) continue;
                         stage = "object-identity-path";
-                        if (obj.Path is null || !obj.Path.StartsWith("passiveobject/actionobject/map/luke_raid/phase1/", StringComparison.Ordinal))
+                        if (obj.Path is null || !obj.Path.StartsWith("passiveobject/actionobject/map/luke_raid/" +
+                            (energy ? "phase2/link_obj/" : "phase1/"), StringComparison.Ordinal))
                             throw new InvalidDataException("登记对象路径不匹配");
                         stage = "etc-action-declaration";
                         var actions = RaidObjectEvidence.EtcActions(pvf.ReadTokens(obj.Path), pvf.ResolveString);
@@ -118,7 +148,8 @@ internal sealed class LukeRaidObjectCatalog(ImmutableDictionary<LukeObjectRoom, 
                         string path = PvfArchive.NormalizePath(obj.Path[..(obj.Path.LastIndexOf('/') + 1)] + actions[rule.Action]);
                         if (!path.StartsWith(obj.Path[..(obj.Path.LastIndexOf('/') + 1)], StringComparison.Ordinal) ||
                             !path.EndsWith("/action/" + rule.File, StringComparison.Ordinal) || !pvf.Contains(path) ||
-                            RaidObjectEvidence.SetActionIncrement(pvf.ReadTokens(path), pvf.ResolveString) != rule.Symbol)
+                            (energy ? RaidObjectEvidence.SetActionAssignment(pvf.ReadTokens(path), pvf.ResolveString) :
+                                RaidObjectEvidence.SetActionIncrement(pvf.ReadTokens(path), pvf.ResolveString)) != rule.Symbol)
                             throw new InvalidDataException("直接动作触发或符号声明不匹配");
                         rows.Add(new(key, ordinal, obj.ObjectId, rule.Symbol, rule.Action, path));
                     }

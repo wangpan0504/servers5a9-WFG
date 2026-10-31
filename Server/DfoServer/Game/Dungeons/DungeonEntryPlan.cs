@@ -58,6 +58,8 @@ internal sealed record DungeonEntryPlan(
     public int? BeastDay { get; init; }
     public bool DisableClearReward { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
+    // 仅由团本准入根据当前maze和精确OBJ/ACT证据冻结，不以模板号单独授予清图资格。
+    public DfoServer.GameWorld.Raids.LukeObjectBinding? LukeEnergyObject { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }

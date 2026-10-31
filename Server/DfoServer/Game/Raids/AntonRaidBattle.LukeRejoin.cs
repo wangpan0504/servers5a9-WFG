@@ -4,9 +4,21 @@ namespace DfoServer.Game.Raids;
 
 internal sealed partial class AntonRaidBattle
 {
-    bool LukeRejoinOpenLocked() => Kind == RaidKind.Luke && !TerminalRequested(current) &&
-        !LukePhaseDueLocked() && pendingTransition is null && dungeonRuns.Count == 0 &&
-        lukeRevivalReservations.Count == 0 && !lukeSettlements.ContainsKey(current.Phase);
+    readonly Dictionary<ushort, long> lukeDisconnectAnchors = [];
+    internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => Kind == RaidKind.Luke ? script.WaitingRoom : null;
+    bool LukeRejoinOpenLocked() => Kind == RaidKind.Luke && current.State != AntonRaidBattleState.Completed &&
+        !current.ClockFaulted && !current.PhaseExpired && !LukePhaseDueLocked();
+
+    internal void ReserveLukeDisconnect(RaidActor actor)
+    { lock (gate) { lukeDisconnectAnchors[actor.Character] = lukeClock.GetTimestamp(); ScheduleLukeClockLocked(); } }
+
+    TimeSpan? LukeRejoinRemainingLocked()
+    {
+        foreach (var row in lukeDisconnectAnchors.Where(row => lukeClock.GetElapsedTime(row.Value) >= TimeSpan.FromSeconds(300)).ToArray())
+            lukeDisconnectAnchors.Remove(row.Key);
+        return lukeDisconnectAnchors.Count == 0 ? null : lukeDisconnectAnchors.Values
+            .Select(anchor => TimeSpan.FromSeconds(300) - lukeClock.GetElapsedTime(anchor)).Min();
+    }
 
     internal bool IsLukeWaitingRoom(RaidActor actor)
     {
@@ -17,7 +29,7 @@ internal sealed partial class AntonRaidBattle
 
     internal bool CanCaptureLukeRejoin(RaidActor actor)
     {
-        lock (gate) return LukeRejoinOpenLocked() && IsLukeWaitingRoom(actor) && members.ContainsKey(actor) &&
+        lock (gate) return LukeRejoinOpenLocked() && members.ContainsKey(actor) &&
             originalLukeMembers.GetValueOrDefault(actor.Character) == actor;
     }
 
@@ -27,7 +39,8 @@ internal sealed partial class AntonRaidBattle
     }
 
     bool CanRestoreLukeRejoinLocked(LukeRaidRejoinReservation reservation) =>
-        ReferenceEquals(reservation.Battle, this) && LukeRejoinOpenLocked() && current.Phase == reservation.Phase &&
+        ReferenceEquals(reservation.Battle, this) && LukeRejoinOpenLocked() && pendingTransition is null &&
+        !dungeonRuns.Values.Any(run => !run.Installed) && lukeRevivalReservations.Count == 0 && current.Phase >= reservation.Phase &&
         originalLukeMembers.GetValueOrDefault(reservation.Original.Character) == reservation.Original &&
         !members.Keys.Any(actor => actor.Character == reservation.Original.Character);
 
@@ -40,14 +53,16 @@ internal sealed partial class AntonRaidBattle
                 replacement.Character != reservation.Original.Character ||
                 replacement.Owner.Account != reservation.Original.Owner.Account ||
                 reservation.Original.Owner.IsCurrent) return false;
-            ImmutableArray<RaidPhaseRewardPolicy> policy = lukeCompletion is { } completion
-                ? completion.Phases.Select(p => p.Rewards).ToImmutableArray() : [];
+            ImmutableArray<RaidPhaseRewardPolicy> policy = originalLukePolicies.GetValueOrDefault(replacement.Character,
+                lukeCompletion is { } completion ? completion.Phases.Select(p => p.Rewards).ToImmutableArray() : []);
             members.EnsureCapacity(members.Count + 1);
             if (!install()) return false;
             members.Add(replacement, policy);
+            lukeDisconnectAnchors.Remove(replacement.Character);
             originalLukeMembers[replacement.Character] = replacement;
             // 已提交参与、资格、已领kind集合不变；新视图使旧快照失效，但不重新锚定阶段时钟。
             current = current with { Revision = current.Revision + 1 };
+            ScheduleLukeClockLocked();
             return true;
         }
     }

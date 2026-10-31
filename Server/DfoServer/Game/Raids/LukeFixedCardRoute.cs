@@ -41,6 +41,11 @@ internal sealed class LukeFixedCardRoute
         row.HpSymbol == catalog.Script.Phases[0].Dungeons.Single(d => d.Id == id).HpSymbol);
     public int? Maze(int dungeon, int step) => ordinals.TryGetValue(dungeon, out var rows) && step >= 0 && step < rows.Length ? rows[step] : null;
 
+    // DGN尾部可保留不属于当前maze的条件坐标。不存在的端点不会创建房间，原Run也不允许传送到它。
+    // 两端均存在的实际传送仍需单独核验，不能因普通Greed连通就自动授予该捷径。
+    static bool HasActiveWarps(DungeonMaze maze) => maze.MapSpecification is { } maps && maze.WarpMaps.Any(warp =>
+        maps.Any(map => map.Position == warp.Source) && maps.Any(map => map.Position == warp.Destination));
+
     // 指纹只覆盖本策略解释的资源声明，不读取或散列整份PVF。
     public static string Fingerprint(RaidDungeonCatalog catalog)
     {
@@ -94,7 +99,7 @@ internal sealed class LukeFixedCardRoute
             if (maze.Starts.Count != 1 || maze.Bosses.Count != 1) problems.Add("start-or-boss-count");
             if (maze.MapSpecification is null || maze.MapSpecification.Count == 0) problems.Add("map-specification-missing");
             if (maze.LayeredMaps.Count != 0 || maze.StoryStages.Count != 0 || maze.DummyStages.Count != 0 ||
-                maze.ConditionalMaps.Count != 0 || maze.WarpMaps.Count != 0 || maze.BossEntrance is not null) problems.Add("unsupported-dynamic-map-source");
+                maze.ConditionalMaps.Count != 0 || HasActiveWarps(maze) || maze.BossEntrance is not null) problems.Add("unsupported-dynamic-map-source");
             try
             {
                 var topology = catalog.ResolveMaze(maze,_=>0).StaticTopology;
@@ -159,7 +164,7 @@ internal sealed class LukeFixedCardRoute
                 if (maze.QuestConnectionTokens.Count != 0 || maze.ResourceError is not null || maze.MapSpecification is null ||
                     maze.MapSpecification.Count == 0 || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
                     maze.LayeredMaps.Count != 0 || maze.StoryStages.Count != 0 || maze.DummyStages.Count != 0 ||
-                    maze.ConditionalMaps.Count != 0 || maze.WarpMaps.Count != 0 || maze.BossEntrance is not null) return null;
+                    maze.ConditionalMaps.Count != 0 || HasActiveWarps(maze) || maze.BossEntrance is not null) return null;
                 try
                 {
                     var topology = catalog.ResolveMaze(maze, _ => 0).StaticTopology;

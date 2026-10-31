@@ -5,10 +5,12 @@ internal sealed record LukeRaidClockPolicy(string Source);
 
 // Runtime拥有，Anton复用同一有界所有者与退出回收；每实例至多一个停用/活跃timer和一个同步到期操作，不创建无界后台Task。
 internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore store, Action<string, Exception> report,
-    int capacity = 64, Action<AntonRaidBattleView>? rewardAbandoned = null, Func<AntonRaidBattle, bool>? rewardDue = null) : IAsyncDisposable
+    int capacity = 64, Action<AntonRaidBattleView>? rewardAbandoned = null,
+    Func<AntonRaidBattle, Task>? settleLukeRewards = null, Func<AntonRaidBattle, bool>? rewardDue = null) : IAsyncDisposable
 {
     readonly object gate = new();
     readonly Dictionary<Guid, Lease> leases = [];
+    readonly Func<AntonRaidBattle, Task>? settleRewards = settleLukeRewards;
     bool stopped;
 
     internal Lease? Reserve(AntonRaidBattle battle)
@@ -52,6 +54,7 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
         int callbacks;
         int stopped;
         int failures;
+        readonly TaskCompletionSource drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal AntonRaidBattle Battle { get; }
         internal bool IsStopped => Volatile.Read(ref stopped) != 0;
 
@@ -83,23 +86,33 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             catch (Exception diagnostic) { error.Data["ClockDiagnosticFailure"] = diagnostic.GetType().Name; }
         }
 
-        void Tick()
+        async void Tick()
         {
             Interlocked.Increment(ref callbacks);
-            try { RunTick(); }
+            try { await RunTickAsync(); }
+            catch (Exception error) { Report("callback", error); Dispose(); }
             finally
             {
-                if (Interlocked.Decrement(ref callbacks) == 0 && IsStopped) owner.Remove(this);
+                if (Interlocked.Decrement(ref callbacks) == 0 && IsStopped)
+                { owner.Remove(this); drained.TrySetResult(); }
             }
         }
 
-        void RunTick()
+        async Task RunTickAsync()
         {
             if (IsStopped || Interlocked.CompareExchange(ref running, 1, 0) != 0) return;
             try
             {
                 if (IsStopped) return;
                 bool changed;
+                if (Battle.Kind == RaidKind.Luke && owner.settleRewards is { } settle && Battle.DueLukeRewards().Length != 0)
+                {
+                    var beforeReward = Battle.View;
+                    try { await settle(Battle); }
+                    catch (Exception error)
+                    { failures = Math.Min(failures + 1, 30); Report("luke-auto-reward", error); return; }
+                    if (!ReferenceEquals(beforeReward, Battle.View)) Battle.Publish(Battle.View, error => Report("recipient", error));
+                }
                 bool waitingForReward = Battle.Kind == RaidKind.Anton && Battle.HasAntonRewards &&
                     Battle.View.State == AntonRaidBattleState.Reward;
                 // 发奖不持Battle锁；在线成员复用原资格和资产事务，失败保留Reward等待重试。
@@ -112,7 +125,7 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                 { failures = Math.Min(6, failures + 1); Report("anton-auto-reward", error); return; }
                 catch (Exception error)
                 { Battle.FaultLukeClock(this); Report("anton-auto-reward-fault", error); Dispose(); return; }
-                try { changed = Battle.ExpireDueLukeClock(this); }
+                try { changed = Battle.PrepareLukeNextPhase() | Battle.ExpireDueLukeClock(this); }
                 catch (Exception error)
                 {
                     // 解释器错误不能冒充正常进行中的攻坚，也不猜测原生失败/退款通知。
@@ -166,13 +179,14 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             Battle.StopLukeClock(this);
             timer.Dispose();
             // 仍在回调时保留Runtime所有权，Host必须能等待它结束。
-            if (Volatile.Read(ref callbacks) == 0) owner.Remove(this);
+            if (Volatile.Read(ref callbacks) == 0) { owner.Remove(this); drained.TrySetResult(); }
         }
 
         public async ValueTask DisposeAsync()
         {
             Dispose();
             await timer.DisposeAsync();
+            await drained.Task;
         }
     }
 

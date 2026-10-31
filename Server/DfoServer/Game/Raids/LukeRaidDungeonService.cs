@@ -11,6 +11,8 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
     RaidDungeonCatalog catalog, LukeRaidRunPolicy policy, LukeRaidObjectCatalog? objects = null)
 {
     public string? UnavailableReason => policy.Rejection(catalog) ??
+        policy.EnergyRejection(catalog, objects) ??
+        (policy.CardRoute is { } cards && !cards.MatchesObjects(objects) ? "luke-card-route-object-catalog-changed" : null) ??
         (policy.FixedRoute is { } route && !route.MatchesObjects(objects) ? "luke-fixed-route-object-catalog-changed" : null);
 
     public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party)
@@ -21,7 +23,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         var anchor = raid.Members.SingleOrDefault(member => ReferenceEquals(member.Actor.Session, leader));
         if (anchor is null || anchor.Squad is not (1 or 2)) return [];
         var members = raid.Members.Where(member => member.Squad == anchor.Squad).OrderBy(member => member.Slot).ToArray();
-        if (members.Length is < 1 or > 4 || members[0] != anchor || members.Length != party.Members.Length ||
+        if (members.Length is < 1 or > 4 || members.Length != party.Members.Length ||
             members.Any(member => !party.Members.Any(other => ReferenceEquals(member.Actor.Session, other.Actor.Session) &&
                 ReferenceEquals(member.Actor.Owner, other.Actor.Owner) && member.Actor.Character == other.Actor.Character.Id))) return [];
         return AccountOwners.Lease.ExecuteGroup(members.Select(member => (member.Actor.Owner, member.Actor.Character)).ToArray(), () =>
@@ -30,13 +32,15 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
             var battle = leader.CurrentRaidBattle(anchor.Actor);
             if (battle is not { Kind: RaidKind.Luke } || battle.HasPendingTransition || battle.Instance != start.InstanceId) return [];
             var view = battle.View;
-            var route = battle.CaptureLukeRoute(view.Phase, dungeon, policy.FixedRoute);
-            int? selectedMaze = battle.UsesFixedRoute(view.Phase) ? route?.MazeOrdinal : policy.Maze(view.Phase, dungeon);
-            if (battle.UsesFixedRoute(view.Phase) != (view.Phase == 0 && policy.FixedRoute is not null) ||
+            var route = battle.CaptureLukeRoute(view.Phase, dungeon, policy.FixedRoute, policy.CardRoute);
+            int? selectedMaze = battle.UsesLukeRoute(view.Phase) ? route?.MazeOrdinal : policy.Maze(view.Phase, dungeon);
+            if (battle.UsesLukeRoute(view.Phase) != (view.Phase == 0 && (policy.FixedRoute is not null || policy.CardRoute is not null)) ||
                 !battle.LukePhaseOpen(view.Phase) || selectedMaze is not { } maze ||
-                !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return [];
+                !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open ||
+                members.Any(member => !battle.AllowsLukeMemberRoute(member.Actor, view.Phase, dungeon))) return [];
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, view.Phase,
-                member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id), RaidKind.Luke)
+                member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id) &&
+                    battle.AllowsLukeMemberRoute(member.Actor, view.Phase, id), RaidKind.Luke)
                 { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze) { Route = route }).ToArray();
             if (selections.Any(selection => !ReferenceEquals(selection.Admission.Actor.Session.CurrentRaidBattle(selection.Admission.Actor), battle) ||
                 !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
@@ -55,7 +59,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         bool Allows(AntonRaidBattle battle, int phase, int id)
         {
             var current = battle.View;
-            return battle.LukePhaseOpen(phase) && current.Phase == phase && (battle.UsesFixedRoute(phase) ? battle.CaptureLukeRoute(phase, id, policy.FixedRoute) is not null : policy.Maze(phase, id) is not null) &&
+            return battle.LukePhaseOpen(phase) && current.Phase == phase && (battle.UsesLukeRoute(phase) ? battle.CaptureLukeRoute(phase, id, policy.FixedRoute, policy.CardRoute) is not null : policy.Maze(phase, id) is not null) &&
                 current.Dungeons.TryGetValue(id, out var state) && state == RaidDungeonState.Open;
         }
     }

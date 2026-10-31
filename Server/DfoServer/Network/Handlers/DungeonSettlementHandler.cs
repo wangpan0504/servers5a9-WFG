@@ -382,7 +382,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (context.Session.FormalDungeonResultFocus() is not { } current)
         {
             if (state == 1 && option == (byte)DungeonResultOption.ReturnTown && context.Session.PartyDungeon is { } boardSquad &&
-                context.Session.AntonDungeonBoardReturn())
+                context.Session.CanReturnFromRaidDungeonBoard())
             {
                 // 图内安徒恩战况表「回到城镇」：沿已证42/结算回城的分队退场提交，提交后回ACK72原state/option。
                 using var boardPeers = await PartyDungeonProjection.AcquirePeersAsync(context, boardSquad.Members);
@@ -390,7 +390,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     () => context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
                         "anton_board_return_town"));
             }
-            if (context.Session.AntonDungeonResultFocus() is not { } anton || context.Session.PartyDungeon is not { } squad)
+            if (context.Session.RaidDungeonResultFocus() is not { } anton || context.Session.PartyDungeon is not { } squad)
                 return CommandResult.Unhandled;
             if (state == 2)
             {
@@ -401,7 +401,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, squad.Members);
             if (option <= 1)
             {
-                var notices = squad.AntonResultCommand(context.Session, option);
+                var notices = squad.RaidResultCommand(context.Session, option);
                 string eventName = notices.Length == 0 ? "unimplemented" :
                     notices[0].Kind == PartyDungeonNoticeKind.ResultSelection ? "dungeon_entry" : "formal_dungeon_return";
                 log.Write(eventName, new { Connection = context.Id, Reason = "anton-result-command", Dungeon = anton.Entry.DungeonId, option,

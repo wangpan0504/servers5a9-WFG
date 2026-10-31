@@ -530,7 +530,15 @@ internal sealed partial class SinglePlayerDungeonRun
         // 遗忘之地有独立传送房；只接受原静态普通连接，不补边以伪造全图可达。
         bool lostLandLinksMatch = entry.LostLand is not null && entry.Maze.StaticTopology.Links is { } links &&
             links.Count == approvedRoute.Connections.Count && links.All(link => edges.Contains((link.First, link.Second)));
-        if (entry.LostLand is not null ? !lostLandLinksMatch || keys.Count == 0 : reachable.Count != points.Count || keys.Count == 0 && !entry.IsTrainingRoom)
+        // 能源图可仅有客户端原生装置；精确登记的物件本身是演员来源，不能伪造一只普通怪绕过空图保护。
+        bool energyActor = entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+            entry.LukeEnergyObject is { } energy && approvedRoute.PassiveClearTarget == energy.ObjectId &&
+            approvedRoute.Rooms.Any(room => energy.MatchesEnergy(entry.DungeonId, entry.Maze, room.Room.Map,
+                energy.ObjectId, energy.Ordinal) && energy.Ordinal < room.Room.PassiveObjects.Count &&
+                room.Room.PassiveObjects[energy.Ordinal].ObjectId == energy.ObjectId &&
+                room.Room.PassiveObjects.Count(source => source.ObjectId == energy.ObjectId) == 1);
+        if (entry.LostLand is not null ? !lostLandLinksMatch || keys.Count == 0 : reachable.Count != points.Count ||
+            keys.Count == 0 && !entry.IsTrainingRoom && !energyActor)
         {
             reason = "invalid: 路线不可达或无可生成演员";
             return false;

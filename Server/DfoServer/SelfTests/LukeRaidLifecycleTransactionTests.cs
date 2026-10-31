@@ -21,7 +21,7 @@ namespace DfoServer;
 // 与真实Runtime网络组互补：原Start/PartyDungeon/死亡SQL产生候选，直接领域调用只为有界故障重试而不关闭连接。
 internal static class LukeRaidLifecycleTransactionTests
 {
-    internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy,string? restartPvf=null)
+    internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy,string? restartPvf=null,bool energyObjects=false)
     {
         int before=Count;string root=Path.Combine(Path.GetTempPath(),"S5A9-luke-lifecycle-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);string path=Path.Combine(root,"game.db");bool done=false;
@@ -39,7 +39,7 @@ internal static class LukeRaidLifecycleTransactionTests
                     Offers=phase.Rewards.Offers.Add(phase.Rewards.Offers.First() with {Card=2})}}).ToImmutableArray()}};
             var clock=new Clock(DateTimeOffset.Parse("2026-10-25T05:59:59+08:00"));
             var start=new LukeRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces,policy,clock,rewardItems:items.Items);
-            var selection=new LukeRaidDungeonService(raids,parties,definition.Resources!.EntryCatalog!,policy.Run!);
+            var selection=new LukeRaidDungeonService(raids,parties,definition.Resources!.EntryCatalog!,policy.Run!,definition.Resources.LukeObjects);
             var dungeonService=new PartyDungeonService(parties,repository);
             var dungeons=SelfTestCatalogs.Dungeons(resources.Archive);var rooms=SelfTestCatalogs.Rooms(resources.Archive);
             var kills=SelfTestCatalogs.KillExperience(resources.Archive);
@@ -67,6 +67,13 @@ internal static class LukeRaidLifecycleTransactionTests
             var members=sessions.Take(4).ToArray();
             var leave=new AntonRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces);
             RaidPhaseEligibility[]? recoveryCandidates=null;
+            if(energyObjects)
+            {
+                RunStages(false,energyOnly:true);
+                done=true;
+                Console.WriteLine($"PASS {Count-before} Luke energy SQLite rollback and replay assertions");
+                return;
+            }
             RunStages(false);
             That(battle.View.State==AntonRaidBattleState.Completed,"两阶段原领取路径后完成");
             foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"完成后真实离团");
@@ -104,10 +111,11 @@ internal static class LukeRaidLifecycleTransactionTests
             }
             done=true;
 
-            void RunStages(bool supersede,bool stageDenied=false,bool unclaimedRestart=false)
+            void RunStages(bool supersede,bool stageDenied=false,bool unclaimedRestart=false,bool energyOnly=false)
             {
             for(int phase=0;phase<2;phase++)
             {
+                if(phase==1&&energyOnly){VerifyEnergyTransactions();return;}
                 int dungeon=phase==0?5054:5311;
                 int hp=definition.Resources.Script.Phases[phase].Dungeons.Single(row=>row.Id==dungeon).HpRaw;
                 for(int turn=0;turn<hp;turn++)
@@ -273,6 +281,60 @@ internal static class LukeRaidLifecycleTransactionTests
                     session.ConfirmRaidRewardPublished(receipt!);
                 }
             }
+            }
+
+            void VerifyEnergyTransactions()
+            {
+                foreach(int dungeon in new[]{5063,5066})
+                {
+                    That(selection.Select(sessions[0],dungeon,parties.Current(sessions[0])).Length==4,"能源SQL回归沿原P2分队选图");
+                    var entered=dungeonService.Enter(sessions[0],(uint)dungeon,2,dungeons,rooms,null,null,null,null);
+                    var run=sessions[0].PartyDungeon!;var entry=entered.First(notice=>notice.Scene is not null).Scene!.Entry;
+                    var route=QuestStoryRouteTests.Path(entry.Maze.StaticTopology,entry.StartMap.Position,entry.BossMap.Position);
+                    foreach(var point in route)
+                    {
+                        foreach(var session in members)run.CompleteLoading(session);
+                        var scene=sessions[0].CurrentFormalDungeonScene()!;
+                        foreach(var monster in scene.Monsters.Monsters.Where(monster=>monster.IsBlocking&&monster.CanReportDeath&&!monster.IsFriendly).OrderBy(monster=>monster.IsBoss))
+                        {
+                            var observation=FormalDungeonSessionTests.Observation(scene,monster);
+                            run.ObserveDeath(sessions[0],monster.ObjectKey,session=>session.ObserveFormalDungeonDeath(observation,kills,resources.Growth));
+                        }
+                        if(point==route[^1])break;
+                        var next=route[Array.IndexOf(route,point)+1];
+                        That(run.Move(sessions[0],(byte)next.X,(byte)next.Y,0).Length==4,"能源SQL回归沿真实资源连接换房");
+                    }
+                    uint template=dungeon==5063?64062u:64060u;
+                    string fingerprint=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(QuestPassiveClearTcpTests.PassiveDeath(template)));
+                    PartyDungeonNotice[] Report(uint source,string identity)=>run.ObservePassive(sessions[0],source,identity,
+                        session=>session.ObserveFormalPassiveDeath(source,true,identity,rooms));
+                    long ReceiptCount()
+                    {
+                        using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();
+                        command.CommandText="SELECT count(*) FROM character_dungeon_scene_clear_receipts WHERE dungeon_id=$id AND quest_id=0";
+                        command.Parameters.AddWithValue("$id",dungeon);return Convert.ToInt64(command.ExecuteScalar());
+                    }
+                    var original=battle.View;
+                    That(Report(template+1,fingerprint).Length==0&&ReceiptCount()==0,"非法能源模板不提交、不留下阻塞正确报告的候选");
+                    foreach(int failure in new[]{0,1,3})
+                    {
+                        Sql($"CREATE TRIGGER fail_energy_scene AFTER INSERT ON character_dungeon_scene_clear_receipts WHEN NEW.character_id={actors[failure].Character} BEGIN SELECT RAISE(ABORT,'energy scene rollback'); END");
+                        Reject<SqliteException>(()=>Report(template,fingerprint),"首、中、末成员能源场景事务注入失败");
+                        That(ReceiptCount()==failure&&ReferenceEquals(battle.View,original)&&actors.All(actor=>!battle.HasDungeonContribution(actor,run.Id)),
+                            "能源逐人失败保留已提交成员，失败成员回滚且Battle不提前完成");
+                        Sql("DROP TRIGGER fail_energy_scene");
+                        That(Report(template+1,fingerprint).Length==0&&Report(template,new string('b',64)).Length==0&&ReceiptCount()==failure,
+                            "部分提交的能源候选只接纳原来源重放，不被错误模板或新指纹替换");
+                    }
+                    var completed=Report(template,fingerprint);
+                    That(ReceiptCount()==4&&completed.Count(notice=>notice.Kind==PartyDungeonNoticeKind.Passive)==4&&
+                        members.All(session=>session.Phase==SessionPhase.Settlement)&&actors.Take(4).All(actor=>battle.HasDungeonContribution(actor,run.Id)),
+                        "原候选重试只补未提交成员，全部SQL成功后推进共享Run并发布四份真实回执");
+                    var committed=battle.View;string saved=Snapshot();
+                    That(Report(template,fingerprint).All(notice=>notice.Kind==PartyDungeonNoticeKind.RaidBattleSync)&&ReceiptCount()==4&&
+                        ReferenceEquals(battle.View,committed)&&Snapshot()==saved,"能源报告重放不重写SQL、不重复参与或扣HP");
+                    foreach(var session in members)That(dungeonService.Depart(session,preserveSolo:true).Error==0,"能源提交后沿原退场事务返回候战室");
+                }
             }
 
         }

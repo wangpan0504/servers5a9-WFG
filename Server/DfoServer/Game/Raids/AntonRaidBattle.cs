@@ -19,12 +19,20 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<int, LukeRouteProgress> LukeRoutes { get; init; } = ImmutableDictionary<int, LukeRouteProgress>.Empty;
     // 仅显式设施报告兼容模式使用，键最多为三个已证设施符号；随候选原子提交。
     public ImmutableDictionary<string, long> LukeFacilityWriteEpochs { get; init; } = ImmutableDictionary<string, long>.Empty;
+    // ACT使用原数值113/114；与etc的138/139分开，随原Battle候选发布。
+    public ImmutableDictionary<int, int> LukeEnergySignals { get; init; } = ImmutableDictionary<int, int>.Empty;
     public bool AntonCardsReady { get; init; }
     public bool AntonPreparing { get; init; }
     public long AntonWaitAnchor { get; init; }
     public int AntonWaitSeconds { get; init; }
     public bool ClockFaulted { get; init; }
     public bool PhaseExpired { get; init; }
+    public bool LukeEnergyActivated { get; init; }
+    public bool LukeEnergyBlocked { get; init; }
+    public long LukeEnergyOverloadEpoch { get; init; }
+    public bool LukePreparing { get; init; }
+    public long LukeWaitAnchor { get; init; }
+    public int LukeWaitSeconds { get; init; }
     public long PhaseClockGeneration { get; init; }
     public ImmutableDictionary<RaidTimer, long> TimerAnchors { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
 }
@@ -41,6 +49,8 @@ internal sealed partial class AntonRaidBattle
     sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, RaidDungeonRun? Run = null);
     readonly Dictionary<(Guid Run, ushort Character), DungeonBinding> entries = [];
     readonly Dictionary<RaidActor, ImmutableArray<RaidPhaseRewardPolicy>> members = [];
+    readonly Dictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>> originalLukePolicies = [];
+    readonly LukeResourceRewards? lukeResourceRewards;
     readonly HashSet<(ushort Character, int Phase, byte Kind)> rewards = [];
     AntonRaidBattleView current;
     int? rewardWeek;
@@ -74,7 +84,9 @@ internal sealed partial class AntonRaidBattle
                 members.Keys.Any(m => m.Character == actor.Character)) return false;
             if (lukeCompletion is { } completion)
             {
-                if (!Join(actor, completion.Phases.Select(phase => phase.Rewards).ToImmutableArray())) return false;
+                var policies = lukeResourceRewards?.Create(actor.Session.PremiumPcRoom) ?? completion.Phases.Select(phase => phase.Rewards).ToImmutableArray();
+                if (!Join(actor, policies)) return false;
+                originalLukePolicies.Add(actor.Character, policies);
             }
             else if (antonRewards is not null)
             {
@@ -136,7 +148,8 @@ internal sealed partial class AntonRaidBattle
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
     internal (int Id, int Value)[] SymbolSnapshot(AntonRaidBattleView view) =>
-        script.Symbols.OrderBy(row => row.Value).Select(row => (row.Value, view.Symbols[row.Key])).ToArray();
+        script.Symbols.Select(row => (row.Value, lukePacing is not null && row.Value == 102 ? 0 : view.Symbols[row.Key]))
+            .Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value))).OrderBy(row => row.Item1).ToArray();
     internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>
         script.Phases.SelectMany(phase => phase.Dungeons).Select(d => d.Id).Distinct().Order()
             .Select(id => (id, view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
@@ -148,8 +161,17 @@ internal sealed partial class AntonRaidBattle
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
         LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null,
         LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null, AntonResourceRewards? antonRewards = null, Random? antonHatcheryRandom = null,
+        LukeSanctumRoute? cardRoute = null, Random? lukeRouteRandom = null, bool lukeEnergyObjects = false,
+        LukeRaidPacingPolicy? pacing = null, LukeRaidFlowPolicy? flow = null, LukeResourceRewards? lukeRewards = null,
         Random? preyRandom = null)
     {
+        if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
+        script = pacing?.Adapt(script) ?? script;
+        lukePacing = pacing;
+        if (flow is not null && (kind != RaidKind.Luke || !flow.Matches(script)))
+            throw new InvalidDataException("卢克阶段休息策略与当前资源不匹配");
+        lukeFlow = flow;
+        lukeResourceRewards = lukeRewards;
         this.script = script;
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -176,10 +198,20 @@ internal sealed partial class AntonRaidBattle
             throw new InvalidDataException("攻坚阶段超时兼容策略与资源不匹配");
         if (fixedRoute is not null && (kind != RaidKind.Luke || !fixedRoute.Matches(script)))
             throw new InvalidDataException("卢克固定路线与执行脚本不匹配");
+        if (cardRoute is not null && (kind != RaidKind.Luke || fixedRoute is not null || !cardRoute.Matches(script)))
+            throw new InvalidDataException("卢克动态三圣所路线与执行脚本不匹配");
+        if (lukeEnergyObjects && (kind != RaidKind.Luke || script.Phases.Length != 2 || script.Symbols.Count > byte.MaxValue - 2 ||
+            script.Symbols.Values.Any(id => id is 113 or 114) ||
+            !new[] { 5063, 5066 }.All(id => script.Phases[1].Dungeons.Count(row => row.Id == id) == 1)))
+            throw new InvalidDataException("卢克能源原值命名空间或地下城声明不完整");
+        this.lukeEnergyObjects = lukeEnergyObjects;
         if (facilities is not null && (kind != RaidKind.Luke || !facilities.Valid))
             throw new InvalidDataException("卢克设施桥必须显式声明客户端动作报告信任合同");
         lukeFacilities = facilities;
+        lukeFacilityRules = facilities?.UseResourceBudgets == true ? LukeSanctumObjectRules.Create(script) : null;
         lukeFixedRoute = fixedRoute;
+        lukeCardRoute = cardRoute;
+        this.lukeRouteRandom = lukeRouteRandom ?? Random.Shared;
         lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
@@ -201,6 +233,17 @@ internal sealed partial class AntonRaidBattle
     {
         var definition = script.Phases[phase];
         var symbols = inheritedSymbols ?? script.Symbols.Keys.ToImmutableDictionary(s => s, _ => 0);
+        if (phase == 1 && lukeFacilityRules is not null)
+        {
+            int total = 0;
+            foreach (var budget in lukeFacilityRules.Budgets)
+            {
+                int count = symbols[budget.Symbol];
+                if (count < 0 || count > budget.Cap) throw new InvalidDataException("卢克设施继承计数超出资源预算");
+                total += count;
+            }
+            symbols = symbols.SetItem("[energy control open]", lukeFacilityRules.Tier(total));
+        }
         if (Kind == RaidKind.Prey)
             symbols = InitializePreySymbols(phase, symbols);
         foreach (var dungeon in definition.Dungeons) symbols = symbols.SetItem(dungeon.HpSymbol, dungeon.HpRaw);
@@ -209,6 +252,8 @@ internal sealed partial class AntonRaidBattle
                 ? RaidDungeonState.Hide : d.InitialState),
             ImmutableDictionary<RaidTimer, int>.Empty)
             { LukePhaseCoinsUsed = SupportsLukeRevival && phase == 1 ? (byte)0 : null,
+                LukeEnergySignals = lukeEnergyObjects ? ImmutableDictionary<int, int>.Empty.Add(113, 0).Add(114, 0) :
+                    ImmutableDictionary<int, int>.Empty,
                 TimerSequence = timerSequence, DungeonGenerations = Kind is RaidKind.Luke or RaidKind.Prey || antonPhaseProgress || HasAntonRewards
                 ? definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState == RaidDungeonState.Open ? 1L : 0L)
                 : ImmutableDictionary<int, long>.Empty }, null, null, null);
@@ -358,6 +403,8 @@ internal sealed partial class AntonRaidBattle
                     TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty }
                 : HasAntonRewards ? before with { State = AntonRaidBattleState.Intermission, Revision = before.Revision + 1,
                     AntonWaitAnchor = lukeClock.GetTimestamp(), AntonWaitSeconds = Math.Max(0, AntonHeaderSeconds("[phase break time]") - 5) }
+                : lukeFlow is not null ? before with { State = AntonRaidBattleState.Intermission, Revision = before.Revision + 1,
+                    LukeWaitAnchor = lukeClock.GetTimestamp(), LukeWaitSeconds = lukeFlow.BreakSeconds }
                 : Initialize(before.Phase + 1, before.Revision + 1, Kind is RaidKind.Luke or RaidKind.Prey ? before.Symbols : null, before.TimerSequence);
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
@@ -406,6 +453,7 @@ internal sealed partial class AntonRaidBattle
     AntonRaidBattleView Evaluate(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, RaidStageFact? fact = null)
     {
         if (Kind == RaidKind.Prey) return EvaluatePrey(state, dungeon, symbol, timer);
+        state = ApplyLukeEnergyPacing(state, dungeon, timer, fact);
         var events = new Queue<(int? Dungeon, string? Symbol, RaidTimer? Timer, RaidStageFact? Fact)>();
         events.Enqueue((dungeon, symbol, timer, fact));
         int budget = 4096;
@@ -467,6 +515,7 @@ internal sealed partial class AntonRaidBattle
                             }
                             break;
                         case "[set timer]":
+                            if (lukePacing is not null && action.Timer == new RaidTimer(1, 5066) && !state.LukeEnergyActivated) break;
                             long generation = checked(state.TimerSequence + 1);
                             state = state with { Timers = state.Timers.SetItem(action.Timer!, action.RawIntegers[2]),
                                 TimerGenerations = state.TimerGenerations.SetItem(action.Timer!, generation),
@@ -484,16 +533,24 @@ internal sealed partial class AntonRaidBattle
                         // 调度与随机目标未证实时保留待执行事实；不能静默丢弃或改为立即开图。
                         case "[reserve dungeon state]":
                         case "[open random hatchery]":
-                        case "[reset sanctum object]" when Kind == RaidKind.Luke:
+                        case "[reset sanctum object]" when Kind == RaidKind.Luke && lukeFacilityRules is null:
                             state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action),
                                 DeferredAnchors = state.DeferredAnchors.SetItem(action.TokenIndex, lukeClock.GetTimestamp()),
                                 DeferredGenerations = state.DeferredGenerations.SetItem(action.TokenIndex, checked(state.TimerSequence + 1)),
                                 TimerSequence = checked(state.TimerSequence + 1) };
                             break;
+                        case "[reset sanctum object]" when Kind == RaidKind.Luke:
+                            var resetBudget = lukeFacilityRules!.Budget(action.DungeonId!.Value)
+                                ?? throw new InvalidDataException("卢克重置设施缺少原资源归属");
+                            state = StampLukeFacilityWrite(state, resetBudget.Symbol);
+                            if (state.Symbols[resetBudget.Symbol] != 0)
+                            {
+                                state = state with { Symbols = state.Symbols.SetItem(resetBudget.Symbol, 0) };
+                                events.Enqueue((null, resetBudget.Symbol, null, null));
+                            }
+                            break;
                         case "[fail phase]" when Kind == RaidKind.Luke:
-                            state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action),
-                                Timers = ImmutableDictionary<RaidTimer, int>.Empty,
-                                TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty };
+                            state = FailLukePhase(state);
                             break;
                         default: throw new InvalidDataException("未支持的攻坚行为 " + action.Tag);
                     }

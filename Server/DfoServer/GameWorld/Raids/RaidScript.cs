@@ -15,6 +15,8 @@ internal sealed record RaidWaitingRoom(int Town, int Area);
 internal sealed record RaidDungeon(int Id, RaidDungeonState InitialState, string HpSymbol, int HpRaw, int PartyMax)
 {
     public ImmutableArray<RaidField> Declarations { get; init; } = [];
+    public int? LukeLockoutType => Declarations.Where(row => row.Tag == "[lockout type]").ToArray() is
+        [{ Values: [{ Type: 0, Number: 0 or 4 or 5 } kind, { Type: 0, Number: 0 }] }] ? kind.Number : null;
 }
 internal sealed record RaidTimer(int Kind, int DungeonId);
 internal sealed record RaidClause(string Tag, int TokenIndex, int? DungeonId, string? Symbol,
