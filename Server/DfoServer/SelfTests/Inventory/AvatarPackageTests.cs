@@ -73,8 +73,21 @@ internal static class AvatarPackageTests
             !InventoryAvatarPackageService.TrySelect(single, single.Categories[0], [101, 102], out _), "单件自选保留所选行参数并遵守PVF上限");
         foreach (string malformed in new[] { "101 1 3", "101 0 3 0", "101 65536 3 0", "101 1 65536 0", "101 1 3 256" })
             That(Package(malformed).Categories[0].PendingRule is not null, "装扮行宽及u16/u8字段边界拒绝");
-        That(Package("101 1 3 0\n[/avatar]\n[equipment]\n103 1\n[/equipment]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
-            "混合未实现奖励段不生成截断的装扮子集");
+        var mixed = Package("101 1 3 0\n[/avatar]\n[equipment]\n103 1\n[/equipment]\n[avatar]\n102 1 3 0");
+        var mixedCategory = mixed.Categories[0];
+        That(mixed.Available && mixedCategory.PendingRule is null && mixedCategory.RowCount == 3 &&
+            mixedCategory.Rows.Length == 2 && mixedCategory.EquipmentRows.SequenceEqual(new[] { new AvatarPackageEquipmentRow(103, 1) }) &&
+            InventoryAvatarPackageService.TrySelect(mixed, mixedCategory, [102, 103, 101], out var selectedAvatars, out var selectedEquipment) &&
+            selectedAvatars.Length == 2 && selectedEquipment.Length == 1 &&
+            !InventoryAvatarPackageService.TrySelect(mixed, mixedCategory, [101, 102, 103], out _),
+            "完整混合分类保留两类行且160按完整集合领取，518纯装扮入口不截断装备");
+        That(Package("101 1 3 0\n[/avatar]\n[equipment]\n103 1\n[/equipment]\n[avatar]\n102 1 3 0", 1).Categories[0].PendingRule is not null,
+            "混合分类仍拒绝未经证明的部分自选合同");
+        That(Package("101 1 3 0\n[/avatar]\n[stackable]\n103 1\n[/stackable]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
+            "其他未实现混合奖励段继续拒绝，不生成截断的装扮子集");
+        foreach (string equipment in new[] { "103", "103 0", "-1 1", "103 65536", "101 1", "103 1 103 1" })
+            That(Package("101 1 3 0\n[/avatar]\n[equipment]\n" + equipment + "\n[/equipment]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
+                "混合装备行拒绝坏宽度、数量、编号和种类冲突");
         var avatar = AvatarPackageCatalog.ParseAvatar(AvatarText("0 `[HP MAX]` `+` 100 37 `[SKILL_LEVEL]` `[swordman]` 5 1"));
         var implicitType = AvatarPackageCatalog.ParseAvatar("[equipment type]\n`[aurora avatar]` 0");
         That(implicitType.PendingRule is null && implicitType.Types.IsEmpty && !implicitType.RequiresAbilityChoice,

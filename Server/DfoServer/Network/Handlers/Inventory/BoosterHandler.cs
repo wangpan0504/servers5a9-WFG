@@ -70,15 +70,15 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             {
                 var header = AvatarPackageRequests.ReadHeader(packet.Body);
                 var category = definition.Categories.FirstOrDefault(row => row.Category == header.Category && row.Subcategory == header.Subcategory);
-                if (!definition.Available || category is null || category.Rows.IsEmpty)
+                if (!definition.Available || category is null || category.PendingRule is not null || category.Rows.IsEmpty)
                 {
                     reason = "definition_or_category_unavailable";
                     result = InventoryResult.Reject(19);
                 }
                 else
                 {
-                    int minimum = definition.SelectionCount == 0 ? category.Rows.Length : 1;
-                    int maximum = definition.SelectionCount == 0 ? category.Rows.Length :
+                    int minimum = definition.SelectionCount == 0 ? category.RowCount : 1;
+                    int maximum = definition.SelectionCount == 0 ? category.RowCount :
                         Math.Min(definition.SelectionCount, category.Rows.Select(row => row.ItemId).Distinct().Count());
                     var request = AvatarPackageRequests.Read(packet.Body, minimum, maximum);
                     result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :

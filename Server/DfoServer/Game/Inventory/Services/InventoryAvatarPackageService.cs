@@ -21,9 +21,9 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows))
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows))
             return InventoryResult.Reject(19);
-        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now);
+        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now, equipmentRows);
     }
 
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
@@ -68,9 +68,10 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
 
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,
         AvatarPackageChoice[] choices, bool allowOverflowMail, bool shopExpiration, bool ignoreUsablePeriod,
-        out BoosterReceipt? receipt, DateTimeOffset now)
+        out BoosterReceipt? receipt, DateTimeOffset now, AvatarPackageEquipmentRow[]? equipmentRows = null)
     {
         receipt = null;
+        equipmentRows ??= [];
         var selectedIds = rows.Select(row => row.ItemId).ToHashSet();
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
             choices.Any(choice => !selectedIds.Contains(choice.ItemId)))
@@ -78,7 +79,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var options = choices.ToDictionary(choice => choice.ItemId, choice => choice.Ability);
         var definitions = new List<(AvatarPackageRow Row, ItemTemplate Template, AvatarPackageType Type, byte Ability)>();
         var totals = new Dictionary<int, int>();
-        long total = 0;
+        var equipmentDefinitions = new List<(AvatarPackageEquipmentRow Row, ItemTemplate Template)>();
+        long total = 0, equipmentTotal = 0;
         try
         {
             foreach (var row in rows)
@@ -107,12 +109,23 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 var type = avatar.Types.IsEmpty ? new AvatarPackageType(template.Expiration.Days, template.AvatarSockets) : avatar.Types[row.Type];
                 definitions.Add((row, template, type, ability));
             }
+            foreach (var row in equipmentRows)
+            {
+                var template = items.Get(row.ItemId);
+                if (row.Count == 0 || template.Kind != ItemKind.Equipment || !template.Expiration.SupportsCreation ||
+                    template.IsPremiumService || template.HasAcquisitionEffect)
+                    return InventoryResult.Reject(19);
+                int amount = checked(row.Count * count);
+                totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
+                equipmentTotal = checked(equipmentTotal + amount);
+                equipmentDefinitions.Add((row, template));
+            }
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
             return InventoryResult.Reject(19);
         }
-        if (totals.Count > BoosterReceipt.MaximumItems || total > int.MaxValue) return InventoryResult.Reject(4);
+        if (totals.Count > BoosterReceipt.MaximumItems || total + equipmentTotal > int.MaxValue) return InventoryResult.Reject(4);
         var before = character.Inventory;
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, count).Plan!.After;
         if (!allowOverflowMail)
@@ -121,8 +134,16 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Avatar &&
                 item.Position.Index >= range.Start && item.Position.Index <= range.End);
             if (total > range.End - range.Start + 1 - occupied) return InventoryResult.Reject(4);
+            if (equipmentTotal != 0)
+            {
+                var equipmentRange = ItemSlotBoundService.Range(ItemKind.Equipment, paid);
+                int equipmentOccupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
+                    item.Position.Index >= equipmentRange.Start && item.Position.Index <= equipmentRange.End);
+                if (equipmentTotal > equipmentRange.End - equipmentRange.Start + 1 - equipmentOccupied)
+                    return InventoryResult.Reject(4);
+            }
         }
-        var prototypes = new List<InventoryItem>((int)total);
+        var prototypes = new List<InventoryItem>((int)(total + equipmentTotal));
         foreach (var definition in definitions)
         {
             var (row, template, type, ability) = definition;
@@ -139,6 +160,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 Socket2 = AvatarSocket.Empty(sockets.Third), Socket3 = AvatarSocket.Empty(sockets.Fourth), Socket4 = AvatarSocket.Empty(sockets.Fifth)
             } };
             for (int i = 0; i < checked(row.Count * count); i++) prototypes.Add(prototype);
+        }
+        foreach (var (row, template) in equipmentDefinitions)
+        {
+            for (int i = 0; i < checked(row.Count * count); i++)
+            {
+                var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                    ignoreUsablePeriod: ignoreUsablePeriod);
+                if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+                prototypes.Add(InventoryRewardGrantService.CreateItem(template,
+                    new(InventoryListType.Main, ItemSlotBoundService.Range(ItemKind.Equipment, paid).Start), core));
+            }
         }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
@@ -161,7 +193,24 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         out AvatarPackageRow[] rows)
     {
         rows = [];
+        // 518仅确认过纯装扮选择；混合分类不能按装扮子集成功并漏掉装备。
+        return category.EquipmentRows.IsEmpty && TrySelect(definition, category, ids, out rows, out _);
+    }
+
+    internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
+        out AvatarPackageRow[] rows, out AvatarPackageEquipmentRow[] equipmentRows)
+    {
+        rows = [];
+        equipmentRows = [];
         if (category.PendingRule is not null || category.Rows.IsEmpty) return false;
+        if (!category.EquipmentRows.IsEmpty)
+        {
+            if (definition.SelectionCount != 0 || !ids.Order().SequenceEqual(category.Rows.Select(row => row.ItemId)
+                .Concat(category.EquipmentRows.Select(row => row.ItemId)).Order())) return false;
+            rows = category.Rows.ToArray();
+            equipmentRows = category.EquipmentRows.ToArray();
+            return true;
+        }
         if (definition.SelectionCount == 0)
         {
             if (!ids.Order().SequenceEqual(category.Rows.Select(row => row.ItemId).Order())) return false;
