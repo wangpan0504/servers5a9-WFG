@@ -30,6 +30,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         commands.Register(CmdPacketType.RAID_MANAGER_WORK, ManagerAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_LIST, SearchAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_USERINFO, OtherUserAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_CHECK_RAID_USER, CheckUserAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_MEMBER_CHANGE_STATE, MemberStateAsync, nameof(RaidHandler), UserStateRequirement.WorldReady);
         // CMD668 REJOIN_RAID 与同号 NOTI668 REAL_ESTATE_STATE 是两套枚举，这里只注册命令。
