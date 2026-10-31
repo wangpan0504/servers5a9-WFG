@@ -93,11 +93,10 @@ internal static class ExpertJobChainTests
                 }
                 else if (type == 1)
                 {
-                    Give([new(10015129, 1)]);
-                    var scroll = f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10015129);
-                    That(f.Session.LearnExpertJobRecipe(scroll.Position, 10015129, new(scripts, resources.Items)).Accepted,
-                        "附魔链学习白卡卷轴");
                     var current = f.Session.Selected!;
+                    That(current.ExpertJobRecipes.IsEmpty && scripts.IsLearned(1,
+                        scripts.Level(1, current.ExpertJobExperience), current.ExpertJobRecipes, 10015129),
+                        "附魔链授职后自动具有白卡资格，无需额外消耗卷轴");
                     var target = current.Inventory.Items.First(item => item.Core.ItemId == 18400);
                     var card = current.Inventory.Items.Single(item => item.Core.ItemId == 3619);
                     var plan = new ExpertJobEnchanting(scripts, resources.Items, resources.Enchantments,

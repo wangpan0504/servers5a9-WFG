@@ -106,9 +106,9 @@ internal static class ExpertJobActionTests
             Sql($"UPDATE character_expert_job SET expertness={enchanter.ExpertJobExperience} WHERE character_id={enchanter.Id}");
             var enchanting = new ExpertJobEnchanting(scripts, items, resources.Enchantments,
                 policy with { EnchantSuccessPercent = 100 }, random: _ => 0);
-            That(enchanting.Plan(enchanter with { ExpertJobRecipes = ImmutableHashSet<int>.Empty }, cardRecipe.RecipeId, gearSlot, cardSlot) is null &&
+            That(enchanting.Plan(enchanter with { ExpertJobRecipes = ImmutableHashSet<int>.Empty }, cardRecipe.RecipeId, gearSlot, cardSlot) is not null &&
                 enchanting.Plan(enchanter, cardRecipe.RecipeId + 1, gearSlot, cardSlot) is null,
-                "未学或伪造配方不能附魔");
+                "达到自动等级无需消费资格卷轴，伪造配方仍拒绝");
             That(enchanting.Plan(enchanter with { ExpertJobExperience = 0 }, cardRecipe.RecipeId, gearSlot, cardSlot) is null,
                 "Lv1不能附魔要求Lv9的卡片，不为截图错误提示取消真实等级门禁");
             var enchanted = enchanting.Plan(enchanter, cardRecipe.RecipeId, gearSlot, cardSlot)!;

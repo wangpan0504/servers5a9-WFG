@@ -68,13 +68,15 @@ internal static class ExpertJobExtractionTcpTests
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             return repository.LoadCharacter(owner, slot);
         }
-        byte[] Info((byte Job, ushort Id, ushort Slot, short Tool, int Product) row) => Build(writer =>
+        byte[] Info((byte Job, ushort Id, ushort Slot, short Tool, int Product) row, bool qualifications = true) => Build(writer =>
         {
             var current = Read(row.Slot);
             writer.Write((byte)0); writer.Write(row.Job);
             if (row.Job == 1)
             {
-                writer.Write((byte)0); writer.Write((byte)0);
+                writer.Write((byte)1); writer.Write(10015129);
+                writer.Write((byte)(qualifications ? 1 : 0));
+                if (qualifications) writer.Write((byte)0);
                 writer.Write((uint)scripts.Level(1, current.ExpertJobExperience)); writer.Write(300u);
             }
             else { writer.Write((byte)1); writer.Write(row.Job == 2 ? 2600149 : 2600083); }
@@ -87,7 +89,7 @@ internal static class ExpertJobExtractionTcpTests
             That(ack[0] == 1 && ack[1] == 0 && U16(ack, 2) == slot && ack[4] > 0 && ack.Length == 5 + 10 * ack[4] &&
                 Enumerable.Range(0, ack[4]).Any(index => U32(ack, 7 + index * 10) == row.Product && U32(ack, 11 + index * 10) > 0),
                 "416先发实际槽位与增量，已有堆叠不混入原数量");
-            peer.Expect(0, 2); peer.Expect(0, 205, Info(row)); peer.Barrier();
+            peer.Expect(0, 2); peer.Expect(0, 205, Info(row, false)); peer.Barrier();
         }
     }
     static InventorySlot Bag(int slot) => new(InventoryListType.Main, checked((short)slot));

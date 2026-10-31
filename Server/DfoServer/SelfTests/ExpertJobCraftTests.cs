@@ -94,8 +94,8 @@ internal static class ExpertJobCraftTests
                 scripts, items, resources.GoldLimits, resources.EpicPieces, id, count, (ushort)card.Position.Index,
                 _ => 0, DateTimeOffset.UtcNow, out craft, out _);
             That(!Bead(beadSource, 0, 1, out _) && !Bead(beadSource, 2600141, 1, out _) &&
-                !Bead(beadSource, 10015129, 3, out _) && !Bead(beadSource with { ExpertJobRecipes = [] }, 10015129, 1, out _),
-                "无配方、错映射、源卡数量不足与未学习不能以扣卡代替成功");
+                !Bead(beadSource, 10015129, 3, out _) && Bead(beadSource with { ExpertJobRecipes = [] }, 10015129, 1, out _),
+                "无效配方、错映射和源卡数量不足拒绝，基础资格自动获得");
             foreach (var core in new[] { card.Core with { EquipmentLockId = 1 }, card.Core with { ExpireTime = 1 },
                 card.Core with { Attr = 1 }, card.Core with { EnchantUpgrade = 1 } })
                 That(!Bead(beadSource with { Inventory = beadSource.Inventory with { Items = beadSource.Inventory.Items.Replace(card, card with { Core = core }) } },

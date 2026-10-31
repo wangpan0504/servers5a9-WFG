@@ -177,12 +177,16 @@ internal static class ExpertJobPackets
     }
 
     public static byte[] Info(DfoServer.Game.Characters.Character character, DfoServer.GameWorld.Items.ExpertJobScriptCatalog scripts,
-        bool includeQualifications = false, byte? learnedRarity = null)
+        bool includeQualifications = false, byte? learnedRarity = null, DfoServer.Game.Characters.Character? previous = null)
     {
         byte mode = character.ExpertJobType;
         int level = scripts.Level(mode, character.ExpertJobExperience);
         var recipes = scripts.LearnedRecipes(mode, level, character.ExpertJobRecipes);
-        byte[] rarities = includeQualifications ? scripts.LearnedRarities(recipes) : learnedRarity is { } rarity ? [rarity] : [];
+        // 客户端配方重建、资格追加；升级只能发布相对提交前快照的新增资格。
+        byte[] rarities = includeQualifications ? scripts.LearnedRarities(recipes)
+            : previous is not null ? scripts.LearnedRarities(recipes).Except(scripts.LearnedRarities(
+                scripts.LearnedRecipes(previous.ExpertJobType, scripts.Level(previous.ExpertJobType, previous.ExpertJobExperience), previous.ExpertJobRecipes))).ToArray()
+            : learnedRarity is { } rarity ? [rarity] : [];
         return mode switch
         {
             3 => Info(3, [], (uint)character.ExpertMachineGrade, (uint)character.ExpertMachineEndurance, giveUpState: (byte)character.ExpertGiveUpState),

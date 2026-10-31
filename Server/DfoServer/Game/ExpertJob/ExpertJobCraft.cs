@@ -72,7 +72,7 @@ internal static class ExpertJobCraft
         int level = scripts.Level(1, character.ExpertJobExperience);
         if (card is null || card.Uid <= 0 || !card.Core.IsStackable || card.Core.Count < count || card.Core.EquipmentLockId != 0 ||
             card.IsExpired(now.ToUnixTimeSeconds()) || card.Core.Upgrade != 0 || card.Core.EnchantUpgrade != 0 || !scripts.TryCardRecipe(card.Core.ItemId, out var recipe) ||
-            recipe.RecipeId != recipeId || !character.ExpertJobRecipes.Contains(recipeId) || level < recipe.RequiredLevel ||
+            recipe.RecipeId != recipeId || !scripts.IsLearned(character.ExpertJobType, level, character.ExpertJobRecipes, recipeId) || level < recipe.RequiredLevel ||
             !ItemSlotBoundService.Allows(character.Inventory, card.Position, card.Core.Kind)) return false;
         var template = items.Get(card.Core.ItemId);
         if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel ||

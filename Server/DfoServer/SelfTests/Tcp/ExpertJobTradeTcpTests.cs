@@ -119,11 +119,11 @@ internal static class ExpertJobTradeTcpTests
             using var lease = new AccountOwners().Acquire(account, () => { });
             var character = repository.Create(lease, new(name, resources.Towns.Room, resources.Towns.InitialReturn)
             { Level = 50, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills, Inventory = InventorySnapshot.Empty with { Gold = 100 } });
-            fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,{type},{(type == 3 ? 51 : startingExperience)},'{(type == 3 ? "[]" : $"[{recipe.RecipeId}]")}' FROM characters WHERE id={character.Id}");
+            fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,{type},{(type == 3 ? 51 : startingExperience)},'[]' FROM characters WHERE id={character.Id}");
             return character.Id;
         }
-        byte[] EnchantInfo(uint endurance) => Build(w => { w.Write((byte)0); w.Write((byte)1); w.Write((byte)1); w.Write(recipe.RecipeId);
-            w.Write((byte)1); w.Write(recipe.Rarity); w.Write(4u); w.Write(endurance); });
+        byte[] EnchantInfo(uint endurance) => Build(w => { w.Write((byte)0); w.Write((byte)1); w.Write((byte)2); w.Write(10015129); w.Write(recipe.RecipeId);
+            w.Write((byte)2); w.Write(new byte[] { 0, recipe.Rarity }); w.Write(4u); w.Write(endurance); });
         long Gold(ushort id) => Convert.ToInt64(fixture.Query($"SELECT gold FROM characters WHERE id={id}")[0][0]);
         long Endurance(ushort id) => Convert.ToInt64(fixture.Query($"SELECT machine_endurance FROM character_expert_meta WHERE character_id={id}")[0][0]);
         string Snapshot() => JsonSerializer.Serialize(new[] { fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid"),

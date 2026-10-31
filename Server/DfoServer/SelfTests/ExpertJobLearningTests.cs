@@ -37,11 +37,11 @@ internal static class ExpertJobLearningTests
             var database = new SqliteGameDatabase(path);
             var repository = new CharacterRepository(path);
             using var owner = new AccountOwners().Acquire("expert-learning", () => { });
-            var template = items.Items.Get(10015129);
+            var template = items.Items.Get(2600141);
             short first = ItemSlotBoundService.Range(template.Kind, InventorySnapshot.Empty).Start;
             InventorySlot Slot(int offset) => new(InventoryListType.Main, (short)(first + offset));
             var scroll = InventoryRewardGrantService.Create(template);
-            var blueprint = InventoryRewardGrantService.Create(items.Items.Get(2600141));
+            var blueprint = InventoryRewardGrantService.Create(items.Items.Get(2600142));
             var rare = InventoryRewardGrantService.Create(items.Items.Get(10015130));
             var created = repository.Create(owner, new("LearnScroll", towns.Room, towns.InitialReturn)
             {
@@ -50,6 +50,36 @@ internal static class ExpertJobLearningTests
             });
             Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES(" + created.Id + ",'expert-learning',1,0)");
             var current = repository.LoadCharacter(owner, 0);
+            // 每个自动门槛及其前一级验证资源合同；网络用例只保留代表性Lv11与真实601。
+            var automatic = new (int Level, int Recipe, byte Rarity)[]
+            { (1, 10015129, 0), (4, 10015130, 1), (7, 10015131, 2), (9, 10015132, 3), (10, 10159564, 6), (11, 10015151, 4) };
+            foreach (int level in automatic.SelectMany(row => new[] { Math.Max(1, row.Level - 1), row.Level }).Distinct())
+            {
+                var grown = current with { ExpertJobExperience = scripts.ExperienceForLevel(1, level) };
+                int[] expected = automatic.Where(row => row.Level <= level).Select(row => row.Recipe).Order().ToArray();
+                byte[] expectedRarities = automatic.Where(row => row.Level <= level).Select(row => row.Rarity).Order().ToArray();
+                That(scripts.LearnedRecipes(1, level, grown.ExpertJobRecipes).SequenceEqual(expected),
+                    "等级门槛自动派生完整配方：" + level);
+                var mixed = scripts.LearnedRecipes(1, level, new[] { 2600141, 10015129 });
+                That(mixed.SequenceEqual(expected.Append(2600141).Order()), "有效集合保留非自动制作图并去重基础资格");
+                var full = DfoServer.Network.Builders.ExpertJobPackets.Info(grown, scripts, includeQualifications: true);
+                int at = 3 + expected.Length * 4;
+                That(full[2] == expected.Length && full[at] == expectedRarities.Length &&
+                    full.Length == 12 + expected.Length * 4 + expectedRarities.Length,
+                    "205全量配方与资格数量及包长对应等级");
+                Bytes(full.AsSpan(3, expected.Length * 4), expected.SelectMany(BitConverter.GetBytes).ToArray(), "205全量配方身份");
+                Bytes(full.AsSpan(at + 1, expectedRarities.Length), expectedRarities, "205全量资格身份");
+                var repeated = DfoServer.Network.Builders.ExpertJobPackets.Info(grown, scripts, previous: grown);
+                That(repeated[at] == 0, "同等级重复通知不重复追加资格");
+                if (level > 1)
+                {
+                    var previous = grown with { ExpertJobExperience = scripts.ExperienceForLevel(1, level - 1) };
+                    var delta = DfoServer.Network.Builders.ExpertJobPackets.Info(grown, scripts, previous: previous);
+                    byte[] added = automatic.Where(row => row.Level == level).Select(row => row.Rarity).ToArray();
+                    That(delta[at] == added.Length, "跨门槛通知仅追加本次资格");
+                    Bytes(delta.AsSpan(at + 1, added.Length), added, "205新增资格身份");
+                }
+            }
             var service = new ExpertJobLearning(scripts, items.Items);
             var cardCore = InventoryRewardGrantService.Create(items.Items.Get(3619));
             var cardSlot = new InventorySlot(InventoryListType.Main, ItemSlotBoundService.Range(cardCore.Kind, InventorySnapshot.Empty).Start);
@@ -61,18 +91,18 @@ internal static class ExpertJobLearningTests
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds(), out var unsafePlan, out var unsafeExperience, out _) &&
                 unsafePlan is null && unsafeExperience == current.ExpertJobExperience,
                 "原直接卡片捷径不得免材料、免资格把任意卡写入装备，已核实宝珠路径另有回归");
-            That(service.Plan(current with { ExpertJobType = 2 }, Slot(0), 10015129) is null &&
+            That(service.Plan(current with { ExpertJobType = 2 }, Slot(0), 2600141) is null &&
                 service.Plan(current, Slot(3), 10015130) is null && service.Plan(current, Slot(0), 10015130) is null,
                 "错误副职业、未到卷轴等级与模板不符拒绝");
-            That(service.Plan(current with { ExpertJobRecipes = ImmutableHashSet.Create(10015129) }, Slot(0), 10015129) is null,
+            That(service.Plan(current with { ExpertJobRecipes = ImmutableHashSet.Create(2600141) }, Slot(0), 2600141) is null,
                 "已学习设计图不得再次消费");
             foreach (var replacement in new[] { scroll with { EquipmentLockId = 1 }, scroll with { ExpireTime = 1 } })
             {
                 var source = current.Inventory.Find(Slot(0))!;
                 var changed = current with { Inventory = current.Inventory with { Items = current.Inventory.Items.Replace(source, source with { Core = replacement }) } };
-                That(service.Plan(changed, Slot(0), 10015129) is null, "锁定或到期设计图拒绝学习");
+                That(service.Plan(changed, Slot(0), 2600141) is null, "锁定或到期设计图拒绝学习");
             }
-            var plan = service.Plan(current, Slot(0), 10015129)!;
+            var plan = service.Plan(current, Slot(0), 2600141)!;
             That(plan.Inventory.After.Gold == current.Inventory.Gold && plan.Inventory.After.Items.Length == current.Inventory.Items.Length - 1,
                 "学习只消费源图一张，不扣制作材料、商店费用或熟练度");
             Sql("CREATE TRIGGER fail_recipe BEFORE UPDATE OF learned_recipes ON character_expert_job BEGIN SELECT RAISE(ABORT,'recipe failure'); END");
@@ -84,11 +114,11 @@ internal static class ExpertJobLearningTests
             var learned = repository.CommitExpertJobLearning(owner, plan);
             var reopened = new CharacterRepository(path).LoadCharacter(owner, 0);
             That(learned.Revision == current.Revision + 1 && learned.ExpertJobExperience == 0 && learned.Inventory.Gold == 999 &&
-                learned.ExpertJobRecipes.SetEquals([10015129]) && reopened.ExpertJobRecipes.SetEquals(learned.ExpertJobRecipes) &&
+                learned.ExpertJobRecipes.SetEquals([2600141]) && reopened.ExpertJobRecipes.SetEquals(learned.ExpertJobRecipes) &&
                 reopened.Inventory.Find(Slot(0)) is null && reopened.Inventory.Find(Slot(1)) is not null,
                 "学习与扣图只增一次revision，重开库恢复真实资格，保留重复实体");
             Reject<InvalidOperationException>(() => repository.CommitExpertJobLearning(owner, plan), "旧学习计划不能重放扣图");
-            var next = service.Plan(reopened, Slot(2), 2600141)!;
+            var next = service.Plan(reopened, Slot(2), 2600142)!;
             Sql("UPDATE character_expert_job SET expertness=20");
             Reject<InvalidOperationException>(() => repository.CommitExpertJobLearning(owner, next), "同revision副职业资格变化也拒绝旧计划");
             That(repository.LoadCharacter(owner, 0).Inventory.Find(Slot(2)) is not null, "旧资格拒绝回滚已经执行的扣图");
@@ -99,7 +129,7 @@ internal static class ExpertJobLearningTests
                 blueprintSource with { Core = blueprintSource.Core with { ExpireTime = 2000000000 } }) };
             expiryCurrent = repository.CommitInventory(owner, expiryCurrent, new(expiryCurrent.Inventory, expiringInventory, "learning_expiry_fixture"));
             var clock = new Clock { Now = 1999999999 };
-            var expiryPlan = new ExpertJobLearning(scripts, items.Items, clock).Plan(expiryCurrent, Slot(2), 2600141)!;
+            var expiryPlan = new ExpertJobLearning(scripts, items.Items, clock).Plan(expiryCurrent, Slot(2), 2600142)!;
             clock.Now++;
             Reject<InventoryQualificationExpiredException>(() => repository.CommitExpertJobLearning(owner, expiryPlan), "提交时到期拒绝原计划");
             That(repository.LoadCharacter(owner, 0).Revision == expiryCurrent.Revision &&

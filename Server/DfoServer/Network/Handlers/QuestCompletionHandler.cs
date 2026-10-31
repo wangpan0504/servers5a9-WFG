@@ -128,7 +128,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         if ((commit.GoldMailId is not null || commit.ResourceMailId is not null) && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_mail_arrived", Guard);
         if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)
-            await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, expertJobs),
+            await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, expertJobs, includeQualifications: true),
                 "quest_expert_job_info", Guard);
         return CommandResult.Handled;
     }

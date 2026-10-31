@@ -113,7 +113,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
                 adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
                 "expert_job_compound_actor", Crafted);
-            await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info");
+            await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info", current);
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB,
                 ExpertJobPackets.CompoundResult(craft.Products.Select(row => (row.ItemId, row.Count)).ToArray(),
                     checked((uint)craft.SuccessCount), checked((uint)craft.FailureCount)),
@@ -173,11 +173,13 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_enchant_actor", Crafted);
-        await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info");
+        await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info", current);
+        var priorRarities = scripts.LearnedRarities(scripts.LearnedRecipes(current!.ExpertJobType,
+            scripts.Level(current.ExpertJobType, current.ExpertJobExperience), current.ExpertJobRecipes));
         await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.EnchantStoreSuccess((uint)craftedReceipt.Character.ExpertMachineEndurance,
-            (uint)scripts.Level(1, action is null && scripts.LearnedRarities(current!.ExpertJobRecipes).Length == 0
+            (uint)scripts.Level(1, action is null && priorRarities.Length == 0
                 ? current.ExpertJobExperience : craftedReceipt.Character.ExpertJobExperience),
-            action?.EnchantRarity ?? scripts.LearnedRarities(current!.ExpertJobRecipes).FirstOrDefault(), action?.Succeeded != false), "expert_job_enchant_crafted",
+            action?.EnchantRarity ?? priorRarities.FirstOrDefault(), action?.Succeeded != false), "expert_job_enchant_crafted",
             Crafted);
         return CommandResult.Handled;
     }
@@ -224,7 +226,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_extract_actor", Crafted);
-        await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info");
+        await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info", current);
         return CommandResult.Handled;
     }
 
@@ -440,8 +442,8 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         return true;
     });
 
-    Task NotifyInfo(GameConnectionContext context, DfoServer.Game.Characters.Character character, Func<bool> guard, string action) =>
-        context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, scripts), action, guard);
+    Task NotifyInfo(GameConnectionContext context, DfoServer.Game.Characters.Character character, Func<bool> guard, string action, DfoServer.Game.Characters.Character? previous = null) =>
+        context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, scripts, previous: previous), action, guard);
 
     static (ushort Slot, uint ItemId, uint Count)[] Products(InventorySnapshot after, InventorySnapshot before,
         ExpertJobProduct[] planned)

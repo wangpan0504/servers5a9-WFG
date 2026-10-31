@@ -112,6 +112,9 @@ internal static partial class EnchantmentTests
             binder: null, args: [jobs], culture: null)!;
         ((Dictionary<int, ExpertJobCardRecipe>)typeof(ExpertJobScriptCatalog).GetField("cardRecipes", instance)!
             .GetValue(catalog)!).Add(recipe.CardId, recipe);
+        // 统一资格校验同时需要配方声明；保留本例的手动已学输入及完整成功/拒绝断言。
+        ((Dictionary<int, ExpertJobLearnableRecipe>)typeof(ExpertJobScriptCatalog).GetField("learnable", instance)!
+            .GetValue(catalog)!).Add(recipe.RecipeId, new(recipe.RecipeId, 1, recipe.RequiredLevel, recipe.Rarity));
         return catalog;
     }
 }

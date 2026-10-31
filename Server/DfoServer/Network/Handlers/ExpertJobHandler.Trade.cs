@@ -68,7 +68,7 @@ internal sealed partial class ExpertJobHandler
                 transport.Disconnect();
                 return CommandResult.CloseConnection;
             }
-            async Task PublishOwner() => await transport.Publish(results.Owner, ExpertJobPackets.Info(ownerReceipt.Character, scripts));
+            async Task PublishOwner() => await transport.Publish(results.Owner, ExpertJobPackets.Info(ownerReceipt.Character, scripts, previous: owner));
             async Task PublishCustomer()
             {
             if (job == 3 && action.Disjoint is { } products)
