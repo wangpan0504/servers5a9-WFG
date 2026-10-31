@@ -44,7 +44,7 @@ internal static class QuestEligibility
         if (QuestHiddenEntry.ImmediateShape(quest) || QuestHiddenEntry.NpcDialogueShape(quest) || QuestStandbyEntry.Supports(quest))
             return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
         if (QuestAntonUnlockEntry.Supports(quest))
-            return new(QuestResourceEntry.Ordinary, "本服安徒恩解锁任务的奈恩入口；仍须原前置和材料");
+            return new(QuestResourceEntry.Ordinary, "本服安徒恩解锁任务的城镇入口；仍须原前置和材料");
 
         if (QuestMarriageProgress.Supports(quest) && definition.ExposedByNpc)
             return new(QuestResourceEntry.Ordinary, "婚约准备任务；仍须核对当前关系、前置及原接取身份");

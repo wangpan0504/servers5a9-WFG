@@ -21,7 +21,7 @@ internal static class QuestAntonUnlockTcpTests
         ushort id;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            var candidate = CharacterCreation.Prepare("AntonWire", resources.Characters.Get(0), QuestAntonUnlockTests.Nain(resources.Towns),
+            var candidate = CharacterCreation.Prepare("AntonWire", resources.Characters.Get(0), QuestAntonUnlockTests.TownAwayFromNain(resources.Towns),
                 resources.Towns.InitialReturn, resources.Learning.Get);
             var character = repository.Create(owner, candidate with
             {
@@ -40,7 +40,7 @@ internal static class QuestAntonUnlockTcpTests
             That(QuestLifecycleTcpTests.List(peer.AvailableQuests, 85).Contains(12829), "NOTI21包含合格安徒恩解锁候选");
             peer.Send(31, [31, 0, 29, 50]);
             var accepted = peer.Expect(1, 31).Body;
-            That(accepted.Length == 8 && accepted[0] == 1 && U16(accepted, 1) == 12829 && U32(accepted, 3) == 0, "CMD31原生接取成功");
+            That(accepted.Length == 8 && accepted[0] == 1 && U16(accepted, 1) == 12829 && U32(accepted, 3) == 0, "#897 非奈恩城镇CMD31原生接取成功");
             peer.Barrier(packet => That(packet.Opcode is 21 or 356, "接取仅允许任务候选和完成历史投影"));
             peer.Send(34, [34, 0, 29, 50, 255, 255, 1, 0, 255, 255]);
             var finished = peer.Expect(1, 34).Body;
