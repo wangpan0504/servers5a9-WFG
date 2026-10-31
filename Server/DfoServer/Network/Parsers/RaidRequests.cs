@@ -29,6 +29,11 @@ internal static class RaidRequests
         return new(body[0], body[1]);
     }
 
+    // 现场218终末后的Last动作；不接受其它symbol、操作或减量。
+    public static bool AntonEnergyClear(ReadOnlySpan<byte> body) => body.Length == 9 &&
+        BinaryPrimitives.ReadUInt32LittleEndian(body) == 110 &&
+        BinaryPrimitives.ReadUInt32LittleEndian(body[4..]) == 3000 && body[8] == 2;
+
     // ARAD 01DC6180: symbol:u32, value:u32, operation:u8。这里只开放三设施+1白名单。
     public static int? LukeFacilitySymbol(ReadOnlySpan<byte> body)
     {

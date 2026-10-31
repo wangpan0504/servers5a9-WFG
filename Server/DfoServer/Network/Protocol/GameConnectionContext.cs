@@ -20,6 +20,9 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
+    // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
+    internal Guid AntonDungeonDisplayInstance { get; set; }
+    internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;

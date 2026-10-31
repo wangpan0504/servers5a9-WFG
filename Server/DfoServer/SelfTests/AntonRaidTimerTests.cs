@@ -40,12 +40,59 @@ internal static class AntonRaidTimerTests
         That(script.Phases[0].Dungeons.All(row => row.PartyMax == (row.Id == 216 ? 1 : 5)),
             "匹配PVF的PARTY MAX原值216=1、其它P1图=5，不解释并发语义");
         foreach (int dungeon in new[] { 221, 222, 223, 224 }) Hatchery(dungeon);
+        Energy();
         PhaseReset();
         foreach (int dungeon in new[] { 212, 214 }) TimedPhaseReset(dungeon);
         PendingHatcheryAfterVolcano();
         TimeoutRetry();
         IntermissionPreparation();
         RewardWaitDetached();
+
+        void Energy()
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false);
+            var service = new LukeRaidClocks(clock, store, (_, _) => { });
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215);
+                Settle(battle, store); Rewards(battle, clock);
+                for (int index = 0; index < 4; index++)
+                {
+                    var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+                    using var reservation = battle.ReserveDungeon(new(battle.Instance, 1, 1), 218, [(actor, identity)])!;
+                    reservation.Install();
+                    var map = new DfoServer.GameWorld.Dungeons.DungeonMap("boss", new(0, 0), 77, "fixture/energy.map");
+                    var snapshot = new DungeonRunSnapshot(identity, SinglePlayerDungeonPhase.Settlement, map, []);
+                    That(!battle.ConfirmAntonEnergy(actor, snapshot), "未清图报告不能扣屏障");
+                    That(battle.CompleteAntonReservedDungeon(new(identity, 218, [Guid.NewGuid()]) { ClearMap = map }) is not null,
+                        "能量测试沿正式Run清图");
+                    That(!battle.ConfirmAntonEnergy(actor, snapshot with { Identity = identity with { Epoch = 2 } }), "旧清图事实不能确认其它房间代");
+                    That(battle.ConfirmAntonEnergy(actor, snapshot) && battle.ConfirmAntonEnergy(actor, snapshot) &&
+                        battle.View.Symbols["[black volcano barrier]"] == Math.Max(0, 10000 - 3000 * (index + 1)),
+                        "每个可信Run只接受一次Last，钳制0且不从117重复扣能量");
+                    battle.ReleaseDungeon(actor, identity.InstanceId);
+                    That(!battle.ConfirmAntonEnergy(actor, snapshot), "已释放Run不能再次报告");
+                }
+                That(battle.View.Symbols["[movie barrier break]"] == 1, "归零执行PVF破壁规则");
+                clock.Advance(1);
+                That(battle.View.Symbols["[black volcano barrier]"] == 17, "首次归零后沿86每秒恢复17");
+                clock.Advance(179);
+                int previous = battle.View.Symbols["[black volcano barrier]"];
+                clock.Advance(1);
+                That(battle.View.Symbols["[black volcano barrier]"] == previous + 34, "感染场开放后恢复34");
+                for (int tick = 0; tick < 600; tick++) clock.Advance(1);
+                That(battle.View.Symbols["[black volcano barrier]"] == 10000 &&
+                    battle.View.Symbols["[movie barrier recover]"] == 1, "充电钳制满值并执行PVF恢复规则");
+                Clear(battle, actor, 219);
+                int stopped = battle.View.Symbols["[black volcano barrier]"];
+                clock.Advance(240); clock.FireQueued();
+                That(battle.View.Symbols["[black volcano barrier]"] == stopped && battle.View.Dungeons[220] == RaidDungeonState.Open,
+                    "火山通关取消充电，迟到回调不能污染心脏阶段");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
 
         void RewardWaitDetached()
         {

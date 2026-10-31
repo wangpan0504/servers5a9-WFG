@@ -20,6 +20,15 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
 
     async Task<CommandResult> FacilityAsync(GameConnectionContext context, Packet request)
     {
+        if (context.Session.RaidCombatKind() == RaidKind.Anton && RaidRequests.AntonEnergyClear(request.Body) &&
+            context.Session.PartyDungeon is { } antonParty && antonParty.ReportAntonEnergy(context.Session))
+        {
+            log.Write("raid_energy_confirmed", new { Connection = context.Id, Symbol = 110, Operand = 3000,
+                Contract = "anton-cleared-run-last-v1" });
+            context.Session.PublishRaidCombat();
+            // Anton成功ACK的消费合同未闭合，只发布已提交583，不猜回包。
+            return CommandResult.Handled;
+        }
         if (!context.Session.AcceptsLukeFacilityReports || RaidRequests.LukeFacilitySymbol(request.Body) is not { } symbol || context.Session.PartyDungeon is not { } party)
             return CommandResult.Unhandled;
         // 忙锁重试先恢复原封存SQL；不能在回放同一662时重复执行设施增量。

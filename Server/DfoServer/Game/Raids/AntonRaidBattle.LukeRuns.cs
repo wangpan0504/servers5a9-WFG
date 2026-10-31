@@ -29,6 +29,7 @@ internal sealed partial class AntonRaidBattle
         public Dictionary<RaidActor, long> MapEpochs { get; } = [];
         public Dictionary<RaidActor, DungeonClearFact> ClearFacts { get; } = [];
         public bool Cleared => ClearFacts.Count != 0;
+        public bool AntonEnergyConfirmed { get; set; }
     }
     readonly Dictionary<Guid, RaidDungeonRun> dungeonRuns = [];
     AntonRaidBattleView? pendingTransition;
