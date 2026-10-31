@@ -112,6 +112,7 @@ internal static class SelfTestRunner
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
         BoosterSelectionTests.RunCore();
+        BoosterGrowTypeTests.RunCharacterCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         MonsterCardBindTests.RunCore();
@@ -476,6 +477,7 @@ internal static class SelfTestRunner
         MaterialExchangeTests.Run(towns, characters, itemResources);
         CeraPackageAvatarTests.ShenxuanDefinitions(pvf, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
+        BoosterGrowTypeTests.RunCharacterResources(towns, pvf, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);
         BoosterDisjointNestedSelectionTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
         BoosterEquipmentTests.Run(towns, characters, itemResources);

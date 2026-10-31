@@ -15,11 +15,13 @@ internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewa
     public int MinimumLevel { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
     public int GrowType { get; init; } = -1;
+    public bool IsCharacterPool { get; init; }
     public ItemKind? RequiredKind { get; init; }
 
     public bool Matches(byte job, byte growType, byte level) => JobTag is null ||
         (string.Equals(JobTag, ItemCatalog.JobTag(job), StringComparison.OrdinalIgnoreCase) &&
-            (growType & 15) == GrowType && level >= MinimumLevel && level <= MaximumLevel);
+            ((IsCharacterPool && GrowType == -1) || (growType & 15) == GrowType) &&
+            level >= MinimumLevel && level <= MaximumLevel);
 }
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
     BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
@@ -354,6 +356,14 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     return new([], pending ?? "转职奖池无效");
                 if (growPool is not null)
                     pools.Add(growPool);
+                continue;
+            }
+            if (kind == "charactor")
+            {
+                if (!BoosterGrowTypePools.TryParseCharacter(match.Groups["data"].Value, out var characterPool, out string? pending))
+                    return new([], pending ?? "职业奖池无效");
+                if (characterPool is not null)
+                    pools.Add(characterPool);
                 continue;
             }
             if (kind == "avatar")
