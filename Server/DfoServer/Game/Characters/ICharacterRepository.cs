@@ -45,6 +45,8 @@ internal interface ICharacterRepository
     // 结算加成只读取账号等级，不装载商店、代表与远征；未初始化账号按初始等级1处理。
     int ReadAdventureLevel(AccountOwners.Lease owner);
     SelectionContentsState ReadSelectionContents(AccountOwners.Lease owner, CharacterRosterEntry? expected, DateTimeOffset now);
+    ImmutableArray<DfoServer.Game.Raids.RaidClearCount> ReadRaidClearCounts(AccountOwners.Lease owner, ushort character,
+        ImmutableArray<DfoServer.Game.Raids.RaidClearPeriod> periods);
     void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
     DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
         DfoServer.Game.Tutorials.TutorialCheckpointPlan plan);

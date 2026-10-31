@@ -406,6 +406,7 @@ internal static class ServerRuntime
             Rejoin = raidSettings.AntonRejoinEnabled ? "rejoin-recovery-sequence-unknown" : "anton-rejoin-disabled",
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
+        projection.RaidClearLukeCycle = lukeStartPolicy?.Completion?.Cycle;
         if (lukeStartPolicy?.ResourceCompletion is not null && lukeStartPolicy.Completion is { } resourceCompletion)
             log.Write("startup", new { Stage = "Luke resource completion policy", State = "complete", resourceCompletion.Source,
                 resourceCompletion.WeeklyClearLimit, resourceCompletion.Cycle,

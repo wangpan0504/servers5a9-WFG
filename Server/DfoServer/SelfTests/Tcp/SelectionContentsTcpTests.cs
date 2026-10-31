@@ -143,6 +143,11 @@ internal static class SelectionContentsTcpTests
         state=state with {RaidClears=[new(1,lukeCycle.Key(clock.Now),1),new(1,lukeCycle.Key(clock.Now.AddDays(-7)),2)]};
         That(raidRules.Character(state,first,clock.Now).RaidUsed[1]==1,
             "卢克按实际装配策略的周周期读取完成账本，排除历史周");
+        var beforeReset = new DateTimeOffset(2026,11,3,5,59,59,TimeSpan.FromHours(8));
+        state=state with {RaidClears=[new(2,DfoServer.Game.Raids.FiendwarRewards.Cycle.Key(beforeReset),2)]};
+        That(raidRules.Character(state,first,beforeReset).RaidUsed[2]==2 &&
+            raidRules.Character(state,first,beforeReset.AddSeconds(1)).RaidUsed[2]==0,
+            "漩涡悬停次数按周二06点重置，与真实入场同周期而非沿用周四");
         captured=session.CaptureSelectionContents(rules,0)!;
         session.ChangeCharacterSlots(0,1);
         That(!session.CanPublishSelectionContents(captured),"重排推进epoch后不能发布旧悬停结果");

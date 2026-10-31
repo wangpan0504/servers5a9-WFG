@@ -50,6 +50,8 @@ internal sealed partial class DungeonHandler
                     selected = fiendwarRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason, replay);
                     try
                     {
+                        // 城镇直接16也必须先建立原生scene2；Loading安装后选择回执已不再可发布。
+                        if (selected.Any(notice => notice.SceneTransition)) await PartyDungeonProjection.PublishAsync(selected);
                         entered = replay ? selected : selected.Length == 0 ? [] :
                             partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter, dungeons, rooms, null, null, null, null,
                                 onRejected: (rejection, slot) => reason = rejection + ":member=" + slot);

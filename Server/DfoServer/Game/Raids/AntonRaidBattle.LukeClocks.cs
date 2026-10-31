@@ -67,6 +67,9 @@ internal sealed partial class AntonRaidBattle
     void ScheduleLukeClockLocked()
     {
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
+        // 失败能力在首个终态快照密封；即使最后成员离开，原邮件事务仍须完成重试。
+        if (PendingFiendwarFailure() is not null)
+        { lease.Schedule(lease.RetryRemaining ?? TimeSpan.Zero); return; }
         if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null && LukeRewardRemainingLocked() is null &&
             LukeRejoinRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
         { lease.Dispose(); return; }

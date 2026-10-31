@@ -46,6 +46,8 @@ internal static partial class RaidCombatProjection
         }
         PostState(context, view, actor, Guard, "raid_phase_state");
         PostRoster(context, view, actor, Guard);
+        if (view.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed)
+            RaidClearProjection.Refresh(context, Guard);
     }
 
     static void PostRoster(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor, Func<bool> current)

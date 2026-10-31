@@ -58,6 +58,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         {
             await town.QuestCycleAsync(context);
             await town.LegacyServiceDayAsync(context);
+            RaidClearProjection.Refresh(context);
         }
         if (localPublished is { } local && local.Epoch == selectedEpoch && local.Day < localDay)
             await town.AssaultServiceDayAsync(context);
