@@ -37,6 +37,11 @@ internal static class CharacterInvestmentScoreTests
                 raw => raw == 0x00020001, id => sets.GetValueOrDefault(id), id => tals.GetValueOrDefault(id),
                 id => runes.GetValueOrDefault(id), id => boxes[id], (_, type) => type == 1);
         int Module(CharacterInvestmentResult r, string module) => r.Parts.Where(p => p.Module == module).Sum(p => p.Score);
+        CharacterInvestmentResult ScoreV24(params InventoryItem[] items) => CharacterInvestmentScore.Calculate(
+            CharacterInvestmentScore.Capture(Character(items), 1000), Get, (_, _, _, _) => true, _ => true,
+            id => sets.GetValueOrDefault(id), id => tals.GetValueOrDefault(id), id => runes.GetValueOrDefault(id),
+            id => boxes[id], (_, type) => type == 1, option => new(option.Id == 1254, 0, "fixture"),
+            (_, _) => throw new InvalidDataException("fixture"), includeQualitySeedTier: true, includeAllWorn: true);
         That(Score(Character()) is { Status: "Complete", Score: 0 }, "全空模块是完整零分");
         var equipped = EquipmentInvestmentScore.Slots.Select(slot => Item(slot)).ToArray();
         That(Score(Character(equipped)) is { Status: "Complete", Score: 24050 }, "v2底座与v1一致且不重复加算");
@@ -133,6 +138,50 @@ internal static class CharacterInvestmentScoreTests
             "异常收集箱只降本模块，不把已知穿戴总计变为Invalid");
         That(Score(Character(pet with { Core = pet.Core with { EmblemSocketCount = 1, Emblem1 = 9100 } })) is { Partial: true, Score: 1800 },
             "不将非装备宿主异常两孔状态静默当作空徽章模块");
+        var aura = Item(11, ItemKind.Avatar, grade: 3);
+        templates[aura.Core.ItemId] = templates[aura.Core.ItemId] with { EquipmentSlot = 9 };
+        var skin = Item(33, ItemKind.Creature);
+        templates[skin.Core.ItemId] = templates[skin.Core.ItemId] with { EquipmentSlot = 26 };
+        That(ScoreV24(aura) is { Profile: CharacterInvestmentScore.CompleteWornProfile, Score: 350, Partial: false }, "v2.4光环实际实体按Grade计分且接受部位9");
+        That(ScoreV24(pet, skin).Score == 3600 && Module(ScoreV24(pet, skin), "pet") == 3600, "宠物幻化为独立实体，按宠物档位及成长计分");
+        That(ScoreV24(aura, aura with { Position = new(InventoryListType.Equipment, 9) }).Status == "Invalid", "跨模块重复UID拒绝，不重复累计");
+        var artifacts = new short[] { 27, 28, 29 }.Select(slot => Item(slot, ItemKind.CreatureEquipment)).ToArray();
+        That(ScoreV24(artifacts) is { Score: 900, Partial: false }, "宠装三槽全部计入且每件仅一次");
+        That(ScoreV24(medal with { Core = medal.Core with { Attr = 10 } }).Score == 700, "公会勋章保留600基础与每强化级10，不重复强化");
+        InventoryItem[] hosts = [aura, pet, skin, .. artifacts, medal, Item(24), Item(30)];
+        foreach (var host in hosts)
+        {
+            var enchantedHost = host with { Core = host.Core with { EnchantCardId = 9000, EnchantUpgrade = 2 } };
+            That(Module(ScoreV24(enchantedHost), "enchant") == 100, "所有有效穿戴宿主附魔仍固定每件100：" + host.Position.Index);
+            if (host.Core.Kind is ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.Avatar)
+                That(ScoreV24(host with { Core = host.Core with { Attr = 10 } }).Score == ScoreV24(host).Score + 200,
+                    "特殊实体强化按档位计分：" + host.Position.Index);
+        }
+        var subweapon = Item(24);
+        templates[subweapon.Core.ItemId] = templates[subweapon.Core.ItemId] with { EquipmentSlot = 12 };
+        var upgradedSubweapon = subweapon with { Core = subweapon.Core with { Attr = 10, GenuineUpgrade = 8, Value = 999999998 } };
+        That(ScoreV24(upgradedSubweapon).Score == 1850 + 260 + 100, "副武器接受武器模板，强化锻造取较大档，仅一倍权重并加品质");
+        That(Module(ScoreV24(subweapon with { Core = subweapon.Core with { Chronicle0 = new(1254, 0, 0, 12, 1) } }), "chronicle") == 40,
+            "副武器气息沿安装器模板部位12验证，不误用物理24");
+        That(Module(ScoreV24(equipped), "equipment") == 24050, "v2.4标准十二件基础不重复加算");
+        var missingBase = Item(25) with { Core = equipped[^1].Core with { ItemId = 88888, Attr = 15 } };
+        That(ScoreV24(missingBase) is { Score: 0, Partial: true }, "标准装备缺资源不残留强化或品质奖励");
+        var invalidHost = equipped[0] with { Avatar = new() };
+        That(ScoreV24(invalidHost) is { Score: 0, Partial: true }, "普通装备详情非法时基础与全部附属同时排除");
+        That(Module(ScoreV24(enchanted with { Core = enchanted.Core with { EnchantUpgrade = 5 } }), "enchant") == 100 &&
+            Module(ScoreV24(random with { Core = random.Core with { Random0 = new(1, 99, 99) } }), "random-option") == 40,
+            "附魔索引与魔封属性数值变化不改变件数分");
+        That(Module(ScoreV24(pet with { Core = pet.Core with { Attr = 10, AmplifyType = 1, AmplifyValue = 1 } }), "enhancement") == 300,
+            "宠物已保存强化及有效增幅各计一次");
+        That(Module(ScoreV24(Item(13), Item(30)), "title") == 1850, "称号使用完整普通装备基础，不叠加旧称号表");
+        That(ScoreV24(Item(31)) is { Partial: true, Score: 0 }, "31无穿戴准入合同，不冒充勋章或普通装备");
+        That(ScoreV24(aura with { Avatar = aura.Avatar! with { Socket0 = new(16, 9100), Socket4 = new(16, 9100) } }).Score == 550,
+            "新增光环实体两枚白金仍每孔100，与属性量无关");
+        That(ScoreV24(aura with { Avatar = aura.Avatar! with { ExpireTime = 1000 } }) is { Score: 0, Partial: false }, "新增光环详情到期排除");
+        templates.Remove(artifacts[2].Core.ItemId);
+        That(ScoreV24(artifacts) is { Partial: true, Score: 600 }, "缺资源只缺对应宠装，不影响其它槽");
+        That(Module(ScoreV24(gemmed), "gem") == 130 && Module(ScoreV24(random), "random-option") == 40 &&
+            ScoreV24(tal, ritem).Score == 250, "v2.4保留守护珠、魔封、护石及符文固定分");
         That(DevelopmentRequest.Parse("character-score Hero", "owner") is { Action: DevelopmentAction.CharacterScore, Writes: false }, "新v2独立只读命令");
         using (var fixture = new MailboxPersistenceTests.Fixture())
         {

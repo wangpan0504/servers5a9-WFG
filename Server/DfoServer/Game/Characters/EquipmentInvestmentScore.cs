@@ -49,19 +49,21 @@ internal static class EquipmentInvestmentScore
     }
 
     // 生产调用传共享ItemCatalog.Get；注入查询仅为确定性纯测试，不建立第二套目录或状态。
-    public static InvestmentScoreResult Calculate(InvestmentSnapshot snapshot, Func<int, ItemTemplate> template)
+    public static InvestmentScoreResult Calculate(InvestmentSnapshot snapshot, Func<int, ItemTemplate> template, bool includeAdditionalSlots = false)
     {
+        // v2.4扩展仍复用同一公式；旧v1入口只接受标准十二件。
+        ImmutableArray<short> slots = includeAdditionalSlots ? [.. Slots, 13, 24, 30] : Slots;
         InvestmentScoreResult Invalid(string error) => new(Profile, snapshot.CharacterId, snapshot.CharacterRevision,
             snapshot.ObservedAt, "Invalid", null, false, false, [], error);
         if (snapshot.Error is not null) return Invalid(snapshot.Error);
         if (snapshot.CharacterId == 0 || snapshot.CharacterRevision < 0 || snapshot.ObservedAt < 0 || snapshot.Items.IsDefault ||
-            snapshot.Items.Length > Slots.Length || snapshot.Items.Any(item => item is null || item.Uid <= 0 || item.ItemId <= 0 ||
-                !Slots.Contains(item.Slot) || item.Upgrade > 31 || item.ExpireTime < 0) ||
+            snapshot.Items.Length > slots.Length || snapshot.Items.Any(item => item is null || item.Uid <= 0 || item.ItemId <= 0 ||
+                !slots.Contains(item.Slot) || item.Upgrade > 31 || item.ExpireTime < 0) ||
             snapshot.Items.Select(item => item.Slot).Distinct().Count() != snapshot.Items.Length ||
             snapshot.Items.Select(item => item.Uid).Distinct().Count() != snapshot.Items.Length)
             return Invalid("invalid_snapshot");
         var rows = ImmutableArray.CreateBuilder<InvestmentSlotScore>();
-        foreach (short slot in Slots)
+        foreach (short slot in slots)
         {
             int weight = slot == 12 ? 2 : 1;
             var item = snapshot.Items.SingleOrDefault(item => item.Slot == slot);
@@ -87,7 +89,8 @@ internal static class EquipmentInvestmentScore
             { partial = true; notes.Add("template_unavailable"); }
             else
             {
-                if (definition.Id != item.ItemId || definition.Kind != ItemKind.Equipment || definition.EquipmentSlot != slot)
+                if (definition.Id != item.ItemId || definition.Kind != ItemKind.Equipment ||
+                    !(definition.EquipmentSlot == slot || includeAdditionalSlots && slot == 24 && definition.EquipmentSlot == 12))
                 {
                     rows.Add(new(slot, item.Uid, item.ItemId, weight, definition.MinimumLevel, definition.Rarity,
                         item.Upgrade, item.Refinement, item.AmplifyType, 0, 0, 0, 0, true, false,
@@ -104,7 +107,7 @@ internal static class EquipmentInvestmentScore
             int upgrade = Math.Min((int)item.Upgrade, 15);
             if (item.Upgrade > 15) { capped = true; notes.Add("upgrade_capped_15"); }
             int equivalent = upgrade;
-            if (slot == 12)
+            if (slot == 12 || includeAdditionalSlots && slot == 24)
             {
                 equivalent = Math.Max(upgrade, RefinementEquivalent[Math.Min((int)item.Refinement, 8)]);
                 if (item.Refinement > 8) { capped = true; notes.Add("refinement_capped_8"); }
@@ -121,7 +124,7 @@ internal static class EquipmentInvestmentScore
             if (item.Durability == 0) notes.Add("broken_investment_retained");
             rows.Add(new(slot, item.Uid, item.ItemId, weight, definition?.MinimumLevel, definition?.Rarity,
                 item.Upgrade, item.Refinement, item.AmplifyType, baseScore, enhancement, amplification,
-                weight * (baseScore + enhancement + amplification), partial, capped, notes.ToImmutable()));
+                includeAdditionalSlots && definition is null ? 0 : weight * (baseScore + enhancement + amplification), partial, capped, notes.ToImmutable()));
         }
         var result = rows.ToImmutable();
         bool incomplete = result.Any(row => row.Partial);

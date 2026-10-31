@@ -19,11 +19,11 @@ internal static class CharacterScoreProjection
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
         if (score.CharacterId != snapshot.Equipment.CharacterId || score.CharacterRevision != snapshot.Equipment.CharacterRevision ||
-            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile or CharacterInvestmentScore.DimensionEnergyProfile or CharacterInvestmentScore.QualityProfile) || score.Status == "Invalid" || score.Score is null)
+            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile or CharacterInvestmentScore.DimensionEnergyProfile or CharacterInvestmentScore.QualityProfile or CharacterInvestmentScore.CompleteWornProfile) || score.Status == "Invalid" || score.Score is null)
             throw new InvalidDataException("评分提示计算身份或数据无效");
         long deadline = checked(snapshot.Equipment.ObservedAt + GameSession.ScoreNoticeLifetimeSeconds);
         foreach (var item in snapshot.Worn)
-            if (item.Position.Index is not (11 or 33) && item.ExpireTime > snapshot.Equipment.ObservedAt)
+            if ((score.Profile == CharacterInvestmentScore.CompleteWornProfile || item.Position.Index is not (11 or 33)) && item.ExpireTime > snapshot.Equipment.ObservedAt)
                 deadline = Math.Min(deadline, item.ExpireTime);
         try
         {
@@ -49,6 +49,7 @@ internal static class CharacterScoreProjection
             {
                 CharacterInvestmentScore.DimensionEnergyProfile => "v2.2",
                 CharacterInvestmentScore.QualityProfile => "v2.3",
+                CharacterInvestmentScore.CompleteWornProfile => "v2.4",
                 CharacterInvestmentScore.ChronicleProfile => "v2.1",
                 _ => "v2"
             };

@@ -203,10 +203,10 @@ internal static class ChronicleInvestmentTests
             using var result = JsonDocument.Parse(json[3..]);
             var root = result.RootElement;
             var parts = root.GetProperty("Parts").EnumerateArray().ToArray();
-            That(root.GetProperty("Profile").GetString() == CharacterInvestmentScore.QualityProfile &&
+            That(root.GetProperty("Profile").GetString() == CharacterInvestmentScore.CompleteWornProfile &&
                 parts.Where(part => part.GetProperty("Module").GetString() == "chronicle").Sum(part => part.GetProperty("Score").GetInt32()) == 40 &&
                 parts.Where(part => part.GetProperty("Module").GetString() == "quality").Sum(part => part.GetProperty("Score").GetInt32()) == 100,
-                "实际穿戴后的默认v2.3保留每气息40与顶档seed100，不重复部位权");
+                "实际穿戴后的默认v2.4保留每气息40与顶档seed100，不重复部位权");
             That(f.Snapshot() == original, "实际原色目录评分不写SQLite或重roll种子");
         }
         That(resources.ChronicleEnchants.Get(1257) is null, "当前1257无动作、类型或导入表，不伪称可安装黄色气息");
