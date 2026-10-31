@@ -189,7 +189,8 @@ internal static class ExpertJobLearningTcpTests
             That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body).All(tree => tree.Skills.All(skill => skill.Id != 194)),
                 "放弃时先移除双树副职业赠技");
             peer.Expect(0, 2);
-            peer.Expect(1, 239, [1, 40, 35, 0, 0, 1, 0]); peer.Barrier();
+            peer.Expect(1, 239, [1, 40, 35, 0, 0, 1, 0]);
+            peer.Expect(0, 574); peer.Expect(0, 21); peer.Expect(0, 356); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_expert_job WHERE character_id=$p0", peer.Id) is [[0L]],
                 "放弃资格、赠技和费用同次提交");
         }

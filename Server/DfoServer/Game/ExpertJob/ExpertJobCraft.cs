@@ -27,7 +27,7 @@ internal static class ExpertJobCraft
         if (!scripts.TryRecipe(character.ExpertJobType, (int)recipeId, out var recipe))
             return false;
         int level = scripts.Level(character.ExpertJobType, character.ExpertJobExperience);
-        if (level < recipe.RequiredLevel || character.ExpertJobType == 1 && !character.ExpertJobRecipes.Contains(recipe.RecipeId)) return false;
+        if (!scripts.IsLearned(character.ExpertJobType, level, character.ExpertJobRecipes, recipe.RecipeId)) return false;
         var (successPercent, experienceMin, experienceMax) = scripts.Outcome(character.ExpertJobType, recipe, level);
         var inventory = character.Inventory;
         foreach (var material in recipe.Materials)
@@ -125,29 +125,52 @@ internal static class ExpertJobCraft
         var extractor = character.Inventory.Find(new(InventoryListType.Main, extractorSlot));
         var target = character.Inventory.Find(new(targetList, targetSlot));
         if (extractor is null || target is null || extractor.Uid <= 0 || target.Uid <= 0 ||
+            !extractor.Core.IsStackable || extractor.Core.Count <= 0 || extractor.Position == target.Position ||
             extractor.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 ||
             extractor.IsExpired(now.ToUnixTimeSeconds()) || target.IsExpired(now.ToUnixTimeSeconds()) ||
+            !ItemSlotBoundService.Allows(character.Inventory, extractor.Position, extractor.Core.Kind) ||
+            !ItemSlotBoundService.Allows(character.Inventory, target.Position, target.Core.Kind) ||
             target.Core.Kind != ItemKind.Equipment || target.Core.IsStackable)
             return false;
-        if (!scripts.TryExtractExp(character.ExpertJobType, extractor.Core.ItemId, out int expMin, out int expMax))
+        if (!scripts.CanExtract(character.ExpertJobType, scripts.Level(character.ExpertJobType, character.ExpertJobExperience), extractor.Core.ItemId) ||
+            !scripts.TryExtractExp(character.ExpertJobType, extractor.Core.ItemId, out int expMin, out int expMax))
             return false;
         var template = items.Get(target.Core.ItemId);
+        var tool = items.Get(extractor.Core.ItemId);
+        if (template.Kind != target.Core.Kind || tool.Kind != extractor.Core.Kind || !tool.AllowsUse(character.Level, character.Job))
+            return false;
         int state = EquipmentState(target.Core);
         if (!scripts.TryExtractResult(character.ExpertJobType, extractor.Core.ItemId, template.Rarity, state, out var row))
             return false;
         int sell = Math.Max(1, template.ShopPrice.GetSellGold(target.Core.Durability, template.Durability));
-        int count = Math.Max(1, (int)Math.Floor(sell * row.Multiplier));
+        int grade = Math.Max(1, template.Grade);
+        int divisor = scripts.ExtractionBase(character.ExpertJobType);
+        double basis = divisor > 0 ? (double)sell / divisor : grade;
+        var rewards = new List<InventoryReward> { new(row.ItemId, Math.Max(1, (int)Math.Floor(basis * row.Multiplier))) };
+        bool bigWin = next(10000) < row.BigWinPercent * 100;
+        int roll = next(10000);
+        foreach (var candidate in scripts.ExtractionPool(character.ExpertJobType, bigWin ? row.BigWinTable : row.AdditionalTable, bigWin))
+        {
+            if (grade < candidate.MinimumGrade || grade > candidate.MaximumGrade) continue;
+            if (roll < candidate.Weight)
+            {
+                rewards.Add(new(candidate.ItemId, Math.Max(1, (int)Math.Floor(grade * candidate.Multiplier))));
+                break;
+            }
+            roll -= candidate.Weight;
+        }
         var deleted = InventoryDeleteService.Plan(character.Inventory, target.Position, target.Core.ItemId, 1);
         if (!deleted.Accepted || deleted.Plan is null) return false;
         var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = deleted.Plan.After },
-            [new InventoryReward(row.ItemId, count)], items, goldLimits, pieces, now);
+            rewards.ToArray(), items, goldLimits, pieces, now);
         if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
         int gained = expMin;
         if (expMax > expMin) gained += next(expMax - expMin + 1);
         int experience = character.ExpertJobExperience;
         if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
-        plan = new(new(character.Inventory, grant.Plan.After, "expert_job_extract"), experience,
-            [new(row.ItemId, count)], 1, 0);
+        long? deadline = new[] { extractor.ExpireTime, target.ExpireTime }.Where(value => value > 0).Select(value => (long?)value).Min();
+        plan = new(new(character.Inventory, grant.Plan.After, "expert_job_extract", new(character, deadline)), experience,
+            rewards.GroupBy(reward => reward.ItemId).Select(group => new ExpertJobProduct(group.Key, group.Sum(reward => reward.Count))).ToArray(), 1, 0);
         return true;
     }
 
@@ -230,7 +253,15 @@ internal static class ExpertJobCraft
         int cost = costs[index];
         var spend = CurrencyService.Spend(character.Inventory, CurrencyKind.Gold, cost);
         if (!spend.Accepted || spend.Plan is null) return false;
-        wallet = spend.Plan;
+        var inventory = spend.Plan.After;
+        foreach (var item in inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.PersonalCargo &&
+            scripts.GiveUpDeletedItems(character.ExpertJobType).Contains(item.Core.ItemId)).ToArray())
+        {
+            var deleted = InventoryDeleteService.Plan(inventory, item.Position, item.Core.ItemId, item.Core.Count);
+            if (!deleted.Accepted || deleted.Plan is null) return false;
+            inventory = deleted.Plan.After;
+        }
+        wallet = new(character.Inventory, inventory, "expert_job_giveup", new(character));
         giveUpState = Math.Min(index + 1, costs.Length - 1);
         error = 0;
         return true;
@@ -257,7 +288,7 @@ internal static class ExpertJobCraft
         var spend = CurrencyService.Spend(character.Inventory, CurrencyKind.Gold, gold);
         if (!spend.Accepted || spend.Plan is null) return false;
         scripts.TryRepair(3, target, out _, out int nextMax);
-        wallet = spend.Plan;
+        wallet = new(character.Inventory, spend.Plan.After, "expert_job_upgrade", new(character));
         grade = target;
         endurance = nextMax > 0 ? nextMax : scripts.EnduranceInitial(3);
         error = 0;
@@ -271,7 +302,7 @@ internal static class ExpertJobCraft
         endurance = character.ExpertMachineEndurance;
         error = 19;
         if (character.ExpertJobType is not (1 or 3)) return false;
-        int grade = Math.Max(1, character.ExpertMachineGrade);
+        int grade = character.ExpertJobType == 1 ? scripts.Level(1, character.ExpertJobExperience) : Math.Max(1, character.ExpertMachineGrade);
         if (!scripts.TryRepair(character.ExpertJobType, grade, out int fullCost, out int max) || max <= 0)
             return false;
         int missing = max - character.ExpertMachineEndurance;
@@ -279,7 +310,7 @@ internal static class ExpertJobCraft
         int cost = Math.Max(1, (int)((long)missing * fullCost / max));
         var spend = CurrencyService.Spend(character.Inventory, CurrencyKind.Gold, cost);
         if (!spend.Accepted || spend.Plan is null) return false;
-        wallet = spend.Plan;
+        wallet = new(character.Inventory, spend.Plan.After, "expert_job_repair", new(character));
         endurance = max;
         error = 0;
         return true;

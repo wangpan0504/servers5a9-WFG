@@ -25,6 +25,12 @@ internal static class ExpertJobActionTests
         That(items.Get(20238) is { Rarity: 3, BossDrop: true } && items.Get(10114).BossDrop == false,
             "当前PVF牛头兵项链的boss drop分类与普通装备区分");
         var policy = new ExpertJobCompatibility();
+        var repairSource = new DfoServer.Game.Characters.Character(1, 0, "Repair", 0, towns.Room, towns.InitialReturn)
+        { Level = 50, ExpertJobType = 1, ExpertJobExperience = scripts.ExperienceForLevel(1, 9),
+            ExpertMachineGrade = 1, ExpertMachineEndurance = 299, Inventory = new([], Gold: 1000000) };
+        That(ExpertJobCraft.TryPlanRepair(repairSource, scripts, out var repaired, out int capacity, out _) &&
+            capacity == 500 && repaired.After.Gold == 979900 && repaired.CharacterPrecondition is not null,
+            "Lv9附魔维修按EXJ职业等级补到500并收20100，不能误用机器档1");
         foreach (var invalid in new[] { policy with { DisjointEnduranceCost = 0 }, policy with { EnchantSuccessPercent = 101 },
             policy with { SelfServiceRewardPercent = -1 }, policy with { DisjointRewardPermille = 10001 } })
             Reject<InvalidDataException>(() => invalid.Validate(), "兼容配置越界启动拒绝");
@@ -88,6 +94,16 @@ internal static class ExpertJobActionTests
             enchanter = repository.CommitInventory(owner, enchanter, grant.Plan!);
             Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) VALUES({enchanter.Id},'profession-action',1,1195,'[{cardRecipe.RecipeId}]')");
             enchanter = repository.LoadCharacter(owner, 1);
+            That(ExpertJobCraft.TryPlanRepair(enchanter, scripts, out var repairWallet, out int repairEndurance, out _),
+                "真实Lv9附魔角色可规划维修");
+            Sql($"UPDATE character_expert_job SET expertness=0 WHERE character_id={enchanter.Id}");
+            Reject<InvalidOperationException>(() => repository.CommitExpertJobMachine(owner, enchanter, repairWallet,
+                enchanter.ExpertMachineGrade, repairEndurance), "资产版本相同但副职业等级已变时拒绝旧维修");
+            var repairRollback = repository.LoadCharacter(owner, 1);
+            That(repairRollback.Revision == enchanter.Revision && repairRollback.Inventory.Gold == enchanter.Inventory.Gold &&
+                repairRollback.ExpertJobExperience == 0 && repairRollback.ExpertMachineEndurance == enchanter.ExpertMachineEndurance,
+                "旧资格维修失败回滚费用、版本和耐久，保留实际新资格");
+            Sql($"UPDATE character_expert_job SET expertness={enchanter.ExpertJobExperience} WHERE character_id={enchanter.Id}");
             var enchanting = new ExpertJobEnchanting(scripts, items, resources.Enchantments,
                 policy with { EnchantSuccessPercent = 100 }, random: _ => 0);
             That(enchanting.Plan(enchanter with { ExpertJobRecipes = ImmutableHashSet<int>.Empty }, cardRecipe.RecipeId, gearSlot, cardSlot) is null &&

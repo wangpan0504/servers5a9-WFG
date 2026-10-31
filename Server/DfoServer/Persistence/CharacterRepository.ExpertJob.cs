@@ -76,22 +76,9 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             using var write = db.BeginWrite("CharacterRepository.CommitExpertJobCraft");
             using var transaction = write.Transaction;
             var current = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
-            if (tutorial is not null)
-            {
-                if (!ReferenceEquals(tutorial.Expected, expected) || tutorial.Action != QuestLifecycleAction.Condition ||
-                    expected.ExpertJobType is not (2 or 4) || tutorial.QuestId != QuestExpertJobProgress.TutorialQuest(expected.ExpertJobType) ||
-                    tutorial.AcceptanceId == Guid.Empty || tutorial.ActiveAfter.Single(row => row.AcceptanceId == tutorial.AcceptanceId).ConditionState != 0)
-                    throw new InvalidDataException("副职业制作教程计划非法");
-                var target = current.ActiveMainQuests.Single(row => row.AcceptanceId == tutorial.AcceptanceId && row.QuestId == tutorial.QuestId);
-                if (target.ConditionState != 1) throw new InvalidOperationException("副职业制作教程接取身份已变化");
-                var active = current.ActiveMainQuests.Select(row => row == target ? row with { ConditionState = 0 } : row).ToArray();
-                WriteQuestConditions(db, transaction, current.Id, current.ActiveMainQuests, active);
-                current = current with { ActiveMainQuests = active };
-            }
+            current = CommitExpertJobTutorial(db, transaction, expected, current, tutorial);
 
-            if (current.ExpertJobType != expected.ExpertJobType || current.ExpertJobExperience != expected.ExpertJobExperience ||
-                !current.ExpertJobRecipes.SetEquals(expected.ExpertJobRecipes))
-                throw new InvalidOperationException("副职业制作资格已经变化");
+            ValidateExpertJobQualification(current, expected);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = "UPDATE character_expert_job SET expertness=$exp WHERE character_id=$id AND account=$account AND job_type=$type";
@@ -132,17 +119,21 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
         });
     }
 
-    public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState, CharacterLearningState learning)
+    public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState, CharacterLearningState learning,
+        IReadOnlyList<int>? clearQuests = null)
     {
         if (expected.ExpertJobType is < 1 or > 4 || giveUpState is < 0 or > 3)
             throw new InvalidDataException("没有可放弃的副职业资格");
         learning.Validate();
+        var cleared = (clearQuests ?? []).ToHashSet();
+        if (cleared.Any(id => id is <= 0 or >= 30000)) throw new InvalidDataException("副职业清理任务编号非法");
         return owner.Execute(() =>
         {
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitExpertJobGiveUp");
             using var transaction = write.Transaction;
             var committed = CommitInventoryInTransaction(db, transaction, owner, expected, wallet);
+            ValidateExpertJobQualification(committed, expected);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
             command.Parameters.AddWithValue("$id", expected.Id);
@@ -150,6 +141,15 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             command.Parameters.AddWithValue("$type", expected.ExpertJobType);
             command.CommandText = "DELETE FROM character_expert_job WHERE character_id=$id AND account=$account AND job_type=$type";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业资格行已变化");
+            command.Parameters.AddWithValue("$quest", 0);
+            foreach (int quest in cleared)
+            {
+                command.Parameters["$quest"].Value = quest;
+                command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
+                command.ExecuteNonQuery();
+                command.CommandText = "DELETE FROM character_completed_quests WHERE character_id=$id AND quest_id=$quest";
+                command.ExecuteNonQuery();
+            }
             UpsertExpertMeta(command, owner.Account, expected.Id, giveUpState, 1, 300);
             if (!SameLearning(expected.Learning, learning))
             {
@@ -167,7 +167,11 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
                 ExpertJobRecipes = System.Collections.Immutable.ImmutableHashSet<int>.Empty,
                 ExpertGiveUpState = giveUpState,
                 ExpertMachineGrade = 1,
-                ExpertMachineEndurance = 300
+                ExpertMachineEndurance = 300,
+                ActiveMainQuests = committed.ActiveMainQuests.Where(row => !cleared.Contains(row.QuestId)).ToArray(),
+                CompletedQuests = committed.CompletedQuests.Where(id => !cleared.Contains(id)).ToArray(),
+                QuestDailyClaims = committed.QuestDailyClaims.RemoveRange(cleared),
+                QuestAnswers = committed.QuestAnswers.RemoveRange(cleared)
             };
         });
     }
@@ -183,6 +187,7 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             using var write = db.BeginWrite("CharacterRepository.CommitExpertJobMachine");
             using var transaction = write.Transaction;
             var committed = CommitInventoryInTransaction(db, transaction, owner, expected, wallet);
+            ValidateExpertJobQualification(committed, expected);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
             UpsertExpertMeta(command, owner.Account, expected.Id, committed.ExpertGiveUpState, grade, endurance);
@@ -202,10 +207,9 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             using var write = db.BeginWrite("CharacterRepository.CommitExpertJobAction");
             using var transaction = write.Transaction;
             var current = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
-            if (current.ExpertJobType != expected.ExpertJobType || current.ExpertJobExperience != expected.ExpertJobExperience ||
-                current.ExpertMachineGrade != expected.ExpertMachineGrade || current.ExpertMachineEndurance != expected.ExpertMachineEndurance ||
-                current.ExpertGiveUpState != expected.ExpertGiveUpState || !current.ExpertJobRecipes.SetEquals(expected.ExpertJobRecipes))
-                throw new InvalidOperationException("副职业操作资格已经变化");
+            if (!plan.Succeeded && plan.Tutorial is not null) throw new InvalidDataException("失败操作不能推进副职业教程");
+            current = CommitExpertJobTutorial(db, transaction, expected, current, plan.Tutorial);
+            ValidateExpertJobQualification(current, expected);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = "UPDATE character_expert_job SET expertness=$exp WHERE character_id=$id AND account=$account AND job_type=$type";
@@ -223,16 +227,14 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
         owner.Execute(() =>
         {
             var expected = plan.Expected;
-            if (expected.ExpertJobType != 1 || expected.ExpertJobRecipes.Contains(plan.RecipeId) ||
+            if (expected.ExpertJobType is not (1 or 2 or 4) || expected.ExpertJobRecipes.Contains(plan.RecipeId) ||
                 expected.ExpertJobRecipes.Count >= byte.MaxValue || plan.RecipeId <= 0 || !plan.Inventory.Changed)
                 throw new InvalidDataException("副职业设计图学习计划非法");
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitExpertJobLearning");
             using var transaction = write.Transaction;
             var committed = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
-            if (committed.ExpertJobType != expected.ExpertJobType || committed.ExpertJobExperience != expected.ExpertJobExperience ||
-                !committed.ExpertJobRecipes.SetEquals(expected.ExpertJobRecipes))
-                throw new InvalidOperationException("副职业学习资格已经变化");
+            ValidateExpertJobQualification(committed, expected);
             var recipes = committed.ExpertJobRecipes.Add(plan.RecipeId);
             using var command = db.CreateCommand();
             command.Transaction = transaction;
@@ -245,6 +247,21 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             transaction.Commit();
             return committed with { ExpertJobRecipes = recipes };
         });
+
+    static Character CommitExpertJobTutorial(SqliteConnection db, SqliteTransaction transaction, Character expected,
+        Character current, QuestLifecyclePlan? tutorial)
+    {
+        if (tutorial is null) return current;
+        if (!ReferenceEquals(tutorial.Expected, expected) || tutorial.Action != QuestLifecycleAction.Condition ||
+            tutorial.QuestId != QuestExpertJobProgress.TutorialQuest(expected.ExpertJobType) || tutorial.AcceptanceId == Guid.Empty ||
+            tutorial.ActiveAfter.Single(row => row.AcceptanceId == tutorial.AcceptanceId).ConditionState != 0)
+            throw new InvalidDataException("副职业教程计划非法");
+        var target = current.ActiveMainQuests.Single(row => row.AcceptanceId == tutorial.AcceptanceId && row.QuestId == tutorial.QuestId);
+        if (target.ConditionState != 1) throw new InvalidOperationException("副职业教程接取身份已变化");
+        var active = current.ActiveMainQuests.Select(row => row == target ? row with { ConditionState = 0 } : row).ToArray();
+        WriteQuestConditions(db, transaction, current.Id, current.ActiveMainQuests, active);
+        return current with { ActiveMainQuests = active };
+    }
 
     static void UpsertExpertMeta(SqliteCommand command, string account, ushort id, int giveUpState, int grade, int endurance)
     {

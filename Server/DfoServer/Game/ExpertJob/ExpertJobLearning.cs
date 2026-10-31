@@ -15,7 +15,9 @@ internal sealed class ExpertJobLearning(ExpertJobScriptCatalog scripts, ItemCata
     public ExpertJobLearningPlan? Plan(Character character, InventorySlot slot, int itemId)
     {
         if (!scripts.TryLearningRecipe(itemId, out var definition) || character.ExpertJobType != definition.Job ||
-            character.ExpertJobRecipes.Count >= byte.MaxValue || character.ExpertJobRecipes.Contains(itemId) ||
+            scripts.LearnedRecipes(character.ExpertJobType, scripts.Level(character.ExpertJobType,
+                character.ExpertJobExperience), character.ExpertJobRecipes).Length >= byte.MaxValue || scripts.IsLearned(character.ExpertJobType,
+                scripts.Level(character.ExpertJobType, character.ExpertJobExperience), character.ExpertJobRecipes, itemId) ||
             scripts.Level(character.ExpertJobType, character.ExpertJobExperience) < definition.RequiredLevel ||
             definition.Rarity is { } rarity && scripts.LearnedRarities(character.ExpertJobRecipes).Contains(rarity))
             return null;

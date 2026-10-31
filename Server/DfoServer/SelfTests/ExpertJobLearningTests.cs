@@ -18,6 +18,8 @@ internal static class ExpertJobLearningTests
     public static void Run(TownCatalog towns, ItemResources items, ExpertJobScriptCatalog scripts)
     {
         ExpertJobCraftTests.Run(towns, items);
+        ExpertJobGiveUpTests.Run(towns, items);
+        ExpertJobOtherLearningTests.Run(towns, items);
         int checks = Count;
         foreach (var (id, level, rarity) in new[] { (10015129, 1, 0), (10015130, 4, 1), (10015131, 7, 2),
             (10015132, 9, 3), (10159564, 10, 6), (10015151, 11, 4) })
@@ -25,8 +27,8 @@ internal static class ExpertJobLearningTests
                 "真实附魔卷轴等级与稀有度完整映射：" + id);
         That(scripts.TryLearningRecipe(2600141, out var craft) && craft.RequiredLevel == 1 && craft.Rarity is null,
             "制作图学习不将商店need material当成制作/学习成本");
-        That(!scripts.TryLearningRecipe(490705314, out _) && !scripts.TryLearningRecipe(2600149, out _),
-            "宝珠与其他副职业设计图不进入附魔师学习入口");
+        That(!scripts.TryLearningRecipe(490705314, out _) && scripts.TryLearningRecipe(2600149, out var alchemy) && alchemy.Job == 2,
+            "宝珠不是图纸，炼金图纸归属真实副职业");
         string root = Path.Combine(Path.GetTempPath(), "s5a9-expert-learning-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try

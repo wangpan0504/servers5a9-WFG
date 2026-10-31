@@ -9,7 +9,7 @@ using DfoServer.GameWorld.Quests;
 namespace DfoServer.Game.Session;
 
 internal sealed record ExpertJobGiveUpResult(ushort Error, string Reason, Character? Character, long Generation, long Epoch,
-    SessionPhase Phase, uint FinalGold = 0, byte GiveUpState = 0);
+    SessionPhase Phase, uint FinalGold = 0, byte GiveUpState = 0, InventoryPlan? Inventory = null);
 
 internal sealed partial class GameSession
 {
@@ -80,11 +80,12 @@ internal sealed partial class GameSession
         {
             if (!CanUseExpertJob() || SelectionEpoch != capture.SelectionEpoch || !ReferenceEquals(Selected, before))
                 return Rejected(19, "stale-expert-job");
-            var committed = repository.CommitExpertJobGiveUp(owner, before, wallet, giveUpState, learning);
+            var committed = repository.CommitExpertJobGiveUp(owner, before, wallet, giveUpState, learning, scripts.ClearQuests(before.ExpertJobType));
             Selected = committed;
-            expertJobStoreOpen = false;
+            completed = QuestEligibility.Completed(committed);
+            InvalidateExpertJobStore();
             return new ExpertJobGiveUpResult(0, "committed", committed, owner.Generation, SelectionEpoch, Phase,
-                committed.Inventory.Gold, (byte)committed.ExpertGiveUpState);
+                committed.Inventory.Gold, (byte)committed.ExpertGiveUpState, wallet);
         });
     }
 
@@ -100,13 +101,14 @@ internal sealed partial class GameSession
         };
     });
 
-    public InventoryResult CommitExpertJobCraft(InventoryPlan inventory, int experience, QuestCatalog? tutorialQuests = null) => owner.Execute(() =>
+    public InventoryResult CommitExpertJobCraft(InventoryPlan inventory, int experience, QuestCatalog? tutorialQuests = null,
+        bool enchanting = false) => owner.Execute(() =>
     {
         if (!CanUseExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
             return InventoryResult.Reject(19);
         Character committed;
         QuestLifecyclePlan? tutorial = null;
-        if (tutorialQuests is not null && expertJobStoreOpen && current.ExpertJobType is 2 or 4 &&
+        if (tutorialQuests is not null && expertJobStoreOpen && (current.ExpertJobType is 2 or 4 || enchanting && current.ExpertJobType == 1) &&
             QuestExpertJobProgress.TutorialQuest(current.ExpertJobType) is { } questId)
             tutorial = QuestLifecyclePlan.ObserveExpertJobTutorial(current, tutorialQuests, questId);
         try { committed = repository.CommitExpertJobCraft(owner, current, inventory, experience, tutorial); }
@@ -128,9 +130,12 @@ internal sealed partial class GameSession
         return committed;
     });
 
-    public InventoryResult CommitExpertJobAction(DfoServer.Game.ExpertJob.ExpertJobActionPlan plan) => owner.Execute(() =>
+    public InventoryResult CommitExpertJobAction(DfoServer.Game.ExpertJob.ExpertJobActionPlan plan, QuestCatalog? tutorialQuests = null) => owner.Execute(() =>
     {
         if (!CanUseExpertJob() || !ReferenceEquals(Selected, plan.Expected)) return InventoryResult.Reject(19);
+        if (plan.Succeeded && tutorialQuests is not null && expertJobStoreOpen &&
+            QuestExpertJobProgress.TutorialQuest(plan.Expected.ExpertJobType) is { } questId)
+            plan = plan with { Tutorial = QuestLifecyclePlan.ObserveExpertJobTutorial(plan.Expected, tutorialQuests, questId) };
         Character committed;
         try { committed = repository.CommitExpertJobAction(owner, plan); }
         catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(19); }

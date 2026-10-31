@@ -17,6 +17,9 @@ internal sealed class ExpertJobStoreBoard
 
     public void Open(ExpertJobStoreRecord store) => stores[store.OwnerId] = store;
 
+    public bool TryUpdate(ExpertJobStoreRecord before, ExpertJobStoreRecord current) =>
+        before.OwnerId == current.OwnerId && before.Instance == current.Instance && stores.TryUpdate(before.OwnerId, current, before);
+
     public bool TryClose(ushort owner, out ExpertJobStoreRecord store) => stores.TryRemove(owner, out store!);
 
     public bool TryGet(ushort owner, out ExpertJobStoreRecord store) => stores.TryGetValue(owner, out store!);

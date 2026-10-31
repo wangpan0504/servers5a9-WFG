@@ -33,7 +33,7 @@ internal static class ExpertJobCompoundTutorialTcpTests
             That(supplies.Accepted && supplies.Plan is not null, "炼金/控偶教程准备真实配方完整材料");
             repository.CommitInventory(owner, character, supplies.Plan!);
             ushort quest = type == 2 ? (ushort)11015 : (ushort)11018;
-            fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,{type},10000 FROM characters WHERE id={character.Id}");
+            fixture.Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness,learned_recipes) SELECT id,account,{type},10000,'[{recipe.RecipeId}]' FROM characters WHERE id={character.Id}");
             fixture.Sql($"INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES({character.Id},0,{quest},1,'{Guid.NewGuid():N}')");
             cases.Add((type, quest, character.Id, recipe.RecipeId, recipe.ProductId, recipe.ProductCount));
         }
@@ -90,7 +90,7 @@ internal static class ExpertJobCompoundTutorialTcpTests
             fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") });
         byte[] Info(byte type) => Build(writer =>
         {
-            var recipes = scripts.UnlockedRecipes(type, scripts.Level(type, 10000));
+            var recipes = scripts.LearnedRecipes(type, scripts.Level(type, 10000), [cases.Single(row => row.Type == type).Recipe]);
             writer.Write((byte)0); writer.Write(type); writer.Write(checked((byte)recipes.Length));
             foreach (int recipe in recipes) writer.Write(recipe);
         });
