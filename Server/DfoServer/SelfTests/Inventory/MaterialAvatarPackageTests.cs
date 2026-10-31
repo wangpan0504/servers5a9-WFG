@@ -18,6 +18,7 @@ internal static class MaterialAvatarPackageTests
 
     public static void RunCore()
     {
+        RunEtcConsumableCore();
         var request = AvatarPackageRequests.Read(CapturedBody(), 3, 3);
         That(CapturedBody().Length == 27 && request is { Slot: SourceSlot, Count: 1, Category: 0, Subcategory: 0 } &&
             request.ItemIds.SequenceEqual(new[] { AvatarId, TitleId, MaterialId }) &&
@@ -62,6 +63,99 @@ internal static class MaterialAvatarPackageTests
             That(!denied.Available || denied.Categories.Any(category => category.PendingRule is not null || category.Rows.IsEmpty),
                 "#976奇数/零/负/溢出/重复/跨Kind冲突/未闭合etc及混合自选整拒，不接受奖励子集");
         }
+    }
+
+    // #984仅合成Core：etc是真实类型分流声明，不把下列模板冒充正常资源或字体用途。
+    static void RunEtcConsumableCore()
+    {
+        const int boxId = 10164651, auraId = 101590347, titleId = 100331609, tokenId = 10164635, fillerId = 10164636;
+        var now = new DateTimeOffset(2026, 10, 31, 12, 45, 0, TimeSpan.Zero);
+        var pieces = new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]");
+        ItemTemplate Template(int id, ItemKind kind, int stack = 1) => new(id, kind,
+            kind == ItemKind.Avatar ? (byte)9 : kind == ItemKind.Equipment ? (byte)13 : (byte)0,
+            1, 0, stack, 1, 2, 1, "[account]", ushort.MaxValue, 0, "Synthetic" + id,
+            kind == ItemKind.Consumable ? "[waste] 0" : "");
+        var boxTemplate = Template(boxId, ItemKind.Consumable, 2) with { StackableType = "[booster selection] 0" };
+        var tokenTemplate = Template(tokenId, ItemKind.Consumable);
+        var templates = new[] { boxTemplate, Template(auraId, ItemKind.Avatar), Template(titleId, ItemKind.Equipment),
+            tokenTemplate, Template(fillerId, ItemKind.Consumable) };
+        var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        items.PrefillTemplates(templates.ToDictionary(row => row.Id));
+        const string declared = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n0\n[booster category num]\n0\n" +
+            "[booster select category]\n0 0\n[avatar]\n101590347 1 0 0\n[/avatar]\n" +
+            "[equipment]\n100331609 1\n[/equipment]\n[etc]\n10164635 1\n[/etc]\n[/booster select category]\n";
+        var packages = new AvatarPackageCatalog(path => path switch
+        {
+            "stackable/source.stk" => declared,
+            "equipment/avatar.equ" => "[equipment type]\n`[aurora avatar]` 0\n",
+            _ => throw new InvalidDataException("unexpected synthetic etc fixture read: " + path)
+        }, new Dictionary<int, string> { [auraId] = "avatar.equ" }, new Dictionary<int, string> { [boxId] = "source.stk" });
+        var service = new InventoryAvatarPackageService(items, packages,
+            new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]"), pieces);
+        var source = new InventoryItem(984001, new(InventoryListType.Main, 66),
+            InventoryRewardGrantService.Create(boxTemplate, 2, now));
+        var sentinel = new InventoryItem(984002, new(InventoryListType.Main, 67),
+            InventoryRewardGrantService.Create(items.Get(fillerId), 1, now));
+        var before = new InventorySnapshot([source, sentinel], Gold: 321) { ReviveCoins = 7, WinPoints = 11 };
+        var role = new Character(1, 0, "SyntheticEtc", 0, new(0, 0, 0, 0), null)
+            { Job = 0, Level = 4, Inventory = before };
+        var request = new AvatarPackageOpenRequest(66, 1, 0, 0, [auraId, titleId, tokenId], []);
+        That(source.Core.Count == 2 && boxTemplate.StackLimit == 2 &&
+            InventoryAvatarPackageService.SourceEligible(role, source, boxTemplate),
+            "#984合成源上限2且现有2份合法，不将真实源上限1改为多开");
+        var opened = service.Open(role, request, out var receipt, now);
+        That(opened.Accepted && opened.Plan is not null && receipt is { Rewards.Length: 3 },
+            "#984合成etc普通Consumable须与光环称号完整三奖同计划 error=" + opened.Error);
+        var after = opened.Plan!.After;
+        var token = after.Items.Single(item => item.Core.ItemId == tokenId);
+        var range = ItemSlotBoundService.Range(ItemKind.Consumable, before);
+        That(range.Start == 65 && token.Position.List == InventoryListType.Main &&
+            token.Position.Index >= range.Start && token.Position.Index <= range.End && token.Core.Kind == ItemKind.Consumable &&
+            token.Core.Count == 1 && token.Avatar is null && token.Creature is null,
+            "#984etc券按Consumable落65起的消耗品页，不落121材料页或代用入皮肤仓");
+        That(after.Find(source.Position)!.Core.Count == 1 && after.Find(sentinel.Position) == sentinel &&
+            after.Items.Count(item => item.Core.ItemId == auraId) == 1 &&
+            after.Items.Count(item => item.Core.ItemId == titleId) == 1 && after.Items.Length == 5 &&
+            receipt!.Rewards.OrderBy(row => row.ItemId).SequenceEqual(new[] { new BoosterGrantedItem(auraId, 1),
+                new BoosterGrantedItem(titleId, 1), new BoosterGrantedItem(tokenId, 1) }.OrderBy(row => row.ItemId)) &&
+            after.Gold == before.Gold && after.ReviveCoins == before.ReviveCoins && after.WinPoints == before.WinPoints &&
+            Equals(after.AccountWallet, before.AccountWallet) && Equals(after.EpicPieces, before.EpicPieces) &&
+            Equals(after.Skins, before.Skins) && Equals(after.AccountSkins, before.AccountSkins) &&
+            opened.Plan.OverflowItems.IsEmpty && ReferenceEquals(role.Inventory, before) &&
+            ReferenceEquals(opened.Plan.Before, before) && before.Find(source.Position) == source,
+            "#984三奖数量与唯一源扣1准确，哨兵/钱包/皮肤及提交前输入保持");
+
+        // 用不同ID的满堆占页，避免同ID兼容堆优先规则掩盖源腾格行为。
+        var filled = Enumerable.Range(range.Start, range.End - range.Start + 1).Where(index => index != 66)
+            .Select(index => new InventoryItem(984100 + index, new(InventoryListType.Main, checked((short)index)),
+                InventoryRewardGrantService.Create(items.Get(fillerId), 1, now))).ToArray();
+        var fullBefore = before with { Items = [source, .. filled] };
+        var fullRole = role with { Inventory = fullBefore };
+        var denied = service.Open(fullRole, request, out var deniedReceipt, now);
+        That(!denied.Accepted && denied.Error == 4 && denied.Plan is null && deniedReceipt is null &&
+            ReferenceEquals(fullRole.Inventory, fullBefore) && fullBefore.Find(source.Position) == source &&
+            filled.All(item => fullBefore.Find(item.Position) == item),
+            "#984满消耗品页且源2扣1仍占槽时三奖整拒，无部分扣源或发奖");
+        var single = source with { Core = InventoryRewardGrantService.Create(boxTemplate, 1, now) };
+        var reusableBefore = fullBefore with { Items = [single, .. filled] };
+        var reused = service.Open(role with { Inventory = reusableBefore }, request, out var reusedReceipt, now);
+        That(reused.Accepted && reused.Plan is not null && reusedReceipt is { Rewards.Length: 3 } &&
+            reused.Plan.After.Find(single.Position) is { Core.ItemId: tokenId, Core.Kind: ItemKind.Consumable, Core.Count: 1 } &&
+            reused.Plan.After.Items.All(item => item.Uid != single.Uid) &&
+            filled.All(item => reused.Plan.After.Find(item.Position) == item) && reusableBefore.Find(single.Position) == single,
+            "#984相同满页仅源1耗尽时券可复用唯一空槽66，不要求源槽永久为空");
+
+        var materialTemplate = Template(3330, ItemKind.Material, 100);
+        That(InventoryAvatarPackageService.EtcRowDefinitionError(new(3330, 1), materialTemplate, pieces) is null &&
+            InventoryAvatarPackageService.MaterialRowDefinitionError(new(3330, 1), materialTemplate, pieces) is null &&
+            InventoryAvatarPackageService.MaterialRowDefinitionError(new(tokenId, 1), tokenTemplate, pieces) is not null &&
+            InventoryAvatarPackageService.EtcRowDefinitionError(new(tokenId, 1), tokenTemplate, pieces) is null,
+            "#984新分流允许普通Consumable并保Material原严格Kind守卫，不泛化其它owner");
+        foreach (var forbidden in new[] { Template(1, ItemKind.Consumable), Template(70001, ItemKind.Material),
+            tokenTemplate with { IsPremiumService = true }, tokenTemplate with { PersonalCargoUpgradeTarget = 1 },
+            Template(tokenId, ItemKind.Equipment) })
+            That(InventoryAvatarPackageService.EtcRowDefinitionError(new(forbidden.Id, 1), forbidden, pieces) is not null,
+                "#984etc继续拒钱包/碎片/付费服务/获取效果和其它Kind，不借普通券放宽owner");
     }
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
