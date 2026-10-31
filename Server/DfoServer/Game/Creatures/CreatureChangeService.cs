@@ -15,14 +15,14 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
     readonly Func<long, long> random = random ?? Random.Shared.NextInt64;
 
     public InventoryResult Plan(Character character, InventorySlot sourceSlot, InventorySlot targetSlot, bool inTown = true) =>
-        Plan(character, sourceSlot, targetSlot, (source, _) => definitions(source.Core.ItemId), inTown, "creature_change");
+        Plan(character, sourceSlot, targetSlot, (source, _) => definitions(source.Core.ItemId), inTown, "creature_change", true);
 
     public InventoryResult PlanGroup(Character character, InventorySlot sourceSlot, InventorySlot targetSlot, uint choice, bool inTown) =>
         Plan(character, sourceSlot, targetSlot, (source, target) => growthItems?.Invoke(source.Core.ItemId) is { } item
-            ? groups?.Resolve(item, target.Core.ItemId, choice) : null, inTown, "creature_group_convert");
+            ? groups?.Resolve(item, target.Core.ItemId, choice) : null, inTown, "creature_group_convert", false);
 
     InventoryResult Plan(Character character, InventorySlot sourceSlot, InventorySlot targetSlot,
-        Func<InventoryItem, InventoryItem, CreatureChangeDefinition?> resolve, bool inTown, string reason)
+        Func<InventoryItem, InventoryItem, CreatureChangeDefinition?> resolve, bool inTown, string reason, bool consumeAction)
     {
         var time = clock.GetUtcNow();
         long now = time.ToUnixTimeSeconds();
@@ -62,17 +62,21 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
         }
         InventoryResult consumed;
         ActionConsumableDefinition? use = null;
-        if (definition.Random)
+        if (consumeAction)
         {
             use = actionItems?.Invoke(source.Core.ItemId);
-            if (use is not { Label: "[change creature random]" }) return InventoryResult.Reject(0);
-            consumed = InventoryActionConsumableService.Plan(character, sourceSlot, use, inTown ? "[village]" : "[dungeon]", clock, time);
+            if (use is null || use.Label != (definition.Random ? "[change creature random]" : "[change creature]"))
+                return InventoryResult.Reject(0);
+            consumed = InventoryActionConsumableService.Plan(character, sourceSlot, use, inTown ? "[village]" : "[dungeon]",
+                clock, time, definition.ConsumeCount);
         }
         else consumed = InventoryDeleteService.Plan(before, sourceSlot, source.Core.ItemId, definition.ConsumeCount);
         if (!consumed.Accepted || consumed.Plan is null) return InventoryResult.Reject(0);
         int resultId = definition.Select(random(definition.TotalWeight));
-        // 只换模板；原实例、附魔、扩展、名称、等级、经验及期限均不重新创建。
-        var changed = target with { Core = target.Core with { ItemId = resultId } };
+        // 固定转换的-1期限用于永久兑换；其余转换沿用原期限，实例和成长均不重建。
+        var changed = target with { Core = target.Core with { ItemId = resultId,
+            ExpireTime = definition.MakePermanent ? 0 : target.Core.ExpireTime },
+            Creature = definition.MakePermanent ? target.Creature with { ExpireTime = 0 } : target.Creature };
         var after = consumed.Plan.After with { Items = consumed.Plan.After.Items.Replace(target, changed) };
         var plan = new InventoryPlan(before, after, reason);
         long? deadline = plan.ChangedSlots.Select(plan.BeforeIndex.Find).OfType<InventoryItem>().Append(target)

@@ -33,6 +33,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[creature transport stone]" or "[cargo transport stone]" or "[avatar transport stone]" or
                     "[flag transport stone]" or "[emblem transport stone]", Parameters: [>= 0] } or
                 { Label: "[change creature random]", Parameters.Count: >= 5 } or
+                { Label: "[change creature]", Parameters.Count: 4 } or
                 { Label: "[creature effect]", Parameters: [> 0] }) ||
             (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 : raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
