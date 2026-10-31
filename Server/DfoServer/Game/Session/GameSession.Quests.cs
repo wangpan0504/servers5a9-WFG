@@ -82,6 +82,7 @@ internal sealed partial class GameSession
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 带NPC的末清图子任务保留到结算后对话；原生34可转向父任务，父子在一个领奖事务中关闭。
+        // 顺序父/清图对话父34在副本/结算内：CompleteNpc 若出现在城镇地图（TownCatalog，不按任务号白名单），当前房间 MAP [NPC] 须含该 NPC，否则拒绝。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         bool clearDialogue = QuestRelationProgress.ClearDialogueChild(quest,quests) ||
             QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null;
