@@ -45,6 +45,7 @@ internal static partial class EnchantmentTests
         Spring2020KnownCardRarityQualificationPlans();
         OrderedRaritySubtypes();
         MultipleCardPlans();
+        WeightedCardPlans();
         MultipleCardExtraQualificationPlans();
         EnchantmentResourceParsingFailures();
         ExpertJobKnownCardRarityQualificationPlans();
@@ -222,6 +223,7 @@ internal static partial class EnchantmentTests
     public static void RunResources(ItemResources resources, EnchantmentCatalog enchantments)
     {
         MultipleCardResourcePlans(resources, enchantments);
+        WeightedCardResourcePlans(resources);
         MultipleCardExtraQualificationResources(resources, enchantments);
         Spring2020RealBeadQualificationResources(resources);
         var definition = enchantments.Get(490705314);

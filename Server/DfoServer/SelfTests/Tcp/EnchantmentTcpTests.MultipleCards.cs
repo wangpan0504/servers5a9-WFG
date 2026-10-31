@@ -11,9 +11,10 @@ internal static partial class EnchantmentTcpTests
 {
     static async Task RunMultipleCardsAsync(ServerOptions options, string root, TcpTestResources resources)
     {
-        // 原五珠各开一次；后三项分别覆盖购买材料、单独地点、event分类声明。
-        int[] sources = [490701137, 490701256, 490702314, 490702319, 490702378, 2683770, 10099668, 10148273];
-        int[] unknown = [2600657, 10304051]; // foil与加权对仅验拒绝，不记作可使用。
+        // 原五珠和资格代表继续覆盖；追加总权重100/500/99/600的真实普通卡池。
+        int[] sources = [490701137, 490701256, 490702314, 490702319, 490702378, 2683770, 10099668, 10148273,
+            10304051, 10310134, 10311584, 10311590];
+        int[] unknown = [2600657, 10158322]; // foil与独立过期使用标记仍未闭合。
         var items = resources.ItemResources.Items;
         var catalog = resources.ItemResources.Enchantments;
         var definitions = sources.Select(id => catalog.Get(id)).ToArray();
@@ -38,7 +39,7 @@ internal static partial class EnchantmentTcpTests
                     .. sources.Select((id, index) => new InventoryItem(0, Main((short)(82 + index)),
                         InventoryRewardGrantService.Create(items.Get(id), 2))),
                     .. originals.Select((core, index) => new InventoryItem(0, Main((short)(9 + index)), core)),
-                    .. unknown.Select((id, index) => new InventoryItem(0, Main((short)(90 + index)),
+                    .. unknown.Select((id, index) => new InventoryItem(0, Main((short)(110 + index)),
                         InventoryRewardGrantService.Create(items.Get(id), 2)))], Gold: 1234)
             });
         fixture.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,1,0 FROM characters");
@@ -47,14 +48,24 @@ internal static partial class EnchantmentTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
+            peer.Select(inventoryNotices: Notices(), expertJobInfo: ExpertInfo());
+            string before = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_weighted_bead BEFORE INSERT ON inventory_audit_log " +
+                "WHEN NEW.action_name='enchant_by_bead' AND NEW.slot_index=90 BEGIN SELECT RAISE(ABORT,'weighted bead rollback'); END");
+            Send(peer, 90, 17); peer.Closed();
+            That(Snapshot() == before, "真实权重珠晚SQL失败，已规划卡与源/完整目标/金币/版本全部回滚，无提前成功");
+            fixture.Sql("DROP TRIGGER fail_weighted_bead");
+        }
+        using (var peer = Open(fixture))
+        {
             var entry = peer.Select(inventoryNotices: Notices(), expertJobInfo: ExpertInfo());
             byte[] full = entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             int success = 0;
-            foreach (short source in new short[] { 90, 91 })
+            foreach (short source in new short[] { 110, 111 })
             {
                 string before = Snapshot();
                 Send(peer, source, 9); peer.Expect(1, 272, [0, 23, 0]); peer.Barrier();
-                That(Snapshot() == before, "未知foil/加权声明272正常拒绝，不扣源或提交任何资产");
+                That(Snapshot() == before, "未知foil/过期使用声明272正常拒绝，不扣源或提交任何资产");
                 Accept(peer, success++, full);
                 before = Snapshot();
                 // 本人601复用正式珠服务回退入口，不伪装跨玩家配方卡片请求。
@@ -116,7 +127,7 @@ internal static partial class EnchantmentTcpTests
             }
             That(character.Inventory.Gold == 1234 && character.ExpertJobExperience == 0 &&
                 character.ExpertMachineEndurance == 300 && Uids() == originalUids &&
-                unknown.Select((id, index) => character.Inventory.Find(Main((short)(90 + index)))!.Core.Count).All(count => count == 2),
+                unknown.Select((id, index) => character.Inventory.Find(Main((short)(110 + index)))!.Core.Count).All(count => count == 2),
                 "全部目标和源UID保留，未知源/钱包/本人副职业账本没有附带变更");
         }
 

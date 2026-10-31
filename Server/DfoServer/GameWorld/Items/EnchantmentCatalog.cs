@@ -16,14 +16,22 @@ internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byt
     public bool AllowsTarget(ItemTemplate target) => Targets.Contains((target.Kind, target.EquipmentSlot)) &&
         (LimitedItems.IsEmpty || LimitedItems.Contains(target.Id)) && !ExcludedTargetRarities.Contains(target.Rarity == 2 && target.IsLegacyEquipment ? 99 : target.Rarity);
 }
-internal sealed record RandomCardEnchantmentPool(ImmutableArray<int> Positions)
+internal sealed record RandomCardEnchantmentPool(ImmutableArray<int> Positions,
+    ImmutableArray<int> Weights = default, int TotalWeight = 0)
 {
     public int Draw(Func<int, int> next)
     {
-        int position = next(Positions.Length);
-        if (position < 0 || position >= Positions.Length)
+        int maximum = Weights.IsDefaultOrEmpty ? Positions.Length : TotalWeight;
+        int position = next(maximum);
+        if (position < 0 || position >= maximum)
             throw new InvalidDataException("随机卡片附魔抽样越界");
-        return Positions[position];
+        if (Weights.IsDefaultOrEmpty) return Positions[position];
+        for (int index = 0; index < Positions.Length; index++)
+        {
+            if (position < Weights[index]) return Positions[index];
+            position -= Weights[index];
+        }
+        throw new InvalidDataException("随机卡片附魔权重无效");
     }
 }
 internal sealed record EnchantmentEffect(string Tag, ImmutableArray<int> IntegerValues);
@@ -143,21 +151,46 @@ internal sealed partial class EnchantmentCatalog
             return null; // 尚未核对的旧式限制不能被忽略后扩大目标范围。
         if (randomTitle) return LoadRandomTitle(itemId, bead, restricted.ToImmutable());
         var cardFields = Fields(bead, "monster card id");
-        if (cardFields.Count != 1) throw new InvalidDataException("宝珠字段无效: monster card id");
         var cardIds = ImmutableArray.CreateBuilder<int>();
-        foreach (string token in RawValues(bead, cardFields[0]).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        var weights = ImmutableArray.CreateBuilder<int>();
+        int totalWeight = 0;
+        bool weighted = Regex.IsMatch(MaskStrings(bead), @"\[/?monster card id drop prob(?=[\]\s]|$)");
+        if (weighted)
         {
-            if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out int cardId) || cardId <= 0)
-                throw new InvalidDataException("宝珠字段无效: monster card id");
-            cardIds.Add(cardId);
+            if (cardFields.Count != 0 || restricted.Count == 0 ||
+                !TryRootBlock(bead, "monster card id drop prob", out string? values) || values is null)
+                return null;
+            string[] tokens = values.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0 || tokens.Length % 2 != 0) return null;
+            for (int at = 0; at < tokens.Length; at += 2)
+            {
+                if (!int.TryParse(tokens[at], NumberStyles.None, CultureInfo.InvariantCulture, out int cardId) || cardId <= 0 ||
+                    !int.TryParse(tokens[at + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int weight))
+                    return null;
+                cardIds.Add(cardId);
+                weights.Add(weight);
+                totalWeight = checked(totalWeight + weight);
+            }
+            if (totalWeight == 0) return null;
+        }
+        else
+        {
+            if (cardFields.Count != 1) throw new InvalidDataException("宝珠字段无效: monster card id");
+            foreach (string token in RawValues(bead, cardFields[0]).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out int cardId) || cardId <= 0)
+                    throw new InvalidDataException("宝珠字段无效: monster card id");
+                cardIds.Add(cardId);
+            }
         }
         if (cardIds.Count == 0) throw new InvalidDataException("宝珠字段无效: monster card id");
         bool villageOnly = false;
-        if (cardIds.Count > 1)
+        if (weighted || cardIds.Count > 1)
         {
             if (Fields(bead, "usable expired item").Count != 0 ||
                 !TryRootBlock(bead, "action usable place", out string? places) ||
                 !TryRootBlock(bead, "item category", out string? category) ||
+                weighted && places is null ||
                 places is not null && !Regex.IsMatch(places, @"^\s*`\[village\]`(?:\s+`\[seria room\]`)?\s*$") ||
                 category is not null && !Regex.IsMatch(category, @"^\s*`event`\s*$"))
                 return null; // 未证过期标记、地点或分类不能因普通卡片可解析而放行。
@@ -177,8 +210,9 @@ internal sealed partial class EnchantmentCatalog
             excludedTargetRarities.UnionWith(allowed.ExcludedTargetRarities);
         }
         if (targets is null || targets.IsEmpty) return null;
-        return new(itemId, cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
-        { RandomCards = cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly,
+        return new(itemId, !weighted && cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
+        { RandomCards = weighted ? new(cardIds.ToImmutable(), weights.ToImmutable(), totalWeight) :
+                cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly,
             ExcludedTargetRarities = excludedTargetRarities.ToImmutable() };
     }
 
