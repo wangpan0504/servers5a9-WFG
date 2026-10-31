@@ -68,7 +68,7 @@ internal sealed partial class AntonRaidBattle
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
         if (members.Count == 0 && AntonRewardWaitRemainingLocked() is null || current.State == AntonRaidBattleState.Completed)
         { lease.Dispose(); return; }
-        if (lease.RetryRemaining is { } retryDelay && (PendingLukeSettlement() is not null || PendingAntonSettlement() is not null))
+        if (lease.RetryRemaining is { } retryDelay && (PendingLukeSettlement() is not null || PendingAntonSettlement() is not null || AntonAutoRewardDue))
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);

@@ -1,7 +1,33 @@
+using System.Collections.Immutable;
+
 namespace DfoServer.Game.Raids;
 
 internal sealed partial class AntonRaidBattle
 {
+    readonly AntonRewardCards antonCards = new();
+
+    internal bool MatchesAntonCardReplay(PreparedRaidReward reward, byte requested)
+    {
+        lock (gate) return HasAntonRewards && reward.Instance == Instance &&
+            antonCards.MatchesReplay(reward.Phase, reward.Character, requested, reward.Card);
+    }
+
+    internal RaidRewardOffer? SelectAntonRewardCard(RaidActor actor, int phase, byte kind, byte requested, byte squad)
+    {
+        lock (gate)
+        {
+            if (!HasAntonRewards || !actor.IsCurrent || current.State != AntonRaidBattleState.Reward ||
+                current.Phase != phase || current.ClockFaulted || pendingTransition is not null ||
+                !members.TryGetValue(actor, out var policy) ||
+                AntonEligibility(actor.Character, phase) is not { Eligible: true } ||
+                policy[phase].Offers.SingleOrDefault(offer => offer.Kind == kind && offer.Card == 0) is not { } frozen)
+                return null;
+            if (antonCards.Select(phase, actor.Character, squad, requested) is not { } card) return null;
+            // 只移动已冻结Card0产物的展示位置，不重抽、不改未知code/flag。
+            return frozen with { Card = card, Display = frozen.Display.Select(row => row with { Card = card }).ToImmutableArray() };
+        }
+    }
+
     readonly Dictionary<int, ushort> antonDeaths = [];
     readonly Dictionary<int, RaidResultDisplay> antonResults = [];
 
@@ -24,7 +50,7 @@ internal sealed partial class AntonRaidBattle
     int antonRewardPhase = -1;
     bool antonRewardsAbandoned;
 
-    // 本服兜底政策：沿PVF当前阶段MOVIE END TIME秒数限制领奖等待；不冒充原服自动发奖。
+    // 本服政策：沿PVF当前阶段MOVIE END TIME秒数限制等待，到期在线成员由原领取链提交。
     // 只在阶段资格事务提交后锚定，重放、回城和重连均不能续期。
     void AnchorAntonRewardWaitLocked()
     {
@@ -51,6 +77,12 @@ internal sealed partial class AntonRaidBattle
         var remaining = TimeSpan.FromSeconds(seconds) - lukeClock.GetElapsedTime(anchor);
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
+
+    internal bool AntonAutoRewardDue
+    { get { lock (gate) return AntonRewardWaitRemainingLocked() == TimeSpan.Zero; } }
+
+    internal RaidActor[] AntonAutoRewardActors()
+    { lock (gate) return members.Keys.ToArray(); }
 
     bool ExpireAntonRewardWaitLocked()
     {

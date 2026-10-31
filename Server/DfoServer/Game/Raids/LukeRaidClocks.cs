@@ -5,7 +5,7 @@ internal sealed record LukeRaidClockPolicy(string Source);
 
 // Runtime拥有，Anton复用同一有界所有者与退出回收；每实例至多一个停用/活跃timer和一个同步到期操作，不创建无界后台Task。
 internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore store, Action<string, Exception> report,
-    int capacity = 64, Action<AntonRaidBattleView>? rewardAbandoned = null) : IAsyncDisposable
+    int capacity = 64, Action<AntonRaidBattleView>? rewardAbandoned = null, Func<AntonRaidBattle, bool>? rewardDue = null) : IAsyncDisposable
 {
     readonly object gate = new();
     readonly Dictionary<Guid, Lease> leases = [];
@@ -102,6 +102,16 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                 bool changed;
                 bool waitingForReward = Battle.Kind == RaidKind.Anton && Battle.HasAntonRewards &&
                     Battle.View.State == AntonRaidBattleState.Reward;
+                // 发奖不持Battle锁；在线成员复用原资格和资产事务，失败保留Reward等待重试。
+                try
+                {
+                    if (Battle.AntonAutoRewardDue && !owner.DeliverDueRewards(Battle))
+                    { failures = Math.Min(6, failures + 1); return; }
+                }
+                catch (Exception error) when (store.IsRetryable(error))
+                { failures = Math.Min(6, failures + 1); Report("anton-auto-reward", error); return; }
+                catch (Exception error)
+                { Battle.FaultLukeClock(this); Report("anton-auto-reward-fault", error); Dispose(); return; }
                 try { changed = Battle.ExpireDueLukeClock(this); }
                 catch (Exception error)
                 {
@@ -165,6 +175,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             await timer.DisposeAsync();
         }
     }
+
+    bool DeliverDueRewards(AntonRaidBattle battle) => rewardDue?.Invoke(battle) ?? true;
 
     void NotifyRewardAbandoned(AntonRaidBattleView view) => rewardAbandoned?.Invoke(view);
 }

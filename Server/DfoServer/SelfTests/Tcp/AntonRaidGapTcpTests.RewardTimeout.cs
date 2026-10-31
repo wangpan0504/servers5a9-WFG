@@ -35,16 +35,24 @@ internal static partial class AntonRaidGapTcpTests
             Bytes(AntonTcpProbe.Barrier(peer, "Reward中666").Single(p => p is { Kind: 1, Opcode: 666 }).Body,
                 [0, 19, 0], "Reward中666明确失败");
             clock.Advance(1);
-            var timeout = AntonTcpProbe.Barrier(peer, "20秒放弃未领项");
+            var timeout = AntonTcpProbe.Barrier(peer, "20秒到期自动领取");
+            // ACK先写出，原命令门禁可能尚未释放；推进可控时钟的有界退避，按真实587观察完成。
+            for (int attempt = 0; attempt < 4 && !timeout.Any(p => p is { Opcode: 587, Body: [5,0] }); attempt++)
+            {
+                clock.Advance(1 << attempt);
+                timeout.AddRange(AntonTcpProbe.Barrier(peer, "在线领取门禁退避"));
+            }
             That(timeout.Count(p => p is { Opcode: 587, Body: [5,0] }) == 1 &&
                 timeout.Any(p => p is { Opcode: 597, Body: [1,0x53,2,0,0] }),
                 "无人或部分选牌均只推进一次至原595秒休息");
-            That(assets == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") +
-                fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY phase,kind"),
-                "放弃不生成资产或虚假领取回执");
+            That(assets != fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") +
+                fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY phase,kind") &&
+                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]],
+                "到期在线成员自动提交两种冻结奖励，部分已领者不增发");
             peer.Send(660, [0, 0]);
-            That(AntonTcpProbe.Barrier(peer, "超时后未领项").All(p => p.Opcode is not (600 or 660)),
-                "休息态不能补领已放弃的未领项");
+            That(AntonTcpProbe.Barrier(peer, "超时后回放").Any(p => p is { Kind: 1, Opcode: 660, Body: [1] }) &&
+                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]],
+                "休息态重放到期已提交回执，不增发");
             peer.Send(666);
             That(AntonTcpProbe.Barrier(peer, "休息后准备").Any(p => p is { Kind: 1, Opcode: 666, Body: [1] }),
                 "超时兜底后团长仍可准备二阶段");

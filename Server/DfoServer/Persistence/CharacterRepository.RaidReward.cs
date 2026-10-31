@@ -61,7 +61,8 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
                 if (command.ExecuteScalar() is not string json || JsonSerializer.Deserialize<RaidPhaseEligibility>(json) is not { Eligible: true } eligibility ||
                     eligibility.Instance != prepared.Instance || eligibility.Character != expected.Id || eligibility.Phase != prepared.Phase ||
                     eligibility.RaidType != RaidKind.Anton || eligibility.Week != prepared.Week || eligibility.Source != prepared.Source ||
-                    eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == prepared.Card) is not { } authorized ||
+                    prepared.Card > 3 ||
+                    eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == 0) is not { } authorized ||
                     !authorized.Grants.SequenceEqual(prepared.Grants)) return null;
             }
         }

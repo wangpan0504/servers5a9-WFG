@@ -87,10 +87,12 @@ internal static partial class AntonRaidTcpTests
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 596) &&
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 597),
             "server.jsonl 有进图210、Reward和586，完整领取后有休息596/597");
-        // 两种真实奖励均领取后进入休息态；计时按剩余值校验，不固定真实时钟秒数或重复投影次数。
+        // 两种真实奖励均领取后进入休息态；只配对休息事件，保留全部原有读宽、包序与剩余值断言。
+        // 阶段/地图596、597由anton-raid-phase-timer-221-224覆盖，不能把已实现的Fighting时钟误当休息。
         var stateAndTimers = events.Where(row => row.GetProperty("Kind").GetString() == "send" &&
             row.GetProperty("Detail").GetProperty("Kind").GetInt32() == 0 &&
-            row.GetProperty("Detail").GetProperty("Opcode").GetInt32() is 587 or 596 or 597).ToArray();
+            (row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 587 ||
+                row.GetProperty("Detail").GetProperty("Action").GetString() is "anton_wait_timer" or "anton_wait_remaining")).ToArray();
         uint waitLimit = checked((uint)(catalog.Script.Headers.Single(row => row.Tag == "[phase break time]").Values.Single().Number - 5));
         string? state = null;
         byte[]? timer = null;
@@ -130,8 +132,8 @@ internal static partial class AntonRaidTcpTests
             }
             previousSendAt = sentAt;
         }
-        That(timer is null && pairs > 0 && pairs == report.Opcode596 && pairs == report.Opcode597,
-            "真实收包与日志均有完整596/597待命计时对，不允许孤立计时或漏收");
+        That(timer is null && pairs > 0 && pairs == report.Wait596 && pairs == report.Wait597,
+            $"休息计时完整配对，休息596/597真实收包数和日志一致，不允许漏收：pairs={pairs}, wire596={report.Wait596}, wire597={report.Wait597}");
         peer.Dispose();
         await fixture.StopAsync();
         await fixture.StartAsync("reopened");

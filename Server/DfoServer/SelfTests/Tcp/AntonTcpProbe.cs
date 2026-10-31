@@ -611,6 +611,10 @@ internal static class AntonTcpProbe
     {
         foreach (var packet in rows)
         {
+            if (packet is { Kind: 0, Opcode: 587, Body: [var state, var phase] })
+                report.Waiting = state == 5 && phase == 0;
+            if (report.Waiting && packet is { Kind: 0, Opcode: 596 }) report.Wait596++;
+            if (report.Waiting && packet is { Kind: 0, Opcode: 597 }) report.Wait597++;
             if (packet is { Kind: 0, Opcode: 586 })
             {
                 report.Opcode586++;
@@ -798,6 +802,10 @@ internal static class AntonTcpProbe
         public int Opcode586;
         public int Opcode596;
         public int Opcode597;
+        // 按实际已接收587划分休息计时，不能与阶段/地图计时总数混用。
+        public bool Waiting;
+        public int Wait596;
+        public int Wait597;
         public int Opcode600;
         public int Opcode601;
         public int RejectedCards;

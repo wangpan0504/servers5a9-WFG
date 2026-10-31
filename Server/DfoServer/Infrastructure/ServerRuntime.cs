@@ -416,7 +416,17 @@ internal static class ServerRuntime
         var lukeTimers = !preyReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }),
             rewardAbandoned: view => log.Write("anton_phase_progress", new { view.Instance, view.Phase, view.Revision,
-                State = view.State.ToString(), Reason = "reward-wait-expired-unclaimed-abandoned" }));
+                State = view.State.ToString(), Reason = "reward-wait-expired-offline-unclaimed-abandoned" }),
+            rewardDue: battle =>
+            {
+                var view = battle.View;
+                foreach (var actor in battle.AntonAutoRewardActors())
+                {
+                    if (!actor.IsCurrent || battle.AntonEligibility(actor.Character, view.Phase) is not { Eligible: true }) continue;
+                    if (actor.Session.AntonAutoRewardRequested?.Invoke(battle, view.Phase) != true) return false;
+                }
+                return true;
+            });
         var antonRewards = raidSettings.AntonPhaseProgressEnabled && raidCatalog.Find(0)?.Resources?.Script is { } antonScript
             ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items, itemResources.Boosters) : null;
         // 启动时解析全部奖励模板，避免开战持owner锁时首次读取PVF。

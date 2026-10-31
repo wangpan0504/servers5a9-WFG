@@ -199,6 +199,23 @@ internal static partial class AntonRaidGapTcpTests
             fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]], "选图不代领、重抽或清除未领奖成员资格");
         leader.Send(72, [1, 0]);
         That(AntonTcpProbe.Barrier(leader, "选图后的旧菜单").All(p => p.Opcode != 72), "旧结果菜单不能退出新的选图状态");
+        leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
+        var leadCards = AntonTcpProbe.Barrier(leader, "同队竞争第四张");
+        var mateCards = AntonTcpProbe.Barrier(member, "同队竞争第四张队员");
+        var picked = new[] { leadCards, mateCards }.Select(packets => packets.Single(p => p is { Kind: 0, Opcode: 600 }).Body[4]).Order().ToArray();
+        That(picked.SequenceEqual(new byte[] { 0, 3 }) &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]], "两成员同时选同牌只占不同位置，逐人提交原资产");
+        leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
+        AntonTcpProbe.Barrier(leader, "队长重复点击"); AntonTcpProbe.Barrier(member, "队员重复点击");
+        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]], "竞争后重复点击不重复发奖");
+        leader.Send(660, [0, 3]); member.Send(660, [0, 3]);
+        AntonTcpProbe.Barrier(leader, "竞争成员第二牌种"); AntonTcpProbe.Barrier(member, "竞争队员第二牌种");
+        leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
+        var lateLead = AntonTcpProbe.Barrier(leader, "休息态重试原选位");
+        var lateMate = AntonTcpProbe.Barrier(member, "休息态重试冲突原选位");
+        That(new[] { lateLead, lateMate }.All(packets => packets.Any(p => p is { Kind: 1, Opcode: 660, Body: [1] })) &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]],
+            "冲突改位后跨休息态重发原请求仍确认同份回执，不增发");
 
     }
 
