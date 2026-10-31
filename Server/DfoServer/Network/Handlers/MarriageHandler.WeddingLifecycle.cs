@@ -21,7 +21,7 @@ internal sealed partial class MarriageHandler
         for (byte area = 8; area < 38; area++)
             if (!occupied.Contains(area) && maps.Areas.ContainsKey((39, area)))
                 return record with { Wedding = record.Wedding! with { HallArea = area, ServerIndex = channel.ServerIndex, ChannelNumber = channel.Number } };
-        throw new InvalidOperationException("本频道的婚礼礼堂已满");
+        throw new MarriageRuleException(MarriageFailureReason.HallUnavailable, "本频道的婚礼礼堂已满");
     }
 
     async Task<CommandResult> PartnerCardAsync(GameConnectionContext context, MarriageCapture capture, uint target)
@@ -32,16 +32,14 @@ internal sealed partial class MarriageHandler
         if (store.FindMarriage(subject) is not { Active: true } record || !record.IsMember(subject) ||
             store.FindMarriageCard(record.Other(subject)) is not { } card)
             return await Reject(context, 1037, -2);
-        await context.Reply((CmdPacketType)1037, MarriageProjection.Card(record.ContextId, card,
-            characters.DefaultAppearance.Resolve(card.Recipient.Job, card.Recipient.GrowType),
-            id => items.TryGet(id, out var template) && template.CloneAvatar), "marriage_partner_card",
+        await context.Reply((CmdPacketType)1037, Projection().PartnerCard(record.ContextId, card), "marriage_partner_card",
             () => context.Session.MatchesMarriage(capture, false));
         return CommandResult.Handled;
     }
 
     async Task PublishRelationshipAsync(GameConnectionContext context, MarriageRecord record, byte reason = 0)
     {
-        var projection = new MarriageProjection(store, catalog, online, timer);
+        var projection = Projection();
         await projection.PublishAsync(context, record, reason);
         if (record.State != 2 || record.Wedding is not { State: 1 } wedding ||
             wedding.StartsAt <= timer.GetUtcNow().ToUnixTimeSeconds()) return;
@@ -70,7 +68,7 @@ internal sealed partial class MarriageHandler
             var candidates = online.Snapshot().Where(row => row.Ready && !record.IsMember(row.CharacterId) &&
                 !wedding.Invitations.Any(invitation => invitation.CharacterId == row.CharacterId))
                 .Where(row => online.FindConnectionByCharacterId(row.CharacterId)?.Session.ChannelEntry?.Identity == context.Channel).ToArray();
-            if (candidates.Length == 0) return await Reject(context, 1040, -2);
+            if (candidates.Length == 0) return await Reject(context, 1040, -7);
             request = new(0, candidates[RandomNumberGenerator.GetInt32(candidates.Length)].CharacterId, 0, 0);
         }
         if (request.Target is 0 or > ushort.MaxValue || request.Option != 0 ||
@@ -80,12 +78,12 @@ internal sealed partial class MarriageHandler
         var after = MarriageWeddingRules.SendInvitation(record, capture.Character.Id, target.Id, target.Name, timer.GetUtcNow().ToUnixTimeSeconds());
         var plan = planner.Plan(capture.Character, [], timer.GetUtcNow());
         if (plan is null || context.Session.CommitMarriage(capture, plan, record, after) is not { } saved)
-            return await Reject(context, 1040, -3);
+            return await Reject(context, 1040, -1);
         await context.Reply((CmdPacketType)1040, MarriageWeddingPackets.LetterAck(0,
             checked((ushort)saved.Record.Wedding!.InviteRemaining[capture.Character.Id])), "marriage_invitation_sent");
         if (online.FindConnectionByCharacterId(target.Id) is { Marriage: { } transport } peer &&
             peer.Session.CaptureMarriage(false) is { } targetCapture)
-            await transport.Notify(1008, MarriageWeddingPackets.Letter(new MarriageProjection(store, catalog, online, timer).Wire(saved.Record), 0, 0),
+            await transport.Notify(1008, MarriageWeddingPackets.Letter(Projection().Wire(saved.Record), 0, 0),
                 "marriage_invitation", () => peer.Session.MatchesMarriage(targetCapture, false));
         return CommandResult.Handled;
     }
@@ -95,12 +93,13 @@ internal sealed partial class MarriageHandler
     {
         if (request.Context != record.ContextId || request.Flag > 1 || record.Wedding is not { State: 1 } wedding ||
             request.Destination != wedding.HallArea || context.Channel != new ChannelIdentity(wedding.ServerIndex, wedding.ChannelNumber) ||
-            timer.GetUtcNow().ToUnixTimeSeconds() >= wedding.StartsAt ||
-            !record.IsMember(capture.Character.Id) && (!wedding.Invitations.Any(row => row.CharacterId == capture.Character.Id) ||
-                !wedding.Gifts.Any(row => row.CharacterId == capture.Character.Id && !row.Settled)) ||
+            !record.IsMember(capture.Character.Id) && !wedding.Invitations.Any(row => row.CharacterId == capture.Character.Id) ||
             HallPosition(capture, wedding) is not { } position)
-            return await Reject(context, 1041, -2);
+            return await Reject(context, 1041, -1);
         var now = timer.GetUtcNow();
+        if (now.ToUnixTimeSeconds() >= wedding.StartsAt) return await Reject(context, 1041, -7);
+        if (!record.IsMember(capture.Character.Id) && !wedding.Gifts.Any(row => row.CharacterId == capture.Character.Id && !row.Settled))
+            return await Reject(context, 1041, -6);
         InventoryPlan? gifts = null;
         MarriageRecord? afterGift = null;
         if (!record.IsMember(capture.Character.Id))
@@ -115,7 +114,7 @@ internal sealed partial class MarriageHandler
             }
         }
         if (context.Session.CommitMarriageTravel(capture, position, record, now, gifts, afterGift) is not { } receipt)
-            return await Reject(context, 1041, -2);
+            return await Reject(context, 1041, -1);
         await context.Reply((CmdPacketType)1041, MarriageWeddingPackets.ResultAck(0), "marriage_enter_ceremony",
             () => context.Session.CanPublishTravel(receipt.Travel));
         if (receipt.Inventory is not null) await inventory.RefreshAsync(context, receipt.Inventory);

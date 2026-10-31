@@ -257,6 +257,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 new OnlineMarriageConnection(
                     result => inventory?.RefreshAsync(context, result) ?? Task.CompletedTask,
                     (opcode, body, action, guard) => context.Notify((NotiPacketType)opcode, body, action, guard),
+                    (opcode, body, action, guard) => context.Reply((CmdPacketType)opcode, body, action, guard),
                     receipt => projection.TravelAsync(context, receipt),
                     () => { if (session.Phase == SessionPhase.Town) projection.Refresh(context, marriageOnly: true); }),
                 guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,

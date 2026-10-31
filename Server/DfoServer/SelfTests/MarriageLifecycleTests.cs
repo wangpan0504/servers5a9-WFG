@@ -107,7 +107,7 @@ internal static class MarriageLifecycleTests
         }
     }
 
-    public static void Run(MarriageCatalog catalog, ItemCatalog items)
+    public static void Run(MarriageCatalog catalog, ItemCatalog items, DfoServer.GameWorld.Characters.CharacterDefaultAppearance defaults)
     {
         int checks = Count;
         string directory = Path.Combine(Path.GetTempPath(), "s5a9-marriage-lifecycle-" + Guid.NewGuid().ToString("N"));
@@ -138,7 +138,7 @@ internal static class MarriageLifecycleTests
             using (var log = new ServerLog(directory))
             {
                 var scheduler = new MarriageWeddingScheduler(reopened, catalog, items, online,
-                    new MarriageProjection(reopened, catalog, online, clock), log, clock);
+                    new MarriageProjection(reopened, catalog, online, defaults, items, clock), log, clock);
                 scheduler.TickAsync(startup: true).GetAwaiter().GetResult();
                 scheduler.TickAsync(startup: true).GetAwaiter().GetResult();
             }

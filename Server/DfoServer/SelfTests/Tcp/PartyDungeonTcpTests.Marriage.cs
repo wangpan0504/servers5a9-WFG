@@ -40,6 +40,8 @@ internal static partial class PartyDungeonTcpTests
                 new(b.Inventory, b.Inventory, "marriage_fixture"), null, record);
         }
         foreach (var peer in peers) { peer.Select(resumeTown: true, room: false); Drain(peer); }
+        That(peers.All(peer => peer.MarriagePartnerCard.Length == 98 && U32(peer.MarriagePartnerCard, 5) == 801),
+            "夫妻首次入城已恢复伴侣卡，无需主动查询1037也具有原生NPC入场所需姓名");
         for (int i = 0; i < peers.Length; i++)
         {
             peers[i].Send(2, Build(w => { w.Write((byte)5); w.Write(0x0100007fu); w.Write(0x0100007fu); w.Write((ushort)(30100 + i)); w.Write(512u); }));

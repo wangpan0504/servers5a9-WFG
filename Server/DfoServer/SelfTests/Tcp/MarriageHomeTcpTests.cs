@@ -57,12 +57,21 @@ internal static class MarriageHomeTcpTests
                 Storage = ImmutableDictionary<ushort, MarriageFurnitureStack>.Empty.Add(0, new(furniture.ItemId, 2))
             };
             record = record with { Members = record.Members
-                .SetItem(a.Id, new() { CapsuleGauge = catalog.GrowthCapsule.MaxGage, LovePoints = 500 })
+                .SetItem(a.Id, new() { CapsuleGauge = catalog.GrowthCapsule.MaxGage, CapsulesOwned = 1, LovePoints = 500 })
                 .SetItem(b.Id, new() { CapsuleDay = QuestCycle.Day(clock.GetUtcNow()), CapsulesTaken = catalog.GrowthCapsule.MaxTakenCount }) };
             repository.CommitMarriageTogether(ownerA, ownerB, a, b, new(a.Inventory, a.Inventory, "marriage_fixture"),
                 new(b.Inventory, b.Inventory, "marriage_fixture"), null, record);
         }
-        first.Select(); second.Select(); Flush(first); Flush(second);
+        first.Select(); Flush(first);
+        first.Send(1055, []); Ack(Flush(first), 1055, 0);
+        That(repository.FindMarriage(first.Id)!.Members[second.Id].CapsulesPending == 1,
+            "配偶未选角时的赠送同样保存待领，不依赖接收方在线或先打开窗口");
+        second.Select(); Flush(first); Flush(second);
+        That(second.MarriageCapsules[5] == 1,
+            "离线获赠后登录恢复一份可领取礼物，符合原生待领大于零才发送1056的前置条件");
+        second.Send(1056, []); Ack(Flush(second), 1056, -7); Flush(first);
+        That(repository.FindMarriage(first.Id)!.Members[second.Id].CapsulesPending == 1,
+            "待领不等于今日可领取额度，额度耗尽仍由服务端拒绝并保留礼物");
         foreach (var peer in new[] { first, second })
             That(U32(peer.MarriageRoom, peer.MarriageRoom.Length - 13) == seed.Value &&
                 U32(peer.MarriageRoom, peer.MarriageRoom.Length - 9) == savedExpiry,
@@ -124,6 +133,11 @@ internal static class MarriageHomeTcpTests
         Ack(Flush(second), 1048, 0); Flush(first);
         That(repository.FindMarriage(first.Id) is { Furniture.IsEmpty: true } returned && returned.Storage[0].Count == 2,
             "配偶取得锁后收回家具并合并数量");
+        string beforeInvalidRing = fixture.Snapshot("SELECT aggregate_json FROM marriage_records");
+        first.Send(1038, Structured(Build(w => { w.Write(68u); w.Write((byte)2); })));
+        var invalidRing = Flush(first).Single(p => p.Kind == 1 && p.Opcode == 1038).Body;
+        Bytes(invalidRing, [1, 0xfe, 0xff, 0xff, 0xff, 0], "婚戒越级走原生无法升级分支，失败仍携带必读等级尾字节");
+        That(fixture.Snapshot("SELECT aggregate_json FROM marriage_records") == beforeInvalidRing, "婚戒拒绝不扣券或改关系版本");
         first.Send(1038, Structured(Build(w => { w.Write(68u); w.Write((byte)1); })));
         Ack(Flush(first), 1038, 0); Flush(second);
         That(repository.FindMarriage(first.Id)!.RingLevel == 1 && fixture.Query("SELECT gold FROM characters WHERE id=$p0", first.Id) is [[10000000L]],
@@ -171,6 +185,8 @@ internal static class MarriageHomeTcpTests
         That(U32(plantedTree.Single(p => p.Opcode == 1015).Body, 0) == seed.Value &&
             partnerTree.Single(p => p.Opcode == 1015).Body.SequenceEqual(plantedTree.Single(p => p.Opcode == 1015).Body),
             "种植成功后双方收到相同原生树index，不泄漏服务端种子存档语义");
+        first.Send(1052, []); Ack(Flush(first), 1052, -6);
+        That(repository.FindMarriage(first.Id)!.Tree is { Growth: 0 }, "未成熟收获提示成长不足，不清树或伪造无树");
         while (repository.FindMarriage(first.Id)!.Tree!.Growth < tree.Steps[^1].GrowPoint)
         {
             first.Send(1051, Structured(Build(w => { w.Write((ushort)66); w.Write(water); })));
@@ -188,8 +204,8 @@ internal static class MarriageHomeTcpTests
                 That(daily.Any(p => p is { Opcode: 1015, Body.Length: 13 } && p.Body[12] == 0),
                     "持续在线跨日后，普通请求即刷新已耗尽的浇水UI，不必重登或重进婚房");
                 var partnerDaily = Flush(second);
-                That(partnerDaily.Any(p => p is { Opcode: 1018, Body.Length: 7 } && p.Body[5] == 0),
-                    "胶囊已领满的配偶跨日恢复UI领取额度，不提前改写资产或发奖");
+                That(partnerDaily.Any(p => p is { Opcode: 1018, Body.Length: 7 } && p.Body[5] == 1),
+                    "胶囊跨日通知保留一份待领礼物，不把每日次数清零误投影为没有礼物");
             }
         }
         first.Send(1052, []);
@@ -206,12 +222,24 @@ internal static class MarriageHomeTcpTests
             first.Send(1053, []); Ack(Flush(first), 1053, 0); Flush(second);
         }
         first.Send(1054, []); Ack(Flush(first), 1054, 0); Flush(second);
-        first.Send(1055, []); Ack(Flush(first), 1055, 0); Flush(second);
-        second.Send(1056, []); Ack(Flush(second), 1056, 0); Flush(first);
+        first.Send(1054, []); Ack(Flush(first), 1054, -4);
+        second.Send(1055, []); Ack(Flush(second), 1055, -4);
+        first.Send(1055, []); Ack(Flush(first), 1055, 0);
+        var giftNotice = Flush(second).Single(p => p is { Kind: 0, Opcode: 1018 });
+        Bytes(giftNotice.Body, new byte[] { 0, 0, 0, 0, 0, 2, 1 },
+            "在线赠送通知带累计两份待领和新礼物标记，客户端具备真实领取前置条件");
+        second.Send(1056, []);
+        var firstTake = Flush(second); Ack(firstTake, 1056, 0); Flush(first);
+        Bytes(firstTake.Single(p => p is { Kind: 1, Opcode: 1056 }).Body, new byte[] { 1, 0, 0, 0, 0, 1 },
+            "首次领取后回执保留一份待领，允许客户端再次领取");
+        second.Send(1056, []);
+        var lastTake = Flush(second); Ack(lastTake, 1056, 0); Flush(first);
+        Bytes(lastTake.Single(p => p is { Kind: 1, Opcode: 1056 }).Body, new byte[] { 1, 0, 0, 0, 0, 0 },
+            "最后一份领取后回执清空待领，不把当天已领两次变成仍有两个礼物");
         That(repository.FindMarriage(first.Id) is { } capsules && capsules.Members[first.Id].CapsulesOwned == 0 &&
-            capsules.Members[second.Id] is { CapsulesPending: 0, CapsulesTaken: 1 } &&
-            fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", second.Id, catalog.GrowthCapsule.CapsuleId) is [[1L]],
-            "制作赠送领取原子转移计数并产生一份真实胶囊");
+            capsules.Members[second.Id] is { CapsulesPending: 0, CapsulesTaken: 2 } &&
+            fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", second.Id, catalog.GrowthCapsule.CapsuleId) is [[2L]],
+            "离线及在线赠送后连续领取原子转移两份真实胶囊，持久已领与待领分别计数");
         second.Send(1056, []); That(unchecked((int)U32(Flush(second).Single(p => p.Kind == 1 && p.Opcode == 1056).Body, 1)) < 0,
             "重复领取不再产生胶囊");
         foreach (var peer in new[] { first, second })
@@ -230,7 +258,8 @@ internal static class MarriageHomeTcpTests
             .First(point => resources.Towns.IsPosition(point));
         second.Send(35, Move(moved.X, moved.Y)); Flush(second);
         first.Send(1046, Structured(Build(w => { w.Write(67u); w.Write((int)street.Town); w.Write((int)street.Area); w.Write((int)street.X); w.Write((int)street.Y); })));
-        Ack(Flush(first), 1046, -2);
+        Bytes(Flush(first).Single(p => p.Kind == 1 && p.Opcode == 1046).Body, [0],
+            "原生空1046回调的失败只拒绝，不伪装01成功或追加未读取的错误结构");
         That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10002915", first.Id) is [[3L]],
             "报价后伴侣移动拒绝旧确认，不提前扣传送券");
         second.Send(35, Move(street.X, street.Y)); Flush(second);
@@ -269,7 +298,12 @@ internal static class MarriageHomeTcpTests
         for (int i = 0; i < 100; i++)
         {
             var packet = peer.Read();
-            if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "婚房请求屏障成功"); return packets; }
+            if (packet is { Kind: 1, Opcode: 1347 })
+            {
+                Bytes(packet.Body, [1], "婚房请求屏障成功");
+                peer.CheckMarriagePartnerRestores(packets);
+                return packets;
+            }
             if (packet is { Kind: 0, Opcode: 411 })
             {
                 peer.ReadChatEmoticons(packet);

@@ -110,21 +110,21 @@ internal static class MarriageWeddingTcpTests
         {
             guest.Send(1035, response); Rejected(guest, 1035);
             second.Send(1035, Structured(Build(w => { w.Write((uint)guest.Id); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0); })));
-            Bytes(second.Expect(1, 1035).Body, Answer(-2, guest.Id, 0, ack: true), "无邀请者和错对象回应不能消费真实配偶的邀请");
+            Bytes(second.Expect(1, 1035).Body, Answer(-7, guest.Id, 0, ack: true), "无邀请者和错对象回应不能消费真实配偶的邀请");
             first.Send(1034, request); Rejected(first, 1034);
             That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null }, "邀请未决时拒绝重复请求，不预约或扣费");
             clock.Advance(TimeSpan.FromSeconds(61));
             second.Send(1035, response);
-            Bytes(second.Expect(1, 1035).Body, Answer(-2, first.Id, 0, ack: true), "过期确认保留原预约操作与对象");
-            Bytes(first.Expect(0, 1001).Body, Answer(-2, second.Id, type, ack: false), "过期确认通知原发起人关闭等待窗口");
+            Bytes(second.Expect(1, 1035).Body, Answer(-7, first.Id, 0, ack: true), "过期确认保留原预约操作与对象，不误报已有配偶");
+            Bytes(first.Expect(0, 1001).Body, Answer(-7, second.Id, type, ack: false), "过期确认通知原发起人关闭等待窗口");
             That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null }, "过期确认不产生预约");
             first.Send(1034, request); first.Expect(1, 1034); second.Expect(0, 1000);
         }
         second.Send(1035, response);
         if (!prepared)
         {
-            Bytes(second.Expect(1, 1035).Body, Answer(-1, first.Id, 0, ack: true), "缺少准备任务时错误回执仍保留预约操作，不能被客户端静默忽略");
-            Bytes(first.Expect(0, 1001).Body, Answer(-1, second.Id, type, ack: false), "确认失败也通知原发起人关闭等待窗口");
+            Bytes(second.Expect(1, 1035).Body, Answer(-9, first.Id, 0, ack: true), "缺少准备任务使用原生任务资格提示并保留预约操作");
+            Bytes(first.Expect(0, 1001).Body, Answer(-9, second.Id, type, ack: false), "确认失败也通知原发起人关闭等待窗口");
             That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null, PrepareClears: 5 } &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", first.Id) is [[10000000L]], "通关计数不能代替双方准备任务，拒绝不扣费");
             return;
@@ -261,6 +261,7 @@ internal static class MarriageWeddingTcpTests
             {
                 var info = peer.Expect(0, 1003).Body;
                 That(info.Length == 15 && info[4] == 4 && U32(info, 6) == wedding.StartsAt, "开场才发布已婚与真实婚期");
+                peer.ReadMarriagePartnerCard(peer.Expect(1, 1037), U32(info, 0));
                 peer.Expect(0, 1018); peer.Expect(0, 1011);
                 var movie = peer.Expect(0, 1010).Body;
                 That(movie.Length == 68 && U32(movie, 0) == reserved.ContextId && U32(movie, 4) == wedding.HallArea, "新人电影通知匹配本场礼堂");
@@ -332,13 +333,18 @@ internal static class MarriageWeddingTcpTests
         for (int index = 0; index < 64; index++)
         {
             var packet = peer.Read();
-            if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "婚礼流程屏障成功"); return packets; }
+            if (packet is { Kind: 1, Opcode: 1347 })
+            {
+                Bytes(packet.Body, [1], "婚礼流程屏障成功");
+                peer.CheckMarriagePartnerRestores(packets);
+                return packets;
+            }
             if(packet is {Kind:0,Opcode:411})
             {
                 peer.ReadChatEmoticons(packet);packets.Add(packet);continue;
             }
             That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 1001 or 1002 or 1003 or 1007 or 1016 ||
-                packet.Kind == 1 && packet.Opcode is 160 or 1035 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
+                packet.Kind == 1 && packet.Opcode is 160 or 1035 or 1037 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
             That(packet.Body.Length > 0, "婚礼流程通知必须有真实正文");
             if (packet.Opcode == 1002) That(packet.Body.Length == 71, "临时婚服71字节");
             if (packet.Opcode == 1007) That(packet.Body.Length == 79, "预约79字节");

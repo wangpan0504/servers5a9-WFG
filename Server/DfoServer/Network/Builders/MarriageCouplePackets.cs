@@ -46,7 +46,7 @@ internal static class MarriageCouplePackets
         writer.Write((byte)1); writer.Write(result);
         if (result != 0) return;
         if (command == 1054) writer.Write(checked((uint)member.CapsuleGauge));
-        writer.Write(checked((byte)(command == 1056 ? member.CapsulesTaken : member.CapsulesOwned)));
+        writer.Write(checked((byte)(command == 1056 ? Math.Min(member.CapsulesPending, byte.MaxValue) : member.CapsulesOwned)));
     });
 
     public static byte[] RoomInformation(MarriageRecord record, IReadOnlyDictionary<int, int> seedTypes) => Build(writer =>
@@ -100,7 +100,9 @@ internal static class MarriageCouplePackets
     public static byte[] CapsuleInformation(MarriageMemberState member, bool showNotice) => Build(writer =>
     {
         writer.Write(checked((uint)member.CapsuleGauge)); writer.Write(checked((byte)member.CapsulesOwned));
-        writer.Write(checked((byte)member.CapsulesTaken)); writer.Write(showNotice ? (byte)1 : (byte)0);
+        // 01E50BC0写入待领缓存+280，01E53120据此决定是否发送领取请求；不是每日已领次数。
+        // 原生u8只限制显示，不能截断长期未领取的真实账本。
+        writer.Write(checked((byte)Math.Min(member.CapsulesPending, byte.MaxValue))); writer.Write(showNotice ? (byte)1 : (byte)0);
     });
 
     public static byte[] CapsuleGauge(int gauge) => Build(writer => writer.Write(checked((uint)gauge)));

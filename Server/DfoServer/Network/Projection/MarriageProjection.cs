@@ -4,6 +4,8 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Marriage;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Marriage;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
@@ -11,7 +13,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection;
 
 internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog catalog,
-    OnlineSessionDirectory online, TimeProvider? clock = null)
+    OnlineSessionDirectory online, CharacterDefaultAppearance defaults, ItemCatalog items, TimeProvider? clock = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
 
@@ -58,6 +60,8 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         bool Guard() => peer.Session.MatchesMarriage(capture, false);
         if (reason != 0) await transport.Notify(1005, MarriageWeddingPackets.Divorce(reason), "marriage_ended", Guard);
         await transport.Notify(1003, Information(record, id), "marriage_information", Guard);
+        if (CachedPartner(record, id) is { } partner)
+            await transport.Reply(1037, partner, "marriage_partner_restore", Guard);
         if (reason != 0)
         {
             await transport.Notify((ushort)NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(capture.Character.ActiveMainQuests), "marriage_quest_progress", Guard);
@@ -65,7 +69,7 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         }
         if (record.State == 4)
         {
-            await transport.Notify(1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, id), false), "marriage_capsules", Guard);
+            await transport.Notify(1018, MarriageCouplePackets.CapsuleInformation(record.Members[id], false), "marriage_capsules", Guard);
             await transport.Notify(1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record), catalog.Seeds), "marriage_home_effects", Guard);
             if (capture.Character.Position is { Town: 101, Area: 0 })
             {
@@ -91,6 +95,8 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         bool Guard() => context.Session.CanPublishMarriageInitialization(capture);
         if (reason != 0) await context.Notify((NotiPacketType)1005, MarriageWeddingPackets.Divorce(reason), "marriage_ended", Guard);
         await context.Notify((NotiPacketType)1003, Information(record, capture.Character.Id), "marriage_information", Guard);
+        if (CachedPartner(record, capture.Character.Id) is { } partner)
+            await context.Reply((CmdPacketType)1037, partner, "marriage_partner_restore", Guard);
         if (reason != 0)
         {
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(capture.Character.ActiveMainQuests), "marriage_quest_progress", Guard);
@@ -103,7 +109,7 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         }
         if (record.State == 4)
         {
-            await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, capture.Character.Id), false),
+            await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(record.Members[capture.Character.Id], false),
                 "marriage_capsules", Guard);
             await context.Notify((NotiPacketType)1011, MarriageCouplePackets.RoomInformation(DisplayRecord(record), catalog.Seeds), "marriage_home_effects", Guard);
             if (capture.Character.Position is { Town: 101, Area: 0 })
@@ -115,6 +121,17 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
             await context.Notify((NotiPacketType)1007, MarriageWeddingPackets.Ceremony(Wire(record),
                 checked((ushort)wedding.InviteRemaining.GetValueOrDefault(capture.Character.Id))), "marriage_reservation", Guard);
     }
+
+    byte[]? CachedPartner(MarriageRecord record, ushort id)
+    {
+        // 1003会清除伴侣预览；0398A853..0398A8A3入场检查从预览取姓名，空缓存会静默拒绝。
+        return record is { Active: true, State: 4 } && record.IsMember(id) &&
+            store.FindMarriageCard(record.Other(id)) is { } card ? PartnerCard(record.ContextId, card) : null;
+    }
+
+    internal byte[] PartnerCard(uint contextId, MarriageCharacterCard card) => Card(contextId, card,
+        defaults.Resolve(card.Recipient.Job, card.Recipient.GrowType),
+        id => items.TryGet(id, out var template) && template.CloneAvatar);
 
     internal static byte[] Information(MarriageRecord record, ushort id) => MarriageWeddingPackets.Info(
         record.Active ? record.ContextId : 0, record.State,
@@ -146,18 +163,11 @@ internal sealed class MarriageProjection(IMarriageStore store, MarriageCatalog c
         if (context.Session.CaptureMarriage(false) is not { } capture ||
             capture.Character.Marriage is not { State: 4 } record || !record.IsMember(capture.Character.Id)) return;
         bool Guard() => context.Session.MatchesMarriage(capture, false);
-        await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(DisplayMember(record, capture.Character.Id), false),
+        await context.Notify((NotiPacketType)1018, MarriageCouplePackets.CapsuleInformation(record.Members[capture.Character.Id], false),
             "marriage_capsules_daily", Guard);
         if (capture.Character.Position is { Town: 101, Area: 0 })
             await context.Notify((NotiPacketType)1015, MarriageCouplePackets.TreeInformation(DisplayRecord(record).Tree, catalog.Seeds),
                 "marriage_tree_daily", Guard);
-    }
-
-    MarriageMemberState DisplayMember(MarriageRecord record, ushort id)
-    {
-        var member = record.Members[id];
-        int day = QuestCycle.Day(timer.GetUtcNow());
-        return day > member.CapsuleDay ? member with { CapsulesTaken = 0 } : member;
     }
 
     MarriageRecord DisplayRecord(MarriageRecord record) => record.Tree is { } tree && QuestCycle.Day(timer.GetUtcNow()) > tree.WaterDay

@@ -144,7 +144,7 @@ internal static partial class PartyDungeonTcpTests
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 ReturnSelection();
-                OpenSelection();
+                OpenSelection(direct: attempt == 0);
             }
         }
         byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000");
@@ -555,14 +555,15 @@ internal static partial class PartyDungeonTcpTests
             }
         }
 
-        void OpenSelection()
+        void OpenSelection(bool direct = false)
         {
-            alpha.Send(15, new byte[4]);
+            alpha.Send(15, BitConverter.GetBytes(direct ? 3u : 0u));
             foreach (var peer in participants)
             {
                 var opened = Drain(peer);
                 That(opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }) &&
-                    opened.Any(p => p is { Kind: 0, Opcode: 27, Body.Length: 42 }), "队长选图同时打开全员客户端");
+                    opened.Count(p => p is { Kind: 0, Opcode: 27, Body.Length: 42 }) == 1,
+                    "普通和指定3号副本的城镇直入都为全员建立一次选择场景，不限定3541");
                 var players = opened.Where(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 1).ToArray();
                 That(players.Length == count && players.Select(p => U16(p.Body, 22)).ToHashSet().SetEquals(participants.Select(p => p.Id)),
                     "选图完整安装所有成员战斗属性与技能，角色ID未套用其他客户端偏移");

@@ -149,20 +149,23 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             if (entry.DungeonIndex != 0)
             {
                 var party = context.Session.CurrentParty?.Invoke();
-                if (entry.DungeonIndex == 3541 && dungeons is not null && context.Session.Phase == SessionPhase.Town &&
-                    context.Session.CanBeginMarriageDungeonSelection(dungeons))
+                if (dungeons is not null && context.Session.Phase == SessionPhase.Town &&
+                    context.Session.CanBeginSpecifiedPartySelection(entry.DungeonIndex, dungeons))
                 {
                     using var couplePeers = await PartyDungeonProjection.AcquirePeersAsync(context, party?.Members ?? []);
                     var coupleSelection = partyDungeons.BeginSelection(context.Session);
                     if (coupleSelection.Length == 0)
-                        await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "marriage_dungeon_selection_rejected");
+                        await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_direct_selection_rejected");
                     else await PartyDungeonProjection.PublishAsync(coupleSelection.Select(notice => notice with { Option = 1 }));
                     // 已选定目标与客户端scene2是两层状态；由共用投影补空27，不改写请求的副本编号。
                     return CommandResult.Handled;
                 }
                 if (party is null || context.Session.Phase != SessionPhase.MapSelect ||
                     !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, context.Session)))
-                    return CommandResult.Unhandled;
+                {
+                    await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_direct_selection_unavailable");
+                    return CommandResult.Handled;
+                }
                 var confirmation = context.Session.BeginDungeonSelection(partyAdmission: true);
                 if (confirmation is not null)
                     await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "party_dungeon_chosen",
