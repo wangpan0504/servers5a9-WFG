@@ -14,6 +14,7 @@ internal sealed partial class GameSession
     {
         var children = owner.Execute(() => Selected?.ActiveMainQuests.Where(row => row.ConditionState == 0 &&
             quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest) &&
+            (parentQuestId is not null || Phase == SessionPhase.Town || !QuestRelationProgress.ClearDialogueChild(quest,quests)) &&
             (parentQuestId is null || quest.MainQuest == parentQuestId && QuestRelationProgress.TownLinkedChild(quest)))
             .Select(row => row.QuestId).ToArray() ?? []);
         QuestCompletionReceipt? last = null;
@@ -45,7 +46,8 @@ internal sealed partial class GameSession
                 HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
                     Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null,
-                    Entry: (DungeonEntryPlan?)null, Room: (DfoServer.GameWorld.Dungeons.DungeonRoomDefinition?)null);
+                    Entry: (DungeonEntryPlan?)null, Room: (DfoServer.GameWorld.Dungeons.DungeonRoomDefinition?)null,
+                    CardsFinished: false, TerminalClear: (QuestClearReceipt?)null);
             var identity = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = identity is not null && formalDungeon is { } dungeon
                 ? dungeon.Run.CurrentMonsterPlan.Room : null;
@@ -59,8 +61,12 @@ internal sealed partial class GameSession
             // 不同请求不能用旧revision读取或替换未决领奖；同请求继续使用冻结清图凭据。
             var clear = (pending is null || samePending) && !Selected.CompletedQuests.Contains(questId) && !completedParentChild
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
+            var terminalClear = samePending ? pending!.Plan.TerminalClear : pending is null && target is not null &&
+                QuestRelationProgress.TerminalClearDialogue(target,quests) is { } terminal && !Selected.CompletedQuests.Contains(terminal.Id)
+                    ? ReadClearedQuest(checked((ushort)terminal.Id))?.Clear : null;
             return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion,
-                Entry: formalDungeon?.Entry, Room: room);
+                Entry: formalDungeon?.Entry, Room: room,
+                CardsFinished: formalDungeon?.Settlement is { Committed: true, SelectedCard: not null }, TerminalClear: terminalClear);
         });
         if (captured.Character is not { } expected)
             return new(QuestFinishOutcome.Unsupported) { Failure = QuestCompletionFailure.EligibilityChanged };
@@ -75,9 +81,20 @@ internal sealed partial class GameSession
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
-        // 顺序父33只核子完成集。副本/结算内的父34：CompleteNpc若在城镇地图（3521/58、3525/362），当前房间须含该NPC，否则拒绝，避免末子自动归档后在图内交父任务。对话NPC（3146/1247）不在城镇地图，结算34仍按子完成集交付以保留连图。
+        // 带NPC的末清图子任务保留到结算后对话；原生34可转向父任务，父子在一个领奖事务中关闭。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
-        if (QuestRelationProgress.SequentialParent(quest,quests) && quest.CompleteNpc > 0 &&
+        bool clearDialogue = QuestRelationProgress.ClearDialogueChild(quest,quests) ||
+            QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null;
+        if (clearDialogue && captured.Phase != SessionPhase.Town && !captured.CardsFinished)
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "清图对话任务须先完成本实例结算和免费翻牌" };
+        if (clearDialogue && captured.Phase != SessionPhase.Town &&
+            (captured.Entry is not { } dialogueEntry || captured.Room is null ||
+                dialogueEntry.RouteQuestId != (quest.MainQuest ?? quest.Id) ||
+                !expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,dialogueEntry))))
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "清图对话任务不属于当前原接取实例" };
+        if ((QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && quest.CompleteNpc > 0 &&
             captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
         {
             int resolved = QuestClientSceneProgress.ResolveNpc(expected,quest.CompleteNpc,quest);
@@ -114,7 +131,7 @@ internal sealed partial class GameSession
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
                 stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
-                rank is null ? null : pvpRatings!.Grade(rank));
+                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear);
             if (preparation.Plan is { } planned) planned.PvpRating = rank;
         }
         return owner.Execute(() =>

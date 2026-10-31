@@ -118,6 +118,16 @@ internal static class QuestRelationProgress
     public static bool TownLinkedChild(StoryQuest quest) => ZeroRewardChild(quest) &&
         quest.Condition is "[meet npc]" or "[seek n meet npc]" or "[seeking]" or "[look cinematic]";
 
+    // 清图只达成条件；带完成NPC的零奖励子任务仍须保留到原生结算后对话交付。
+    public static bool ClearDialogueChild(StoryQuest quest, QuestCatalog quests) =>
+        quest.CompleteNpc > 0 && ZeroRewardChild(quest) && quest.MainQuest is { } parentId &&
+        quests.TryGet(parentId,out var parent) && SequentialParent(parent,quests) && parent.IntData[^1] == quest.Id &&
+        (quest.Condition == "[clear map]" || QuestDungeonClearProgress.Supports(quest));
+
+    public static StoryQuest? TerminalClearDialogue(StoryQuest parent, QuestCatalog quests) =>
+        SequentialParent(parent,quests) && quests.Get(parent.IntData[^1]) is { } child && ClearDialogueChild(child,quests)
+            ? child : null;
+
     // 已完成父任务下的终末零奖励子任务只补归档；不重开父任务，也不重复消费跳过链的材料。
     public static int? CompletedParentChild(Character character, StoryQuest child, QuestCatalog quests) =>
         ZeroRewardChild(child) && QuestCoverage.HasOrdinaryDeclarations(child) &&

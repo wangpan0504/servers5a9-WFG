@@ -15,6 +15,22 @@ namespace DfoServer.Network.Projection;
 internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterCatalog? parameters = null,
     ItemCatalog? items = null, GoldLimitCatalog? goldLimits = null, EpicPieceCatalog? pieces = null, CharacterGrowthCatalog? growth = null)
 {
+    public async Task PublishDeathConditionsAsync(GameConnectionContext context, Character character,
+        IReadOnlyList<ActiveMainQuest> changed, Func<bool> guard)
+    {
+        if (changed.Count == 0) return;
+        if (changed.Any(row => quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ClearDialogueChild(quest,quests)))
+        {
+            // 574重建活动对象，会提前启动末子/父对话；33仅原位安装真实条件，结算界面仍按原生时机结束。
+            foreach (var row in changed)
+                await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, QuestPackets.ClearTrigger(row.QuestId,row.ConditionState),
+                    "quest_dungeon_condition",guard);
+        }
+        else
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),
+                "formal_hunt_conditions",guard);
+    }
+
     public Task CreatureChangedAsync(GameConnectionContext context, Character before, Character after, Func<bool> canSend) =>
         QuestEligibility.CreatureCandidatesChanged(before, after, quests)
             ? RefreshAsync(context, after, canSend) : Task.CompletedTask;

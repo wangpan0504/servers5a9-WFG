@@ -52,6 +52,9 @@ internal sealed partial class CharacterRepository
             plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
             (plan.ConditionType is 1 or 3 or 45) != (clear is not null) ||
             clear is not null && !QuestCompletionPlan.MatchesClearedActiveQuest(expected, clear) ||
+            plan.TerminalClear is { } terminalClear && (plan.ConditionType != 44 || plan.CompletedChild is not { } clearChild ||
+                clearChild.QuestId != terminalClear.QuestId || clearChild.AcceptanceId != terminalClear.AcceptanceId ||
+                !QuestCompletionPlan.MatchesClearedActiveQuest(expected,terminalClear)) ||
             plan.CompletedParentId is { } parent && (!expected.CompletedQuests.Contains(parent) ||
                 expected.ActiveMainQuests.Any(row => row.QuestId == parent) || active.ConditionState != 0 ||
                 reward.Amount != 0 || plan.Inventory.Changed || plan.Consumed.Length != 0 || plan.Rewards.Length != 0 ||
@@ -67,20 +70,27 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$id", expected.Id); command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$acceptance", plan.AcceptanceId.ToString("N"));
         command.Parameters.AddWithValue("$quest", plan.QuestId);
-        if (clear is not null)
+        if (clear is not null) VerifyClear(clear);
+        if (plan.TerminalClear is { } childClear) VerifyClear(childClear);
+        command.Parameters["$acceptance"].Value = plan.AcceptanceId.ToString("N");
+        command.Parameters["$quest"].Value = plan.QuestId;
+
+        void VerifyClear(QuestClearReceipt fact)
         {
+            command.Parameters["$acceptance"].Value = fact.AcceptanceId.ToString("N");
+            command.Parameters["$quest"].Value = fact.QuestId;
             command.CommandText = """
                 SELECT event_id,instance_id,task_attempt,epoch,quest_slot,revision,dungeon_id,map_id,source_type FROM character_quest_clear_receipts
                 WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance AND quest_id=$quest
                 """;
             using var reader = command.ExecuteReader();
-            if (!reader.Read() || reader.GetString(0) != clear.EventId.ToString("N") || reader.GetString(1) != clear.InstanceId.ToString("N") ||
-                reader.GetInt64(2) != clear.TaskAttempt || reader.GetInt64(3) != clear.Epoch || reader.GetInt32(4) != clear.QuestSlot || reader.GetInt64(5) != clear.Revision ||
-                reader.GetInt32(6) != clear.DungeonId || reader.GetInt32(7) != clear.MapId || reader.GetString(8) != clear.SourceType.ToString())
+            if (!reader.Read() || reader.GetString(0) != fact.EventId.ToString("N") || reader.GetString(1) != fact.InstanceId.ToString("N") ||
+                reader.GetInt64(2) != fact.TaskAttempt || reader.GetInt64(3) != fact.Epoch || reader.GetInt32(4) != fact.QuestSlot || reader.GetInt64(5) != fact.Revision ||
+                reader.GetInt32(6) != fact.DungeonId || reader.GetInt32(7) != fact.MapId || reader.GetString(8) != fact.SourceType.ToString())
                 throw new InvalidDataException("领奖资格不是原持久接取的权威清图事实");
             reader.Close();
-            if (clear.SourceType == QuestClearSourceType.PassiveObject)
-                VerifySceneDeathLedger(db,tx,owner.Account,current.Id,clear.EventId,clear.InstanceId,clear.TaskAttempt);
+            if (fact.SourceType == QuestClearSourceType.PassiveObject)
+                VerifySceneDeathLedger(db,tx,owner.Account,current.Id,fact.EventId,fact.InstanceId,fact.TaskAttempt);
         }
         string consumed = JsonSerializer.Serialize(plan.Consumed);
         command.CommandText = "SELECT * FROM character_quest_completion_receipts WHERE character_id=$id AND account=$account AND acceptance_id=$acceptance";

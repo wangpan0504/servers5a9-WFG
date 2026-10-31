@@ -732,7 +732,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             var changed = receipt.Character.ActiveMainQuests.Where(row => previous.Any(old =>
                 old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)).ToArray();
             var hope = changed.SingleOrDefault(row => context.Session.IsOperationHopeQuest(row.QuestId));
-            if (changed.Any(row => row != hope))
+            var ordinary = changed.Where(row => row != hope).ToArray();
+            if (quests is not null)
+                await quests.PublishDeathConditionsAsync(context,receipt.Character,ordinary,Guard);
+            else if (ordinary.Length != 0)
                 await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
             // 574先清空再重新接取，不能替代33的原位进度/完成回调；队伍成员也复用本死亡投影。
             if (hope is not null)

@@ -69,7 +69,7 @@ internal static class QuestRoomClearTcpTests
                 "3525及普通0保留真实92251终点，入场规划不造3560接取");
             FormalDungeonTcpTests.Load(peer);
             int enabled = 0,bossChecks = 0,deathCount = 0;
-            bool parentZeroPublished = false,childCompletePublished = false;
+            bool parentZeroPublished = false,childCompletePublished = false,clearConditionPublished = false;
             var dead = new HashSet<ushort>();
             Drain();
             peer.Send(31,QuestRequest(31,3560,[]));
@@ -91,10 +91,11 @@ internal static class QuestRoomClearTcpTests
                 "目标房少一敌人仍不能清图、推进父任务或发送115/31");
             lastDeath = FormalDungeonTcpTests.Death(U16(map,enemies[^1]+6),peer.Id,map[enemies[^1]+12]);
             Kill(enemies[^1]);
-            That(enabled == 0 && bossChecks == 0 && parentZeroPublished && childCompletePublished && daily!.OtherRows("quest_id,condition_state") is [[3525L,0L]] &&
-                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3560",peer.Id) is [[3560L]] &&
-                fixture.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id) is [[3560L,0L]],
-                "第六敌人死亡只清92247，生产39自动交付无奖励3560并推进真实父任务，不提前通关");
+            That(enabled == 0 && bossChecks == 0 && !parentZeroPublished && !childCompletePublished && clearConditionPublished &&
+                daily!.OtherRows("quest_id,condition_state") is [[3525L,1L],[3560L,0L]] &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3560",peer.Id).Length == 0 &&
+                fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id).Length == 0,
+                "第六敌人死亡只达成92247条件并原位33，保留NPC子任务，不推进父领奖或提前通关");
             var clearRows = fixture.Query("""
                 SELECT r.acceptance_id,r.dungeon_id,r.map_id,r.epoch,g.epoch,g.quest_id
                 FROM character_quest_clear_receipts r JOIN character_dungeon_growth_receipts g
@@ -109,17 +110,17 @@ internal static class QuestRoomClearTcpTests
             string cleared = State();
             peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
             peer.Expect(1,34,[0,19,0]); Drain();
-            That(State() == cleared && daily!.OtherRows("quest_id,condition_state") is [[3525L,0L]] &&
+            That(State() == cleared && daily!.OtherRows("quest_id,condition_state") is [[3525L,1L],[3560L,0L]] &&
                 fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3525",peer.Id).Length == 0,
-                "92247没有CompleteNpc 362，末子归档后不能在图内提前交付父任务");
+                "92247尚未结算翻牌且没有CompleteNpc 362，不能在图内提前交付父任务");
             peer.Send(39,lastDeath); Drain();
             That(State() == cleared && enabled == 0 && bossChecks == 0,"RoomClear确认后的重复39仅忽略，不重发进度、奖励或结算");
             peer.Send(33,QuestRequest(33,3525,[0,0]));
-            peer.Expect(1,33,[1,197,13,0,0,0,0]); Drain();
-            That(State() == cleared,"父33读取实际子完成后的归零状态，不伪造任务条件");
+            peer.Expect(1,33,[1,197,13,1,0,0,0]); Drain();
+            That(State() == cleared,"父33保留尚待NPC交付的末子，不提前归零");
             peer.Send(34,QuestRequest(34,3560,[255,255,1,0,255,255]));
             peer.Expect(1,34,[0,19,0]); Drain();
-            That(State() == cleared,"已自动归档子任务的迟到34不再次发奖");
+            That(State() == cleared,"结算前子34不关闭NPC任务或发奖");
             var toBoss = QuestStoryRouteTests.Path(maze.StaticTopology,target.Position,boss.Position);
             foreach (var next in toBoss.Skip(1)) { KillRoom(); Move(next); }
             That(U32(map,14) == 92251 && enabled == 0 && bossChecks == 0,"中途任务完成后继续原92251，加载Boss仍不提前结算");
@@ -145,8 +146,10 @@ internal static class QuestRoomClearTcpTests
             Drain();
             That((long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id).Single()[0] > goldBefore &&
                 fixture.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id)
-                    is [[3525L,long parentExp],[3560L,0L]] && parentExp > 0,
-                "回城父34发放经验与金币，3560保持零奖励");
+                    is [[3525L,long parentExp]] && parentExp > 0 &&
+                fixture.Query("SELECT json_extract(plan_snapshot,'$.TerminalClear.Clear.MapId') FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3525",peer.Id)
+                    is [[92247L]],
+                "回城父34原子发放经验金币并归档3560，唯一父回执保留92247实际清图凭据");
             string completed = State();
             peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
             peer.Expect(1,34,[0,19,0]); Drain();
@@ -154,6 +157,11 @@ internal static class QuestRoomClearTcpTests
 
             void Drain() => drain(peer,packet =>
             {
+                if (packet is { Kind: 1, Opcode: 33 } && U16(packet.Body,1) == 3560)
+                {
+                    That(U32(packet.Body,3) == 0,"中途清图原位33使用3560的真实零条件");
+                    clearConditionPublished = true;
+                }
                 if (packet.Opcode == 31) enabled++;
                 if (packet.Opcode == 115) bossChecks++;
                 if (packet.Opcode == 574)
@@ -188,7 +196,7 @@ internal static class QuestRoomClearTcpTests
             peer.Select(created.Slot,prepared:true); peer.Barrier();
             That(peer.Id == created.Id,"中途清房重连仍绑定原角色");
             That(peer.CompletedQuestHistory[4+3525] == 1 && peer.CompletedQuestHistory[4+3560] == 1 && fixture.Query(
-                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id) is [[3525L],[3560L]] &&
+                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id) is [[3525L]] &&
                 fixture.Query("SELECT map_id FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[92247L]] &&
                 fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[92251L]],
                 "重连恢复真实父子完成、唯一中途凭据与独立原Boss结算");
@@ -434,6 +442,11 @@ internal static class QuestRoomClearTcpTests
             }
             That(U32(map,14) == 57866,"首房完成后仍沿原路线到57866终点");
             peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
+            before = State();
+            peer.Send(34,QuestRequest(34,3578,[255,255,1,0,255,255])); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == before,"海上列车末子真实清图后，免费翻牌前不能交付父奖励");
+            peer.Send(69); peer.Expect(1,69,[1]); peer.Send(70); peer.Expect(1,70);
+            peer.Send(71,[0,0]); peer.Expect(1,71); Drain();
             peer.Send(34,QuestRequest(34,3578,[255,255,1,0,255,255]));
             var finished = peer.Expect(1,34).Body;
             That(finished[0] == 1 && U16(finished,1) == 3578,"死灵在第二子任务真实完成后交付破坏武器父任务");
@@ -451,8 +464,10 @@ internal static class QuestRoomClearTcpTests
         {
             peer.Select(created.Slot,prepared:true); peer.Barrier();
             That(new[] {3578,3607,3608}.All(id => peer.CompletedQuestHistory[4+id] == 1) && fixture.Query(
-                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id) is [[3578L],[3607L],[3608L]],
-                "重连恢复父子三个实际完成及各自唯一交付回执");
+                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id) is [[3578L],[3607L]] &&
+                fixture.Query("SELECT json_extract(plan_snapshot,'$.TerminalClear.Clear.MapId') FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3578",created.Id)
+                    is [[57866L]],
+                "重连恢复父子三个实际完成，父回执合并末清图子事实，首阶段保留独立零奖励回执");
         }
         string State() => fixture.Snapshot("SELECT revision,experience,gold FROM characters WHERE id=$p0",created.Id)+
             fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
