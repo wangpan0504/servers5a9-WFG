@@ -468,6 +468,7 @@ internal static class BoosterTests
             var definition = resources.Boosters.Get(test.Id);
             That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
                 !definition.Lottery && definition.FirstGrowTypes.IsEmpty && definition.CooltimeMaintenance is null &&
+                definition.CoolTime == (test.Unseal ? 1000 : 0) && definition.CoolGroup is null &&
                 definition.UnsealsRandomOptions == test.Unseal && definition.Pools.Length == test.Rewards.Length &&
                 definition.Pools.Select((pool, at) => pool.Draws == 1 && pool.JobTag is null &&
                     pool.Rewards.SequenceEqual(new BoosterReward[] { new(test.Rewards[at].ItemId, 1000, test.Rewards[at].Count) })).All(value => value),
@@ -506,8 +507,11 @@ internal static class BoosterTests
                 plan.CharacterPrecondition is { } qualification && qualification.Matches(role, now.ToUnixTimeSeconds()) &&
                 plan.OverflowItems.IsEmpty && plan.AccountRefillClaims.IsEmpty && plan.DailyItemMails.IsEmpty &&
                 plan.ChangedCurrencies.IsEmpty && plan.ChangedEpicPieces.IsEmpty &&
-                JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items }) == before,
-                "complete plan preserves every non-item asset and leaves input unchanged " + test.Id);
+                JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items, ConsumableStates = role.Inventory.ConsumableStates }) == before &&
+                plan.After.ConsumableStates.SequenceEqual(test.Unseal
+                    ? new[] { new ConsumableState(ConsumableStateKind.Cooldown, test.Id, now.ToUnixTimeMilliseconds() + 1000, 0, -test.Id) }
+                    : []),
+                "complete plan preserves every other asset, records exact declared cooldown and leaves input unchanged " + test.Id);
             That(plan.After.Find(sentinel.Position) == sentinel && (openCount == 2 ? plan.After.Find(source.Position) is null :
                     plan.After.Find(source.Position) == source with { Core = source.Core with { Value = 1 } }) &&
                 outputs.GroupBy(item => item.Core.ItemId).Select(group => new BoosterGrantedItem(group.Key, group.Sum(item => item.Core.Count)))
@@ -637,7 +641,7 @@ internal static class BoosterTests
                 !definition.UnsealsRandomOptions && definition.CustomAbilityGrade is null &&
                 !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
                 definition.DailyRetainedLimit is null && definition.RuneBox is null &&
-                definition.CoolTime == 0 && definition.CoolGroup is null && definition.CooltimeMaintenance is null &&
+                definition.CoolTime == 1000 && definition.CoolGroup is null && definition.CooltimeMaintenance is null &&
                 definition.Pools.Length == 1 && definition.Pools[0] is
                     { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue, GrowType: -1, RequiredKind: null } pool &&
                 pool.Rewards.SequenceEqual(new BoosterReward[] { new(10161538, 1000, test.Count) }),
@@ -674,7 +678,9 @@ internal static class BoosterTests
                     plan.CharacterPrecondition is { } qualification && qualification.Matches(role, now.ToUnixTimeSeconds()) &&
                     plan.OverflowItems.IsEmpty && plan.AccountRefillClaims.IsEmpty && plan.DailyItemMails.IsEmpty &&
                     plan.ChangedCurrencies.IsEmpty && plan.ChangedEpicPieces.IsEmpty &&
-                    JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items }) == before && random.Calls == calls,
+                    JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items, ConsumableStates = role.Inventory.ConsumableStates }) == before &&
+                    plan.After.ConsumableStates.SequenceEqual(new[] { new ConsumableState(ConsumableStateKind.Cooldown,
+                        test.SourceId, now.ToUnixTimeMilliseconds() + 1000, 0, -test.SourceId) }) && random.Calls == calls,
                     "单确定行无需随机，完整计划保留非物品资产及原输入快照 " + test.SourceId + ":" + job);
                 That(plan.After.Find(source.Position) == source with { Core = source.Core with { Value = 1 } } &&
                     plan.After.Find(sentinel.Position) == sentinel && output.Length == 1 && output[0].Uid == 0 &&

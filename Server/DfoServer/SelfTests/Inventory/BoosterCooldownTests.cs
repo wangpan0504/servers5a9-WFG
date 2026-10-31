@@ -37,19 +37,63 @@ internal static class BoosterCooldownTests
             SavedSource.Replace("[cooltime maintenance]\n1 1 1 ", "[outer]\n[cooltime maintenance]\n1 1 1\n[/outer]"),
             SavedSource + "[/cooltime maintenance]\n",
             SavedSource.Replace("604800000 ", "-1 "), SavedSource.Replace("604800000 ", "2147483648 "),
-            SavedSource.Replace("604800000 ", "604800000 1 "), SavedSource + "[cool time]\n604800000\n",
+            SavedSource.Replace("604800000 ", "604800000 1 "), SavedSource + "[cool time]\n604800000 1\n",
             SavedSource.Replace("[cooltime group]\n71 ", "[cooltime group]\n-1 "),
             SavedSource.Replace("[cooltime group]\n71 ", "[cooltime group]\n2147483648 "),
             SavedSource.Replace("[cooltime group]\n71 ", "[cooltime group]\n71 72 "),
-            SavedSource + "[cooltime group]\n71\n", SavedSource + "[effect maintenance]\n1 1 1 1\n"
+            SavedSource + "[cooltime group]\n71 72\n", SavedSource + "[effect maintenance]\n1 1 1 1\n"
         })
-            That(!BoosterCatalog.Parse(text).Available, "冷却字段损坏、重复、嵌套或额外未实现效果仍整盒拒绝");
+            That(!BoosterCatalog.Parse(text).Available, "冷却字段损坏、重复维护位、嵌套或额外未实现效果仍整盒拒绝");
+        That(BoosterCatalog.Parse(SavedSource + "[cool time]\n1000\n[cooltime group]\n0\n") is
+            { Available: true, CoolTime: 1000, CoolGroup: 0, CooltimeMaintenance: 7 },
+            "冷却标量按完整声明的最后值读取，保留位仍唯一且不变");
+        string plain = SavedSource.Replace("[cooltime maintenance]\n1 1 1 \n", "");
+        That(BoosterCatalog.Parse(plain) is { Available: true, CoolTime: Milliseconds, CoolGroup: 71, CooltimeMaintenance: null },
+            "普通礼包不依赖维护位读取冷却时长及组");
+        foreach (string field in new[] { "cool time", "cooltime group" })
+            foreach (string value in new[] { "", "-1", "2147483648", "`1000`", "1 2", "1\n[outer]\n[" + field + "]\n1\n[/outer]" })
+                That(!BoosterCatalog.Parse(plain + "[" + field + "]\n" + value + "\n").Available,
+                    "无维护位仍逐份拒绝损坏冷却标量，不绕过字段验证");
         Console.WriteLine($"PASS {Count - checks} booster cooldown declaration checks");
+    }
+
+    public static void RunPlainResources(TownCatalog towns, ItemResources resources)
+    {
+        int checks = Count;
+        const int sourceId = 490011382;
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var definition = resources.Boosters.Get(sourceId);
+        That(definition is { Available: true, CoolTime: 1000, CooltimeMaintenance: null, CoolGroup: null },
+            $"普通礼包无maintenance仍须读取原文1000毫秒冷却，缺省组独立且不补保留位：{definition.PendingRule}/{definition.CoolTime}/{definition.CoolGroup}/{definition.CooltimeMaintenance}");
+        var core = InventoryRewardGrantService.Create(resources.Items.Get(sourceId), utcNow: now);
+        var role = new Character(1, 0, "PlainBox", 0, towns.Room, towns.InitialReturn)
+            { Inventory = new([new(1, Bag(3), core), new(2, Bag(4), core)]) };
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        var first = service.Open(role, new(3, 1), out var receipt, now);
+        That(first.Accepted && first.Plan is not null && receipt is not null &&
+            first.Plan.After.ConsumableStates.SequenceEqual(new[]
+            { new ConsumableState(ConsumableStateKind.Cooldown, sourceId, now.ToUnixTimeMilliseconds() + 1000, 0, -sourceId) }),
+            "普通会话冷却与源及两个子盒发奖同一计划，维护位为0而非跨重选保留");
+        var active = role with { Inventory = first.Plan!.After };
+        string before = JsonSerializer.Serialize(active);
+        var denied = service.Open(active, new(4, 1), out var deniedReceipt, now.AddMilliseconds(999));
+        That(!denied.Accepted && denied.Plan is null && deniedReceipt is null && JsonSerializer.Serialize(active) == before,
+            "同模板不同UID/槽第二源在截止前1ms拒绝，全部资产和已提交截止不变");
+        That(service.Open(active, new(4, 1), out _, now.AddMilliseconds(1000)).Accepted,
+            "恰到普通冷却截止可再次使用，不向后续请求追加旧时长");
+        foreach (var boundary in new[] { ConsumableMaintenance.Death, ConsumableMaintenance.Town, ConsumableMaintenance.Reselect })
+        {
+            var cleared = active with { Inventory = ConsumableStatePolicy.CrossBoundary(active.Inventory, boundary, now.ToUnixTimeMilliseconds()) };
+            That(cleared.Inventory.ConsumableStates.IsEmpty && service.Open(cleared, new(4, 1), out _, now).Accepted,
+                "无保留声明的普通冷却在既有生命周期边界清理 " + boundary);
+        }
+        Console.WriteLine($"PASS {Count - checks} plain booster session cooldown resource checks");
     }
 
     public static void RunResources(TownCatalog towns, ItemResources resources)
     {
         int checks = Count;
+        RunPlainResources(towns, resources);
         var clock = new ConsumableUseSessionTests.FakeClock();
         clock.Advance(SeedNow - clock.GetUtcNow());
         var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
@@ -132,7 +176,8 @@ internal static class BoosterCooldownTests
             (SavedSource.Replace("[cooltime group]\n71 \n", ""), 0, true),
             (SavedSource.Replace("[cooltime group]\n71 \n", ""), -SourceId, false),
             (SavedSource, 72, true),
-            (SavedSource.Replace("[cooltime maintenance]\n1 1 1 \n", "").Replace("604800000 ", "1000 "), 71, true)
+            (SavedSource.Replace("[cooltime maintenance]\n1 1 1 \n", "").Replace("604800000 ", "1000 "), 71, false),
+            (SavedSource.Replace("[cooltime maintenance]\n1 1 1 \n", "").Replace("604800000 ", "1000 "), 72, true)
         })
         {
             definitions[SourceId] = BoosterCatalog.Parse(text);
@@ -143,10 +188,12 @@ internal static class BoosterCooldownTests
             var result = service.Open(role, Select(65), out var receipt, SeedNow);
             That(result.Accepted == accepted && JsonSerializer.Serialize(role) == before &&
                 (accepted || result.Plan is null && receipt is null),
-                "显式组0共享、缺省组按物品独立；不同组不封锁，未声明maintenance保留旧开盒路径");
+                "显式组0共享、缺省组按物品独立；普通冷却同组封锁、不同组允许");
             if (accepted && !text.Contains("[cooltime maintenance]", StringComparison.Ordinal))
-                That(result.Plan!.After.ConsumableStates.SequenceEqual(role.Inventory.ConsumableStates),
-                    "未声明维护位的普通cool time不被本次修复改写为新冷却");
+                That(result.Plan!.After.ConsumableStates.Any(row => row.ItemId == SourceId && row.Maintenance == 0 &&
+                        row.CoolGroup == 71 && row.UntilMilliseconds == SeedNow.ToUnixTimeMilliseconds() + 1000) &&
+                    result.Plan.After.ConsumableStates.Contains(role.Inventory.ConsumableStates[0]),
+                    "普通冷却新增独立维护位0状态，既有不同组冷却保持原截止");
         }
 
         foreach (bool transient in new[] { true, false })
@@ -354,6 +401,38 @@ internal static class BoosterCooldownTests
             var independent = service.Open(other, Select(65, 1), out var receipt, SeedNow);
             AssertOpened(other, independent, receipt, 1, SeedNow);
             That(other.Inventory.ConsumableStates.IsEmpty, "同账号另一角色首用仍合法，不把account attach改成账号冷却");
+            const int plainSource = 490011382;
+            var plainCore = InventoryRewardGrantService.Create(resources.Items.Get(plainSource), utcNow: SeedNow);
+            repository.Create(owner, new("PlainBox", towns.Room, towns.InitialReturn)
+            { Inventory = new([new(0, Bag(3), plainCore), new(0, Bag(4), plainCore)]) });
+            session.ReturnToRoster();
+            session.Select(2);
+            session.MarkReady();
+            InventoryResult OpenPlain(short slot) => session.PlanAndCommitBooster(
+                role => service.Open(role, new(slot, 1), out _, SeedNow), service.UsePlaces(plainSource), plainSource);
+            var plainBefore = session.Selected!;
+            before = Snapshot(owner);
+            Query("CREATE TRIGGER fail_plain_cooldown AFTER INSERT ON character_consumable_states BEGIN SELECT RAISE(ABORT,'plain cooldown rollback'); END");
+            Reject<SqliteException>(() => OpenPlain(3), "普通礼包冷却行晚SQL失败传播，不提前发布奖励");
+            That(ReferenceEquals(session.Selected, plainBefore) && Snapshot(owner) == before,
+                "普通冷却晚失败完整回滚源、两个子盒奖励、revision、审计和UID");
+            Query("DROP TRIGGER fail_plain_cooldown");
+            That(OpenPlain(3).Accepted && session.Selected!.Inventory.ConsumableStates is
+                [{ ItemId: plainSource, Maintenance: 0, CoolGroup: -plainSource }],
+                "普通礼包完整奖励和维护位0冷却同事务提交");
+            var plainCommitted = session.Selected!;
+            That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single(role => role.Name == "PlainBox")) ==
+                JsonSerializer.Serialize(plainCommitted), "普通冷却提交后的源、完整奖励及唯一截止可重新读取");
+            before = Snapshot(owner);
+            That(!OpenPlain(4).Accepted && Snapshot(owner) == before,
+                "普通冷却中第二源拒绝不修改持久化状态");
+            session.ReturnToRoster();
+            session.Select(2);
+            session.MarkReady();
+            That(session.Selected!.Inventory.ConsumableStates.IsEmpty && OpenPlain(4).Accepted &&
+                session.Selected!.Inventory.Items.All(item => item.Core.ItemId != plainSource),
+                "普通维护位0冷却真实重选后清除，第二源沿原完整奖励流程提交");
+            before = Snapshot(owner);
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject<InvalidOperationException>(() => repository.CommitInventory(owner, other, independent.Plan!),
                 "旧generation不能提交另一角色的合法冷却计划");
