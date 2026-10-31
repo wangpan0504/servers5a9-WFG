@@ -131,6 +131,8 @@ internal static class FiendwarGuideTcpTests
             var search = Read().Single(row => row is { Kind: 0, Opcode: 756 }).Body;
             That(U32(search, 0) == 1 && U32(search, 8) == 1 && U32(search, 12) == key &&
                 RaidPanelTests.ReadGuideFlag(search, 12) == single, "原生招募搜索返回真实团队或引导记录");
+            peer.Send(833, [1]);
+            That(!Read().Any(row => row is { Kind: 0, Opcode: 756 }), "原生关闭搜索不重发旧列表或建立新查询");
         }
         void Move(int from, int to, bool accepted = true)
         {

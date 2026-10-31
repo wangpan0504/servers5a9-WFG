@@ -361,6 +361,7 @@ internal static partial class LukeRaidRunTcpTests
     }
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 765 }) { RaidPanelTests.ReadMemberStates(packet.Body); return; }
         if (packet is { Kind: 0, Opcode: 1446 }) { RaidPanelTests.ReadWeeklyClears(packet.Body); return; }
         if (packet is { Kind: 1, Opcode: 1361 }) { RaidPanelTests.ReadClears(packet.Body); return; }
         That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0] is 0 or 1 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is

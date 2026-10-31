@@ -47,11 +47,14 @@ internal static partial class FiendwarRaidTcpTests
             var created = Drain(leader);
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
             uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
+            byte server = checked((byte)(raidKey >> 24));
             That(!RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4), "可单人开战的完整团队面板不显示引导标记");
             foreach (var (peer, index) in peers.Skip(1).Select((peer, index) => (peer, index)))
             {
                 var requester = index % 2 == 0 ? leader : peer;
                 var responder = index % 2 == 0 ? peer : leader;
+                CheckUser(requester, responder, server, index % 2 == 0 ? 0u : raidKey,
+                    index % 2 == 0 ? (ushort)0 : leader.Id, index % 2 == 0 ? (byte)0 : checked((byte)(index + 1)));
                 requester.Send(10, AntonRaidTcpTests.Peer(responder.Id, 0, true)); Drain(requester); Drain(responder);
                 responder.Send(11, AntonRaidTcpTests.Peer(requester.Id, 0, false));
                 That(Drain(responder).Any(row => row is { Kind: 1, Opcode: 11, Body: [1, ..] }), "真实邀请或申请进入八人攻坚名册");
@@ -61,6 +64,24 @@ internal static partial class FiendwarRaidTcpTests
             leader.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(raidKey); }));
             That(!RaidPanelTests.ReadGuideFlag(Drain(leader).Single(row => row is { Kind: 1, Opcode: 1361 }).Body, 6),
                 "完整名册信息在一人、四人、八人时均保持团队模式");
+            CheckUser(leader, peers[^1], server, raidKey, leader.Id, checked((byte)count));
+            leader.Send(891, [server, (byte)peers[^1].Id, (byte)(peers[^1].Id >> 8), 38]);
+            That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 891, Body: [0, ..] }), "891错误频道明确失败，不让客户端无限等待或泄漏错误目标");
+            foreach (byte inactive in new byte[] { 1, 0 })
+            {
+                peers[^1].Send(825, [inactive]);
+                foreach (var peer in peers.OrderBy(peer => peer == peers[^1] ? 0 : 1))
+                {
+                    var states = Drain(peer);
+                    That(states.Any(row => row is { Kind: 0, Opcode: 764, Body.Length: 3 } &&
+                        U16(row.Body) == peers[^1].Id && row.Body[2] == inactive), "825只改变本人状态并向全团发送真实764");
+                    var snapshot = RaidPanelTests.ReadMemberStates(states.Single(row => row is { Kind: 0, Opcode: 765 }).Body);
+                    That(snapshot.Count == count && snapshot[peers[^1].Id] == (inactive == 1) &&
+                        snapshot.All(row => row.Key == peers[^1].Id || !row.Value), "765完整快照保留其他成员状态，不挪作准备或通关资格");
+                }
+                peers[^1].Send(825, [inactive]);
+                That(!Drain(peers[^1]).Any(row => row is { Kind: 0, Opcode: 764 or 765 }), "重复状态幂等，不重复广播");
+            }
             if (count == 4)
             {
                 leader.Send(670, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwPanel")); writer.Write((byte)0); }));
@@ -312,6 +333,13 @@ internal static partial class FiendwarRaidTcpTests
                 Bytes(frames.Single(row => row is { Kind: 0, Opcode: 29 }).Body, map, "同遭遇共用真实地图、种子和怪物键");
             }
             Load(team); return rows;
+        }
+        void CheckUser(TcpPeer requester, TcpPeer target, byte server, uint key, ushort captain, byte members)
+        {
+            requester.Send(891, [server, (byte)target.Id, (byte)(target.Id >> 8), 39]);
+            var body = Drain(requester).Single(row => row is { Kind: 1, Opcode: 891 }).Body;
+            Bytes(body, Build(writer => { writer.Write((byte)1); writer.Write(key); writer.Write(captain);
+                writer.Write(members); writer.Write(new byte[3]); }), "自然申请前891回报真实团key/团长/人数，随后仍由10/11实际加入");
         }
         void Load(TcpPeer[] team)
         {
