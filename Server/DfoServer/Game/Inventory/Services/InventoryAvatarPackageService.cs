@@ -2,6 +2,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Settings;
+using DfoServer.Game.Currency;
 
 namespace DfoServer.Game.Inventory.Services;
 
@@ -21,9 +22,9 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows))
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows, out var materialRows))
             return InventoryResult.Reject(19);
-        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now, equipmentRows);
+        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now, equipmentRows, materialRows);
     }
 
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
@@ -68,10 +69,12 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
 
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,
         AvatarPackageChoice[] choices, bool allowOverflowMail, bool shopExpiration, bool ignoreUsablePeriod,
-        out BoosterReceipt? receipt, DateTimeOffset now, AvatarPackageEquipmentRow[]? equipmentRows = null)
+        out BoosterReceipt? receipt, DateTimeOffset now, AvatarPackageEquipmentRow[]? equipmentRows = null,
+        AvatarPackageMaterialRow[]? materialRows = null)
     {
         receipt = null;
         equipmentRows ??= [];
+        materialRows ??= [];
         var selectedIds = rows.Select(row => row.ItemId).ToHashSet();
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
             choices.Any(choice => !selectedIds.Contains(choice.ItemId)))
@@ -80,7 +83,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var definitions = new List<(AvatarPackageRow Row, ItemTemplate Template, AvatarPackageType Type, byte Ability)>();
         var totals = new Dictionary<int, int>();
         var equipmentDefinitions = new List<(AvatarPackageEquipmentRow Row, ItemTemplate Template)>();
-        long total = 0, equipmentTotal = 0;
+        var materialDefinitions = new List<(ItemTemplate Template, int Amount)>();
+        long total = 0, equipmentTotal = 0, materialStacks = 0;
         try
         {
             foreach (var row in rows)
@@ -120,6 +124,16 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 equipmentTotal = checked(equipmentTotal + amount);
                 equipmentDefinitions.Add((row, template));
             }
+            foreach (var row in materialRows)
+            {
+                var template = items.Get(row.ItemId);
+                if (MaterialRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
+                int amount = checked(row.Count * count);
+                if (amount > template.StackLimit) return InventoryResult.Reject(4);
+                totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
+                materialStacks = checked(materialStacks + 1);
+                materialDefinitions.Add((template, amount));
+            }
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
@@ -143,7 +157,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                     return InventoryResult.Reject(4);
             }
         }
-        var prototypes = new List<InventoryItem>((int)(total + equipmentTotal));
+        short materialStart = 0;
+        if (materialStacks != 0)
+        {
+            var materialRange = ItemSlotBoundService.Range(ItemKind.Material, paid);
+            materialStart = materialRange.Start;
+            // 兼容材料页和快捷栏已有堆的宽上界；实际空槽与首个兼容堆仍由统一放置器判定。
+            int materialCapacity = materialRange.End - materialRange.Start + 1 +
+                ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1;
+            if (materialStacks > materialCapacity) return InventoryResult.Reject(4);
+        }
+        var prototypes = new List<InventoryItem>((int)(total + equipmentTotal + materialStacks));
         foreach (var definition in definitions)
         {
             var (row, template, type, ability) = definition;
@@ -171,6 +195,13 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 prototypes.Add(InventoryRewardGrantService.CreateItem(template,
                     new(InventoryListType.Main, ItemSlotBoundService.Range(ItemKind.Equipment, paid).Start), core));
             }
+        }
+        foreach (var (template, amount) in materialDefinitions)
+        {
+            var core = InventoryRewardGrantService.Create(template, amount, now, shopExpiration: shopExpiration,
+                ignoreUsablePeriod: ignoreUsablePeriod);
+            if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+            prototypes.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, materialStart), core));
         }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
@@ -202,13 +233,25 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     {
         rows = [];
         equipmentRows = [];
+        // 旧调用方没有材料输出，不能接受装扮和装备子集后漏发材料。
+        return category.MaterialRows.IsEmpty && TrySelect(definition, category, ids, out rows, out equipmentRows, out _);
+    }
+
+    internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
+        out AvatarPackageRow[] rows, out AvatarPackageEquipmentRow[] equipmentRows, out AvatarPackageMaterialRow[] materialRows)
+    {
+        rows = [];
+        equipmentRows = [];
+        materialRows = [];
         if (category.PendingRule is not null || category.Rows.IsEmpty) return false;
-        if (!category.EquipmentRows.IsEmpty)
+        if (!category.EquipmentRows.IsEmpty || !category.MaterialRows.IsEmpty)
         {
             if (definition.SelectionCount != 0 || !ids.Order().SequenceEqual(category.Rows.Select(row => row.ItemId)
-                .Concat(category.EquipmentRows.Select(row => row.ItemId)).Order())) return false;
+                .Concat(category.EquipmentRows.Select(row => row.ItemId)).Concat(category.MaterialRows.Select(row => row.ItemId)).Order()))
+                return false;
             rows = category.Rows.ToArray();
             equipmentRows = category.EquipmentRows.ToArray();
+            materialRows = category.MaterialRows.ToArray();
             return true;
         }
         if (definition.SelectionCount == 0)
@@ -233,6 +276,15 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         .ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility)
         .SequenceEqual(right.OrderBy(row => row.ItemId).ThenBy(row => row.Count).ThenBy(row => row.Type)
             .ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility));
+    internal static string? MaterialRowDefinitionError(AvatarPackageMaterialRow row, ItemTemplate template, EpicPieceCatalog pieces)
+    {
+        if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Material ||
+            template.StackLimit <= 0 || !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect ||
+            CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId))
+            return "avatar_material_row_definition";
+        return null;
+    }
+
     internal static string? ValidateRowDefinition(AvatarPackageRow row, ItemTemplate template, AvatarPackageItemDefinition avatar)
     {
         if (row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Avatar ||
