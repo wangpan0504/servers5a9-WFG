@@ -63,6 +63,13 @@ internal static class ConsumableUseTests
             RecoveryConsumableCatalog.Read(raw with { HpRecovery = new("%", 95, 333, "party") }) == Hp &&
             RecoveryConsumableCatalog.Read(raw with { HpRecovery = null, Diagnostics = ["客户端效果形状不由服务端核验"] }) == Hp,
             "服务端只取使用资格及冷却，恢复数值、目标、附加效果和客户端效果格式不构成使用白名单");
+        var dungeonRestricted = raw with { DeclaredFields = raw.DeclaredFields.Add("action usable dungeon"),
+            ActionUsableDungeons = [291100339, 5350] };
+        That(RecoveryConsumableCatalog.Read(dungeonRestricted)?.AllowedDungeons is { } allowed &&
+            allowed.SetEquals(new uint[] { 291100339, 5350 }) && RecoveryConsumableCatalog.Read(raw)?.AllowedDungeons is null,
+            "可用地下城名单独立进入使用资格，未声明的普通药不受新增限制");
+        That(RecoveryConsumableCatalog.Read(dungeonRestricted with { ActionUsableDungeons = null }) is null,
+            "存在但解析失败的可用地下城声明不能回退成任意场景使用");
         foreach (int subtype in new[] { 0, 1, 4, 5, 6, 99 })
         {
             var other = raw with
@@ -169,6 +176,14 @@ internal static class ConsumableUseTests
 
     public static void RunResources(ItemResources resources)
     {
+        uint[] fiendwarDungeons = [..Enumerable.Range(291100339, 26).Select(id => checked((uint)id)),
+            ..Enumerable.Range(5350, 9).Select(id => checked((uint)id))];
+        foreach (int id in new[] { 10312384, 10312387 })
+            That(resources.RecoveryConsumables.TryGet(id, out var potion) && potion.AllowedDungeons is { } dungeons &&
+                dungeons.SetEquals(fiendwarDungeons) && potion.CoolTime == 10000,
+                "漩涡实际普通恢复及解状态补给保留团队26图与引导9图名单和原冷却");
+        That(!resources.RecoveryConsumables.TryGet(10312385, out _) && !resources.RecoveryConsumables.TryGet(10312386, out _),
+            "潜能药声明use action packet1，变身药属于disguise，两者不能冒充普通恢复药消费成功");
         var mentalUse = new InventoryConsumableUseService(resources.RecoveryConsumables);
         foreach (var (id, group, milliseconds) in new[]
         {
