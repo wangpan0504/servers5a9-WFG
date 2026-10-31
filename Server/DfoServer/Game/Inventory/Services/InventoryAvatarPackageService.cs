@@ -127,7 +127,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             foreach (var row in materialRows)
             {
                 var template = items.Get(row.ItemId);
-                if (MaterialRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
+                if (EtcRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
                 int amount = checked(row.Count * count);
                 if (amount > template.StackLimit) return InventoryResult.Reject(4);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
@@ -157,15 +157,13 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                     return InventoryResult.Reject(4);
             }
         }
-        short materialStart = 0;
-        if (materialStacks != 0)
+        // [etc]保留原声明，两个真实Kind分别预检容量，实际堆叠仍由统一放置器判定。
+        foreach (var group in materialDefinitions.GroupBy(row => row.Template.Kind))
         {
-            var materialRange = ItemSlotBoundService.Range(ItemKind.Material, paid);
-            materialStart = materialRange.Start;
-            // 兼容材料页和快捷栏已有堆的宽上界；实际空槽与首个兼容堆仍由统一放置器判定。
-            int materialCapacity = materialRange.End - materialRange.Start + 1 +
+            var range = ItemSlotBoundService.Range(group.Key, paid);
+            int capacity = range.End - range.Start + 1 +
                 ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1;
-            if (materialStacks > materialCapacity) return InventoryResult.Reject(4);
+            if (group.Count() > capacity) return InventoryResult.Reject(4);
         }
         var prototypes = new List<InventoryItem>((int)(total + equipmentTotal + materialStacks));
         foreach (var definition in definitions)
@@ -201,7 +199,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             var core = InventoryRewardGrantService.Create(template, amount, now, shopExpiration: shopExpiration,
                 ignoreUsablePeriod: ignoreUsablePeriod);
             if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
-            prototypes.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, materialStart), core));
+            prototypes.Add(InventoryRewardGrantService.CreateItem(template,
+                new(InventoryListType.Main, ItemSlotBoundService.Range(template.Kind, paid).Start), core));
         }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
@@ -276,6 +275,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         .ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility)
         .SequenceEqual(right.OrderBy(row => row.ItemId).ThenBy(row => row.Count).ThenBy(row => row.Type)
             .ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility));
+    // [etc]是历史声明桶；普通材料守卫保持原契约，消耗品只接受普通实体owner。
+    internal static string? EtcRowDefinitionError(AvatarPackageMaterialRow row, ItemTemplate template, EpicPieceCatalog pieces)
+    {
+        if (template.Kind == ItemKind.Material) return MaterialRowDefinitionError(row, template, pieces);
+        if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Consumable ||
+            template.StackLimit <= 0 || !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect ||
+            CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId))
+            return "avatar_etc_consumable_row_definition";
+        return null;
+    }
+
     internal static string? MaterialRowDefinitionError(AvatarPackageMaterialRow row, ItemTemplate template, EpicPieceCatalog pieces)
     {
         if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Material ||

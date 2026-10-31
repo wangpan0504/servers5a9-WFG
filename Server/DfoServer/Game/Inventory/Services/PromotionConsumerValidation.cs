@@ -197,9 +197,10 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     foreach (var row in category.MaterialRows)
                     {
                         var child = items.Get(row.ItemId);
-                        if (InventoryAvatarPackageService.MaterialRowDefinitionError(row, child, pieces) is { } reason)
+                        if (InventoryAvatarPackageService.EtcRowDefinitionError(row, child, pieces) is { } reason)
                         { Error(source, row.ItemId, reason); continue; }
-                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:material:{category.Category}:{category.Subcategory}", ItemKind.Material, freeSource: id);
+                        string kind = child.Kind == ItemKind.Consumable ? "stackable" : "material";
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:{kind}:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);
                     }
                 }
                 return;
