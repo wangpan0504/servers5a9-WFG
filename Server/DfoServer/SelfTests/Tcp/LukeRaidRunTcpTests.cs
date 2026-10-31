@@ -73,10 +73,10 @@ internal static partial class LukeRaidRunTcpTests
         Load(first);
         Select(otherCaptain,dungeons[0]);
         var refused=Drain(otherCaptain);
-        That(refused.Any(p=>p is {Kind:1,Opcode:16}&&p.Body[0]==0)&&!refused.Any(p=>p.Opcode is 28 or 29),
+        That(refused.Any(p=>p is {Kind:1,Opcode:16}&&p.Body[0]==0)&&refused.Count(p=>p is {Kind:0,Opcode:27})==1&&!refused.Any(p=>p.Opcode is 28 or 29),
             "第二分队不能占用第一分队同一阶段地下城");
         foreach(var peer in second.Where(peer=>peer!=otherCaptain))That(!Drain(peer).Any(p=>p.Opcode is 28 or 29),"冲突拒绝不部分安装其它成员Run");
-        Enter(second,otherCaptain,dungeons[1]);Load(second);
+        Enter(second,otherCaptain,dungeons[1],sceneAlreadyOpen:true);Load(second);
         ManualCoins(fixture,first,second,0,8);
         ManualCoins(fixture,second,first,0,1);
         Return(first,captain);
@@ -135,6 +135,17 @@ internal static partial class LukeRaidRunTcpTests
         var maze=catalog.Find((int)U32(information))!.Mazes.Single(row=>row.SourceOrdinal==information[7]);
         var route=QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),new(information[8],information[9]));
         ushort last=0;byte lastLevel=0; byte[]? lastSymbols=null;
+        var otherSymbols=new bool[others.Length];var otherClears=new bool[others.Length];
+        void ObserveOthers()
+        {
+            for(int index=0;index<others.Length;index++)
+            {
+                var updates=Drain(others[index]);
+                otherSymbols[index]|=updates.Any(p=>p is {Kind:0,Opcode:583});
+                otherClears[index]|=updates.Any(p=>p is {Kind:0,Opcode:586}&&U32(p.Body)==U32(information));
+                That(updates.All(p=>p.Opcode!=587),"同Fighting阶段清图只更新583/586，不重播587");
+            }
+        }
         foreach(var point in route)
         {
             foreach(int offset in Enumerable.Range(0,map[18]).Select(index=>19+index*22)
@@ -148,6 +159,8 @@ internal static partial class LukeRaidRunTcpTests
                 That(own.Any(p=>p is {Kind:0,Opcode:38}&&U16(p.Body)==last),"队长真实39提交死亡");
                 foreach(var member in members.Where(peer=>peer!=captain))
                     That(Drain(member).Any(p=>p is {Kind:0,Opcode:38}&&U16(p.Body)==last),"共同Run各成员正式死亡投影");
+                // 另一分队也是活跃客户端，逐事件消费；不能积压整图怪物快照后误报单批预算超限。
+                ObserveOthers();
             }
             if(point==route[^1])break;
             var next=route[Array.IndexOf(route,point)+1];byte[] move=new byte[100];move[0]=(byte)next.X;move[1]=(byte)next.Y;
@@ -176,13 +189,10 @@ internal static partial class LukeRaidRunTcpTests
             That(lastSymbols is not null && Enumerable.Range(0,lastSymbols[0]).Any(index=>
                 U32(lastSymbols,1+index*8)==hp.Symbol && U32(lastSymbols,5+index*8)==hp.Value),
                 "真实死亡事务提交后HP恰减1，与下一次ordinal推进一致");
-        foreach(var peer in others)
-        {
-            var updates=Drain(peer);
-            That(updates.Any(p=>p is {Kind:0,Opcode:583})&&updates.Any(p=>p is {Kind:0,Opcode:586}&&U32(p.Body)==U32(information)),
+        ObserveOthers();
+        for(int index=0;index<others.Length;index++)
+            That(otherSymbols[index]&&otherClears[index],
                 "另一分队收到真实清图后的symbol及本图状态，不借重复开场动画同步");
-            That(updates.All(p=>p.Opcode!=587),"同Fighting阶段清图只更新583/586，不重播587");
-        }
         if(passiveTarget is { } repeatedTarget)captain.Send(39,QuestPassiveClearTcpTests.PassiveDeath((uint)repeatedTarget));
         else captain.Send(39,FormalDungeonTcpTests.Death(last,captain.Id,lastLevel));
         foreach(var peer in members.OrderBy(peer=>peer==captain?0:1))
@@ -204,28 +214,95 @@ internal static partial class LukeRaidRunTcpTests
         return U16(roster,entries[0]+1);
     }
 
-    static void Select(TcpPeer captain,int dungeon,bool native=false)
+    static void Select(TcpPeer captain,int dungeon,bool native=false,bool open=true)
     {
-        captain.Send(15,BitConverter.GetBytes(native?0:dungeon));
+        if(open)captain.Send(15,BitConverter.GetBytes(native?0:dungeon));
         // 实测原生流程先15=0，目标图及FFFFFFFF尾字段在16中提交；同时保留非零15兼容用例。
         captain.Send(16,Build(w=>{w.Write(dungeon);w.Write((byte)2);w.Write((ushort)0);w.Write((byte)0);w.Write((byte)0);
             w.Write(ushort.MaxValue);w.Write(0u);w.Write((byte)0);w.Write(0u);w.Write((byte)0);w.Write(native?uint.MaxValue:0u);}));
     }
-    static List<WirePacket>[] Enter(TcpPeer[] members,TcpPeer captain,int dungeon)
+    static List<WirePacket>[] Enter(TcpPeer[] members,TcpPeer captain,int dungeon,bool sceneAlreadyOpen=false)
     {
-        Select(captain,dungeon,native:true);
+        captain.Send(15,new byte[4]);
+        var opened=members.Select(peer=>Drain(peer)).ToArray();
+        foreach(var frames in opened)
+        {
+            That(frames.Count(p=>p is {Kind:0,Opcode:27,Body.Length:42})==(sceneAlreadyOpen?0:1) &&
+                !frames.Any(p=>p.Opcode is 28 or 29 or 1536),
+                "15零值独立建立全分队scene2，无需先发送16，不提前安装Run或普通目录");
+            int ack=frames.FindIndex(p=>p is {Kind:1,Opcode:15,Body:[1]});
+            int scene=frames.FindIndex(p=>p is {Kind:0,Opcode:27});
+            That(ack>=0&&(sceneAlreadyOpen?scene<0:scene>ack),"新开选图ACK15后发布27，已打开时保留原场景");
+            That(!frames.Any(p=>p is {Kind:0,Opcode:6}),"团本打开选图只隐藏城镇实体，保留原分队Actor及P2P引用");
+        }
+        Select(captain,dungeon,native:true,open:false);
         var leading=Drain(captain);
-        var rows=members.Select(peer=>peer==captain?leading:Drain(peer)).ToArray();
+        var entered=members.Select(peer=>peer==captain?leading:Drain(peer)).ToArray();
+        var rows=opened.Select((frames,index)=>frames.Concat(entered[index]).ToList()).ToArray();
         That(leading.Any(p=>p is {Kind:1,Opcode:15,Body:[1]})&&!leading.Any(p=>p is {Kind:1,Opcode:16}),
             "候战室原生15零值成功，连续16沿原28/29通知进入而不伪造ACK");
         byte[] map=rows[0].Single(p=>p is {Kind:0,Opcode:29}).Body;
         foreach(var frames in rows)
         {
-            That(!frames.Any(p=>p.Opcode==27),"团本直选不发送额外空27");
+            That(frames.Count(p=>p is {Kind:0,Opcode:27})==(sceneAlreadyOpen?0:1) &&
+                (sceneAlreadyOpen||frames.FindIndex(p=>p is {Kind:0,Opcode:27})<frames.FindIndex(p=>p is {Kind:0,Opcode:28})),
+                "团本进图前恰有一个27场景边界，16确认不能重复打开选图");
             That(frames.Count(p=>p is {Kind:0,Opcode:28})==1,"每成员仅安装一次正式Run");
             Bytes(frames.Single(p=>p is {Kind:0,Opcode:29}).Body,map,"同分队共用同一地图、随机种子与怪物对象键");
         }
         return rows;
+    }
+
+    static void SelectionBoundaries(TcpPeer[] members,TcpPeer captain,int dungeon)
+    {
+        captain.Send(15,new byte[4]);
+        foreach(var peer in members)
+        {
+            var frames=Drain(peer);
+            That(frames.Count(p=>p is {Kind:0,Opcode:27,Body.Length:42})==1 && !frames.Any(p=>p.Opcode is 28 or 29),
+                "只发15零值即可建立真实选图，尚未确认目标时没有Run");
+        }
+        captain.Send(15,new byte[4]);
+        foreach(var peer in members)That(!Drain(peer).Any(p=>p.Opcode is 27 or 28 or 29),"重发15不重建已打开的原生场景");
+        foreach(int repeat in new[]{0,1})
+        {
+            captain.Send(15,BitConverter.GetBytes(dungeon));
+            foreach(var peer in members)
+            {
+                var selected=Drain(peer);
+                That(selected.Any(p=>p is {Kind:1,Opcode:15,Body:[1]})&&!selected.Any(p=>p.Opcode is 27 or 28 or 29),
+                    "原生选图内确认或更换目标不重建场景，也不提前进图");
+            }
+        }
+        Select(captain,0,open:false);
+        foreach(var peer in members)
+        {
+            var rejected=Drain(peer);
+            That(!rejected.Any(p=>p.Opcode is 27 or 28 or 29),"目标不匹配被拒后仍留在原选图，不部分建立Run");
+            if(peer==captain)That(rejected.Any(p=>p is {Kind:1,Opcode:16,Body:[0,9,0,0]}),"目标不匹配16返回明确拒绝");
+        }
+        captain.Send(132);
+        foreach(var peer in members)
+        {
+            var returned=Drain(peer);
+            That(returned.Any(p=>p is {Kind:1,Opcode:132,Body:[1]})&&returned.Any(p=>p is {Kind:0,Opcode:24}),
+                "未选图的132可让全分队正常回候战，不遗留虚假Run");
+        }
+        foreach(bool send15 in new[]{true,false})
+        {
+            Select(captain,dungeon,open:send15);
+            foreach(var peer in members)
+            {
+                var frames=Drain(peer);
+                int scene=frames.FindIndex(p=>p is {Kind:0,Opcode:27,Body.Length:42});
+                That(scene>=0&&frames.Count(p=>p is {Kind:0,Opcode:27})==1&&
+                    frames.FindIndex(p=>p is {Kind:0,Opcode:28})>scene&&frames.FindIndex(p=>p is {Kind:0,Opcode:29})>scene,
+                    "非零15直入与仅16直入均先建立全分队scene2，再安装28/29");
+                That(!frames.Any(p=>p is {Kind:0,Opcode:6}),"团本城镇直入也保留原Actor，不能通过销毁重建刷新名册");
+            }
+            Load(members);
+            foreach(var peer in members)Return(members,peer);
+        }
     }
     static void Load(TcpPeer[] members)
     {
@@ -289,7 +366,8 @@ internal static partial class LukeRaidRunTcpTests
         2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 21 or 22 or 23 or 24 or 26 or 27 or 28 or 29 or 30 or 31 or 37 or 38 or 153 or 356 or 583 or 586 or 587 or 590 or 591 or 593 or 594 or 598 ||
         packet.Kind==1&&packet.Opcode is 15 or 16 or 37 or 42 or 45 || packet is {Kind:1,Opcode:662,Body:[1]} ||
         packet is {Kind:1,Opcode:72,Body:[1,1,2] or [1,2,2]} ||
-        packet is {Kind:0,Opcode:835,Body.Length:7} || packet is {Kind:1,Opcode:668,Body:[1] or [0,19,0]},
+        packet is {Kind:0,Opcode:835,Body.Length:7} || packet is {Kind:1,Opcode:668,Body:[1] or [0,19,0]} ||
+        packet is {Kind:1,Opcode:132,Body:[1]},
         $"Luke Run只消费已证通知/应答：{packet.Kind}/{packet.Opcode}");
     }
 

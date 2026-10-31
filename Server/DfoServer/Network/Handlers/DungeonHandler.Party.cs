@@ -171,7 +171,7 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind is PartyDungeonNoticeKind.RaidSelection or PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.ResultSelection && notice.Selection is { } selection)
         {
-            IReadOnlySet<ushort>? preservePartyActors = notice.Kind == PartyDungeonNoticeKind.Selection
+            IReadOnlySet<ushort>? preservePartyActors = notice.Kind is PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.RaidSelection
                 ? notice.Members.Select(member => member.Actor.Character.Id).ToHashSet() : null;
             if (!await town.DetachForDungeonSelectionAsync(context, selection, preservePartyActors)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);
@@ -186,7 +186,7 @@ internal sealed partial class DungeonHandler
             RaidCombatProjection.Selection(context, Guard);
             // 与修炼场指定直入、TAG/帝国15相同：城镇直入先发42B空27建立scene2，585之后、28/29之前；已在选图的不重复打开。
             if (notice.Kind == PartyDungeonNoticeKind.RaidSelection && notice.SceneTransition)
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_direct_selection_scene", Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "raid_direct_selection_scene", Guard);
             // 指定副本的非零15仍需27建立scene2；空列表不改变已选目标，不能省略客户端上下文。
             if (notice.Kind == PartyDungeonNoticeKind.Selection && notice.Option != 0 && notice.SceneTransition)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "party_direct_selection_scene", Guard);

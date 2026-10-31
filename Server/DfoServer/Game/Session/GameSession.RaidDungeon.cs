@@ -30,11 +30,15 @@ internal sealed partial class GameSession
         admission.Catalog.Script.WaitingRoom is { } room && Selected?.Position is { } position &&
         position.Town == room.Town && position.Area == room.Area);
 
-    internal DungeonSelectionReceipt InstallRaidDungeonSelection(RaidDungeonSelection selection) => owner.Execute(() =>
+    internal DungeonSelectionReceipt InstallRaidDungeonMenu(RaidDungeonAdmission admission) => InstallRaidSelection(admission, null);
+
+    internal DungeonSelectionReceipt InstallRaidDungeonSelection(RaidDungeonSelection selection) => InstallRaidSelection(selection.Admission, selection);
+
+    DungeonSelectionReceipt InstallRaidSelection(RaidDungeonAdmission admission, RaidDungeonSelection? selection) => owner.Execute(() =>
     {
-        if (!CanBeginRaidDungeonSelection(selection.Admission))
+        if (!CanBeginRaidDungeonSelection(admission))
             throw new InvalidOperationException("团本选图安装前身份已变化");
-        raidDungeonAdmission = selection.Admission;
+        raidDungeonAdmission = admission;
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position)
             { Raid = selection };
         SetState(SessionPhase.MapSelect);
@@ -65,9 +69,15 @@ internal sealed partial class GameSession
                 return true;
             });
     }
-    internal void ClearLukeRaidSelection() => owner.Execute(() =>
+    internal void ClearLukeRaidSelection(bool preserveScene = false) => owner.Execute(() =>
     {
         if (CurrentDungeonSelection?.Raid is null || formalDungeon is not null) return false;
+        // 入图拒绝或重选只撤销目标，客户端仍在scene2；132才负责关闭场景并发布回城。
+        if (preserveScene && Phase == SessionPhase.MapSelect)
+        {
+            CurrentDungeonSelection = CurrentDungeonSelection with { Raid = null };
+            return true;
+        }
         CurrentDungeonSelection = null;
         raidDungeonAdmission = null;
         if (Phase == SessionPhase.MapSelect) SetState(SessionPhase.Town);

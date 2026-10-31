@@ -208,15 +208,20 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             {
                 // 原生候战室先发15=0，目标图只在16确定；沿同一领域准入安装选择，不提前占图。
                 if (valid && !context.Session.HasLukeRaidSelection)
-                    valid = selection.DungeonIndex <= int.MaxValue &&
-                        lukeRaid!.Select(context.Session, (int)selection.DungeonIndex, selectedParty).Length > 0;
+                {
+                    var selected = selection.DungeonIndex <= int.MaxValue
+                        ? lukeRaid!.Select(context.Session, (int)selection.DungeonIndex, selectedParty) : [];
+                    valid = selected.Length > 0;
+                    // 选择回执仅在MapSelect有效，必须在安装Loading之前发布，不能丢弃场景与队员通知。
+                    if (valid) await PartyDungeonProjection.PublishAsync(selected);
+                }
                 if (valid) entered = partyDungeons!.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
                     dungeons, rooms, null, null, null, null);
             }
             finally
             {
                 // SQL失败也仅撤销本次选择；已安装Run的选择清理是空操作，不能释放成功的占用。
-                if (entered.Length == 0) lukeRaid?.CancelSelection(context.Session, selectedParty);
+                if (entered.Length == 0) lukeRaid?.CancelSelection(context.Session, selectedParty, preserveScene: true);
             }
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
                 RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry),
