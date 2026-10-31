@@ -13,6 +13,8 @@ namespace DfoServer.GameWorld.Dungeons;
 //   [special weekly reset day] 成对“副本 星期”。[single dungeon]、[event link enterable dungeon]、[send dungeon info account login] 只保留原样，未实现。
 internal sealed record DungeonIncountRow(int ResetType, ImmutableArray<int> Dungeons, int Limit, bool Flag, int Second)
 {
+    // 专用玩法复用账本，不代表已证明其客户端次数通知。
+    public bool HasCountNotification { get; init; } = true;
     public int WeeklyLimit => Second;
     // 次数存储键：同行共用一份次数，取该行第一个副本编号（结构推断：客户端只为 n>1 的行建组，未见读者）。
     public int CountKey => Dungeons[0];
@@ -34,6 +36,7 @@ internal sealed class DungeonIncountCatalog
     public ImmutableHashSet<int> SubOnClear { get; }
     public ImmutableDictionary<int, int> SpecialWeeklyResetDay { get; }
     public DimensionDungeonCatalog? Dimension { get; private init; }
+    public ImmutableArray<DungeonIncountRow> DaybreakRows { get; private init; } = [];
 
     DungeonIncountCatalog(ImmutableArray<DungeonIncountRow> rows, ImmutableArray<AccountIncountRow> accountRows, ImmutableDictionary<int, int> resetInfo,
         ImmutableArray<(int, int)> enterAdd, ImmutableHashSet<int> subOnClear, ImmutableDictionary<int, int> specialWeekly)
@@ -47,6 +50,7 @@ internal sealed class DungeonIncountCatalog
     }
 
     public DungeonIncountRow? Find(int dungeon) => Rows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
+        DaybreakRows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
         (Dimension?.Contains(dungeon) == true ? Dimension.DailyRow : null);
     public AccountIncountRow? FindAccount(int dungeon) => AccountRows.FirstOrDefault(row => row.Dungeon == dungeon);
     public bool ChargesOnClear(int dungeon) => SubOnClear.Contains(dungeon);
@@ -57,13 +61,29 @@ internal sealed class DungeonIncountCatalog
 
     public static DungeonIncountCatalog Load(PvfArchive archive)
     {
-        var catalog = Parse(archive.ReadTokens(Path), archive.ResolveString);
+        var parsed = Parse(archive.ReadTokens(Path), archive.ResolveString);
+        var daybreak = ReadDaybreak(archive.ReadText("etc/crackofdaybreak.etc"));
+        if (parsed.Rows.Any(row => row.Dungeons.Any(id => daybreak.Any(other => other.Dungeons.Contains(id)))))
+            throw new InvalidDataException("黎明专表与通用次数重复登记");
+        var catalog = new DungeonIncountCatalog(parsed.Rows, parsed.AccountRows, parsed.ResetInfo,
+            parsed.EnterAdd, parsed.SubOnClear, parsed.SpecialWeeklyResetDay) { DaybreakRows = daybreak };
         if (!archive.Contains(DimensionDungeonCatalog.Path)) return catalog;
         var dimension = new DimensionDungeonCatalog(archive);
-        if (catalog.Rows.Any(row => row.Dungeons.Any(dimension.Contains)))
+        if (catalog.Rows.Concat(daybreak).Any(row => row.Dungeons.Any(dimension.Contains)))
             throw new InvalidDataException("异界专表与通用次数重复登记");
         return new(catalog.Rows, catalog.AccountRows, catalog.ResetInfo,
-            catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay) { Dimension = dimension };
+            catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay) { Dimension = dimension, DaybreakRows = daybreak };
+    }
+
+    internal static ImmutableArray<DungeonIncountRow> ReadDaybreak(string text)
+    {
+        var document = new PvfDocument(text);
+        int? limit = document.ReadRootInt32("daily enter count");
+        var ids = PvfScript.Integers(document.Block("dungeon list"));
+        if (limit is not (> 0 and <= byte.MaxValue) || ids.Length == 0 || ids.Any(id => id <= 0) || ids.Distinct().Count() != ids.Length)
+            throw new InvalidDataException("黎明每日次数或副本名册无效");
+        // 专表没有共享组声明，每个副本独立记次；当前匹配PVF仅530。
+        return [.. ids.Select(id => new DungeonIncountRow(0, [id], limit.Value, false, 0) { HasCountNotification = false })];
     }
 
     internal static DungeonIncountCatalog Parse(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)

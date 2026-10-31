@@ -1,4 +1,6 @@
 using DfoServer.Network.Builders;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Dungeons;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -8,6 +10,13 @@ internal static class RiftDailyPacketTests
 {
     public static void Run()
     {
+        var row = DungeonIncountCatalog.ReadDaybreak("[daily enter count]\n2\n[dungeon list]\n530\n[/dungeon list]").Single();
+        That(row.CountKey == 530 && row.Limit == 2 && !row.HasCountNotification &&
+            DungeonIncountPolicy.CanEnter(row, new(1, 1)) && !DungeonIncountPolicy.CanEnter(row, new(2, 2)) &&
+            !DungeonIncountPolicy.Views(row, default).Any(), "黎明专表按两次准入，不借通用550发送未证实通知");
+        foreach (string text in new[] { "[dungeon list]\n530\n[/dungeon list]", "[daily enter count]\n0\n[dungeon list]\n530\n[/dungeon list]",
+            "[daily enter count]\n2\n[dungeon list]\n530 530\n[/dungeon list]", "[daily enter count]\n2\n[dungeon list]\n0\n[/dungeon list]" })
+            Reject<InvalidDataException>(() => DungeonIncountCatalog.ReadDaybreak(text), "黎明缺额度、零额度、重复或非法副本不放行");
         var hell = RiftDailyPackets.ParticularHell();
         That(hell.Length == 4 + RiftDailyPackets.ParticularHellTailBytes &&
             hell[0] == RiftDailyPackets.ParticularHellLimit && hell.Skip(1).All(b => b == 0),
