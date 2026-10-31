@@ -41,7 +41,11 @@
 
 ## 开发模拟充值
 
-充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP80；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理接口与充值设为相同端口时共用一次绑定。监听仍沿用内置站点的本机边界；端口占用导致明确启动失败，不悄悄跳过。普通路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
+充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP80；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理接口与充值设为相同端口时共用一次绑定。GM Web和客户端HTTP统一使用服务端TCP的`ListenAddress / --listen-ip`，没有独立IP配置或回环硬编码，不固定域名。Host仅接受本次连接实际接入的本地IP，回环来源额外允许localhost。普通充值路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
+
+同一HTTP入口提供`/client/includeImg.htm`，以及同级`includeImg_bg.png`、`banner_top.jpg`。三项均内嵌在程序集，构建和发布不依赖原始素材目录，不开放任意文件读取，也不重定向至充值页。页面保留350×350布局和兼容旧浏览器的脚本。链接目前为原页面的空操作，不代填外部网址。
+
+客户端HTTP绑定失败（包括80端口占用或无监听权限）记录`client_web_failed`告警，不阻止频道、游戏和原生传输就绪。若配置了不同端口的GM网页，则释放失败应用后只恢复该GM入口；没有独立GM入口时等待统一停机，不立即返回触发全服退出。独立GM端口自身不可用仍按原启动失败处理，不静默吞错。启动摘要显示实际可用状态；`ready.json`的`RechargeWebPort`失败时为0，`ConfiguredRechargeWebPort`保留配置端口。端口稍后释放不会后台重试，需要重启服务再启用。
 
 当前提供开发模拟加值，不连接支付平台、不产生真实扣款。页面只接受原生CMD65票据和`ticketKey`，没有手选账号、UID或默认10000回退。有效票据绑定当前连接generation、选角epoch及角色，十分钟失效；重新开页、换角、断线和接管使旧票据失效。票据与实际加值在原owner内验证和提交；状态查询只读持久钱包，不安装未知提交结果的旧快照。
 
@@ -147,7 +151,7 @@ dotnet run --project Server/DfoServer -- --gm appearance 测试角色
 
 ## 4. 本机管理接口
 
-服务端以 `--gm-port 23102 --gm-web-port 23103` 提供本机 TCP 命令与 HTTP JSON 接口。`--gm-web-port` 沿用现有配置键，仅监听 `127.0.0.1`；根路径及旧 `/assets/` 页面返回 404，不再内嵌 GM 页面、脚本或浏览器入口。玩家通过独立 95JP 启动器的原生 GM工具页操作。
+服务端以 `--gm-port 23102 --gm-web-port 23103` 提供TCP命令与HTTP JSON接口。GM TCP命令仍仅本机可用；GM Web沿用现有端口键，绑定地址与游戏TCP共用`--listen-ip`。根路径及旧`/assets/`页面返回404，不再内嵌GM页面、脚本或浏览器入口。玩家通过独立95JP启动器的原生GM工具页操作。GM Web没有登录鉴权；监听`0.0.0.0`或局域网IP时管理API也随之开放，应由受控网络和防火墙限制访问，Host/Origin校验不代替身份鉴权。
 
 HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=true` 及审计要求。它复用当前服务的资源和仓储，提供背包、邮件、角色、掉落清单、包查询等能力。独立充值页面使用另外的充值端口，按原配置运行。
 

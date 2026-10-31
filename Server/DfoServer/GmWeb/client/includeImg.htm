@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>欢迎登录</title>
+<style>
+* { margin: 0; padding: 0; }
+img { border: none; margin-bottom: 7px; display: block; }
+#wrapper { width: 326px; height: 326px; padding: 12px; overflow: hidden; background: url(includeImg_bg.png) no-repeat; }
+.banner { display: block; margin: 0; }
+.empty-space { width: 326px; height: 68px; margin-bottom: 7px; }
+.lnks { line-height: 25px; width: 314px; padding-left: 15px; color: #9E7846; font-size: 12px; white-space: nowrap; }
+a { font-size: 12px; color: #9E7846; text-decoration: none; margin: 0 1px; }
+a:hover { color: #FFC171; text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="wrapper">
+<a class="banner" href="#"><img src="banner_top.jpg" width="326" height="219" alt="活动宣传图"></a>
+<div class="empty-space" aria-hidden="true"></div>
+<div class="lnks">
+  <a href="#">装备被盗找回</a>
+  <a href="#">帐号安全</a>
+  <a href="#">二级密码</a>
+  <a href="#">官方论坛</a>
+  <a href="#">活动中心</a>
+</div>
+</div>
+<script>
+var links = document.getElementsByTagName('a');
+for (var i = 0; i < links.length; i++) {
+  links[i].onclick = function () { return false; };
+}
+</script>
+</body>
+</html>

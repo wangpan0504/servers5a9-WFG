@@ -8,7 +8,7 @@ using DfoServer.Testing;
 
 namespace DfoServer;
 
-internal static class GmWebServerTests
+internal static partial class GmWebServerTests
 {
     sealed class FakeData(string audit) : IGmWebData
     {
@@ -99,8 +99,11 @@ internal static class GmWebServerTests
         TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM接口保留内容安全策略");
         foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
             TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
-        TestCheck.That(!typeof(GmWebServer).Assembly.GetManifestResourceNames().Any(name =>
-            name.StartsWith("DfoServer.GmWeb.", StringComparison.Ordinal) && !name.EndsWith("recharge.html", StringComparison.Ordinal)), "程序集不再包含旧GM网页资产");
+        string[] embeddedPages = ["DfoServer.GmWeb.recharge.html", "DfoServer.GmWeb.client.includeImg.htm",
+            "DfoServer.GmWeb.client.includeImg_bg.png", "DfoServer.GmWeb.client.banner_top.jpg"];
+        TestCheck.That(typeof(GmWebServer).Assembly.GetManifestResourceNames().Where(name =>
+            name.StartsWith("DfoServer.GmWeb.", StringComparison.Ordinal)).Order().SequenceEqual(embeddedPages.Order()),
+            "程序集只包含充值页和客户端宣传页白名单，不恢复旧GM网页资产");
         var status = await http.GetFromJsonAsync<JsonElement>("/api/status");
         TestCheck.That(status.GetProperty("pid").GetInt32() == 1 && status.GetProperty("gmWebPort").GetInt32() == 4, "状态接口返回进程与端口信息");
         int beforeQueries = data.Commands.Count;

@@ -12,7 +12,24 @@ internal static class RechargeWebTcpTests
     {
         await using var fixture = new TcpTestFixture(source,
             Path.Combine(root, "recharge-web"), resources: resources);
-        await fixture.StartAsync();
+        using (var occupied = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, fixture.Options.RechargeWebPort))
+        {
+            occupied.Start();
+            await fixture.StartAsync();
+            using (var login = Open(fixture, "web-port-busy"))
+            {
+                login.Send(3, [1]);
+                login.Expect(1, 3, [1]);
+            }
+            using var ready = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "ready.json")));
+            That(ready.RootElement.GetProperty("RechargeWebPort").GetInt32() == 0 &&
+                ready.RootElement.GetProperty("ConfiguredRechargeWebPort").GetInt32() == fixture.Options.RechargeWebPort,
+                "HTTP端口占用时游戏仍完成就绪和真实登录，ready不虚报网页已监听");
+            await fixture.StopAsync();
+            That(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Contains("client_web_failed"),
+                "HTTP端口占用留下明确告警，停服后核对完整日志");
+        }
+        await fixture.StartAsync("web-available");
         using var peer = Open(fixture, "pay-native");
         peer.Create("PayFirst");
         peer.Create("PayHero");
@@ -24,6 +41,13 @@ internal static class RechargeWebTcpTests
             using var http = new HttpClient(new HttpClientHandler { UseProxy = false })
             { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
             const string page = "/comm-htdocs/pay/client/dnf/";
+            using (var welcome = await http.GetAsync("/client/includeImg.htm"))
+                That(welcome.StatusCode == System.Net.HttpStatusCode.OK && welcome.Headers.Location is null &&
+                    (await welcome.Content.ReadAsStringAsync()).Contains("banner_top.jpg"),
+                    "正式宿主随启动发布客户端宣传页，固定路径直接返回且不要求票据");
+            That((await http.GetAsync("/client/includeImg_bg.png")).StatusCode == System.Net.HttpStatusCode.OK &&
+                (await http.GetAsync("/client/banner_top.jpg")).StatusCode == System.Net.HttpStatusCode.OK,
+                "宣传页图片与充值页复用同一HTTP监听和内嵌资源装配");
             That((await http.GetAsync("/")).StatusCode == System.Net.HttpStatusCode.NotFound,
                 "关闭GM网页时只保留充值路由，不需要启动管理接口或GM TCP端口");
             foreach (string path in new[] { page, page + "diamond/" })

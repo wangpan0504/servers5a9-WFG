@@ -862,9 +862,13 @@ internal static class ServerRuntime
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
         var webReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool rechargeWebAvailable = false;
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options, () => webReady.TrySetResult());
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options,
+                available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
+                error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,
+                    Reason = error.GetType().Name, error.Message, Continuing = "Game listeners remain enabled" }));
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         // 决斗维护也使用此生命周期；关闭两个GM入口时仍须配对及回收预约。
         Func<PacketCapture?, CancellationToken, Task> management = RunManagement;
@@ -873,7 +877,8 @@ internal static class ServerRuntime
         return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,
             guildInvitations,guildEconomyProjection,guildTeleportService,guildNpcService,guildHallWait.RunAsync,
             runWorld: marriageScheduler.RunAsync, gameplayTimers: lukeTimers, saveVersion: SqliteMigrations.CurrentVersion,
-            lukeRejoinCandidate: lukeRejoin is null ? null : lukeRejoin.DescribeCandidate, managementReady: webReady.Task);
+            lukeRejoinCandidate: lukeRejoin is null ? null : lukeRejoin.DescribeCandidate, managementReady: webReady.Task,
+            rechargeWebAvailable: () => rechargeWebAvailable);
 
         async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {

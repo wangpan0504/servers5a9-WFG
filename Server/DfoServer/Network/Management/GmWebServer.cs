@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
@@ -47,22 +48,45 @@ internal interface IGmWebData
     GmAudit Audit { get; }
 }
 
-// 嵌入服务进程的 GM 站点（Kestrel Minimal API）。只绑定 127.0.0.1，并校验 Host 头以防 DNS 重绑定；
-// 写接口须带 X-GM-Request 头和 confirm=true，Origin 若存在必须同源，每次写操作写审计。
+// 内嵌Kestrel：所有网页端口复用服务端监听IP，Host只接受实际本地端点及回环localhost。
+// 管理写接口须带X-GM-Request和confirm=true，Origin须同源，每次写操作写审计。
 internal static partial class GmWebServer
 {
     public static Task RunAsync(int port, IGmWebData data, CancellationToken stop,
         PacketCapture? capture = null, ServerOptions? options = null) => RunCoreAsync(port, null, data, stop, capture, options, null);
 
-    public static Task RunWithRechargeAsync(int port, int rechargePort, IGmWebData data, CancellationToken stop,
-        PacketCapture? capture = null, ServerOptions? options = null, Action? started = null) =>
-        RunCoreAsync(port, rechargePort, data, stop, capture, options, started);
+    public static async Task RunWithRechargeAsync(int port, int rechargePort, IGmWebData data, CancellationToken stop,
+        PacketCapture? capture = null, ServerOptions? options = null, Action<bool>? started = null,
+        Action<Exception>? unavailable = null)
+    {
+        bool bound = false;
+        try
+        {
+            await RunCoreAsync(port, rechargePort, data, stop, capture, options,
+                () => { bound = true; started?.Invoke(true); }, clientPages: true);
+        }
+        catch (Exception error) when (!bound && !stop.IsCancellationRequested && error is IOException or SocketException)
+        {
+            // Kestrel绑定失败会释放同一应用的全部端点；仅重新建立独立配置的GM入口，不探测后抢占端口。
+            if (port != 0 && port != rechargePort)
+                await RunCoreAsync(port, null, data, stop, capture, options,
+                    () => { unavailable?.Invoke(error); started?.Invoke(false); }, clientPages: true);
+            else
+            {
+                unavailable?.Invoke(error);
+                started?.Invoke(false);
+                try { await Task.Delay(Timeout.Infinite, stop); }
+                catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            }
+        }
+    }
 
     static async Task RunCoreAsync(int port, int? rechargePort, IGmWebData data, CancellationToken stop,
-        PacketCapture? capture, ServerOptions? options, Action? started)
+        PacketCapture? capture, ServerOptions? options, Action? started, bool clientPages = false)
     {
         if (port is < 0 or > 65535 || port == 0 && rechargePort is null || rechargePort is < 1 or > 65535)
             throw new InvalidDataException("Invalid GM web port");
+        var listenAddress = IPAddress.Parse((options ?? new ServerOptions()).ListenAddress);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(kestrel =>
@@ -71,12 +95,16 @@ internal static partial class GmWebServer
             // 任务“全部完成”会一次提交当前筛选的编号列表，3000 个编号的 JSON 超过 16KB。
             kestrel.Limits.MaxRequestBodySize = 128 * 1024;
             foreach (int endpoint in new[] { port, rechargePort ?? 0 }.Where(value => value != 0).Distinct())
-                kestrel.Listen(IPAddress.Loopback, endpoint, listen => listen.Protocols = HttpProtocols.Http1);
+                kestrel.Listen(listenAddress, endpoint, listen => listen.Protocols = HttpProtocols.Http1);
         });
         await using var app = builder.Build();
         using var packetRequests = new SemaphoreSlim(8, 8);
-        Map(app, data, port != 0);
-        if (rechargePort is not null) MapRecharge(app, data);
+        Map(app, data, port != 0, clientPages);
+        if (clientPages)
+        {
+            MapRecharge(app, data);
+            MapClientPages(app);
+        }
         if (capture is not null && options is not null)
             MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
         await app.StartAsync(stop);
@@ -90,12 +118,19 @@ internal static partial class GmWebServer
     static readonly Regex Amplify = new(@"^amp:[1-4]:[0-9]{1,10}$", RegexOptions.Compiled);
     static readonly Regex Tag = new(@"^[^\s\p{C}]{1,32}$", RegexOptions.Compiled);
 
-    internal static void Map(WebApplication app, IGmWebData data, bool management = true)
+    internal static void Map(WebApplication app, IGmWebData data, bool management = true, bool clientPages = false)
     {
         app.Use(async (context, next) =>
         {
             string host = context.Request.Host.Host;
-            if (host != "127.0.0.1" && !string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            bool local = context.Connection.RemoteIpAddress is { } peer && IPAddress.IsLoopback(peer) &&
+                string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase);
+            bool clientPath = clientPages && (context.Request.Path.StartsWithSegments("/client", StringComparison.Ordinal) ||
+                context.Request.Path.StartsWithSegments(RechargeRoot.TrimEnd('/'), StringComparison.Ordinal) ||
+                context.Request.Path == "/favicon.ico");
+            bool listenerHost = IPAddress.TryParse(host, out var address) &&
+                context.Connection.LocalIpAddress is { } listener && address.Equals(listener);
+            if (!local && !listenerHost)
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
@@ -103,7 +138,7 @@ internal static partial class GmWebServer
             context.Response.Headers["Cache-Control"] = "no-store";
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             bool recharge = context.Request.Path.StartsWithSegments(RechargeRoot.TrimEnd('/'), StringComparison.Ordinal);
-            context.Response.Headers["Content-Security-Policy"] = recharge
+            context.Response.Headers["Content-Security-Policy"] = clientPath
                 ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
                 : "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
             if (!HttpMethods.IsGet(context.Request.Method))
@@ -509,6 +544,15 @@ internal static partial class GmWebServer
                 ?? throw new InvalidDataException("程序集缺少内嵌 GM 资源：" + file);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();
+        }
+
+        public static byte[] Bytes(string file)
+        {
+            using var stream = typeof(GmWebServer).Assembly.GetManifestResourceStream("DfoServer.GmWeb." + file)
+                ?? throw new InvalidDataException("程序集缺少内嵌网页资源：" + file);
+            using var copy = new MemoryStream();
+            stream.CopyTo(copy);
+            return copy.ToArray();
         }
     }
 }
