@@ -53,7 +53,7 @@ internal static partial class RaidCombatProjection
                     {
                         if (battle.LukeRuleTimerSeconds(view.Instance, view.Phase, timer, generation) is not { } seconds) return null;
                         context.AntonTimerDisplays.Add(timer);
-                        return RaidCombatPackets.AntonDungeonTimer(timer.Kind, timer.DungeonId, seconds,
+                        return RaidCombatPackets.AntonDungeonTimer(timer.Kind, timer.DungeonId, checked((uint)view.Timers[timer]),
                             checked((uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + seconds)));
                     }, "anton_dungeon_timer", () => current() && battle.IsCurrent(view));
             }

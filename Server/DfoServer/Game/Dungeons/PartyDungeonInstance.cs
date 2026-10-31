@@ -162,6 +162,11 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         });
     }
 
+    internal bool ReportAntonEnergy(GameSession reporter) => Execute(current =>
+        pendingDeath is null && pendingScene is null && loaded.Count == 0 &&
+        current.Any(member => ReferenceEquals(member.Actor.Session, reporter)) &&
+        current.All(member => member.Actor.Session.CanMoveWithParty()) && reporter.ReportAntonEnergy());
+
     public LukeFacilityReportReceipt? ReportLukeFacility(GameSession reporter, int symbol, uint value, byte operation) => Execute(current =>
     {
         if (pendingDeath is not null || pendingScene is not null || loaded.Count != 0 ||

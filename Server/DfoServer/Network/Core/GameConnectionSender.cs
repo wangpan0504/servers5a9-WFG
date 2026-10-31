@@ -99,10 +99,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 
     // 默认固定长度；变长快照可显式按上限预算。泵内不得执行SQL或网络等待，null代表原身份失效。
     internal void PostPrepared(byte kind, ushort opcode, int bodyLength, Func<byte[]?> prepare, string action, Func<bool> canSend,
-        bool allowShorter = false)
+        bool allowShorter = false, Action? written = null)
     {
         if (bodyLength is < 0 or > 65520) throw new ArgumentOutOfRangeException(nameof(bodyLength));
-        Enqueue(new(Epoch, new(kind, opcode, new byte[bodyLength], action, CanSend: canSend, Prepare: prepare, AllowShorter: allowShorter)));
+        Enqueue(new(Epoch, new(kind, opcode, new byte[bodyLength], action, CanSend: canSend, Prepare: prepare, AllowShorter: allowShorter, Written: written)));
     }
 
     // 共享副本先完整规划并提交；发布只入原有有界发送队列，不持队伍/连接门禁等待慢客户端。

@@ -615,6 +615,7 @@ internal static class AntonTcpProbe
                 report.Opcode586++;
                 report.States.Add(packet.Body.ToArray());
             }
+            else if (packet is { Kind: 0, Opcode: 585 }) report.DungeonSnapshots.Add(packet.Body.ToArray());
             else if (packet is { Kind: 0, Opcode: 583 }) report.Symbols.Add(packet.Body.ToArray());
             else if (packet.Opcode == 596) { report.Opcode596++; report.Timers.Add(packet.Body.ToArray()); }
             else if (packet.Opcode == 597) report.Opcode597++;
@@ -803,6 +804,7 @@ internal static class AntonTcpProbe
         public byte[]? LastClearCheck;
         public List<string> Steps { get; } = [];
         public List<byte[]> States { get; } = [];
+        public List<byte[]> DungeonSnapshots { get; } = [];
         public List<byte[]> Symbols { get; } = [];
         public List<byte[]> Timers { get; } = [];
         public List<byte[]> Maps { get; } = [];

@@ -94,6 +94,7 @@ internal sealed partial class AntonRaidBattle
                 if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
                 if (earliest is null || remaining < earliest) earliest = remaining;
             }
+        if (AntonChargeRemainingLocked() is { } charge && (earliest is null || charge < earliest)) earliest = charge;
         lease.Schedule(earliest ?? Timeout.InfiniteTimeSpan);
     }
 

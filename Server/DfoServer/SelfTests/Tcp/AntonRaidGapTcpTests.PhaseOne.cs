@@ -94,12 +94,12 @@ internal static partial class AntonRaidGapTcpTests
         }
         AntonTcpProbe.Enter(peer, catalog, 216, report, clear: true);
         AssertState(report, 216, 1);
-        Timer(2, 211, 280);
+        Timer(2, 211, 300, 280);
         That(report.Timers.Any(body => body.Length == 13 && body[0] == 1 &&
             BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == 216 &&
             BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == 1 &&
             BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(5)) < DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-            "舰炮完成按原key清除攻略条；黑雾补发280秒而非重启300秒");
+            "舰炮完成按原key清除攻略条；黑雾保留总长300秒及剩余280秒");
         var meteor = report.Timers.Last(body => body.Length == 13 && body[0] == 3 &&
             BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == 216);
         That(BinaryPrimitives.ReadUInt32LittleEndian(meteor.AsSpan(9)) == 120,
@@ -120,6 +120,10 @@ internal static partial class AntonRaidGapTcpTests
                 That(!report.Reward && fixture.Query("SELECT phase0_receipt IS NOT NULL FROM character_raid_runs") is [[0L]],
                     "单腿或尚有HP的擎天不能提前封存阶段0");
             }
+        That(report.States.Count(body => BinaryPrimitives.ReadInt32LittleEndian(body) == 213 && body[5] == 3) +
+            report.DungeonSnapshots.Sum(body => Enumerable.Range(0, body[1]).Count(index =>
+                BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2 + index * 5)) == 213 && body[6 + index * 5] == 3)) == 1,
+            "清B及其它战况补发不重放A区Clear横幅");
         That(report.Reward, "真实阶段0CLEAR PHASE抵达Reward");
         string menuBefore = Assets();
         peer.Send(72, [2, 1]);
@@ -172,6 +176,22 @@ internal static partial class AntonRaidGapTcpTests
             BinaryPrimitives.ReadInt32LittleEndian(hpSnapshot.AsSpan(1 + index * 8)) == hpSymbol &&
             BinaryPrimitives.ReadInt32LittleEndian(hpSnapshot.AsSpan(5 + index * 8)) == 0), "218 clear沿583同步PVF明示HP0");
         peer.Send(117, report.LastClearCheck!); AntonTcpProbe.Barrier(peer, "218重复clear不重计");
+        byte[] energy = [110, 0, 0, 0, 0xB8, 0x0B, 0, 0, 2];
+        peer.Send(662, energy);
+        var energyReply = AntonTcpProbe.Barrier(peer, "218终末Last能量报告");
+        That(energyReply.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == 7000),
+            "正式218通关后110减3000，保持HP0剩余语义");
+        peer.Send(662, energy);
+        var duplicateEnergy = AntonTcpProbe.Barrier(peer, "同Run重复Last");
+        That(duplicateEnergy.Where(p => p is { Kind: 0, Opcode: 583 }).All(p => Energy(p.Body) == 7000),
+            "同Run重复报告不再扣能量");
+        static int Energy(byte[] body)
+        {
+            for (int index = 0; index < body[0]; index++)
+                if (BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1 + index * 8)) == 110)
+                    return BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(5 + index * 8));
+            return -1;
+        }
         peer.Send(42); AntonTcpProbe.Barrier(peer, "218回候战室");
         int volcanoMap = report.Maps.Count;
         AntonTcpProbe.Enter(peer, catalog, 219, report, clear: true);
@@ -226,13 +246,14 @@ internal static partial class AntonRaidGapTcpTests
                 $"583图{id}符号{symbol}剩余HP={expected}");
         }
 
-        void Timer(byte kind, int dungeon, uint seconds)
+        void Timer(byte kind, int dungeon, uint seconds, uint? remaining = null)
         {
-            That(report.Timers.Any(body => body.Length == 13 && body[0] == kind &&
-                BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1)) == dungeon &&
-                BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == seconds &&
-                BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(5)) >= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + seconds - 2),
-                $"596类型{kind}地图{dungeon}剩余{seconds}及绝对截止");
+            var body = report.Timers.Last(row => row.Length == 13 && row[0] == kind &&
+                BinaryPrimitives.ReadInt32LittleEndian(row.AsSpan(1)) == dungeon);
+            long expectedEnd = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (remaining ?? seconds);
+            That(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(9)) == seconds &&
+                Math.Abs(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(5)) - expectedEnd) <= 2,
+                $"596类型{kind}地图{dungeon}总长{seconds}及绝对截止");
         }
 
         string Assets() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +

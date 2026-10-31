@@ -24,11 +24,13 @@ internal static partial class RaidCombatProjection
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
         {
             // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
-            if (anton.HasAntonRewards || anton.PhaseProgress)
-                PostAntonSnapshot(context, anton, view, Guard);
             foreach (var row in anton.DungeonSnapshot(view))
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
-                    RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state", Guard);
+                    RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state",
+                    () => Guard() && ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State),
+                    () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
+            if (anton.HasAntonRewards || anton.PhaseProgress)
+                PostAntonSnapshot(context, anton, view, Guard);
         }
         if (view.PhaseExpired)
         {
@@ -46,12 +48,38 @@ internal static partial class RaidCombatProjection
             !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
         bool Guard() => current() && battle.IsCurrent(view);
         // 585尾值保留感染身份；01DCF210会对非零身份置symbol7=1，随后583恢复本次真实开闭值及剩余HP。
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
-            RaidCombatPackets.Dungeons(0, battle.DungeonSnapshot(view), infectionDungeon),
-            "raid_dungeon_snapshot", Guard);
+        IReadOnlyList<(int Id, GameWorld.Raids.RaidDungeonState State)> published = [];
+        // 585与586共用01DD9DD0，重复Clear也会弹横幅；在FIFO实际写帧时过滤。
+        context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
+            6 + battle.DungeonSnapshot(view).Length * 5,
+            () =>
+            {
+                published = battle.DungeonSnapshot(view).Where(row =>
+                    ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State)).ToArray();
+                return RaidCombatPackets.Dungeons(0, published, infectionDungeon);
+            }, "raid_dungeon_snapshot", Guard, allowShorter: true, written: () =>
+            {
+                foreach (var row in published) RecordAntonDungeon(context, view.Instance, row.Id, row.State);
+            });
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
             RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
         PostAntonTimers(context, battle, view, Guard);
+    }
+
+    static bool ShouldPublishAntonDungeon(GameConnectionContext context, Guid instance, int dungeon,
+        GameWorld.Raids.RaidDungeonState state) => state != GameWorld.Raids.RaidDungeonState.Clear ||
+        context.AntonDungeonDisplayInstance != instance ||
+        context.AntonDungeonDisplays.GetValueOrDefault(dungeon) != state;
+
+    static void RecordAntonDungeon(GameConnectionContext context, Guid instance, int dungeon,
+        GameWorld.Raids.RaidDungeonState state)
+    {
+        if (context.AntonDungeonDisplayInstance != instance)
+        {
+            context.AntonDungeonDisplays.Clear();
+            context.AntonDungeonDisplayInstance = instance;
+        }
+        context.AntonDungeonDisplays[dungeon] = state;
     }
 
     internal static void Selection(GameConnectionContext context, Func<bool> current)

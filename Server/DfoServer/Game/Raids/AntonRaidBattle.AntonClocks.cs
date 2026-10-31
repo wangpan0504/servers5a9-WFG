@@ -8,6 +8,7 @@ internal sealed partial class AntonRaidBattle
     // 随机孵化沿86已实现策略，候选、计时和线上布局使用95资源及接收合同。
     void ExpireDueAntonClockLocked()
     {
+        ChargeAntonEnergyLocked();
         var timers = current.Timers.Where(row => current.TimerAnchors.TryGetValue(row.Key, out long anchor) &&
             lukeClock.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(row.Value))
             .Select(row => (row.Key, Generation: current.TimerGenerations.GetValueOrDefault(row.Key))).ToArray();
