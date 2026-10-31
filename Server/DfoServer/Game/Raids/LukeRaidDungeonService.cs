@@ -15,7 +15,11 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         (policy.CardRoute is { } cards && !cards.MatchesObjects(objects) ? "luke-card-route-object-catalog-changed" : null) ??
         (policy.FixedRoute is { } route && !route.MatchesObjects(objects) ? "luke-fixed-route-object-catalog-changed" : null);
 
-    public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party)
+    public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party) => SelectCore(leader, dungeon, party);
+
+    public PartyDungeonNotice[] OpenSelection(GameSession leader, PartySnapshot? party) => SelectCore(leader, null, party);
+
+    PartyDungeonNotice[] SelectCore(GameSession leader, int? dungeon, PartySnapshot? party)
     {
         var raid = registry.FindCurrent(leader, leader.SelectionEpoch);
         if (party is null || !parties.IsCurrent(party) || raid is not { Type: 1, Started: { } start } || UnavailableReason is not null ||
@@ -32,21 +36,26 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
             var battle = leader.CurrentRaidBattle(anchor.Actor);
             if (battle is not { Kind: RaidKind.Luke } || battle.HasPendingTransition || battle.Instance != start.InstanceId) return [];
             var view = battle.View;
-            var route = battle.CaptureLukeRoute(view.Phase, dungeon, policy.FixedRoute, policy.CardRoute);
-            int? selectedMaze = battle.UsesLukeRoute(view.Phase) ? route?.MazeOrdinal : policy.Maze(view.Phase, dungeon);
-            if (battle.UsesLukeRoute(view.Phase) != (view.Phase == 0 && (policy.FixedRoute is not null || policy.CardRoute is not null)) ||
-                !battle.LukePhaseOpen(view.Phase) || selectedMaze is not { } maze ||
-                !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open ||
-                members.Any(member => !battle.AllowsLukeMemberRoute(member.Actor, view.Phase, dungeon))) return [];
-            var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, view.Phase,
+            if (!battle.LukePhaseOpen(view.Phase)) return [];
+            var route = dungeon is { } target ? battle.CaptureLukeRoute(view.Phase, target, policy.FixedRoute, policy.CardRoute) : null;
+            int? selectedMaze = dungeon is { } mazeDungeon ? battle.UsesLukeRoute(view.Phase) ? route?.MazeOrdinal : policy.Maze(view.Phase, mazeDungeon) : null;
+            if (dungeon is { } chosen && (battle.UsesLukeRoute(view.Phase) !=
+                (view.Phase == 0 && (policy.FixedRoute is not null || policy.CardRoute is not null)) || selectedMaze is null ||
+                !view.Dungeons.TryGetValue(chosen, out var state) || state != RaidDungeonState.Open ||
+                members.Any(member => !battle.AllowsLukeMemberRoute(member.Actor, view.Phase, chosen)))) return [];
+            var admissions = members.Select(member => new RaidDungeonAdmission(start.InstanceId, member.Actor, view.Phase,
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id) &&
                     battle.AllowsLukeMemberRoute(member.Actor, view.Phase, id), RaidKind.Luke)
-                { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze) { Route = route }).ToArray();
-            if (selections.Any(selection => !ReferenceEquals(selection.Admission.Actor.Session.CurrentRaidBattle(selection.Admission.Actor), battle) ||
-                !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
-            return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
-                party.Members.Single(member => ReferenceEquals(member.Actor.Session, selection.Admission.Actor.Session)), party.Members,
-                Selection: selection.Admission.Actor.Session.InstallRaidDungeonSelection(selection))).ToArray();
+                { LukePolicy = policy, Battle = battle, LukeObjects = objects }).ToArray();
+            if (admissions.Any(admission => !ReferenceEquals(admission.Actor.Session.CurrentRaidBattle(admission.Actor), battle) ||
+                !admission.Actor.Session.CanBeginRaidDungeonSelection(admission))) return [];
+            // 空15只建立全分队的原生选图上下文，不预选地图或预留Run；直入同样必须先建立scene2。
+            var fromTown = admissions.Select(admission => admission.Actor.Session.Phase == SessionPhase.Town).ToArray();
+            return admissions.Select((admission, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
+                party.Members.Single(member => ReferenceEquals(member.Actor.Session, admission.Actor.Session)), party.Members,
+                Selection: dungeon is { } selected ? admission.Actor.Session.InstallRaidDungeonSelection(
+                    new(admission, selected, selectedMaze!.Value) { Route = route }) : admission.Actor.Session.InstallRaidDungeonMenu(admission),
+                SceneTransition: fromTown[index])).ToArray();
         });
 
         bool MemberCurrent(RaidMember member)
@@ -64,7 +73,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         }
     }
 
-    public bool CancelSelection(GameSession leader, PartySnapshot? party)
+    public bool CancelSelection(GameSession leader, PartySnapshot? party, bool preserveScene = false)
     {
         // 调用方保留取得命令门禁时的原队伍；不能改用新快照清除另一次选择。
         if (party is null || !parties.IsCurrent(party) ||
@@ -72,7 +81,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         return AccountOwners.Lease.ExecuteGroup(party.Members.Select(member => (member.Actor.Owner, member.Actor.Character.Id)).ToArray(), () =>
         {
             if (!parties.IsCurrent(party)) return false;
-            foreach (var member in party.Members) member.Actor.Session.ClearLukeRaidSelection();
+            foreach (var member in party.Members) member.Actor.Session.ClearLukeRaidSelection(preserveScene);
             return true;
         });
     }

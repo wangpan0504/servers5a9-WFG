@@ -443,7 +443,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         {
             if (!context.Session.CanPublishDungeonSelection(receipt))
                 return null;
-            // 普通组队选图只退城镇实体；删除Actor会清掉队伍槽并使客户端重新创建P2P peer。
+            // 组队及团本选图只退城镇实体；删除Actor会清掉队伍槽并使客户端重新创建P2P peer。
             presence?.Remove(context.Sender, preserveActors: preservePartyActors);
             return context.Sender.ClearScene(preservePartyActors is not null ? SceneActorClear.Hide : SceneActorClear.Delete);
         });

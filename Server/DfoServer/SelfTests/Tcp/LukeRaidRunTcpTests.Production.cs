@@ -128,6 +128,7 @@ internal static partial class LukeRaidRunTcpTests
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0", original) is [[1L]], "重返保留原实例账本，不重复扣票");
                 }
                 var members = peers.Take(4).ToArray(); var others = peers.Skip(4).ToArray();
+                if (!recovery) SelectionBoundaries(members, leader, 5054);
                 int clearPhase = -1, phaseClears = 0;
                 void Run(int dungeon, byte phase)
                 {
