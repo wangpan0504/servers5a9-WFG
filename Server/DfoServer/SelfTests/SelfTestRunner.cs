@@ -123,6 +123,7 @@ internal static class SelfTestRunner
         BoosterSelectionTests.RunCore();
         BoosterGrowTypeTests.RunCharacterCore();
         AvatarPackageTests.RunCore();
+        OmittedDimensionsAvatarPackageTests.RunCore();
         MixedAvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         MonsterCardBindTests.RunCore();
@@ -451,6 +452,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunResources(itemResources.Items);
         KnightShieldTests.RunResources(pvf, itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        OmittedDimensionsAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         MixedAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);

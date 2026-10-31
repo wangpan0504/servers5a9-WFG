@@ -120,13 +120,16 @@ internal sealed class AvatarPackageCatalog
         if (!int.TryParse(Scalar(text, "booster selection num").Trim(), out int selection) || selection < 0)
             return Reject("装扮选择数量无效");
         var dimensions = Tokens(Scalar(text, "booster category num"));
-        bool rankZero = dimensions is ["0"];
+        var dimensionTags = Regex.Matches(masked, @"\[\s*/?\s*booster\s+category\s+num[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        bool dimensionsOmitted = dimensionTags.Count == 0;
+        bool rankZero = dimensions is ["0"] || dimensionsOmitted && selection == 0;
         int rank = rankZero ? 1 : 0;
-        if (Fields(text, "booster category num").Count != 1 || !rankZero &&
+        if (!dimensionsOmitted && (dimensionTags.Count != 1 || dimensionTags[0].Value != "[booster category num]") ||
+            Fields(text, "booster category num").Count != (dimensionsOmitted ? 0 : 1) || !rankZero &&
             (dimensions.Length is not (2 or 3) || !int.TryParse(dimensions[0], out rank) || rank != dimensions.Length - 1))
             return Reject("装扮分类维数无效");
         var sizes = ImmutableArray.CreateBuilder<int>();
-        // 无分类选择格式只有一个0声明，奖励仍须完整归属于唯一坐标0/0。
+        // 省略维数仅支持固定全领；与显式0一样，完整奖励必须属于唯一坐标0/0。
         if (rankZero) sizes.Add(1);
         foreach (string token in dimensions.Skip(1))
         {
