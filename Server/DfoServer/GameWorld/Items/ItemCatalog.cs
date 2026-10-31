@@ -76,6 +76,7 @@ internal sealed partial class ItemCatalog
 
     readonly int equipmentSellRate;
     readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
+    readonly Lazy<ImmutableArray<OrdinaryHellPassCost>> ordinaryHellPasses;
     readonly Lazy<RuneSystemFile> runeSystem;
     readonly Lazy<TalismanRefineCost> talismanRefineCost;
     readonly Lazy<TalismanCompoundCost> talismanCompoundCost;
@@ -102,6 +103,7 @@ internal sealed partial class ItemCatalog
         this.echon = echon;
         this.newEchon = newEchon;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
+        ordinaryHellPasses = new(() => OrdinaryHellPassCost.Load(archive));
         runeSystem = new(() => RuneSystemFile.Parse(
             archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString));
         talismanRefineCost = new(() => TalismanRefineCost.Parse(runeSystem.Value));
@@ -369,6 +371,9 @@ internal sealed partial class ItemCatalog
     }
 
     public ImmutableArray<CosmoPassCost> CosmoPasses() => cosmoPasses.Value
+        .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
+
+    public ImmutableArray<OrdinaryHellPassCost> OrdinaryHellPasses() => ordinaryHellPasses.Value
         .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
 
     public IReadOnlyList<(int ItemId, int Count)>? NeededMaterials(int id)
