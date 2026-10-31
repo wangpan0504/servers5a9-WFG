@@ -90,8 +90,50 @@ internal static class AvatarPortraitTests
             "v2 图标保留小画布定位和负坐标裁剪");
         var loop = Img(4, [palette], 1, 0);
         That(!ImgFrameReader.TryRead(loop, 0, out _), "链接环被拒绝");
+        Budget(palette, v2);
         // 旧解码入口（物品图标）对 v4/v6 也可用，并按 ≤256 画布放置。
         That(NpkImageDecoder.TryDecodeFrame(v4, 0, out int iconWidth, out _, out var icon) && iconWidth == 2 && icon.Length == 16, "图标解码入口转交 v4 调色板，超 256 的画布退回帧尺寸");
+    }
+
+    // #959：帧表容量、预算帧数、长链/环、压缩膨胀上限与损坏 zlib。
+    static void Budget(byte[] palette, byte[] v2)
+    {
+        var hugeCount = v2.ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(hugeCount.AsSpan(28), int.MaxValue);
+        var shortTable = v2.ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(shortTable.AsSpan(28), 10);
+        That(!NpkImageDecoder.TryDecodeFrame(hugeCount, 0, out _, out _, out _) && !ImgFrameReader.TryRead(hugeCount, 0, out _) &&
+            !NpkImageDecoder.TryDecodeFrame(shortTable, 0, out _, out _, out _) && !ImgFrameReader.TryRead(shortTable, 0, out _),
+            "帧数超预算或超过帧表容量时在分配前拒绝");
+        var overBudget = new object[ImgBudget.MaxFrames + 1];
+        overBudget[0] = (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, false);
+        for (int i = 1; i < overBudget.Length; i++) overBudget[i] = 0;
+        That(!ImgFrameReader.TryRead(Img(2, null, overBudget), 0, out _) && !NpkImageDecoder.TryDecodeFrame(Img(2, null, overBudget), 0, out _, out _, out _),
+            "帧数超过真实样本预算被拒绝");
+        var chain = new object[ImgBudget.MaxFrames];
+        chain[0] = (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, false);
+        for (int i = 1; i < chain.Length; i++) chain[i] = i - 1;
+        var longChain = Img(2, null, chain);
+        That(NpkImageDecoder.TryDecodeFrame(longChain, chain.Length - 1, out _, out _, out var chained) && chained[0] == 255 &&
+            ImgFrameReader.TryRead(longChain, chain.Length - 1, out var chainedFrame) && chainedFrame!.Rgba[0] == 255,
+            "预算内最长无环链接迭代跟随到像素帧");
+        That(!NpkImageDecoder.TryDecodeFrame(Img(2, null, 1, 0), 0, out _, out _, out _), "v2 图标入口拒绝链接环");
+        var bomb = new byte[1 << 20];
+        bomb[0] = 0x00; bomb[1] = 0xFC;
+        var inflated = Img(2, null, (1, 1, 0, 0, bomb, true));
+        That(NpkImageDecoder.TryDecodeFrame(inflated, 0, out int bombWidth, out _, out var bombIcon) && bombWidth == 1 && bombIcon[0] == 255 &&
+            ImgFrameReader.TryRead(inflated, 0, out var bombFrame) && bombFrame!.Rgba[0] == 255,
+            "压缩帧只展开所需字节，超长解压内容不再整体展开");
+        var corrupt = Img(2, null, (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, false));
+        BinaryPrimitives.WriteInt32LittleEndian(corrupt.AsSpan(32 + 4), 6);
+        That(!NpkImageDecoder.TryDecodeFrame(corrupt, 0, out _, out _, out _) && !ImgFrameReader.TryRead(corrupt, 0, out _),
+            "损坏 zlib 不再回退为原始字节当直接色");
+        var corruptV4 = Img(4, [palette], (1, 1, 0, 0, new byte[] { 0x00, 0xFC }, false));
+        BinaryPrimitives.WriteInt32LittleEndian(corruptV4.AsSpan(32 + 4 + palette.Length + 4), 6);
+        That(!ImgFrameReader.TryRead(corruptV4, 0, out _), "v4 损坏 zlib 同样失败");
+        var normal = Img(6, [palette], (2, 2, 0, 0, new byte[] { 0, 1, 2, 1 }, true));
+        That(ImgFrameReader.TryRead(normal, 0, out var normalFrame) && normalFrame!.Rgba.AsSpan(4, 4).SequenceEqual(new byte[] { 255, 0, 0, 255 }),
+            "正常压缩调色板帧在预算内解码不变");
     }
 
     sealed class FakeImages(Dictionary<string, ImgFrame> frames, Dictionary<string, int> palettes) : IAvatarImages
