@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Party;
@@ -8,14 +9,16 @@ using DfoServer.GameWorld.Dungeons;
 namespace DfoServer.Game.Dungeons;
 
 // 取值只按名称使用、不做整数转换：上游新增 LoadingReplay（安徒恩重复进图回放），本地新增 BeastUpdated（魔兽阶段广播），两处并集保留。
-internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, LoadingReplay, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure, EvildomWarStarted, EvildomWarUpdated, BeastUpdated }
+internal enum PartyDungeonNoticeKind { RaidBattleSync, AntonHp, RaidSelection, LoadingReplay, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure, EvildomWarStarted, EvildomWarUpdated, BeastUpdated }
 internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMember Recipient,
     PartyMember[] Members, FormalDungeonReceipt? Scene = null, DungeonSelectionReceipt? Selection = null,
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
     byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null,
     DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null,
-    EvildomWarView? WarView = null, bool SceneTransition = false);
+    EvildomWarView? WarView = null, bool SceneTransition = false, AntonHpDisplay? AntonHp = null);
+
+internal sealed record AntonHpDisplay(ushort Squad, ImmutableArray<ushort> Members, uint UsedCoins, uint Context, ImmutableArray<uint> Values);
 
 internal sealed class PartySettlementCards
 {
@@ -161,6 +164,32 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             }
         });
     }
+
+    AntonHpDisplay? antonHp;
+    int antonCoinsUsed;
+    // 只由原Session实际扣币提交调用；保持已离场成员的本Run消费，不依赖其下一次HP上报。
+    internal void RecordAntonRevival() => Interlocked.Increment(ref antonCoinsUsed);
+    internal bool IsAntonHpCurrent(AntonHpDisplay display) => ReferenceEquals(Volatile.Read(ref antonHp), display) &&
+        Members.Length == display.Members.Length && Members.All(member => member.IsCurrent() &&
+            display.Members.Contains(member.Actor.Character.Id));
+
+    internal PartyDungeonNotice[] ReportAntonHp(GameSession reporter, uint context, uint[] values) => Execute(current =>
+    {
+        if (pendingDeath is not null || pendingScene is not null || loaded.Count != 0 ||
+            !current.Any(member => ReferenceEquals(member.Actor.Session, reporter)) || values.Length == 0 ||
+            values.Any(value => value > 100)) return [];
+        var captured = current.Select(member => member.Actor.Session.CaptureAntonHp()).ToArray();
+        if (captured.Any(row => row is null)) return [];
+        var first = captured[0]!.Value;
+        if (captured.Any(row => row!.Value.Scene.Snapshot.Identity.InstanceId != Id ||
+            row.Value.Squad != first.Squad || row.Value.Scene.Snapshot.CurrentMap != first.Scene.Snapshot.CurrentMap)) return [];
+        // 只保留本Run最近一次C及同顺序百分比，不为客户端任意C建立无界字典；不授予死亡或结算权限。
+        var display = new AntonHpDisplay(first.Squad, [..current.OrderBy(member => member.Slot)
+            .Select(member => member.Actor.Character.Id)], checked((uint)Volatile.Read(ref antonCoinsUsed)), context, [..values]);
+        Volatile.Write(ref antonHp, display);
+        return current.Select((member, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.AntonHp, member,
+            current, captured[index]!.Value.Scene, AntonHp: display)).ToArray();
+    });
 
     internal bool ReportAntonEnergy(GameSession reporter) => Execute(current =>
         pendingDeath is null && pendingScene is null && loaded.Count == 0 &&

@@ -5,6 +5,18 @@ namespace DfoServer.Network.Builders;
 
 internal static class RaidCombatPackets
 {
+    // 02397850：outer、分队号、登记成员、已用币、695首u32、同序百分比。图集帧1..20直接画分队号。
+    internal static byte[] AntonHp(DfoServer.Game.Dungeons.AntonHpDisplay display)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1); writer.Write(display.Squad); writer.Write(checked((byte)display.Members.Length));
+        foreach (ushort member in display.Members) writer.Write(member);
+        writer.Write(display.UsedCoins); writer.Write(display.Context); writer.Write(checked((byte)display.Values.Length));
+        foreach (uint value in display.Values) writer.Write(value);
+        return stream.ToArray();
+    }
+
     // 015BCB50：op1无尾部，op5只读真实副本编号。
     internal static byte[] PreyStatus(int operation, int? dungeon = null)
     {

@@ -527,7 +527,7 @@ internal static class AntonTcpProbe
     }
 
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
-        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true)
+        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null)
     {
         leader.Send(15, DungeonId(dungeon));
         var selected = Flush(leader, "15 分队选择 " + dungeon);
@@ -551,6 +551,7 @@ internal static class AntonTcpProbe
         member.Send(37, new byte[8]);
         Note(leaderReport, Flush(leader, "37 加载"));
         Note(memberReport, Barrier(member, "37 队员加载"));
+        loaded?.Invoke();
         var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
         ClearRoom(leader, map.Body, leaderReport, out ushort bossKey, out byte bossLevel,
             path[0].X == info.Body[8] && path[0].Y == info.Body[9], member, memberReport);

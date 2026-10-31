@@ -32,6 +32,7 @@ internal static partial class AntonRaidGapTcpTests
         // 图内战况表：未清图时「回到城镇」72 01 02 走分队退场；「进入地下城」72 01 01 仍UNIMPLEMENTED，不回伪成功。
         AntonTcpProbe.Enter(peer, catalog, 210, report, clear: false);
         peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "图内战况表加载210");
+        AssertHpProjection(peer);
         peer.Send(72, [1, 1]);
         That(AntonTcpProbe.Barrier(peer, "图内战况表进入地下城未证").All(p => p.Opcode != 72), "图内72 01 01不伪造成功");
         peer.Send(72, [1, 2]);
