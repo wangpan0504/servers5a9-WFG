@@ -19,6 +19,36 @@ internal sealed partial class GameSession
         public int? RewardWeek { get; set; }
     }
     RaidCombatBinding? raidCombat;
+    internal Action<RaidRewardReceipt>? AntonAutoRewardArrived { get; set; }
+    internal Func<AntonRaidBattle, int, bool>? AntonAutoRewardRequested { get; set; }
+
+    internal bool AutoClaimAntonReward(AntonRaidBattle battle, int phase, IRaidRewardStore store,
+        ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now)
+    {
+        // 旧owner/离线成员保留明确未补发边界；不能借后来登录的新会话提交。
+        bool Current() => owner.IsCurrent && owner.Execute(() => Ready && raidCombat is { Actor.IsCurrent: true } binding &&
+            ReferenceEquals(binding.Battle, battle) && binding.Battle.View.Phase == phase &&
+            binding.Battle.View.State == AntonRaidBattleState.Reward);
+        try
+        {
+            if (!Current()) return true;
+            foreach (byte kind in new byte[] { 1, 0 })
+            {
+                if (!Current()) return true;
+                var receipt = ClaimRaidReward(kind, 0, store, items, gold, pieces, now);
+                if (receipt is null) return !Current();
+                // 已提交资产先排入原连接FIFO；自动领取不伪造客户端请求的ACK。
+                AntonAutoRewardArrived?.Invoke(receipt);
+                ConfirmRaidRewardPublished(receipt);
+            }
+            return true;
+        }
+        catch (InvalidOperationException) when (!owner.IsCurrent)
+        {
+            // 检查后发生接管属于原成员失效，不能因此故障整个Battle或借新owner发奖。
+            return true;
+        }
+    }
     public Action<AntonRaidBattleView, RaidActor>? RaidBattleNoticeArrived { get; set; }
 
     // START在正式开战提交后安装；MAP在安装正式副本后调用BindRaidCombatDungeon。无协议探测状态。
@@ -192,13 +222,18 @@ internal sealed partial class GameSession
             if (view.State != AntonRaidBattleState.Reward)
             {
                 var old = raid.Receipts.Where(r => r.Key.Kind == kind).Select(r => r.Value).MaxBy(r => r.Prepared.Phase);
-                return old is not null && old.Prepared.Card == card ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
+                return old is not null && (old.Prepared.Card == card || raid.Battle.MatchesAntonCardReplay(old.Prepared, card))
+                    ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
             var eligibility = raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey ? raid.Battle.LukeEligibility(character.Id, phase) :
                 raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(character.Id, phase) : null;
             if ((raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
-            var offer = policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
+            var offer = raid.Battle.HasAntonRewards
+                ? raid.Battle.SelectAntonRewardCard(raid.Actor, phase, kind, card,
+                    StartedRaid?.Participants.SingleOrDefault(row => row.Character == character.Id).Squad ?? 0)
+                : policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
+            if (offer is not null) card = offer.Card;
             if (offer is null) return null;
             if (raid.Receipts.TryGetValue((phase, kind), out var replay))
                 return replay.Prepared.Card == card ? new RaidRewardCapture(raid, character, replay.Prepared, replay.Offer, replay) : null;

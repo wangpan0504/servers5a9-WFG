@@ -60,6 +60,17 @@ internal static class AntonRaidBattleTests
                 3, 0xef, 0xcd, 0xab, 0x89, 0xdc, 0xfe, 4, 0x78, 0x56, 6, 0,
                 0xff, 0xff, 7, 1, 5, 0x40, 0x30, 0x20, 0x10, 0x60, 0x50, 6],
             "600多行、多项与中间空行均保留直接8B项，不附加Luke尾列；数值为显式合成输入");
+        var slots = new AntonRewardCards();
+        That(slots.Select(0, 1, 1, 3) == 3, "界面第四张为wire3");
+        That(slots.Select(0, 2, 1, 3) == 0 && slots.Select(0, 3, 1, 3) == 1 && slots.Select(0, 4, 1, 3) == 2,
+            "同队冲突依次分配空位，无重复占位");
+        That(slots.Select(0, 1, 1, 0) == 3, "重复点击或另一牌种保留原选择");
+        That(slots.MatchesReplay(0, 2, 3, 0) && !slots.MatchesReplay(0, 2, 1, 0) &&
+            !slots.MatchesReplay(1, 2, 3, 0), "仅原始点击可映射回冲突分配，未知牌位和旧阶段不得扩大回放");
+        That(slots.Select(0, 5, 1, 3) is null, "同队四位满时拒绝，不覆盖别人");
+        That(slots.Select(0, 5, 2, 3) == 3 && slots.Select(1, 1, 1, 0) == 0, "分队和阶段独立");
+        That(slots.Select(0, 6, 2, 4) is null && slots.Select(0, 6, 0, 0) is null && slots.Select(2, 6, 2, 0) is null,
+            "非法牌位、分队和阶段拒绝");
         var additionScript = Script(10);
         additionScript = additionScript with { Symbols = additionScript.Symbols.Add("[signal]", 8).Add("[counter]", 9),
             Phases = additionScript.Phases.SetItem(0, additionScript.Phases[0] with { Rules = [new(

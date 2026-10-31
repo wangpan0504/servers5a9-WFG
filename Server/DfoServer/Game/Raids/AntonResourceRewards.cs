@@ -40,7 +40,7 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
             if (selected < 0 || selected >= weight) throw new InvalidDataException("安徒恩奖励随机值越界");
             var winner = squad.First(row => (selected -= row.RawB) < 0);
             // LIVE-VERIFY：95按类别/牌位/物品ID显示；code=0普通项、flag=0不点亮特殊效果。
-            // 只展示本成员正式Card0冻结产物，不开放其它牌位或代领。
+            // 初始展示本成员Card0冻结产物，实际选位与在线到期领取由原Battle处理，不重抽。
             RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants,
                 [new(character, 0, grants.Select(item => new RaidRewardDisplayItem(0,
                     checked((uint)item.ItemId), checked((ushort)item.Count), 0)).ToImmutableArray())]);

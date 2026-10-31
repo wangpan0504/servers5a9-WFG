@@ -167,6 +167,34 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart);
         session.RaidBattleNoticeArrived = (view, actor) => RaidCombatProjection.Notice(context, view, actor);
+        session.AntonAutoRewardRequested = (battle, phase) =>
+        {
+            if (repository is not DfoServer.Game.Raids.IRaidRewardStore rewardStore || items is null ||
+                goldLimits is null || pieces is null || inventory is null) return false;
+            // 本人资产提交及FIFO入队与同连接请求互斥；不等待共享门禁，不升级成跨成员账号锁。
+            if (!context.CommandGate.Wait(0)) return false;
+            try
+            {
+                return session.AutoClaimAntonReward(battle, phase, rewardStore, items, goldLimits, pieces,
+                    (time ?? TimeProvider.System).GetUtcNow());
+            }
+            finally { context.CommandGate.Release(); }
+        };
+        session.AntonAutoRewardArrived = receipt =>
+        {
+            if (inventory is null) return;
+            using var publication = sender.QueuePublication(() => session.CanPublishRaidReward(receipt));
+            // QueuePublication使Refresh只排入原有有界队列，此处没有网络等待或后台Task。
+            try { inventory.RefreshAsync(context, receipt.Inventory).GetAwaiter().GetResult(); }
+            catch (IOException) { context.Disconnect(); return; }
+            if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
+            sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
+                RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display), "anton_auto_card_committed",
+                () => session.CanPublishRaidReward(receipt) && session.RaidCombatView() is { } view &&
+                    view.Phase == receipt.Prepared.Phase && view.State == DfoServer.Game.Raids.AntonRaidBattleState.Reward);
+            log.Write("raid_reward_committed", new { Connection = context.Id, receipt.Prepared.Instance,
+                receipt.Prepared.Phase, receipt.Prepared.Kind, receipt.Prepared.Card, receipt.Commit.Duplicate, Automatic = true });
+        };
         session.RaidStartArrived = (receipt, actor) => RaidProjection.Started(context, projection, receipt, actor);
         session.RaidCostArrived = (rows, actor) => RaidProjection.Cost(context, rows, actor);
         session.RaidRecordNoticeArrived = (party, actor) => sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
