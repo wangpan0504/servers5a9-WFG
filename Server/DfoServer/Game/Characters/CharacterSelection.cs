@@ -16,11 +16,13 @@ internal static class CharacterSelection
         bool leavingBeastTown = ChannelAreaLanding.LeavesBeastTown(channel, character.Position);
         if (leavingBeastTown) resumeTown = false;
         // 专属中央公园的旧位置/返回地区归回正常中央公园；仍由目录核对等级、任务及房间门口。
-        // 只有决斗城镇 10 有普通地图连接却会被当成普通地区，改由共享房间解析默认地区；
-        // 其余频道专属城镇（战舰 19、普雷 118 等）的房间登记了自己的默认地区，换成赛丽亚房间会丢掉。
+        // 频道专属街区已有普通返回地区时，从共享房间解析该记忆，不能让当前街区覆盖它。
+        // 无返回地区的旧存档仍从原地区恢复；决斗场与五陵继续使用共享房间默认地区。
         var returnSource = leavingBeastTown
             ? new Location(ChannelAreaLanding.CentralParkTown, 1, 0, 0)
-            : character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ? towns.Room : character.Position;
+            : character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ||
+              character.Return is not null && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position.Town)
+                ? towns.Room : character.Position;
         if (resumeTown && towns.IsGuildHall(character.Position, completed))
         {
             var admitted = repository is Game.Guild.IGuildHallStore hall

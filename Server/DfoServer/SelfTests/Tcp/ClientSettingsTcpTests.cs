@@ -251,11 +251,16 @@ internal static class ClientSettingsTcpTests
         foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
         {
             string account = $"firstui{job}";
+            using var login = timings.Measure("FirstEntry/login");
             using var peer = Open(fixture, account);
-            peer.Create("FirstUi" + (char)('A' + job), job);
+            login.Dispose();
+            using (timings.Measure("FirstEntry/create"))
+                peer.Create("FirstUi" + (char)('A' + job), job);
             byte[]? combos = job == 9 ? StoredCombos(fixture, peer.Id) : null;
-            peer.Select(combos: combos);
-            peer.Barrier();
+            using (timings.Measure("FirstEntry/initial-select"))
+                peer.Select(combos: combos);
+            using (timings.Measure("FirstEntry/initial-barrier"))
+                peer.Barrier();
             That(peer.ClientSettings is [{ Opcode: 390 }], "新账号所有职业补角色光环初始化，不重复重置主区");
             That(fixture.Query("SELECT count(*) FROM account_client_settings WHERE account=$p0", account) is [[0L]] &&
                 fixture.Query("SELECT count(*) FROM character_game_settings WHERE character_id=$p0", peer.Id) is [[0L]],
@@ -263,6 +268,7 @@ internal static class ClientSettingsTcpTests
             string assets = Assets(fixture, timings);
             if (job == 0)
             {
+                using var markerPhase = timings.Measure("FirstEntry/native-marker");
                 byte[] marker = new byte[204];
                 for (int slot = 0; slot < 102; slot++) Write(marker, slot, 0x7fff);
                 Save(peer, 197, marker);
@@ -279,14 +285,23 @@ internal static class ClientSettingsTcpTests
             foreach (ushort scale in new ushort[] { 0, 25, 50, 75, 100 })
             {
                 Write(main, 90, scale);
-                Save(peer, 197, main);
-                peer.Barrier();
-                CheckGame(fixture, account, main);
-                That(Assets(fixture, timings) == assets, "首次及后续UI保存保持角色revision和其他资产不变");
-                ReturnSelection(peer);
-                Select(peer, 0, main, combos: combos);
+                using (timings.Measure("FirstEntry/save-and-barrier"))
+                {
+                    Save(peer, 197, main);
+                    peer.Barrier();
+                }
+                using (timings.Measure("FirstEntry/database-checks"))
+                {
+                    CheckGame(fixture, account, main);
+                    That(Assets(fixture, timings) == assets, "首次及后续UI保存保持角色revision和其他资产不变");
+                }
+                using (timings.Measure("FirstEntry/return-selection"))
+                    ReturnSelection(peer);
+                using (timings.Measure("FirstEntry/replay-select"))
+                    Select(peer, 0, main, combos: combos);
             }
-            Exit(peer);
+            using (timings.Measure("FirstEntry/exit"))
+                Exit(peer);
         }
     }
 
@@ -457,6 +472,7 @@ internal static class ClientSettingsTcpTests
         Write(mainB, 13, 0);
         Write(mainB, 9, 1234);
         ushort idA, idB;
+        using (timings.Measure("character-scope/initial-session"))
         using (var peer = Open(fixture, account))
         {
             peer.Create("ScopeFirst");
@@ -502,18 +518,27 @@ internal static class ClientSettingsTcpTests
 
             byte previousFlags = Flags(mainA);
             // 全组合由纯规则测试覆盖；TCP 验证各独立开关及全开全关的持久化与回放。
+            using (timings.Measure("character-scope/toggle-and-visibility"))
             foreach (int mask in new[] { 0, 1, 2, 4, 8, 15 })
             {
                 mainA = TypedMain(mask, (ushort)(10 + mask), (ushort)(20 + mask), (ushort)(30 + mask), (ushort)(40 + mask));
                 Write(mainA, 9, 4321);
                 roleA = TypedCharacter(mainA);
-                SavePair(peer, mainA, roleA, previousFlags);
+                using (timings.Measure("character-scope/save-pair"))
+                    SavePair(peer, mainA, roleA, previousFlags);
                 previousFlags = Flags(mainA);
-                CheckRoleMain(fixture, idA, account, mainA, roleA);
-                CheckRoleMain(fixture, idB, account, mainB, roleB);
-                ReturnSelection(peer);
-                Select(peer, 0, mainA, roleA, mainA);
-                TravelVisibility(peer, Read(mainA, 1) == 0 ? (byte)1 : (byte)3);
+                using (timings.Measure("character-scope/database-checks"))
+                {
+                    CheckRoleMain(fixture, idA, account, mainA, roleA);
+                    CheckRoleMain(fixture, idB, account, mainB, roleB);
+                }
+                using (timings.Measure("character-scope/return-and-select"))
+                {
+                    ReturnSelection(peer);
+                    Select(peer, 0, mainA, roleA, mainA);
+                }
+                using (timings.Measure("character-scope/travel-visibility"))
+                    TravelVisibility(peer, Read(mainA, 1) == 0 ? (byte)1 : (byte)3);
             }
             ReturnSelection(peer);
             Select(peer, 1, mainA, roleB, mainB);
@@ -521,6 +546,7 @@ internal static class ClientSettingsTcpTests
                 "另一角色的队员透明度及字体透明度不受复选项保存影响");
             Exit(peer);
         }
+        using (timings.Measure("character-scope/reconnect"))
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, mainA, roleA, mainA);
@@ -534,6 +560,7 @@ internal static class ClientSettingsTcpTests
         using (timings.Measure("process-restart"))
             await fixture.StartAsync("role-restart", isolatedProcess: true);
         That(Settings(fixture, timings) == saved, "四复选项及四透明度分角色存档在进程重启后完整保留");
+        using (timings.Measure("character-scope/post-process-restart"))
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, mainA, roleA, mainA);
@@ -542,6 +569,7 @@ internal static class ClientSettingsTcpTests
             Exit(peer);
         }
 
+        using (timings.Measure("character-scope/shared-scene-visibility"))
         using (var owner = Open(fixture, account))
         using (var watcher = Open(fixture, "scopewatch"))
         {

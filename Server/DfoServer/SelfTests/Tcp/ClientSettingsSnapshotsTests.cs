@@ -56,10 +56,24 @@ internal static class ClientSettingsSnapshotsTests
             That(ClientSettingsSnapshots.Capture(database, false) == expectedSettings, "失败后释放连接事务，后续独立快照仍可读取");
             var timings = new ClientSettingsTimings();
             var sample = timings.Measure("snapshot"); sample.Dispose(); sample.Dispose();
+            using (timings.Measure("parent"))
+            {
+                using (timings.Measure("child")) { }
+                using (timings.Measure("child")) { }
+            }
             timings.Write(root, completed: false);
             using var report = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "settings.phases.json")));
             That(!report.RootElement.GetProperty("Completed").GetBoolean() && report.RootElement.GetProperty("Stages")[0].GetProperty("Calls").GetInt32() == 1,
                 "失败计时不冒成功，scope重复Dispose不累计两次");
+            var stages = report.RootElement.GetProperty("Stages").EnumerateArray().ToArray();
+            var parent = stages.Single(stage => stage.GetProperty("Stage").GetString() == "parent");
+            var child = stages.Single(stage => stage.GetProperty("Stage").GetString() == "child");
+            double childTotal = child.GetProperty("ElapsedMs").GetDouble();
+            That(child.GetProperty("Calls").GetInt32() == 2 && child.GetProperty("MinMs").GetDouble() >= 0 &&
+                child.GetProperty("MinMs").GetDouble() <= child.GetProperty("MaxMs").GetDouble() &&
+                child.GetProperty("MaxMs").GetDouble() <= childTotal &&
+                parent.GetProperty("ElapsedMs").GetDouble() >= childTotal,
+                "子阶段按调用累计min/max，父阶段包含子阶段而非独占时间，不按样本数量保存无界明细");
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

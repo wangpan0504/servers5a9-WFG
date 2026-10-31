@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 
 
 def utc():
@@ -97,6 +98,33 @@ def run(args):
                    startedUtc=utc(), completedUtc=None, logBytes=0, error=None)
     process = None
     memory = RssObservation()
+    receipt["ownership"] = {"supervisor": None, "root": None, "observedChildren": [], "reaped": [], "signals": [], "truncated": False}
+    observed_identities = set()
+
+    def identity(pid):
+        try:
+            proc = Path(f"/proc/{pid}")
+            stat = (proc / "stat").read_text()
+            # comm 可以含空格或括号；字段从最后一个右括号后开始。
+            fields = stat[stat.rfind(")") + 2:].split()
+            return dict(procPid=pid, startTicks=int(fields[19]), pidNamespace=os.readlink(proc / "ns/pid"))
+        except (FileNotFoundError, ProcessLookupError):
+            return dict(procPid=pid, state="disappeared-before-identity")
+
+    def record_owned(pid, status):
+        item = identity(pid)
+        item["localPid"] = namespace_pid(status, namespace_depth)
+        # /proc 可挂在外层 namespace；只能由已核父子关系与 NSpid 匹配根进程。
+        if process is not None and item["localPid"] == process.pid:
+            receipt["ownership"]["root"]["observed"] = item
+        key = (item["procPid"], item.get("startTicks"), item.get("pidNamespace"))
+        if key in observed_identities:
+            return
+        if len(observed_identities) >= 1024:
+            receipt["ownership"]["truncated"] = True
+            return
+        observed_identities.add(key)
+        receipt["ownership"]["observedChildren"].append(item)
     namespace_depth = None
     selector = selectors.DefaultSelector()
     interrupted = []
@@ -115,12 +143,14 @@ def run(args):
                 continue
             try:
                 status = (entry / "status").read_text()
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
+                # /proc 条目可在枚举后退出；仅该已消失竞态不视为监督器损坏。
                 scan_failures += 1
                 continue
             ppid = next(int(line.split()[1]) for line in status.splitlines() if line.startswith("PPid:"))
             if ppid == parent:
                 result.append(int(entry.name))
+                record_owned(int(entry.name), status)
             try:
                 rows[int(entry.name)] = (ppid, status)
             except Exception:
@@ -134,9 +164,13 @@ def run(args):
             try:
                 pid, status = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
-                break
+                return True
             if pid == 0:
-                break
+                return False
+            if len(receipt["ownership"]["reaped"]) < 1024:
+                receipt["ownership"]["reaped"].append(dict(localPid=pid, waitStatus=status, exitCode=os.waitstatus_to_exitcode(status)))
+            else:
+                receipt["ownership"]["truncated"] = True
             if process is not None and pid == process.pid:
                 process.returncode = os.waitstatus_to_exitcode(status)
                 receipt["exitCode"] = process.returncode
@@ -157,6 +191,10 @@ def run(args):
                 if ppid != int(os.readlink("/proc/self")):
                     raise RuntimeError("自有进程身份已变化，拒绝发信号")
                 signal.pidfd_send_signal(fd, sig)
+                if len(receipt["ownership"]["signals"]) < 1024:
+                    receipt["ownership"]["signals"].append(dict(procPid=pid, localPid=local_pid, signal=int(sig), identity=identity(pid)))
+                else:
+                    receipt["ownership"]["truncated"] = True
             except (ProcessLookupError, FileNotFoundError):
                 pass
             finally:
@@ -186,6 +224,8 @@ def run(args):
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(36, 1, 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "无法设置本进程 subreaper")
+        receipt["ownership"]["supervisor"] = identity(int(os.readlink("/proc/self")))
+        receipt["ownership"]["supervisor"]["localPid"] = os.getpid()
         self_status = Path("/proc/self/status").read_text()
         namespace_depth = len(next(line.split()[1:] for line in self_status.splitlines() if line.startswith("NSpid:")))
         if namespace_pid(self_status, namespace_depth) != os.getpid():
@@ -201,6 +241,7 @@ def run(args):
         with open(args.log, "wb", buffering=0) as log:
             process = subprocess.Popen(args.command, cwd=args.working_directory, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            receipt["ownership"]["root"] = dict(localPid=process.pid, observed=None)
             for pipe in (process.stdout, process.stderr):
                 os.set_blocking(pipe.fileno(), False)
                 selector.register(pipe, selectors.EVENT_READ)
@@ -208,9 +249,10 @@ def run(args):
             deadline = time.monotonic() + args.timeout_seconds
             root_done_at = None
             while receipt["state"] == "running":
-                reap()
+                kernel_empty = reap()
                 direct = children()
-                if not direct:
+                if not direct and kernel_empty:
+                    receipt["ownership"]["terminalProof"] = "same-subreaper waitpid ECHILD"
                     # 所有已启动的后代都已退出并回收，才能归还预算；不能只看根进程。
                     drain_deadline = time.monotonic() + 1
                     while selector.get_map() and time.monotonic() < drain_deadline:
@@ -239,8 +281,9 @@ def run(args):
                 cleanup_deadline = time.monotonic() + 5
                 term_until = time.monotonic() + 0.5
                 while True:
-                    reap()
-                    if not children():
+                    kernel_empty = reap()
+                    if not children() and kernel_empty:
+                        receipt["ownership"]["terminalProof"] = "same-subreaper waitpid ECHILD after cleanup"
                         receipt["descendantsTerminated"] = True
                         break
                     if time.monotonic() >= cleanup_deadline:
@@ -250,10 +293,28 @@ def run(args):
                 if not receipt["descendantsTerminated"]:
                     receipt.update(state="termination-unknown", error="无法确认全部自有后代终止；必须保留预算租约")
     except BaseException as error:
-        receipt.update(state="termination-unknown", error=str(error))
-        # 发生监督错误时，不以缺少读数推断无人运行，不尝试按 PID 名称兜底杀进程。
+        receipt.update(state="termination-unknown", error=str(error), traceback=traceback.format_exc())
+        # 只由仍存活的原 subreaper 收尾；保留原错误，不以新进程的缺少读数推断终态。
         if process is None:
             receipt["descendantsTerminated"] = True
+        else:
+            try:
+                cleanup_deadline = time.monotonic() + 5
+                term_until = time.monotonic() + 0.5
+                with open(args.log, "ab", buffering=0) as log:
+                    while True:
+                        kernel_empty = reap()
+                        if not children() and kernel_empty:
+                            receipt.update(state="failed", descendantsTerminated=True)
+                            receipt["ownership"]["terminalProof"] = "same-subreaper waitpid ECHILD after supervisor error"
+                            break
+                        if time.monotonic() >= cleanup_deadline:
+                            break
+                        signal_owned(signal.SIGTERM if time.monotonic() < term_until else signal.SIGKILL)
+                        drain(log, 0.05)
+            except BaseException as cleanup_error:
+                receipt["cleanupError"] = str(cleanup_error)
+                receipt["cleanupTraceback"] = traceback.format_exc()
     finally:
         selector.close()
         receipt["memory"] = memory.result()

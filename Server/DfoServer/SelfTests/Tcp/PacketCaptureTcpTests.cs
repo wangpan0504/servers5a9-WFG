@@ -49,6 +49,7 @@ internal static class PacketCaptureTcpTests
     {
         string credential = Credential;
         await using var httpFixture = new TcpTestFixture(source, Path.Combine(root, "packet-http"), resources: resources, packetHttp: true);
+        // 共享资源仅用于严格核对选角回放，HTTP启动与日志仍验证真实子进程。
         await httpFixture.StartAsync(isolatedProcess: true);
         using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{httpFixture.Options.PacketHttpPort}"), Timeout = TimeSpan.FromSeconds(5) };
         TestCheck.That((await Read("/health")).GetProperty("status").GetString() == "ok", "真实服务启动HTTP只读入口");

@@ -52,10 +52,12 @@ function Get-DevelopmentAffectedPlan([string]$Repository,[string]$Base) {
         $reasons=[Collections.Generic.List[string]]::new()
         $reasons.Add('new-content-dependency-closure-unproven')
         if($ignored.Count){$reasons.Add('ignored-content-not-hashed')}
-        # 精确07f4审核时消费者是core、收据合同和定向包装；仅提示先跑，不推断新内容等价。
+        # 精确6114审核时消费者是core、收据合同和定向包装；仅提示先跑，不推断新内容等价。
         $focus=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
         $focus.Add('Server/DfoServer/SelfTests/EquipmentPowerScoreTests.cs','equipment-power-rules')
         $focus.Add('Server/DfoServer/Game/Characters/EquipmentPowerScore.cs','equipment-power-rules')
+        $focus.Add('Server/DfoServer/SelfTests/ChatServiceTests.cs','chat-rate-rules')
+        $focus.Add('Server/DfoServer/Game/Chat/ChatRateLimiter.cs','chat-rate-rules')
         $focus.Add('Server/DfoServer/SelfTests/FrameCrcTests.cs','frame-crc-rules')
         $focus.Add('Server/DfoServer/Network/Core/GameFrame.cs','frame-crc-rules')
         $catalog=@(); try { $catalog=@(Get-DevelopmentGroupCatalog $Repository) } catch { $reasons.Add('registry-unreviewed') }
@@ -64,7 +66,7 @@ function Get-DevelopmentAffectedPlan([string]$Repository,[string]$Base) {
             if($focus.ContainsKey($path) -and @($catalog | Where-Object { $_.Name -ceq $focus[$path] -and $_.Kind -ceq 'targeted' }).Count -eq 1){
                 $existing=@($priorities | Where-Object { $_.Group -ceq $focus[$path] })
                 if($existing.Count){$existing[0].Paths+=@($path)}
-                else {$priorities.Add(@{Group=$focus[$path];Paths=@($path);Basis='reviewed-07f4-callers-core-receipt-targeted; priority-only';RequiresFresh=$true})}
+                else {$priorities.Add(@{Group=$focus[$path];Paths=@($path);Basis='reviewed-6114-callers-core-receipt-targeted; priority-only';RequiresFresh=$true})}
             }
             if($path -match '(?i)(^|/)(Program|SelfTestRunner|TestCheck|Tcp\w*)\.cs$|/(Application|Infrastructure|Network/Core|Persistence)/|^Tools/|\.(csproj|props|targets|sln|slnx|json|config|sql)$'){
                 $reasons.Add('shared-build-registry-or-dependency-change')
