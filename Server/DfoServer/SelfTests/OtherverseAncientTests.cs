@@ -43,11 +43,11 @@ internal static class OtherverseAncientTests
     static void RunDropRulesCore()
     {
         That(DimensionDropRules.Parse("{}").Tiers[2] == DimensionDropRules.Default.Tiers[2], "默认空JSON保留v2表");
-        foreach (string invalid in new[] { "{\"mode\":\"unknown\"}", "{\"tiers\":{\"2\":{\"named\":{\"equip\":101}}}}",
+        foreach (string invalid in new[] { "{\"mode\":\"unknown\"}", "{\"tiers\":{\"2\":{\"named\":{\"equip\":101}}}}", "{\"tiers\":{\"0\":{\"named\":{\"memories\":101}}}}", "{\"tiers\":{\"0\":{\"named\":{\"holyAuraPercent\":101}}}}", "{\"tiers\":{\"0\":{\"boss\":{\"shardStackSize\":-1}}}}",
             "{\"tiers\":{\"0\":{\"boss\":{\"count\":-1}}}}", "{\"setRateSource\":\"unknown\"}" })
             Reject<InvalidDataException>(() => DimensionDropRules.Parse(invalid), "R7 非法规则启动解析拒绝");
         var patch = DimensionDropRules.Parse("{\"tiers\":{\"1\":{\"named\":{\"set\":12}}}}");
-        That(patch.Tiers[1].Named is { Equip: 80, Set: 12, Shards: 0 } && patch.Tiers[2].Boss.Count == 2,
+        That(patch.Tiers[1].Named is { Equip: 80, Set: 12, Shards: 7, Memories: 5, HolyAuraPercent: 5 } && patch.Tiers[2].Boss is { Count: 2, ShardStacks: 3, ShardStackSize: 7, MemoryStacks: 5, MemoryStackSize: 4 },
             "配置局部覆盖保留各档其余默认值");
     }
 
@@ -77,23 +77,105 @@ internal static class OtherverseAncientTests
         That(named.Source!.IsNamed, "R1 MOB命名标记冻结进入Source，未借用强化限制");
         var empty = new DungeonDropGenerationPlan("regression", []);
         var plan = policy.Extend(empty, entry, named);
-        That(plan.ResourceSource.Contains("otherverse-rewards-server-v2"), "v2计划标记实际规则");
-        That(plan.Trials.Length == 1, "R1 勇士绿名本人有一次职业装备判定");
+        That(plan.ResourceSource.Contains("otherverse-rewards-server-v2") && plan.ResourceSource.Contains(DimensionRewardPolicy.AuraRule) && plan.ResourceSource.Contains(DimensionRewardPolicy.HolyAuraRule), "v2计划标记实际规则及本人拍板普通/神圣气息规则");
+        That(plan.Trials.Count(t => !t.RarityPools.IsDefaultOrEmpty) == 1, "R1 勇士绿名本人有一次职业装备判定");
+        That(MaterialCount(plan, 3311) == 7 && MaterialCount(plan, 10303569) == 5, "R1 勇士绿名固定发放异次元碎片7个、荒古的记忆碎片5个");
+        var generatedNamed = plan.Generate(_ => 0, DateTimeOffset.UtcNow);
+        That(generatedNamed.Single(row => row.Item?.ItemId == 3311).Item is { Count: 7 } &&
+            generatedNamed.Single(row => row.Item?.ItemId == 10303569).Item is { Count: 5 }, "R1 绿名材料实际生成堆叠数量为7与5");
+        var aura = plan.Trials.Single(t => t.Items?.Entries.Any(r => r.Template.Id == 1256) == true);
+        That(aura is { Threshold: 1, ProbabilityDenominator: 1, MinimumCount: 1, MaximumCount: 1 } &&
+            aura.Items!.Entries.Select(r => r.Template.Id).SequenceEqual([1254, 1255, 1256]),
+            "R1 绿名三色气息为100%单次掉落且三色等权");
+        var auraOnly = new DungeonDropGenerationPlan("aura-test", [aura]);
+        for (int color = 0; color < 3; color++)
+        {
+            int expected = 1254 + color;
+            That(auraOnly.Generate(bound => bound == 3 ? color : 0, DateTimeOffset.UtcNow) is [{ Item.ItemId: var itemId, Item.Count: 1 }] &&
+                itemId == expected, "R1 三色气息等概率实际抽样颜色=" + expected);
+        }
+        var holy = plan.Trials.Single(t => t.Items?.Entries.Any(r => r.Template.Id == 10090760) == true);
+        That(holy is { Threshold: 10, ProbabilityDenominator: 100, MinimumCount: 1, MaximumCount: 1 } &&
+            holy.Items!.Entries.Select(r => r.Template.Id).SequenceEqual([10090758, 10090759, 10090760]),
+            "R1 勇士绿名神圣气息追加概率10%且三色等权");
+        var holyOnly = new DungeonDropGenerationPlan("holy-aura-test", [holy]);
+        for (int color = 0; color < 3; color++)
+        {
+            int expected = 10090758 + color;
+            That(holyOnly.Generate(bound => bound == 3 ? color : 0, DateTimeOffset.UtcNow) is [{ Item.ItemId: var itemId, Item.Count: 1 }] &&
+                itemId == expected, "R1 神圣气息等概率实际抽样颜色=" + expected);
+        }
         var boss = named with { Source = source.Monster with { RankKind = "[boss]", Modifiers = [] }, SourceMap = entry.BossMap };
         var bossPlan = policy.Extend(empty, entry, boss);
+        That(bossPlan.ResourceSource.Contains(DimensionRewardPolicy.BossMaterialRule), "领主整组材料计划标记本人拍板规则");
+        That(!bossPlan.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id is 1254 or 1255 or 1256 or 10090758 or 10090759 or 10090760) == true), "R1 终点Boss不额外触发绿名普通或神圣气息");
         int equipment = bossPlan.Generate(_ => 0, DateTimeOffset.UtcNow).Count(row => row.Item is { } item &&
             catalog.Professions[(entry.DimensionRewardProfession!.Value.Job, entry.DimensionRewardProfession.Value.Grow & 15)].Set.Contains(item.ItemId));
         That(equipment == 2, "R2 勇士Boss两次判定可命中套装池");
+        var bossDrops = bossPlan.Generate(_ => 0, DateTimeOffset.UtcNow).Where(r => r.Item is not null).Select(r => r.Item!).ToArray();
+        var shardStacks = bossDrops.Where(row => row.ItemId == 3311).ToArray();
+        var memoryStacks = bossDrops.Where(row => row.ItemId == 10303569).ToArray();
+        That(shardStacks.Length == 3 && shardStacks.All(row => row.Count == 7) &&
+            memoryStacks.Length == 5 && memoryStacks.All(row => row.Count == 4),
+            "R2 领主材料为3311三堆各7、10303569五堆各4，不保留基础1份");
+        var hiddenEntry = entry with { Dimension = entry.Dimension! with { HiddenBoss = true } };
+        var terminalHiddenPlan = policy.Extend(empty, hiddenEntry, boss);
+        var hiddenTableIds = dimension.HiddenRewards.Where(r => r.Tier == 2).Select(r => r.Item).ToHashSet();
+        That(!terminalHiddenPlan.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 10304874 || hiddenTableIds.Contains(r.Template.Id)) == true),
+            "R2 v2不把依普利乌斯直接奖励或旧隐藏表错挂到普通终点Boss");
+
+        using var hiddenFixture = new Fixture(pvf, TownCatalog.Load(pvf), items, DungeonIncountCatalog.Load(pvf), 2);
+        var hiddenOpening = hiddenFixture.Enter(7167, 2, _ => 0);
+        var iflius = hiddenOpening.Entry.Maze.MapSpecification!
+            .Select(map => DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), 1, 100,
+                hiddenOpening.Entry.BasisLevel ?? 95))
+            .SelectMany(plan => plan.Monsters)
+            .FirstOrDefault(monster => monster.MonsterId is 107000256 or 107000257 or 107000258);
+        That(hiddenOpening.Entry.Dimension is { HiddenBoss: true } && iflius is not null,
+            "R2 真实隐藏迷宫包含依普利乌斯随机奖励怪物");
+        if (iflius is not null)
+        {
+            var ifliusPlan = policy.Extend(empty, hiddenOpening.Entry, iflius);
+            var ifliusDrops = ifliusPlan.Generate(_ => 0, DateTimeOffset.UtcNow)
+                .Where(row => row.Item is not null).Select(row => row.Item!).ToArray();
+            var ifliusShards = ifliusDrops.Where(row => row.ItemId == 3311).ToArray();
+            var ifliusMemories = ifliusDrops.Where(row => row.ItemId == 10303569).ToArray();
+            var ifliusInvites = ifliusDrops.Where(row => row.ItemId == 3330).ToArray();
+            var ifliusStones = ifliusDrops.Where(row => row.ItemId == 10000204).ToArray();
+            That(ifliusPlan.ResourceSource.Contains(DimensionRewardPolicy.IfliusRule) &&
+                ifliusShards.Length == 3 && ifliusShards.All(row => row.Count == 10) &&
+                ifliusMemories.Length == 4 && ifliusMemories.All(row => row.Count == 6) &&
+                ifliusInvites.Length == 4 && ifliusInvites.All(row => row.Count == 5) &&
+                ifliusStones.Length == 2 && ifliusStones.All(row => row.Count == 8),
+                "R2 依普利乌斯按独立堆叠掉3311×3堆10个、10303569×4堆6个、3330×4堆5个、10000204×2堆8个");
+            That(ifliusDrops.Count(row => hiddenTableIds.Contains(row.ItemId)) == 1 &&
+                !ifliusDrops.Any(row => row.ItemId == 10304874),
+                "R2 依普利乌斯另掉1件远古稀有奖励且不掉10304874礼盒");
+        }
+        var setOnlyCard = policy.Card(7167, 0, 1, _ => 0, DateTimeOffset.UtcNow);
+        That(setOnlyCard is not null && catalog.Professions[(0, 1)].Set.Contains(setOnlyCard.ItemId) &&
+            !catalog.Professions[(0, 1)].Normal.Contains(setOnlyCard.ItemId),
+            "R2 定向回归确认翻牌只从套装池产出");
         var now = DateTimeOffset.UtcNow;
         foreach (int tier in Enumerable.Range(0, 3))
         {
             var current = entry with { Dimension = entry.Dimension! with { Tier = tier } };
-            var n = policy.Extend(empty, current, named).Trials.Single();
+            var namedPlan = policy.Extend(empty, current, named);
+            var n = namedPlan.Trials.Single(t => !t.RarityPools.IsDefaultOrEmpty);
             That(n.Threshold == new[] { 60, 80, 100 }[tier] && n.ProbabilityDenominator == 100,
                 "绿名三档掉装概率不借翻牌字段");
+            var holyTrial = namedPlan.Trials.Single(t => t.Items?.Entries.Any(r => r.Template.Id == 10090760) == true);
+            int holyThreshold = new[] { 1, 5, 10 }[tier];
+            That(holyTrial.Threshold == holyThreshold && holyTrial.ProbabilityDenominator == 100,
+                "神圣气息难度概率为1%/5%/10%");
+            var holyOnlyTier = new DungeonDropGenerationPlan("holy-tier", [holyTrial]);
+            That(holyOnlyTier.Generate(bound => bound == 3 ? 0 : holyThreshold - 1, now).Length == 1 &&
+                holyOnlyTier.Generate(bound => bound == 3 ? 0 : holyThreshold, now).Length == 0,
+                "神圣气息概率命中与未命中边界");
             foreach (var actor in new[] { named, boss })
             {
                 var selected = policy.Extend(empty, current, actor);
+                if (tier == 0) That(!selected.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 10303569) == true), "R1 普通档材料表不含荒古的记忆碎片");
                 if (tier == 0)
                     That(selected.Generate(_ => 0, now).Where(r => r.Item is { Kind: ItemKind.Equipment })
                         .All(r => catalog.Professions[(0, 1)].Normal.Contains(r.Item!.ItemId)), "R3 普通档从不进入套装池");
@@ -139,21 +221,22 @@ internal static class OtherverseAncientTests
             .Generate(_ => 0, now).Single().Item is { } fallback && catalog.Professions[(0, 1)].Normal.Contains(fallback.ItemId),
             "R8 强制套装命中但池空时实际生成散件");
         That(DimensionRewardPolicy.EquipmentTrial(emptyPool, emptyPool, 100, 100) is null, "R8 两池空不创建装备trial");
-        That(policy.Extend(empty, entry with { DimensionRewardProfession = (255, 15) }, named).Trials.IsEmpty,
-            "R8 两池都空跳过不抛");
+        That(!policy.Extend(empty, entry with { DimensionRewardProfession = (255, 15) }, named).Trials.Any(t => !t.RarityPools.IsDefaultOrEmpty),
+            "R8 两池都空跳过职业装备，材料仍按资源发放");
         foreach (var actor in new[] { named with { IsFriendly = true }, named with { IsBlocking = false },
             named with { AiCharacter = new(1, [], "[monster]", "[normal]", "synthetic", 95) } })
             That(ReferenceEquals(policy.Extend(empty, entry, actor), empty), "R9 友方、非法死亡、APC不掉");
         That(ReferenceEquals(policy.Extend(empty, entry with { IsPractice = true }, boss), empty), "R9 练习不掉");
         That(ReferenceEquals(policy.Extend(empty, entry with { Dimension = null }, boss), empty), "R9 非异界不掉");
         var card = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"setRateSource\":\"card\"}"));
-        That(card.Extend(empty, entry, named).Trials.Single().RarityPools.Single().AlternatePermille == catalog.CardRates[2].SetPercent * 10,
+        That(card.Extend(empty, entry, named).Trials.Single(t => !t.RarityPools.IsDefaultOrEmpty).RarityPools.Single().AlternatePermille == catalog.CardRates[2].SetPercent * 10,
             "显式card来源沿翻牌套装率");
         var extraPolicy = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"extraEntryEquipment\":true}"));
-        That(extraPolicy.Extend(empty, entry with { Dimension = entry.Dimension! with { DailyBefore = new(10, 0) } }, named).Trials.Length == 1,
+        That(extraPolicy.Extend(empty, entry with { Dimension = entry.Dimension! with { DailyBefore = new(10, 0) } }, named).Trials.Count(t => !t.RarityPools.IsDefaultOrEmpty) == 1,
             "显式追加开关允许装备");
         Console.WriteLine("PASS #899 R1-R9 资源及个人掉落计划（非TCP客户端验收）");
         DungeonItemDropPool Pool(IEnumerable<int> ids) => new(ids.Select(id => new DungeonWeightedDropItem(items.Items.Get(id), 1)));
+        int MaterialCount(DungeonDropGenerationPlan generation, int id) => generation.Trials.Single(t => t.Items?.Entries.Any(r => r.Template.Id == id) == true).MinimumCount;
 
     }
 
@@ -167,13 +250,10 @@ internal static class OtherverseAncientTests
         var rewardCatalog = new DimensionRewardCatalog(pvf, items.Items);
         var rewardPolicy = new DimensionRewardPolicy(dimension, rewardCatalog, items.Items);
         foreach (var row in rewardCatalog.Professions)
-        foreach (bool set in new[] { false, true })
         {
-            int draws = 0;
-            int Draw(int bound) => draws++ < 2 ? (draws == 2 && !set ? 99 : 0) : 0;
-            var card = rewardPolicy.Card(7167, (byte)row.Key.Job, (byte)row.Key.Grow, Draw, DateTimeOffset.UtcNow);
-            var allowed = set ? row.Value.Set : row.Value.Normal;
-            That(card is null ? allowed.IsEmpty : allowed.Contains(card.ItemId), "异界各职业单双装备池精确匹配，不回退通用池");
+            var card = rewardPolicy.Card(7167, (byte)row.Key.Job, (byte)row.Key.Grow, _ => 0, DateTimeOffset.UtcNow);
+            That(card is not null && row.Value.Set.Contains(card.ItemId) && !row.Value.Normal.Contains(card.ItemId),
+                "异界通关翻牌必出套装池，不回退裂魂散件");
         }
         foreach (int id in new[] { 10158125, 10158126, 490008217, 10158692, 10161066, 490003748, 490009451 })
             That(items.Items.ActionConsumable(id) is { Label: "[add dimension dungeon enter count]", Parameters: [1 or 5] },
@@ -267,6 +347,18 @@ internal static class OtherverseAncientTests
             for (int at = 0; at < path.Length; at++)
             {
                 var loaded = f.Session.CompleteFormalDungeonLoading()!;
+                if (opening.Entry.Dimension is { HiddenBoss: true })
+                {
+                    var hiddenBoss = loaded.Monsters.Monsters.Single(monster => monster.IsBoss && monster.SourceMap is { } map &&
+                        opening.Entry.IsTerminalMap(map));
+                    That(hiddenBoss.MonsterId is 107000256 or 107000257 or 107000258,
+                        "真实隐藏路线终点为依普利乌斯：" + hiddenBoss.MonsterId);
+                    var hiddenDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+                        id => new(id, "monster/synthetic.mob", null, null), items.Items.Get, dimensionRewards: rewardPolicy);
+                    var hiddenPlan = hiddenDrops.PrepareEntry(opening.Entry)(hiddenBoss);
+                    That(hiddenPlan.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 10304874) == true),
+                        "真实依普利乌斯死亡计划包含击败奖励礼盒10304874");
+                }
                 if (opening.Entry.Dimension is not null && loaded.Monsters.Monsters.FirstOrDefault(monster => monster.IsBoss &&
                     monster.SourceMap is { } map && opening.Entry.IsTerminalMap(map)) is { } boss)
                 {
