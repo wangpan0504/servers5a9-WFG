@@ -181,7 +181,7 @@ internal static class ExpertJobPackets
     {
         byte mode = character.ExpertJobType;
         int level = scripts.Level(mode, character.ExpertJobExperience);
-        var recipes = mode == 1 ? character.ExpertJobRecipes.Order().ToArray() : scripts.UnlockedRecipes(mode, level);
+        var recipes = scripts.LearnedRecipes(mode, level, character.ExpertJobRecipes);
         byte[] rarities = includeQualifications ? scripts.LearnedRarities(recipes) : learnedRarity is { } rarity ? [rarity] : [];
         return mode switch
         {

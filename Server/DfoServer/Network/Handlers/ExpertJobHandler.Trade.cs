@@ -58,7 +58,8 @@ internal sealed partial class ExpertJobHandler
                 presence.CanInteract(context.Owner, customer.Id, provider.ExpertJobOwner, owner.Id));
             if (committed is not { } results || results.Customer.Receipt is not { } receipt || results.Owner.Receipt is not { } ownerReceipt)
                 return await Reject();
-            stores.Open(store with { Endurance = (uint)ownerReceipt.Character.ExpertMachineEndurance });
+            byte grade = checked((byte)(job == 3 ? ownerReceipt.Character.ExpertMachineGrade : scripts.Level(job, ownerReceipt.Character.ExpertJobExperience)));
+            stores.TryUpdate(store, store with { Grade = grade, Name = ((char)grade).ToString(), Endurance = (uint)ownerReceipt.Character.ExpertMachineEndurance });
             bool Current() => context.Session.CanPublishInventory(receipt);
             // 提交后的两端发布独立开始；一端断线不能跳过另一端，发布失败绝不回到 SQLiteBusyRetry 重规划扣费。
             if (await ExpertJobTradePublication.PublishAsync(PublishCustomer, PublishOwner) is { } publicationError)

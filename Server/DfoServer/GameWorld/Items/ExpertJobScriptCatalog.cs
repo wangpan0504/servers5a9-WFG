@@ -7,7 +7,9 @@ namespace DfoServer.GameWorld.Items;
 internal readonly record struct ExpertJobRate(int MaximumLevelDifference, int SuccessPercent, int ExperienceMin, int ExperienceMax);
 internal sealed record ExpertJobRecipe(int RecipeId, int ProductId, int RequiredLevel, (int ItemId, int Count)[] Materials,
     int ExperienceMin, int ExperienceMax, int ProductCount = 1);
-internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier);
+internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier,
+    int AdditionalTable, int BigWinTable, int BigWinPercent);
+internal readonly record struct ExpertJobExtractionSelection(int MinimumGrade, int MaximumGrade, int ItemId, int Weight, double Multiplier);
 internal readonly record struct ExpertJobMonsterCardExp(int Level, int Min, int Max);
 internal readonly record struct ExpertJobSkill(ushort Id, byte Level);
 
@@ -21,6 +23,7 @@ internal sealed class ExpertJobScriptCatalog
     readonly Dictionary<byte, JobScript> jobs;
     readonly Dictionary<int, ExpertJobLearnableRecipe> learnable = new();
     readonly Dictionary<int, ExpertJobCardRecipe> cardRecipes = new();
+    readonly Dictionary<int, (byte Job, int Level)> extractors = new();
 
     ExpertJobScriptCatalog(Dictionary<byte, JobScript> jobs) => this.jobs = jobs;
 
@@ -33,18 +36,28 @@ internal sealed class ExpertJobScriptCatalog
         {
             if (id is < 1 or > 4) continue;
             string text = pvf.ReadText("character/" + path);
-            jobs[(byte)id] = JobScript.Parse(text, items, ownDisjoint, recipeId =>
+            jobs[(byte)id] = JobScript.Parse((byte)id, text, items, ownDisjoint, recipeId =>
                 stackable.TryGetValue(recipeId, out var recipePath)
                     ? ItemRecipeFile.Parse(recipeId, recipePath, pvf.ReadTokens("stackable/" + recipePath), pvf.ResolveString) : null);
         }
         var result = new ExpertJobScriptCatalog(jobs);
-        if (jobs.TryGetValue(1, out var enchanter))
+        foreach (var (job, script) in jobs)
         {
-            foreach (var candidate in enchanter.LearningRecipes.Values)
+            ushort skill = job switch { 1 => 191, 2 => 193, 4 => 192, _ => 0 };
+            foreach (int tool in script.ExtractExp.Keys)
+            {
+                if (!stackable.TryGetValue(tool, out var toolPath)) continue;
+                string restriction = PvfScript.Section(pvf.ReadText("stackable/" + toolPath), "expertjob only");
+                int[] levels = PvfScript.Integers(restriction);
+                string label = job switch { 1 => "enchanter", 2 => "alchemist", 4 => "doll_controller", _ => "" };
+                if (levels is [> 0] && restriction.Contains('`' + label + '`', StringComparison.Ordinal))
+                    result.extractors.Add(tool, (job, levels[0]));
+            }
+            foreach (var candidate in script.LearningRecipes.Values)
             {
                 if (!stackable.TryGetValue(candidate.ItemId, out var path)) continue;
                 var declaration = ExpertRecipeFile.Parse(candidate.ItemId, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
-                if (!declaration.Supported || declaration.Skills is not [{ ItemId: 191 }] ||
+                if (!declaration.Supported || declaration.Skills.Length != 1 || declaration.Skills[0].ItemId != skill ||
                     declaration.Skills[0].Count > candidate.RequiredLevel ||
                     (candidate.Rarity is not null) != (declaration.RecipeKind == "[enchant]")) continue;
                 result.learnable.Add(candidate.ItemId, candidate);
@@ -52,7 +65,7 @@ internal sealed class ExpertJobScriptCatalog
                 {
                     var recipe = ItemRecipeFile.Parse(candidate.ItemId, path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString);
                     if (!recipe.Diagnostics.IsEmpty || recipe.Inputs.IsEmpty || recipe.Inputs.Any(row => row.ItemId < 0 || row.Count <= 0)) continue;
-                    foreach (var pair in enchanter.CardProducts.Where(row => row.Value.RecipeId == candidate.ItemId))
+                    foreach (var pair in script.CardProducts.Where(row => row.Value.RecipeId == candidate.ItemId))
                         result.cardRecipes.Add(pair.Key, new(pair.Key, pair.Value.BeadId, candidate.ItemId, candidate.RequiredLevel, rarity,
                             recipe.Inputs.Select(row => (row.ItemId, row.Count)).ToArray(),
                             recipe.BeadInputs.Select(row => (row.ItemId, row.Count)).ToArray()));
@@ -74,6 +87,17 @@ internal sealed class ExpertJobScriptCatalog
     }
 
     public bool TryLearningRecipe(int itemId, out ExpertJobLearnableRecipe recipe) => learnable.TryGetValue(itemId, out recipe!);
+
+    public bool CanExtract(byte job, int level, int tool) => extractors.TryGetValue(tool, out var required) &&
+        required.Job == job && level >= required.Level;
+
+    public bool IsLearned(byte job, int level, IEnumerable<int> learned, int recipe) =>
+        learnable.TryGetValue(recipe, out var definition) && definition.Job == job && definition.RequiredLevel <= level &&
+        (learned.Contains(recipe) || (job is 2 or 4 && jobs[job].AutoRecipes.Any(row => row.ItemId == recipe && row.Count <= level)));
+
+    public int[] LearnedRecipes(byte job, int level, IEnumerable<int> learned) =>
+        UnlockedRecipes(job, level).Concat(job == 1 ? learned.Where(id => learnable.GetValueOrDefault(id)?.Rarity is not null) : [])
+            .Where(id => IsLearned(job, level, learned, id)).Distinct().Order().ToArray();
 
     public byte[] LearnedRarities(IEnumerable<int> recipes) => recipes.Select(id => learnable.GetValueOrDefault(id)?.Rarity)
         .Where(rarity => rarity.HasValue).Select(rarity => rarity!.Value).Distinct().Order().ToArray();
@@ -102,6 +126,9 @@ internal sealed class ExpertJobScriptCatalog
         ? script.GiveUpCosts : [1000, 10000, 100000, 1000000];
 
     public int EnduranceInitial(byte job) => jobs.TryGetValue(job, out var script) ? script.EnduranceInitial : 300;
+
+    public IReadOnlyList<int> ClearQuests(byte job) => jobs.TryGetValue(job, out var script) ? script.ClearQuests : [];
+    public IReadOnlyList<int> GiveUpDeletedItems(byte job) => jobs.TryGetValue(job, out var script) ? script.GiveUpDeletedItems : [];
 
     public bool TryUpgradeCost(byte job, int grade, out int gold)
     {
@@ -140,6 +167,11 @@ internal sealed class ExpertJobScriptCatalog
             }
         return false;
     }
+
+    public int ExtractionBase(byte job) => jobs.GetValueOrDefault(job)?.ExtractionBase ?? 0;
+
+    public IReadOnlyList<ExpertJobExtractionSelection> ExtractionPool(byte job, int table, bool bigWin) =>
+        jobs.TryGetValue(job, out var script) ? (bigWin ? script.ExtractionBigWins : script.ExtractionAdditional).GetValueOrDefault(table) ?? [] : [];
 
     public ExpertJobDisjointRules DisjointRules => jobs.GetValueOrDefault((byte)3)?.DisjointRules ?? ExpertJobDisjointRules.Empty;
 
@@ -199,12 +231,18 @@ internal sealed class ExpertJobScriptCatalog
         public int EnduranceInitial { get; init; } = 300;
         public Dictionary<int, (int Min, int Max)> ExtractExp { get; init; } = [];
         public ExpertJobScriptResult[] ExtractionResults { get; init; } = [];
+        public int ExtractionBase { get; init; }
+        public Dictionary<int, ExpertJobExtractionSelection[]> ExtractionAdditional { get; init; } = new();
+        public Dictionary<int, ExpertJobExtractionSelection[]> ExtractionBigWins { get; init; } = new();
         public ExpertJobDisjointRules DisjointRules { get; init; } = ExpertJobDisjointRules.Empty;
         public HashSet<int> KnownCards { get; init; } = [];
         public ExpertJobMonsterCardExp[] MonsterCard { get; init; } = [];
         public Dictionary<int, (int RecipeId, int BeadId)> CardProducts { get; init; } = new();
         public Dictionary<int, int[]> CardSuccess { get; init; } = new();
         public int[] ShopItems { get; init; } = [];
+        public int[] ClearQuests { get; init; } = [];
+        public int[] GiveUpDeletedItems { get; init; } = [];
+        public (int ItemId, int Count)[] AutoRecipes { get; init; } = [];
 
         public int Level(int experience)
         {
@@ -217,7 +255,7 @@ internal sealed class ExpertJobScriptCatalog
             return Math.Min(level, Math.Max(Thresholds.Length, 1));
         }
 
-        public static JobScript Parse(string text, ItemCatalog items, string ownDisjoint, Func<int, ItemRecipeFile?> readRecipe)
+        public static JobScript Parse(byte job, string text, ItemCatalog items, string ownDisjoint, Func<int, ItemRecipeFile?> readRecipe)
         {
             int[] skills = PvfScript.Integers(Field(text, "skill"));
             if (skills.Length % 2 != 0 || Enumerable.Range(0, skills.Length / 2).Any(i =>
@@ -248,7 +286,7 @@ internal sealed class ExpertJobScriptCatalog
             if (rows.Length % 4 == 0)
                 for (int index = 0; index < rows.Length; index += 4)
                     if (rows[index + 1] > 0 && rows[index + 3] > 0)
-                        learning[rows[index + 1]] = new(rows[index + 1], 1, rows[index + 3], null);
+                        learning[rows[index + 1]] = new(rows[index + 1], job, rows[index + 3], null);
             foreach (Match match in Regex.Matches(Field(text, "rarity recipe"), @"\[rarity\](.*?)\[/rarity\]", RegexOptions.Singleline))
             {
                 string block = match.Groups[1].Value;
@@ -331,11 +369,17 @@ internal sealed class ExpertJobScriptCatalog
                 EnduranceInitial = enduranceInitial <= 0 ? 300 : enduranceInitial,
                 ExtractExp = extract,
                 ExtractionResults = Results(Field(text, "extraction result")),
+                ExtractionBase = PvfScript.Integers(Field(text, "enchanter extraction result item")).ElementAtOrDefault(1),
+                ExtractionAdditional = Selections(Field(text, "additional result")),
+                ExtractionBigWins = Selections(Field(text, "big win result")),
                 DisjointRules = string.IsNullOrWhiteSpace(Field(text, "disjoint result")) ? ExpertJobDisjointRules.Empty :
                     new(Field(text, "disjoint result"), Field(text, "additional result"), Field(text, "big win result"), baseConst, ownDisjoint),
                 KnownCards = cards,
                 MonsterCard = monsterRows.ToArray(),
-                ShopItems = shopItems.ToArray()
+                ShopItems = shopItems.ToArray(),
+                ClearQuests = PvfScript.Integers(Field(text, "clear quests")).Where(id => id is > 0 and < 30000).Distinct().ToArray(),
+                GiveUpDeletedItems = PvfScript.Integers(Field(text, "giveup delete item")).Where(id => id > 0).Distinct().ToArray(),
+                AutoRecipes = Pairs(PvfScript.Integers(Field(text, "auto learn recipe"))).Select(row => (row.Count, row.ItemId)).ToArray()
             };
         }
 
@@ -353,8 +397,26 @@ internal sealed class ExpertJobScriptCatalog
             var rows = new ExpertJobScriptResult[values.Length / 8];
             for (int index = 0, row = 0; index + 7 < values.Length; index += 8, row++)
                 rows[row] = new((int)values[index], (int)values[index + 1], (int)values[index + 2],
-                    (int)values[index + 3], values[index + 4]);
+                    (int)values[index + 3], values[index + 4], (int)values[index + 5], (int)values[index + 6], (int)values[index + 7]);
             return rows;
+        }
+
+        static Dictionary<int, ExpertJobExtractionSelection[]> Selections(string block)
+        {
+            double[] values = Numbers(block);
+            if (values.Length % 6 != 0) throw new InvalidDataException("副职业萃取附加表必须为六列");
+            var rows = new Dictionary<int, List<ExpertJobExtractionSelection>>();
+            for (int at = 0; at < values.Length; at += 6)
+            {
+                if (values[at] <= 0 || values[at + 1] < 0 || values[at + 2] < values[at + 1] || values[at + 3] <= 0 ||
+                    values[at + 4] is < 0 or > 10000 || !double.IsFinite(values[at + 5]) || values[at + 5] <= 0)
+                    throw new InvalidDataException("副职业萃取附加表字段非法");
+                int key = checked((int)values[at]);
+                if (!rows.TryGetValue(key, out var group)) rows.Add(key, group = []);
+                group.Add(new(checked((int)values[at + 1]), checked((int)values[at + 2]), checked((int)values[at + 3]),
+                    checked((int)values[at + 4]), values[at + 5]));
+            }
+            return rows.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
         }
 
         static double[] Numbers(string text)

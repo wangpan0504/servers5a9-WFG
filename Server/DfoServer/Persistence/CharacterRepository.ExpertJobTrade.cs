@@ -31,8 +31,8 @@ internal sealed partial class CharacterRepository
         using var transaction = write.Transaction;
         var currentCustomer = Require(db, transaction, customerLease.Account, customer.Name);
         var currentOwner = Require(db, transaction, ownerLease.Account, owner.Name);
-        ValidateTradeQualification(currentCustomer, customer);
-        ValidateTradeQualification(currentOwner, owner);
+        ValidateExpertJobQualification(currentCustomer, customer);
+        ValidateExpertJobQualification(currentOwner, owner);
         var committedCustomer = CommitInventoryInTransaction(db, transaction, customerLease, currentCustomer, customer, debit);
         var committedOwner = CommitInventoryInTransaction(db, transaction, ownerLease, currentOwner, owner, credit);
         using var command = db.CreateCommand();
@@ -59,7 +59,7 @@ internal sealed partial class CharacterRepository
         });
     });
 
-    static void ValidateTradeQualification(Character current, Character expected)
+    static void ValidateExpertJobQualification(Character current, Character expected)
     {
         // GM 资格调整未必推进资产版本，双方等级及副职业快照必须独立复验。
         if (current.Level != expected.Level || current.Job != expected.Job || current.GrowType != expected.GrowType ||
@@ -67,6 +67,6 @@ internal sealed partial class CharacterRepository
             current.ExpertJobExperience != expected.ExpertJobExperience || current.ExpertGiveUpState != expected.ExpertGiveUpState ||
             current.ExpertMachineGrade != expected.ExpertMachineGrade || current.ExpertMachineEndurance != expected.ExpertMachineEndurance ||
             !current.ExpertJobRecipes.SetEquals(expected.ExpertJobRecipes))
-            throw new InvalidOperationException("副职业交易参与者资格已经变化");
+            throw new InvalidOperationException("副职业操作参与者资格已经变化");
     }
 }

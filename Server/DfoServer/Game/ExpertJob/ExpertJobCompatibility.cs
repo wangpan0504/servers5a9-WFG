@@ -28,4 +28,5 @@ internal sealed record ExpertJobCompatibility
 }
 
 internal sealed record ExpertJobActionPlan(Character Expected, InventoryPlan Inventory, int Experience, int Endurance,
-    bool Succeeded = true, DisjointReceipt? Disjoint = null, byte? EnchantRarity = null);
+    bool Succeeded = true, DisjointReceipt? Disjoint = null, byte? EnchantRarity = null,
+    DfoServer.Game.Quests.QuestLifecyclePlan? Tutorial = null);

@@ -80,6 +80,8 @@ internal static class ExpertJobActionTcpTests
             peer.Send(599, Build(w => w.Write(machineId)));
             peer.Expect(1, 599, [1, 0, 1, 0, 0, 0, 0, 43, 1, 0, 0]);
             UseMachine(peer, 4, machineId); ReadMachine(peer, 4, 298, tutorial: true);
+            peer.Send(599, Build(w => w.Write(machineId)));
+            peer.Expect(1, 599, [1, 0, 1, 0, 0, 0, 0, 42, 1, 0, 0]);
             That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId} AND quest_id=10021") is [[0L]],
                 "进行中10021教学经开店、进入本人分解机、真实分解后归零");
             UseMachine(peer, 6, machineId);
@@ -127,9 +129,11 @@ internal static class ExpertJobActionTcpTests
             peer.Select(1, expertJobInfo: EnchantInfo(300));
             peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
             SendEnchant(peer, enchanterId);
-            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
+            peer.Expect(0, 14); peer.Expect(0, 574); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
             peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(5u); w.Write((uint)recipe.Rarity); }));
-            peer.Expect(0, 574); peer.Barrier();
+            peer.Barrier();
+            peer.Send(599, Build(w => w.Write(enchanterId)));
+            peer.Expect(1, 599, Build(w => { w.Write((byte)1); w.Write((byte)3); w.Write(enchanterId); w.Write(299u); }));
             That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={enchanterId} AND quest_id=11009") is [[0L]],
                 "真实附魔成功且教程状态改变时仍送完整ACK，不被旧回执守卫吞掉");
         }
@@ -145,6 +149,7 @@ internal static class ExpertJobActionTcpTests
             "分解和附魔操作只推进各自教程，并存每日身份和计数不受影响");
         await fixture.StopAsync();
         await ExpertJobCompoundTutorialTcpTests.RunAsync(options, root, resources);
+        await ExpertJobExtractionTcpTests.RunAsync(options, root, resources);
 
         string Daily(ushort id)
         {
@@ -169,8 +174,8 @@ internal static class ExpertJobActionTcpTests
                 U32(ack, ack.Length - 8) == 999 && U32(ack, ack.Length - 4) == endurance, "235完整源头、实际产物数组、绝对金币与耐久尾部");
             That(Enumerable.Range(0, count).Any(i => U32(ack, 9 + 10 * i) == 2610045 && U32(ack, 13 + 10 * i) == 1),
                 "自用零件在已提交的ACK产物中以增量1出现");
-            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
             if (tutorial) peer.Expect(0, 574);
+            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
             peer.Barrier();
         }
     }

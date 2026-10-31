@@ -66,7 +66,8 @@ internal static class ExpertJobRequests
         byte mode = reader.ReadByte();
         if (mode is not (0 or 3)) throw new InvalidDataException("开设副职业商店模式不是 0 或 3");
         int length = reader.ReadInt32();
-        if (length is < 0 or > 64) throw new InvalidDataException("开设副职业商店名称长度非法");
+        if (length is < 0 or > 64 || reader.BaseStream.Length - reader.BaseStream.Position != length + 10)
+            throw new InvalidDataException("开设副职业商店名称长度非法");
         string name = length == 0 ? "" : CharacterName.Encoding.GetString(reader.ReadBytes(length));
         var request = new ExpertJobCreateStoreRequest(mode, name, reader.ReadUInt32(), reader.ReadUInt16(),
             reader.ReadUInt16(), reader.ReadUInt16());

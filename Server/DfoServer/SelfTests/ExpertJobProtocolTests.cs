@@ -67,6 +67,8 @@ internal static class ExpertJobProtocolTests
         That(BitConverter.ToUInt16(ExpertJobPackets.CreateStoreNotice(0, 42), 1) == 42,
             "NOTI 538 演员号是 character.Id");
         ExpertJobRequests.ReadEmpty([]);
+        Reject<InvalidDataException>(() => ExpertJobRequests.ReadCreateStore([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            "598名称声明超出包体时受控拒绝，不抛读取越界");
         var compound = ExpertJobRequests.ReadCompound([1, 2, 3, 4, 5, 0, 6, 0]);
         That(compound is { First: 0x04030201, Second: 5, Third: 6 }, "C2S 238 是 u32+u16+u16");
         var enchant = ExpertJobRequests.ReadEnchantStore([1, 0, 2, 0, 0, 0, 2, 0, 3, 0, 0, 4, 0]);

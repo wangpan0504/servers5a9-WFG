@@ -22,7 +22,7 @@ public sealed record ExpertRecipeFile(int TemplateId, bool Supported, string? Re
             type?.Values is [{ Type: 6 } label, { Type: 0, Value: 0 }] && resolve(label.Value) == "[recipe]" &&
             Field("int data")?.Values is [{ Type: 0, Value: 2 }] &&
             (kind == "[enchant]" && Field("sub type")?.Values is [{ Type: 0, Value: 1 }] ||
-             kind == "[craftmanship]" && Field("sub type")?.Values is [{ Type: 0, Value: 0 }]);
+             kind == "[craftmanship]" && Field("sub type")?.Values is [{ Type: 0, Value: 0 or 2 }]);
         var skills = ImmutableArray.CreateBuilder<ItemRecipeEntry>();
         if (Field("need skill") is { } required && required.Values.Length > 0 && required.Values.Length % 2 == 0)
         {

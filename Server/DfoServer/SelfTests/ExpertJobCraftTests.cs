@@ -18,6 +18,7 @@ internal static class ExpertJobCraftTests
     public static void Run(TownCatalog towns, ItemResources resources)
     {
         int checks = Count;
+        ExpertJobExtractionTests.Run(towns, resources);
         var scripts = resources.ExpertJobs;
         var items = resources.Items;
         That(scripts.TryRecipe(1, 2600141, out var recipe) && recipe.ProductId == 2610034 && recipe.ProductCount == 1 &&
@@ -147,7 +148,8 @@ internal static class ExpertJobCraftTests
             var conversionMaterials = InventoryRewardGrantService.TryGrantBatch(beadSaved, [new(3035, 20), new(3302, 2)],
                 items, resources.GoldLimits, resources.EpicPieces);
             That(conversionMaterials.Accepted && conversionMaterials.Plan is not null, "炼金转换准备钱包和实体材料");
-            var alchemist = beadSaved with { ExpertJobType = 2, ExpertJobExperience = int.MaxValue, Inventory = conversionMaterials.Plan!.After };
+            var alchemist = beadSaved with { ExpertJobType = 2, ExpertJobExperience = int.MaxValue,
+                ExpertJobRecipes = [2600401], Inventory = conversionMaterials.Plan!.After };
             That(ExpertJobCraft.TryPlan(alchemist, scripts, items, resources.GoldLimits, resources.EpicPieces, 2600401, 2,
                 ushort.MaxValue, _ => 0, DateTimeOffset.UtcNow, out var converted, out _) &&
                 converted.Products.SequenceEqual(new[] { new ExpertJobProduct(3033, 20) }) &&

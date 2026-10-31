@@ -933,6 +933,7 @@ internal static class QuestOrdinaryCompletionTests
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var scripts = items.ExpertJobs;
         ExpertJobLearningTests.Run(towns, items, scripts);
+        ExpertJobChainTests.Run(towns, characters, learning, growth, parameters, items, quests);
         NewCharacter Level20(NewCharacter source) => source with
         {
             Level = 20,
@@ -1004,6 +1005,9 @@ internal static class QuestOrdinaryCompletionTests
                 "完成后再次交付保持已完成，不重复扣晶块、不改类型");
             That(f.Session.MutateInventory(character => CurrencyService.SetGold(character, 20_000)).Accepted, "放弃前置金币");
             var given = f.Session.GiveUpExpertJob(scripts);
+            That(given.Error == 0 && !f.Read().CompletedQuests.Contains(sample.Id) &&
+                QuestEligibility.Evaluate(f.Read(), quest, quests).Eligible,
+                "放弃副职业清理EXJ声明的旧链完成记录，可重新接取授职任务");
             byte[] actorCleared = DfoServer.Network.Builders.TownPackets.Actor(given.Character!, 0);
             using var cleared = f.Open();
             using var clearedCommand = cleared.CreateCommand();
@@ -1173,6 +1177,9 @@ internal static class QuestOrdinaryCompletionTests
             board.Open(new(created.Id, 2, 0, "shop", 7, 8, 9, 10, 1, 300));
             That(board.TryGet(created.Id, out var store) && store.OwnerId == created.Id && store.First == 7,
                 "副职业商店按角色 Id 持久化");
+            board.TryClose(created.Id, out _);
+            That(!board.TryUpdate(store, store with { Endurance = 299 }) && !board.TryGet(created.Id, out _),
+                "迟到的店铺耐久刷新不能复活已关闭店铺");
         }
         using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
         {

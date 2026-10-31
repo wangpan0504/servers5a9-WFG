@@ -23,5 +23,10 @@ internal static class ExpertRecipeFileTests
         var craft = valid.ToArray();
         craft[4] = new(6, 10); craft[7] = new(0, 0);
         That(Parse(craft).Supported, "制作图与附魔卷轴使用明确的各自子类型");
+        craft[7] = new(0, 2);
+        craft[12] = new(0, 193);
+        That(Parse(craft).Supported, "炼金晶体转换卷轴保留真实sub type2学习声明");
+        craft[7] = new(0, 3);
+        That(!Parse(craft).Supported, "未知制作图子类型不能泛化放行");
     }
 }
