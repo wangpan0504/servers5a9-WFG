@@ -126,7 +126,7 @@ internal static class QuestStolenEggTcpTests
                     var ack = new byte[100]; ack[0]=2; ack[10]=1;
                     peer.Send(45,ack); Drain();
                     int seen = navigationPackets;
-                    ack[10]=0; peer.Send(45,ack); Drain();
+                    ack[10]=0; peer.Send(45,ack); peer.Expect(1,45,[0,19,0]); Drain();
                     That(navigationPackets == seen && State() == saved && enabled == 0 && bossChecks == 0,
                         "重复kind0返回不能重进演出层、推进实例或生成奖励");
                 }
