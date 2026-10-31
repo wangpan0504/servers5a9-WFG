@@ -20,6 +20,7 @@ internal static class BoosterDisjointNestedSelectionTests
     public static void RunResources(TownCatalog towns, CharacterCatalog characters, ItemResources resources, DateTimeOffset now)
     {
         int checks = Count;
+        RunOrdinaryParents(towns, resources);
         var items = resources.Items;
         var definition = resources.Boosters.Get(SourceId);
         That(definition.Available && definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
@@ -84,6 +85,58 @@ internal static class BoosterDisjointNestedSelectionTests
         Console.WriteLine($"PASS {Count - checks} 806 分解声明嵌套自选盒断言，{openings}次真实合法选择规划");
     }
 
+    public static void RunOrdinaryParents(TownCatalog towns, ItemResources resources)
+    {
+        int checks = Count;
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
+            resources.EpicPieces, contracts: resources.Contracts);
+        foreach (var entry in new[] { (Source: 490011382, Children: new[] { 490011404, 490011405 }),
+            (Source: 490012852, Children: new[] { 490012869, 490012871 }) })
+        {
+            var parent = resources.Boosters.Get(entry.Source);
+            That(parent is { Available: true, Selection: null, Lottery: false, SetsDisjointInstanceType: true,
+                SetsEpicExchangeInstanceType: false, Pools.Length: 2 } &&
+                parent.Pools.All(pool => pool is { Draws: 1, Rewards: [{ Weight: 1000, Count: 1 }] }) &&
+                parent.Pools.Select(pool => pool.Rewards[0].ItemId).SequenceEqual(entry.Children),
+                "两款达成礼包保持两个独立固定子盒池 " + entry.Source);
+            var source = InventoryRewardGrantService.Create(resources.Items.Get(entry.Source), utcNow: now);
+            var sentinel = new InventoryItem(3, Bag(65), InventoryRewardGrantService.Create(resources.Items.Get(1106), utcNow: now));
+            var role = new Character(1, 0, "ParentBox", 0, towns.Room, towns.InitialReturn)
+            { Level = 95, GrowType = 1, Inventory = new([new(1, Bag(3), source), new(2, Bag(4), source), sentinel], Gold: 12345) };
+            string before = JsonSerializer.Serialize(role);
+            var opened = service.Open(role, new(3, 1), out var receipt, now);
+            That(opened.Accepted && opened.Plan is not null && receipt is not null && JsonSerializer.Serialize(role) == before,
+                "普通父盒应真实规划两个自选子盒，不因父盒无Selection拒绝 " + entry.Source);
+            var after = opened.Plan!.After;
+            That(after.Find(Bag(3)) is null && after.Find(Bag(4)) == role.Inventory.Find(Bag(4)) &&
+                after.Find(Bag(65)) == sentinel && after.Gold == 12345 &&
+                receipt!.Rewards.Select(row => row.ItemId).SequenceEqual(entry.Children),
+                "只消费指定父盒一次，两子盒与哨兵金币及另一个源保持 " + entry.Source);
+            foreach (int id in entry.Children)
+            {
+                var child = after.Items.Single(item => item.Core.ItemId == id);
+                That(child.Core == InventoryRewardGrantService.Create(resources.Items.Get(id), utcNow: now) &&
+                    child.Core is { Kind: ItemKind.Consumable, DisjointForbidden: false, DestructionSoulForbidden: false,
+                        EpicExchangeOrigin: null, Extension119: 0 } &&
+                    resources.Boosters.Get(id) is { Available: true, Selection: not null, SetsDisjointInstanceType: true },
+                    "四子盒完整核心和自身声明独立保留，既不补装备标志也不代开 " + id);
+            }
+            That(after.ConsumableStates.SequenceEqual(role.Inventory.ConsumableStates),
+                "父盒发奖不改写无关已有消耗品状态；未声明maintenance的普通冷却消费者另行核查 " + entry.Source);
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, role.Inventory.Expansion);
+            var full = role with { Inventory = role.Inventory with { Items = [role.Inventory.Items[0],
+                .. Enumerable.Range(range.Start, range.End - range.Start).Select(slot =>
+                    new InventoryItem(100 + slot, Bag((short)slot), sentinel.Core))] } };
+            string fullBefore = JsonSerializer.Serialize(full);
+            var noRoom = service.Open(full, new(3, 1), out var noRoomReceipt, now);
+            That(!noRoom.Accepted && noRoom.Error == 4 && noRoomReceipt is null && noRoom.Plan is null &&
+                JsonSerializer.Serialize(full) == fullBefore,
+                "仅一空位不能发两个不同子盒，源与冷却及全部资产不变 " + entry.Source);
+        }
+        Console.WriteLine($"PASS {Count - checks} ordinary parent selection-child checks");
+    }
+
     static void RunBoundaries(ItemResources resources, BoosterDefinition source, Character role, DateTimeOffset now)
     {
         var archive = (PvfLib.PvfArchive)typeof(ItemCatalog).GetField("pvf", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -96,10 +149,10 @@ internal static class BoosterDisjointNestedSelectionTests
         const int childId = 490011826;
         var child = resources.Boosters.Get(childId);
         BoosterDefinition Parent(int id) => source with { Selection = new(1, [new(0, 0, [new(id, 1)])]) };
-        void Reject(int id, string reason)
+        void Reject(int id, string reason, bool ordinary = false)
         {
             string before = JsonSerializer.Serialize(role);
-            var result = service.Open(role, Select(id), out var receipt, now);
+            var result = service.Open(role, ordinary ? new(3, 1) : Select(id), out var receipt, now);
             That(!result.Accepted && result.Plan is null && receipt is null && JsonSerializer.Serialize(role) == before,
                 "806 " + reason + "整盒拒绝且无计划、回执或输入资产变更");
         }
@@ -129,6 +182,32 @@ internal static class BoosterDisjointNestedSelectionTests
             definitions[SourceId] = Parent(id);
             Reject(id, "钱包/碎片/直接激活/账号契约不能借子盒选择定义转普通实体 " + id + "，");
         }
+
+        var ordinaryParent = source with { Selection = null, Pools = [new(1, [new(childId, 1000, 1)])] };
+        definitions[SourceId] = ordinaryParent;
+        definitions[childId] = child;
+        That(service.Open(role, new(3, 1), out var plainReceipt, now).Accepted && plainReceipt is not null,
+            "普通固定父盒可以发真实可用自选子盒");
+        foreach (var invalidParent in new[]
+        {
+            ordinaryParent with { Lottery = true },
+            ordinaryParent with { Pools = [new(2, [new(childId, 1000, 1)])] },
+            ordinaryParent with { Pools = [new(1, [new(childId, 1000, 1), new(490011783, 1000, 1)])] },
+            ordinaryParent with { SetsEpicExchangeInstanceType = true }
+        })
+        {
+            definitions[SourceId] = invalidParent;
+            Reject(childId, "随机/多抽/混合奖池/史诗来源父盒不借固定子盒路径放行，", ordinary: true);
+        }
+        foreach (int id in new[] { 1106, 1, resources.EpicPieces.ByPiece.Keys.First(),
+            resources.Boosters.DirectActivationItems.First(), contract }.Distinct())
+        {
+            definitions[SourceId] = ordinaryParent with { Pools = [new(1, [new(id, 1000, 1)])] };
+            Reject(id, "普通父盒的未知子盒或特殊owner仍拒绝 " + id + "，", ordinary: true);
+        }
+        definitions[SourceId] = ordinaryParent;
+        definitions[childId] = child with { PendingRule = "测试未实现子盒规则" };
+        Reject(childId, "普通父盒不能发带待实现规则的子盒，", ordinary: true);
     }
 
     static BoosterOpenRequest Select(int id) => new(3, 1, new(0, 0, [id]));
