@@ -46,23 +46,32 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 "class change grow type check off", "stackable action limit indexes",
                 "stackable action result limit indexes", "creature minimum level", "levelup range", "cool time"]);
         StackableTypeDeclaration? type = null;
+        PvfTokenDocument? repeatedDocument = null;
+        PvfTokenSection[] RepeatedSections(string name)
+        {
+            int count = tokens.Count(token => token.Type == 3 && resolve(token.Value) == "[" + name + "]");
+            if (count < 2) return [];
+            try
+            {
+                repeatedDocument ??= new(tokens, resolve);
+                var sections = repeatedDocument.Sections.Where(section => section.Name == name).ToArray();
+                // 只兼容根级完整声明，不把嵌套或损坏的声明抹成最后一个有效值。
+                return repeatedDocument.Diagnostics.IsEmpty && sections.Length == count &&
+                    sections.All(section => section.Children.IsEmpty) ? sections : [];
+            }
+            catch (InvalidDataException) { return []; }
+        }
         if (fields.TryGet("stackable type", out var values))
         {
-            // 已支持形状为字符串后接1、2或4个整数，参数不推断成背包类型枚举。
-            if (values.Length is 2 or 3 or 5 && values[0].Type == 6)
-            {
-                var parameters = new List<int>(values.Length - 1);
-                foreach (var token in values[1..])
-                {
-                    if (token.Type != 0)
-                        break;
-                    parameters.Add(token.Value);
-                }
-                if (parameters.Count == values.Length - 1)
-                    type = new(resolve(values[0].Value), parameters.AsReadOnly());
-            }
+            type = ReadType(values, resolve);
             if (type is null)
                 fields.Unsupported("stackable type");
+        }
+        else
+        {
+            var declarations = RepeatedSections("stackable type").Select(section => ReadType(section.Values.AsSpan(), resolve)).ToArray();
+            // 与客户端及 ItemCatalog 一致，堆叠类型由最后一次完整声明决定。
+            if (declarations.Length > 1 && declarations.All(declaration => declaration is not null)) type = declarations[^1];
         }
         int? limit = fields.Scalar("stack limit", true), price = fields.Scalar("price", true),
             sellPrice = fields.Scalar("sell price", true), minimum = fields.Scalar("minimum level", true);
@@ -96,6 +105,19 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 places = Array.AsReadOnly(values.ToArray().Select(token => resolve(token.Value)).ToArray());
             else fields.Unsupported("action usable place");
         }
+        else
+        {
+            var declarations = RepeatedSections("action usable place");
+            if (declarations.Length > 1 && declarations.All(section => section.IsBlock && section.Values.Length > 0 &&
+                section.Values.All(token => token.Type == 6)))
+            {
+                var last = declarations[^1].Values.Select(token => resolve(token.Value)).ToArray();
+                var expected = last.ToHashSet(StringComparer.Ordinal);
+                // 仅接受同一个地点集合的重复书写，不猜测冲突集合的覆盖关系。
+                if (declarations.All(section => expected.SetEquals(section.Values.Select(token => resolve(token.Value)))))
+                    places = Array.AsReadOnly(last);
+            }
+        }
         bool hasUseAction = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[use action packet]");
         int? maximum = fields.Scalar("maximum level"), useAction = fields.Scalar("use action packet");
         IReadOnlyList<int>? Integers(string name)
@@ -122,7 +144,9 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 child.Values.All(token => token.Type == 0))
                 boosterEtc = Array.AsReadOnly(child.Values.Select(token => token.Value).ToArray());
         }
-        return new(templateId, path, type, limit, price, sellPrice, minimum, group, fields.UnsupportedFields)
+        var unsupported = fields.UnsupportedFields.Where(name => !(name == "stackable type" && type is not null ||
+            name == "action usable place" && places is not null)).ToArray();
+        return new(templateId, path, type, limit, price, sellPrice, minimum, group, Array.AsReadOnly(unsupported))
         {
             ActionDeclaration = action, HasActionType = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action type]"),
             DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
@@ -145,5 +169,18 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             HasCoolTime = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[cool time]"),
             HasBoosterInfo = hasBooster, DeclaredBoosterEtc = boosterEtc
         };
+    }
+
+    static StackableTypeDeclaration? ReadType(ReadOnlySpan<PvfToken> values, Func<int, string> resolve)
+    {
+        // 已支持形状为字符串后接1、2或4个整数，参数不推断成背包类型枚举。
+        if (values.Length is not (2 or 3 or 5) || values[0].Type != 6) return null;
+        var parameters = new int[values.Length - 1];
+        for (int i = 1; i < values.Length; i++)
+        {
+            if (values[i].Type != 0) return null;
+            parameters[i - 1] = values[i].Value;
+        }
+        return new(resolve(values[0].Value), Array.AsReadOnly(parameters));
     }
 }

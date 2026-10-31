@@ -50,6 +50,11 @@ internal static class LevelUpTicketTests
             DeclaredLevelUpRange=10,HasBoosterInfo=true,DeclaredBoosterEtc=[1,1,50000,1,1,30000,2,1,20000,10] },template)!;
         That(randomTicket.Roll(_=>0)==1 && randomTicket.Roll(_=>50000)==2 && randomTicket.Roll(_=>99999)==10 &&
             randomTicket.AllowsRoll(10) && !randomTicket.AllowsRoll(3), "随机升级数量来自booster的完整相对权重，不取最大levelup range当固定结果");
+        var uncappedRandom = LevelUpTicketDefinition.Parse(raw with { DeclaredLevelUpRange=3,
+            HasBoosterInfo=true, DeclaredBoosterEtc=[1,1,50000,1,1,30000,2,1,20000,3] },template);
+        That(uncappedRandom is { TargetMaximum:95, Rolls.Length:3 } && uncappedRandom.Roll(_=>50000)==2 &&
+            uncappedRandom.Roll(_=>99999)==3 && uncappedRandom.TargetLevel(94,3)==95,
+            "无动作封顶参数的随机升级券仍读取完整奖池，缺省封顶95且不误取最大升级数");
         foreach (var invalid in new[] { raw with { DeclaredLevelUpRange=null },raw with { DeclaredLevelUpRange=0 },
             raw with { HasBoosterInfo=true },raw with { DeclaredMaximumLevel=null },
             raw with { ActionDeclaration=new("[level up ticket]",[85,95]) },
@@ -67,6 +72,9 @@ internal static class LevelUpTicketTests
         var growth = SelfTestCatalogs.Growth(pvf,skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var service = new LevelUpTicketService(items.Items,growth);
+        foreach (int id in new[] { 2683638,10002225,10004106,10012995,10099881,10151466 })
+            That(items.Items.LevelUpTicket(id) is { TargetMaximum:95, Rolls.Length:>0 },
+                "全量普查命中的无封顶参数随机升级券保留各自原始奖池：" + id);
         That(items.Items.LevelUpTicket(TicketId) is { MinimumLevel:1,MaximumLevel:85,Jobs:ushort.MaxValue } &&
             items.Items.LevelUpTicket(10156788) is { Levels:10, TargetMaximum:85, Rolls.Length:10 } &&
             items.Items.LevelUpTicket(490705250) is { MinimumLevel:85,MaximumLevel:94 } &&

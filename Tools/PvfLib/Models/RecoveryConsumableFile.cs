@@ -27,15 +27,18 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         var structureErrors = document.Diagnostics.ToList();
         if (document.Sections.Any(section => section.Children.Length != 0)) structureErrors.Add("恢复物品含未确认的嵌套声明");
         var errors = new List<string>(structureErrors);
+        var stackable = StackableFile.Parse(id, path, tokens, resolve);
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
-            if (duplicate.Key is not ("cool time" or "cooltime group") || !CompleteIntegerScalars(duplicate))
+            if (!(duplicate.Key is "stackable type" && stackable.TypeDeclaration is not null ||
+                duplicate.Key is "action usable place" && stackable.DeclaredActionUsablePlaces is not null ||
+                CompleteIntegerScalars(duplicate) && AllowsRepeatedScalar(duplicate.Key, duplicate)))
                 errors.Add("重复恢复物品字段：" + duplicate.Key);
         int? Scalar(string name)
         {
             var sections = document.Sections.Where(section => section.Name == name).ToArray();
             if (sections.Length == 0) return null;
             // 原客户端按脚本顺序直接赋值冷却标量，后声明覆盖前声明；畸形声明不参与兼容。
-            if ((sections.Length == 1 || name is "cool time" or "cooltime group") && CompleteIntegerScalars(sections))
+            if (CompleteIntegerScalars(sections) && (sections.Length == 1 || AllowsRepeatedScalar(name, sections)))
                 return sections[^1].Values[0].Value;
             errors.Add("恢复物品整数声明不完整：" + name);
             return null;
@@ -62,7 +65,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         int? questBonus = ExpBonus(document, "quest exp bonus rate", errors);
         var limits = document.Sections.Where(section => section.Name == "limit dungeon")
             .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
-        return new(id, path, StackableFile.Parse(id, path, tokens, resolve), coolTime, group, hp, mp,
+        return new(id, path, stackable, coolTime, group, hp, mp,
             document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
         { SubType = subType, TotalUsableCount = totalUses, StructureDiagnostics = structureErrors.ToImmutableArray(),
             ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
@@ -72,6 +75,11 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
 
     static bool CompleteIntegerScalars(IEnumerable<PvfTokenSection> sections) =>
         sections.All(section => section is { Children.Length: 0, Values: [{ Type: 0 }] });
+
+    // 日次数仅兼容相同完整值的重复声明，冲突值继续保留诊断及无效状态。
+    static bool AllowsRepeatedScalar(string name, IEnumerable<PvfTokenSection> sections) =>
+        name is "cool time" or "cooltime group" || name == "total usable count" &&
+        sections.Select(section => section.Values[0].Value).Distinct().Count() == 1;
 
     static int? ExpBonus(PvfTokenDocument document, string field, List<string> errors)
     {

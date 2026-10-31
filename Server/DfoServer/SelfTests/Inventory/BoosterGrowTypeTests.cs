@@ -295,6 +295,7 @@ internal static class BoosterGrowTypeTests
     public static void Run(TownCatalog towns, ItemResources itemResources)
     {
         int checks = Count;
+        WeddingCharacterRewards(towns, itemResources);
         FirstGrowQualification(towns, itemResources);
         var catalog = itemResources.Items;
         var now = DateTimeOffset.UtcNow;
@@ -428,6 +429,33 @@ internal static class BoosterGrowTypeTests
     static BoosterDefinition Parse(string body) =>
         BoosterCatalog.Parse("[stackable type]\n`[booster]` 0\n[booster info]\n[grow type]\n" + body + "\n[/grow type]\n[/booster info]");
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
+
+    static void WeddingCharacterRewards(TownCatalog towns, ItemResources resources)
+    {
+        var wedding = resources.Boosters.Get(10002631);
+        That(wedding.Available && wedding.Pools.Length == 80, "豪华婚礼化妆箱保留16职业各五个独立奖池，不覆盖同职业重复段");
+        int[] boxes = [2683422,2683423,2683424,2683425,2683426,2683427,2683428,2683429,2683430,2683435,2683434,2683431,
+            10007239,490700159,490700962,490702509];
+        int[] appearances = [101600020,102600019,104600019,106600019,108600026,105600018,109600017,103600019,107600017,101600020,
+            106600019,112600017,413600001,414600001,415600000,416600003];
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        for (byte job = 0; job < 16; job++)
+        {
+            var role = new Character(1,0,"Wedding",0,towns.Room,towns.InitialReturn)
+            {
+                Job = job, GrowType = 0x21, Level = 50,
+                Inventory = new([new(1, new(InventoryListType.Main,65), new(10002631,ItemKind.Consumable,1))])
+            };
+            var result = service.Open(role,new(65,1),out var receipt,DateTimeOffset.UtcNow);
+            That(service.CountMatchingPools(role,10002631) == (80,5) && result.Accepted && receipt is not null &&
+                receipt.Rewards.Select(row => (row.ItemId,row.Count)).OrderBy(row => row.ItemId).SequenceEqual(new[]
+                { (boxes[job],1), (appearances[job],1), (10002901,100), (10002611,1), (10002612,1) }.OrderBy(row => row.Item1)) &&
+                result.Plan!.After.Items.All(item => item.Core.ItemId != 10002631) &&
+                result.Plan.After.Items.Single(item => item.Core.ItemId == appearances[job]) is
+                    { Core.Kind: ItemKind.Avatar, Avatar: not null },
+                "婚礼箱仅发当前职业的完整五项奖励并消耗一件源 " + job);
+        }
+    }
 
     sealed class BoosterTestsRandom : Random
     {

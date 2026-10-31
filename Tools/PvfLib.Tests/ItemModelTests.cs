@@ -66,7 +66,7 @@ internal static class ItemModelTests
         scripts["equipment/base.equ"] = "[import script]\n`child.equ`";
         Reject<InvalidDataException>(() => EquipmentFile.ReadScript(Read, "equipment/child.equ"));
 
-        string[] strings = ["[price]", "[stack limit]", "[stackable type]", "[material]", "fixture.stk", "../outside.stk", "[equipment type]", "[weapon]"];
+        string[] strings = ["[price]", "[stack limit]", "[stackable type]", "[material]", "fixture.stk", "../outside.stk", "[equipment type]", "[weapon]", "[waste]"];
         string Resolve(int value) => strings[value];
         var equipment = EquipmentFile.Parse(1, "equipment/a.equ", [new(3, 0), new(0, 0), new(3, 6), new(6, 7), new(0, 19)], Resolve);
         That(equipment.DeclaredPrice == 0 && equipment.DeclaredEquipmentType == new EquipmentTypeDeclaration("[weapon]", 19), "equipment raw zero and type parameter");
@@ -75,6 +75,15 @@ internal static class ItemModelTests
         That(equipment.DeclaredPrice is null && equipment.UnsupportedFields.Count(x => x == "price") == 1, "duplicate raw declaration is unsupported");
         var stackable = StackableFile.Parse(0, "stackable/a.stk", [new(3, 1), new(0, 0), new(3, 2), new(6, 3), new(0, -1), new(0, 2)], Resolve);
         That(stackable.DeclaredStackLimit == 0 && stackable.TypeDeclaration!.Parameters.SequenceEqual(new[] { -1, 2 }), "raw type parameters have no invented nonnegative constraint");
+        stackable = StackableFile.Parse(1, "stackable/a.stk",
+            [new(3,2),new(6,3),new(0,0),new(3,2),new(6,8),new(0,1)], Resolve);
+        That(stackable.TypeDeclaration is { Label: "[waste]", Parameters: [1] } &&
+            !stackable.UnsupportedFields.Contains("stackable type"), "重复堆叠类型按客户端取最后完整声明，与模板分页一致");
+        foreach (PvfToken[] tail in new PvfToken[][] { [], [new(6,8)], [new(0,1)], [new(6,8),new(0,1),new(6,3)] })
+            That(StackableFile.Parse(1, "stackable/a.stk", [new(3,2),new(6,3),new(0,0),new(3,2),..tail], Resolve)
+                .TypeDeclaration is null, "损坏的末类型不得回退成前一个合法声明");
+        That(StackableFile.Parse(1, "stackable/a.stk", [new(3,2),new(6,3),new(3,2),new(6,8),new(0,1)], Resolve)
+            .TypeDeclaration is null, "损坏的前类型也不得被末声明悄悄掩盖");
         foreach (int count in new[] { 0, 1, 7 })
             That(StackableTradeLimitDeclaration.Read(new($"[trade limit]\n{count} `[account]`\n")) == new StackableTradeLimitDeclaration(count, "[account]"),
                 "限次交易声明保留次数和后续账号绑定标签，零次数不是缺省值");
@@ -88,7 +97,7 @@ internal static class ItemModelTests
         That(EquipmentFile.Parse(1, "equipment/a.equ", [new(3, 0), new(0, -1)], Resolve).DeclaredPrice is null, "equipment unsupported scalar remains nonfatal");
         That(PvfItemIndex.Stackable([new(0, 0), new(6, 4)], Resolve, _ => true)[0] == "stackable/fixture.stk", "stackable zero identity is retained");
         string[] ticketStrings = ["[action type]","[quest clear]","[maximum level]","[use action packet]","[usable job]","[all]","[/action type]","[/usable job]","[any quest clear]",
-            "[action usable place]","[village]","[/action usable place]"];
+            "[action usable place]","[village]","[/action usable place]","[seria room]"];
         string TicketResolve(int value) => ticketStrings[value];
         var ticket = StackableFile.Parse(100,"stackable/ticket.stk",
             [new(3,0),new(6,1),new(3,6),new(3,2),new(0,84),new(3,3),new(0,0),new(3,4),new(6,5),new(3,7)],TicketResolve);
@@ -104,14 +113,24 @@ internal static class ItemModelTests
         ticket = StackableFile.Parse(100,"stackable/ticket.stk",[new(3,9),new(6,10),new(3,11)],TicketResolve);
         That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces!.SequenceEqual(new[] { "[village]" }),
             "ticket raw village declaration is retained");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",
+            [new(3,9),new(6,10),new(6,12),new(3,11),new(3,9),new(6,12),new(6,10),new(3,11)],TicketResolve);
+        That(ticket.DeclaredActionUsablePlaces!.Order().SequenceEqual(new[] { "[seria room]", "[village]" }) &&
+            !ticket.UnsupportedFields.Contains("action usable place"), "完整且等价的重复使用地点不因顺序不同失去资格");
+        string NestedResolve(int index) => index switch { 0 => "[stackable type]", 1 => "[waste]",
+            2 => "[booster info]", 3 => "[/booster info]", _ => throw new ArgumentOutOfRangeException(nameof(index)) };
+        That(StackableFile.Parse(1,"stackable/a.stk",
+            [new(3,0),new(6,1),new(0,0),new(3,2),new(3,0),new(6,1),new(0,0),new(3,3)], NestedResolve)
+            .TypeDeclaration is null, "嵌套块中的堆叠类型不得覆盖根级声明");
         ticket = StackableFile.Parse(100,"stackable/ticket.stk",[],TicketResolve);
         That(!ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,"missing usable place has no implicit village restriction");
         foreach (PvfToken[] values in new PvfToken[][]
-            { [new(3,9),new(0,1)], [new(3,9),new(6,10),new(3,11),new(3,9),new(6,10),new(3,11)] })
+            { [new(3,9),new(0,1)], [new(3,9),new(6,10),new(3,11),new(3,9),new(6,12),new(3,11)],
+                [new(3,9),new(6,10),new(3,9),new(6,10)] })
         {
             ticket = StackableFile.Parse(100,"stackable/ticket.stk",values,TicketResolve);
             That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,
-                "malformed or duplicate usable place cannot become an absent default");
+                "损坏、未闭合或互相冲突的重复地点不得成为无限制缺省值");
         }
         Reject<InvalidDataException>(() => PvfItemIndex.Equipment([new(0, 0), new(6, 4)], Resolve, _ => true));
         string[] classStrings = ["[need material]", "[/need material]", "[dont change grow type]", "[/dont change grow type]",

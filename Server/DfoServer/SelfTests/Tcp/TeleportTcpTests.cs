@@ -23,8 +23,8 @@ internal static class TeleportTcpTests
             var items = resources.ItemResources.Items;
             repository.Create(owner, candidate with { Level = 60, CompletedQuests = [3156], Inventory = candidate.Inventory with
             {
-                Items = candidate.Inventory.Items.Add(InventoryRewardGrantService.CreateItem(items.Get(2600014), new(InventoryListType.Main, 65),
-                    InventoryRewardGrantService.Create(items.Get(2600014), 3)))
+                Items = candidate.Inventory.Items.Add(InventoryRewardGrantService.CreateItem(items.Get(490008100), new(InventoryListType.Main, 65),
+                    InventoryRewardGrantService.Create(items.Get(490008100), 3)))
                     .Add(InventoryRewardGrantService.CreateItem(items.Get(101590011), new(InventoryListType.Equipment, 9),
                         InventoryRewardGrantService.Create(items.Get(101590011))))
             } });
@@ -44,16 +44,16 @@ internal static class TeleportTcpTests
         using (var peer = Open(fixture))
         {
             peer.Send(434, Party(38, 0, 1327, 234, 1)); peer.Expect(1, 434, [0, 19, 0, 38, 0, 0, 0, 0, 1]);
-            peer.Send(237, Potion(65, 2600014, 38, 0, 1327, 234)); peer.Expect(1, 237, [0, 23, 0]);
+            peer.Send(237, Potion(65, 490008100, 38, 0, 1327, 234)); peer.Expect(1, 237, [0, 23, 0]);
             peer.Send(692, Name("Missing")); peer.Expect(1, 692, [1]);
             peer.Select(prepared: true);
             peer.Send(469, Name("Missing")); peer.Expect(1, 469, [0, 1, 0]); peer.Barrier();
-            peer.Send(237, Potion(65, 2600014, 38, 0, 1327, 234));
-            peer.Expect(1, 237, [1, 65, 0, 78, 172, 39, 0]);
+            peer.Send(237, Potion(65, 490008100, 38, 0, 1327, 234));
+            peer.Expect(1, 237, Build(w => { w.Write((byte)1); w.Write((short)65); w.Write(490008100); }));
             peer.Expect(0, 1681); peer.Expect(0, 1681); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
             That(Count() == 2 && fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[38L, 0L, 1327L, 234L]],
                 "真实TCP药剂ACK、绝对库存及23/24后保存目的地，无额外124");
-            peer.Send(237, Potion(65, 2600014, 38, 0, 1327, 234)); peer.Expect(1, 237, [0, 23, 0]); peer.Barrier();
+            peer.Send(237, Potion(65, 490008100, 38, 0, 1327, 234)); peer.Expect(1, 237, [0, 23, 0]); peer.Barrier();
             That(Count() == 2, "原药请求重放仅拒绝，不重复扣件");
             using (var observer = Open(fixture, "departure-observer"))
             {
@@ -179,7 +179,7 @@ internal static class TeleportTcpTests
             }
         }
         int Count() => System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
-            "SELECT item_core FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=2600014")[0][0])!.Count;
+            "SELECT item_core FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=490008100")[0][0])!.Count;
 
         async Task SingleMemberPartyAsync(TcpPeer peer, ushort slot)
         {

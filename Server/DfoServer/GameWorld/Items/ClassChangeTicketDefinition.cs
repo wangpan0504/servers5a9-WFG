@@ -20,7 +20,7 @@ internal sealed record ClassChangeTicketDefinition(int TemplateId, int MinimumLe
             raw.DeclaredActionUsablePlaces is not { } places || !places.Contains("[village]") ||
             places.Any(place => place is not ("[village]" or "[seria room]" or "[dont use assult]")) ||
             raw.DeclaredActionUsableServerTypes is not { } servers || !servers.Contains("[general server]") ||
-            servers.Any(server => server is not ("[general server]" or "[event server]")) ||
+            servers.Any(server => server is not ("[general server]" or "[event server]" or "[starter server]")) ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
             raw.DeclaredDontChangeGrowTypes is not { } forbidden || forbidden.Count % 2 != 0 ||
             raw.DeclaredUsableFirstGrowTypes is not { } sources || sources.Any(value => value is < 0 or > 5) ||

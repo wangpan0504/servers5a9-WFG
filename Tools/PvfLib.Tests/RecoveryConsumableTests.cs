@@ -71,7 +71,12 @@ internal static class RecoveryConsumableTests
             new(3,14),new(6,15),new(3,14),new(6,16)], Resolve);
         That(result.TotalUsableCount == 2 && result.StructureDiagnostics.IsEmpty && !result.Diagnostics.IsEmpty,
             "日次数按原始整数保留，重复交易元数据诊断不等于使用声明结构损坏");
-        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,13),new(6,3)], [new(3,13),new(0,1),new(3,13),new(0,2)] })
+        result = RecoveryConsumableFile.Parse(490004967, "stackable/example.stk",
+            [..valid,new(3,13),new(0,1),new(3,13),new(0,1)], Resolve);
+        That(result.TotalUsableCount == 1 && result.Diagnostics.IsEmpty,
+            "相同完整日次数重复声明保持一次限制，不误拒绝疲劳灵药");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,13),new(6,3)], [new(3,13),new(0,1),new(3,13),new(0,2)],
+            [new(3,13),new(0,1),new(3,13)], [new(3,13),new(0,1),new(3,13),new(6,3)] })
         {
             result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
             That(result.TotalUsableCount is null && !result.Diagnostics.IsEmpty, "畸形或重复日次数不能被解释为无限使用");

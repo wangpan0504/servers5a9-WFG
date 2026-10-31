@@ -26,9 +26,11 @@ internal sealed class TeleportCatalog(Func<string, string> read, IReadOnlyDictio
         if (document.Section("stackable type").Trim() != "`[teleport potion]` 0" ||
             document.Has("expiration date") || document.Has("npc teleport potion"))
             return null;
-        int[] minimum = PvfScript.Integers(document.Section("minimum level")), cool = PvfScript.Integers(document.Section("cool time"));
+        // 堆叠物品未声明最低等级时与 ItemCatalog 一致取0；已声明但损坏的字段仍拒绝。
+        int[] minimum = document.Has("minimum level") ? PvfScript.Integers(document.Section("minimum level")) : [0];
+        int[] cool = PvfScript.Integers(document.Section("cool time"));
         int[] maps = PvfScript.Integers(document.Section("int data"));
-        if (minimum is not [>= 1 and <= 95] || cool is not [> 0] || maps.Length == 0 || maps.Any(id => id <= 0))
+        if (minimum is not [>= 0 and <= 95] || cool is not [> 0] || maps.Length == 0 || maps.Any(id => id <= 0))
             return null;
         return new(minimum[0], cool[0], maps.ToImmutableHashSet());
     }
