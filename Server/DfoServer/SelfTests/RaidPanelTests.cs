@@ -10,6 +10,16 @@ internal static class RaidPanelTests
 {
     internal static void RunCore()
     {
+        That(DfoServer.Network.Parsers.RaidRequests.Search([1]).Closed, "833原生关闭模式只有单字节，不冒充新查询");
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.Search([1, 0]));
+        var user = DfoServer.Network.Parsers.RaidRequests.CheckUser([2, 0x34, 0x12, 39]);
+        That(user == new DfoServer.Network.Parsers.RaidUserRequest(2, 0x1234, 39), "891角色定位保留原生server/character/channel顺序");
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.CheckUser([2, 0, 0]));
+        That(DfoServer.Network.Parsers.RaidRequests.MemberState([1]) && !DfoServer.Network.Parsers.RaidRequests.MemberState([0]),
+            "825仅接受本人活动状态布尔值");
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.MemberState([2]));
+        Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.MemberState([0, 0]));
+        Bytes(RaidPackets.CheckedUser(null), new byte[] { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, "在线未入团查询成功但不伪造团编号或成员");
         var boundary = new DateTimeOffset(2026, 11, 3, 6, 0, 0, TimeSpan.FromHours(8));
         var before = DfoServer.Game.Raids.RaidClearCounts.Periods(boundary.AddSeconds(-1));
         var after = DfoServer.Game.Raids.RaidClearCounts.Periods(boundary);
@@ -90,6 +100,20 @@ internal static class RaidPanelTests
             That(body[offset] < 4 && body[offset + 9] == 0, "次数类型有效且未猜造引导子表");
             That(result.TryAdd(body[offset], (BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset + 1)),
                 BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(offset + 5)))), "次数表类型不能重复");
+        }
+        return result;
+    }
+
+    internal static Dictionary<ushort, bool> ReadMemberStates(byte[] body)
+    {
+        That(body.Length >= 4, "成员状态快照保留u32数量");
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        That(count <= byte.MaxValue && body.Length == 4 + count * 3, "成员状态快照完整消费每个u16角色及布尔值");
+        var result = new Dictionary<ushort, bool>();
+        for (int at = 4; at < body.Length; at += 3)
+        {
+            That(body[at + 2] <= 1 && result.TryAdd(BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(at)), body[at + 2] == 1),
+                "活动状态不能重复成员或猜造标记");
         }
         return result;
     }

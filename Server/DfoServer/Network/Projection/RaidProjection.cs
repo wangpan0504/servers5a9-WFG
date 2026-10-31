@@ -139,6 +139,15 @@ internal static class RaidProjection
         }
         if (change.After is not { } after) return;
         bool Guard() => recipient.Session.CanPublishRaid(recipient, after);
+        if (change.StateMember is { } stateMember)
+        {
+            var member = after.Members.Single(row => row.Actor.Character == stateMember);
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_MEMBER_CHANGE_STATE,
+                RaidPackets.MemberState(stateMember, member.Inactive), "raid_member_activity", Guard);
+            // 并发改变可使旧增量失效；最新完整快照保留其他成员已经提交的状态。
+            States(context, after, recipient);
+            return;
+        }
         // 加入只由双账号提交结束后的招募处理器发布；清理/继任不在owner锁内读取其它成员。
         if (after.Members.Length > change.Before.Members.Length)
         {
@@ -158,7 +167,13 @@ internal static class RaidProjection
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(after, enableLuke), "raid_member_record_updated", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
             RaidPackets.OpenWithSquads(after.Key, Members(after), ClearCounts(after)), "raid_members_updated", Guard);
+        // 每次最新名册变更携带完整状态，避免并发改名/入团淘汰先前状态增量后留下旧显示。
+        States(context, after, recipient);
     }
+
+    internal static void States(GameConnectionContext context, RaidParty party, RaidActor recipient) =>
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MEMBERS_STATE, RaidPackets.MemberStates(party), "raid_member_activity_snapshot",
+            () => recipient.Session.CanPublishRaid(recipient, party));
 
     public static void Peer(GameConnectionContext context, RaidActor recipient, RaidActor peer, uint peerId, bool invite)
     {

@@ -13,7 +13,7 @@ namespace DfoServer.Network.Handlers;
 // 招募及开战复用正式会话身份；首阶段提交与进图、战斗奖励按各自领域边界处理。
 // 魔界大战不是团本：建队走 SET_PARTY_INFO(kind=5)，开战走 C2S 1652（见 DungeonHandler.EvildomWar），
 // 这里不为它补建类型 6 的团本记录。
-internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
+internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
     AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null,
     Game.Party.PartyService? parties = null, LukeRaidRejoin? lukeRejoin = null, TownProjection? town = null) : IGameCommandModule
 {
@@ -30,6 +30,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         commands.Register(CmdPacketType.RAID_MANAGER_WORK, ManagerAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_LIST, SearchAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_CHECK_RAID_USER, CheckUserAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_MEMBER_CHANGE_STATE, MemberStateAsync, nameof(RaidHandler), UserStateRequirement.WorldReady);
         // CMD668 REJOIN_RAID 与同号 NOTI668 REAL_ESTATE_STATE 是两套枚举，这里只注册命令。
         commands.Register(CmdPacketType.REJOIN_RAID, RejoinAsync, nameof(RaidHandler));
     }
@@ -47,7 +49,10 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         RaidSearchRequest parsed;
         try { parsed = RaidRequests.Search(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        if (Actor(context) is not { } actor || !MatchesType(actor, parsed.RaidType)) return CommandResult.Unhandled;
+        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        // 当前查询只返回一次快照，没有后台订阅；原生mode1关闭也不回造成功包。
+        if (parsed.Closed) return CommandResult.Handled;
+        if (!MatchesType(actor, parsed.RaidType)) return CommandResult.Unhandled;
         // 当前频道的正式招募目录；不以未知跨频道加入合同发布其它频道的可加入记录。
         var snapshot = registry.List(actor.Channel, parsed.RaidType);
         var matches = snapshot.Where(p => p.Title.Contains(parsed.Name, StringComparison.OrdinalIgnoreCase)).ToArray();

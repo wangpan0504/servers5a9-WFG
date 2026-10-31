@@ -10,7 +10,7 @@ namespace DfoServer.Network.Parsers;
 // u32 字节数 + 队名（03BDF8E0）；随后依次 u8 窗口[+0x210]、u8 [+0x211]、u8 [+0x214]、u8 标志（局部 bl，0216E0BD 可清 bit2）。
 // 三个窗口字段与标志的业务含义未恢复，只原样保留。
 internal readonly record struct CreateRaidRequest(byte RaidType, string Name, byte Field210, byte Field211, byte Field214, byte Flags);
-internal readonly record struct RaidSearchRequest(uint Offset, byte RaidType, string Name);
+internal readonly record struct RaidSearchRequest(uint Offset, byte RaidType, string Name, bool Closed = false);
 
 // C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 [ebp-0x34]（含义未恢复，原样保留）。
 internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
@@ -19,9 +19,24 @@ internal readonly record struct RaidInfoRequest(byte Mode, uint Key);
 internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
 internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEntries);
 internal readonly record struct RaidRewardCardRequest(byte Kind, byte Card);
+internal readonly record struct RaidUserRequest(byte Server, ushort Character, byte Channel);
 
 internal static class RaidRequests
 {
+    // 01DC6A70依次写目标server:u8、character:u16、channel:u8。
+    public static RaidUserRequest CheckUser(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("RAID_CHECK_RAID_USER需要4字节角色定位");
+        return new(body[0], BinaryPrimitives.ReadUInt16LittleEndian(body[1..]), body[3]);
+    }
+
+    // 01DC6920仅报告本人的活动计时状态，不是准备开战按钮或全员准备门禁。
+    public static bool MemberState(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 1 || body[0] > 1) throw new InvalidDataException("RAID_MEMBER_CHANGE_STATE需要单个布尔值");
+        return body[0] == 1;
+    }
+
     // 副本协议：01101417..01101446连续写两个u8；只固定读宽，不猜牌种/槽位全集。
     public static RaidRewardCardRequest RewardCard(ReadOnlySpan<byte> body)
     {
@@ -42,9 +57,10 @@ internal static class RaidRequests
         return symbol is 117 or 118 or 119 ? checked((int)symbol) : null;
     }
 
-    // 01DC88B7..01DC88FE：mode0、12B筛选块、CP936字符串。筛选块+0为分页偏移、+8为raid.lst类型；其余字段尚未恢复。
+    // 01DC8820：mode0为12B筛选块和CP936字符串；mode1只有一个关闭字节。
     public static RaidSearchRequest Search(ReadOnlySpan<byte> body)
     {
+        if (body is [1]) return new(0, 0, "", Closed: true);
         if (body.Length < 17 || body[0] != 0) throw new InvalidDataException("攻坚搜索需要mode0与完整筛选块");
         int length = BinaryPrimitives.ReadInt32LittleEndian(body[13..]);
         if (length < 0 || length > MaxNameBytes || body.Length != 17 + length)

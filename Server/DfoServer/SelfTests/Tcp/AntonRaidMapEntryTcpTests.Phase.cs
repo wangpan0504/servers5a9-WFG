@@ -182,7 +182,12 @@ internal static partial class AntonRaidMapEntryTcpTests
                     var observation = FormalDungeonSessionTests.Observation(current, monster);
                     var notices = party.ObserveDeath(sessions[0], monster.ObjectKey,
                         member => member.ObserveFormalDungeonDeath(observation, kills, resources.Growth));
-                    That(notices.Length == 2, "阶段图的阻挡怪由两名队员各自提交");
+                    That(notices.Count(notice => notice.Kind == PartyDungeonNoticeKind.Death) == 2 &&
+                        notices.Where(notice => notice.Kind == PartyDungeonNoticeKind.Death)
+                            .Select(notice => notice.Recipient.Actor.Character.Id).Order()
+                            .SequenceEqual(sessions.Select(session => session.Selected!.Id).Order()) &&
+                        notices.All(notice => notice.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.RaidBattleSync),
+                        "阶段图的阻挡怪由两名队员各自提交，终图额外同步已提交团本成果");
                 }
                 if (index + 1 == route.Length) break;
                 var next = route[index + 1];

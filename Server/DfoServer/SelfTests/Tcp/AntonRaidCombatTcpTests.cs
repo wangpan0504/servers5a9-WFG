@@ -69,6 +69,9 @@ internal static class AntonRaidCombatTcpTests
         await using var sender = new GameConnectionSender(owner, server.GetStream(), stop, 0, (_, _, _, _, _) => { });
         var connection = new ConnectionContext(1, IPAddress.Loopback, server.GetStream(), stop);
         var context = new GameConnectionContext(connection, owner, session, sender);
+        RaidClearProjection.Refresh(context, initialize: true);
+        That(RaidPanelTests.ReadWeeklyClears(peer.Expect(0, 1446).Body)
+            .All(row => row.Value == (0u, 0u)), "无入场账本的隔离战斗夹具初始化真实零次数，不把合成清图当通关");
         session.RaidBattleNoticeArrived = (view, recipient) => RaidCombatProjection.Notice(context, view, recipient);
         var dispatch = Task.Run(async () =>
         {

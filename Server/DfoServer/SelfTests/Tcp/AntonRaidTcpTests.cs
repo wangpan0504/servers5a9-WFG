@@ -369,6 +369,7 @@ internal static partial class AntonRaidTcpTests
     }
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 765 }) { RaidPanelTests.ReadMemberStates(packet.Body); return; }
         if (packet is { Kind: 0, Opcode: 1446 }) { RaidPanelTests.ReadWeeklyClears(packet.Body); return; }
         That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 7 or 8 or 590 or 591 or 592 or 593 or 598,
             $"只允许已知旁路通知，实际{packet.Kind}/{packet.Opcode}");

@@ -229,6 +229,27 @@ internal static class RaidPackets
 
     public readonly record struct WeeklyClear(byte RaidType, uint DailyUsed, uint WeeklyUsed);
 
+    // ACK891的0233CEC0读取key/团长/成员数及三个未使用尾字节；01DDCC40用成员数比较团容量。
+    public static byte[] CheckedUser(DfoServer.Game.Raids.RaidParty? party) => Build(writer =>
+    {
+        writer.Write((byte)1);
+        writer.Write(party?.Key ?? 0u);
+        writer.Write(party?.Leader ?? (ushort)0);
+        writer.Write(checked((byte)(party?.Members.Length ?? 0)));
+        writer.Write(new byte[3]);
+    });
+
+    // 023B5840、023ADD80：单成员增量与完整活动状态快照。
+    public static byte[] MemberState(ushort character, bool inactive) => Build(writer =>
+    { writer.Write(character); writer.Write(inactive ? (byte)1 : (byte)0); });
+
+    public static byte[] MemberStates(DfoServer.Game.Raids.RaidParty party) => Build(writer =>
+    {
+        writer.Write((uint)party.Members.Length);
+        foreach (var member in party.Members.OrderBy(member => member.Slot))
+        { writer.Write(member.Actor.Character); writer.Write(member.Inactive ? (byte)1 : (byte)0); }
+    });
+
     // NOTI 0x5A6 RAID_WEEKLY_CLEAR_INFO（ARAD 01DD61C0）：先清空团本管理器 [062EF51C]+0x234 表，再读
     //   u8 n；n × { u8 团本类型, u32 a, u32 b, u8 m；m × { u8, u32, u32 } }，按类型写入 {a, b, 子表}。
     // 01DCBE90(type, 0/1) 取 a/b（缺项返回 -1）；01711690 显示每日 (1-a)/1、每周 (WEEKLY CLEAR COUNT-b)/WEEKLY CLEAR COUNT，

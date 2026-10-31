@@ -16,7 +16,7 @@ internal sealed record RaidActor(GameSession Session, AccountOwners.Lease Owner,
     public bool CanManage => IsCurrent && Session.CanChangeTownParty &&
         RaidAdmissionPlan.Rejection(Session.ChannelEntry, Session.Selected!) is null;
 }
-internal sealed record RaidMember(RaidActor Actor, byte Slot, byte Squad = 0);
+internal sealed record RaidMember(RaidActor Actor, byte Slot, byte Squad = 0, bool Inactive = false);
 internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] TitleBytes, ChannelIdentity Channel,
     ushort Leader, ImmutableArray<RaidMember> Members, int Capacity, long Revision)
 {
@@ -28,6 +28,7 @@ internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] Title
 internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false)
 {
     internal TownTravelReceipt? TownReturn { get; init; }
+    internal ushort? StateMember { get; init; }
 }
 internal sealed record RaidWaiting(RaidActor Actor, byte Type);
 internal sealed record RaidInvitation(RaidActor Source, RaidActor Target, uint Raid, uint Peer, DateTimeOffset Expires);
@@ -389,7 +390,8 @@ internal sealed partial class RaidRegistry
 
     public void Publish(RaidChange change)
     {
-        PublishDirectory(new(Party: change.After ?? change.Before, Removed: change.After is null));
+        if (change.StateMember is null)
+            PublishDirectory(new(Party: change.After ?? change.Before, Removed: change.After is null));
         if (change.After is { } joined)
             foreach (var member in joined.Members.Where(m => !change.Before.Members.Any(old => Same(old.Actor, m.Actor))))
                 PublishDirectory(new(Waiting: new(member.Actor, joined.Type), Removed: true));

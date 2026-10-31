@@ -65,7 +65,8 @@ internal static class RaidCreateTcpTests
             var ack = peer.Expect(1, 664).Body;
             That(ack.Length == 5 && ack[0] == 1 && U32(ack, 1) == key, "ACK664 成功 = 01 + 同一 key");
             peer.Send(658, [1]);
-            peer.Expect(0, 598, new byte[4]);
+            peer.Expect(0, 598, Build(writer =>
+            { writer.Write(1); writer.Write(id); writer.Write((byte)0); writer.Write((short)0); }));
             peer.Expect(1, 658, [1]);
             peer.Send(669, Build(writer => { writer.Write(2u); writer.Write((uint)id); writer.Write(11u); }));
             peer.Barrier(packet => That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6,

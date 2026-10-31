@@ -531,9 +531,13 @@ internal static class LukeRaidStartTcpTests
         That(at+16<=body.Length&&body[at]==1&&body[at+7]==expected,"Luke记录+DC与Runtime实际可用启动能力一致");
     }
 
-    static void Validate(WirePacket packet) => That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0]==0 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
+    static void Validate(WirePacket packet)
+    {
+        if (packet is { Kind: 0, Opcode: 765 }) { RaidPanelTests.ReadMemberStates(packet.Body); return; }
+        That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0]==0 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
         2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 590 or 591 or 592 or 593 or 594 or 598,
         $"Luke夹具仅消费已证旁路通知：{packet.Kind}/{packet.Opcode}");
+    }
 
     static WirePacket Until(TcpPeer peer,byte kind,ushort opcode)
     {
