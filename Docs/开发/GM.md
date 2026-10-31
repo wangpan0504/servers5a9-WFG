@@ -266,7 +266,7 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 - 默认外观：`character/characteretc/<chr名>.etc` 的 `defaultEquipment`（`[equipment index]` 按位置、`[key value index]` 为首值加下标/值对两种写法），按物品自身 `[equipment type]` 归位，部位为空才使用。
 - 克隆装扮画 `ClearAvatarId`；武器优先级：武器幻化（武器幻化存储的当前选择，且编号是武器）> 武器装扮(10) > 武器(12) > 默认武器。
 - 层按 z 升序叠放，裁到非透明范围外加 4 像素。缺失的 IMG/帧、无法解析的层名跳过，写入 `layers[].note` 并记 `server.jsonl` 的 `gm-avatar`。
-- IMG：v2 直接色；v4 单调色板、v6 多调色板（默认第 0 个），压缩后长度等于 w×h 的 0x0E 帧是 1 字节下标，调色板为 RGBA 字节序（按本机 `sm_body0000/0004`、`sm_coat*`、`sswd*` 样本核对）。未压缩帧（compress≠6）实际占 w×h×2（0x10 为 ×4）字节，头里声明的 size 不可信（`gn_coat0000c.img` 的 165 个 1×1 帧声明 4 字节，按 2 字节累计才与文件长度一致）。解码由本仓库自写的 `ImagePack/ImgFrameReader.cs` 完成，物品图标入口的 v4/v6 也转交给它（v2 图标仍走原移植代码）。
+- IMG：v2 直接色；v4 单调色板、v6 多调色板（默认第 0 个），压缩后长度等于 w×h 的 0x0E 帧是 1 字节下标，调色板为 RGBA 字节序（按本机 `sm_body0000/0004`、`sm_coat*`、`sswd*` 样本核对）。未压缩帧（compress≠6）实际占 w×h×2（0x10 为 ×4）字节，头里声明的 size 不可信（`gn_coat0000c.img` 的 165 个 1×1 帧声明 4 字节，按 2 字节累计才与文件长度一致）。解码由本仓库自写的 `ImagePack/ImgFrameReader.cs` 完成，物品图标入口的 v4/v6 也转交给它；v2 图标保留原画布适配，未压缩像素长度同样按宽×高×每像素字节计算，仅压缩标记 6 按声明 size 读取并解压。
 
 已知缺口（未从资源证明，不猜）：
 
