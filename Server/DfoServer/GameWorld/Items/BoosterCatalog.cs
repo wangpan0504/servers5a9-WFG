@@ -198,7 +198,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         bool setsDisjointInstanceType = disjointDeclarations.Count != 0;
         if (setsDisjointInstanceType)
         {
-            if (type is not ("booster selection" or "upgradable legacy"))
+            if (type is not ("booster" or "booster selection" or "upgradable legacy"))
                 return new([], "set disjoint instance type");
             foreach (Match declaration in disjointDeclarations)
             {
@@ -409,7 +409,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         string tail = body[at..];
         return !string.IsNullOrWhiteSpace(tail) &&
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
-            ? new([], "未识别的奖池尾段") : new(pools.ToImmutable()) { DailyRetainedLimit = dailyLimit };
+            ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())
+                { DailyRetainedLimit = dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
     }
 
     // 普通装扮礼包的 [avatar] 段把外观写成 (物品, 权重, 数量) 加资源特定的尾部整数列，
