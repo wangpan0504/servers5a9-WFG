@@ -48,7 +48,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
                             battle.Instance != view.Instance || !battle.View.PhaseExpired) return;
                         originalBattle = battle;
-                        prefix = battle.Kind == RaidKind.Anton ? "anton" : "luke";
+                        prefix = battle.Kind.ToString().ToLowerInvariant();
                     }
                     // 只处理门禁/身份读取中的旧owner，不吞后续事务或发布的业务异常。
                     catch (InvalidOperationException) when (!context.Owner.IsCurrent) { return; }

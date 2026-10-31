@@ -12,7 +12,7 @@ internal sealed partial class GameSession
     // 只能由已提交开战的领域协调者调用；授权仍随原owner/选角epoch与原实例一起失效。
     public bool AuthorizeRaidDungeon(RaidDungeonAdmission admission) => owner.Execute(() =>
     {
-        if (admission.Kind != RaidKind.Anton || !ReferenceEquals(admission.Actor.Session, this) || !ReferenceEquals(admission.Actor.Owner, owner) ||
+        if (admission.Kind is not (RaidKind.Anton or RaidKind.Prey) || !ReferenceEquals(admission.Actor.Session, this) || !ReferenceEquals(admission.Actor.Owner, owner) ||
             !admission.Current || ChannelEntry?.Identity != admission.Actor.Channel || RaidTypes.FromChannelType(ChannelEntry.Type) != (byte)admission.Kind ||
             !Ready || !(Phase == SessionPhase.Town || admission.Kind == RaidKind.Luke && Phase == SessionPhase.MapSelect) || formalDungeon is not null ||
             admission.Catalog.Script.WaitingRoom is not { } room || Selected?.Position is not { } position ||
@@ -47,7 +47,7 @@ internal sealed partial class GameSession
         Ready && Phase == SessionPhase.Loading && formalDungeon is { } run &&
         run.Entry.DungeonId == dungeon && run.Run.LastLoadingFact is null &&
         run.Entry.StartMap == run.Run.Snapshot.CurrentMap &&
-        run.Entry.RaidEntry is { Kind: RaidKind.Anton } identity &&
+        run.Entry.RaidEntry is { Kind: RaidKind.Anton or RaidKind.Prey } identity &&
         StartedRaid?.InstanceId == identity.InstanceId && IsCurrentRaidDungeon(run.Entry) &&
         raidDungeonAdmission!.Allows(dungeon) ? FormalReceipt() : null);
 
@@ -105,7 +105,7 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter, Selected)) ? Selected : null,
             SelectionEpoch, CurrentDungeonSelection, Admission: raidDungeonAdmission));
         var admission = captured.Admission;
-        string prefix = admission?.Kind switch { RaidKind.Luke => "luke", RaidKind.Anton => "anton", _ => "raid" };
+        string prefix = admission?.Kind switch { RaidKind.Luke => "luke", RaidKind.Anton => "anton", RaidKind.Prey => "prey", _ => "raid" };
         if (captured.Selected is not { } character || captured.CurrentDungeonSelection is null || admission is null ||
             incompatibleMode || questId != 0 || dungeonId > int.MaxValue || !admission.Allows((int)dungeonId))
             return RejectFormal(prefix + "-entry-authorization-changed");
@@ -128,7 +128,7 @@ internal sealed partial class GameSession
         entry = entry! with
         {
             RaidEntry = identity,
-            CoinLimit = controlled ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
+            CoinLimit = controlled && admission.Kind != RaidKind.Prey ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
             DisableMonsterAndClearExperience = controlled || entry!.DisableMonsterAndClearExperience,
             DisableClearReward = controlled || entry.DisableClearReward,
             DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,

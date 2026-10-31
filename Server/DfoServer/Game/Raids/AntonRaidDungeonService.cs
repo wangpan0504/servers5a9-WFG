@@ -8,7 +8,7 @@ namespace DfoServer.Game.Raids;
 
 // 正式进图只读原 Battle 当前开放图。阶段迁移由 Battle.PhaseProgress 决定，本服务不解释计时或机关。
 internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyService parties,
-    RaidDungeonCatalog catalog, bool enabled)
+    RaidDungeonCatalog catalog, bool enabled, RaidKind kind = RaidKind.Anton)
 {
     public bool Enabled => enabled;
     public IReadOnlyList<int> MissingMaps => catalog.MissingMaps;
@@ -21,7 +21,7 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
         if (!enabled) return [];
         rejection = "anton-entry-squad-mismatch";
         var raid = registry.FindCurrent(leader, leader.SelectionEpoch);
-        if (party is null || !parties.IsCurrent(party) || raid is not { Type: 0, Started: { } start } ||
+        if (party is null || !parties.IsCurrent(party) || raid is not { Started: { } start } || raid.Type != (byte)kind ||
             !party.Members.Any(member => member.Slot == party.Leader && ReferenceEquals(member.Actor.Session, leader))) return [];
         var anchor = raid.Members.SingleOrDefault(member => ReferenceEquals(member.Actor.Session, leader));
         if (anchor is null || anchor.Squad is < 1 or > 5) return [];
@@ -35,7 +35,7 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
         {
             if (!parties.IsCurrent(party) || members.Any(member => !MemberCurrent(member))) return [];
             var battle = leader.CurrentRaidBattle(anchor.Actor);
-            if (battle is not { Kind: RaidKind.Anton } || battle.Instance != start.InstanceId) return [];
+            if (battle is null || battle.Kind != kind || battle.Instance != start.InstanceId) return [];
             // Reward后读取原聚合的实际phase；固定0会使已开放218/219被旧阶段授权拒绝。
             int phase = battle.View.Phase;
             reason = "anton-entry-dungeon-not-open";
@@ -59,7 +59,7 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
             reason = "anton-entry-maze-unproven";
             if (mazes.Length != 1) return [];
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, phase,
-                member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, id)) { Battle = battle },
+                member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, id), kind) { Battle = battle },
                 dungeon, mazes[0].SourceOrdinal)).ToArray();
             reason = "anton-entry-authorization-changed";
             if (selections.Any(selection => !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
@@ -77,10 +77,11 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
         {
             var current = registry.Find(member.Actor);
             return member.Actor.IsCurrent && RaidAdmissionPlan.Rejection(member.Actor.Session.ChannelEntry, member.Actor.Session.Selected!) is null &&
-                current is { Type: 0, Started: { } started } && current.Key == raid.Key && started.InstanceId == start.InstanceId &&
+                current is { Started: { } started } && current.Type == (byte)kind && current.Key == raid.Key && started.InstanceId == start.InstanceId &&
                 current.Members.Any(other => other.Actor == member.Actor && other.Squad == member.Squad);
         }
     }
 
-    static bool Allows(AntonRaidBattle battle, int dungeon) => battle.AllowsAntonEntry(dungeon);
+    static bool Allows(AntonRaidBattle battle, int dungeon) => battle.Kind == RaidKind.Prey
+        ? battle.AllowsPreyEntry(dungeon) : battle.AllowsAntonEntry(dungeon);
 }

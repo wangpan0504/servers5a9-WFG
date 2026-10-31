@@ -136,12 +136,18 @@ internal sealed partial class PartyService
         PartyNotice[] notices;
         lock (gate)
         {
+            // 引导只有本人一队；客户端可能已经用CMD12建立普通单人队，沿用该队身份和设置。
+            var single = raid is { Type: 3, Guide: true, Capacity: 1, Members.Length: 1 } && captured.Length == 1 &&
+                captured[0].Member is { } member ? Find(member) : null;
+            if (single is not null && (single.Members.Length != 1 || !IsCurrent(single) ||
+                single.Members[0].Slot != single.Leader)) return null;
             if (prepared is not null && (raid.Type != 1 || !ReferenceEquals(prepared.Raid.Source, raid) ||
                 !RaidBatchMatches(prepared) || !RaidBindingsCurrent(prepared.Raid, prepared.Bindings) ||
                 prepared.Groups.Any(g => g.Members.Any(m => !m.IsCurrent() || !m.Actor.Session.CanChangeTownParty ||
                     m.Actor.Session.StartedRaid is not null)))) return null;
-            if (prepared is null && captured.Any(m => m.Member is null || Find(m.Member) is not null)) return null;
-            var groups = prepared?.Groups.ToArray() ?? captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key)
+            if (prepared is null && captured.Any(m => m.Member is null || Find(m.Member) is { } existing && !ReferenceEquals(existing, single))) return null;
+            var groups = single is not null ? new[] { new RaidPartyGroup([..single.Members], single.Settings, single) } :
+                prepared?.Groups.ToArray() ?? captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key)
                 .Select(group => new RaidPartyGroup([..group.Select((m, slot) => m.Member! with { Slot = (byte)slot })],
                     PartySettings.Default with { TitleCode = 0, Title = $"Party : {group.Key}", Capacity = 4,
                         Dungeon = uint.MaxValue, Difficulty = 5 }, null)).ToArray();

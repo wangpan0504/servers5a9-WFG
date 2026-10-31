@@ -224,6 +224,7 @@ internal static partial class DatabaseSchemaTests
             OrdinaryLukeUpgrade(root);
             PreyNormalUpgrade(root);
             FrozenLootVersionCollisionUpgrade(root);
+            PreyGuideUpgrade(Path.Combine(root, "prey-guide"));
             OrdinaryLukeDropUpgrade(root);
             PvpArenaResultUpgrade(root);
             PvpRatingUpgrade(root);

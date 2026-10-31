@@ -1,4 +1,4 @@
-﻿CREATE TABLE character_luke_normal_drop_claims(
+CREATE TABLE character_luke_normal_drop_claims(
           character_id INTEGER NOT NULL,
           account TEXT NOT NULL,
           day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day BETWEEN 10000101 AND 99991231),
@@ -1739,7 +1739,7 @@ CREATE TABLE IF NOT EXISTS character_raid_reward_receipts(
     plan_json TEXT NOT NULL CHECK(json_valid(plan_json) AND json_type(plan_json)='object'),
     mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids) AND json_type(mail_ids)='array'),
     created_at INTEGER NOT NULL CHECK(created_at>=0),
-    raid_type INTEGER NOT NULL DEFAULT 0 CHECK(raid_type IN(0,1)),
+    raid_type INTEGER NOT NULL DEFAULT 0 CHECK(raid_type IN(0,1,3)),
     PRIMARY KEY(character_id,instance_id,phase,kind),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
@@ -1748,7 +1748,7 @@ CREATE INDEX IF NOT EXISTS character_raid_rewards_week ON character_raid_reward_
 CREATE TABLE character_raid_runs(
     character_id INTEGER NOT NULL, account TEXT NOT NULL,
     instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*' AND instance_id<>'00000000000000000000000000000000'),
-    raid_type INTEGER NOT NULL CHECK(raid_type IN(0,1)),
+    raid_type INTEGER NOT NULL CHECK(raid_type IN(0,1,3)),
     source TEXT NOT NULL CHECK(length(source)>0), admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
     state INTEGER NOT NULL CHECK(state IN(0,1,2)),
     phase0_event TEXT, phase0_anchor INTEGER, phase0_receipt TEXT,
@@ -1764,6 +1764,7 @@ CREATE TABLE character_raid_runs(
 );
 CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,raid_type) WHERE state=0;
 CREATE INDEX character_raid_clear_week ON character_raid_runs(character_id,raid_type,clear_week) WHERE state=2;
+CREATE INDEX character_raid_account_admission ON character_raid_runs(account,raid_type,admitted_at);
 CREATE INDEX character_raid_rewards_type_week ON character_raid_reward_receipts(character_id,raid_type,week_key,final_phase,instance_id);
 
 CREATE TABLE character_evildom_war_rewards(

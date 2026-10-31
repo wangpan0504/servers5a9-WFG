@@ -21,6 +21,8 @@ internal static partial class RaidCombatProjection
             context.Session.RaidCombatResult(view) is null) return;
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke)
             PostLukeSnapshot(context, luke, view, Guard);
+        else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey)
+            PostPreySnapshot(context, prey, view, Guard);
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
         {
             // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
@@ -110,6 +112,18 @@ internal static partial class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (view.State == AntonRaidBattleState.Reward &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey &&
+                prey.LukeEligibility(actor.Character, view.Phase) is { Eligible: true } &&
+                prey.RewardPolicy(actor, view.Phase) is { } preyPolicy)
+            {
+                bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity;
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "prey_movie_skip", Cards);
+                foreach (var offer in preyPolicy.Offers)
+                    context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
+                        PreyRewardPackets.Reward(actor.Character, offer), "prey_card_list", Cards,
+                        offer == preyPolicy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
+            }
             if (view.State == AntonRaidBattleState.Reward && view.AntonCardsReady &&
                 context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } rewardBattle &&
                 rewardBattle.RewardPolicy(actor, view.Phase) is { } policy &&
@@ -142,7 +156,7 @@ internal static partial class RaidCombatProjection
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
                     RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
             if (view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
-                context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind == RaidKind.Luke || battle.HasAntonRewards))
+                context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind is RaidKind.Luke or RaidKind.Prey || battle.HasAntonRewards))
             {
                 if (battle.Kind == RaidKind.Anton)
                     context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,
@@ -169,6 +183,29 @@ internal static partial class RaidCombatProjection
         foreach (var row in battle.DungeonSnapshot(view))
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                 RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_snapshot", guard);
+    }
+
+    internal static void PostPreySnapshot(GameConnectionContext context, AntonRaidBattle battle,
+        AntonRaidBattleView view, Func<bool> guard)
+    {
+        if (battle.Kind != RaidKind.Prey || view.Instance != battle.Instance) return;
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+            RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "prey_symbol_snapshot", guard);
+        foreach (var row in battle.DungeonSnapshot(view))
+        {
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
+                RaidCombatPackets.DungeonState(row.Id, 0, row.State), "prey_dungeon_snapshot", guard);
+            if (row.State == GameWorld.Raids.RaidDungeonState.Clear)
+                context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(5, row.Id),
+                    "prey_dungeon_cleared", () => guard() && ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State),
+                    () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
+        }
+        foreach (var timer in view.Timers.Keys.Where(timer => timer.Kind is 1 or 2))
+            context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,
+                () => battle.PreyTimerSeconds(view, timer) is { } seconds
+                    // 01DD06B0频道50忽略中列，以now+末列保存截止点；补发只写当前剩余值。
+                    ? RaidCombatPackets.LukePositiveTimer(checked((sbyte)timer.Kind), timer.DungeonId, 0, seconds) : null,
+                "prey_rule_timer", guard);
     }
 
 }

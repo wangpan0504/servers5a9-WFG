@@ -5,6 +5,16 @@ namespace DfoServer.Network.Builders;
 
 internal static class RaidCombatPackets
 {
+    // 015BCB50：op1无尾部，op5只读真实副本编号。
+    internal static byte[] PreyStatus(int operation, int? dungeon = null)
+    {
+        if (operation == 1 && dungeon is null) return [1, 0, 0, 0];
+        if (operation != 5 || dungeon is not > 0) throw new ArgumentOutOfRangeException(nameof(operation));
+        byte[] body = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(body, operation);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4), dungeon.Value);
+        return body;
+    }
     // Luke专用准备层：02386120按1/4/4/4读取，01DD06DE忽略中间列并保存now+seconds。
     // 零秒不是RESET，kind2 UI存在除零风险；本方法未接入正式投影。
     public static byte[] LukePositiveTimer(sbyte kind, int dungeon, uint ignoredRaw, uint seconds)

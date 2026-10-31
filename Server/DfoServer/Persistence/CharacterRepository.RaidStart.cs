@@ -28,7 +28,7 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             var committed = ImmutableArray.CreateBuilder<Character>(reservations.Count);
             foreach (var r in reservations)
                 committed.Add(SaveInTransaction(db, tx, r.Actor.Owner, r.Expected, r.Position, r.Expected.Return,
-                    new(r.Inventory.Before, r.Inventory.After, (kind == RaidKind.Anton ? "anton_raid_start:" : "luke_raid_start:") + instance.ToString("N"))));
+                    new(r.Inventory.Before, r.Inventory.After, kind.ToString().ToLowerInvariant() + "_raid_start:" + instance.ToString("N"))));
             tx.Commit();
             return committed.ToImmutable();
         });
@@ -54,7 +54,18 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             if (admission.WeeklyLimit is { } limit)
             {
                 command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week";
-                if (Convert.ToInt32(command.ExecuteScalar()) >= limit) throw new RaidLifecycleRejectedException(kind == RaidKind.Luke ? "luke-weekly-clear-limit" : "anton-weekly-clear-limit");
+                if (Convert.ToInt32(command.ExecuteScalar()) >= limit)
+                    throw new RaidLifecycleRejectedException(kind.ToString().ToLowerInvariant() + "-weekly-clear-limit");
+            }
+            if (admission.DailyAccountLimit is { } daily)
+            {
+                if (kind != RaidKind.Prey || daily <= 0) throw new InvalidDataException("攻坚账号日入场策略不完整");
+                // 沿本服业务日UTC+8 06:00；失败和中途离团也已真实入场，不退回日次数。
+                long day = new DateTimeOffset(admission.At.UtcDateTime.AddHours(2).Date.AddHours(-2), TimeSpan.Zero).ToUnixTimeSeconds();
+                command.Parameters.AddWithValue("$day", day);
+                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE account=$account AND raid_type=$type AND admitted_at >= $day AND admitted_at < $day+86400";
+                if (Convert.ToInt32(command.ExecuteScalar()) >= daily) throw new RaidLifecycleRejectedException("prey-daily-account-enter-limit");
+                command.Parameters.RemoveAt("$day");
             }
             command.CommandText = """
                 UPDATE character_raid_runs SET state=1 WHERE character_id=$id AND account=$account AND raid_type=$type AND state=0 AND instance_id<>$instance;

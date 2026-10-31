@@ -26,7 +26,7 @@ internal sealed partial class AntonRaidBattle
         if (!lukeClockActive || lukePhaseTimeout is null || current.State != AntonRaidBattleState.Fighting ||
             lukeAnchoredPhase == current.Phase) return;
         lukeAnchoredPhase = current.Phase;
-        lukePhaseAnchor = lukeClock.GetTimestamp();
+        if (Kind != RaidKind.Prey || lukePhaseAnchor is null) lukePhaseAnchor = lukeClock.GetTimestamp();
         current = current with { PhaseClockGeneration = checked(current.Phase + 1L) };
     }
 

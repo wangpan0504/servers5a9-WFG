@@ -374,6 +374,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             // 普雷妮十五图仅声明difficulty 2，匹配客户端正常16请求也发2；不能按缺省0拒绝。
             if (IsOrdinaryPrey && designated.Length == 0)
                 return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
+            // 普雷引导也只有difficulty声明；正式团本授权仍由原Battle签发。
+            if (IsRaid && Path.StartsWith("dungeon/kcontents3/isysraid_guide/", StringComparison.Ordinal) && designated.Length == 0)
+                return plain is [{ Tokens: [{ Type: 0, Value: >= 0 and <= 4 } value] }] && difficulty == value.Value;
             return IsTournament && designated.Length == 1 || difficulty == 0;
         }
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。

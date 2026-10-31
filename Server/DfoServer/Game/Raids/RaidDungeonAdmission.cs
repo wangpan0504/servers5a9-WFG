@@ -10,7 +10,8 @@ internal sealed record RaidDungeonAdmission(Guid InstanceId, RaidActor Actor, in
     public LukeRaidObjectCatalog? LukeObjects { get; init; }
     public AntonRaidBattle? Battle { get; init; }
     public bool Current => Enum.IsDefined(Kind) && Catalog.Type == (byte)Kind && InstanceId != Guid.Empty && Squad > 0 && Actor.IsCurrent &&
-        (Kind == RaidKind.Anton ? Catalog.Script.Issues.IsEmpty && (Battle is null || Battle.Kind == Kind && Battle.Instance == InstanceId &&
+        (Kind is RaidKind.Anton or RaidKind.Prey ? Catalog.Script.Issues.IsEmpty && (Kind != RaidKind.Prey || Squad == 1 && Battle is not null) &&
+            (Battle is null || Battle.Kind == Kind && Battle.Instance == InstanceId &&
             Battle.View.Phase == Phase && ReferenceEquals(Actor.Session.CurrentRaidBattle(Actor), Battle) &&
             Actor.Session.StartedRaid?.InstanceId == InstanceId) :
             LukePolicy is not null && Battle is { Kind: RaidKind.Luke } && Battle.Instance == InstanceId) &&
