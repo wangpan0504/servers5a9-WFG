@@ -36,6 +36,16 @@ internal static class MachineCharacterScoreTests
             Reject(() => MachineCharacterScorePackets.Build(nonce, 42, 0, "p", "v", "complete", 0, false, 1));
         foreach (string token in new[] { "", "中文", "a|b", "a b", "a\0b", new string('a', 49) })
             Reject(() => MachineCharacterScorePackets.Build(Nonce, 42, 0, token, "v", "complete", 0, false, 1));
+        // 面板接受带修订的规则标签，并保留两个 token 的独立长度上限。
+        foreach (string version in new[] { "", "中文", "a|b", new string('a', 33) })
+            Reject(() => MachineCharacterScorePackets.Build(Nonce, 0, 0, "p", version, "complete", 0, false, 1));
+        string maximum = Read(MachineCharacterScorePackets.Build(Nonce, ushort.MaxValue, long.MaxValue,
+            new string('p', 48), new string('v', 32), "complete", int.MaxValue, true, 10000));
+        That(maximum.Split('|').Length == 10 && Encoding.ASCII.GetByteCount(maximum) <= 600, "最大合法字段仍在客户端十段/600字节边界内");
+        That(Read(MachineCharacterScorePackets.Build(Nonce, 0, 0, "character-investment", "v2.3", "complete", 0, false, 1)) ==
+            "1|0123456789abcdef0123456789abcdef|0|0|character-investment|v2.3|complete|0|0|1", "当前规则版本及合法零分的黄金正文");
+        Reject(() => MachineCharacterScorePackets.Build(Nonce, 0, 0, "p", "v", "complete", -1, false, 1));
+        Reject(() => MachineCharacterScorePackets.Build(Nonce, 0, 0, "p", "v", "unknown", 0, false, 1));
         foreach (int ttl in new[] { 0, -1, 10001 }) Reject(() => MachineCharacterScorePackets.Build(Nonce, 42, 0, "p", "v", "complete", 0, false, ttl));
         Reject(() => MachineCharacterScorePackets.Build(Nonce, 42, -1, "p", "v", "complete", 0, false, 1));
         Reject(() => MachineCharacterScorePackets.Build(Nonce, 42, 0, "p", "v", "complete", null, false, 1));
