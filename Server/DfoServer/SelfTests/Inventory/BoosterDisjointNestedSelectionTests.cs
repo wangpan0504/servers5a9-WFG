@@ -122,8 +122,10 @@ internal static class BoosterDisjointNestedSelectionTests
                     resources.Boosters.Get(id) is { Available: true, Selection: not null, SetsDisjointInstanceType: true },
                     "四子盒完整核心和自身声明独立保留，既不补装备标志也不代开 " + id);
             }
-            That(after.ConsumableStates.SequenceEqual(role.Inventory.ConsumableStates),
-                "父盒发奖不改写无关已有消耗品状态；未声明maintenance的普通冷却消费者另行核查 " + entry.Source);
+            That(parent is { CoolTime: 1000, CoolGroup: null, CooltimeMaintenance: null } &&
+                after.ConsumableStates.SequenceEqual(new[] { new ConsumableState(ConsumableStateKind.Cooldown,
+                    entry.Source, now.ToUnixTimeMilliseconds() + 1000, 0, -entry.Source) }),
+                "普通父盒与完整双子盒同计划登记原文1000ms维护位0独立冷却 " + entry.Source);
             var range = ItemSlotBoundService.Range(ItemKind.Consumable, role.Inventory.Expansion);
             var full = role with { Inventory = role.Inventory with { Items = [role.Inventory.Items[0],
                 .. Enumerable.Range(range.Start, range.End - range.Start).Select(slot =>

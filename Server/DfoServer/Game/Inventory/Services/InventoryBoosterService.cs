@@ -666,15 +666,15 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     }
 
     static bool HasCooldown(InventorySnapshot inventory, int itemId, BoosterDefinition definition, DateTimeOffset now) =>
-        definition.CooltimeMaintenance is not null && inventory.ConsumableStates.Any(row =>
+        definition.CoolTime > 0 && inventory.ConsumableStates.Any(row =>
             row.Kind == ConsumableStateKind.Cooldown && row.CoolGroup == (definition.CoolGroup ?? -itemId) &&
             row.Active(now.ToUnixTimeMilliseconds()));
 
     static InventorySnapshot? ActivateCooldown(InventorySnapshot inventory, ItemTemplate source, BoosterDefinition definition, DateTimeOffset now) =>
-        definition.CooltimeMaintenance is { } maintenance
+        definition.CoolTime > 0
             ? ConsumableStatePolicy.Activate(inventory,
                 new(source.Id, source.MinimumLevel, definition.CoolTime, definition.CoolGroup ?? -source.Id)
-                    { CooltimeMaintenance = maintenance }, now.ToUnixTimeMilliseconds(), sessionCooldown: true)
+                    { CooltimeMaintenance = definition.CooltimeMaintenance ?? 0 }, now.ToUnixTimeMilliseconds(), sessionCooldown: true)
             : inventory;
 
     static bool TrySelect(BoosterSelectionDefinition definition, BoosterSelectionRequest request, out BoosterChoice[] rewards)

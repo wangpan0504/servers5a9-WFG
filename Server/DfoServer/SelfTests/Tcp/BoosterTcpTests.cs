@@ -22,7 +22,9 @@ internal static class BoosterTcpTests
             resourceWalletBox.Pools is [{ Draws: 1, Rewards: [{ ItemId: 2681762, Weight: > 0, Count: > 0 }] }],
             "钱包礼盒TCP用例要求匹配资源具有唯一确定奖励");
         int resourceWalletCount = resourceWalletBox.Pools[0].Rewards[0].Count;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), gm: true, resources: resources);
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        clock.Advance(DateTimeOffset.UtcNow - clock.GetUtcNow());
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster"), gm: true, resources: resources, clock: clock);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -356,6 +358,7 @@ internal static class BoosterTcpTests
         }
         await RestrictedOrdinaryAsync(fixture, resources, repo, owners);
         CharacterPool(fixture,resources,repo,owners);
+        PlainCooldown(fixture, resources, repo, owners, clock);
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
@@ -378,7 +381,7 @@ internal static class BoosterTcpTests
         foreach (int id in new[] { 490014072, 490014073, 490704552, 490704553 })
         {
             int first = items.Boosters.Get(id).Pools[0].Rewards[0].ItemId;
-            var now = DateTimeOffset.UtcNow;
+            var now = fixture.UtcNow;
             var actor = repo.Create(owner, CharacterCreation.Prepare("RestBox" + actors.Count, resources.Characters.Get(0),
                 resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
             {
@@ -403,7 +406,7 @@ internal static class BoosterTcpTests
             }
             using var client = Open(fixture);
             client.Select(entry.Actor.Slot); client.Barrier();
-            long earliest = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+            long earliest = fixture.UtcNow.AddDays(30).ToUnixTimeSeconds();
             SendOpen(client, 65, 1);
             var expectedRewards = items.Boosters.Get(entry.Source).Pools.Select(pool => (Id: pool.Rewards[0].ItemId, Count: 1)).ToArray();
             ExpectAck(client, entry.Source, 65, expectedRewards);
@@ -422,7 +425,7 @@ internal static class BoosterTcpTests
                 var expected = InventoryRewardGrantService.Create(items.Items.Get(output.Core.ItemId), utcNow: createdAt)
                     with { DisjointForbidden = true };
                 That(output.Core == expected && output.Core.ExpireTime >= earliest &&
-                    output.Core.ExpireTime <= DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds(),
+                    output.Core.ExpireTime <= fixture.UtcNow.AddDays(30).ToUnixTimeSeconds(),
                     "实际十二件完整核心及30天期限，只带分解限制且无毁装灵魂限制 " + output.Core.ItemId);
                 Entry(delta, output.Position.Index, output.Core.ItemId, output.Core.Value);
                 string committed = State();
@@ -435,7 +438,8 @@ internal static class BoosterTcpTests
             That(State() == consumed, "耗尽普通礼包重放不发第二份装备 " + entry.Source);
         }
         var allActors = actors.Select(entry => entry.Actor).Concat(OrdinaryParents(fixture, resources, repo, owners)).ToArray();
-        var inventories = allActors.ToDictionary(actor => actor.Slot, actor => JsonSerializer.Serialize(Read(actor.Slot).Inventory));
+        var inventories = allActors.ToDictionary(actor => actor.Slot, actor => JsonSerializer.Serialize(
+            Read(actor.Slot).Inventory with { ConsumableStates = [] }));
         await fixture.StopAsync();
         await fixture.StartAsync("ordinary-restricted-restart");
         foreach (var actor in allActors)
@@ -443,7 +447,7 @@ internal static class BoosterTcpTests
             using var client = Open(fixture);
             client.Select(actor.Slot); client.Barrier();
             That(JsonSerializer.Serialize(Read(actor.Slot).Inventory) == inventories[actor.Slot],
-                "普通礼包与达成子盒重启重登保持完整实例/限制/期限，不续期或复活源 " + actor.Slot);
+                "普通礼包与达成子盒重启重登保持完整实例/限制/期限，清除会话冷却且不续期或复活源 " + actor.Slot);
         }
         Character Read(ushort slot)
         {
@@ -534,7 +538,7 @@ internal static class BoosterTcpTests
     {
         const int sourceId = 490704573;
         var items = resources.ItemResources;
-        var now = DateTimeOffset.UtcNow;
+        var now = fixture.UtcNow;
         var source = InventoryRewardGrantService.Create(items.Items.Get(sourceId),utcNow:now);
         var expired = InventoryRewardGrantService.Create(items.Items.Get(sourceId),utcNow:now.AddDays(-31));
         That(source.ExpireTime == now.AddDays(30).ToUnixTimeSeconds() && expired.IsExpired(now.ToUnixTimeSeconds()),
@@ -622,6 +626,95 @@ internal static class BoosterTcpTests
             fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id")+
             fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
+    static void PlainCooldown(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners,
+        ConsumableUseSessionTests.FakeClock clock)
+    {
+        const int sourceId = 490011382;
+        Character created;
+        var core = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(sourceId), utcNow: fixture.UtcNow);
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            created = repo.Create(owner, new("PlainBoxTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            { AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(65), core), new(0, Bag(66), core), new(0, Bag(67), core)]) });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            string before = State();
+            fixture.Sql("CREATE TRIGGER fail_plain_box AFTER INSERT ON character_consumable_states BEGIN SELECT RAISE(ABORT,'plain box cooldown rollback'); END");
+            SendOpen(peer, 65, 1);
+            peer.Closed();
+            That(State() == before, "普通礼包晚SQL冷却失败不发成功，源、完整子盒、冷却、审计与UID全部回滚");
+            fixture.Sql("DROP TRIGGER fail_plain_box");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            SendOpen(peer, 65, 1);
+            ReceiveOpened(peer, 65);
+            var opened = Read();
+            That(opened.Inventory.Items.Count(item => item.Core.ItemId == sourceId) == 2 &&
+                new[] { 490011404, 490011405 }.All(id => opened.Inventory.Items.Where(item => item.Core.ItemId == id).Sum(item => item.Core.Count) == 1) &&
+                opened.Inventory.ConsumableStates.SequenceEqual(new[] { new ConsumableState(ConsumableStateKind.Cooldown,
+                    sourceId, fixture.UtcNow.ToUnixTimeMilliseconds() + 1000, 0, -sourceId) }),
+                "普通CMD160首次发完整双子盒并在SQL登记唯一1000ms维护位0冷却");
+            clock.Advance(TimeSpan.FromMilliseconds(999));
+            string before = State();
+            SendOpen(peer, 66, 1); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(State() == before, "同模板第二实例在截止前1ms拒绝，原截止、源和奖励均不改写");
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            SendOpen(peer, 66, 1);
+            ReceiveOpened(peer, 66);
+            That(new[] { 490011404, 490011405 }.All(id => Read().Inventory.Items.Where(item => item.Core.ItemId == id).Sum(item => item.Core.Count) == 2),
+                "恰到冷却截止第二源沿原CMD160成功并完整累积双子盒");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot);
+            That(Read().Inventory.ConsumableStates.IsEmpty, "普通维护位0冷却重连选角清理，不恢复旧1000ms窗口");
+            SendOpen(peer, 67, 1);
+            ReceiveOpened(peer, 67);
+            That(Read().Inventory.Items.All(item => item.Core.ItemId != sourceId) &&
+                new[] { 490011404, 490011405 }.All(id => Read().Inventory.Items.Where(item => item.Core.ItemId == id).Sum(item => item.Core.Count) == 3),
+                "重连后第三源可立即使用，三个源各消费一次并保留全部六子盒");
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single(role => role.Id == created.Id);
+        }
+        void ReceiveOpened(TcpPeer peer, short slot)
+        {
+            ExpectAck(peer, sourceId, slot, [(490011404, 1), (490011405, 1)]);
+            var saved = Read().Inventory;
+            bool replaced = saved.Find(Bag(slot)) is not null;
+            if (replaced)
+            {
+                byte[] clear = peer.Expect(0, 14).Body;
+                That(clear.Length == 126 && clear[0] == 0 && U16(clear, 1) == 1,
+                    "源格复用先发唯一完整123B删除行");
+                Entry(clear, slot, -1, 0);
+            }
+            byte[] delta = peer.Expect(0, 14).Body;
+            That(delta[0] == 0 && U16(delta, 1) == (replaced ? 2 : 3) && delta.Length == 3 + U16(delta, 1) * 123,
+                "普通父盒仅同步完整两子盒及未复用源删除，不省略或多发其他行");
+            foreach (int id in new[] { 490011404, 490011405 })
+            {
+                int at = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123)
+                    .Single(index => U32(delta, index + 2) == id);
+                short position = (short)U16(delta, at);
+                var item = saved.Find(Bag(position))!;
+                That(item.Core.ItemId == id, "子盒差量位置来自实际提交后独立库存");
+                Entry(delta, position, id, item.Core.Count);
+            }
+            if (!replaced) Entry(delta, slot, -1, 0);
+            peer.Barrier();
+        }
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,kind,item_id") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     internal static void SetExpirationDebug(TcpTestFixture fixture, bool enabled)
     {

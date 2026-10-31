@@ -111,7 +111,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             unseal = flag == 1;
         }
         if (!TryParseCooldown(text, tags, out int coolTime, out int? coolGroup, out byte? maintenance))
-            return new([], "cooltime maintenance");
+            return new([], "礼包冷却声明无效");
         return ParseContents(text) with
         {
             FirstGrowTypes = branches, UnsealsRandomOptions = unseal,
@@ -127,34 +127,36 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         coolGroup = null;
         maintenance = null;
         var declarations = Regex.Matches(tags, @"\[\s*/?\s*cooltime\s+maintenance[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
-        // 未声明维护位的礼盒保持原有路径；本次不把普通冷却字段扩大为新的使用限制。
-        if (declarations.Count == 0) return true;
+        int[] bits = [];
         if (text.Count(value => value == '`') % 2 != 0 ||
-            !Read("cooltime maintenance", 3, required: true, out var bits) || bits.Any(value => value > 1) ||
-            !Read("cool time", 1, required: false, out var duration) ||
-            !Read("cooltime group", 1, required: false, out var group))
+            declarations.Count != 0 && (!Read("cooltime maintenance", 3, required: true, out bits) || bits.Any(value => value > 1)) ||
+            !Read("cool time", 1, required: false, out var duration, repeated: true) ||
+            !Read("cooltime group", 1, required: false, out var group, repeated: true))
             return false;
         coolTime = duration.Length == 0 ? 0 : duration[0];
         coolGroup = group.Length == 0 ? null : group[0];
-        maintenance = checked((byte)(bits[0] | bits[1] << 1 | bits[2] << 2));
+        maintenance = bits.Length == 0 ? null : checked((byte)(bits[0] | bits[1] << 1 | bits[2] << 2));
         return true;
 
-        bool Read(string name, int width, bool required, out int[] values)
+        bool Read(string name, int width, bool required, out int[] values, bool repeated = false)
         {
             values = [];
             var fields = Regex.Matches(tags, @"\[\s*/?\s*" + name.Replace(" ", @"\s+") + @"[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
             if (fields.Count == 0) return !required;
-            if (fields.Count != 1 || !fields[0].Value.Equals("[" + name + "]", StringComparison.OrdinalIgnoreCase) ||
-                !IsRootDeclaration(tags, fields[0].Index))
-                return false;
-            int start = fields[0].Index + fields[0].Length;
-            int end = tags.IndexOf('[', start);
-            string[] tokens = text[start..(end < 0 ? text.Length : end)].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length != width) return false;
-            values = new int[width];
-            for (int i = 0; i < width; i++)
-                if (!int.TryParse(tokens[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out values[i]) || values[i] < 0)
+            if (!repeated && fields.Count != 1) return false;
+            foreach (Match field in fields)
+            {
+                if (!field.Value.Equals("[" + name + "]", StringComparison.OrdinalIgnoreCase) || !IsRootDeclaration(tags, field.Index))
                     return false;
+                int start = field.Index + field.Length;
+                int end = tags.IndexOf('[', start);
+                string[] tokens = text[start..(end < 0 ? text.Length : end)].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length != width) return false;
+                values = new int[width];
+                for (int i = 0; i < width; i++)
+                    if (!int.TryParse(tokens[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out values[i]) || values[i] < 0)
+                        return false;
+            }
             return true;
         }
     }
