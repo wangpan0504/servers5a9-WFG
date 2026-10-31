@@ -43,6 +43,7 @@ internal static class SelfTestRunner
         CharacterDefaultAppearanceTests.RunCore();
         MarriageCoupleTests.RunCore();
         MarriageWeddingTests.RunCore();
+        MarriageFailureTests.RunCore();
         SharedEffectItemTests.RunCore();
         Testing.Inventory.BoosterCharacterPoolTests.RunCore();
         MarriagePersistenceTests.RunCore();
@@ -408,7 +409,7 @@ internal static class SelfTestRunner
         var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
         MarriageCoupleTests.Run(marriageCatalog, itemResources.Items);
         MarriageWeddingTests.Run(marriageCatalog);
-        MarriageLifecycleTests.Run(marriageCatalog, itemResources.Items);
+        MarriageLifecycleTests.Run(marriageCatalog, itemResources.Items, characters.DefaultAppearance);
         MarriagePreparationTests.Run(towns, pvf, characters, itemResources);
         MarriageDungeonTests.RunResources(DfoServer.GameWorld.Dungeons.DungeonCatalog.Load(pvf), towns);
         MarriageShopTests.Run(pvf, itemResources);

@@ -24,6 +24,8 @@ internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCata
     readonly object editorGate = new();
     readonly Dictionary<Guid, (GameSession Session, long Generation, long Epoch)> editors = [];
 
+    MarriageProjection Projection() => new(store, catalog, online, characters.DefaultAppearance, items, timer);
+
     public void Register(GameCommandRegistry commands)
     {
         for (ushort opcode = 1034; opcode <= 1056; opcode++)
@@ -35,33 +37,62 @@ internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCata
         try
         {
             if (context.BlocksTownActions || context.Session.CaptureMarriage() is not { } capture)
-                return await Reject(context, packet.Opcode, -2);
+                return await RejectRequest(context, packet, context.Session.Phase != SessionPhase.Town
+                    ? MarriageFailurePackets.WrongPlace(packet.Opcode) : MarriageFailurePackets.Unspecified(packet.Opcode));
             return packet.Opcode <= 1041
                 ? await WeddingAsync(context, packet, capture)
                 : await CoupleAsync(context, packet, capture);
+        }
+        catch (MarriageRuleException error)
+        {
+            int result = MarriageFailurePackets.Rule(packet.Opcode, error.Reason);
+            log.Write("marriage_rejected", new { Connection = context.Id, packet.Opcode, result, error.Reason, Error = error.Message });
+            return await RejectRequest(context, packet, result);
         }
         catch (Exception error) when (error is InvalidDataException or ArgumentException or
             InvalidOperationException or OverflowException or DbException)
         {
             log.Write("marriage_rejected", new { Connection = context.Id, packet.Opcode, Error = error.Message });
-            return await Reject(context, packet.Opcode, -1);
+            return await RejectRequest(context, packet, MarriageFailurePackets.Unspecified(packet.Opcode));
         }
     }
 
-    static async Task<CommandResult> Reject(GameConnectionContext context, ushort opcode, int result)
+    async Task<CommandResult> Reject(GameConnectionContext context, ushort opcode, int result)
     {
-        byte[] body = opcode switch
+        log.Write("marriage_failure", new { Connection = context.Id, Opcode = opcode, Result = result });
+        await context.Reply((CmdPacketType)opcode, MarriageFailurePackets.Body(opcode, result), "marriage_rejected");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> RejectRequest(GameConnectionContext context, Packet packet, int result)
+    {
+        byte[]? body = null;
+        try
         {
-            1034 => MarriageWeddingPackets.RequestAck(result, 0, 0),
-            1035 => MarriageWeddingPackets.ResponseAck(result, 0, 0, 1),
-            1037 => [0],
-            1038 => MarriageWeddingPackets.RingAck(result, 0),
-            1043 => MarriageCouplePackets.DeleteCommentAck(result, 0),
-            1045 => MarriageCouplePackets.PartnerCheckAck(result, 0, 0, 0, 0, 0, 0),
-            1047 => MarriageCouplePackets.OpenCloseAck(result, false),
-            _ => MarriageCouplePackets.Result(result)
-        };
-        await context.Reply((CmdPacketType)opcode, body, "marriage_rejected");
+            switch (packet.Opcode)
+            {
+                case 1034:
+                    var request = MarriageWeddingRequests.Request(packet.Body);
+                    body = MarriageFailurePackets.Body(1034, result, request.Target, request.Operation, extraA: request.ExtraA, extraB: request.ExtraB);
+                    break;
+                case 1035:
+                    var response = MarriageWeddingRequests.Response(packet.Body);
+                    if (result == MarriageFailurePackets.Unspecified(1035))
+                        result = MarriageFailurePackets.Unspecified(1035, response.Operation);
+                    return await RejectResponse(context, response, result);
+                case 1043:
+                    var comment = MarriageCoupleRequests.CommentDelete(packet.Body);
+                    body = MarriageFailurePackets.Body(1043, result, commentId: comment.CommentId);
+                    break;
+                case 1047:
+                    body = MarriageFailurePackets.Body(1047, result, close: MarriageCoupleRequests.OpenClose(packet.Body));
+                    break;
+            }
+        }
+        catch (InvalidDataException) { }
+        if (body is null) return await Reject(context, packet.Opcode, result);
+        log.Write("marriage_failure", new { Connection = context.Id, packet.Opcode, Result = result });
+        await context.Reply((CmdPacketType)packet.Opcode, body, "marriage_rejected");
         return CommandResult.Handled;
     }
 
@@ -100,16 +131,16 @@ internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCata
                 editors.Remove(relation);
     }
 
-    async Task<MarriageSessionCommit?> CommitCouple(GameConnectionContext context, MarriageCapture capture,
-        MarriageRecord before, MarriageCoupleTransition transition)
+    async Task<(MarriageSessionCommit? Commit, int Result)> CommitCouple(GameConnectionContext context, MarriageCapture capture,
+        MarriageRecord before, MarriageCoupleTransition transition, ushort command)
     {
-        if (!transition.Success) return null;
+        if (!transition.Success) return (null, transition.Result);
         var plan = planner.Plan(capture.Character, transition.Items, timer.GetUtcNow());
-        if (plan is null) return null;
+        if (plan is null) return (null, command == 1056 ? -6 : MarriageFailurePackets.Unspecified(command));
         var result = context.Session.CommitMarriage(capture, plan, before, transition.Record);
-        if (result is null) return null;
+        if (result is null) return (null, MarriageFailurePackets.Unspecified(command));
         await inventory.RefreshAsync(context, result.Actor);
-        return result;
+        return (result, 0);
     }
 
     async Task PublishCouple(GameConnectionContext context, MarriageRecord record, ushort opcode, byte[] body)

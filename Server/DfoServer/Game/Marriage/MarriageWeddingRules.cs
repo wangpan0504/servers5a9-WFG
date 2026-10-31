@@ -38,10 +38,14 @@ internal static class MarriageWeddingRules
         ushort payerId, int type, int selectionIndex, long now, long startsAt, bool prepared)
     {
         Member(record, payerId);
-        if (record.State != Engaged || !prepared || record.Wedding is { State: 1 } || weddingId == Guid.Empty ||
+        if (record.State == Reserved || record.Wedding is { State: 1 })
+            throw new MarriageRuleException(MarriageFailureReason.AlreadyReserved, "婚礼已预约");
+        if (!prepared) throw new MarriageRuleException(MarriageFailureReason.TasksIncomplete, "双方结婚任务未完成");
+        if (!DayIntervalElapsed(record.LastWeddingAt, now, catalog.Timing.OnceHowManyDays))
+            throw new MarriageRuleException(MarriageFailureReason.WeddingDailyLimit, "当日已申请举办婚礼");
+        if (record.State != Engaged || weddingId == Guid.Empty ||
             now < 0 || startsAt < now || !catalog.Ceremonies.TryGetValue(type, out var definition) ||
-            (uint)selectionIndex >= (uint)catalog.Timing.SelectionSeconds.Length ||
-            !DayIntervalElapsed(record.LastWeddingAt, now, catalog.Timing.OnceHowManyDays))
+            (uint)selectionIndex >= (uint)catalog.Timing.SelectionSeconds.Length)
             throw new InvalidOperationException("当前婚约不能预约该婚礼");
         int seconds = catalog.Timing.SelectionSeconds[selectionIndex];
         var ticket = catalog.ChargedWeddingTickets.GetValueOrDefault(type);
@@ -76,13 +80,15 @@ internal static class MarriageWeddingRules
     public static MarriageWeddingChange UpgradeRing(MarriageRecord record, MarriageCatalog catalog,
         ushort memberId, byte requestedLevel, int suppliedItemId)
     {
+        if (record.State != Married || !record.IsMember(memberId))
+            throw new MarriageRuleException(MarriageFailureReason.NotMarried, "只有已婚成员能升级婚戒");
         Member(record, memberId);
-        if (record.State != Married || requestedLevel != record.RingLevel + 1 ||
+        if (requestedLevel != record.RingLevel + 1 ||
             !catalog.Rings.ContainsKey(requestedLevel) || requestedLevel >= catalog.UpgradeRingTickets.Length)
-            throw new InvalidOperationException("婚戒不能越级或超过资源上限");
+            throw new MarriageRuleException(MarriageFailureReason.InvalidRingLevel, "婚戒不能越级或超过资源上限");
         var ticket = catalog.UpgradeRingTickets[requestedLevel];
         if (ticket.ItemId <= 0 || ticket.Count <= 0 || suppliedItemId != ticket.ItemId)
-            throw new InvalidOperationException("婚戒升级券不匹配");
+            throw new MarriageRuleException(MarriageFailureReason.MissingItem, "婚戒升级券不匹配");
         // 券的金币属于商店售价，升级只消耗资源声明的券，不能再扣一次金币。
         return new(Next(record) with { RingLevel = requestedLevel }, new(0, ticket));
     }
@@ -90,10 +96,13 @@ internal static class MarriageWeddingRules
     public static MarriageWeddingChange UseLovePointItem(MarriageRecord record, MarriageCatalog catalog,
         ushort memberId, int suppliedItemId)
     {
+        if (record.State != Married || !record.IsMember(memberId))
+            throw new MarriageRuleException(MarriageFailureReason.NotMarried, "只有已婚成员能使用心意道具");
         var member = Member(record, memberId);
-        if (record.State != Married || !catalog.LovePoints.ItemPoints.TryGetValue(suppliedItemId, out int points) ||
-            points <= 0 || member.LovePoints < 0 || points > catalog.LovePoints.Max - member.LovePoints)
-            throw new InvalidOperationException("爱心道具不适用或会超过上限");
+        if (!catalog.LovePoints.ItemPoints.TryGetValue(suppliedItemId, out int points) || points <= 0 || member.LovePoints < 0)
+            throw new InvalidOperationException("爱心道具不适用");
+        if (points > catalog.LovePoints.Max - member.LovePoints)
+            throw new MarriageRuleException(MarriageFailureReason.LovePointLimit, "心意点已达到上限");
         var next = Next(record) with
         {
             Members = record.Members.SetItem(memberId, member with { LovePoints = member.LovePoints + points })
@@ -114,7 +123,15 @@ internal static class MarriageWeddingRules
     public static MarriageRecord AddGift(MarriageRecord record, MarriageCatalog catalog, MarriageGuestGift gift, long now)
     {
         var wedding = ActiveWedding(record, now);
-        if (now >= wedding.StartsAt || gift.Text is null || gift.Text.Any(char.IsControl) ||
+        if (now >= wedding.StartsAt)
+            throw new MarriageRuleException(MarriageFailureReason.GiftClosed, "婚礼已开始，不能再送礼金");
+        if (wedding.Gifts.Any(row => row.CharacterId == gift.CharacterId))
+            throw new MarriageRuleException(MarriageFailureReason.AlreadyGifted, "该来宾已送过礼金");
+        if (gift.Gold < catalog.MoneyGiftMin)
+            throw new MarriageRuleException(MarriageFailureReason.GiftTooSmall, "礼金低于资源下限");
+        if (gift.Gold > catalog.MoneyGiftMax)
+            throw new MarriageRuleException(MarriageFailureReason.GiftTooLarge, "礼金超过资源上限");
+        if (gift.Text is null || gift.Text.Any(char.IsControl) ||
             DfoServer.Game.Characters.CharacterName.Encoding.GetByteCount(gift.Text) > 255 ||
             gift.Id == Guid.Empty || gift.CharacterId == 0 || gift.Settled || gift.Gold < catalog.MoneyGiftMin ||
             gift.Gold > catalog.MoneyGiftMax || wedding.Gifts.Any(row => row.Id == gift.Id || row.CharacterId == gift.CharacterId))
@@ -135,10 +152,14 @@ internal static class MarriageWeddingRules
     {
         Member(record, senderId);
         var wedding = ActiveWedding(record, now);
-        if (now >= wedding.StartsAt || targetId == 0 || record.IsMember(targetId) || string.IsNullOrWhiteSpace(targetName) ||
-            wedding.Invitations.Any(row => row.CharacterId == targetId) ||
-            !wedding.InviteRemaining.TryGetValue(senderId, out int remaining) || remaining <= 0)
-            throw new InvalidOperationException("婚礼邀请目标重复或邀请额度不足");
+        if (record.IsMember(targetId))
+            throw new MarriageRuleException(MarriageFailureReason.InvalidInvitationTarget, "婚礼举办者无需请帖");
+        if (wedding.Invitations.Any(row => row.CharacterId == targetId))
+            throw new MarriageRuleException(MarriageFailureReason.DuplicateInvitation, "已向该来宾发过请帖");
+        if (!wedding.InviteRemaining.TryGetValue(senderId, out int remaining) || remaining <= 0)
+            throw new MarriageRuleException(MarriageFailureReason.NoInvitations, "剩余请帖不足");
+        if (now >= wedding.StartsAt || targetId == 0 || string.IsNullOrWhiteSpace(targetName))
+            throw new InvalidOperationException("婚礼邀请时机或目标无效");
         var invitation = new MarriageInvitation
         { CharacterId = targetId, Name = targetName, State = 1, SentAt = now, InviterId = senderId };
         return Next(record) with
@@ -231,7 +252,7 @@ internal static class MarriageWeddingRules
     static MarriageWeddingState ActiveWedding(MarriageRecord record, long now)
     {
         if (!record.Active || record.Wedding is not { State: 1 } wedding || now < wedding.ReservedAt || now >= wedding.EndsAt)
-            throw new InvalidOperationException("婚礼不在有效预约期内");
+            throw new MarriageRuleException(MarriageFailureReason.InvalidWedding, "婚礼不在有效预约期内");
         return wedding;
     }
 }

@@ -22,6 +22,17 @@ internal sealed partial class GameSession
         formalDungeon is null && (HasRaidDungeonAdmission || CurrentDungeonSelection is { IsClassExperience: false } ||
             towns.SelectionReturn(Selected.Position, completed) is not null));
 
+    public bool CanBeginSpecifiedPartySelection(uint dungeon, DungeonCatalog catalog)
+    {
+        if (MarriageDungeonAdmission.Applies(dungeon)) return CanBeginMarriageDungeonSelection(catalog);
+        if (dungeon > int.MaxValue || !catalog.ContainsDungeon((int)dungeon)) return false;
+        // 15只建立选择上下文；任务、等级、费用和玩法资格仍由16按原入口统一复验。
+        return owner.Execute(() => Phase == SessionPhase.Town && CanBeginPartySelection() && Selected is { } character &&
+            towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) &&
+            area.DungeonWorldMap is { } world && towns.DungeonMaps.TryGetValue(world, out var map) && map.Error is null &&
+            map.Options.Any(option => option.DungeonId == dungeon));
+    }
+
     public bool CanBeginMarriageDungeonSelection(DungeonCatalog catalog)
     {
         var character = owner.Execute(() => Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect ? Selected : null);

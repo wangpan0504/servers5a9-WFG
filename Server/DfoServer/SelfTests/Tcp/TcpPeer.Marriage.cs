@@ -6,6 +6,7 @@ namespace DfoServer.Testing;
 internal sealed partial class TcpPeer
 {
     public byte[] MarriageInformation { get; private set; } = [];
+    public byte[] MarriagePartnerCard { get; private set; } = [];
     public byte[] MarriageCapsules { get; private set; } = [];
     public byte[] MarriageRoom { get; private set; } = [];
     public byte[] MarriageStorage { get; private set; } = [];
@@ -15,6 +16,7 @@ internal sealed partial class TcpPeer
     WirePacket ReadMarriageInitialization(WirePacket first, ushort characterId)
     {
         MarriageInformation = []; MarriageCapsules = []; MarriageRoom = []; MarriageStorage = [];
+        MarriagePartnerCard = [];
         MarriageReservation = []; MarriageInvitations.Clear();
         if (fixture is not null && fixture.Query("SELECT character_id FROM account_pvp_private_characters WHERE character_id=$p0", characterId).Length != 0)
         {
@@ -45,10 +47,17 @@ internal sealed partial class TcpPeer
         MarriageCapsules = []; MarriageRoom = []; MarriageStorage = []; MarriageReservation = []; MarriageInvitations.Clear();
         if (rows.Length != 0 && record.GetProperty("State").GetByte() == 4)
         {
+            ushort partnerId = record.GetProperty("FirstId").GetUInt16() == characterId
+                ? record.GetProperty("SecondId").GetUInt16() : record.GetProperty("FirstId").GetUInt16();
+            string partnerName = (string)fixture.Query("SELECT name FROM characters WHERE id=$p0", partnerId).Single()[0];
+            ReadMarriagePartnerCard(packet, record.GetProperty("ContextId").GetUInt32(), partnerName);
+            packet = Read();
             That(packet is { Kind: 0, Opcode: 1018, Body.Length: 7 }, "已婚入城恢复本人的胶囊计数");
             MarriageCapsules = packet.Body;
             That(U32(packet.Body, 0) == member.GetProperty("CapsuleGauge").GetInt32() &&
-                packet.Body[4] == member.GetProperty("CapsulesOwned").GetInt32(), "胶囊能量与持有数不混用配偶数据");
+                packet.Body[4] == member.GetProperty("CapsulesOwned").GetInt32() &&
+                packet.Body[5] == Math.Min(member.GetProperty("CapsulesPending").GetInt32(), byte.MaxValue),
+                "胶囊能量、持有及待领数逐字段匹配本人账本，不能混用配偶数据或每日已领次数");
             packet = Read();
             That(packet is { Kind: 0, Opcode: 1011 } && packet.Body.Length == 17 + U32(packet.Body, 0) * 6,
                 "已婚角色在所有城镇恢复家具输入，使客户端重算婚房效果");
@@ -88,5 +97,34 @@ internal sealed partial class TcpPeer
             MarriageInvitations.Add(packet.Body); packet = Read();
         }
         return packet;
+    }
+
+    internal void ReadMarriagePartnerCard(WirePacket packet, uint context, string? expectedName = null)
+    {
+        That(packet is { Kind: 1, Opcode: 1037, Body.Length: 98 } && packet.Body[0] == 1 &&
+            U32(packet.Body, 5) == context, "已婚信息之后以原生1037恢复同一关系的伴侣缓存");
+        string name = DfoServer.Game.Characters.CharacterName.Encoding.GetString(packet.Body, 13, 30).TrimEnd('\0');
+        That(name.Length > 0 && (expectedName is null || name == expectedName),
+            "恢复卡携带真实伴侣姓名，NPC入场不再依赖先打开婚姻窗口");
+        MarriagePartnerCard = packet.Body;
+    }
+
+    internal void CheckMarriagePartnerRestores(IReadOnlyList<WirePacket> packets)
+    {
+        uint? pending = null;
+        foreach (var packet in packets)
+        {
+            if (packet is { Kind: 0, Opcode: 1003, Body.Length: 15 })
+            {
+                That(pending is null, "前一份已婚信息的伴侣缓存必须完成恢复");
+                if (packet.Body[4] == 4) pending = U32(packet.Body, 0);
+            }
+            else if (pending is { } context && packet is { Kind: 1, Opcode: 1037 })
+            {
+                ReadMarriagePartnerCard(packet, context);
+                pending = null;
+            }
+        }
+        That(pending is null, "完整已婚信息不能留下未恢复的伴侣缓存");
     }
 }

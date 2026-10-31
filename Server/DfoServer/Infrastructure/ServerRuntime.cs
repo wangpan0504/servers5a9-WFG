@@ -262,7 +262,7 @@ internal static class ServerRuntime
         }
         var serverItemCycles = new ServerItemCycleService(serverItemRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock, marriageSupply);
         repository.MarriageResources = marriageCatalog;
-        var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
+        var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, characters.DefaultAppearance, itemResources.Items, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
         var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);

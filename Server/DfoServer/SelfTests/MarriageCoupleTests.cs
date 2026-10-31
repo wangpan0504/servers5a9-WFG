@@ -93,8 +93,15 @@ internal static class MarriageCoupleTests
         That(list.Length == 59 && list[0] == 1 && BinaryPrimitives.ReadInt32LittleEndian(list.AsSpan(9)) == 1 &&
             BinaryPrimitives.ReadInt32LittleEndian(list.AsSpan(51)) == 4,
             "留言回执包含42字节定长行头及独立CP936正文长度");
-        That(MarriageCouplePackets.CapsuleInformation(new() { CapsuleGauge = 8, CapsulesOwned = 2, CapsulesTaken = 3 }, false)
-            .SequenceEqual(new byte[] { 8, 0, 0, 0, 2, 3, 0 }), "胶囊通知持有与领取字段不颠倒");
+        var capsuleCounts = new MarriageMemberState { CapsuleGauge = 8, CapsulesOwned = 2, CapsulesTaken = 3, CapsulesPending = 5 };
+        That(MarriageCouplePackets.CapsuleInformation(capsuleCounts, false)
+            .SequenceEqual(new byte[] { 8, 0, 0, 0, 2, 5, 0 }), "胶囊通知分别发送持有及待领，不把每日已领次数当作礼物数");
+        That(MarriageCouplePackets.CapsuleAck(1056, 0, capsuleCounts).SequenceEqual(new byte[] { 1, 0, 0, 0, 0, 5 }),
+            "领取成功回执带剩余待领数量，不能随每日已领次数递增");
+        var manyGifts = capsuleCounts with { CapsulesPending = 300 };
+        That(MarriageCouplePackets.CapsuleInformation(manyGifts, true).SequenceEqual(new byte[] { 8, 0, 0, 0, 2, 255, 1 }) &&
+            MarriageCouplePackets.CapsuleAck(1056, 0, manyGifts).SequenceEqual(new byte[] { 1, 0, 0, 0, 0, 255 }) &&
+            manyGifts.CapsulesPending == 300, "原生u8计数饱和显示但不裁剪真实待领，也不因积累礼物无法登录");
         That(MarriageCouplePackets.CapsuleAck(1054, 0, new() { CapsuleGauge = 2, CapsulesOwned = 3 }).Length == 10 &&
             MarriageCouplePackets.CapsuleAck(1055, 0, new() { CapsulesOwned = 3 }).Length == 6 &&
             MarriageCouplePackets.CapsuleAck(1056, -6, new()).Length == 5, "三种胶囊回执按命令及结果写入不同宽度");

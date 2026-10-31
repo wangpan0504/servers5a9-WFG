@@ -171,7 +171,7 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind is PartyDungeonNoticeKind.RaidSelection or PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.ResultSelection && notice.Selection is { } selection)
         {
-            IReadOnlySet<ushort>? preservePartyActors = notice.Kind == PartyDungeonNoticeKind.Selection && notice.Option == 0
+            IReadOnlySet<ushort>? preservePartyActors = notice.Kind == PartyDungeonNoticeKind.Selection
                 ? notice.Members.Select(member => member.Actor.Character.Id).ToHashSet() : null;
             if (!await town.DetachForDungeonSelectionAsync(context, selection, preservePartyActors)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);

@@ -17,6 +17,7 @@ internal sealed record OnlineExpertJobConnection(Func<bool> TryReserve, Action R
     Func<bool> BlocksActions, Action Disconnect, Func<InventoryResult, byte[], Task> Publish);
 internal sealed record OnlineMarriageConnection(Func<InventoryResult, Task> PublishInventory,
     Func<ushort, byte[], string, Func<bool>?, Task> Notify,
+    Func<ushort, byte[], string, Func<bool>?, Task> Reply,
     Func<DfoServer.Game.Town.TownTravelReceipt, Task> Travel, Action RefreshScene);
 internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session, Action<ushort, byte[], string> Probe,
     OnlineExpertJobConnection? ExpertJob = null, OnlineMarriageConnection? Marriage = null)

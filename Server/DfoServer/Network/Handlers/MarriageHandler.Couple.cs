@@ -52,7 +52,7 @@ internal sealed partial class MarriageHandler
         }
         else
         {
-            if (before is not { State: 4 }) return await Reject(context, command, -2);
+            if (before is not { State: 4 }) return await Reject(context, command, MarriageFailurePackets.MissingRelation(command));
             if (command is 1045 or 1046) return await PartnerTeleportAsync(context, packet, capture, before);
             if (command is >= 1047 and <= 1053 && !AtHome(actor)) return await Reject(context, command, -2);
             switch (command)
@@ -102,14 +102,14 @@ internal sealed partial class MarriageHandler
                     break;
             }
         }
-        if (before is null || change is null) return await Reject(context, command, -2);
-        var committed = await CommitCouple(context, capture, before, change);
-        int result = committed is not null ? 0 : !change.Success ? change.Result
-            : command == 1048 ? MarriageCoupleRules.MoveInvalidRequest : -3;
+        if (before is null || change is null) return await Reject(context, command, MarriageFailurePackets.MissingRelation(command));
+        var (committed, result) = await CommitCouple(context, capture, before, change, command);
         byte[] ack = command is >= 1054 and <= 1056
             ? MarriageCouplePackets.CapsuleAck(command, result, (committed?.Record ?? before).Members[actor.Id])
             : command == 1043 ? MarriageCouplePackets.DeleteCommentAck(result, comment)
+            : command == 1049 ? result == 0 ? MarriageCouplePackets.EmptyAck() : MarriageFailurePackets.Body(command, result)
             : MarriageCouplePackets.Result(result);
+        if (result != 0) log.Write("marriage_failure", new { Connection = context.Id, Opcode = command, Result = result });
         await context.Reply((CmdPacketType)command, ack, "marriage_couple_result");
         if (committed is null) return CommandResult.Handled;
         var record = committed.Record;
@@ -121,7 +121,7 @@ internal sealed partial class MarriageHandler
                     record.Furniture.GetValueOrDefault(slot).ItemId, slot, record.Furniture.GetValueOrDefault(slot).Count))).ToArray();
             await PublishCouple(context, record, 1014, MarriageCouplePackets.ItemUpdates(updates));
             // 1011的本版消费者会重算婚房加成；双方在普通城镇也必须更新这份派生输入。
-            await new DfoServer.Network.Projection.MarriageProjection(store, catalog, online, timer).PublishAsync(context, record);
+            await Projection().PublishAsync(context, record);
         }
         if (command is >= 1050 and <= 1053)
             await PublishCouple(context, record, 1015, MarriageCouplePackets.TreeInformation(record.Tree, catalog.Seeds));

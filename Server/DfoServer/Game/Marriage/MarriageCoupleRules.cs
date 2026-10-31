@@ -97,11 +97,11 @@ internal static class MarriageCoupleRules
         long now, int day, MarriageCatalog catalog)
     {
         if (!Member(record, member)) return Fail(record, -2);
-        if (now < 0 || day < 0 || !catalog.Seeds.TryGetValue(seed, out int index)) return Fail(record, -3);
+        if (now < 0 || day < 0 || !catalog.Seeds.TryGetValue(seed, out int index)) return Fail(record, -1);
         if (record.Tree is { }) return Fail(record, -4);
         var definition = catalog.Trees[index];
         long duration = (long)definition.ExpireDays * 86400;
-        if (now > uint.MaxValue - duration) return Fail(record, -3);
+        if (now > uint.MaxValue - duration) return Fail(record, -1);
         return Done(record with { Tree = new() { Seed = seed, Expiry = now + duration, WaterDay = day } },
             new MarriageItemDelta(member, seed, -1, slot));
     }
@@ -110,13 +110,14 @@ internal static class MarriageCoupleRules
         long now, int day, MarriageCatalog catalog)
     {
         if (!Member(record, member)) return Fail(record, -2);
-        if (!Tree(record, catalog, out var definition) || record.Tree is not { } tree || now < 0 ||
-            now >= tree.Expiry || day < tree.WaterDay) return Fail(record, -4);
-        if (!definition.GrowPoints.TryGetValue(itemId, out int points)) return Fail(record, -3);
+        if (record.Tree is not { } tree) return Fail(record, -4);
+        if (now >= tree.Expiry) return Fail(record, -11);
+        if (now < 0 || day < tree.WaterDay || !Tree(record, catalog, out var definition)) return Fail(record, -1);
+        if (!definition.GrowPoints.TryGetValue(itemId, out int points)) return Fail(record, -1);
         int waters = day > tree.WaterDay ? 0 : tree.Waters;
         if (waters >= definition.DayWaterCount) return Fail(record, -6);
         int maximum = definition.Steps[^1].GrowPoint;
-        if (tree.Growth >= maximum) return Fail(record, -4);
+        if (tree.Growth >= maximum) return Fail(record, -9);
         int growth = (int)Math.Min(maximum, (long)tree.Growth + points);
         return Done(record with { Tree = tree with { Growth = growth, WaterDay = day, Waters = waters + 1 } },
             new MarriageItemDelta(member, itemId, -1, slot));
@@ -126,8 +127,10 @@ internal static class MarriageCoupleRules
         MarriageCatalog catalog, Func<long, long> draw)
     {
         if (!Member(record, member)) return Fail(record, -2);
-        if (!Tree(record, catalog, out var definition) || record.Tree is not { } tree || now < 0 ||
-            now >= tree.Expiry || tree.Growth < definition.Steps[^1].GrowPoint) return Fail(record, -4);
+        if (record.Tree is not { } tree) return Fail(record, -4);
+        if (now >= tree.Expiry) return Fail(record, -7);
+        if (now < 0 || !Tree(record, catalog, out var definition)) return Fail(record, -1);
+        if (tree.Growth < definition.Steps[^1].GrowPoint) return Fail(record, -6);
         long total = definition.TotalRewardWeight;
         long selected = draw(total);
         if (selected < 0 || selected >= total) throw new ArgumentOutOfRangeException(nameof(draw));
@@ -162,8 +165,8 @@ internal static class MarriageCoupleRules
     {
         if (!TryMember(record, member, day, out var state)) return Fail(record, -2);
         var definition = catalog.GrowthCapsule;
-        if (state.CapsuleGauge < definition.MaxGage) return Fail(record, -5);
-        if (state.CapsulesOwned >= definition.MaxOwnCount) return Fail(record, -4);
+        if (state.CapsuleGauge < definition.MaxGage) return Fail(record, -4);
+        if (state.CapsulesOwned >= definition.MaxOwnCount) return Fail(record, -5);
         state = state with { CapsuleGauge = state.CapsuleGauge - definition.MaxGage, CapsulesOwned = state.CapsulesOwned + 1 };
         return Done(record with { Members = record.Members.SetItem(member, state) });
     }
@@ -172,7 +175,8 @@ internal static class MarriageCoupleRules
     {
         if (!TryMember(record, member, day, out var state) ||
             !record.Members.TryGetValue(record.Other(member), out var partner)) return Fail(record, -2);
-        if (state.CapsulesOwned <= 0 || partner.CapsulesPending == int.MaxValue) return Fail(record, -4);
+        if (state.CapsulesOwned <= 0) return Fail(record, -4);
+        if (partner.CapsulesPending == int.MaxValue) return Fail(record, -6);
         return Done(record with { Members = record.Members
             .SetItem(member, state with { CapsulesOwned = state.CapsulesOwned - 1 })
             .SetItem(record.Other(member), partner with { CapsulesPending = partner.CapsulesPending + 1 }) });
@@ -181,8 +185,9 @@ internal static class MarriageCoupleRules
     public static MarriageCoupleTransition TakeCapsule(MarriageRecord record, ushort member, int day, MarriageCatalog catalog)
     {
         if (!TryMember(record, member, day, out var state)) return Fail(record, -2);
-        if (state.CapsulesPending <= 0) return Fail(record, -4);
-        if (state.CapsulesTaken >= catalog.GrowthCapsule.MaxTakenCount) return Fail(record, -6);
+        // 本版-4对应不相关的礼堂确认文案；无待领项使用原生通用关联失败，不冒用该分支。
+        if (state.CapsulesPending <= 0) return Fail(record, -1);
+        if (state.CapsulesTaken >= catalog.GrowthCapsule.MaxTakenCount) return Fail(record, -7);
         state = state with { CapsulesPending = state.CapsulesPending - 1, CapsulesTaken = state.CapsulesTaken + 1 };
         return Done(record with { Members = record.Members.SetItem(member, state) }, new MarriageItemDelta(member, catalog.GrowthCapsule.CapsuleId, 1));
     }
