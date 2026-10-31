@@ -23,6 +23,73 @@ internal static class LimitCubeTcpTests
     {
         await RunAsync(options, root, resources, null);
         await RunShenxuanTicketAsync(options, root, resources);
+        await RunCooldownTicketAsync(options, root, resources);
+    }
+
+    static async Task RunCooldownTicketAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        const int ticketId = 10305519;
+        var items = resources.ItemResources;
+        var definition = items.LimitCubes.Get(ticketId)!;
+        int targetId = definition.Targets[0].ItemId;
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "limit-cube-cooldown"), resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var role = repo.Create(owner, new("CooldownCube", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, new(InventoryListType.Main,85), new(ticketId,ItemKind.Consumable,2)),
+                    new(0, new(InventoryListType.Main,9), InventoryRewardGrantService.Create(items.Items.Get(targetId), shopExpiration:true))])
+            });
+            repo.CommitInventory(owner, role, new(role.Inventory, role.Inventory with
+                { AccountWallet = role.Inventory.AccountWallet.Set(CurrencyKind.ClearCube,30) }, "cooldown_cube_fixture"));
+        }
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            string before = JsonSerializer.Serialize(Read());
+            fixture.Sql("CREATE TRIGGER fail_cooldown_cube BEFORE INSERT ON inventory_audit_log " +
+                "WHEN NEW.action_name='use_limit_cube' BEGIN SELECT RAISE(ABORT,'cooldown cube rollback'); END");
+            Send(peer);
+            peer.Closed();
+            That(JsonSerializer.Serialize(Read()) == before, "真实冷却券SQL末段失败同时回滚源、目标、材料、产出和冷却");
+            fixture.Sql("DROP TRIGGER fail_cooldown_cube");
+        }
+        int resultId = 0;
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            Send(peer);
+            WirePacket? ack = null;
+            for (int n = 0; n < 16; n++)
+            {
+                var packet = peer.Read();
+                if (packet is { Kind:1, Opcode:338 }) { ack = packet; break; }
+                That(packet.Kind == 0, "真实冷却券仍先同步已提交资产再应答338");
+            }
+            That(ack is { Body.Length:12 } && ack.Body[0] == 1, "回滚后重试真实冷却券成功，不残留失败冷却");
+            resultId = I32(ack!.Body,1);
+            peer.Barrier();
+            var saved = Read().Inventory;
+            That(definition.Results.Any(row => row.ItemId == resultId) &&
+                saved.Items.Single(row => row.Core.ItemId == ticketId).Core.Count == 1 &&
+                saved.AccountWallet.Get(CurrencyKind.ClearCube) == 20 &&
+                saved.ConsumableStates is [{ Kind:ConsumableStateKind.Cooldown, ItemId:ticketId, CoolGroup:-ticketId }],
+                "真实券一次提交保存一件消费、完整结果、十个无色及独立冷却账本");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            That(Read().Inventory.Items.Any(row => row.Core.ItemId == resultId) &&
+                Read().Inventory.Items.Single(row => row.Core.ItemId == ticketId).Core.Count == 1,
+                "重连恢复真实冷却券产出和剩余源，不再次消费");
+        }
+
+        Character Read() { using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }); return repo.List(owner).Single(); }
+        void Send(TcpPeer peer) => peer.Send(338, Build(writer => { writer.Write((short)9); writer.Write(targetId); writer.Write((short)85); }));
     }
 
     internal static Task RunShenxuanTicketAsync(ServerOptions options, string root, TcpTestResources resources) =>

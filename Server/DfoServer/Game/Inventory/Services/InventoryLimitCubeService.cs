@@ -71,6 +71,12 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind ||
             !ItemSlotBoundService.Allows(before, target.Position, targetTemplate.Kind))
             return Reject("template", out rejection);
+        if (!ticketTemplate.AllowsUse(character.Level, character.Job) ||
+            !InventoryMoveService.RequiredSkillSatisfied(character, ticketTemplate))
+            return Reject("qualification", out rejection);
+        if (before.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
+            row.CoolGroup == -ticket.Core.ItemId && row.Active(now.ToUnixTimeMilliseconds())))
+            return Reject("cooldown", out rejection);
 
         int? required = definition.RequiredTargetCount(target.Core.ItemId);
         if (required is null || required <= 0 || target.Core.Count < required ||
@@ -93,7 +99,11 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
             definition.Materials, pieces, now);
         if (!materials.Accepted)
             return Reject("materials", out rejection);
-        paid = materials.Plan!.After;
+        var activated = ConsumableStatePolicy.Activate(materials.Plan!.After,
+            new(ticket.Core.ItemId, ticketTemplate.MinimumLevel, definition.CoolTime, -ticket.Core.ItemId),
+            now.ToUnixTimeMilliseconds(), sessionCooldown: true);
+        if (activated is null) return Reject("cooldown-capacity", out rejection);
+        paid = activated;
 
         long totalWeight;
         long roll;

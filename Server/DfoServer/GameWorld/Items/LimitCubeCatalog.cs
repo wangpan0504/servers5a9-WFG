@@ -10,6 +10,7 @@ internal sealed record LimitCubeResultItem(int ItemId, int Count, long Weight);
 internal sealed record LimitCubeDefinition(int ItemId, ImmutableArray<ItemMaterialCost> Targets,
     ImmutableArray<ItemMaterialCost> Materials, ImmutableArray<LimitCubeResultItem> Results)
 {
+    public int CoolTime { get; init; }
     public int? RequiredTargetCount(int itemId) =>
         Targets.FirstOrDefault(row => row.ItemId == itemId)?.Count;
 }
@@ -72,10 +73,22 @@ internal sealed class LimitCubeCatalog
             return null;
 
         // 这些资格在当前库存模型中没有对应账本；不能忽略后把受限券扩大成普通券。
-        foreach (string field in new[] { "cool time", "cooltime group", "total usable count",
+        foreach (string field in new[] { "cooltime group", "cooltime maintenance", "total usable count",
             "total weekly usable count", "total accumulated usable count", "use count limit all server item" })
             if (Fields(text, field).Count != 0)
                 throw new InvalidDataException("变更券包含尚未支持的使用资格: " + field);
+
+        int coolTime = 0;
+        var cooldowns = Fields(text, "cool time");
+        if (cooldowns.Count != 0)
+        {
+            if (cooldowns.Count != 1)
+                throw new InvalidDataException("变更券冷却声明无效或重复");
+            var values = Integers(RawValues(text, cooldowns[0]));
+            if (values is not [>= 0 and <= int.MaxValue])
+                throw new InvalidDataException("变更券冷却声明无效或重复");
+            coolTime = (int)values[0];
+        }
 
         var infos = Blocks(text, "upgrade limit cube info");
         if (infos.Count != 1)
@@ -142,7 +155,7 @@ internal sealed class LimitCubeCatalog
         return new(itemId,
             targets.Select(row => new ItemMaterialCost(row.Key, row.Value)).ToImmutableArray(),
             materials.Select(row => new ItemMaterialCost(row.Key, row.Value)).ToImmutableArray(),
-            results.ToImmutable());
+            results.ToImmutable()) { CoolTime = coolTime };
     }
 
     bool LoadBattleSpirit(int itemId)
