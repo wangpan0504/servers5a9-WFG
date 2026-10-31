@@ -125,6 +125,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
                 premiumPcRoom: premiumPcRoom), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
+        // Actor先建立本人对象；穿戴表装载前恢复装备准入技能，避免光剑、拳套、扫把被客户端按空技能树卸下。
+        if (c.Learning.Initialized)
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c)), "skill_info");
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PcRoomBuffProjection.PostAsync(context);
@@ -153,8 +156,6 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.Job == DfoServer.Game.Inventory.Services.InventoryKnightShieldService.Job)
             await context.Notify(NotiPacketType.SEND_DECK_INFO, KnightShieldPackets.Deck(KnightShieldDeck(c)),
                 "knight_shield_deck_initialize");
-        if (c.Learning.Initialized)
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c)), "skill_info");
         if (c.Learning.ExpertContractExpiresAt > 0)
             await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(c.Learning.ExpertContractExpiresAt,
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_initialize");

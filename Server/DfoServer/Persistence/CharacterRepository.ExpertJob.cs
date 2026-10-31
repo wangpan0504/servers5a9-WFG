@@ -38,9 +38,11 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
 
     // 开发GM：直接设置副职业类型与累计熟练度。没有资格时插入，已有资格时改类型与熟练度；
     // 已学附魔图沿用任务授职的语义保留在原行，不清空。
-    public Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience)
+    public Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience,
+        (int Grade, int Endurance)? machine = null)
     {
-        if (type is < 1 or > 4 || experience < 0)
+        if (type is < 1 or > 4 || experience < 0 ||
+            machine is { } state && (type != 3 || state.Grade is < 1 or > 11 || state.Endurance <= 0))
             throw new InvalidDataException("副职业类型或累计熟练度超出已确认范围");
         return owner.Execute(() =>
         {
@@ -63,8 +65,13 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             command.Parameters.AddWithValue("$revision", expected.Revision);
             command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业资格的角色快照已变化");
+            if (machine is { } requested)
+                UpsertExpertMeta(command, owner.Account, expected.Id, expected.ExpertGiveUpState, requested.Grade, requested.Endurance);
             transaction.Commit();
-            return expected with { ExpertJobType = type, ExpertJobExperience = experience, Revision = checked(expected.Revision + 1) };
+            return expected with { ExpertJobType = type, ExpertJobExperience = experience,
+                ExpertMachineGrade = machine?.Grade ?? expected.ExpertMachineGrade,
+                ExpertMachineEndurance = machine?.Endurance ?? expected.ExpertMachineEndurance,
+                Revision = checked(expected.Revision + 1) };
         });
     }
     public Character CommitExpertJobCraft(AccountOwners.Lease owner, Character expected, InventoryPlan inventory, int experience, QuestLifecyclePlan? tutorial = null) =>

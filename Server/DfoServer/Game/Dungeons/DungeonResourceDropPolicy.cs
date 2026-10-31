@@ -11,7 +11,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null,
     OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null,
     DungeonDropControlSettings? dropControl = null, LegacyHellDropPolicy? legacyHell = null,
-    DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null)
+    DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null, AssaultMaterialDropPolicy? assaultMaterials = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -25,7 +25,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         bool ordinaryLuke = entry.IsOrdinaryLuke && entry.DungeonId is >= 5101 and <= 5106 && entry.IsOrdinary && !entry.IsPractice;
         if (ordinaryLuke && special?.OrdinaryLukeCards.Count != 24)
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
-        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward), DungeonDropGenerationPlan>();
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
         var dropMultipliers = dropControl?.Current.Resolve(entry);
         bool regionalDrops = regional?.Applies(entry) == true;
@@ -37,7 +37,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 sleepyHollow?.IsRewardBoss(entry, monster) == true,
                 entry.Dimension is not null && monster.SourceMap is { } source && entry.IsTerminalMap(source),
                 riftEpics?.Matches(entry, monster) == true,
-                regionalDrops && PandemoniumRegionalDropPolicy.CanReward(monster));
+                regionalDrops && PandemoniumRegionalDropPolicy.CanReward(monster), assaultMaterials?.Matches(entry, monster) == true);
             if (plans.TryGetValue(key, out var existing)) return existing;
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
             var plan = monster.SpawnType > 3
@@ -62,6 +62,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             if (hopeRewards is not null) plan = hopeRewards.Extend(plan,entry,monster);
             if (dimensionRewards is not null) plan = dimensionRewards.Extend(plan,entry,monster);
             if (regionalDrops) plan = regional!.Extend(plan, entry, monster);
+            if (assaultMaterials is not null) plan = assaultMaterials.Extend(plan, entry, monster);
             if (ordinaryLuke && monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss &&
                 monster.SpawnType <= 3 && special?.OrdinaryLukeCards.TryGetValue(monster.MonsterId, out var card) == true)
             {

@@ -82,24 +82,34 @@ internal static partial class DevelopmentGm
                     {
                         name = character.Name, rev = character.Revision, type, typeLabel = ExpertJobTypeLabel(type),
                         expertness = character.ExpertJobExperience, level = type == 0 ? 0 : scripts.Level((byte)type, character.ExpertJobExperience),
-                        maxLevel = scripts.MaxLevel((byte)type)
+                        maxLevel = scripts.MaxLevel((byte)type), machineGrade = character.ExpertMachineGrade,
+                        machineEndurance = character.ExpertMachineEndurance
                     });
                 }
                 byte job = (byte)Number(args[0], 4);
                 if (job == 0) throw new InvalidDataException("副职业类型须为 1–4");
                 int level = (int)Number(args[1], 100);
                 int experience = scripts.ExperienceForLevel(job, level);
+                (int Grade, int Endurance)? machine = null;
+                if (job == 3)
+                {
+                    if (!scripts.TryRepair(job, level, out _, out int endurance))
+                        throw new InvalidDataException("该等级缺少分解机耐久资源");
+                    machine = (level, endurance);
+                }
                 Func<AccountOwners.Lease, Character, Character> write = (lease, character) =>
                 {
                     var setter = repository as IExpertJobSetter ?? throw new InvalidOperationException("当前存档不支持修改副职业");
-                    return setter.SetExpertJob(lease, character, job, experience);
+                    return setter.SetExpertJob(lease, character, job, experience, machine);
                 };
-                var updated = live is not null ? live.SetExpertJob(request.Name, job, experience) : Target(null, owners, repository, request, false, write);
+                var updated = live is not null ? live.SetExpertJob(request.Name, job, experience, machine) : Target(null, owners, repository, request, false, write);
                 return Ok(new
                 {
                     name = updated.Name, rev = updated.Revision, type = (int)job, typeLabel = ExpertJobTypeLabel(job),
                     expertness = experience, level, maxLevel = scripts.MaxLevel(job),
-                    message = "副职业已写入；客户端回到选角并再次进入后刷新等级显示。"
+                    machineGrade = updated.ExpertMachineGrade, machineEndurance = updated.ExpertMachineEndurance,
+                    message = job == 3 ? "分解师熟练度、分解机等级及满耐久已同步；回到选角再进入后刷新。"
+                        : "副职业已写入；客户端回到选角并再次进入后刷新等级显示。"
                 });
             }
             case DevelopmentAction.Currency when args[0] == "vault-gold":

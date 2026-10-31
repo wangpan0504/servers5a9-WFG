@@ -76,6 +76,48 @@ internal static class QuestFactionSelectionTests
                 That(Finish().Outcome == QuestFinishOutcome.AlreadyCompleted &&
                     QuestCompletionRepositoryTests.Same(completed, f.Read()), "重复交付不重复奖励或改变答案");
 
+                var branch = branches.Single(row => QuestEligibility.Evaluate(completed, row, quests).Eligible);
+                var accepted = f.Session.ChangeQuest(checked((ushort)branch.Id), QuestLifecycleAction.Accept, quests,
+                    items.Items, items.GoldLimits, items.EpicPieces);
+                That(accepted?.Commit is not null, $"阵营分支{branch.Id}可真实接取：{accepted?.Reason}");
+                var branchState = f.Read();
+                var branchDone = QuestEligibility.Completed(branchState);
+                var meetingArea = towns.Areas.Values.FirstOrDefault(row => row.Town == 22 &&
+                    row.Map(branchDone).Npcs.Any(npc => npc.Id == branch.IntData[0]));
+                That(meetingArea is not null, $"阵营分支{branch.Id}当前阶段存在目标NPC{branch.IntData[0]}");
+                var destination = towns.Spawn(new(meetingArea!.Town, meetingArea.Area, 0, 0), branchDone);
+                That(destination is not null, "阵营对话地图具有合法落点");
+                f.Session.ReturnToRoster();
+                f.Repository.Save(f.Owner, f.Read(), destination!, destination);
+                f.Session.Select(0, resumeTown: true);
+                f.Session.MarkReady();
+                var meeting = f.Session.ChangeQuest(checked((ushort)branch.Id), QuestLifecycleAction.Condition, quests,
+                    items.Items, items.GoldLimits, items.EpicPieces, new(null, 0, 0));
+                That(meeting?.Commit is not null, $"阵营分支{branch.Id}可在真实NPC场景对话：{meeting?.Reason}");
+                var joined = f.Session.FinishQuest(checked((ushort)branch.Id), ushort.MaxValue, quests, parameters,
+                    items.Items, items.GoldLimits, items.EpicPieces, growth);
+                That(joined.Outcome == QuestFinishOutcome.Committed, $"阵营分支{branch.Id}可交付：{joined.Reason}");
+                var merged = f.Read();
+                That(QuestEligibility.Evaluate(merged, quests.Get(3875), quests).Eligible,
+                    $"阵营分支{branch.Id}真实交付后开放共同主线3875");
+                That(branches.Where(row => row.Id != branch.Id).All(row => !merged.CompletedQuests.Contains(row.Id)),
+                    "阵营合流不伪造其它分支完成记录");
+                var common = f.Session.ChangeQuest(3875, QuestLifecycleAction.Accept, quests,
+                    items.Items, items.GoldLimits, items.EpicPieces);
+                That(common?.Commit is not null, $"阵营分支{branch.Id}可接取合流主线3875：{common?.Reason}");
+                var gateArea = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+                    towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 195));
+                var gate = gateArea.Map(QuestEligibility.Completed(f.Read())).DungeonGates.First().Bounds;
+                var entrance = new Location(gateArea.Town, gateArea.Area,
+                    checked((ushort)(gate.X + gate.Width / 2)), checked((ushort)(gate.Y + gate.Height / 2)));
+                f.Session.ReturnToRoster();
+                f.Repository.Save(f.Owner, f.Read(), entrance, entrance);
+                f.Session.Select(0, resumeTown: true);
+                f.Session.MarkReady();
+                var opening = f.Session.EnterFormalDungeon(195, 3875, 0, SelfTestCatalogs.Dungeons(pvf), SelfTestCatalogs.Rooms(pvf));
+                That(opening is { Entry.RouteQuestId: 3875, Entry.BossMap.Id: 70539, Entry.HasExplicitClearMap: true },
+                    $"阵营分支{branch.Id}合流后按真实主线进入王的书库目标图70539：{f.Session.LastFormalDungeonRejection}; route={opening?.Entry.RouteQuestId}, clear={opening?.Entry.QuestClearMap?.Id}");
+
                 void Change(QuestLifecycleAction action, QuestClientCondition? condition = null)
                 {
                     var receipt = f.Session.ChangeQuest(id, action, quests, items.Items, items.GoldLimits, items.EpicPieces, condition);
@@ -85,6 +127,6 @@ internal static class QuestFactionSelectionTests
                     items.Items, items.GoldLimits, items.EpicPieces, growth);
             }
         }
-        Console.WriteLine($"PASS {Count - checks} 原场景阵营问题：Lv87/95、男女鬼剑全部选项、重选与重复交付");
+        Console.WriteLine($"PASS {Count - checks} 原场景阵营问题：Lv87/95、男女鬼剑全部选项、重选、真实分支交付及主线合流入图");
     }
 }
