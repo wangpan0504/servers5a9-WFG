@@ -34,9 +34,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         if (knightShields is not null && InventoryKnightShieldService.Recognizes(request))
             return await MoveShieldAsync(context, request);
         if (trade is not null && await trade.TryMoveAsync(context, packet)) return CommandResult.Handled;
-        var result = context.Session.MutateInventory(
-            character => inventory.Move(character, request, context.Session.LoginWearRestatementWindowOpen),
-            requireTown: IsCargo(request.Source.List) || IsCargo(request.Destination.List));
+        var result = context.Session.MoveInventory(request, inventory);
         var outcome = !result.Accepted ? "move_item_rejected"
             : result.Plan?.Reason == InventoryMoveService.LoginWearRestatementReason ? "move_item_restatement_absorbed"
             : "move_item_committed";

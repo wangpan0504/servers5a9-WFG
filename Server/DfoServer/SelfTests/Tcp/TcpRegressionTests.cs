@@ -307,6 +307,7 @@ internal static class TcpRegressionTests
         {
             ConsumableUseTests.RunResources(resources.ItemResources);
             ConsumableUseSessionTests.Run(resources.Towns, resources.Characters, resources.Archive);
+            ConsumableUseSessionTests.RunPortableCargo(resources.Towns, resources.Characters, resources.Archive, resources.ItemResources);
             return Task.CompletedTask;
         }),
         ("inventory-persistence", (_, _, resources) =>

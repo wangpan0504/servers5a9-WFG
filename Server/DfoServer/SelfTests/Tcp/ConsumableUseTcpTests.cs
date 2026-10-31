@@ -45,7 +45,9 @@ internal static partial class ConsumableUseTcpTests
                 Inventory = candidate.Inventory with { Gold = checked((uint)resources.ItemResources.DevilContracts.RecoveryPrices[19]), Items = candidate.Inventory.Items
                     .Add(new(0, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1113), 2)))
                     .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(6001), 2)))
-                    .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2))) } });
+                    .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2)))
+                    .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10), 1)))
+                    .Add(new(0, new(InventoryListType.Main, 71), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1114), 2))) } });
         }
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -197,6 +199,22 @@ internal static partial class ConsumableUseTcpTests
             string before = Assets(); Use(peer, 65, 6, 1113); Refused(peer, 6, 1113); peer.Barrier();
             That(Assets() == before, "正式Loading阶段拒绝药剂，完整失败收尾后仍可加载");
             FormalDungeonTcpTests.Load(peer);
+            byte[] depositOwlCargo = Build(w =>
+            {
+                w.Write((byte)0); w.Write((short)71); w.Write(1114); w.Write(1);
+                w.Write((byte)2); w.Write((short)0); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
+            });
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            Use(peer, 71, 0, 10); Refused(peer, 0, 10); peer.Barrier();
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            Use(peer, 70, 0, 10); Accepted(peer, 70, 0, 10); peer.Barrier();
+            That(Count(70) == 0, "一次性猫头鹰耗尽后本副本资格仍可使用");
+            CargoTcpTests.Transfer(peer, 0, 71, 1114, 1, 2, 0, 0, 1);
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2, "猫头鹰放入沿原CMD19差量");
+            CargoTcpTests.Transfer(peer, 2, 0, 1114, 1, 0, 71, 1114, 1);
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2 && Count(71) == 2,
+                "猫头鹰取出提交后恢复两件且同步源目标");
+            peer.Barrier();
             foreach (var item in new[] { (Slot: (ushort)68,Id: 6001), (Slot: (ushort)69,Id: 1073) })
             {
                 Use(peer,item.Slot,0,item.Id); Accepted(peer,item.Slot,0,item.Id); peer.Barrier();

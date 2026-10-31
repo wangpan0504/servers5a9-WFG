@@ -19,6 +19,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public byte EffectMaintenance { get; init; }
     public byte CooltimeMaintenance { get; init; }
     public bool Unlimited { get; init; }
+    public bool OpensPortableCargo { get; init; }
     public int TownGiftItem { get; init; }
     public bool RevivalBlessing { get; init; }
     public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
@@ -162,6 +163,8 @@ internal sealed class RecoveryConsumableCatalog
         var template = items!.Get(id);
         return template.Kind == ItemKind.Consumable ? definition with
         {
+            // 仅匹配名册中已核对的猫头鹰模板；普通药剂及同名图标不产生仓库资格。
+            OpensPortableCargo = path is "cash/owl.stk" or "cash/owl_unlimited.stk" or "cash/owl_new_unlimited.stk",
             MinimumLevel = template.MinimumLevel,
             MaximumLevel = template.MaximumLevel,
             Jobs = template.Jobs,

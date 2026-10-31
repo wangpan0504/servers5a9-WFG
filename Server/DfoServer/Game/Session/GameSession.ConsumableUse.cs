@@ -13,6 +13,16 @@ internal sealed partial class GameSession
     }
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
+    sealed record PortableCargoAccess(long Generation, long SelectionEpoch,
+        Guid DungeonInstance, ushort PersonalCapacity, ushort AccountCapacity);
+    PortableCargoAccess? portableCargo;
+
+    bool CanAccessPortableCargo() => portableCargo is { } access && Ready && Selected is { } character &&
+        Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+        access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
+        access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&
+        access.PersonalCapacity == character.Inventory.CargoCapacity &&
+        access.AccountCapacity == character.Inventory.AccountCargo.Capacity;
 
     bool CanUseDungeonItem(int itemId) => !IsImperialArenaCombat &&
         (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true);
@@ -113,6 +123,11 @@ internal sealed partial class GameSession
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             if (!result.Accepted) return Reject(result.RejectReason ?? "source-expired");
+            // 资格只来自实际成功提交；消耗最后一只猫头鹰后仍可访问本次实例的仓库。
+            if (definition.OpensPortableCargo && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+                formalDungeon is { } cargoDungeon)
+                portableCargo = new(owner.Generation, SelectionEpoch, cargoDungeon.Run.Snapshot.Identity.InstanceId,
+                    Selected!.Inventory.CargoCapacity, Selected.Inventory.AccountCargo.Capacity);
             CommitDungeonItemUse(request.ItemId);
             if (freeEffects is { } effects) formalDungeon!.FreeConsumableEffects = effects;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
@@ -144,6 +159,7 @@ internal sealed partial class GameSession
 
     void ClearConsumableUse()
     {
+        portableCargo = null;
         usedConsumables.Clear();
         creatureFeedUses.Clear();
         levelUpCooldowns.Clear();
