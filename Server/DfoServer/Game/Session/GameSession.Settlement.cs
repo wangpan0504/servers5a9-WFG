@@ -546,10 +546,12 @@ internal sealed partial class GameSession
     {
         var original = owner.Execute(() => CanEnterFormalDungeon(expected) ? formalDungeon : null);
         if (original is null) return null;
-        uint quest = DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId) ? 0 : expected.Entry.QuestId;
+        if (OrdinaryDungeonContinuation.Target(expected.Entry, dungeons) is not { } target) return null;
+        uint quest = target != expected.Entry.DungeonId ||
+            DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId) ? 0 : expected.Entry.QuestId;
         // 资源规划失败保留原结算实例；新尝试持久预留成功后才替换旧实例。
         // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
-        return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
+        return EnterFormalDungeon(target,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
             draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
             prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
             hellParty: expected.Entry.IsCosmo || expected.Entry.IsInfernoParty);

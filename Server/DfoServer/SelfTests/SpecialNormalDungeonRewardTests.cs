@@ -147,6 +147,22 @@ internal static class SpecialNormalDungeonRewardTests
                 draw: bound => { draws++; return (id == 400000016 || definition.IsOrdinaryLuke) && bound == 1000000 ? 0 : random.Next(bound); },
                 pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value));
             That(entry is not null, $"{id}真实掉落准备后入场：{fixture.Session.LastFormalDungeonRejection}");
+            uint? nextDungeon = definition.IsOrdinaryLuke ? id < 5106 ? (uint)id + 1 : null :
+                definition.IsOrdinaryPrey ? PreyNext() : definition.IsOrdinaryAnton ? id switch
+                { 9595 => 9596u, 9596 => 9597u, 9597 => 9599u, >= 9599 and <= 9602 => (uint)id + 4,
+                    >= 9603 and <= 9606 => 9607u, 9607 => null, _ => (uint)id } : (uint)id;
+            That(OrdinaryDungeonContinuation.Target(entry!.Entry,dungeons) == nextDungeon,
+                "真实普通入场冻结的续图目标对应六图顺序、当前普雷分支及全部安徒恩变体");
+            That(OrdinaryDungeonContinuation.Target(entry.Entry with { IsPractice=true },dungeons) == id &&
+                OrdinaryDungeonContinuation.Target(entry.Entry with { IsTutorial=true },dungeons) == id,
+                "练习和任务身份不套用普通序列续图");
+            uint? PreyNext()
+            {
+                var admission = entry!.Entry.PreyNormal!;
+                var path = admission.Catalog.Route(admission.Branch);
+                int index = path.IndexOf(id);
+                return index < 4 ? (uint)path[index+1] : null;
+            }
             if (fee is { } paid) That(CountItem(paid.ItemId) == beforeFee - paid.Count, "按资源完整数量扣入场材料");
             var route = QuestStoryRouteTests.Path(entry!.Entry.Maze.StaticTopology, entry.Entry.StartMap.Position, entry.Entry.BossMap.Position);
             FormalDungeonDeathResult? last = null;

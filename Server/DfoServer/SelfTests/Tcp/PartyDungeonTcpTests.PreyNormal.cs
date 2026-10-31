@@ -43,7 +43,7 @@ internal static partial class PartyDungeonTcpTests
                 is [[long savedDay,long savedBranch,5L]] && savedDay == day && savedBranch == branch,"两名成员真实结算分别持久化五图进度");
             peer.Send(69); group.All(peer); peer.Send(70); group.All(peer); peer.Send(71,[0,0]); group.All(peer);
         }
-        alpha.Send(72,[1,1]);
+        alpha.Send(72,[1,0]);
         var returned = group.All();
         That(returned.All(rows => rows.Any(packet => packet is { Kind:1,Opcode:72,Body:[1,1,2] }) &&
             rows.Any(packet => packet is { Kind:0,Opcode:24 })),"组队本体下一图统一回城并释放两人的结算占用");
