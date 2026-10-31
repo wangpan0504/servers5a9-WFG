@@ -90,6 +90,23 @@ internal static class AntonRaidCombatTcpTests
                 That(entered is not null && session.BindRaidCombatDungeon(battle.Instance, phase), "MAP交界使用真实批准实例绑定当前攻坚阶段");
                 var loaded = session.CompleteFormalDungeonLoading()!;
                 var maps = entered!.Entry.Maze.MapSpecification!;
+                if (phase == 0)
+                {
+                    That(session.MutateInventory(c => new(true, 0,
+                        new(c.Inventory, c.Inventory with { ReviveCoins = 3 }, "anton_revive_fixture")), requireTown: false).Accepted,
+                        "安徒恩死亡夹具沿正式库存提交准备复活币");
+                    peer.Send(40, [0, 0, 0, 0]);
+                    Bytes(peer.Expect(0, 32).Body, [(byte)created.Id, (byte)(created.Id >> 8), 0, 0],
+                        "安徒恩死亡发送原生state0以启动本地复活币时钟");
+                    peer.Send(40, [0, 0, 0, 0]); peer.Send(1278); peer.Expect(1, 1278);
+                    That(session.Selected!.Inventory.ReviveCoins == 3, "重复死亡不扣币也不重复发布死亡通知");
+                    peer.Send(41, [(byte)created.Id, (byte)(created.Id >> 8)]);
+                    Bytes(peer.Expect(1, 41).Body, [1, (byte)created.Id, (byte)(created.Id >> 8), 0], "用币提交后确认本人key");
+                    Bytes(peer.Expect(0, 32).Body, [(byte)created.Id, (byte)(created.Id >> 8), 1, 0], "安徒恩用币发送state1结束死亡窗口");
+                    peer.Send(1278); Until(peer, 1, 1278);
+                    That(session.Selected!.Inventory.ReviveCoins == 2 && battle.View.State == AntonRaidBattleState.Fighting,
+                        "安徒恩复活只扣一币且不提交阶段胜利");
+                }
                 var fighting = battle.View;
                 peer.Send(695, new byte[5]); peer.Send(1278); peer.Expect(1, 1278);
                 That(ReferenceEquals(fighting, battle.View), "695已注册但不能将本地零值报告升级为Boss死亡");
