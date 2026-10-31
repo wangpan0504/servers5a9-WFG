@@ -220,6 +220,7 @@ public static class ServerApplication
             var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
             var promotionCatalog = Load("Cash shop promotions", () => ServerRuntime.LoadCashShopPromotions(itemResources));
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotionCatalog;
+            if (command.Kind == ServerCommandKind.Serve) SqliteDatabaseBootstrap.EnableRuntimePooling();
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,
                 adventureCatalog, growthCatalog, guildDungeonMileage: itemResources.GuildContents.DungeonMileage, promotions: CurrentPromotions));
             log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion,
@@ -243,8 +244,15 @@ public static class ServerApplication
                 Opening = opening.Opening.ToString(CultureInfo.InvariantCulture), Honor = opening.Honor.ToString(CultureInfo.InvariantCulture),
                 Roster = opening.Roster.ToString(CultureInfo.InvariantCulture) });
             stage = "Runtime and listeners";
-            await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
-                adventureCatalog, growthCatalog, promotions: CurrentPromotions);
+            try
+            {
+                await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
+                    adventureCatalog, growthCatalog, promotions: CurrentPromotions);
+            }
+            finally
+            {
+                SqliteDatabaseBootstrap.ReleaseRuntimePool();
+            }
             return 0;
         }
         catch (Exception error) when (log is not null)
