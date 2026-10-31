@@ -4,6 +4,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Marriage;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Marriage;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -17,7 +18,7 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCatalog catalog, ItemCatalog items,
     MarriageInventoryPlanner planner, TownCatalog maps, TownProjection town, OnlineSessionDirectory online,
-    InventoryProjection inventory, ServerLog log, TimeProvider? clock = null) : IGameCommandModule
+    InventoryProjection inventory, ServerLog log, CharacterCatalog characters, TimeProvider? clock = null) : IGameCommandModule
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     readonly object editorGate = new();
@@ -66,8 +67,9 @@ internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCata
 
     static bool AtHome(Character character) => character.Position is { Town: 101, Area: 0 };
 
-    bool Edit(GameSession session, MarriageCapture capture, Guid relation, bool acquire)
+    bool Edit(GameSession session, MarriageCapture capture, Guid relation, bool acquire, out int failure)
     {
+        failure = MarriageCoupleRules.MoveInvalidRequest;
         lock (editorGate)
         {
             // 每次访问都清理失效占用，避免已结束的婚约长期保留离线Session引用。
@@ -79,9 +81,14 @@ internal sealed partial class MarriageHandler(IMarriageStore store, MarriageCata
                     editors.Remove(entry.Key);
             }
             if (editors.TryGetValue(relation, out var current))
-                return ReferenceEquals(current.Session, session) && current.Generation == capture.Generation && current.Epoch == capture.Epoch;
+            {
+                bool granted = ReferenceEquals(current.Session, session) && current.Generation == capture.Generation && current.Epoch == capture.Epoch;
+                failure = granted ? 0 : MarriageCoupleRules.MoveEditorBusy;
+                return granted;
+            }
             if (!acquire) return false;
             editors.Add(relation, (session, capture.Generation, capture.Epoch));
+            failure = 0;
             return true;
         }
     }

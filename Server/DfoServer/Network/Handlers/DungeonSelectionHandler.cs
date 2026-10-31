@@ -157,7 +157,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                     if (coupleSelection.Length == 0)
                         await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "marriage_dungeon_selection_rejected");
                     else await PartyDungeonProjection.PublishAsync(coupleSelection.Select(notice => notice with { Option = 1 }));
-                    // 非零15表示已经选中副本，沿用正式队伍选图状态，不用27重新打开普通列表。
+                    // 已选定目标与客户端scene2是两层状态；由共用投影补空27，不改写请求的副本编号。
                     return CommandResult.Handled;
                 }
                 if (party is null || context.Session.Phase != SessionPhase.MapSelect ||

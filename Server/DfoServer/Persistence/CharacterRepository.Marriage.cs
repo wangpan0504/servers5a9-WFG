@@ -15,8 +15,11 @@ internal sealed partial class CharacterRepository : IMarriageStore
     const string MarriageColumns = "r.marriage_id,r.context_id,r.revision,r.first_id,r.second_id,r.state,r.created_at,r.ended_at,r.aggregate_json";
 
     public Character CommitMarriageHallTravel(AccountOwners.Lease owner, Character expected, MarriageRecord wedding,
-        Location destination, Location? returnPoint, long now) => owner.Execute(() =>
+        Location destination, Location? returnPoint, long now, InventoryPlan? inventory = null,
+        MarriageRecord? afterGift = null) => owner.Execute(() =>
     {
+        if ((inventory is null) != (afterGift is null))
+            throw new InvalidDataException("婚礼入场礼计划与领取凭据必须同时提交");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitMarriageHallTravel");
         using var tx = write.Transaction;
@@ -26,7 +29,8 @@ internal sealed partial class CharacterRepository : IMarriageStore
             !current.IsMember(expected.Id) && (!ceremony.Invitations.Any(row => row.CharacterId == expected.Id) ||
                 !ceremony.Gifts.Any(row => row.CharacterId == expected.Id && !row.Settled)))
             throw new InvalidOperationException("婚礼入场资格或预约版本已改变");
-        var saved = SaveInTransaction(db, tx, owner, expected, destination, returnPoint, null);
+        var saved = SaveInTransaction(db, tx, owner, expected, destination, returnPoint, inventory);
+        if (afterGift is not null) SaveMarriageInTransaction(db, tx, current, afterGift);
         tx.Commit();
         return saved with { WeddingHall = new(current.Id, ceremony.Id, ceremony.HallArea, ceremony.ServerIndex) };
     });
@@ -46,9 +50,10 @@ internal sealed partial class CharacterRepository : IMarriageStore
         using var query = db.CreateCommand();
         query.Transaction = tx;
         query.CommandText = """
-            SELECT s.slot_index,json_extract(i.item_core,'$.ItemId')
+            SELECT s.slot_index,json_extract(i.item_core,'$.ItemId'),COALESCE(json_extract(a.detail,'$.ClearAvatarId'),0)
             FROM character_inventory_slots s JOIN character_inventory_items i
               ON i.item_uid=s.item_uid AND i.account=s.account AND i.character_id=s.character_id
+            LEFT JOIN inventory_avatar_details a ON a.item_uid=i.item_uid
             WHERE s.character_id=$id AND s.account=$account AND s.list_type=$equipment AND s.slot_index BETWEEN 0 AND 12
             ORDER BY s.slot_index
             """;
@@ -56,10 +61,16 @@ internal sealed partial class CharacterRepository : IMarriageStore
         query.Parameters.AddWithValue("$account", recipient.Account);
         query.Parameters.AddWithValue("$equipment", (int)InventoryListType.Equipment);
         var equipment = new int[13];
+        var clearAvatarIds = new int[13];
         using (var rows = query.ExecuteReader())
-            while (rows.Read()) equipment[rows.GetInt32(0)] = checked((int)rows.GetInt64(1));
+            while (rows.Read())
+            {
+                int slot = rows.GetInt32(0);
+                equipment[slot] = checked((int)rows.GetInt64(1));
+                clearAvatarIds[slot] = checked((int)rows.GetInt64(2));
+            }
         tx.Commit();
-        return new(recipient, Array.AsReadOnly(equipment));
+        return new(recipient, Array.AsReadOnly(equipment)) { ClearAvatarIds = Array.AsReadOnly(clearAvatarIds) };
     }
 
     public IReadOnlyList<MarriageRecord> FindPendingWeddings()

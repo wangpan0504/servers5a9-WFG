@@ -15,6 +15,33 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, out _, utcNow, ceraPackage: false);
 
+    public InventoryResult UseSharedEffect(Character character, int itemId, short slot, out byte outcome,
+        DateTimeOffset? utcNow = null)
+    {
+        outcome = 0;
+        if (character.Inventory.Find(new(InventoryListType.Main, slot))?.Core.ItemId != itemId ||
+            catalog.SharedEffect(itemId) is not { } effect) return InventoryResult.Reject(17);
+        long value = (random ?? Random.Shared).NextInt64(effect.Outcomes.Sum(row => (long)row.Weight));
+        var selected = effect.Outcomes[^1];
+        foreach (var row in effect.Outcomes)
+        {
+            if (value < row.Weight)
+            {
+                selected = row;
+                break;
+            }
+            value -= row.Weight;
+        }
+        outcome = selected.Index;
+        // 正数引用礼包奖池，直接复用开箱规则，不把无名称的中间礼包伪造成入包物品。
+        var rewards = selected.BoosterId > 0 ? boosters.Get(selected.BoosterId) : new BoosterDefinition([]);
+        if (selected.BoosterId > 0 && !rewards.Available) return InventoryResult.Reject(17);
+        rewards = rewards with { CoolTime = effect.CoolTime, CoolGroup = effect.CoolGroup,
+            CooltimeMaintenance = effect.CooltimeMaintenance };
+        return OpenCore(character, new(slot, 1), out _, out _, utcNow, ceraPackage: false,
+            sharedRewards: rewards, allowEmptyReward: selected.BoosterId <= 0);
+    }
+
     public (int Total, int Matching) CountMatchingPools(Character character, int itemId)
     {
         var definition = boosters.Get(itemId);
@@ -257,7 +284,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
-        out InventorySnapshot? grantBefore, DateTimeOffset? utcNow, bool ceraPackage, bool lottery = false)
+        out InventorySnapshot? grantBefore, DateTimeOffset? utcNow, bool ceraPackage, bool lottery = false,
+        BoosterDefinition? sharedRewards = null, bool allowEmptyReward = false)
     {
         receipt = null;
         grantBefore = null;
@@ -272,10 +300,10 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var sourceTemplate = catalog.Get(source.Core.ItemId);
         if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "booster_source_ineligible" };
-        var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) ||
+        var definition = sharedRewards ?? boosters.Get(source.Core.ItemId);
+        if ((!definition.Available && !allowEmptyReward) || !definition.AllowsFirstGrowType(character.GrowType) ||
             ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
-            return InventoryResult.Reject(19);
+            return InventoryResult.Reject(19) with { RejectReason = definition.PendingRule ?? "booster_entry_or_grow_ineligible" };
         if (HasCooldown(before, source.Core.ItemId, definition, now))
             return InventoryResult.Reject(19);
         var selectionPolicy = (attributePairs ?? IndependentAttributePairCatalog.RequiredOnly)
@@ -493,7 +521,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             return InventoryResult.Reject(19) with { RejectReason = "attribute_pair_random_invalid" };
         }
-        if (totals.Count is 0 or > BoosterReceipt.MaximumItems)
+        if ((totals.Count == 0 && !allowEmptyReward) || totals.Count > BoosterReceipt.MaximumItems)
             return InventoryResult.Reject(4);
         // 所有奖励基于已扣源和材料的快照规划；容量或钱包失败时整份计划不提交。
         if (lottery && boosters.AllowsDevilDouble(source.Core.ItemId) &&

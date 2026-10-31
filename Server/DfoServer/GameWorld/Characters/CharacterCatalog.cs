@@ -10,6 +10,7 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
 {
     public IEnumerable<byte> Jobs => profiles.Keys.Order();
     private readonly Dictionary<byte, CharacterAttributeDefinition> attributeDefinitions = new();
+    public CharacterDefaultAppearance DefaultAppearance { get; private set; } = new([]);
 
     public CharacterProfile Get(byte job) => profiles.GetValueOrDefault(job) ?? throw new InvalidDataException("Ordinary character job is not implemented");
     public CharacterAttributeDefinition GetAttributeDefinition(byte job) => attributeDefinitions.GetValueOrDefault(job)
@@ -118,6 +119,7 @@ internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profil
             }
         }
 
+        catalog.DefaultAppearance = CharacterDefaultAppearance.Load(pvf);
         return catalog;
     }
 

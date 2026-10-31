@@ -136,6 +136,7 @@ internal static partial class MarriagePersistenceTests
         WeddingQuestIsolation();
         WeddingRecoverySettlement();
         WeddingHallTravel();
+        WeddingAdmissionGifts();
         Console.WriteLine($"PASS {Count - checks} marriage persistence transaction assertions");
     }
 
@@ -186,6 +187,51 @@ internal static partial class MarriagePersistenceTests
             destination, f.Second.Position, 1501), "取消后旧预约快照不能提交另一方的位置或场景身份");
         That(f.ReadSecond().Position == f.Second.Position && f.ReadSecond().Revision == created.Second!.Revision,
             "旧预约入场失败不留下位置或版本写入");
+    }
+
+    static void WeddingAdmissionGifts()
+    {
+        using var f = new Fixture();
+        var guest = f.Guest;
+        var record = f.NewRelation(f.First, f.Second) with
+        {
+            State = 2,
+            Wedding = new()
+            {
+                Id = Guid.NewGuid(), PayerId = f.First.Id, State = 1, HallArea = 8,
+                StartsAt = 2000, EndsAt = 2060,
+                Invitations = [new() { CharacterId = guest.Id, InviterId = f.First.Id, Name = guest.Name }],
+                Gifts = [new() { Id = Guid.NewGuid(), CharacterId = guest.Id, Gold = 10000 }]
+            }
+        };
+        f.Repository.CommitMarriageTogether(f.FirstOwner, f.SecondOwner, f.First, f.Second,
+            Noop(f.First), Noop(f.Second), null, record);
+        var claimed = MarriageWeddingRules.ClaimCeremonyGifts(record, guest.Id, 1500);
+        var destination = new DfoServer.GameWorld.Towns.Location(39, 8, 100, 100);
+        var plan = new InventoryPlan(guest.Inventory, guest.Inventory with
+        {
+            Items = guest.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), new(10002627, ItemKind.Consumable, 1)))
+                .Add(new(0, new(InventoryListType.Main, 66), new(10002628, ItemKind.Consumable, 1)))
+        }, "marriage");
+        f.Sql("CREATE TRIGGER fail_ceremony_gift AFTER UPDATE ON marriage_records BEGIN SELECT RAISE(ABORT,'ceremony gift rollback'); END");
+        Reject<SqliteException>(() => f.Repository.CommitMarriageHallTravel(f.GuestOwner, guest, record, destination,
+            guest.Position, 1500, plan, claimed), "入场位置与库存保存后，领取凭据末段失败必须回滚");
+        That(f.ReadGuest().Position == guest.Position && f.ReadGuest().Revision == guest.Revision &&
+            f.ReadGuest().Inventory.Items.IsEmpty && f.Repository.FindMarriage(record.Id)!.Revision == record.Revision,
+            "入场礼写入失败没有位置、UID、资产或领取资格残留");
+        f.Sql("DROP TRIGGER fail_ceremony_gift");
+        var entered = f.Repository.CommitMarriageHallTravel(f.GuestOwner, guest, record, destination,
+            guest.Position, 1500, plan, claimed);
+        var reopened = new CharacterRepository(f.Path);
+        That(entered.Position == destination && entered.WeddingHall?.CeremonyId == record.Wedding.Id &&
+            entered.Inventory.Items.Length == 2 && entered.Inventory.Items.All(row => row.Uid > 0) &&
+            reopened.FindMarriage(record.Id)!.Wedding!.Invitations[0].CeremonyGiftsReceived,
+            "重试成功后发放实际UID，位置和请帖领取凭据一并保存，重开库不丢凭据");
+        Reject<InvalidOperationException>(() => f.Repository.CommitMarriageHallTravel(f.GuestOwner, guest, record,
+            destination, guest.Position, 1500, plan, claimed), "原入场礼计划不能绕过角色与关系CAS重放");
+        var repeated = f.Repository.CommitMarriageHallTravel(f.GuestOwner, entered, claimed, destination, guest.Position, 1501);
+        That(repeated.Inventory.Items.Select(row => row.Uid).SequenceEqual(entered.Inventory.Items.Select(row => row.Uid)) &&
+            repeated.Inventory.Items.All(row => row.Core.Count == 1), "已经领取的来宾重复入场不产生第二套礼炮");
     }
 
     static void WeddingRecoverySettlement()

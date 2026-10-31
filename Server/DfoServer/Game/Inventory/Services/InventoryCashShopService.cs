@@ -11,7 +11,8 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CargoCatalog cargo,
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
-    ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null)
+    ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null,
+    IReadOnlySet<int>? marriedOnlyCommodities = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
     readonly TimeProvider time = clock ?? TimeProvider.System;
@@ -48,6 +49,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var activity = events?.Read(DfoServer.Game.Events.ServerEventService.MileageShopId);
         bool? mileageCart = null;
         bool requireEvent = false;
+        bool requireMarriageState = false;
         var before = character.Inventory;
         var paid = before;
         ushort avatarExpansion = before.AvatarExpansion;
@@ -66,6 +68,13 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (product is null || product.Count <= 0 ||
                 requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0)
                 return InventoryResult.Reject(17);
+            bool marriedOnly = marriedOnlyCommodities?.Contains(product.CommodityId) == true;
+            if (marriedOnly && (character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
+                return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_required" };
+            bool renameCard = catalog.StackableAction(product.ItemId)?.Label == "[character name change]";
+            if (renameCard && !CharacterRenameCard.AllowsMarriage(character.Marriage))
+                return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_rename_blocked" };
+            requireMarriageState |= marriedOnly || renameCard;
             if (request.CurrencyMode == 1 && !product.IsMileage)
                 return InventoryResult.Reject(17) with { RejectReason = "mileage_source_product_mismatch" };
             if (mileageCart.HasValue && mileageCart != product.IsMileage)
@@ -329,7 +338,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             }
         receipt = new(products.ToImmutableArray(), bonuses);
         if (requireEvent && activity!.Schedule.OverrideActive is null) Deadline(activity.Schedule.EndsAt);
-        return new(true, 0, new(before, after, "cash_shop_buy", new(character, deadline, time), overflow)
+        return new(true, 0, new(before, after, "cash_shop_buy", new(character, deadline, time,
+            requireMarriageState: requireMarriageState), overflow)
         {
             RequiredEvent = requireEvent ? new(activity!.Schedule, time) : null,
             UnlockSkillTree = unlockSkillTree,

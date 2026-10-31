@@ -143,11 +143,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             var notices = new List<PartyDungeonNotice>();
             foreach (var member in party.Members)
             {
+                bool sceneTransition = member.Actor.Session.Phase == SessionPhase.Town;
                 var receipt = evildomDungeon is { } dungeon ? member.Actor.Session.BeginEvildomWarSelection(dungeon) :
                     member.Actor.Session.BeginDungeonSelection(partyAdmission: true);
                 if (receipt is null) return [];
                 if (!member.Actor.Session.ConfirmNewDungeonSelection(receipt)) return [];
-                notices.Add(new(PartyDungeonNoticeKind.Selection, member, party.Members, Selection: receipt));
+                notices.Add(new(PartyDungeonNoticeKind.Selection, member, party.Members, Selection: receipt, SceneTransition: sceneTransition));
             }
             return notices.ToArray();
         });

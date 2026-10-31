@@ -34,6 +34,7 @@ internal sealed partial class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<InventoryExpansionDefinition?>> inventoryExpansions = new();
     readonly ConcurrentDictionary<int, Lazy<EquipmentPeriodChangeDefinition?>> periodChanges = new();
     readonly ConcurrentDictionary<int, Lazy<StackableFile>> stackableDefinitions = new();
+    readonly ConcurrentDictionary<int, Lazy<SharedEffectConsumableDefinition?>> sharedEffects = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpByTableDefinition?>> levelUpTables = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureChangeDefinition?>> creatureChanges = new();
@@ -488,6 +489,13 @@ internal sealed partial class ItemCatalog
         if (!stackable.TryGetValue(id, out var path)) return null;
         return actionConsumables.GetOrAdd(id, key => new(() => ActionConsumableDefinition.Parse(
             RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public SharedEffectConsumableDefinition? SharedEffect(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return sharedEffects.GetOrAdd(id, key => new(() => SharedEffectConsumableDefinition.Parse(
+            SharedEffectConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString)))).Value;
     }
 
     StackableFile? StackableDefinition(int id)

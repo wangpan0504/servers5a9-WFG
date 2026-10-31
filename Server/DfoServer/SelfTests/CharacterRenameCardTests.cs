@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
+using DfoServer.Game.Marriage;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Parsers;
@@ -26,6 +27,9 @@ internal static class CharacterRenameCardTests
         Bytes(CharacterNameHistoryPackets.List([new("旧名", 0x12345678)], 2),
             [1, 4, 0, 0, 0, 0xBE, 0xC9, 0xC3, 0xFB, 2, 0x78, 0x56, 0x34, 0x12], "736原生行数、GBK名字、服索引及Unix时间");
         Bytes(CharacterNameHistoryPackets.List([], 0), [0], "无真实历史也清空旧窗口内容");
+        foreach (byte state in new byte[] { 0, 1, 2, 3, 4 })
+            That(CharacterRenameCard.AllowsMarriage(new MarriageRecord(Guid.NewGuid(), 1, 1, 1, 2, state)) == (state is 0 or 4),
+                "原生更名资格仅排除订婚、预约及婚礼进行中 " + state);
         That(CharacterRenameRequests.Use([65, 0]) == 65, "509读取原生Main槽u16");
         var body = Body(2, "旧名字", "新名字");
         That(CharacterRenameRequests.Complete(body) == new CharacterRenameRequest(2, "旧名字", "新名字", 1),
@@ -40,6 +44,7 @@ internal static class CharacterRenameCardTests
         try
         {
             var repository = new CharacterRepository(path);
+            uint marriageContext = 100;
             var owners = new AccountOwners();
             using var owner = owners.Acquire("rename-test", () => { });
             using var other = owners.Acquire("rename-other", () => { });
@@ -95,7 +100,18 @@ internal static class CharacterRenameCardTests
             Reject<SqliteException>(() => repository.Rename(owner, saved, "Rollback"), "曾用名写入失败须回滚GM改名");
             That(repository.LoadCharacter(owner, saved.Slot).Name == "中文名" && repository.ReadNameHistory(owner, role.Id).SequenceEqual(history), "历史与名称原子提交");
             Sql("DROP TRIGGER rename_history_abort");
-            role = repository.ActivateRenameCard(owner, saved, Plan(saved))!;
+            role = saved;
+            var engagement = Engage();
+            string engaged = Snapshot();
+            That(repository.ActivateRenameCard(owner, role, Plan(role)) is null && Snapshot() == engaged,
+                "订婚时服务端拒绝扣更名卡，不生成待更名资格");
+            End(engagement);
+            role = repository.ActivateRenameCard(owner, role, Plan(role))!;
+            engagement = Engage();
+            string pendingEngaged = Snapshot();
+            That(repository.CompleteRenameCard(owner, role, "BlockedName") == CharacterRenameFailure.Unavailable &&
+                Snapshot() == pendingEngaged, "已有更名资格也不能绕过当前婚约，拒绝保留资格与原名");
+            End(engagement);
             repository = new(path);
             That(repository.ListRoster(owner).Single().RenamePending && repository.ReadNameHistory(owner, role.Id).SequenceEqual(history), "重开仓储恢复待改名资格与历史");
             repository.Delete(owner, repository.LoadDeletionTarget(owner, role.Slot));
@@ -113,6 +129,22 @@ internal static class CharacterRenameCardTests
                 using var command = db.CreateCommand();
                 command.CommandText = sql;
                 command.ExecuteNonQuery();
+            }
+
+            MarriageRecord Engage()
+            {
+                var partner = repository.LoadCharacter(other, 0);
+                var relation = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), ++marriageContext, role.Id, partner.Id, 1000);
+                role = repository.CommitMarriageTogether(owner, other, role, partner,
+                    new(role.Inventory, role.Inventory, "marriage_fixture"),
+                    new(partner.Inventory, partner.Inventory, "marriage_fixture"), null, relation).First;
+                return relation;
+            }
+
+            void End(MarriageRecord relation)
+            {
+                repository.CommitMarriageSettlement(relation, MarriageWeddingRules.EndRelationship(relation, 1001).Record);
+                role = repository.LoadCharacter(owner, role.Slot);
             }
 
             void VerifySession()

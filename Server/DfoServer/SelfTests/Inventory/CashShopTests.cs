@@ -122,6 +122,41 @@ internal static partial class CashShopTests
         Console.WriteLine($"PASS {Count - checks} 商城期限、失败包与调试命令核心断言");
     }
 
+    static void VerifyMarriagePurchases(Character character, ItemResources resources)
+    {
+        const int commodity = 700901, renameCommodity = 700902;
+        var shop = CashShopCatalog.Parse("[material]\n700901 3037 1 0 0 1 0 0 0\n" +
+            "[item]\n700902 2660698 1 0 0 1 0 0 0");
+        var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits,
+            resources.EpicPieces, resources.Cargo, marriedOnlyCommodities: new HashSet<int> { commodity });
+        var request = new CashShopPurchaseRequest(0, [new(commodity, 0)]);
+        var marriage = new DfoServer.Game.Marriage.MarriageRecord(Guid.NewGuid(), 1, 1, character.Id, ushort.MaxValue, 4);
+        foreach (byte state in new byte[] { 0, 1, 2, 3 })
+            That(service.Buy(character with { Marriage = marriage with { State = state } }, request, out _) is
+                { Accepted: false, Plan: null, RejectReason: "cash_shop_marriage_required" },
+                "仅限已婚商品拒绝其他婚姻阶段，整车不扣费 " + state);
+        That(service.Buy(character, request, out _) is { Accepted: false, Plan: null }, "无关系同样不能购买已婚限定商品");
+        var married = character with { Marriage = marriage };
+        var paid = service.Buy(married, request, out var receipt);
+        That(paid.Accepted && receipt?.Products.Single().CommodityId == commodity &&
+            paid.Plan!.After.AccountWallet.Get(CurrencyKind.Cera) == character.Inventory.AccountWallet.Get(CurrencyKind.Cera) - 1 &&
+            paid.Plan.CharacterPrecondition!.MatchesIdentity(married) &&
+            !paid.Plan.CharacterPrecondition.MatchesIdentity(character),
+            "已婚限定商品正常扣款并携带提交时的婚姻资格复验");
+        var itemIdsAreNotCommodities = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits,
+            resources.EpicPieces, resources.Cargo, marriedOnlyCommodities: new HashSet<int> { 3037 });
+        That(itemIdsAreNotCommodities.Buy(character, request, out _).Accepted,
+            "婚礼限制列表按商品号而非物品号解释");
+        var rename = new CashShopPurchaseRequest(0, [new(renameCommodity, 0)]);
+        foreach (byte state in new byte[] { 1, 2, 3 })
+            That(service.Buy(character with { Marriage = marriage with { State = state } }, rename, out _) is
+                { Accepted: false, RejectReason: "cash_shop_marriage_rename_blocked" },
+                "更名卡购买与原生婚约门禁一致 " + state);
+        That(service.Buy(character, rename, out _).Accepted && service.Buy(married, rename, out _).Accepted,
+            "未婚及已婚角色仍可购买更名卡，不扩大为所有婚姻阶段禁用");
+        Console.WriteLine("PASS marriage cash shop qualifications");
+    }
+
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
         int[] expiryItems = [490705385, 490705234, 490705235, 490705286, 490705249];
@@ -166,6 +201,7 @@ internal static partial class CashShopTests
         };
         var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
+        VerifyMarriagePurchases(character, resources);
         VerifyHongbaoPayment(character, product, resources);
         VerifyHongbaoStorage(towns, characters, resources);
         // 新版PVF商城新增商品可能指向含重复 impossible contents 块的物品（加载器按设计拒绝）；这类商品不能作为过期夹具，跳过。

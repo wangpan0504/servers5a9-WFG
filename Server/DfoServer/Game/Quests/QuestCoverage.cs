@@ -314,9 +314,8 @@ internal static class QuestCoverage
                 if (access.Entry == QuestResourceEntry.Creature && catalog.Creatures is null) reasons.Add("宠物目录未装配");
                 if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !expertJob && !QuestRelationProgress.ZeroRewardChild(quest) && !goldOnly)
                     reasons.Add(RewardRestriction(quest));
-                if (!quest.Attributes.Contains("not give exp quest") && !(QuestExperiencePolicy.AllowsOmittedDifficulty(quest) && quest.Difficulty is null) &&
-                    (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
-                    reasons.Add("奖励缺少合法difficulty键");
+                if (!quest.Attributes.Contains("not give exp quest") && !parameters.TryGetDifficultyWeight(quest.Difficulty, out _))
+                    reasons.Add("奖励显式difficulty未配置合法倍率");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
                 try
                 {

@@ -17,36 +17,46 @@ internal static class MarriageCoupleRules
 {
     public const int StorageSlots = 40;
     public const int MaxCommentBytes = 255;
+    // 仅绑定CMD1048的原生回调，不能借作其他婚房命令的通用错误表。
+    public const int MoveInvalidRequest = -1;
+    public const int MoveNoMarriage = -2;
+    public const int MoveStorageFull = -13;
+    public const int MoveEditorBusy = -20;
+    public const int MoveInvalidPlacement = -22;
 
     public static MarriageCoupleTransition Move(MarriageRecord record, ushort member,
         MarriageCoupleSlot source, MarriageCoupleSlot target, MarriageCatalog catalog)
     {
-        if (!Member(record, member)) return Fail(record, -2);
+        if (!Member(record, member)) return Fail(record, MoveNoMarriage);
         if (!ValidSlot(source, catalog) || !ValidSlot(target, catalog) ||
-            source.Container == target.Container && source.Slot == target.Slot) return Fail(record, -3);
+            source.Container == target.Container && source.Slot == target.Slot) return Fail(record, MoveInvalidRequest);
         var from = source.Container == 0 ? record.Furniture : record.Storage;
         var to = target.Container == 0 ? record.Furniture : record.Storage;
         if (!from.TryGetValue(source.Slot, out var value) || value.ItemId != source.ItemId || value.Count <= 0)
-            return Fail(record, -3);
+            return Fail(record, MoveInvalidRequest);
         bool occupied = to.TryGetValue(target.Slot, out var replaced);
-        if ((occupied ? replaced.ItemId : 0) != target.ItemId) return Fail(record, -3);
+        // 原生摆放、收回在两端都写入源家具编号；只有同容器拖动声明目标原物品。
+        int targetItem = source.Container != target.Container ? source.ItemId : occupied ? replaced.ItemId : 0;
+        if (target.ItemId != targetItem) return Fail(record, MoveInvalidRequest);
         var furniture = record.Furniture;
         var storage = record.Storage;
         if (source.Container == 1 && target.Container == 0 && value.Count > 1)
         {
-            if (occupied || !Fits(value with { Count = 1 }, target, catalog)) return Fail(record, -3);
+            if (occupied || !Fits(value with { Count = 1 }, target, catalog)) return Fail(record, MoveInvalidPlacement);
             Put(source, value with { Count = value.Count - 1 });
             Put(target, value with { Count = 1 });
             return Done(record with { Furniture = furniture, Storage = storage });
         }
         if (source.Container == 0 && target.Container == 1 && occupied && replaced.ItemId == value.ItemId)
         {
-            if ((long)replaced.Count + value.Count > int.MaxValue) return Fail(record, -3);
+            if ((long)replaced.Count + value.Count > int.MaxValue) return Fail(record, MoveStorageFull);
             Put(source, null);
             Put(target, replaced with { Count = replaced.Count + value.Count });
             return Done(record with { Furniture = furniture, Storage = storage });
         }
-        if (!Fits(value, target, catalog) || occupied && !Fits(replaced, source, catalog)) return Fail(record, -3);
+        if (!Fits(value, target, catalog)) return Fail(record, MoveInvalidPlacement);
+        if (occupied && !Fits(replaced, source, catalog))
+            return Fail(record, source.Container == 0 && target.Container == 1 ? MoveStorageFull : MoveInvalidPlacement);
         Put(source, occupied ? replaced : null);
         Put(target, value);
         return Done(record with { Furniture = furniture, Storage = storage });

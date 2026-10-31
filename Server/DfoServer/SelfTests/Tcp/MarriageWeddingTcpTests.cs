@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Marriage;
 using DfoServer.GameWorld.Marriage;
 using DfoServer.GameWorld.Items;
@@ -16,32 +17,43 @@ internal static class MarriageWeddingTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
+        Inventory.BoosterCharacterPoolTests.RunResources(resources.Towns, resources.ItemResources);
         var clock = new Clock();
         var catalog = MarriageCatalog.Load(resources.Archive);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "marriage-wedding"), resources: resources, clock: clock);
         await fixture.StartAsync();
-        await Ceremony(fixture, catalog, resources.Towns, clock, 0, missing: false, prepared: false);
+        await Ceremony(fixture, catalog, resources, clock, 0, missing: false, prepared: false);
         foreach (byte type in new byte[] { 0, 1, 2 })
-            await Ceremony(fixture, catalog, resources.Towns, clock, type, missing: false);
-        await Ceremony(fixture, catalog, resources.Towns, clock, 2, missing: true);
+            await Ceremony(fixture, catalog, resources, clock, type, missing: false);
+        await Ceremony(fixture, catalog, resources, clock, 2, missing: true);
         That(fixture.Query("PRAGMA foreign_key_check").Length == 0 && fixture.Query("PRAGMA integrity_check") is [["ok"]],
             "三档成功及付费缺席退款保持隔离库完整");
         Console.WriteLine($"PASS {Count - checks} marriage wedding TCP assertions");
     }
 
-    static async Task Ceremony(TcpTestFixture fixture, MarriageCatalog catalog, TownCatalog towns, Clock clock, byte type, bool missing,
+    static async Task Ceremony(TcpTestFixture fixture, MarriageCatalog catalog, TcpTestResources resources, Clock clock, byte type, bool missing,
         bool prepared = true)
     {
+        var towns = resources.Towns;
         string suffix = type + (!prepared ? "quest" : missing ? "fail" : "ok");
         string accountA = "weddinga" + suffix, accountB = "weddingb" + suffix;
         using var first = Open(fixture, accountA);
         using var second = Open(fixture, accountB);
         using var guest = Open(fixture, "weddingg" + suffix);
-        first.Create("WedA" + suffix, 0); second.Create("WedB" + suffix, 1); guest.Create("WedG" + suffix, 2);
+        first.Create("WedA" + suffix, 0); second.Create("WedB" + suffix, 1); guest.Create("WedG" + suffix, type == 2 ? (byte)14 : (byte)2);
         fixture.Sql("UPDATE characters SET level=30,gold=10000000 WHERE id IN ($p0,$p1,$p2)", first.Id, second.Id, guest.Id);
+        if (type == 2) fixture.Sql("UPDATE characters SET level=55,grow_type=1 WHERE id=$p0", guest.Id);
         // 准备任务另有真实通关回归；本夹具冻结已完成准备的婚约，专测之后的正式网络入口。
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
+        if (type == 2)
+        {
+            using var guestOwner = owners.Acquire("weddingg" + suffix, () => { });
+            var role = repository.LoadCharacter(guestOwner, 0);
+            repository.Save(guestOwner, role, role.Position, role.Return, new(role.Inventory, role.Inventory with
+            { Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 68),
+                InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10002631), utcNow: clock.GetUtcNow()))) }, "marriage_fixture"));
+        }
         using (var ownerA = owners.Acquire(accountA, () => { }))
         using (var ownerB = owners.Acquire(accountB, () => { }))
         {
@@ -153,6 +165,78 @@ internal static class MarriageWeddingTcpTests
         That(guestNotices.Any(p => p.Kind == 1 && p.Opcode == 1041 && p.Body.AsSpan().SequenceEqual(new byte[] { 1, 0, 0, 0, 0 })) &&
             fixture.Query("SELECT town,area,gold FROM characters WHERE id=$p0", guest.Id) is [[39L, long guestHall, 9989997L]] && guestHall == wedding.HallArea,
             "来宾送礼后正式入场，重发礼金不重复扣款");
+        That(guestNotices.Any(p => p is { Kind: 0, Opcode: 14 }) &&
+            repository.FindMarriage(first.Id)!.Wedding!.Invitations.Single(row => row.CharacterId == guest.Id).CeremonyGiftsReceived,
+            "入场成功后下发实际礼炮库存差量，并保存当前请帖的领取凭据");
+        foreach (var item in catalog.CeremonyGifts)
+            That(fixture.Query("SELECT COALESCE(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items " +
+                "WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", guest.Id, item.ItemId) is [[long count]] &&
+                count == item.Count, "入场礼数量严格采用PVF，不复用婚礼结束回礼");
+        if (type == 0)
+        {
+            foreach (var item in catalog.CeremonyGifts)
+            {
+                That(resources.ItemResources.Items.SharedEffect(item.ItemId) is { CoolTime: 5000,
+                    Outcomes: [{ Index: 0, Weight: 100000, BoosterId: 10002868 }] }, "当前两类礼炮对应同一奖励礼包及原生特效结果0");
+                ushort slot = checked((ushort)Convert.ToInt64(fixture.Query("SELECT slot_index FROM character_inventory_slots s " +
+                    "JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 " +
+                    "AND json_extract(i.item_core,'$.ItemId')=$p1", guest.Id, item.ItemId).Single()[0]));
+                byte[] use = Build(w => { w.Write(item.ItemId); w.Write(slot); });
+                guest.Send(251, use);
+                guest.Expect(1, 251, Build(w => { w.Write((byte)1); w.Write(slot); w.Write((byte)0); }));
+                byte[] effect = Build(w => { w.Write(guest.Id); w.Write(item.ItemId); w.Write((byte)0); });
+                foreach (var peer in new[] { guest, first, second }) peer.Expect(0, 219, effect);
+                That(Drain(guest).Any(p => p is { Kind: 0, Opcode: 14 }) &&
+                    fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
+                        "AND json_extract(item_core,'$.ItemId')=$p1", guest.Id, item.ItemId) is [[0L]],
+                    "礼炮按一次真实消费并同步奖池产物，未把无名礼包留作背包实物");
+                string unchanged = fixture.Snapshot();
+                guest.Send(251, use); guest.Expect(1, 251, [0, 17, 0]); guest.Barrier();
+                That(fixture.Snapshot() == unchanged, "旧源槽重放不消费奖励或重复产生礼炮效果");
+            }
+            var rewards = fixture.Query("SELECT json_extract(item_core,'$.ItemId'),json_extract(item_core,'$.Value') " +
+                "FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId') IN (10002912,10002623)", guest.Id);
+            That(rewards.Sum(row => Convert.ToInt64(row[1]) / (Convert.ToInt32(row[0]) == 10002623 ? 3 : 1)) == 2 &&
+                fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
+                    "AND json_extract(item_core,'$.ItemId')=10002868", guest.Id) is [[0L]],
+                "两次礼炮准确抽取两次当前PVF礼包池，不给客户端额外中间盒子");
+        }
+        guest.Send(1041, entry);
+        That(!Drain(guest).Any(p => p is { Kind: 0, Opcode: 14 }), "重复入场不会再次发放入场礼");
+        Drain(first); Drain(second);
+        if (type == 2)
+        {
+            byte[] open = Build(w => { w.Write((ushort)68); w.Write(1); });
+            byte[] expectedAck = Build(w =>
+            {
+                w.Write((byte)1); w.Write((byte)0); w.Write(10002631); w.Write((short)68);
+                w.Write(0); w.Write(0); w.Write((ushort)5);
+                foreach (var row in new[] { (490700962, 1), (415600000, 1), (10002901, 100), (10002611, 1), (10002612, 1) })
+                { w.Write(row.Item1); w.Write(row.Item2); }
+            });
+            guest.Send(160, open);
+            var updates = Drain(guest);
+            Bytes(updates.Single(packet => packet is { Kind: 1, Opcode: 160 }).Body, expectedAck,
+                "职业礼包成功回执包含本职业完整五项奖励");
+            int ackIndex = updates.FindIndex(packet => packet is { Kind: 1, Opcode: 160 });
+            That(!updates.Take(ackIndex).Any(packet => packet.Opcode == 14),
+                "既有场景目录更新允许先到，当前开箱库存差量必须在ACK之后");
+            That(updates.Any(packet => packet is { Kind: 0, Opcode: 14 } && packet.Body[0] == 0) &&
+                updates.Any(packet => packet is { Kind: 0, Opcode: 14 } && packet.Body[0] == 1),
+                "现场相同的女圣职者婚礼盒请求成功，随后同步普通道具和武器装扮容器");
+            That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
+                "AND json_extract(item_core,'$.ItemId')=10002631", guest.Id) is [[0L]] &&
+                fixture.Query("SELECT count(*) FROM inventory_avatar_details a JOIN character_inventory_items i ON i.item_uid=a.item_uid " +
+                    "WHERE i.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=415600000", guest.Id) is [[1L]],
+                "源盒实际消费，武器装扮核心与详情共同入库");
+            string snapshot = fixture.Snapshot();
+            guest.Send(160, open);
+            var replay = Drain(guest);
+            Bytes(replay.Single(packet => packet is { Kind: 1, Opcode: 160 }).Body, [0, 19, 0],
+                "耗尽后的开箱请求按原生失败回执收尾");
+            That(!replay.Any(packet => packet.Opcode == 14), "拒绝不发布获得差量");
+            That(snapshot == fixture.Snapshot(), "耗尽源槽重放不会再发一套婚礼奖励");
+        }
         if (missing)
         {
             second.Dispose();
@@ -200,7 +284,8 @@ internal static class MarriageWeddingTcpTests
                 fixture.Query("SELECT gold FROM mailbox_messages WHERE recipient_id=$p0 AND gold>0", first.Id) is [[2500L]] &&
                 fixture.Query("SELECT gold FROM mailbox_messages WHERE recipient_id=$p0 AND gold>0", second.Id) is [[2500L]],
                 "三档成功均原子结清祝福礼金，手续费及奇数分账按独立预期");
-            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id IN ($p0,$p1,$p2)", first.Id, second.Id, guest.Id) is [[5L]],
+            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id IN ($p0,$p1,$p2) AND delivery_key LIKE $p3",
+                first.Id, second.Id, guest.Id, $"marriage:{reserved.Id:N}:{wedding.Id:N}:%") is [[5L]],
                 "夫妻礼金两封、档位礼包两封和来宾回礼一封各发一次");
             guest.Send(1036, money); Rejected(guest, 1036);
             Drain(first); Drain(second); Drain(guest);
@@ -253,7 +338,7 @@ internal static class MarriageWeddingTcpTests
                 peer.ReadChatEmoticons(packet);packets.Add(packet);continue;
             }
             That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 1001 or 1002 or 1003 or 1007 or 1016 ||
-                packet.Kind == 1 && packet.Opcode is 1035 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
+                packet.Kind == 1 && packet.Opcode is 160 or 1035 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
             That(packet.Body.Length > 0, "婚礼流程通知必须有真实正文");
             if (packet.Opcode == 1002) That(packet.Body.Length == 71, "临时婚服71字节");
             if (packet.Opcode == 1007) That(packet.Body.Length == 79, "预约79字节");

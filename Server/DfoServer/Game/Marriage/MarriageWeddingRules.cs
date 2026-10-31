@@ -151,6 +151,31 @@ internal static class MarriageWeddingRules
         };
     }
 
+    public static MarriageRecord ClaimCeremonyGifts(MarriageRecord record, ushort guestId, long now)
+    {
+        var wedding = ActiveWedding(record, now);
+        if (now >= wedding.StartsAt || record.IsMember(guestId) ||
+            !wedding.Gifts.Any(row => row.CharacterId == guestId && !row.Settled))
+            throw new InvalidOperationException("来宾尚不能领取婚礼入场礼");
+        int index = -1;
+        for (int i = 0; i < wedding.Invitations.Length; i++)
+        {
+            if (wedding.Invitations[i].CharacterId != guestId) continue;
+            index = i;
+            break;
+        }
+        if (index < 0) throw new InvalidOperationException("来宾没有本场婚礼请帖");
+        var invitation = wedding.Invitations[index];
+        if (invitation.CeremonyGiftsReceived) return record;
+        return Next(record) with
+        {
+            Wedding = wedding with
+            {
+                Invitations = wedding.Invitations.SetItem(index, invitation with { CeremonyGiftsReceived = true })
+            }
+        };
+    }
+
     public static MarriageRecord CompleteCeremony(MarriageRecord record, long now)
     {
         var wedding = ActiveWedding(record, now);

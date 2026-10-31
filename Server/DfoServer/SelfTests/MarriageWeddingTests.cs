@@ -105,8 +105,16 @@ internal static class MarriageWeddingTests
         That(record.Wedding!.InviteRemaining[1] == catalog.Ceremonies[0].LettersPerPersonRaw - 1 &&
             record.Wedding.InviteRemaining[2] == catalog.Ceremonies[0].LettersPerPersonRaw, "邀请仅扣发送方的额度");
         Reject<InvalidOperationException>(() => MarriageWeddingRules.SendInvitation(record, 2, 3, "Guest", 1002), "另一配偶不能重复邀请同一来宾");
+        Reject<InvalidOperationException>(() => MarriageWeddingRules.ClaimCeremonyGifts(record, 3, 1002), "未送礼的来宾不领取入场礼");
         var giftId = Guid.NewGuid();
         record = MarriageWeddingRules.AddGift(record, catalog, new() { Id = giftId, CharacterId = 3, Name = "Guest", Gold = 10000 }, 1002);
+        var admitted = MarriageWeddingRules.ClaimCeremonyGifts(record, 3, 1003);
+        That(admitted.Revision == record.Revision + 1 && admitted.Wedding!.Invitations[0].CeremonyGiftsReceived &&
+            !record.Wedding!.Invitations[0].CeremonyGiftsReceived &&
+            ReferenceEquals(admitted, MarriageWeddingRules.ClaimCeremonyGifts(admitted, 3, 1004)),
+            "入场礼按本场来宾请帖领取一次，重进不重复发礼且旧快照不变");
+        Reject<InvalidOperationException>(() => MarriageWeddingRules.ClaimCeremonyGifts(record, 4, 1003), "无请帖来宾不能领取入场礼");
+        Reject<InvalidOperationException>(() => MarriageWeddingRules.ClaimCeremonyGifts(record, 3, 1300), "开场后不能补领入场礼");
         Reject<InvalidOperationException>(() => MarriageWeddingRules.AddGift(record, catalog,
             new() { Id = Guid.NewGuid(), CharacterId = 3, Gold = 10000 }, 1003), "重复送礼不会形成第二笔未结清账单");
         That(MarriageWeddingRules.GuestGift(catalog, 0, 99999).SequenceEqual(catalog.GuestGiftTiers[0].GiftsByWeddingType[0]) &&

@@ -92,6 +92,12 @@ internal static partial class TownPackets
             state[7] = 1;
             // 0267F6FB只接受1；与名册tail34同源，不在ACK4或Player追加未证字段。
             state[43] = character.IsPvpPrivate ? (byte)1 : (byte)0;
+            // 0267FB8B读取头部+17h/+18h并覆盖Data+3E8/+3EA；刷新不能清掉已婚状态和婚戒。
+            if (character.Marriage is { Active: true } relationship && relationship.IsMember(character.Id))
+            {
+                state[23] = relationship.State;
+                state[24] = relationship.RingLevel;
+            }
             // 0267F78D将状态+44h写入Data+488；023BC931据此安装真实组队栏边框。
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(68),
                 InventorySkinStorageService.Merged(character.Inventory).PartyFrameSelection(

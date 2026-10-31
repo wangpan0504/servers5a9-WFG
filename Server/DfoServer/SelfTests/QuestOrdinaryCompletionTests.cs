@@ -100,7 +100,8 @@ internal static class QuestOrdinaryCompletionTests
             That(Same(saved, missingDifficulty.Read()) && missingDifficulty.Receipts == 1, "重复交付不重发奖励");
         }
         foreach (int id in new[] { 2109, 2110, 20743 })
-            That(QuestExperiencePolicy.AllowsOmittedDifficulty(quests.Get(id)), id + "普通会面缺省经验共享同一规则");
+            That(quests.Get(id).Difficulty is null && parameters.TryGetDifficultyWeight(null, out int weight) && weight == 100,
+                id + "普通会面使用统一缺省难度，不需要独立白名单");
         QuestPetRewardTests.Run(towns, characters, items, learning, growth, parameters);
         QuestHarlemContinuationTests.Run(towns,pvf,characters,items,quests);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
@@ -1139,9 +1140,11 @@ internal static class QuestOrdinaryCompletionTests
                 tutorial.Id + " 教程交付零金币、缺省 100 经验：" + result.Reason);
         }
         var plain = new Character(1, 0, "Expert", 1, new(38, 1, 1, 1), null) { Level = 20 };
-        TestCheck.Reject<NotSupportedException>(() => QuestExperiencePolicy.Prepare(plain,
-            quests.Get(11019) with { Path = "n_quest/ordinary/missing-difficulty.qst" }, parameters, out _),
-            "缺省 difficulty=100 不扩大到副职业目录以外的普通任务");
+        var ordinaryDefault = QuestExperiencePolicy.Prepare(plain,
+            quests.Get(11019) with { Path = "n_quest/ordinary/missing-difficulty.qst" }, parameters, out _);
+        That(ordinaryDefault.DifficultyKey == "" && ordinaryDefault.DifficultyWeight == 100 &&
+            ordinaryDefault.Amount == QuestExperiencePolicy.Prepare(plain, quests.Get(11019), parameters).Amount,
+            "统一缺省 difficulty=100 不依赖副职业目录或特定任务路径");
         Console.WriteLine($"PASS {Count - checks} 四条副职业资格交付、落库、重登投影、第二/三/四步领奖与放弃断言");
     }
 

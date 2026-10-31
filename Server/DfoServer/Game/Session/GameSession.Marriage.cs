@@ -12,6 +12,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed record MarriageCapture(Character Character, long Generation, long Epoch, SessionPhase Phase);
 internal sealed record MarriageSessionCommit(MarriageRecord Record, InventoryResult Actor, InventoryResult? Peer = null);
+internal sealed record MarriageTravelCommit(TownTravelReceipt Travel, InventoryResult? Inventory);
 
 internal sealed partial class GameSession
 {
@@ -88,18 +89,19 @@ internal sealed partial class GameSession
         return true;
     });
 
-    public TownTravelReceipt? CommitMarriageTravel(MarriageCapture capture, Location destination, MarriageRecord wedding,
-        DateTimeOffset now) => owner.Execute(() =>
+    public MarriageTravelCommit? CommitMarriageTravel(MarriageCapture capture, Location destination, MarriageRecord wedding,
+        DateTimeOffset now, InventoryPlan? inventory = null, MarriageRecord? afterGift = null) => owner.Execute(() =>
     {
         if (!MatchesMarriage(capture, true) || !towns.IsPosition(destination, completed) || MarriageStore is not { } store ||
             wedding.Wedding is not { } ceremony || ChannelEntry?.Identity is not { } channel ||
             channel.ServerIndex != ceremony.ServerIndex || channel.Number != ceremony.ChannelNumber) return null;
         Selected = store.CommitMarriageHallTravel(owner, capture.Character, wedding, destination,
             capture.Character.Position.Town is 39 or 101 ? capture.Character.Return : capture.Character.Position,
-            now.ToUnixTimeSeconds());
+            now.ToUnixTimeSeconds(), inventory, afterGift);
         InvalidateImageCommunication();
         InvalidateExpertJobStore();
-        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);
+        return new MarriageTravelCommit(new(Selected, owner.Generation, SelectionEpoch),
+            inventory is null ? null : MarriageInventoryReceipt(capture, Selected, inventory));
     });
 
     public MarriageSessionCommit? CommitMarriage(MarriageCapture capture, InventoryPlan plan,

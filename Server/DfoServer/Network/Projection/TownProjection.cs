@@ -270,6 +270,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (adventure is not null) await adventure.InformationAsync(context);
         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
         if (context.BoosterUses is { } boosters) await boosters.RefreshAsync();
+        if (marriage is not null) await marriage.DailyAsync(context);
     }
 
     public async Task AssaultServiceDayAsync(GameConnectionContext context)
@@ -515,6 +516,15 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         byte[] visual = ConsumableStatePackets.ItemEffect(context.Session.Selected!.Id, itemId);
         await context.Notify(NotiPacketType.ITEM_EFFECT, visual, "town_gift_visual", guard);
         if (guard()) presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.ITEM_EFFECT, visual, "town_gift_visual");
+    }
+
+    public async Task SharedItemEffectAsync(GameConnectionContext context, int itemId, byte outcome, Func<bool> guard)
+    {
+        if (!guard() || context.Session.Selected is not { } character) return;
+        byte[] body = SharedEffectItemPackets.Effect(character.Id, itemId, outcome);
+        await context.Notify(NotiPacketType.USE_SHARED_EFFECT_ITEM, body, "shared_item_effect", guard);
+        if (guard()) presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.USE_SHARED_EFFECT_ITEM,
+            body, "shared_item_effect");
     }
 
     public void Move(GameConnectionContext context, ushort scaledSpeed = 100)

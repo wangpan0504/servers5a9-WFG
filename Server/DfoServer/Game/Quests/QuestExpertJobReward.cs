@@ -16,7 +16,4 @@ internal static class QuestExpertJobReward
             return null;
         return (byte)quest.Rewards[0].Value;
     }
-
-    // 资格第一步仍记 0 经验（ACK34 已冻结）；后续步骤省略的 [difficulty] 按 0200B010/040C28A1 表公式与 04333710 缺省 100 计算。
-    public static bool AllowsOmittedDifficulty(StoryQuest quest) => Chain(quest) || QuestCreatureReward.Evolution(quest);
 }

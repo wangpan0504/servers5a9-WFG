@@ -2,12 +2,13 @@ using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Marriage;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemCatalog items, GoldLimitCatalog gold,
-    EpicPieceCatalog pieces, TimeProvider? clock = null)
+    EpicPieceCatalog pieces, TimeProvider? clock = null, MarriageDungeonDailySupply? marriageSupply = null)
 {
     public ServerItemUsageCatalog Rules { get; } = rules;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
@@ -45,9 +46,12 @@ internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemC
         var local = TimeZoneInfo.ConvertTime(now, Clock.LocalTimeZone).DateTime;
         int day = FatigueDailyReset.Day(now, Clock.LocalTimeZone);
         var before = character.Inventory; var state = before.ServerItems;
+        var marriageRefill = marriageSupply?.Eligible(character) == true
+            ? new ServerItemRefill(marriageSupply.ItemId, marriageSupply.Count, DateTime.MaxValue) : null;
         if (day < state.RefillDay) return new(true, 0, new(before, before, "server_item_clock_backwards"));
         bool daily = day > state.RefillDay;
-        bool pendingRefill = Rules.Refills.Any(row => row.Count > 0 && local < row.Until && character.Level >= row.MinimumLevel &&
+        bool pendingRefill = marriageRefill is { } wedding && !state.Refills.Any(saved => saved.ItemId == wedding.ItemId && saved.Day >= day) ||
+            Rules.Refills.Any(row => row.Count > 0 && local < row.Until && character.Level >= row.MinimumLevel &&
             !state.Refills.Any(saved => saved.ItemId == row.ItemId && saved.Day >= day)) ||
             Rules.AccountRefills.Any(row => local < row.Until && character.Level >= row.MinimumLevel &&
                 accountDays?.GetValueOrDefault(row.ItemId) is { Completed: false } saved && saved.Day == day && saved.CharacterId == character.Id);
@@ -59,7 +63,7 @@ internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemC
         var after = before with { Items = before.Items.Where(item => !reset.Contains(item.Core.ItemId)).ToImmutableArray() };
         var accounts = ImmutableArray.CreateBuilder<AccountItemRefillClaim>();
         var refillDays = state.Refills;
-        void Refill(ServerItemRefill rule, bool account)
+        void Refill(ServerItemRefill rule, bool account, bool onlyTopUp = false)
         {
             var previous = accountDays?.GetValueOrDefault(rule.ItemId);
             if (local >= rule.Until || character.Level < rule.MinimumLevel ||
@@ -75,7 +79,17 @@ internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemC
             {
                 var source = after.Items.FirstOrDefault(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == rule.ItemId);
                 var template = items.Get(rule.ItemId);
-                if (source is { Core.IsStackable: true })
+                if (onlyTopUp)
+                {
+                    long owned = after.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == rule.ItemId)
+                        .Sum(item => (long)item.Core.Count);
+                    int needed = checked((int)Math.Max(0, rule.Count - owned));
+                    var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after },
+                        needed == 0 ? [] : [new(rule.ItemId, needed)], items, gold, pieces, now, allowOverflowMail: false);
+                    if (!grant.Accepted) success = false;
+                    else after = grant.Plan!.After;
+                }
+                else if (source is { Core.IsStackable: true })
                 {
                     if (rule.Count > template.StackLimit) success = false;
                     // 数量赋值而非累加；原UID、期限和完整核心保持不变。
@@ -101,7 +115,9 @@ internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemC
             else if (success) refillDays = refillDays.Where(saved => saved.ItemId != rule.ItemId)
                 .Append(new(rule.ItemId, day)).OrderBy(saved => saved.ItemId).ToImmutableArray();
         }
-        foreach (var refill in Rules.Refills) Refill(refill, false);
+        foreach (var refill in Rules.Refills)
+            if (marriageRefill?.ItemId != refill.ItemId) Refill(refill, false);
+        if (marriageRefill is not null) Refill(marriageRefill, false, onlyTopUp: true);
         if (accountDays is not null) foreach (var refill in Rules.AccountRefills) Refill(refill, true);
         var mails = state.Mails;
         var deliveries = ImmutableArray.CreateBuilder<MailboxDelivery>();
@@ -142,7 +158,7 @@ internal sealed class ServerItemCycleService(ServerItemUsageCatalog rules, ItemC
             long seconds = DfoServer.GameWorld.Time.ServiceDay.At(until, Clock.LocalTimeZone).ToUnixTimeSeconds();
             if (seconds > now.ToUnixTimeSeconds()) deadline = Math.Min(deadline, seconds);
         }
-        return new(true, 0, new(before, after, "server_item_cycle", new(character, deadline, Clock))
+        return new(true, 0, new(before, after, "server_item_cycle", new(character, deadline, Clock, requireMarriageState: marriageRefill is not null))
         { AccountRefillClaims = accounts.ToImmutable(), DailyItemMails = deliveries.ToImmutable(), ResetItemIds = reset.ToImmutableArray() });
     }
 }

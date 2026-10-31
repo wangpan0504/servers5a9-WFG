@@ -13,35 +13,23 @@ internal sealed record QuestExperienceReward(string ResourcePath, string QuestPa
 
 internal static class QuestExperiencePolicy
 {
-    // 缺省键与显式未知键不同；已支持的普通会面同样使用参数查询的缺省100，
-    // 不因没有difficulty而在条件完成后卡住交付，也不放开其它未确认目标或奖励。
-    internal static bool AllowsOmittedDifficulty(StoryQuest quest) =>
-        QuestExpertJobReward.AllowsOmittedDifficulty(quest) || QuestCoverage.GoldOnlyReward(quest) ||
-        QuestMarriageProgress.Supports(quest) && QuestCoverage.HasOrdinaryDeclarations(quest) ||
-        quest is { Condition: "[meet npc]", SubType: -1, IntData: [> 0], RewardType: "[item]" } &&
-        QuestCoverage.HasOrdinaryDeclarations(quest);
-
     public static QuestExperienceReward Prepare(Character character, StoryQuest quest, QuestRewardParameterCatalog parameters,
         out int penalty)
     {
         if (character.Job > 15 || character.Level is < 1 or > 95)
             throw new InvalidDataException("任务奖励角色等级或职业无效");
         if (quest.MinimumLevel is < 1 or > 95 || quest.DeclaredIgnoreLevelForExperience is not (null or 0 or 1))
-            throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
-        // 四条资格第一步没有 [difficulty]，ACK34 经验字段已冻结为 0，不改这条合同。
+            throw new NotSupportedException("任务最低等级或经验等级声明无效");
+        string difficulty = quest.Difficulty ?? "";
+        if (!parameters.TryGetDifficultyWeight(quest.Difficulty, out int weight))
+            throw new NotSupportedException("任务显式difficulty未配置合法倍率");
+        // 授职第一步保留零经验业务，难度缺省本身不再用于判定其它任务是否有效。
         if (quest.Difficulty is null && QuestExpertJobReward.Type(quest) is not null)
         {
             penalty = 100;
             int expertIndex = quest.DeclaredIgnoreLevelForExperience == 1 ? character.Level : quest.MinimumLevel;
-            return new(QuestRewardParameterCatalog.ResourcePath, quest.Path, expertIndex, 0, 0, "", 0, 0);
+            return new(QuestRewardParameterCatalog.ResourcePath, quest.Path, expertIndex, 0, 0, difficulty, weight, 0);
         }
-        string difficulty = quest.Difficulty ?? "";
-        int weight = 100;
-        // 0200B010/040C28A1 的 EXP 表公式不乘 QST+4BC；04333710 缺键返回 100。
-        // 后续副职业步骤、已确认宠物进化，以及省略 [reward type]、只声明金币倍率的觉醒成就共用该缺省。
-        if ((quest.Difficulty is not null || !AllowsOmittedDifficulty(quest)) &&
-                (!parameters.Difficulty.TryGetValue(difficulty, out weight) || weight < 0))
-            throw new NotSupportedException("本服通用任务经验需要完整原始difficulty和等级声明");
         bool ignore = quest.DeclaredIgnoreLevelForExperience == 1;
         int index = ignore ? character.Level : quest.MinimumLevel;
         var row = parameters.GetExperienceAtNativeIndex(index);

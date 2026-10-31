@@ -111,7 +111,10 @@ internal static class CreatureQuestTests
         var younger = pet with { Creature = pet.Creature! with { Level = 31 } };
         That(Prepare(character with { Inventory = character.Inventory with { Items = character.Inventory.Items.Replace(pet, younger) } }, quest)
             .Outcome == QuestCompletionOutcome.Rejected, "缺省difficulty不绕过宠物最低等级");
-        Reject<NotSupportedException>(() => QuestExperiencePolicy.Prepare(character,
-            quest with { RewardType = "[item]", Rewards = [] }, parameters), "不扩大普通任务的缺省difficulty范围");
+        var ordinaryReward = QuestExperiencePolicy.Prepare(character,
+            quest with { RewardType = "[item]", Rewards = [] }, parameters);
+        That(ordinaryReward is { DifficultyKey: "", DifficultyWeight: 100, Amount: > 0 } &&
+            ordinaryReward.Amount == prepared.Plan.ExperienceReward!.Amount,
+            "普通任务与宠物任务一致使用缺省difficulty的100%权重，奖励类型不构成白名单");
     }
 }

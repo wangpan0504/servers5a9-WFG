@@ -199,6 +199,18 @@ internal static class ItemModelTests
             [new(3,3),new(6,2),new(0,-1),new(0,0),new(3,4)],
             [new(3,3),new(6,2),new(0,-1),new(0,1),new(0,101),new(0,1),new(0,102),new(3,4)]
         }) Reject<InvalidDataException>(()=>CharacterEquipmentFile.ReadDefaultEquipment(invalid,EtcResolve));
+        PvfToken[] awakeningTokens = new[] { 13, 1, 14, 1 }.Concat(Enumerable.Range(100, 12))
+            .Select(value => new PvfToken(0, value)).ToArray();
+        var awakened = CharacterEquipmentFile.ReadAwakeningEquipment(awakeningTokens);
+        That(awakened is [{ Job: 14, GrowType: 1, Equipment.Length: 13 }] && awakened[0].Equipment[9] == 109 &&
+            awakened[0].Equipment[10] == -1 && awakened[0].Equipment[11] == 110 && awakened[0].Equipment[12] == 111,
+            "觉醒默认表跳过武器装扮槽10，尾部装备不左移");
+        foreach (var invalid in new[] { awakeningTokens[..^1], awakeningTokens.Append(new PvfToken(0, 1)).ToArray(),
+            awakeningTokens.Select((token, at) => at == 0 ? new PvfToken(0, 12) : token).ToArray(),
+            awakeningTokens.Select((token, at) => at == 4 ? new PvfToken(0, -2) : token).ToArray(),
+            awakeningTokens.Select((token, at) => at == 4 ? new PvfToken(6, 100) : token).ToArray(),
+            (PvfToken[])[new(0, 13), new(0, 2), .. awakeningTokens[2..], .. awakeningTokens[2..]] })
+            Reject<InvalidDataException>(() => CharacterEquipmentFile.ReadAwakeningEquipment(invalid));
         string ExperienceResolve(int index) => experienceStrings[index];
         PvfToken[] capsule = [new(3, 0), new(6, 1), new(0, 10), new(3, 2)];
         var experience = ExperienceConsumableFile.Parse(1, "stackable/capsule.stk", capsule, ExperienceResolve);
