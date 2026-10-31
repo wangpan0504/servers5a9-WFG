@@ -10,7 +10,8 @@ internal static class RecipeFileTests
             "[minimum itemmaking level]", "leather", "[success rate]", "[maintain ability]", "normal", "[need material]",
             "[need skill]", "[/need skill]", "[itemmaking exp limit]", "[/itemmaking exp limit]", "[itemmaking exp]",
             "[itemmaking level limit]", "[upgrade with compound]", "[/upgrade with compound]", "[bead item]", "[/bead item]",
-            "[fail output]", "[/fail output]", "[int data]", "[/int data]"];
+            "[fail output]", "[/fail output]", "[int data]", "[/int data]",
+            "[set disjoint instance type]", "[/set disjoint instance type]", "[test wrapper]", "[/test wrapper]"];
         string Resolve(int index) => strings[index];
         PvfToken[] recipe = [new(3, 0), new(6, 1), new(0, 1), new(3, 2), new(0, 3037), new(0, 36), new(0, 0), new(0, 200), new(3, 3),
             new(3, 4), new(0, 100060157), new(0, 1), new(3, 5), new(3, 6), new(6, 7), new(0, 1),
@@ -21,6 +22,16 @@ internal static class RecipeFileTests
             parsed.Outputs is [{ ItemId: 100060157, Count: 1 }] && parsed.MakingType == "leather" && parsed.MakingLevel == 1 &&
             parsed.Skills is [{ ItemId: 12, Count: 2 }] && parsed.SuccessRate == 7000,
             "设计图完整保留首项材料、金币0、输出、熟练度、万分制概率与技能；商店兑换价不作输入");
+        var restrictedRecipe = Parse([..recipe, new(3, 26)]);
+        That(restrictedRecipe.Diagnostics.IsEmpty && restrictedRecipe.SetsDisjointInstanceType && !parsed.SetsDisjointInstanceType,
+            "根级空分解限制声明独立保存，不从普通图推断");
+        foreach (PvfToken[] invalid in new PvfToken[][]
+        {
+            [..recipe, new(3, 26), new(0, 1)],
+            [..recipe, new(3, 26), new(3, 26)],
+            [..recipe, new(3, 26), new(3, 27)],
+            [..recipe, new(3, 28), new(3, 26), new(3, 29)]
+        }) That(!Parse(invalid).Diagnostics.IsEmpty, "分解限制的非空、重复、闭合块或嵌套声明拒绝，不静默丢弃限制");
         var bead = Parse([..recipe, new(3, 20), new(0, 2610039), new(0, 3), new(3, 21)]);
         That(bead.Diagnostics.IsEmpty && bead.BeadInputs is [{ ItemId: 2610039, Count: 3 }] && bead.Inputs.SequenceEqual(parsed.Inputs),
             "宝珠额外成本单独解析，不混入普通卡片附魔input item");
