@@ -157,6 +157,10 @@ internal sealed class AvatarPackageCatalog
                 parsed = parsed with { PendingRule = "混合装备仅支持完整分类领取" };
             if (!parsed.MaterialRows.IsEmpty && selection != 0 && parsed.PendingRule is null)
                 parsed = parsed with { PendingRule = "混合材料仅支持完整分类领取" };
+            // 省略维数只承接纯装扮全领；混合奖励缺少分类坐标，不能静默截断。
+            if (dimensionsOmitted && parsed.PendingRule is null &&
+                (!parsed.EquipmentRows.IsEmpty || !parsed.MaterialRows.IsEmpty))
+                parsed = parsed with { PendingRule = "省略分类声明仅支持纯装扮奖励" };
             categories.Add(parsed);
         }
         return new(selection, sizes.ToImmutable(), categories.ToImmutable()) { Recognized = recognized };
