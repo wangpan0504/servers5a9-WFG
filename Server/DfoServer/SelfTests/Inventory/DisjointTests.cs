@@ -61,6 +61,9 @@ internal static class DisjointTests
         for (int rarity = 0; rarity < 7; rarity++)
         {
             calculated = DisjointResultCalculator.Calculate(config, synthetic with { Rarity = rarity }, new FixedRandom(false));
+            var noSoul = DisjointResultCalculator.Calculate(config, synthetic with { Rarity = rarity }, new FixedRandom(false), grantSouls: false);
+            That(noSoul.SequenceEqual(calculated.Where(row => row.ItemId != config.Souls[rarity]?.ItemId)),
+                "毁装实例仅禁止灵魂，晶体和独立产物不丢失 " + rarity);
             var expected = config.Souls[rarity];
             That(expected is null ? calculated.All(reward => CurrencyWallet.RewardKind(reward.ItemId) is not (>= CurrencyKind.CommonSoul and <= CurrencyKind.EpicSoul)) :
                 calculated.Any(reward => reward.ItemId == expected.ItemId && reward.Count > 0), "soul mapping for rarity " + rarity);
@@ -92,7 +95,8 @@ internal static class DisjointTests
         foreach (var invalid in new[] { request with { Position = Bag(9) }, request with { ToolSlot = -2 }, request with { ToolSlot = 3 },
             request with { ToolSlot = 65 }, request with { Position = new(InventoryListType.Equipment, 3) } })
             That(!service.Disjoint(current, invalid, out _).Accepted, "invalid source/tool never consumes assets");
-        foreach (var bad in new[] { coat with { EquipmentLockId = 1 }, coat with { ExpireTime = 1 }, coat with { AmplifyType = 0x80 } })
+        foreach (var bad in new[] { coat with { EquipmentLockId = 1 }, coat with { ExpireTime = 1 }, coat with { AmplifyType = 0x80 },
+            coat with { DisjointForbidden = true } })
             That(!service.Disjoint(current with { Inventory = new([new(1, Bag(3), bad)]) }, request, out _).Accepted, "locked/expired/unidentified source retained");
         var tooHigh = current with { Inventory = new([new(1, Bag(3), InventoryRewardGrantService.Create(catalog.Get(10117))), new(2, Bag(4), tool)]) };
         That(!service.Disjoint(tooHigh, request with { ToolSlot = 4 }, out _).Accepted && service.Disjoint(tooHigh, request, out _).Accepted,

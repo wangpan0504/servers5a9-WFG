@@ -88,7 +88,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             if (protection is null)
             {
                 // 先规划完整销毁补偿及容量，再抽本次升级结果，不能靠满包拒绝失败来免费重抽。
-                var rewards = DisjointResultCalculator.Calculate(disjoint, template, rng).ToList();
+                var rewards = DisjointResultCalculator.Calculate(disjoint, template, rng,
+                    grantSouls: !target.Core.DestructionSoulForbidden).ToList();
                 foreach (var bonus in reinforce ? new[] { rules.Bonus } : new[] { rules.Bonus, upgrades.CompanionBonus })
                     if (bonus.Count(template, old) is > 0 and var bonusCount) rewards.Add(new(bonus.ItemId, bonusCount));
                 var released = paid with { Items = paid.Items.Remove(target) };

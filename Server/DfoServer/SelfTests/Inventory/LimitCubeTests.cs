@@ -180,7 +180,8 @@ internal static class LimitCubeTests
         var target = ordinary.Inventory.Find(new(InventoryListType.Main, 9))!;
         var marked = ordinary with { Inventory = ordinary.Inventory with
         {
-            Items = ordinary.Inventory.Items.Replace(target, target with { Core = target.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05 } })
+            Items = ordinary.Inventory.Items.Replace(target, target with { Core = target.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05,
+                DisjointForbidden = true, DestructionSoulForbidden = true } })
         } };
         string before = System.Text.Json.JsonSerializer.Serialize(marked);
         var baseline = fixture.Service(_ => 0).Apply(ordinary, new(9, Fixture.EquipmentTarget, 86),
@@ -194,7 +195,9 @@ internal static class LimitCubeTests
         var result = converted.Plan!.After.Find(receipt!.ResultSlot)!;
         var ordinaryResult = baseline.Plan!.After.Find(baselineReceipt!.ResultSlot)!;
         That(result.Core.EpicExchangeOrigin == origin && result.Core.Extension119 == 0x05 &&
-            result.Core with { EpicExchangeOrigin = null, Extension119 = 0 } == ordinaryResult.Core && result.Uid == ordinaryResult.Uid &&
+            result.Core.DisjointForbidden && result.Core.DestructionSoulForbidden &&
+            result.Core with { EpicExchangeOrigin = null, Extension119 = 0, DisjointForbidden = false,
+                DestructionSoulForbidden = false } == ordinaryResult.Core && result.Uid == ordinaryResult.Uid &&
             converted.Plan.After.Find(new(InventoryListType.Main, 86)) == baseline.Plan.After.Find(new(InventoryListType.Main, 86)) &&
             System.Text.Json.JsonSerializer.Serialize(marked) == before,
             "Equipment→Equipment仅额外继承来源与交换实例位，原附魔/封装/模板重建/券消费/输入快照规则不变");
@@ -206,7 +209,8 @@ internal static class LimitCubeTests
         var crossMarked = crossOrdinary with { Inventory = crossOrdinary.Inventory with
         {
             Items = crossOrdinary.Inventory.Items.Replace(crossTarget,
-                crossTarget with { Core = crossTarget.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05 } })
+                crossTarget with { Core = crossTarget.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05,
+                    DisjointForbidden = true, DestructionSoulForbidden = true } })
         } };
         before = System.Text.Json.JsonSerializer.Serialize(crossMarked);
         var plainCross = crossFixture.Service(_ => 0).Apply(crossOrdinary, new(9, Fixture.EquipmentTarget, 86),

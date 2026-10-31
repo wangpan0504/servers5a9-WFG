@@ -34,7 +34,7 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         if (source.Core.EquipmentLockId != 0) return InventoryResult.Reject(214);
         var original = Weapon(source.Core.ItemId);
         if (original is null) return InventoryResult.Reject(3) with { RejectReason = "invalid_weapon_template" };
-        if (source.ExpireTime != 0 || original.DisjointForbidden) return InventoryResult.Reject(93);
+        if (source.ExpireTime != 0 || source.Core.DisjointForbidden || original.DisjointForbidden) return InventoryResult.Reject(93);
         if (original.EquipmentSlot != 12 || skins.Token(recipe.ResultItemId) is not { Type: Type })
             return InventoryResult.Reject(3);
         var resultTemplate = items.Get(recipe.ResultItemId);

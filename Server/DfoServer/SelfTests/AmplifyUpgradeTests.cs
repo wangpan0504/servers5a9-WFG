@@ -234,6 +234,13 @@ internal static class AmplifyUpgradeTests
             "高等级普通失败销毁原目标并原子发放分解及增幅补偿，不截断为保级或遗漏红字精髓");
         That(receipt!.Refunds.Single(row => row.ItemId == 3037).Count ==
             CurrencyWallet.Get(result.Plan!.After, CurrencyKind.ClearCube) - 5000, "销毁回执只加本次晶块补偿，不能把已有5000余额再次加给客户端");
+        var restrictedHigh = high with { Inventory = high.Inventory with { Items = high.Inventory.Items.Select(item =>
+            item.Uid == target.Uid ? item with { Core = item.Core with { DisjointForbidden = true, DestructionSoulForbidden = true } } : item).ToImmutableArray() } };
+        var restrictedFailure = service.Plan(restrictedHigh, request, out var restrictedReceipt);
+        That(restrictedFailure.Accepted && restrictedReceipt is { OutcomeCode: 3 } &&
+            receipt.Refunds.Any(row => row.ItemId == r.Disjoint.Souls[template.Rarity]?.ItemId) &&
+            restrictedReceipt.Refunds.SequenceEqual(receipt.Refunds.Where(row => row.ItemId != r.Disjoint.Souls[template.Rarity]?.ItemId)),
+            "受限实例仍可正常增幅毁装，只去掉实际灵魂返还，晶体和红字精髓保持");
         var full = high with { Inventory = high.Inventory with { Items = [.. high.Inventory.Items,
             .. Enumerable.Range(122, ItemSlotBoundService.Range(ItemKind.Material, high.Inventory).End - 121)
                 .Select(slot => source with { Uid = 1000 + slot, Position = MainSlot((short)slot) })] } };

@@ -24,7 +24,7 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         if (source.Core.Kind != ItemKind.Equipment || source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var template = catalog.Get(source.Core.ItemId);
-        if (template.DisjointForbidden || template.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) ||
+        if (source.Core.DisjointForbidden || template.DisjointForbidden || template.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) ||
             !playerMachine && (source.Core.AmplifyType & 0x80) != 0 ||
             playerMachine && (character.ExpertJobType != 3 || expertJobs is null || request.ToolSlot != -1))
             return InventoryResult.Reject(19);

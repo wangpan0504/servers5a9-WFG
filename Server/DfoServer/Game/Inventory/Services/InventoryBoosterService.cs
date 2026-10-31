@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -390,8 +391,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                             return InventoryResult.Reject(19);
                     }
                 }
-                // 本服没有实例级“不可分解”字段，装备不按模板 DisjointForbidden 收窄，也不猜测实例标志。
-                // 仅分解声明的选择盒还可领取真实可用的自选消耗品子盒；史诗声明与特殊owner仍不可走此兼容。
+                // 装备在发奖规划中写入持久实例限制；选择型消耗品子盒不继承父盒装备限制。
                 if ((definition.SetsDisjointInstanceType || definition.SetsEpicExchangeInstanceType) &&
                     catalog.Get(id).Kind != ItemKind.Equipment)
                 {
@@ -626,6 +626,14 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
+        if (definition.SetsDisjointInstanceType)
+        {
+            var grantedSlots = grant.Plan.ChangedSlots.ToHashSet();
+            after = after with { Items = after.Items.Select(item => item.Core.Kind == ItemKind.Equipment &&
+                grantedSlots.Contains(item.Position) && grant.Plan.BeforeIndex.Find(item.Position) is null
+                ? item with { Core = item.Core with { DisjointForbidden = true,
+                    DestructionSoulForbidden = definition.ForbidsDestructionSouls } } : item).ToImmutableArray() };
+        }
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
             deadline = acquiredUntil;

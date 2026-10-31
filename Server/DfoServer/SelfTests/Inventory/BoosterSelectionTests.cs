@@ -25,6 +25,7 @@ internal static class BoosterSelectionTests
     {
         BoosterCooldownTests.RunCore();
         BoosterEpicExchangeTests.RunCore();
+        BoosterDisjointInstanceTests.RunCore();
         BoosterUsePlacesTests.RunCore();
         int checks = Count;
         RunRepeatedDisjointDeclarations();
@@ -815,6 +816,7 @@ internal static class BoosterSelectionTests
 
     static void RunDisjointInstanceSelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
     {
+        BoosterDisjointInstanceTests.Run(towns, resources);
         var catalog = resources.Items;
         var service = new InventoryBoosterService(catalog, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
         Character Role(int sourceId) => new(1, 0, "RookieBox", 0, towns.Room, towns.InitialReturn)
@@ -856,7 +858,8 @@ internal static class BoosterSelectionTests
                         That(ids.Contains(reward.Core.ItemId) && template is { Kind: ItemKind.Equipment,
                             DisjointForbidden: true, PersonalCargoForbidden: true, Expiration.Days: 30 } &&
                             reward.Core == InventoryRewardGrantService.Create(template, utcNow: now) with
-                            { Attr = (byte)(id == 490704518 ? 10 : 0), GenuineUpgrade = (byte)(id == 490704518 ? 5 : 0) },
+                            { Attr = (byte)(id == 490704518 ? 10 : 0), GenuineUpgrade = (byte)(id == 490704518 ? 5 : 0),
+                                DisjointForbidden = true },
                             "实际装备完整核心、30天期限和模板限制保留，武器强化10锻造5 " + reward.Core.ItemId);
                     }
                 }
@@ -892,11 +895,13 @@ internal static class BoosterSelectionTests
         var syntheticRole = Role(10000743);
         That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
             "支持范围由声明及实际模板驱动，不按四个新秀盒ID放行");
-        // 官方同款装备本身可分解：本服没有实例级不可分解字段，不按模板 DisjointForbidden 收窄。
+        // 同模板普通装备可分解；只限制本次礼包创建的新实例。
         definitions[10000743] = BoosterCatalog.Parse(Text("[equipment]\n16400 1\n[/equipment]"));
+        var restrictedSelection = guarded.Open(syntheticRole, Select(3, [16400]), out _, now);
         That(!catalog.Get(16400).DisjointForbidden &&
-            guarded.Open(syntheticRole, Select(3, [16400]), out _, now).Accepted,
-            "可分解装备同样按声明发放，不再整包拒绝");
+            restrictedSelection.Accepted && restrictedSelection.Plan!.After.Items.Single().Core is
+                { DisjointForbidden: true, DestructionSoulForbidden: false },
+            "同模板礼包奖励写入不可分解实例限制，不擅自追加未知的毁装限制");
         definitions[10000743] = BoosterCatalog.Parse(Text(safe,
             "[outer]\n[inner]\n[/outer]\n" + marker + "[/inner]\n"));
         string beforeCrossedDeclaration = JsonSerializer.Serialize(syntheticRole);
@@ -1047,7 +1052,7 @@ internal static class BoosterSelectionTests
                             foreach (var reward in opened.Plan!.After.Items)
                             {
                                 var template = catalog.Get(reward.Core.ItemId);
-                                var expected = InventoryRewardGrantService.Create(template, utcNow: now);
+                                var expected = InventoryRewardGrantService.Create(template, utcNow: now) with { DisjointForbidden = true };
                                 if (epic) expected = expected with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 1 };
                                 That(selected.Contains(reward.Core.ItemId) && template.Kind == ItemKind.Equipment && reward.Uid == 0 &&
                                     reward.Core == expected && reward.Avatar is null && reward.Creature is null,
@@ -1122,7 +1127,7 @@ internal static class BoosterSelectionTests
                             "564 real candidate must succeed, no wear-job/level grant gate " + id + ":" + job + ":" + level);
                         var after = opened.Plan!.After;
                         var reward = after.Items.Single(item => item.Core.ItemId == id);
-                        var expected = InventoryRewardGrantService.CreateItem(template, reward.Position, Core(id));
+                        var expected = InventoryRewardGrantService.CreateItem(template, reward.Position, Core(id) with { DisjointForbidden = true });
                         That(reward == expected && reward.Uid == 0 && reward.Core.Value == InventoryRewardGrantService.InitialQuality &&
                             reward.Core.Durability == template.Durability && reward.Avatar is null && reward.Creature is null &&
                             after.Find(Bag(3)) is { Uid: 1, Core.Count: 1 } && after.Find(Bag(65)) == role.Inventory.Find(Bag(65)) &&
@@ -1198,7 +1203,7 @@ internal static class BoosterSelectionTests
                         ReferenceEquals(committed.Receipt.Character, session.Selected), "564 real Session committed receipt " + id);
                     var current = session.Selected!;
                     var reward = current.Inventory.Items.Single(item => item.Core.ItemId == id);
-                    var expected = InventoryRewardGrantService.CreateItem(catalog.Get(id), reward.Position, Core(id));
+                    var expected = InventoryRewardGrantService.CreateItem(catalog.Get(id), reward.Position, Core(id) with { DisjointForbidden = true });
                     That(reward.Uid > 0 && reward == (expected with { Uid = reward.Uid }) &&
                         current.Inventory.Find(Bag(3)) is null && current.Inventory.Find(Bag(65)) == sentinel &&
                         current.Inventory.Items.Length == 2 && current.Inventory.Items.Select(item => item.Uid).Distinct().Count() == 2 &&

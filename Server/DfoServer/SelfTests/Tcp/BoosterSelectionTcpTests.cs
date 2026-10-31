@@ -471,7 +471,7 @@ internal static class BoosterSelectionTcpTests
                 var last = InventoryRewardGrantService.Create(rewardTemplate, utcNow: DateTimeOffset.UtcNow);
                 var nestedExpectedCore = first with { ExpireTime = reward.Core.ExpireTime };
                 if (equipment)
-                    nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0x01 };
+                    nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0x01, DisjointForbidden = sourceId is 490011783 or 490011888 or 490011893 or 490011895 };
                 var expected = before.Inventory with { Items = before.Inventory.Items.Where(item => item.Position != Bag(slot))
                     .Append(reward).OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
                 That(rewardTemplate.Kind == (equipment ? ItemKind.Equipment : ItemKind.Consumable) &&

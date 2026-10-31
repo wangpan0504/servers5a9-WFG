@@ -335,6 +335,8 @@ internal static class InventoryCoreGrantTests
         GenuineUpgrade = 26, EmancipateLevel = 27, TradeRestriction = 28, Extension90 = 29,
         Extension92 = 30, Extension93 = 31, RemainUseCount = 32, SortLockFlag = 0,
         Extension97 = 33, GuardianGemKeys = 0x1122334455667788, Extension109 = 34, Extension110 = 35,
-        Extension114 = new(36, 37), Extension119 = 38, Extension120 = 39, Extension121 = 40
+        Extension114 = new(36, 37), Extension119 = 38, Extension120 = 39, Extension121 = 40,
+        DisjointForbidden = template.Kind == ItemKind.Equipment,
+        DestructionSoulForbidden = template.Kind == ItemKind.Equipment
     };
 }

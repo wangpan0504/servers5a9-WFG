@@ -89,7 +89,8 @@ internal sealed class InventoryChronicleEnchantService(ItemCatalog items, Chroni
 
     ChronicleDestruction? Destroy(Character character, InventorySnapshot paid, InventoryItem target, ItemTemplate template, Random rng, long now)
     {
-        var rewards = DisjointResultCalculator.Calculate(disjoint, template, rng).ToList();
+        var rewards = DisjointResultCalculator.Calculate(disjoint, template, rng,
+            grantSouls: !target.Core.DestructionSoulForbidden).ToList();
         if (rewards.Count == 0) throw new InvalidDataException("气息破坏返还资源尚未完整支持");
         foreach (var bonus in target.Core.AmplifyType == 0 ? new[] { upgrades.CompanionBonus } : new[] { upgrades.Rules.Bonus, upgrades.CompanionBonus })
             if (bonus.Count(template, target.Core.Upgrade) is > 0 and var count) rewards.Add(new(bonus.ItemId, count));
