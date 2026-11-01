@@ -1495,7 +1495,7 @@ CREATE TABLE marriage_records(
   first_id INTEGER NOT NULL CHECK(typeof(first_id)='integer' AND first_id BETWEEN 1 AND 65535),
   second_id INTEGER NOT NULL CHECK(typeof(second_id)='integer' AND second_id BETWEEN 1 AND 65535 AND second_id<>first_id),
   first_account TEXT NOT NULL CHECK(length(first_account)>0),
-  second_account TEXT NOT NULL CHECK(length(second_account)>0 AND second_account<>first_account),
+  second_account TEXT NOT NULL CHECK(length(second_account)>0),
   state INTEGER NOT NULL CHECK(typeof(state)='integer' AND state BETWEEN 0 AND 4),
   created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0),
   ended_at INTEGER NOT NULL CHECK(typeof(ended_at)='integer' AND ended_at>=0),

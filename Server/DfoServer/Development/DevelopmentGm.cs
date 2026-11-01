@@ -51,6 +51,8 @@ internal static partial class DevelopmentGm
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.DirectMarriage)
+                return DirectMarriage(repository, owners, find, request, catalog);
             if (request.Action == DevelopmentAction.ProfessionOptions)
             {
                 var reset = progress ?? throw new InvalidOperationException("职业资源未装配");

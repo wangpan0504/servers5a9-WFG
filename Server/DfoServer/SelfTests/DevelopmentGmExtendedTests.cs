@@ -32,6 +32,7 @@ internal static class DevelopmentGmExtendedTests
         f.OtherOwner.Dispose();
         var mailbox = new MailboxService(f.Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
         var catalog = new DevelopmentCatalog(pvf, resources, quests) { Stats = new DfoServer.Game.Characters.CharacterStatComputer(characters) };
+        MarriagePersistenceTests.RunDirectResources(catalog);
         string Answer(string line, GameSession? session = null) => DevelopmentGm.Answer(line, "other", f.Repository, f.Owners,
             _ => session, mailbox, resources.Items, catalog: catalog);
         JsonElement Json(string text)
