@@ -12,7 +12,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
     ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null,
-    IReadOnlySet<int>? marriedOnlyCommodities = null)
+    IReadOnlySet<int>? marriedOnlyCommodities = null, PrivilegeServiceCatalog? privileges = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
     readonly TimeProvider time = clock ?? TimeProvider.System;
@@ -105,6 +105,18 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             paid = afterCoupon;
             Deadline(couponDeadline);
             bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
+            bool privilegeProduct = product.Section == "privilege service";
+            if (privilegeProduct)
+            {
+                if (privileges is null) return InventoryResult.Reject(17) with { RejectReason = "privilege_catalog_missing" };
+                try
+                {
+                    serviceInventory = serviceInventory with { PrivilegeService =
+                        DfoServer.Game.PrivilegeServices.PrivilegeServicePolicy.Purchase(serviceInventory.PrivilegeService, product, privileges, now) };
+                }
+                catch (Exception error) when (error is InvalidOperationException or InvalidDataException or OverflowException)
+                { return InventoryResult.Reject(17) with { RejectReason = "privilege_purchase_not_eligible" }; }
+            }
             if (devilProduct)
             {
                 int[]? slots = product.Section == "selectable character premium" ? [product.ContractType - 580] :
@@ -122,7 +134,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     if (serviceWallet.ContractExpiry(580 + slot) > int.MaxValue) return InventoryResult.Reject(17);
                 }
             }
-            else if (!AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
+            else if (!privilegeProduct && !AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
 
             if (product.Section == "avatar")
             {
@@ -143,7 +155,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 if (requested.PaymentMode != 0 || product.CeraPrice < 0) return InventoryResult.Reject(17);
                 total += product.CeraPrice;
                 gold += product.GoldPrice;
-                var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
+                var template = !devilProduct && !privilegeProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
                 // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
                 if (template is not null && catalog.StackableAction(product.ItemId) is { Label: "[guild hongbao]" })
@@ -228,7 +240,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
                 }
 
-                else if (!devilProduct) rewards.Add(new(product.ItemId, product.Count));
+                else if (!devilProduct && !privilegeProduct) rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
                 return InventoryResult.Reject(17);
@@ -293,7 +305,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             overflow = overflow.AddRange(grant.Plan!.OverflowItems);
         }
 
-        var after = grant.Plan!.After with { DevilUses = serviceInventory.DevilUses };
+        var after = grant.Plan!.After with { DevilUses = serviceInventory.DevilUses, PrivilegeService = serviceInventory.PrivilegeService };
         // 只合并本次魔王子项，保留普通商品附赠激活的其他契约。
         foreach (var contract in serviceWallet.PremiumContracts.Where(pair => DevilContractPolicy.IsService(pair.Key)))
             after = after with { AccountWallet = after.AccountWallet with { Contracts = after.AccountWallet.PremiumContracts.SetItem(contract.Key, contract.Value) } };

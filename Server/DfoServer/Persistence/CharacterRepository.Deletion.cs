@@ -21,6 +21,7 @@ internal sealed partial class CharacterRepository
         "character_luke_normal_drop_claims", "character_luke_normal_progress", "character_anton_normal_progress",
         "character_prey_normal_progress",
         "character_boss_selection_buff",
+        "character_privilege_service",
         "character_tutorial_receipts", "character_tutorial_state",
         "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",
         "character_fiendwar_title_facts", "character_title_book_slots", "character_title_progress", "character_title_sections",

@@ -159,6 +159,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         var inventory = WriteInventory(db, transaction, owner, id, plan, initial);
         WriteItemMakingSkills(db, transaction, id, owner.Account, plan);
         WriteKnightShieldDeck(db, transaction, owner.Account, id, inventory.ShieldDeck);
+        WritePrivilegeService(db, transaction, owner.Account, id, inventory.PrivilegeService);
         inventory = WriteWallet(db, transaction, owner, id, plan, inventory);
         inventory = WriteCargo(db, transaction, owner, id, plan, inventory);
         WritePvpPrivateCreation(db,transaction,owner.Account,id,character);

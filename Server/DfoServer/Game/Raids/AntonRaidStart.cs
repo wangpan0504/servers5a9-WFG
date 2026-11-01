@@ -133,9 +133,11 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 member.Actor.Session.Selected!) is not null || parties.Current(member.Actor.Session) is not null))
                 return new(19, "fiendwar-member-not-ready");
             // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原冻结产物。
-            var policies = expected.Members.ToDictionary(member => member.Actor.Character,
-                member => expected.Guide ? fiendwarRewards!.CreateGuide(member.Actor.Session.PremiumPcRoom) :
-                    fiendwarRewards!.Create(member.Actor.Session.PremiumPcRoom));
+            var policies = reservations.ToDictionary(member => member.Actor.Character,
+                member => expected.Guide ? fiendwarRewards!.CreateGuide(member.Actor.Session.PremiumPcRoom,
+                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())) :
+                    fiendwarRewards!.Create(member.Actor.Session.PremiumPcRoom,
+                        member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())));
             completion = policies[actor.Character];
             memberRewards = policies.ToImmutableDictionary(row => row.Key,
                 row => row.Value.Phases.Select(phase => phase.Rewards).ToImmutableArray());

@@ -14,7 +14,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
     readonly RaidRewardContainers containers = new(definition.Script, items, boosters);
 
     readonly FiendwarRewards? guide = guideDefinition is null ? null : new(guideDefinition, items, boosters);
-    internal LukeRaidCompletionPolicy CreateGuide(bool pcroom) => guide?.Create(pcroom) ??
+    internal LukeRaidCompletionPolicy CreateGuide(bool pcroom, bool privilege = false) => guide?.Create(pcroom, privilege) ??
         throw new InvalidDataException("漩涡引导奖励尚未装配");
 
     internal LukeRaidCompletionPolicy Create(bool pcroom, bool privilege = false, Func<int, int>? draw = null)

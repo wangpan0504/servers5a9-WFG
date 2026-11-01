@@ -97,6 +97,7 @@ internal sealed class CashShopCatalog
                     throw new InvalidDataException("商城装扮类型索引无效: " + commodity);
                 int durationDays = section == "visual"
                     ? Number(values[offset + 3], out int parsedDays) && parsedDays > 0 ? parsedDays : 30
+                    : section == "privilege service" && Number(values[offset + 3], out parsedDays) && parsedDays > 0 ? parsedDays
                     : section == "charac premium package" && Number(values[offset + 7], out parsedDays) && parsedDays > 0 ? parsedDays : 0;
                 int contractType = section == "selectable character premium" && Number(values[offset + 2], out int slot) && slot is >= 0 and < 8
                     ? checked(580 + slot) : 0;
