@@ -19,6 +19,7 @@ internal static class SelfTestRunner
         AccountMaterialTests.RunCore();
         BattlePassCatalogTests.RunCore();
         BattlePassRequestTests.RunCore();
+        BattlePassPacketTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
         LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
