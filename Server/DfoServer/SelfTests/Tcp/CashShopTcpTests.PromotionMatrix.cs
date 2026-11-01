@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text.Json;
@@ -147,7 +148,7 @@ internal static partial class CashShopTcpTests
             {
                 var beforeState = PromotionDelivered(fixture, "10000");
                 var beforeCost = beforeState.Quantities;
-                int carts = await PromotionCostAsync(fixture, peer);
+                int carts = await PromotionCostAsync(fixture, peer, shop);
                 var afterState = PromotionDelivered(fixture, "10000");
                 VerifyPromotionDelivery(beforeState, afterState, peer.Id);
                 var afterCost = afterState.Quantities;
@@ -227,6 +228,7 @@ internal static partial class CashShopTcpTests
                 BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(17 + index * 15), checked((ushort)coupon.Slot));
             }
             expected[2058] = expected.GetValueOrDefault(2058) + giftCount;
+            var mileage = MileageBefore(fixture, commodities.Sum(id => ExpectedCashMileage(shop.Product(id)!)), account);
             long started = System.Diagnostics.Stopwatch.GetTimestamp();
             peer.Send(64, request);
             foreach (int id in commodities)
@@ -242,6 +244,7 @@ internal static partial class CashShopTcpTests
             if (packet is { Kind: 0, Opcode: 14 }) packet = peer.Read();
             That(packet is { Kind: 0, Opcode: 53 } && U32(packet.Body, 1) == balance - commodities.Sum(id => shop.Product(id)!.CeraPrice),
                 "完整购买响应投影真实扣费余额");
+            MileageAfter(peer, fixture, mileage);
             bool overflow = Scalar("SELECT count(*) FROM mailbox_messages WHERE delivery_key LIKE 'inventory-overflow:%'") != 0 && peer.Id == fullCharacterId;
             if (giftCount > 0 || overflow) peer.Expect(0, 99, [1, 0]);
             peer.Barrier();
@@ -496,6 +499,7 @@ internal static partial class CashShopTcpTests
                 "真实三SKU中的目标商品按独立已存折扣价表购买，每行资格一套");
             var beforeCharacter = SavedCharacter();
             var before = PromotionDelivered(fixture, "10000");
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(shop.Product(cart.Commodity)!));
             peer.Send(64, Cart([cart.Commodity]));
             var bonuses = shop.Bonus(cart.Commodity);
             Bytes(peer.Expect(1, 64).Body, Build(writer =>
@@ -511,9 +515,11 @@ internal static partial class CashShopTcpTests
             var cera = peer.Expect(0, 53).Body;
             That(cera.Length == 13 && cera[0] == 1 && U32(cera, 1) == 200000 - carts.Take(index + 1).Sum(row => row.Price),
                 "库存之后的Cera包投影本单真实完整扣费");
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 99, [1, 0]);
             // 本夹具直接seed旧累计，缺少前史订单；严格消费原生只读提示，不冒充完整奖项页。
             AssertPromotionNativeUnavailableRefresh(peer.Expect(0, 108), 5000L + index, peer.ExpectedOpenEvents);
+            MileageLimitsAfterRefresh(peer, fixture);
             peer.Barrier();
             var after = PromotionDelivered(fixture, "10000");
             VerifyPromotionDelivery(before, after, peer.Id);

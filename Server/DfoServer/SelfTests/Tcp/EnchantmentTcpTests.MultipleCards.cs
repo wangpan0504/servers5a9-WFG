@@ -168,7 +168,13 @@ internal static partial class EnchantmentTcpTests
         }
         (byte Kind, ushort Opcode)[] Notices() => Enumerable.Repeat(((byte)1, (ushort)713), sources.Length).ToArray();
         static byte[] ExpertInfo() => Build(writer =>
-        { writer.Write((byte)0); writer.Write((byte)1); writer.Write((byte)0); writer.Write((byte)0); writer.Write(1u); writer.Write(300u); });
+        {
+            // Lv1附魔师自动具有基础配方和普通卡资格；期望独立编码，不调用生产Builder。
+            writer.Write((byte)0); writer.Write((byte)1);
+            writer.Write((byte)1); writer.Write(10015129);
+            writer.Write((byte)1); writer.Write((byte)0);
+            writer.Write(1u); writer.Write(300u);
+        });
         string Uids() => fixture.Snapshot("SELECT item_uid FROM character_inventory_items ORDER BY item_uid");
         string Snapshot() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +

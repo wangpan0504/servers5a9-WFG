@@ -9,6 +9,7 @@ internal static partial class LukeRaidRunTcpTests
     {
         var first = peers[..4]; var second = peers[4..];
         Enter(first, first[0], 5054); Load(first);
+        ReadOtherPartyDeparture(first, second);
         Enter(second, second[0], 5055); Load(second);
         foreach (var peer in peers) Drain(peer);
         string assets = fixture.Snapshot("SELECT character_id,item_uid,item_core FROM character_inventory_items ORDER BY character_id,item_uid");
@@ -38,5 +39,26 @@ internal static partial class LukeRaidRunTcpTests
             "自动失败退场不再次扣票/扣币，也不伪造退款或奖励");
         first[0].Send(15, BitConverter.GetBytes(5054));
         That(Drain(first[0]).Single(packet => packet is { Kind: 1, Opcode: 15 }).Body[0] == 0, "本次失败攻坚不可重新选图，需离团重建");
+    }
+
+    // 另一分队离城是上一阶段的真实更新，不能混入候战队自己的选图断言。
+    static List<WirePacket>[] ReadOtherPartyDeparture(TcpPeer[] departed, TcpPeer[] waiting)
+    {
+        var rows = waiting.Select(peer => Drain(peer)).ToArray();
+        ushort[] departedActors = departed.Select(peer => peer.Id).Order().ToArray();
+        foreach (var updates in rows)
+        {
+            That(!updates.Any(packet => packet.Opcode is 27 or 28 or 29 or 1536),
+                "另一分队离城更新不提前为候战队打开选图或安装Run");
+            var leaves = updates.Where(packet => packet is { Kind: 0, Opcode: 6 }).ToArray();
+            That(leaves.Length == 4 && leaves.All(packet => packet.Body.Length == 2) &&
+                leaves.Select(packet => U16(packet.Body)).Distinct().Count() == 4,
+                "候战队恰收首队四个不同Actor离城，不吞未知或重复离场");
+            leaves = leaves.OrderBy(packet => U16(packet.Body)).ToArray();
+            for (int index = 0; index < departedActors.Length; index++)
+                Bytes(leaves[index].Body, Build(writer => writer.Write(departedActors[index])),
+                    "另一队离场逐字对应首队真实Actor，本队Actor及P2P保留");
+        }
+        return rows;
     }
 }

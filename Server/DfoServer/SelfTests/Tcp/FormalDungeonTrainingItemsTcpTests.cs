@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -74,11 +75,12 @@ internal static partial class FormalDungeonTcpTests
             byte[] key = [(byte)id,(byte)(id >> 8)];
             DieAndRevive(peer,key,0);
             That(Assets() == before,"修炼场零币可复活，保持角色及账号完整资产");
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(100004)!));
             peer.Send(64,Convert.FromHexString("0000010000FF00A48601000000000000000000"));
             byte[] ack = new byte[24]; ack[0] = 1; ack.AsSpan(2,4).Fill(0xFF);
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(ack.AsSpan(6),100004);
             peer.Expect(1,64,ack); peer.Expect(0,14,CoinBalance(1));
-            peer.Expect(0,53,[1,100,0,0,0,0,0,0,0,0,0,0,0]); peer.Barrier();
+            peer.Expect(0,53,[1,100,0,0,0,0,0,0,0,0,0,0,0]); MileageAfter(peer, fixture, mileage); peer.Barrier();
             That(fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=15") is [[100L]] &&
                 fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",id) is [[1L]],
                 "修炼场实收CMD64购买仍扣100点券并发1复活币，免消耗不包围付费事务");

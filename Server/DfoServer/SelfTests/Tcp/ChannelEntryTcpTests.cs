@@ -48,7 +48,7 @@ internal static class ChannelEntryTcpTests
             !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
             "LOGIN返回独立Native端口及关联值，NOTI1和后续Actor仍使用所选频道身份");
         alpha.Create("EntryA"); isolated.Create("EntryB");
-        alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
+        alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         var alphaEntry = alpha.Select();
         var isolatedEntry = isolated.Select();
         alpha.Send(195);
@@ -84,7 +84,7 @@ internal static class ChannelEntryTcpTests
         isolated.Send(3, [1]); isolated.Expect(1, 3, [1]); isolated.Closed();
         var nolanOn = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
         using var beta = Open(fixture, "entryb", gamePort: endpoints[11], channelNumber: 11);
-        beta.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
+        beta.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         beta.Select(resumeTown: true, room: false);
         beta.SendBarrier(); var toBeta = beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
         alpha.SendBarrier(); var toAlpha = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
@@ -124,7 +124,7 @@ internal static class ChannelEntryTcpTests
         alpha.Send(3, [1]);
         alpha.Expect(1, 3, [1]); alpha.Closed();
         using var switched = Open(fixture, "entrya", gamePort: endpoints[21], channelNumber: 21);
-        switched.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
+        switched.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         var reentry = switched.Select(resumeTown: true, room: false, settings: settings);
         That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与账号键位");
         That(switched.Id == id && fixture.Query("SELECT count(*) FROM characters WHERE account='entrya'") is [[1L]] &&
@@ -156,7 +156,7 @@ internal static class ChannelEntryTcpTests
 
         using var takeover = Open(fixture, "entrya");
         switched.Closed(); beta.Barrier();
-        takeover.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
+        takeover.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
         takeover.Select(settings: settings); takeover.Barrier();
         That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOn,
             "换频道、重连和接管合并完整团本事件与同一2532提交，不改写活动revision");
@@ -168,7 +168,7 @@ internal static class ChannelEntryTcpTests
         takeover.Send(3, [1]); takeover.Expect(1, 3, [1]); takeover.Closed();
         var nolanOff = serverEvents.Override(ServerEventService.NolanVisibilityId, false);
         using var gateReentry = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
-        gateReentry.ExpectedOpenEvents = [282, 2449, 414, 181];
+        gateReentry.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.MileageShopId];
         var gatePackets = gateReentry.Select(resumeTown: true, settings: settings);
         gateReentry.Barrier();
         That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOff,

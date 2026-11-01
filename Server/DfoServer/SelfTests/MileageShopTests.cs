@@ -50,7 +50,10 @@ internal static class MileageShopTests
             Level = 1, Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty with { Mileage = 20 } }
         };
         CashShopPurchaseRequest Request(int id = 2001, byte mode = 0) => new(0, [new(id, 255, 255)]) { CurrencyMode = mode };
-        That(!service.Buy(role, Request(), out _).Accepted, "活动266未配置关闭，不因积分足够而放行");
+        var permanent = service.Buy(role, Request(), out _);
+        That(permanent is { Accepted: true, Plan.RequiredEvent: { } } &&
+            permanent.Plan.RequiredEvent.Matches(events.Read(266).Schedule),
+            "活动266未配置时常驻，积分规划与原库存事务前置使用同一默认规则");
         events.Override(266, true);
         That(service.Buy(role, Request(mode: 1), out _) is { Accepted: true, Plan.After.AccountWallet.Mileage: 15 } &&
             service.Buy(role, Request(1001, 1), out _) is { Accepted: false, RejectReason: "mileage_source_product_mismatch" },

@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -79,9 +80,12 @@ internal static class CharacterSlotsTcpTests
         fixture.Sql("DROP TRIGGER fail_slot_purchase");
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Send(64, Purchase());
+            peer.Select();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
+            peer.Send(64, Purchase());
             That(peer.Expect(1, 64).Body[0] == 1, "角色栏购买成功");
             That(U32(peer.Expect(0, 53).Body, 1) == 1_000_000 - product.CeraPrice, "按当前PVF价格扣款");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
         }
         await fixture.StopAsync(); await fixture.StartAsync("restart");

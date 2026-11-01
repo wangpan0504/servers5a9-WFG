@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Net;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -73,8 +74,11 @@ internal static partial class CashShopTcpTests
             That(MailboxTcpTests.ReadList(peer.Mailbox.Single()).Summaries is [var gift] && gift.MailId == giftId &&
                 fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[2L]],
                 "ACK前断流后真实TCP登录恢复同一赠礼和累计，不补寄第二次");
+            var mileage = MileageBefore(fixture, 2 * ExpectedCashMileage(items.CashShop.Product(100004)!));
             peer.Send(64, cart);
-            peer.Expect(1, 64); peer.Expect(1, 64); peer.Expect(0, 14); peer.Expect(0, 53); peer.Expect(0, 99, [1, 0]); peer.Barrier();
+            peer.Expect(1, 64); peer.Expect(1, 64); peer.Expect(0, 14); peer.Expect(0, 53);
+            MileageAfter(peer, fixture, mileage);
+            peer.Expect(0, 99, [1, 0]); peer.Barrier();
             That(fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[4L]] &&
                 fixture.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[2L]] &&
                 fixture.Query("SELECT count(*) FROM mailbox_messages") is [[2L]],

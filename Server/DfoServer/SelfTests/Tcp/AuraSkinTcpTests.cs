@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -74,6 +75,7 @@ internal static class AuraSkinTcpTests
             That(State() == before, "未开通时不能穿入外观光环");
             var buy = new byte[19]; buy[2] = 1; buy[5] = 255;
             BinaryPrimitives.WriteInt32LittleEndian(buy.AsSpan(7), commodity);
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
             peer.Send(64, buy);
             That(peer.Expect(1, 64).Body[0] == 1, "真实商城商品购买成功");
             byte[] delta = peer.Expect(0, 14).Body;
@@ -82,6 +84,7 @@ internal static class AuraSkinTcpTests
             sourceSlot = checked((short)U16(delta, 3));
             That(sourceSlot >= 121 && U32(peer.Expect(0, 53).Body, 1) == 0,
                 "材料券进入真实材料页，商城只扣实际点券");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
             before = State();
             if (!definition.OpensAuraSkinSlot)

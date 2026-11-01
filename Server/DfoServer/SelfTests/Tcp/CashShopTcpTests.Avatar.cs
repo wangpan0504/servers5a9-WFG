@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -46,16 +47,20 @@ internal static partial class CashShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(270623)!, 1320));
             peer.Send(64, BuyAvatar(270623, 4, 3));
             Bought(peer, 270623);
             AvatarRow(peer.Expect(0, 14).Body, 4, 0);
             That(U32(peer.Expect(0, 53).Body, 1) == 8680, "永久散件按EQU扣1320点券，随后同步真实账号余额");
+            MileageAfter(peer, fixture, mileage);
             for (int index = 0; index < 2; index++)
             {
+                var couponMileage = MileageBefore(fixture, 0);
                 peer.Send(64, BuyAvatar(270623, (byte)index, 3, 1));
                 Bought(peer, 270623);
                 BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 65, index == 0 ? 2681590 : -1, index == 0 ? 1 : 0);
                 AvatarRow(peer.Expect(0, 14).Body, (byte)index, 0);
+                MileageAfter(peer, fixture, couponMileage);
                 peer.Barrier();
                 That(fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=15") is [[8680L]],
                     "券支付不扣点券，也不发虚构钱包变化");
@@ -67,9 +72,11 @@ internal static partial class CashShopTcpTests
                 That(before == PurchaseSnapshot(fixture), "耗尽源、非法属性、虚假期限及畸形包拒绝，连接继续且库存不变");
             }
             long started = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(270621)!, 200));
             peer.Send(64, BuyAvatar(270621, 0, 1)); Bought(peer, 270621);
             AvatarRow(peer.Expect(0, 14).Body, 0, 7 * 86400, started);
             That(U32(peer.Expect(0, 53).Body, 1) == 8480, "7天类型按EQU扣200点券，不按商品类型列发1/3件");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
         }
         using (var peer = Open(fixture))
@@ -86,9 +93,11 @@ internal static partial class CashShopTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period on", out string relativeReply) &&
                 relativeReply == "OK {\"ignoreUsablePeriod\":true}", "只开启相对忽略，不改变绝对开关");
             long started = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(270621)!, 200));
             peer.Send(64, BuyAvatar(270621, 0, 1)); Bought(peer, 270621);
             AvatarRow(peer.Expect(0, 14).Body, 0, checked((int)(ItemExpiration.MaximumUnixTime - started)), started);
             That(U32(peer.Expect(0, 53).Body, 1) == 8280, "忽略相对期限不改变七天商品的真实收费");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period off", out relativeReply) &&
                 relativeReply == "OK {\"ignoreUsablePeriod\":false}" &&
@@ -107,8 +116,10 @@ internal static partial class CashShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1);
+            var mileage = MileageBefore(fixture, 0);
             peer.Send(64, BuyAvatar(270623, 4, 3, 1)); Bought(peer, 270623);
             BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 65, -1, 0);
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 99, [1, 0]); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM mailbox_attachments WHERE claimed=0") is [[1L]] &&
                 fixture.Query("SELECT json_extract(i.item_core,'$.Durability'),json_extract(d.detail,'$.ExpireTime') FROM mailbox_attachments a " +
@@ -128,11 +139,14 @@ internal static partial class CashShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(275695)!, 2640) +
+                ExpectedCashMileage(resources.ItemResources.CashShop.Product(105531)!));
             peer.Send(64, dyedCart);
             Bought(peer, 275695); Bought(peer, 105531);
             BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 65, 490704677, 1);
             AvatarRow(peer.Expect(0, 14).Body, 4, 0, itemId: 406560053);
             That(U32(peer.Expect(0, 53).Body, 1) == 5540, "现场34B请求逐商品ACK后完整同步两个容器，合计只扣2740点券");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=1 AND json_extract(item_core,'$.ItemId')=490704677") is [[1L]],
                 "染色剂持久化为普通STK，不按FF选项创建时装详情");

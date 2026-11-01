@@ -10,6 +10,7 @@ internal static class ShopPurchaseLimitService
     {
         after = before;
         deadline = null;
+        if (!price.UnresolvedPurchaseLimits.IsDefaultOrEmpty) return false;
         int today = ShopPurchaseCount.Today(now);
         foreach (var limit in new[] { price.Limit, price.PeriodicLimit })
         {

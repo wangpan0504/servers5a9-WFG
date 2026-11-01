@@ -649,6 +649,11 @@ internal sealed partial class ItemCatalog
             // 旧银质工具的32格声明经兼容约定映射到本版40格，不映射其他表外容量。
             if (cargoTarget == 32) cargoTarget = 40;
         }
+        // 积分金库券的最终服务项未声明容量；该具名金库档位为120格，前两层仍走原礼包奖池。
+        if (!isEquipment && id == 490705297 && kind == ItemKind.Consumable &&
+            path!.Equals("cash/chn_490705297.stk", StringComparison.OrdinalIgnoreCase) &&
+            name == "坚固的金刚石金库扩展券" && stackableType.Replace("`", "").Trim() == "[etc] 0")
+            cargoTarget = 120;
         var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,

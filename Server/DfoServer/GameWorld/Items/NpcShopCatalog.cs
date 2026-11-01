@@ -169,6 +169,7 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
     int EquipmentSellRate { get; init; }
     public ItemSaleLimit? SaleLimit { get; init; }
     public ItemPurchaseLimit? PeriodicLimit { get; init; }
+    public ImmutableArray<string> UnresolvedPurchaseLimits { get; init; } = [];
 
     public int GetSellGold(ushort durability, ushort maximumDurability)
     {
@@ -205,8 +206,21 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
             limit = new(account, count, text.Has("reset daily purchase item"));
         }
         ItemPurchaseLimit? periodicLimit = null;
+        var unresolvedLimits = ImmutableArray.CreateBuilder<string>();
         foreach (string body in text.Sections("purchase limit"))
         {
+            // 已见空声明和角色公会战赛季声明保留原文；规则未闭合，购买端必须拒绝。
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                unresolvedLimits.Add(body);
+                continue;
+            }
+            var season = Regex.Match(body, @"\A\s*`character`\s+`agitwarseason`\s+([0-9]+)\s*\z", RegexOptions.IgnoreCase);
+            if (season.Success && int.TryParse(season.Groups[1].Value, out int seasonalMaximum) && seasonalMaximum > 0)
+            {
+                unresolvedLimits.Add(body);
+                continue;
+            }
             var declaration = Regex.Match(body, @"\A\s*`(account|character)`\s+`(daily|weekly|monthly|accumulate)`\s+([0-9]+)\s*\z", RegexOptions.IgnoreCase);
             if (!declaration.Success || !int.TryParse(declaration.Groups[3].Value, out int maximum) || maximum <= 0)
                 throw new InvalidDataException("NPC 商品周期限购声明无效");
@@ -240,7 +254,8 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
             EquipmentValue = equipment ? value >= 0 ? value : (int)gold : null,
             EquipmentSellRate = equipmentSellRate,
             SaleLimit = saleLimit,
-            PeriodicLimit = periodicLimit
+            PeriodicLimit = periodicLimit,
+            UnresolvedPurchaseLimits = unresolvedLimits.ToImmutable()
         };
         return equipment ? result with { SellGold = result.GetSellGold(0, 0) } : result;
     }

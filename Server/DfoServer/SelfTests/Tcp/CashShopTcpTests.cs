@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -99,6 +100,7 @@ internal static partial class CashShopTcpTests
             body[2] = 1;
             body[5] = 0xFF;
             BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), checked((uint)product.CommodityId));
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
             peer.Send(64, body);
             var ack = peer.Expect(1, 64).Body;
             That(ack.Length == 24 && ack[0] == 1 && U32(ack, 6) == product.CommodityId,
@@ -107,6 +109,7 @@ internal static partial class CashShopTcpTests
             That(delta.Any(value => value == (byte)(product.ItemId & 0xff)), "商城奖励进入主背包差量");
             var cera = peer.Expect(0, 53).Body;
             That(cera.Length == 13 && cera[0] == 1 && U32(cera, 1) == expired.CeraPrice, "商城提交后实时刷新 Cera 余额");
+            MileageAfter(peer, fixture, mileage);
             That(fixture.Query("SELECT COALESCE((SELECT balance FROM account_currency_balances WHERE currency_kind=15),0)") is [[long balance]] && balance == expired.CeraPrice,
                 "商城扣款在数据库提交");
             var before = fixture.Query("SELECT revision FROM characters");
@@ -125,6 +128,7 @@ internal static partial class CashShopTcpTests
             That(Command("cash-shop-expiration invalid").StartsWith("ERR ") &&
                 Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":false}", "错误GM命令不改变开关");
             That(Command("cash-shop-expiration on") == "OK {\"ignoreAbsoluteExpiration\":true}", "GM开启实际购买服务的调试开关");
+            mileage = MileageBefore(fixture, ExpectedCashMileage(expired));
             peer.Send(64, body);
             That(peer.Expect(1,64).Body[0] == 1, "同一连接在失败后可调试购买历史商品");
             var debugDelta = peer.Expect(0,14).Body;
@@ -134,7 +138,9 @@ internal static partial class CashShopTcpTests
                 "历史商品NOTI14中对应物品条目的期限下发2037安全上限");
             That(U32(peer.Expect(0,53).Body,1) == 0 && fixture.Query("SELECT COALESCE((SELECT balance FROM account_currency_balances WHERE currency_kind=15),0)") is [[long paid]] && paid == 0,
                 "调试购买仍原子扣款并投影真实余额");
+            MileageAfter(peer, fixture, mileage);
             AssertPromotionNativeRefresh(peer.Expect(0, 108), 1, false, peer.ExpectedOpenEvents);
+            MileageLimitsAfterRefresh(peer, fixture);
             peer.Barrier();
             That(fixture.Query("SELECT count,revision FROM cash_shop_promotion_progress") is [[1L, 1L]] &&
                 fixture.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[1L]] &&

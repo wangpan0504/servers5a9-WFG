@@ -116,13 +116,30 @@ internal static class RuneBoxTcpTests
             peer.Barrier();
         }
         string committed = Snapshot();
+        var restartStates = fixture.Query("SELECT kind,item_id,until_ms,maintenance,cool_group " +
+            "FROM character_consumable_states WHERE character_id=$p0 ORDER BY kind,item_id", character);
+        var lastDefinition = items.Boosters.Get(LastBox);
+        // 末盒只留下不跨重新选角的100毫秒冷却；原生选角会合法清理它并提交一次revision。
+        That(lastDefinition.CoolTime == 100 && lastDefinition.CooltimeMaintenance is null && lastDefinition.CoolGroup is null &&
+            restartStates is [var state] && Convert.ToByte(state[0]) == (byte)ConsumableStateKind.Cooldown &&
+            Convert.ToInt32(state[1]) == LastBox && Convert.ToInt64(state[2]) > 0 &&
+            Convert.ToByte(state[3]) == 0 && Convert.ToInt32(state[4]) == -LastBox,
+            "末盒持久化冷却精确为本物品、真实冷却组与不跨重新选角的维护标记");
+        string afterReselect = Snapshot(revisionDelta: 1);
         await fixture.StopAsync();
         await fixture.StartAsync();
+        That(committed == Snapshot() && JsonSerializer.Serialize(restartStates) == JsonSerializer.Serialize(
+            fixture.Query("SELECT kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states " +
+                "WHERE character_id=$p0 ORDER BY kind,item_id", character)),
+            "仅重启未选角时资产、UID、槽位、revision、审计、序列与冷却逐字保持");
         using (var peer = Open(fixture))
         {
             peer.Select();
             peer.Barrier();
-            That(committed == Snapshot(), "重启后源扣减、护石页产物与UID保持提交结果");
+            That(afterReselect == Snapshot(), "重新选角只为已证冷却清理提交一次revision，源扣减、护石页产物、槽位、UID与审计保持");
+            That(fixture.Query("SELECT kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states " +
+                "WHERE character_id=$p0 ORDER BY kind,item_id", character).Length == 0,
+                "不跨重新选角的末盒冷却全部清理且没有新增状态");
             var body = peer.SpecialContainers[4].Body;
             That(body[0] == 46 && PageRecords(body).Any(record => record.Slot == stoneDestination && record.Id == stoneProduct),
                 "重启后容器46仍携带护石产物");
@@ -142,10 +159,21 @@ internal static class RuneBoxTcpTests
         long Rows(string where) => Convert.ToInt64(fixture.Query(
             "SELECT COUNT(*) FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid " +
             "WHERE s.character_id=$p0 AND " + where, character)[0][0]);
-        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
-            JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
-            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
-            JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+        string Snapshot(int revisionDelta = 0)
+        {
+            var revisions = fixture.Query("SELECT revision,gold FROM characters");
+            if (revisionDelta != 0)
+            {
+                That(revisions.Length == 1, "符文盒夹具只有本次角色允许一次重新选角冷却提交");
+                revisions[0][0] = checked(Convert.ToInt64(revisions[0][0]) + revisionDelta);
+            }
+            return JsonSerializer.Serialize(revisions) +
+                JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+                JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+                JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'")) +
+                JsonSerializer.Serialize(fixture.Query("SELECT character_id,list_type,slot_index,item_uid " +
+                    "FROM character_inventory_slots ORDER BY character_id,list_type,slot_index"));
+        }
     }
 
     static (int Product, short Destination, byte[] Ack) OpenBox(TcpPeer peer, short slot)

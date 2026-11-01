@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
@@ -44,9 +45,12 @@ internal static class CargoPurchaseTcpTests
         fixture.Sql("DROP TRIGGER fail_cargo_purchase");
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Send(64, Purchase());
+            peer.Select();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(100063)!));
+            peer.Send(64, Purchase());
             That(peer.Expect(1, 64).Body[0] == 1, "金库商城直扩购买成功");
             That(U32(peer.Expect(0, 53).Body, 1) == 940, "只扣当前资源价格60");
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 66, [1, 0, 24, 0]);
             var cargo = peer.Expect(0, 13).Body;
             That(cargo[0] == 2 && U16(cargo, 1) == 24, "先通知打开的窗口扩容，再同步24格权威列表");
@@ -164,12 +168,15 @@ internal static class CargoPurchaseTcpTests
         Rollback("paid");
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Send(64, Purchase(100534));
+            peer.Select();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(100534)!));
+            peer.Send(64, Purchase(100534));
             That(peer.Expect(1, 64).Body[0] == 1, "账号仓库商城购买成功");
             That(fixture.Query("SELECT capacity FROM account_cargo") is [[16L]] &&
                 fixture.Query("SELECT count(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=2681921") is [[0L]],
                 "真实CMD64购买直接扩账号金库至16格，不发升级工具");
             That(U32(peer.Expect(0, 53).Body, 1) == 8000, "账号扩容只扣一次2000点券");
+            MileageAfter(peer, fixture, mileage);
             var cargo = peer.Expect(0, 13).Body;
             That(cargo[0] == 12 && U16(cargo, 1) == 16, "购买后投影账号容量");
             peer.Barrier();
@@ -187,10 +194,13 @@ internal static class CargoPurchaseTcpTests
         Rollback("history", 102045);
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Send(64, Purchase(102045));
+            peer.Select();
+            var mileage = MileageBefore(fixture, 0);
+            peer.Send(64, Purchase(102045));
             That(peer.Expect(1, 64).Body[0] == 1, "再次点击购买可兑历史账号工具");
             var item = peer.Expect(0, 14).Body;
             That(item[0] == 0 && U32(item, 5) == 2682968 && U32(item, 9) == 1, "历史券只消费一张并投影剩余数量");
+            MileageAfter(peer, fixture, mileage);
             var cargo = peer.Expect(0, 13).Body;
             That(cargo[0] == 12 && U16(cargo, 1) == 40, "历史券兑换投影40格");
             peer.Barrier();
@@ -199,8 +209,10 @@ internal static class CargoPurchaseTcpTests
             peer.Send(64, Purchase(102045)); peer.Expect(1, 64, [0, 0, 0]);
             peer.Send(306); peer.Expect(1, 306, [0, 20, 0]); peer.Barrier();
             That(State() == committed, "重放64及跟随裸306不扣款、不消耗旧工具或越档");
+            mileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(102108)!));
             peer.Send(64, Purchase(102108));
             That(peer.Expect(1, 64).Body[0] == 1 && U32(peer.Expect(0, 53).Body, 1) == 6000, "下一付费商品准确扣款一次");
+            MileageAfter(peer, fixture, mileage);
             cargo = peer.Expect(0, 13).Body;
             That(cargo[0] == 12 && U16(cargo, 1) == 48, "连续付费档发布48格");
             peer.Barrier(); committed = State();

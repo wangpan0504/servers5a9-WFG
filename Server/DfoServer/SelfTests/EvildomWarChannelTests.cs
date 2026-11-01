@@ -76,12 +76,16 @@ internal static class EvildomWarChannelTests
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, new(38, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, null, gate),
             "进出 type 0x36 不保留客户端城镇快照，同类频道互换保留");
-        // 与超时空之战（type 0x2D，落点最后防线 115）互换：01EB5AF0 的 vt+0x28（028FA400 集合）与 vt+0x4C 都不一致，同样不保留快照。
+        // 漩涡团队 type 0x2D 使用城镇57；普通超时空之战115不属于团队频道，三者的快照边界分别校验。
         var fiendwar = new ChannelEntry(new(2, 39), ChannelAreaLanding.FiendwarType, "[fiendwar]");
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, gate) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, new(57, 0, 1, 1)) &&
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(57, 0, 1, 1)),
+            "魔界大战与漩涡团队互换不保留快照，漩涡团队之间在57保留");
+        That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(115, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, new(115, 0, 1, 1)) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(115, 0, 1, 1)),
-            "魔界大战与超时空之战频道互换不保留快照，超时空之战之间互换保留");
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, new(115, 0, 1, 1)),
+            "普通超时空之战115仅允许普通频道快照，漩涡团队和魔界大战均拒绝");
         // 房间式区域本城门口规则不触及最后防线 115：115 没有房间式区域，且仍是频道专属城镇。
         That(towns.Areas.Values.Where(a => a.Town == 115).All(a => !towns.IsRoom(new(115, a.Area, 0, 0), none)) &&
             ChannelAreaLanding.IsChannelBoundTown(towns, 115),

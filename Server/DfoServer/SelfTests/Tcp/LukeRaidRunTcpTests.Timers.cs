@@ -15,7 +15,11 @@ internal static partial class LukeRaidRunTcpTests
             U32(packet.Body)==5056 && packet.Body[5]==(byte)RaidDungeonState.Close)), "SET时先关闭目标，不能把入场初态冒充到期开放");
         // 中间成员写入时故意失败，前面成员的阶段资格必须同事务回滚。
         fixture.Sql($"CREATE TRIGGER fail_timer_terminal BEFORE UPDATE ON character_raid_runs WHEN NEW.character_id={peers[3].Id} AND NEW.phase0_event IS NOT NULL BEGIN SELECT RAISE(ABORT,'timer sealed rollback'); END");
+        var previousSecond = ReadOtherPartyDeparture(first, second);
         var secondRows=Enter(second,second[0],5055);
+        // 保留已到达的全部阶段/自然时钟通知，继续参与原5056开放与失败回滚断言。
+        for (int index = 0; index < secondRows.Length; index++)
+            secondRows[index].InsertRange(0, previousSecond[index]);
         var rows=firstRows.Concat(secondRows).ToArray();
         for(int index=0;index<peers.Length;index++)
         {

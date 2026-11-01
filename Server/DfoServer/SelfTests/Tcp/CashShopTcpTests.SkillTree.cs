@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -65,8 +66,10 @@ internal static partial class CashShopTcpTests
             var login = peer.Select();
             That(login[2].Body[^9] == 255, "未开通Actor明确投影FF");
             peer.Send(260, [0]); peer.Expect(1, 260, [0, 1, 0]); peer.Barrier();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
             peer.Send(64, purchase); Bought(peer, product.CommodityId);
             That(U32(peer.Expect(0, 53).Body, 1) == product.CeraPrice, "首次付费只扣本商品一次价格，保留同账号另一角色准备款");
+            MileageAfter(peer, fixture, mileage);
             Changed(peer, 0);
             That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=821", peer.Id) is [[0L]],
                 "付费开通不再发实体821");
@@ -112,8 +115,9 @@ internal static partial class CashShopTcpTests
         {
             peer.Select(1); peer.Barrier();
             long balance = Balance();
+            var mileage = MileageBefore(fixture, 0);
             peer.Send(64, purchase); Bought(peer, product.CommodityId);
-            BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 68, 821, 1); Changed(peer, 0);
+            BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 68, 821, 1); MileageAfter(peer, fixture, mileage); Changed(peer, 0);
             That(Balance() == balance && fixture.Query("SELECT selected_skill_tree FROM characters WHERE id=$p0", peer.Id) is [[0L]],
                 "旧误发背包券只兑换一张，免再次扣款并保留多余券");
             string before = Snapshot();
@@ -123,7 +127,8 @@ internal static partial class CashShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(3); peer.Barrier();
-            peer.Send(64, purchase); Bought(peer, product.CommodityId); peer.Expect(0, 53); Changed(peer, 0);
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
+            peer.Send(64, purchase); Bought(peer, product.CommodityId); peer.Expect(0, 53); MileageAfter(peer, fixture, mileage); Changed(peer, 0);
             That(Balance() == 0, "过期券角色仍须支付完整商品价格，登录既有过期清理规则继续生效");
         }
         using (var peer = Open(fixture))

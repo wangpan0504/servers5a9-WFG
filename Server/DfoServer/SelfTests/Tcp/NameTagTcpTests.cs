@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Models;
@@ -92,14 +93,16 @@ internal static class NameTagTcpTests
         }
         await fixture.StopAsync();
 
-        static uint Purchase(TcpPeer peer, int commodity, uint item, uint balance)
+        uint Purchase(TcpPeer peer, int commodity, uint item, uint balance)
         {
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(commodity)!));
             peer.Send(64, Request(commodity));
             That(peer.Expect(1, 64).Body[0] == 1, "名称装饰购买成功");
             var tag = Tag(peer.Expect(0, 2).Body);
             That(tag.Item == item && tag.Expiry > DateTimeOffset.UtcNow.ToUnixTimeSeconds(), "Actor携带有效名称装饰");
             That(peer.Expect(0, 2).Body[0] == 1, "本人Player同步名称装饰和派生属性");
             That(U32(peer.Expect(0, 53).Body, 1) == balance, "名称装饰扣取实际商品价格");
+            MileageAfter(peer, fixture, mileage);
             return tag.Expiry;
         }
         static byte[] Request(int commodity)

@@ -76,25 +76,29 @@ internal static class PreyChannelTests
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, spot) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, spot) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, spot) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, spot) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, spot) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(115, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(115, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(67, 0, 1, 1)),
-            "普通↔0x32 不保留客户端城镇快照；0x32 与超时空之战 0x2D 同属 vt+0x28 团队页签谓词，互换保留；与魔界大战 0x36 互换不保留");
+            "普通、漩涡团队、魔界大战与普雷不混用快照；普通超时空之战115不能作为普雷旧城镇快照");
 
         // 卢克 0x20 / 安徒恩 0x17 与普通频道 vt+0x28 不同：普通→团本不记快照，必须按服务端落点入城；团本页签之间互换保留快照。
         var luke = new ChannelEntry(new(2, 20), 0x20, "[luke_raid]");
         var anton = new ChannelEntry(new(2, 19), 0x17, "[raid]");
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, anton, new(38, 0, 1, 1)) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(32, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(32, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(32, 0, 1, 1)) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(115, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(115, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(59, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, new(32, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, anton, new(19, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, new(19, 0, 1, 1)),
-            "卢克/安徒恩频道按 01EB5AF0 谓词：普通→团本落点，团本页签互换与安徒恩城镇（非专属城镇，旧频道可能是普通）保留快照");
+            "卢克/普雷之间及安徒恩非专属城镇仍保留快照，漩涡团队和普通超时空115继续独立隔离");
+        That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(57, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(57, 0, 1, 1)) &&
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(57, 0, 1, 1)),
+            "团队城镇57仅由漩涡团队保留，普雷及卢克不能继承");
 
         string path = Path.Combine(Path.GetTempPath(), "S5A9-prey-" + Guid.NewGuid().ToString("N"), "game.db");
         var repo = new CharacterRepository(path);
