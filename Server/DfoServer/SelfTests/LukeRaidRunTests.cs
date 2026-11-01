@@ -19,6 +19,17 @@ internal static class LukeRaidRunTests
         Bytes(RaidCombatPackets.DungeonState(5055, 0, RaidDungeonState.Open), [191, 19, 0, 0, 0, 0], "586完整6B保留中间字节");
         Reject<InvalidDataException>(() => RaidCombatPackets.Symbols([(0, 0)]), "快照不能注入共享清表哨兵");
         var script = AntonRaidBattleTests.Script(10, 20);
+        var executionScript = script with { Symbols = script.Symbols.Add("[kill all character]", 102) };
+        var lukeDisplay = new AntonRaidBattle(executionScript, kind: RaidKind.Luke);
+        That(lukeDisplay.SymbolSnapshot(lukeDisplay.View).Select(row => row.Id).SequenceEqual(new[] { 7 }) &&
+            lukeDisplay.View.Symbols["[kill all character]"] == 0,
+            "卢克显示过滤102零事件，保留领域原值及全部普通符号");
+        var antonDisplay = new AntonRaidBattle(executionScript);
+        That(antonDisplay.SymbolSnapshot(antonDisplay.View).All(row => row.Id != 102),
+            "安徒恩同类执行符号零值也不投递结果菜单事件");
+        var ordinaryDisplay = new AntonRaidBattle(script with { Symbols = script.Symbols.Add("[other state]", 102) });
+        That(ordinaryDisplay.SymbolSnapshot(ordinaryDisplay.View).Single(row => row.Id == 102).Value == 0,
+            "按原资源名称与编号匹配，不误删其它同号普通状态");
         script = script with { Phases = script.Phases.SetItem(0, script.Phases[0] with
             { Dungeons = script.Phases[0].Dungeons.Add(new(11, RaidDungeonState.Open, "[hp]", 1, 1)) }) };
         var map = new DungeonMap("boss", new(0, 0), 77, "fixture/boss.map");

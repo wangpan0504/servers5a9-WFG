@@ -53,6 +53,7 @@ internal static class PreyGuideTcpTests
         var symbolPacket = prepared.LastOrDefault(packet => packet is { Kind: 0, Opcode: 583 }) ??
             started.Last(packet => packet is { Kind: 0, Opcode: 583 });
         var symbols = ReadSymbols(symbolPacket.Body);
+        That(!symbols.ContainsKey(102), "普雷初始击杀全员零值不作为583执行事件发送");
         int branch = symbols[129];
         var report = new AntonTcpProbe.AntonProbeReport();
         foreach (int dungeon in branch == 0 ? new[] { 291100391, 291100393 } : new[] { 291100390, 291100392 })

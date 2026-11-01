@@ -129,7 +129,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         adventure?.Prepare(context);
         var settingReceipt = settings?.Capture(context);
         var c = context.Session.Selected ?? throw new InvalidOperationException("No selected character");
-        await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c, context.Session.FatigueForClient(c)), "select_character");
+        await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c, context.Session.FatigueForClient(c),
+            settingReceipt?.Settings.QuestNotify ?? default), "select_character");
         byte[] hoverPermission = DungeonPackets.Permission(WorldMapHoverDungeons.DungeonIds(towns));
         if (hoverPermission.Length > 2)
             await context.Notify(NotiPacketType.DUNGEON_PERMISSION, hoverPermission, "worldmap_hover_dungeon_permission");

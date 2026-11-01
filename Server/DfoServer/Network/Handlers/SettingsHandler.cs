@@ -20,6 +20,17 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_CHATTING_EMOTICON, SaveChatEmoticonsAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_RECENT_EMOTICON_LIST, SaveRecentEmoticonsAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.SAVE_QUEST_NOTIFY, SaveQuestNotifyAsync, nameof(SettingsHandler));
+    }
+
+    Task<CommandResult> SaveQuestNotifyAsync(GameConnectionContext context, Packet packet)
+    {
+        var entries = SettingsRequests.QuestNotify(packet.Body);
+        var result = context.Session.SaveQuestNotify(settings, entries);
+        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "character_quest_notify",
+            Count = packet.Body[0], result.Accepted, result.Changed });
+        // 书签由原选角四槽恢复；不发送未核证的专用ACK或覆盖当前界面的列表。
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> SaveChatEmoticonsAsync(GameConnectionContext context, Packet packet)

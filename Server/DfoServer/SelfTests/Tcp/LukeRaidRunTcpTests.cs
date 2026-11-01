@@ -361,6 +361,40 @@ internal static partial class LukeRaidRunTcpTests
     }
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 583 })
+        {
+            var body = packet.Body;
+            That(body.Length >= 1 && body.Length == 1 + 8 * body[0], "583完整消费真实符号快照");
+            var ids = new HashSet<uint>();
+            for (int index = 0; index < body[0]; index++)
+            {
+                int at = 1 + 8 * index;
+                That(U32(body, at) > 0 && ids.Add(U32(body, at)), "583符号非零且唯一，不发送清表哨兵");
+                That(U32(body, at) != 102 || U32(body, at + 4) != 0,
+                    "102零值仍会打开原生结果菜单，所有开团/加载/战斗/城镇快照均不得发送");
+            }
+            return;
+        }
+        if (packet is { Kind: 0, Opcode: 563 or 1460 or 1461 })
+        {
+            var body = packet.Body;
+            That(body.Length >= 2, "账号材料及周额度保留完整两字节头");
+            bool balances = packet.Opcode == 563;
+            int count = balances ? body[1] : U16(body);
+            int width = balances ? 8 : 12;
+            That(body.Length == 2 + count * width && (!balances || body[0] is 0 or 1),
+                "563全量/差量与1460/1461周额度各按原生行宽完整消费");
+            var ids = new HashSet<uint>();
+            for (int index = 0; index < count; index++)
+            {
+                int at = 2 + index * width;
+                That(U32(body, at) is > 0 and <= int.MaxValue && ids.Add(U32(body, at)) &&
+                    U32(body, at + 4) <= int.MaxValue &&
+                    (balances ? body[0] != 0 || U32(body, at + 4) > 0 : U32(body, at + 8) is > 0 and <= int.MaxValue),
+                    "账号材料模板唯一、数值合法，全量不带零余额且周额度有真实上限");
+            }
+            return;
+        }
         if (packet is { Kind: 0, Opcode: 765 }) { RaidPanelTests.ReadMemberStates(packet.Body); return; }
         if (packet is { Kind: 0, Opcode: 1446 }) { RaidPanelTests.ReadWeeklyClears(packet.Body); return; }
         if (packet is { Kind: 1, Opcode: 1361 }) { RaidPanelTests.ReadClears(packet.Body); return; }

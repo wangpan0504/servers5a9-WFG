@@ -1,17 +1,11 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
-using System.Text.Json;
 using PvfLib;
 
 internal static class TargetMarkPatch
 {
-    internal static void Run(PvfArchive source, string target, bool verify)
+    internal static List<ResourceDelta> Prepare(PvfArchive source, bool allowPatched = false)
     {
-        string output = Path.GetFullPath(target);
-        bool rawDirectory = Directory.Exists(output);
-        using var candidate = verify && !rawDirectory ? PvfArchive.Open(output) : null;
-        var replacements = new List<object>();
-        var patches = new List<(string Path, string RawName, byte[] Before, byte[] After)>();
+        var patches = new List<ResourceDelta>();
         foreach (string mode in new[] { "fiendwar_kr", "fiendwar_g" })
         for (int slot = 1; slot <= 3; slot++)
         {
@@ -21,7 +15,8 @@ internal static class TargetMarkPatch
             int[] checks = Enumerable.Range(0, tokens.Length).Where(index =>
                 tokens[index].Type == 3 && source.ResolveString(tokens[index].Value) == "[CHECK INDEX EXCLUDE DEAD]").ToArray();
             if (checks.Length != 2 || checks.Any(index => index + 1 >= tokens.Length) ||
-                tokens[checks[0] + 1] != new PvfToken(0, slot) || tokens[checks[1] + 1] != new PvfToken(0, 0) ||
+                tokens[checks[0] + 1] != new PvfToken(0, slot) ||
+                tokens[checks[1] + 1] != new PvfToken(0, 0) && (!allowPatched || tokens[checks[1] + 1] != new PvfToken(0, slot)) ||
                 raw.Length != tokens.Length * 5)
                 throw new InvalidDataException("Unsupported native target selection: " + path);
             for (int branch = 0; branch < checks.Length; branch++)
@@ -42,30 +37,8 @@ internal static class TargetMarkPatch
             // 成功和失败必须检查同一个目标；不能用队伍首槽代替刚刚选中的槽。
             byte[] patched = raw.ToArray();
             BinaryPrimitives.WriteInt32LittleEndian(patched.AsSpan((checks[1] + 1) * 5 + 1), slot);
-            patches.Add((path, $"{mode}_targetchange{slot + 1}.raw", raw, patched));
+            patches.Add(new(path, $"{mode}_targetchange{slot + 1}.raw", raw, patched));
         }
-        if (!verify) Directory.CreateDirectory(output);
-        foreach (var patch in patches)
-        {
-            string rawPath = Path.Combine(output, patch.RawName);
-            if (verify)
-            {
-                byte[] actual = candidate is not null ? candidate.ReadRaw(patch.Path) : File.ReadAllBytes(rawPath);
-                if (!actual.AsSpan().SequenceEqual(patch.After))
-                    throw new InvalidDataException("Candidate does not contain the exact target retry delta: " + patch.Path);
-                Console.WriteLine($"VERIFY path={patch.Path} onlySelectedSlotFallbackChanged=true");
-            }
-            else
-            {
-                File.WriteAllBytes(rawPath, patch.After);
-                replacements.Add(new { path = patch.Path, raw_file = rawPath,
-                    expected_before_sha256 = Convert.ToHexString(SHA256.HashData(patch.Before)).ToLowerInvariant() });
-                Console.WriteLine($"PATCH path={patch.Path} onlySelectedSlotFallbackChanged=true");
-            }
-        }
-        if (!verify)
-            File.WriteAllText(Path.Combine(output, "manifest.json"), JsonSerializer.Serialize(new { replacements },
-                new JsonSerializerOptions { WriteIndented = true }));
-        Console.WriteLine("PASS six team/guide target retry deltas; source PVF read-only; no whole-PVF hash");
+        return patches;
     }
 }

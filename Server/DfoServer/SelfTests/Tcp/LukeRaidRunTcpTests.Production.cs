@@ -21,9 +21,14 @@ internal static partial class LukeRaidRunTcpTests
     }
     static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0)
     {
-        static WirePacket Until(TcpPeer peer, byte kind, ushort opcode)
+        static WirePacket Until(TcpPeer peer, byte kind, ushort opcode, List<WirePacket>? collected = null)
         {
-            for (int index = 0; index < 256; index++) { var packet = peer.Read(); if (packet.Kind == kind && packet.Opcode == opcode) return packet; }
+            for (int index = 0; index < 256; index++)
+            {
+                var packet = peer.Read();
+                collected?.Add(packet);
+                if (packet.Kind == kind && packet.Opcode == opcode) return packet;
+            }
             throw new InvalidOperationException("production TCP expected packet not received");
         }
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.UtcNow);
@@ -108,8 +113,15 @@ internal static partial class LukeRaidRunTcpTests
                 Until(leader, 1, 658);
                 foreach (var peer in peers) Drain(peer);
                 leader.Send(666);
-                Bytes(Until(leader, 1, 666).Body, [1], "默认Runtime直接启用完整卢克开战，无注入合成策略");
-                foreach (var peer in peers) Drain(peer);
+                var leaderStart = new List<WirePacket>();
+                Bytes(Until(leader, 1, 666, leaderStart).Body, [1], "默认Runtime直接启用完整卢克开战，无注入合成策略");
+                foreach (var peer in peers)
+                {
+                    var started = Drain(peer);
+                    if (peer == leader) started.InsertRange(0, leaderStart);
+                    That(started.Any(packet => packet is { Kind: 0, Opcode: 583 }), "生产开团确实收到符号快照");
+                    foreach (var packet in started.Where(packet => packet is { Kind: 0, Opcode: 583 })) Validate(packet);
+                }
                 if (recovery)
                 {
                     Enter([leader], leader, 5054); Load([leader]);

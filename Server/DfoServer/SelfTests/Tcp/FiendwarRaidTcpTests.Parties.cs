@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Raids;
@@ -42,7 +43,13 @@ internal static partial class FiendwarRaidTcpTests
                     [new(10306760, 2), new(10312385, 2), new(1114, 3), new(7180, 2)],
                     items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
                 var funded = InventoryService.Commit(repository, owner, role, grant);
-                repository.CommitInventory(owner, funded, new(funded.Inventory, funded.Inventory with { ReviveCoins = 20 }, "fixture_fiendwar_coins"));
+                repository.CommitInventory(owner, funded, new(funded.Inventory, funded.Inventory with
+                {
+                    ReviveCoins = 20,
+                    AccountWallet = funded.Inventory.AccountWallet.SetContractExpiry(97, clock.GetUtcNow().AddHours(2).ToUnixTimeSeconds())
+                        .Set(CurrencyKind.BlackCube, 3).Set(CurrencyKind.WhiteCube, 3)
+                        .Set(CurrencyKind.RedCube, 3).Set(CurrencyKind.BlueCube, 3)
+                }, "fixture_fiendwar_coins"));
                 if (index == 0)
                     fixture.Sql("""
                         INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix)
@@ -52,7 +59,7 @@ internal static partial class FiendwarRaidTcpTests
                     fixture.Sql("INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES($p0,$p1,4,1000)",
                         count == 8 && index == 5 ? 2000 + count : 1000 + count, role.Id);
                 var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
-                peers.Add(peer); peer.Select(); Drain(peer); locations.Add(peer.Id, 2);
+                peers.Add(peer); peer.Select(premiumContracts: true); Drain(peer); locations.Add(peer.Id, 2);
                 VerifyConsumable(fixture, peer, false, 10);
                 VerifyConsumable(fixture, peer, true, 20, 1114);
             }
@@ -157,6 +164,7 @@ internal static partial class FiendwarRaidTcpTests
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
+            foreach (var peer in peers) VerifyCubeContractInRaid(fixture, peer);
             clock.AdvanceWithoutCallbacks(3);
             SupportRequest(leader, [0], 0);
             // 实际移动/快照不会重播已写支援；另一分队也必须只收到一次。
