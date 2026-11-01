@@ -22,7 +22,7 @@ internal readonly record struct RaidRewardCardRequest(byte Kind, byte Card);
 internal readonly record struct RaidUserRequest(byte Server, ushort Character, byte Channel);
 internal readonly record struct RaidOtherUserRequest(byte Server, ushort Character, byte Mode, byte Channel);
 
-internal static class RaidRequests
+internal static partial class RaidRequests
 {
     // 01C04D43..01C04D9E：曾用名窗口跨频道分支写server/character/mode1/channel。
     public static RaidOtherUserRequest OtherUser(ReadOnlySpan<byte> body)

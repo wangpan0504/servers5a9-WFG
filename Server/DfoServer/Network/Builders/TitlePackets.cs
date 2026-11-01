@@ -23,6 +23,24 @@ internal static class TitlePackets
         if (category is < 0 or > 4) throw new InvalidDataException("称号分类不在客户端五种范围");
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
         writer.Write(show ? (byte)1 : (byte)0); writer.Write(owner); writer.Write(category);
+        BookItems(writer, inventory, category);
+        return stream.ToArray();
+    }
+    // 023DEA00：定位头后批量读取五类，类别为u8，物品行与358相同。
+    public static byte[] RaidBook(InventorySnapshot inventory, byte server, byte channel, ushort owner)
+    {
+        using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
+        writer.Write(channel); writer.Write(server); writer.Write(owner);
+        writer.Write((byte)1); writer.Write((byte)5);
+        for (int category = 0; category < 5; category++)
+        {
+            writer.Write((byte)category);
+            BookItems(writer, inventory, category);
+        }
+        return stream.ToArray();
+    }
+    static void BookItems(BinaryWriter writer, InventorySnapshot inventory, int category)
+    {
         var rows = inventory.Items.Where(item => item.Position.List == (InventoryListType)(18 + category)).OrderBy(item => item.Position.Index).ToArray();
         writer.Write(rows.Length);
         foreach (var item in rows)
@@ -34,7 +52,6 @@ internal static class TitlePackets
             // 023C32C6的RAW块写入两个u16；随后023C32D5读取独立i32。
             writer.Write(4u); writer.Write(core.Extension97); writer.Write(core.Marker16);
         }
-        return stream.ToArray();
     }
     public static byte[] Progress(Character character)
     {

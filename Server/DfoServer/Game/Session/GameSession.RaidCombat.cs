@@ -267,9 +267,10 @@ internal sealed partial class GameSession
         if (capture.Replay is { } duplicate) return duplicate with { Commit = duplicate.Commit with { Duplicate = true }, Inventory = new(true, 0) };
         // 资源解析和批量放置不占账号锁；结果冻结后再复验同一角色及阶段。
         var granted = InventoryRewardGrantService.TryGrantBatch(capture.Character, capture.Prepared.Grants, items, gold, pieces,
-            utcNow: now, allowOverflowMail: true);
+            utcNow: now, allowOverflowMail: true, raidReward: true);
         if (!granted.Accepted || granted.Plan is not { } plan) return null;
-        var inventory = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(capture.Character), plan.OverflowItems);
+        var inventory = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(capture.Character), plan.OverflowItems)
+            { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek };
         return owner.Execute(() =>
         {
             if (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(raidCombat, capture.Binding) ||

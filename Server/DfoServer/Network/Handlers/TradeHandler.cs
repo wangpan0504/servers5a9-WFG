@@ -80,7 +80,7 @@ internal sealed class TradeHandler(TradeRegistry trades, OnlineSessionDirectory 
             CancelFrozen(ticket);
             return;
         }
-        var plan = TradeSettlement.Plan(firstCapture.Value.Character, secondCapture.Value.Character, ticket);
+        var plan = TradeSettlement.Plan(firstCapture.Value.Character, secondCapture.Value.Character, ticket, items);
         if (plan is null || plan.First.After.Gold > Math.Max(firstCapture.Value.Character.Inventory.Gold, new CurrencyService(goldLimits).CarryLimit(firstCapture.Value.Character)) ||
             plan.Second.After.Gold > Math.Max(secondCapture.Value.Character.Inventory.Gold, new CurrencyService(goldLimits).CarryLimit(secondCapture.Value.Character)))
         {
@@ -90,7 +90,7 @@ internal sealed class TradeHandler(TradeRegistry trades, OnlineSessionDirectory 
         (InventoryResult First, InventoryResult Second)? result;
         try
         {
-            result = GameSession.CommitPlayerTrade(first.Session, second.Session, firstCapture.Value.Character, secondCapture.Value.Character, ticket, plan);
+            result = GameSession.CommitPlayerTrade(first.Session, second.Session, firstCapture.Value.Character, secondCapture.Value.Character, ticket, plan, items);
         }
         catch (PlayerTradeCommitUnknownException)
         {

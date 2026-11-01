@@ -5,9 +5,14 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-if (args.Length != 3 || args[0] is not ("generate" or "verify"))
-    throw new ArgumentException("Usage: FiendwarResourcePatch generate base.pvf output-directory | verify base.pvf candidate.pvf");
+if (args.Length != 3 || args[0] is not ("generate" or "verify" or "generate-targets" or "verify-targets"))
+    throw new ArgumentException("Usage: FiendwarResourcePatch generate base.pvf output-directory | verify base.pvf candidate.pvf | generate-targets base.pvf output-directory | verify-targets base.pvf raw-directory-or-candidate.pvf");
 using var archive = PvfArchive.Open(args[1]);
+if (args[0].EndsWith("-targets", StringComparison.Ordinal))
+{
+    TargetMarkPatch.Run(archive, args[2], args[0] == "verify-targets");
+    return;
+}
 using var candidate = args[0] == "verify" ? PvfArchive.Open(args[2]) : null;
 string output = Path.GetFullPath(args[2]);
 if (candidate is null) Directory.CreateDirectory(output);

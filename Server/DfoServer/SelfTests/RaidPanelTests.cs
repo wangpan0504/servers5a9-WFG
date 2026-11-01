@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.GameWorld.Raids;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
@@ -18,6 +20,16 @@ internal static class RaidPanelTests
             [39, 2, 0x34, 0x12, 1, 4, 0, 0, 0, 0xBE, 0xC9, 0xC3, 0xFB, 2, 0x78, 0x56, 0x34, 0x12],
             "761消费4字节头后完整读取真实旧名、服索引和时间，不套736的裸行表");
         Bytes(CharacterNameHistoryPackets.RaidList([], 2, 39, 0x1234), [39, 2, 0x34, 0x12, 0], "761空历史明确清窗");
+        Bytes(TitlePackets.RaidBook(new([]), 2, 39, 0x1234),
+            [39, 2, 0x34, 0x12, 1, 5, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+                2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 0, 0, 0],
+            "762用定位头和u8类别批量发送全部五种空表，不套358的i32类别头");
+        var titleItem = new InventoryItem(1, DfoServer.Game.Titles.TitleBookService.Slot(4, 3), new(26071, ItemKind.Equipment, 1));
+        var raidBook = TitlePackets.RaidBook(new([titleItem]), 2, 39, 0x1234);
+        That(raidBook.Length == 65 && raidBook[26] == 4 && BinaryPrimitives.ReadInt32LittleEndian(raidBook.AsSpan(27)) == 1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(raidBook.AsSpan(31)) == 3 &&
+            BinaryPrimitives.ReadInt32LittleEndian(raidBook.AsSpan(33)) == 26071,
+            "762末类非空行保持u16槽位与34字节原生称号行，五类不截断");
         That(DfoServer.Network.Parsers.RaidRequests.Search([1]).Closed, "833原生关闭模式只有单字节，不冒充新查询");
         Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.Search([1, 0]));
         var user = DfoServer.Network.Parsers.RaidRequests.CheckUser([2, 0x34, 0x12, 39]);

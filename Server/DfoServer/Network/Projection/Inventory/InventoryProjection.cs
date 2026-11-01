@@ -224,6 +224,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         await RestoreLocksAsync(context, current.Inventory, lockSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
+        if (plan.AccountMaterialsChanged)
+            await town.AccountMaterialsAsync(context, current, plan.Before.AccountWallet, CanSend);
         if (plan.ChangedCurrencies.Contains(DfoServer.Game.Currency.CurrencyKind.Mileage))
         {
             bool gained = (plan.Reason is "mileage_item" or "cash_shop_buy") && current.Inventory.AccountWallet.Mileage > plan.Before.AccountWallet.Mileage;

@@ -74,6 +74,12 @@ internal static class FiendwarResourceTests
     {
         int before = Count;
         var definition = catalog.Find(2)!;
+        var rewardCard = items.Get(490007851);
+        var cardCore = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(rewardCard);
+        That(rewardCard is { AccountBoundAfterTrade: true, AccountBindingTradeLimit: 1, AttachType.Length: 0 } &&
+            DfoServer.Game.Inventory.Services.StackableTradePolicy.CanTransfer(cardCore, rewardCard, sameAccount: false) &&
+            DfoServer.Game.Inventory.Services.StackableTradePolicy.AfterTransfer(cardCore, rewardCard).Extension120 == 0x51,
+            "真实漩涡奖励卡片按一次交易后账号绑定声明创建及推进，不借装备Attr次数");
         var resources = RaidResourceLoader.Load(pvf, definition, SelfTestCatalogs.Dungeons(pvf), items);
         var script = resources.Fiendwar!;
         That(resources.ResourcesReady, "漩涡完整资源：" + string.Join(';', resources.Issues) +

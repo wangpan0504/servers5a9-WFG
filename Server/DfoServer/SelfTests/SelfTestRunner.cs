@@ -16,6 +16,7 @@ internal static class SelfTestRunner
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         await GmWebServerTests.RunClientPagesAsync();
         CharacterRenameCardTests.RunCore();
+        AccountMaterialTests.RunCore();
         BattlePassCatalogTests.RunCore();
         BattlePassRequestTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
@@ -75,6 +76,7 @@ internal static class SelfTestRunner
         TradePacketTests.RunCore();
         TradeRegistryTests.RunCore();
         PlayerTradeRepositoryTests.RunCore();
+        StackableTradeTests.RunCore();
         SocialTests.RunCore();
         ExperienceBonusTests.RunCore();
         WorldMapHoverTests.Run();
@@ -482,6 +484,7 @@ internal static class SelfTestRunner
         GuildMedalTests.Run(towns, characters, itemResources);
         MedalUpgradeTests.RunResources(towns, itemResources);
         CurrencyTests.Run(towns, characters, itemResources);
+        AccountMaterialTests.Run(towns, itemResources);
         CargoTests.Run(towns, characters, itemResources);
         ShopTests.Run(towns, characters, itemResources);
         NpcTradingTests.Run(towns, itemResources);

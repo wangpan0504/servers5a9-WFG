@@ -36,6 +36,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public bool HasCoolTime { get; init; }
     public bool HasBoosterInfo { get; init; }
     public IReadOnlyList<int>? DeclaredBoosterEtc { get; init; }
+    public int? DeclaredStackInAccountInventory { get; init; }
+    public bool HasStackInAccountInventory { get; init; }
 
     public static StackableFile Parse(int templateId, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -44,7 +46,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 "action type", "maximum level", "use action packet", "usable job", "action usable place",
                 "action usable server type", "need material", "dont change grow type", "usable first growtype",
                 "class change grow type check off", "stackable action limit indexes",
-                "stackable action result limit indexes", "creature minimum level", "levelup range", "cool time"]);
+                "stackable action result limit indexes", "creature minimum level", "levelup range", "cool time",
+                "stack in account inventory"]);
         StackableTypeDeclaration? type = null;
         PvfTokenDocument? repeatedDocument = null;
         PvfTokenSection[] RepeatedSections(string name)
@@ -144,10 +147,14 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
                 child.Values.All(token => token.Type == 0))
                 boosterEtc = Array.AsReadOnly(child.Values.Select(token => token.Value).ToArray());
         }
+        int? accountInventory = fields.Scalar("stack in account inventory");
+        if (accountInventory is not (null or 0 or 1)) fields.Unsupported("stack in account inventory");
         var unsupported = fields.UnsupportedFields.Where(name => !(name == "stackable type" && type is not null ||
             name == "action usable place" && places is not null)).ToArray();
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, Array.AsReadOnly(unsupported))
         {
+            DeclaredStackInAccountInventory = accountInventory,
+            HasStackInAccountInventory = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[stack in account inventory]"),
             ActionDeclaration = action, HasActionType = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action type]"),
             DeclaredMaximumLevel = maximum, HasMaximumLevel = hasMaximum,
             HasMinimumLevel = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[minimum level]"),

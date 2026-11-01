@@ -619,6 +619,27 @@ CREATE TABLE account_currency_balances(
     PRIMARY KEY(account,currency_kind)
 );
 
+CREATE TABLE account_material_balances(
+  account TEXT NOT NULL REFERENCES account_wallets(account),
+  item_id INTEGER NOT NULL CHECK(item_id>0),
+  balance INTEGER NOT NULL CHECK(balance BETWEEN 0 AND 2147483647),
+  raid_week INTEGER NOT NULL CHECK(raid_week BETWEEN 0 AND 3652058),
+  raid_earned INTEGER NOT NULL CHECK(raid_earned BETWEEN 0 AND 2147483647),
+  character_earned TEXT NOT NULL CHECK(json_valid(character_earned) AND json_type(character_earned)='object'),
+  PRIMARY KEY(account,item_id)
+);
+
+CREATE TABLE account_material_audit(
+  audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 0 AND 65535),
+  generation INTEGER NOT NULL CHECK(generation>=0),
+  action_name TEXT NOT NULL,
+  item_id INTEGER NOT NULL CHECK(item_id>0),
+  before_state TEXT NOT NULL CHECK(json_valid(before_state) AND json_type(before_state)='object'),
+  after_state TEXT NOT NULL CHECK(json_valid(after_state) AND json_type(after_state)='object')
+);
+
 CREATE TABLE currency_audit_log(
     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -2157,6 +2178,8 @@ CREATE TABLE character_fiendwar_title_facts(
   PRIMARY KEY(character_id,quest_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
+
+CREATE INDEX character_raid_rewards_account_time ON character_raid_reward_receipts(account,created_at);
 
 ALTER TABLE characters ADD COLUMN inventory_items_revision INTEGER NOT NULL DEFAULT 0 CHECK(inventory_items_revision>=0);
 ALTER TABLE account_cargo ADD COLUMN inventory_items_revision INTEGER NOT NULL DEFAULT 0 CHECK(inventory_items_revision>=0);

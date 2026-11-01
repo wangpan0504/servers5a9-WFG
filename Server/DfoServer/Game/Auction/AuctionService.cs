@@ -662,6 +662,9 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
 
         // 托管邮件：买方道具一封（必须投出去）+ 卖方所得一封（收件人可能不存在 ⇒ 可跳过）。
         var custody = ImmutableArray.CreateBuilder<AuctionCustodyMail>();
+        if (TransferBlocked(core, template) is { } transferError)
+            return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, transferError);
+        core = StackableTradePolicy.AfterTransfer(core, template);
         var itemText = $"拍卖行成交（挂牌 {listing.ListingId}）：您拍得的道具";
         var overlong = AuctionCustodyMail.TextTooLong(listing.SellerName, itemText);
         if (overlong is not null)
@@ -698,7 +701,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
             Custody: custody.ToImmutable(),
             Inventory: new InventoryPlan(before, after, "auction_buy", new(buyer)),
             SettledAtUnix: now,
-            ExpiresAtUnix: listing.ExpiresAtUnix));
+            ExpiresAtUnix: listing.ExpiresAtUnix) { SourceItemEntry = listing.ItemEntry.ToImmutableArray() });
     }
 
     /// <summary>
@@ -907,6 +910,8 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     public static string? TransferBlocked(ItemCore core, ItemTemplate template)
     {
         if (template.PvpFreeEquipment) return "决斗专用初始装备不可转移";
+        if (StackableTradePolicy.Applies(core, template))
+            return StackableTradePolicy.CanTransfer(core, template, sameAccount: false) ? null : "交易次数已用尽，账号绑定";
         string attach = NormalizeAttachType(template.AttachType);
         return attach switch
         {

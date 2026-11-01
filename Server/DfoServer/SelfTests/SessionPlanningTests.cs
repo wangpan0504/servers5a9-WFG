@@ -758,6 +758,10 @@ internal static partial class SessionPlanningTests
             string fiendwarPayment = JsonSerializer.Serialize(new DfoServer.Game.Raids.FiendwarPaymentSnapshot(
                 [new(0, new(InventoryListType.Main, 121), new ItemCore(10306760, ItemKind.Material, 1))]));
             Sql($$"""
+                INSERT INTO account_wallets(account) VALUES('planning') ON CONFLICT(account) DO NOTHING;
+                INSERT INTO account_material_balances VALUES('planning',10308807,120,740000,150,'{"{{id}}":150}');
+                INSERT INTO account_material_audit(account,character_id,generation,action_name,item_id,before_state,after_state)
+                  VALUES('planning',{{id}},1,'fixture',10308807,'{}','{}');
                 INSERT INTO account_client_settings VALUES('planning',zeroblob(204));
                 INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('planning',9999999999,9999999999,7);
                 INSERT INTO account_expert_contracts VALUES('planning',9999999999);

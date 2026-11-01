@@ -46,10 +46,11 @@ internal static class LukeRewardRecovery
         if (saved.Claimed) return new RaidRewardCommit(character, true, saved.MailIds);
         var catalog = resources();
         var granted = InventoryRewardGrantService.TryGrantBatch(character, saved.Prepared.Grants,
-            catalog.Items, catalog.Gold, catalog.Pieces, utcNow: now, allowOverflowMail: true);
+            catalog.Items, catalog.Gold, catalog.Pieces, utcNow: now, allowOverflowMail: true, raidReward: true);
         if (!granted.Accepted || granted.Plan is not { } plan)
             throw new InvalidDataException("原奖励当前无法合法规划，未作替换或补发");
-        var inventory = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(character), plan.OverflowItems);
+        var inventory = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(character), plan.OverflowItems)
+            { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek };
         return store.CommitRaidReward(owner, character, saved.Prepared, inventory, now)
             ?? throw new InvalidDataException("原阶段资格未通过提交复验");
     });

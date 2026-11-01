@@ -57,7 +57,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 if (currency < CurrencyKind.Cera)
                     materials.Add(new(itemId, CurrencyWallet.Get(paid, currency)));
             }
-            else if (!pieces.ByPiece.ContainsKey(itemId))
+            else if (!pieces.ByPiece.ContainsKey(itemId) && catalog.Get(itemId).AccountMaterial is null)
             {
                 var first = before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == itemId)
                     .OrderBy(item => item.Position.Index).First();
