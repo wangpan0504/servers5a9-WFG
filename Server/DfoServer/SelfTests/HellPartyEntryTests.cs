@@ -1,4 +1,6 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
@@ -22,6 +24,7 @@ internal static class HellPartyEntryTests
     internal static void RunCore()
     {
         HellApcFactionTests.RunCore();
+        OrdinaryPassCore();
         Bytes(DungeonPackets.SelectionNotice(), new byte[42], "空深渊资格名单保持原42字节选图通知");
         byte[] expected = new byte[46];
         expected[8] = 2; expected[11] = 3;
@@ -43,6 +46,96 @@ internal static class HellPartyEntryTests
             !InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 6080 }) &&
             InfernoQuestUnlock.Pairs.All(pair => InfernoQuestUnlock.Satisfied(pair.InfernoQuest, new HashSet<int> { pair.HellQuest })),
             "区域深渊任务视为满足对应时空裂缝外传选图与入场");
+    }
+
+    static void OrdinaryPassCore()
+    {
+        System.Collections.Immutable.ImmutableArray<OrdinaryHellPassCost> Parse(int[] values, int[]? exceptions = null)
+        {
+            var tokens = new List<PvfToken> { new(3, 1) };
+            tokens.AddRange(values.Select(value => new PvfToken(0, value))); tokens.Add(new(3, 2));
+            if (exceptions is not null)
+            {
+                tokens.Add(new(3, 3)); tokens.AddRange(exceptions.Select(value => new PvfToken(0, value))); tokens.Add(new(3, 4));
+            }
+            return OrdinaryHellPassCost.Parse(tokens, id => id switch
+            {
+                1 => "[hell freepass item]", 2 => "[/hell freepass item]",
+                3 => "[hell freepass exception item]", 4 => "[/hell freepass exception item]", _ => throw new InvalidDataException()
+            });
+        }
+        That(Parse([1001, 1, 1002, 2], [49, 1001]).SequenceEqual([new OrdinaryHellPassCost(1002, 2), new(490009324, 1)]),
+            "普通通行证保留二元组费用，例外未明时不启用该物品，历史深渊票独立支持一张");
+        foreach (int[] invalid in new int[][] { [1001], [1001, 0], [1001, 1, 1001, 1] })
+            Reject<InvalidDataException>(() => Parse(invalid), "普通通行证拒绝截断、零费用和重复编号，不能免费放行");
+        Reject<InvalidDataException>(() => Parse([1001, 1], [49]), "例外二元组不完整时不得忽略其限制");
+
+        var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
+        var pieces = new EpicPieceCatalog("[piece list]\n700001 700002\n[/piece list]");
+        const int legacy = OrdinaryHellPassCost.LegacyInvitationPass;
+        InventoryItem expired = new(1, new(InventoryListType.Main, 121), new(legacy, ItemKind.Material, 9) { ExpireTime = 1_999_999_999 });
+        InventoryItem locked = new(2, new(InventoryListType.Main, 122), new(legacy, ItemKind.Material, 9) { EquipmentLockId = 1 });
+        InventoryItem cargo = new(3, new(InventoryListType.PersonalCargo, 0), new(legacy, ItemKind.Material, 9));
+        var before = InventorySnapshot.Empty with { Items = [expired, locked, cargo,
+            new(4, new(InventoryListType.Main, 123), new(1002, ItemKind.Material, 2)),
+            new(5, new(InventoryListType.Main, 124), new(legacy, ItemKind.Material, 3)),
+            new(6, new(InventoryListType.Main, 125), new(3330, ItemKind.Material, 30))] };
+        OrdinaryHellPassCost[] candidates = [new(legacy, 1), new(1002, 2)];
+        var first = HellPartyEntryCost.OrdinaryPass(before, candidates, pieces, now);
+        That(first.Ticket == new HellPartyTicket(1002, 2) && first.Plan is { } payment &&
+            !payment.After.Items.Any(item => item.Core.ItemId == 1002) &&
+            payment.After.Items.Contains(expired) && payment.After.Items.Contains(locked) && payment.After.Items.Contains(cargo) &&
+            payment.After.Items.Single(item => item.Core.ItemId == 3330).Core.Count == 30 && before.Items.Length == 6,
+            "按实际有效背包槽选择完整通行证费用，不消费过期、锁定、仓库票或邀请函，规划不改原快照");
+        var second = HellPartyEntryCost.OrdinaryPass(first.Plan!.After, candidates, pieces, now);
+        That(second.Ticket == new HellPartyTicket(legacy, 1) && second.Plan!.After.Items.Single(item => item.Position.Index == 124).Core.Count == 2,
+            "前一费用组合耗尽后正常使用下一有效通行证，历史票仅扣一张");
+        That(HellPartyEntryCost.OrdinaryPass(before with { Items = [expired, locked, cargo] }, candidates, pieces, now).Plan is null,
+            "只有无效或仓库通行证时不能规划免邀请函入场");
+    }
+
+    internal static void RunOrdinaryPass(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills)
+    {
+        int checks = Count;
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var area = towns.Areas.Values.First(row => row.Level <= 95 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 291100308));
+        var done = baseDone95(area);
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(walk.X + walk.Width / 2)), checked((ushort)(walk.Y + walk.Height / 2)));
+        done.Add(6080);
+        foreach (int invitationCount in new[] { 0, 30 })
+        {
+            var passFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                done.Order().ToArray(), position: position, items: invitationCount == 0 ? [(490009324, 2)] : [(490009324, 2), (3330, 30)]);
+            try
+            {
+                FormalDungeonReceipt? EnterWithPass() => passFixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms,
+                    drops: global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items: items.Items, pieces: items.EpicPieces, hellParty: true);
+                if (invitationCount != 0)
+                {
+                    var saved = passFixture.Read();
+                    passFixture.Sql("CREATE TRIGGER fail_ordinary_pass AFTER UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'ordinary pass rollback'); END");
+                    Reject<Microsoft.Data.Sqlite.SqliteException>(() => EnterWithPass(), "通行证费用提交后尝试号写入故障应回滚");
+                    That(QuestCompletionRepositoryTests.Same(saved, passFixture.Read()) && passFixture.Session.DungeonSnapshot is null,
+                        "普通券、邀请函、疲劳和尝试号一起回滚，不安装半个副本");
+                    passFixture.Sql("DROP TRIGGER fail_ordinary_pass");
+                }
+                var passReceipt = EnterWithPass();
+                That(passReceipt is { HellTicket.ItemId: 490009324, HellTicket.Count: 1, LegendTicket: null } &&
+                    passFixture.Read().Inventory.Items.Where(item => item.Core.ItemId == 490009324).Sum(item => item.Core.Count) == 1 &&
+                    passFixture.Read().Inventory.Items.Where(item => item.Core.ItemId == 3330).Sum(item => item.Core.Count) == invitationCount,
+                    "普通深渊无邀请函也可消费一张有效券，同时有邀请函时优先扣券，故障后可正常重试");
+            }
+            finally
+            {
+                passFixture.Session.End(); passFixture.Owner.Dispose();
+            }
+        }
+        Console.WriteLine($"PASS {Count-checks} 普通通行证入场与同事务回滚断言");
     }
 
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
@@ -172,6 +265,7 @@ internal static class HellPartyEntryTests
             That(richReceipt is not null && rich.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count) == 7,
                 "票分散在多格（17+20=37）时跨格扣 30，剩 7");
         }
+        RunOrdinaryPass(towns, pvf, characters, items, quests, skills);
         // ===== 时空裂缝（[inferno dungeon]）：整条路线就是深渊场地，没有密门房间可换 =====
         // 地轨中心选图区域声明 [hell dungeon] 1 / [hell quest] 2900 / [item condition] 3330；7539 副本头另带 [inferno quest] 10110。
         var riftArea = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&

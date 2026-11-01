@@ -456,7 +456,11 @@ internal sealed partial class GameSession
             var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) : (null, null, null);
             bool usesPass = pass.Item1 is not null;
-            var ticketPlan = usesPass ? (pass.Item1, pass.Item3) : pieces is null ? (null, null) :
+            // 普通券仅替代邀请函；魔界裂缝、时空裂缝及超星空保持各自费用入口。
+            var ordinaryPass = !entry.IsCosmo && !entry.IsInfernoParty && entry.DungeonId != 316 && ticketCount > 0 && !hellTickets.IsEmpty &&
+                items is not null && pieces is not null
+                ? HellPartyEntryCost.OrdinaryPass(expected.Inventory, items.OrdinaryHellPasses(), pieces, now) : (null, null);
+            var ticketPlan = usesPass ? (pass.Item1, pass.Item3) : ordinaryPass.Item1 is not null ? ordinaryPass : pieces is null ? (null, null) :
                 HellPartyEntryCost.Plan(expected.Inventory, hellTickets, ticketCount, pieces, now);
             if (ticketPlan.Item1 is null) return RejectFormal("hell-party-item-required");
             hellTicket = ticketPlan.Item1;
