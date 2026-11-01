@@ -746,6 +746,9 @@ internal sealed record DungeonEntryPlan(
         bool altarHunt = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
             quest.Condition == "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var altarTargets) &&
             altarTargets.Any(target => target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty);
+        // 祭坛收集外传没有专用任务迷宫，沿已声明本图和掉落的普通路线进入专用波次。
+        bool altarSeeking = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
+            quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest);
         // 客户端接取后会把 6084 带进每张图的 C2S16；未列入 dungeon info 的普通图仍沿普通迷宫。
         bool anyDungeonHunt = AssaultSpecialSupplyHunt(quest, difficulty);
         // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
@@ -786,7 +789,7 @@ internal sealed record DungeonEntryPlan(
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
         // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
         else if (!(normalMission && QuestDungeonClearProgress.Supports(quest)) && !listClear && !dailyClear && !preyNormalClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
-                QuestLifecyclePlan.HarlemSeeking(quest) || normalMission) ||
+                QuestLifecyclePlan.HarlemSeeking(quest) || altarSeeking || normalMission) ||
             !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) &&
                 !(normalMission && quest.Condition == "[seeking]" && declared.Drops.Length == 0 && QuestLifecyclePlan.ValidSeeking(quest)))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
