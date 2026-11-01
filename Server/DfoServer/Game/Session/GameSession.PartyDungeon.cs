@@ -15,7 +15,7 @@ internal sealed partial class GameSession
     public PartyDungeonInstance? PartyDungeon { get; private set; }
     Guid? partyDungeonRun;
     public Func<PartyDungeonNotice, Task>? PartyDungeonNoticeArrived { get; set; }
-    bool CanMutatePartyDungeon => PartyDungeon is null || PartyDungeon.IsExecuting;
+    bool CanMutatePartyDungeon => (PartyDungeon is null || PartyDungeon.IsExecuting) && formalDungeon?.Run.FiendwarObjectKeys?.RecoveryRequired != true;
 
     internal bool CanBeginPartySelection() => owner.Execute(() => Ready && Selected is not null &&
         Phase is SessionPhase.Town or SessionPhase.MapSelect && pendingRental is null && !HasPendingTownQuestCommit &&
@@ -53,7 +53,7 @@ internal sealed partial class GameSession
 
     internal bool CanMoveWithParty() => owner.Execute(() => Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon is { } dungeon && !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
-        !HasPendingQuestScene && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue);
+        !HasPendingQuestScene && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue && dungeon.Run.FiendwarObjectKeys?.RecoveryRequired != true);
 
     internal bool CanCompletePartyLoading() => owner.Execute(() => Ready && formalDungeon is { } dungeon &&
         (Phase == SessionPhase.Loading || dungeon.Run.HasScriptedReturn));
@@ -259,7 +259,7 @@ internal sealed partial class GameSession
             ValidateDungeonSelection();
             return new PartyExitPreparation(new(owner, character, selection.ReturnPosition, null), SelectionEpoch, selection, kind);
         }
-        if (!CanMutatePartyDungeon || formalDungeon is not { } dungeon ||
+        if (!(kind == PartyDungeonExitKind.FiendwarKeyRecovery ? PartyDungeon is { IsExecuting: true } : CanMutatePartyDungeon) || formalDungeon is not { } dungeon ||
             dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null ||
             dungeon.HasPendingFatigue || HasPendingQuestScene || dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
             dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed ||
@@ -268,6 +268,7 @@ internal sealed partial class GameSession
         {
             PartyDungeonExitKind.HellSelection => CanBeginClearedHellSelection(0),
             PartyDungeonExitKind.EvildomWarRetreat => CanRetreatEvildomWar(),
+            PartyDungeonExitKind.FiendwarKeyRecovery => CanRecoverFiendwarKeys(dungeon.Run.Scene.Identity.InstanceId),
             PartyDungeonExitKind.ResultSelection or PartyDungeonExitKind.ResultReturn =>
                 FormalDungeonResultFocus() is not null || RaidDungeonResultFocus() is not null,
             _ => FormalDungeonResultFocus() is not null
@@ -276,7 +277,7 @@ internal sealed partial class GameSession
             return null;
         if (kind == PartyDungeonExitKind.ResultSelection && dungeon.Entry.IsCosmo) return null;
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
-        var after = kind == PartyDungeonExitKind.HellSelection ? character.Inventory :
+        var after = kind is PartyDungeonExitKind.HellSelection or PartyDungeonExitKind.FiendwarKeyRecovery ? character.Inventory :
             StaminaRecoveryService.ApplyDungeonRetreat(character, dungeon.Entry, dungeon.Run.Phase, now, PremiumPcRoom);
         after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, now.ToUnixTimeMilliseconds());
         var inventory = after == character.Inventory ? null : new InventoryPlan(character.Inventory, after, "dungeon_retreat_stamina", new(character));
@@ -317,7 +318,7 @@ internal sealed partial class GameSession
         }
         return prepared.Kind switch
         {
-            PartyDungeonExitKind.ResultReturn or PartyDungeonExitKind.EvildomWarRetreat => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
+            PartyDungeonExitKind.ResultReturn or PartyDungeonExitKind.EvildomWarRetreat or PartyDungeonExitKind.FiendwarKeyRecovery => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
                 Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange }),
             _ => new PartyDungeonNotice(prepared.Kind == PartyDungeonExitKind.SelectionReturn ? PartyDungeonNoticeKind.SelectionReturn :
                 prepared.Kind == PartyDungeonExitKind.ResultSelection ? PartyDungeonNoticeKind.ResultSelection : PartyDungeonNoticeKind.Selection,

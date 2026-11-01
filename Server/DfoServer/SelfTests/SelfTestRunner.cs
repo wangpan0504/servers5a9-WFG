@@ -411,6 +411,7 @@ internal static class SelfTestRunner
         RaidEntryScheduleTests.Run();
         RaidEntryEventsTests.Run();
         RaidCreateFlowTests.RunCore();
+        FiendwarKeyLeaseTests.RunCore();
     }
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)

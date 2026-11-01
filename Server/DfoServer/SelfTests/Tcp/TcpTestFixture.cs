@@ -104,6 +104,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
     readonly bool enablePromotionPage;
+    readonly Random? fiendwarMazeRandom;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
@@ -111,13 +112,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
-        Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false)
+        Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
+        Random? fiendwarMazeRandom = null)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
         this.promotions = promotions;
         this.enablePromotionPage = enablePromotionPage;
+        this.fiendwarMazeRandom = fiendwarMazeRandom;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -316,7 +319,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }
@@ -325,6 +328,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         else
         {
             if (evildomHiddenDraw is not null) throw new InvalidOperationException("显式魔界随机源需要同进程Runtime装配");
+            if (fiendwarMazeRandom is not null) throw new InvalidOperationException("显式漩涡迷宫随机源需要同进程Runtime装配");
             if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");
             if (promotions is not null) throw new InvalidOperationException("合成促销目录不能由真实子进程悄然替换");
             if (questCatalog is not null) throw new InvalidOperationException("合成任务目录不能由真实子进程悄然替换");

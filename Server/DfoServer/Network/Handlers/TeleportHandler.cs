@@ -8,7 +8,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class TeleportHandler(TeleportService service, TownProjection town, InventoryProjection inventory,
+internal sealed partial class TeleportHandler(TeleportService service, TownProjection town, InventoryProjection inventory,
     TownPresence presence, ServerLog log, GuildTeleportHandler? guildTeleport = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
@@ -17,6 +17,7 @@ internal sealed class TeleportHandler(TeleportService service, TownProjection to
         commands.Register(CmdPacketType.PRECHECK_SOLO_TELEPOART, PrecheckAsync, nameof(TeleportHandler));
         commands.Register(CmdPacketType.SOLO_TELEPOART, SoloAsync, nameof(TeleportHandler));
         commands.Register(CmdPacketType.PARTY_TELEPORT, PartyAsync, nameof(TeleportHandler));
+        commands.Register(CmdPacketType.PRIVILEGE_SERVICE_TELEPORT, PrivilegeAsync, nameof(TeleportHandler));
     }
 
     async Task<CommandResult> PotionAsync(GameConnectionContext context, Packet packet)

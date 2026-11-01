@@ -108,7 +108,8 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
-        Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false)
+        Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
+        Random? fiendwarMazeRandom = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
@@ -478,9 +479,10 @@ internal static class ServerRuntime
             log.Write("resource_warning", new { Source = "Luke raid run policy", Reason = runUnavailable });
             lukeRun = null;
         }
+        var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
             new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
-                raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards), lukeStart, antonRejoin, parties, lukeRejoin, projection);
+                raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards, fiendwarMazeRandom), lukeStart, antonRejoin, parties, lukeRejoin, projection, pvpRecords);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -688,7 +690,7 @@ internal static class ServerRuntime
             new PvpTotalTeamHandler(totalTeams, log, inventoryProjection, totalTeamProjection),
             new PvpMatchingHandler(arena, log, clock),
             new PvpChannelHandler(gameChannels, log),
-            new PvpRecordHandler(new Game.Pvp.PvpRecordQuery(repository, repository), online, log),
+            new PvpRecordHandler(pvpRecords, online, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
                 guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents),
@@ -708,13 +710,14 @@ internal static class ServerRuntime
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log, tagEvildomProjection, fiendwarRun),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
-                options.TeleportPotionGates, guildParameters.TeleportCost), projection, inventoryProjection, presence, log, guildTeleportHandler),
+                options.TeleportPotionGates, guildParameters.TeleportCost, privilege: itemResources.PrivilegeServices), projection, inventoryProjection, presence, log, guildTeleportHandler),
             guildTeleportHandler,
             new SettingsHandler(settings, log, projection, chatEmoticons),
             avatarPresetHandler,
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online, settings, log),
             new FiendwarCounterHandler(repository, titleService, titleProjection, inventoryProjection),
+            new FiendwarSpawnHandler(),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,

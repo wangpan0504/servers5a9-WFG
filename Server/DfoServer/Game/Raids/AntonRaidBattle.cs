@@ -187,7 +187,8 @@ internal sealed partial class AntonRaidBattle
         LukeRaidPacingPolicy? pacing = null, LukeRaidFlowPolicy? flow = null, LukeResourceRewards? lukeRewards = null,
         Random? preyRandom = null, FiendwarScript? fiendwar = null, FiendwarPacing? fiendwarPacing = null,
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
-        LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default)
+        LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default,
+        Random? fiendwarMazeRandom = null)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -204,6 +205,7 @@ internal sealed partial class AntonRaidBattle
         if (antonPhaseProgress && kind != RaidKind.Anton) throw new InvalidDataException("阶段推进开关只属于安徒恩");
         this.antonPhaseProgress = antonPhaseProgress;
         this.antonHatcheryRandom = antonHatcheryRandom ?? Random.Shared;
+        this.fiendwarMazeRandom = fiendwarMazeRandom ?? Random.Shared;
         if (antonRewards is not null && (kind != RaidKind.Anton || !antonPhaseProgress))
             throw new InvalidDataException("安徒恩正式奖励要求正式阶段推进");
         this.antonRewards = antonRewards;

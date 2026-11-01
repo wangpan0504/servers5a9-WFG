@@ -67,7 +67,7 @@ internal static partial class FiendwarRaidTcpTests
                         """);
                     try
                     {
-                        peer.Send(FiendwarCounterRequests.Opcode, failed); peer.Closed();
+                        peer.Send(FiendwarCounterRequests.Opcode, failed); ExpectCounterRollbackClose(peer);
                         That(stream == fixture.Snapshot("SELECT * FROM character_fiendwar_counter_stream WHERE character_id=$p0", peer.Id) &&
                             facts == fixture.Snapshot("SELECT * FROM character_fiendwar_title_facts WHERE character_id=$p0 ORDER BY quest_id", peer.Id) &&
                             progress == fixture.Snapshot("SELECT revision FROM characters WHERE id=$p0", peer.Id) +
@@ -93,6 +93,24 @@ internal static partial class FiendwarRaidTcpTests
         return map;
         long Total(TcpPeer peer) => Convert.ToInt64(fixture.Query(
             "SELECT coalesce(sum(total),0) FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7006", peer.Id)[0][0]);
+    }
+
+    static void ExpectCounterRollbackClose(TcpPeer peer)
+    {
+        // 故障拆队会在断开前异步投影原生9；不将这份合法名册收尾误判成私包成功或资产提交。
+        for (int budget = 0; budget < 4; budget++)
+        {
+            try
+            {
+                var packet = peer.Read();
+                That(packet is { Kind: 0, Opcode: 9 }, "破招SQL失败关闭前只允许原队伍拆离名册，不允许成功或奖励帧");
+            }
+            catch (EndOfStreamException) { That(true, "破招SQL失败后连接正常关闭"); return; }
+            catch (IOException error) when (error.InnerException is System.Net.Sockets.SocketException
+                { SocketErrorCode: System.Net.Sockets.SocketError.ConnectionReset or System.Net.Sockets.SocketError.ConnectionAborted })
+            { That(true, "破招SQL失败后连接被重置"); return; }
+        }
+        That(false, "破招SQL失败在有界原队伍收尾后必须实际关闭连接");
     }
 
     static void VerifyDeadCounterBody(TcpTestFixture fixture, TcpPeer[] team, uint source, ushort key,

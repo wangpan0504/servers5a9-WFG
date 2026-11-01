@@ -9,10 +9,10 @@ internal sealed partial class RaidHandler
         Parsers.RaidOtherUserRequest parsed;
         try { parsed = Parsers.RaidRequests.OtherUser(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        // 3为独立决斗信息；未恢复其合同前不返回通用成功。
-        if (parsed.Mode is not (0 or 1 or 2) || Actor(context) is not { } actor) return CommandResult.Unhandled;
+        if (parsed.Mode is not (0 or 1 or 2 or 3) || Actor(context) is not { } actor) return CommandResult.Unhandled;
         if (context.Session.ChannelEntry is not { } entry || !MatchesType(actor, Game.Raids.RaidTypes.FromChannelType(entry.Type)))
             return CommandResult.Unhandled;
+        if (parsed.Mode == 3) return await PvpRecordAsync(context, actor, parsed);
         var target = online?.FindReadyCharacter(parsed.Character);
         if (parsed.Mode is 0 or 2)
         {

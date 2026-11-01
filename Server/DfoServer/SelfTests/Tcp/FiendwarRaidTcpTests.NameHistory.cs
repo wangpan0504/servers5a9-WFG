@@ -35,6 +35,7 @@ internal static partial class FiendwarRaidTcpTests
         var publicInfo = requester.Expect(0, 2).Body;
         That(publicInfo[0] == 3 && U16(publicInfo, 14) == target.Id, "既有跨频道公开资料来自目标角色");
         requester.Barrier();
+        VerifyCrossPvp(fixture, requester, target, server);
         string before = fixture.Snapshot("SELECT * FROM character_name_history WHERE character_id=$p0", target.Id);
         string titlesBefore = fixture.Snapshot("SELECT * FROM character_title_book_slots WHERE character_id=$p0", target.Id);
         for (int repeat = 0; repeat < 2; repeat++)

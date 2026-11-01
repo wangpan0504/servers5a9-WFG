@@ -22,7 +22,7 @@ using PvfLib;
 namespace DfoServer.Testing;
 
 // 连真实监听的安徒恩假客户端。默认不连接。进图与清图复用 TcpPeer 帧和正式副本的 39/45/117。
-internal static class AntonTcpProbe
+internal static partial class AntonTcpProbe
 {
     // pcap-manual-1235：GAME RECV opcode 0x0010，25 字节，末尾 u32 = 0xFFFFFFFF。
     internal static readonly byte[] LiveSelect210 = Convert.FromHexString("D20000000200000000FFFF00000000000000000000FFFFFFFF");
@@ -321,13 +321,16 @@ internal static class AntonTcpProbe
         bool leave = true, bool requireClearNotice = true)
     {
         peer.Send(15, DungeonId(dungeon));
-        var opened = Flush(peer, "15 选图 " + dungeon);
-        if (!opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
+        bool fiendwar = IsFiendwarDungeon(dungeon);
+        List<WirePacket> opened = fiendwar ? [] : Flush(peer, "15 选图 " + dungeon);
+        if (!fiendwar && !opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
             throw new InvalidOperationException(dungeon + " 的 15 未被接受");
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
         peer.Send(16, request);
         var entered = Flush(peer, "16 进图 " + dungeon);
+        if (fiendwar && !entered.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
+            throw new InvalidOperationException(dungeon + " 的握手后15未被接受");
         Note(report, entered);
         var info = entered.LastOrDefault(p => p is { Kind: 0, Opcode: 28 } && p.Body.Length >= 10 && TcpPeer.U32(p.Body) == (uint)dungeon);
         var map = entered.LastOrDefault(p => p is { Kind: 0, Opcode: 29 } && p.Body.Length >= 19);
@@ -453,6 +456,7 @@ internal static class AntonTcpProbe
         Console.WriteLine($"C2S 1278 barrier {why}");
         peer.Send(1278);
         var rows = new List<WirePacket>();
+        bool continued = false;
         for (int i = 0; i < 500; i++)
         {
             WirePacket packet;
@@ -466,10 +470,17 @@ internal static class AntonTcpProbe
             {
                 if (packet.Body is not [1])
                     throw new InvalidOperationException(why + " 的 1278 应答不是 [1]");
+                if (continued)
+                {
+                    continued = false;
+                    peer.Send(1278);
+                    continue;
+                }
                 Console.WriteLine($"  barrier complete elapsedMs={elapsed.Elapsed.TotalMilliseconds:F1}");
                 return rows;
             }
             rows.Add(packet);
+            if (ProcessFiendwarKeyNotice(peer, packet)) continued = true;
         }
         throw new InvalidOperationException(why + " 超过读取预算");
     }
@@ -530,15 +541,22 @@ internal static class AntonTcpProbe
         AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null)
     {
         leader.Send(15, DungeonId(dungeon));
-        var selected = Flush(leader, "15 分队选择 " + dungeon);
-        _ = Barrier(member, "15 分队队员 " + dungeon);
-        if (!selected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
+        bool fiendwar = IsFiendwarDungeon(dungeon);
+        List<WirePacket> selected = fiendwar ? [] : Flush(leader, "15 分队选择 " + dungeon);
+        if (!fiendwar) _ = Barrier(member, "15 分队队员 " + dungeon);
+        if (!fiendwar && !selected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
             throw new InvalidOperationException(dungeon + " 分队不能打开选图");
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
         leader.Send(16, request);
         var entered = Flush(leader, "16 进图 " + dungeon);
         var witnessed = Barrier(member, "16 队员进图 " + dungeon);
+        if (fiendwar)
+        {
+            CompleteFiendwarEntry([leader, member], [entered, witnessed], peer => Barrier(peer, "fiendwar entry continuation"));
+            if (!entered.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
+                throw new InvalidOperationException(dungeon + " 的握手后分队15未被接受");
+        }
         Note(leaderReport, entered);
         Note(memberReport, witnessed);
         var info = entered.LastOrDefault(packet => packet is { Kind: 0, Opcode: 28 } && packet.Body.Length >= 10 && TcpPeer.U32(packet.Body) == (uint)dungeon);

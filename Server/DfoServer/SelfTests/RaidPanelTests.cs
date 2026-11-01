@@ -16,6 +16,26 @@ internal static class RaidPanelTests
         That(other == new DfoServer.Network.Parsers.RaidOtherUserRequest(2, 0x1234, 1, 39), "821保留完整目标定位与曾用名模式");
         Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 1]));
         Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 1, 39, 0]));
+        var pvp = DfoServer.Network.Parsers.RaidRequests.OtherUser([2, 0x34, 0x12, 3, 10, 5, 0x78, 0x56, 0x34, 0x12]);
+        That(pvp.Mode == 3 && pvp.RawView == 5 && pvp.RequestId == 0x12345678 && pvp.Character == 0x1234,
+            "821决斗模式严格保留页面和非零关联号，不套其他资料模式");
+        foreach (var invalid in new byte[][]
+        {
+            [2, 0x34, 0x12, 3, 10], [2, 0x34, 0x12, 3, 10, 0, 1, 0, 0, 0],
+            [2, 0x34, 0x12, 3, 10, 6, 1, 0, 0, 0], [2, 0x34, 0x12, 3, 10, 5, 0, 0, 0, 0],
+            [2, 0x34, 0x12, 1, 10, 5, 1, 0, 0, 0], [2, 0x34, 0x12, 3, 10, 5, 1, 0, 0, 0, 0]
+        }) Reject<InvalidDataException>(() => DfoServer.Network.Parsers.RaidRequests.OtherUser(invalid));
+        var score = new DfoServer.Game.Pvp.PvpRecordSnapshot(0x1234, 6, false, new(8, 3, 2, 6, 2, 2, 2, 3));
+        var crossScore = RaidPvpRecordPackets.Build(2, 0x1234, 10, 5, 0x12345678, score);
+        Bytes(crossScore[..14], [0x52, 0x56, 0x50, 0x31, 2, 0x34, 0x12, 10, 5, 0x78, 0x56, 0x34, 0x12, 1],
+            "763完整RVP1头绑定远端角色、页面、请求号及实际结果");
+        Bytes(crossScore[14..], PvpRecordPackets.Score(score)[1..], "763严格复用375公开33B且无本人尾部");
+        That(crossScore.Length == 47, "跨频道公开成功体精确47B");
+        var missingScore = RaidPvpRecordPackets.Build(2, 0x1234, 10, 5, 0x12345678, null);
+        That(missingScore.Length == 14 && missingScore[13] == 0, "763失败14B不伪造零战绩成功");
+        Reject<ArgumentException>(() => RaidPvpRecordPackets.Build(2, 0x1234, 10, 5, 1, score with { Self = true }));
+        Reject<ArgumentException>(() => RaidPvpRecordPackets.Build(2, 0x1234, 10, 4, 1, score));
+        Reject<ArgumentException>(() => RaidPvpRecordPackets.Build(2, 7, 10, 5, 1, score));
         Bytes(CharacterNameHistoryPackets.RaidList([new("旧名", 0x12345678)], 2, 39, 0x1234),
             [39, 2, 0x34, 0x12, 1, 4, 0, 0, 0, 0xBE, 0xC9, 0xC3, 0xFB, 2, 0x78, 0x56, 0x34, 0x12],
             "761消费4字节头后完整读取真实旧名、服索引和时间，不套736的裸行表");

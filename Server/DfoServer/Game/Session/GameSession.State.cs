@@ -21,6 +21,7 @@ internal sealed partial class GameSession
     {
         if (!UserStatePolicy.CanTransition(Phase, next))
             throw new InvalidOperationException($"非法会话状态切换：{Phase} -> {next}");
+        if (next != SessionPhase.MapSelect) InvalidateFiendwarKeyPreparation();
         bool endingDungeon = next is not (SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement);
         bool endingPvp = next != SessionPhase.PvpRoom;
         _ = ReadState(next, endingDungeon, endingPvp);

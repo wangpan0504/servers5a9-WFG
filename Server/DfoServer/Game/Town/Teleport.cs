@@ -11,7 +11,8 @@ namespace DfoServer.Game.Town;
 // Open（默认）：瞬间移动药剂不按 `[int data]` 地下城选择地图白名单限制有 `[dungeon gate]` 的区域；Pvf：恢复严格白名单。
 internal enum TeleportPotionGateMode { Open, Pvf }
 
-internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 0, long UpgradeAuraUntil = 0, long PartyAuraUntil = 0)
+internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 0, long UpgradeAuraUntil = 0, long PartyAuraUntil = 0,
+    long PrivilegeUntil = 0)
 {
     public long Until(AuraAbilityKind kind) => kind switch
     {
@@ -24,6 +25,7 @@ internal sealed record TeleportCooldowns(long PotionUntil = 0, long AuraUntil = 
 internal sealed record PotionTeleportRequest(short Slot, int ItemId, byte Mode, Location Target);
 internal sealed record SoloTeleportRequest(int CharacterId, int NpcId, Location Target);
 internal sealed record PartyTeleportRequest(Location Target, byte Source);
+internal sealed record PrivilegeTeleportRequest(Location Target);
 internal sealed record TeleportTarget(ushort CharacterId, string Name, Location Position, ChannelIdentity Channel, long Serial,
     byte Level, byte Job, byte GrowType);
 internal sealed record TeleportPlan(Character Expected, Location Position, Location Return, InventoryPlan Inventory,
@@ -43,7 +45,8 @@ internal sealed record TeleportResult(string Reason, TeleportReceipt? Receipt = 
 internal sealed record GuildMapTeleportCommit(string Reason, Character? Character = null, bool Replayed = false);
 
 internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definitions, Func<int, ItemTemplate> item, TimeProvider? clock = null,
-    TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open, int guildTeleportCost = 0)
+    TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open, int guildTeleportCost = 0,
+    PrivilegeServiceCatalog? privilege = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     public static bool IsGuildMap(PotionTeleportRequest request) => request is
@@ -134,6 +137,29 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
         if (character.TeleportCooldowns.PartyAuraUntil > now) return ("aura-cooldown", null);
         string access = Destination(character, request.Target);
         return access == "ready" ? ("ready", AuraPlan(character, request.Target, definition, now)) : (access, null);
+    }
+
+    public (string Reason, TeleportPlan? Plan) Privilege(Character character, PrivilegeTeleportRequest request, ChannelEntry? channel, long now)
+    {
+        // 01767170及其原生分类明确拒绝这些频道；其他合法城镇频道不按普通频道22缩窄。
+        if (channel is null || ChannelAreaLanding.IsPvpType(channel.Type) || channel.Type is
+            55 or 40 or 27 or 39 or 23 or 32 or 25 or 45 or 50 or 62 or 63 or 8 or 13 or 24 or 20 or 31 or 41 or 59 or 60 ||
+            !ChannelAreaLanding.AllowsFiendwarTown(channel, character.Position.Town) ||
+            !ChannelAreaLanding.AllowsFiendwarTown(channel, request.Target.Town))
+            return ("privilege-teleport-area-unavailable", null);
+        var state = character.Inventory.PrivilegeService;
+        if (privilege is null || !state.IsActive(now / 1000)) return ("privilege-teleport-unavailable", null);
+        if (character.TeleportCooldowns.PrivilegeUntil > now) return ("privilege-teleport-cooldown", null);
+        var completed = DfoServer.Game.Quests.QuestEligibility.Completed(character);
+        if (towns.DestinationAdmission(character.Position, character.Level, completed) != "ready")
+            return ("privilege-teleport-area-unavailable", null);
+        // 669末六字节只有目的地；朝向沿用角色当前事实，不把未初始化前缀解释为权限或来源。
+        var target = request.Target with { Direction = character.Position.Direction };
+        string access = Destination(character, target);
+        if (access != "ready") return ("privilege-teleport-area-unavailable", null);
+        return ("ready", Plan(character, target,
+            new(character.Inventory, character.Inventory, "teleport_privilege", new(character, state.ExpiresAt, Clock, requirePosition: true)),
+            character.TeleportCooldowns with { PrivilegeUntil = checked(now + privilege.TeleportCooldownSeconds * 1000L) }, now));
     }
 
     TeleportPlan AuraPlan(Character character, Location target, AuraAbilityDefinition? definition, long now)

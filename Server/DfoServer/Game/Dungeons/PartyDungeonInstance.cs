@@ -336,10 +336,27 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     });
 
     public PartyDungeonNotice[] ObserveDeath(GameSession reporter, ushort key,
-        Func<GameSession, FormalDungeonDeathResult> observe) => Execute(current =>
+        Func<GameSession, FormalDungeonDeathResult> observe, Func<GameSession, bool>? prepareDynamic = null) => Execute(current =>
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session, reporter)) ||
             pendingScene is not null || current.Any(m => m.Actor.Session.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement))) return [];
+        if (current.Any(member => member.Actor.Session.HasCurrentFiendwarDynamic(key)))
+        {
+            if (pendingDeath is not null || prepareDynamic is null ||
+                current.Any(member => !prepareDynamic(member.Actor.Session))) return [];
+            var retired = new List<PartyDungeonNotice>();
+            foreach (var member in current)
+            {
+                var previous = member.Actor.Session.Selected;
+                var result = observe(member.Actor.Session);
+                if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate) ||
+                    !result.SpecialChildRetired || result.Receipt is null)
+                    throw new InvalidOperationException("已全员核验的漩涡动态死亡不能部分退休");
+                retired.Add(new(PartyDungeonNoticeKind.Death, member, current, result.Receipt, Death: result, Previous: previous));
+            }
+            // 动态死亡只补零奖励38，不进入静态击杀集合或Raid通关检查；同包可重放退休投影。
+            return retired.ToArray();
+        }
         var notices = new List<PartyDungeonNotice>();
         if (pendingDeath is not null) FinishPendingDeath(current, notices);
         if (deaths.Contains(key))
@@ -450,6 +467,17 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         ClearCards();
         return result;
     });
+
+    // 恢复退场已由同一固定owner组整体提交，不能逐人Detach后再以缩小的组合重入Execute。
+    internal void CompleteFiendwarKeyRecovery(PartyMember[] exited)
+    {
+        if (!IsExecuting || exited.Any(member => !members.Contains(member) ||
+            member.Actor.Session.Phase != SessionPhase.Town))
+            throw new InvalidOperationException("漩涡恢复退场必须在原固定组提交后完成");
+        foreach (var member in exited) member.Actor.Session.RemovePartyDungeon(this);
+        members = members.Except(exited).ToArray();
+        if (members.Length == 0) ClearCards();
+    }
 
     public PartyDungeonNotice[] Detach(GameSession session)
     {

@@ -38,7 +38,8 @@ internal sealed partial class DungeonHandler
 
     async Task<CommandResult> SelectFiendwarAsync(GameConnectionContext context, DungeonSelectionRequest selection)
     {
-        PartyDungeonNotice[] selected = [], entered = [];
+        PartyDungeonNotice[] entered = [];
+        bool waitingForKeys = false;
         string? reason = "fiendwar-entry-request-unproven";
         if (fiendwarRaid is not null && partyDungeons is not null && selection.DungeonIndex <= int.MaxValue &&
             selection.Parameter == 2 && selection.Unknown5 == 0 && selection.Unknown7 == 0 && selection.Unknown8 == 0 &&
@@ -47,7 +48,6 @@ internal sealed partial class DungeonHandler
             fiendwarRaid.Find(context.Session) is { } raid)
         {
             var existing = context.Session.CurrentParty?.Invoke();
-            // 已有遭遇队伍由分派层持共享门禁，可等待其成员命令结束；不能把队友刚发完的加载/心跳误判成入场失败。
             using var commands = existing is not null && context.DispatchGates?.Holds(context, existing.Commands) == true
                 ? await PartyDungeonProjection.AcquirePeersAsync(context, existing.Members)
                 : RaidStartCommands.TryEnter(fiendwarRaid.EncounterMembers(context.Session, raid), context.Session);
@@ -58,24 +58,40 @@ internal sealed partial class DungeonHandler
                     ? fiendwarRaid.Group(context.Session, (int)selection.DungeonIndex, out reason) : context.Session.CurrentParty?.Invoke();
                 if (party is not null)
                 {
-                    selected = fiendwarRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason, replay);
-                    try
+                    if (replay) entered = fiendwarRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason, replay: true);
+                    else if (context.Session.CurrentFiendwarKeyPreparation() is { } previous && previous.Dungeon == selection.DungeonIndex)
                     {
-                        // 城镇直接16也必须先建立原生scene2；Loading安装后选择回执已不再可发布。
-                        if (selected.Any(notice => notice.SceneTransition)) await PartyDungeonProjection.PublishAsync(selected);
-                        entered = replay ? selected : selected.Length == 0 ? [] :
-                            partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter, dungeons, rooms, null, null, null, null,
-                                onRejected: (rejection, slot) => reason = rejection + ":member=" + slot);
-                        if (entered.Length == 0 && reason is null) reason = context.Session.LastFormalDungeonRejection;
+                        waitingForKeys = true;
+                        await PublishFiendwarKeyOffersAsync(previous);
                     }
-                    finally { if (entered.Length == 0) context.Session.CancelRaidDungeonSelection(selected); }
+                    else
+                    {
+                        if (context.Session.CurrentFiendwarKeyPreparation() is { } obsolete)
+                            await CancelFiendwarKeyOffersAsync(obsolete, 3);
+                        var selected = context.Session.HeldFiendwarKeySelection(selection.DungeonIndex);
+                        if (selected.Length == 0)
+                        {
+                            selected = fiendwarRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason);
+                            if (selected.Length != 0) selected = DfoServer.Game.Session.GameSession.HoldFiendwarKeySelections(selected);
+                        }
+                        if (selected.Length != 0 && partyDungeons.PrepareFiendwarKeys(context.Session, selection.DungeonIndex,
+                                selection.Parameter, dungeons, rooms, selected) is { } pending)
+                        {
+                            waitingForKeys = true;
+                            reason = null;
+                            // 只排出offer并释放本次命令，不等待同一reader将来的candidate/ready。
+                            await PublishFiendwarKeyOffersAsync(pending);
+                        }
+                        else reason ??= context.Session.LastFormalDungeonRejection ?? "fiendwar-key-prepare-rejected";
+                    }
                 }
             }
             else reason = "fiendwar-member-command-busy";
         }
-        log.Write("fiendwar_entry", new { Connection = context.Id, Dungeon = selection.DungeonIndex, Members = entered.Length, Reason = reason });
+        log.Write("fiendwar_entry", new { Connection = context.Id, Dungeon = selection.DungeonIndex, Members = entered.Length,
+            WaitingForKeys = waitingForKeys, Reason = reason });
         if (entered.Length != 0) await PartyDungeonProjection.PublishAsync(entered);
-        else await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "fiendwar_entry_rejected");
+        else if (!waitingForKeys) await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "fiendwar_entry_rejected");
         return CommandResult.Handled;
     }
 }

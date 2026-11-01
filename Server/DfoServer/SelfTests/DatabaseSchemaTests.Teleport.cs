@@ -13,6 +13,7 @@ internal static partial class DatabaseSchemaTests
 {
     static void AuraCooldownUpgrade(string root)
     {
+        PrivilegeTeleportCooldownUpgrade(root);
         root = Path.Combine(root, "aura-cooldown");
         Directory.CreateDirectory(root);
         string path = Path.Combine(root, "game.db");
@@ -26,6 +27,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, """
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until;
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until;
+                ALTER TABLE character_teleport_cooldowns DROP COLUMN privilege_until;
                 INSERT INTO character_teleport_cooldowns VALUES(1,'aura-test',1000,2000);
                 CREATE INDEX aura_history_account ON character_teleport_cooldowns(account);
                 PRAGMA user_version=80;
@@ -76,6 +78,7 @@ internal static partial class DatabaseSchemaTests
             RemoveSkillTreeExpansionSchema(db);
             Execute(db, """
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until;
+                ALTER TABLE character_teleport_cooldowns DROP COLUMN privilege_until;
                 INSERT INTO character_teleport_cooldowns VALUES(1,'party-test',1000,2000,3000);
                 PRAGMA user_version=80;
                 """);
@@ -126,6 +129,7 @@ internal static partial class DatabaseSchemaTests
                 if (version == 78) RemoveEmptyPromotionFixtureSchema(db);
                 RewindZeroExperience(db);
                 Execute(db, "DROP TABLE character_quest_daily_clear;ALTER TABLE character_expert_job DROP COLUMN learned_recipes");
+                Execute(db, "ALTER TABLE character_teleport_cooldowns DROP COLUMN privilege_until");
                 if (version == 78) Execute(db, "ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until");
                 RewindRaidLifecycle(db);
                 Execute(db, $"INSERT INTO character_teleport_cooldowns VALUES(1,'preview-aura',1000,2000,3000{(version == 79 ? ",4000" : "")});PRAGMA user_version={version}");

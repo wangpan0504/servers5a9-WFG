@@ -9,7 +9,7 @@ using System.Security.Cryptography;
 
 namespace DfoServer.Game.Dungeons;
 
-internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonStore store, IEvildomWarStore? warStore = null,
+internal sealed partial class PartyDungeonService(PartyService parties, IPartyDungeonStore store, IEvildomWarStore? warStore = null,
     Func<int, int>? hiddenDraw = null, IEvildomWarGuideStore? guideStore = null)
 {
     // 调用方已提交领取并仍持有队伍命令门禁；这里只冻结事件、同步入发送队列，不等待队友上报或网络。
@@ -88,11 +88,18 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         });
     }
 
-    internal static PartyDungeonNotice[] Exit(IPartyDungeonStore store, PartyMember[] members, PartyDungeonExitKind kind)
+    internal static PartyDungeonNotice[] Exit(IPartyDungeonStore store, PartyMember[] members, PartyDungeonExitKind kind) =>
+        Exit(store, members, kind, out _);
+
+    static PartyDungeonNotice[] Exit(IPartyDungeonStore store, PartyMember[] members, PartyDungeonExitKind kind, out string? failureReason)
     {
+        failureReason = null;
         var plans = members.Select(m => m.Actor.Session.PreparePartyExit(kind)).ToArray();
         if (plans.Any(p => p is null)) return [];
-        var committed = store.CommitPartyDungeonExit(plans.Select(p => p!.Reservation).ToArray());
+        var reservations = plans.Select(p => p!.Reservation).ToArray();
+        var committed = kind == PartyDungeonExitKind.FiendwarKeyRecovery
+            ? store.TryCommitPartyDungeonRecoveryExit(reservations, out failureReason) : store.CommitPartyDungeonExit(reservations);
+        if (committed is null) return [];
         var notices = members.Select((m, i) => m.Actor.Session.InstallPartyExit(plans[i]!, committed[i], m, members)).ToArray();
         return members[0].Actor.Session.ReadEvildomWar() is { } war
             ? [..notices, ..EvildomWarNotices(members, war.Battle.View)] : notices;
@@ -158,9 +165,9 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false,
-        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true)
+        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null)
     {
-        var party = parties.Current(leader);
+        var party = fiendwarPrepared?.Party ?? parties.Current(leader);
         if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
             leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
@@ -169,10 +176,10 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             party.Members.Select(m => m.Actor.Session.Phase).Distinct().Count() != 1) return [];
         if (MarriageDungeonAdmission.Applies(dungeon) && party.Members.Length != 2) return [];
         var previousInstance = leader.PartyDungeon;
-        var instance = new PartyDungeonInstance(Guid.NewGuid(), party, store);
+        var instance = fiendwarPrepared?.Instance ?? new PartyDungeonInstance(Guid.NewGuid(), party, store);
         uint firstKey = party.Members.Max(m => Math.Max(m.Actor.Session.Selected?.DungeonState?.NextObjectKey ?? 65536u,
             (uint)m.Actor.Character.Id + 1));
-        var prepared = new List<(PartyMember Member, GameSession.PartyDungeonPreparation Preparation)>();
+        var prepared = fiendwarPrepared?.Prepared ?? new List<(PartyMember Member, GameSession.PartyDungeonPreparation Preparation)>();
         if (leader.FormalDungeonResultFocus() is { } previous)
         {
             hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo || previous.Entry.IsInfernoParty;
@@ -187,7 +194,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         {
             // 共用物理路线时只在全员尚有隐藏周额度才抽隐藏，避免一人满额就随机拒绝整队。
             bool canUseDimensionHidden = allowDimensionHidden && party.Members.All(member => member.Actor.Session.CanUseDimensionHidden(dungeon));
-            foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
+            if (fiendwarPrepared is null) foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
                     prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, canUseDimensionHidden);
@@ -201,7 +208,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             }
             return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
             {
-                if (!parties.IsCurrent(party)) return [];
+                if (!parties.IsCurrent(party) || fiendwarPrepared is { Active: false }) return [];
                 var reservations = prepared.Select(p => p.Member.Actor.Session.ReservePartyDungeon(p.Preparation)).ToArray();
                 if (reservations.Any(r => r is null) || !leader.IsPartyAdmissionDayCurrent(prepared[0].Preparation)) return [];
                 using var raidRun = GameSession.ReserveRaidPartyRun(prepared.Select(row => row.Preparation).ToArray(), out bool raidRequired);

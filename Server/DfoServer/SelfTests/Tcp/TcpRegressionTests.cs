@@ -11,6 +11,11 @@ internal static class TcpRegressionTests
         ("fiendwar-raid-flow", FiendwarRaidTcpTests.RunAsync),
         ("fiendwar-guide", FiendwarGuideTcpTests.RunAsync),
         ("fiendwar-recovery", FiendwarRecoveryTests.RunAsync),
+        ("fiendwar-reward-rules", (_, _, resources) =>
+        {
+            FiendwarRewardClosureTests.Run(resources);
+            return Task.CompletedTask;
+        }),
         ("prey-guide", PreyGuideTests.RunAsync),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
@@ -302,6 +307,7 @@ internal static class TcpRegressionTests
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
         ("consumable-disguise", ConsumableUseTcpTests.RunDisguiseAsync),
         ("teleport", TeleportTcpTests.RunAsync),
+        ("teleport-privilege", PrivilegeTeleportTcpTests.RunAsync),
         ("solo-party", SoloPartyTcpTests.RunAsync),
         ("pvp-training", PvpTrainingTcpTests.RunAsync),
         ("steel-learning", SteelLearningTcpTests.RunAsync),
@@ -515,6 +521,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "fiendwar-reward-rules",
         "settings-snapshot-rules",
         "equipment-power-rules",
         "frame-crc-rules",

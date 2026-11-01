@@ -11,6 +11,7 @@ internal sealed partial class AntonRaidBattle
     internal int FiendwarBaseArea => fiendwarDefinition?.Script.WaitingRoom?.Area ?? 2;
     readonly FiendwarBattlefield? fiendwarEngine;
     readonly FiendwarPacing fiendwarPolicy;
+    readonly Random fiendwarMazeRandom;
     readonly Dictionary<Guid, (int Area, FiendwarCombatScale Scale, DateTimeOffset Started, DateTimeOffset Deadline)> fiendwarEncounters = [];
     readonly Dictionary<int, (long Generation, long Enemy, long Monster, int Ordinal)> fiendwarMazes = [];
     readonly Dictionary<ushort, FiendwarMovement> fiendwarMovements = [];
@@ -198,7 +199,7 @@ internal sealed partial class AntonRaidBattle
                 if (!candidates.Contains(ordinal)) return null;
                 chosen = ordinal;
             }
-            else chosen = candidates[Random.Shared.Next(candidates.Count)];
+            else chosen = candidates[fiendwarMazeRandom.Next(candidates.Count)];
             fiendwarMazes[dungeon] = (generation, enemy, monster, chosen);
             return chosen;
         }
