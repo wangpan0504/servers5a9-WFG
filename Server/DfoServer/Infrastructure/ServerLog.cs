@@ -95,6 +95,8 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
             "room_exit" => "Room exit", "dungeon_entry" => "Dungeon selection",
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
+            "formal_tournament_reward_selected" => "Tournament card selection",
+            "formal_tournament_reward_failed" => "Tournament card reward failed",
             "formal_quest_continuation_selection" => "Quest continuation selection",
             "formal_character_death" => "Dungeon character death", "formal_character_revive" => "Dungeon character revive",
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
@@ -162,7 +164,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
         "connected" or "disconnected" or "closed" or "db_busy" or "db_slow" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
         "selected" or "fatigue_daily_reset" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
-        "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
+        "formal_dungeon_settlement" or "formal_tournament_reward_selected" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "consumable_disguise" or "class_change" or "growup_change" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
         "quest_ticket_use" or "creature_hatch" or "enhancement" or "chronicle_enchant" or "booster_open" or "random_option_change" or "equipment_texture_change" or "cash_shop_buy" or "avatar_dye" or "avatar_socket" or "avatar_emblem" or "gm" or "unimplemented" or "raid_rejoin_notice" or "raid_rejoin_candidate" ||

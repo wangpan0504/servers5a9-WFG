@@ -6,6 +6,7 @@
 <title>欢迎登录</title>
 <style>
 * { margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; border: 0; overflow: hidden; background: #1E1E1E; }
 img { border: none; margin-bottom: 7px; display: block; }
 #wrapper { width: 326px; height: 326px; padding: 12px; overflow: hidden; background: url(includeImg_bg.png) no-repeat; }
 .banner { display: block; margin: 0; }
@@ -28,6 +29,18 @@ a:hover { color: #FFC171; text-decoration: underline; }
 </div>
 </div>
 <script>
+function fitPage() {
+  var root = document.documentElement;
+  var wrapper = document.getElementById('wrapper');
+  var width = window.innerWidth || root.clientWidth || document.body.clientWidth;
+  var height = window.innerHeight || root.clientHeight || document.body.clientHeight;
+  wrapper.style.zoom = 1;
+  if (width > 0 && height > 0 && wrapper.offsetWidth > 0 && wrapper.offsetHeight > 0) {
+    wrapper.style.zoom = Math.min(width / wrapper.offsetWidth, height / wrapper.offsetHeight);
+  }
+}
+window.onresize = fitPage;
+fitPage();
 var links = document.getElementsByTagName('a');
 for (var i = 0; i < links.length; i++) {
   links[i].onclick = function () { return false; };

@@ -53,24 +53,23 @@ internal static class DungeonSettlementPackets
         return body;
     }
 
-    // 魂·黄龙/青龙大会（#259，实验性，实机未验证）：NOTI388 TOURNAMENT_CLEAR_REWARD。
-    // 依据参考 Go 项目 dungeon_tournament_rewards.go 对 DNF.exe 的逆向注释：大会副本通关后客户端等待 388（而非普通 34/35）才显示宝箱并发 CMD457/458。
-    // 格式：完成轮数 u8、经验 u32、0 u8，然后 2 行，每行 count u8 + count×(itemId i32、数量 i32、u16 0)；itemId=-1 表示空卡。
+    // ARAD 023807C0：轮数、经验、附加条目数，再读普通/冠军两组；0为金币、-1为空牌。
     public const int TournamentCardRows = 2;
     public const int TournamentCardsPerRow = 2;
     public const byte TournamentUnselected = 255;
-    public static byte[] TournamentReward(byte completedRounds, uint experience)
+    public static byte[] TournamentReward(byte completedRounds, uint experience, DungeonTournamentReward rewards)
     {
         var body = new List<byte> { completedRounds };
         body.AddRange(BitConverter.GetBytes(experience));
         body.Add(0);
         for (int row = 0; row < TournamentCardRows; row++)
         {
-            body.Add(TournamentCardsPerRow);
-            for (int card = 0; card < TournamentCardsPerRow; card++)
+            var cards = rewards.Row(row);
+            body.Add(checked((byte)cards.Length));
+            foreach (var card in cards)
             {
-                body.AddRange(BitConverter.GetBytes(-1)); // 空卡：本最小实现不发放卡牌奖励
-                body.AddRange(BitConverter.GetBytes(0));
+                body.AddRange(BitConverter.GetBytes(card.Item?.ItemId ?? (card.Gold > 0 ? 0 : -1)));
+                body.AddRange(BitConverter.GetBytes(card.Item?.Count ?? card.Gold));
                 body.AddRange(new byte[2]);
             }
         }
@@ -91,13 +90,14 @@ internal static class DungeonSettlementPackets
     }
 
     // CMD458 回复：1 + 每行 count + count×归属位（未选 0xFF）。selected[row] 为该行已选卡序号或 255。
-    public static byte[] TournamentSelection(byte slot, ReadOnlySpan<byte> selected)
+    public static byte[] TournamentSelection(byte slot, DungeonTournamentReward rewards, ReadOnlySpan<byte> selected)
     {
         var body = new List<byte> { 1 };
         for (int row = 0; row < TournamentCardRows; row++)
         {
-            body.Add(TournamentCardsPerRow);
-            for (int card = 0; card < TournamentCardsPerRow; card++)
+            int count = rewards.Row(row).Length;
+            body.Add(checked((byte)count));
+            for (int card = 0; card < count; card++)
                 body.Add(selected[row] == card ? slot : TournamentUnselected);
         }
         return [.. body];

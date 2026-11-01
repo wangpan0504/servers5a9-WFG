@@ -315,6 +315,8 @@ internal static class SqliteMigrations
         new(170, "漩涡真实成就事实与消费水位", (db, tx) => Execute(db, tx,
             FiendwarTitleFactsSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(171, "库存实例变更标记", InventoryItemRevisionSchema.Upgrade),
+        new(172, "武斗大会翻牌资产领取回执", (db, tx) => Execute(db, tx,
+            DungeonTournamentRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";

@@ -787,8 +787,15 @@ internal static class FormalDungeonPublicationTests
     }
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。
     internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
-        bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false,bool loseFree = false) : ICharacterRepository
+        bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false,bool loseFree = false,bool loseTournament = false) : ICharacterRepository
     {
+        public TournamentCardCommit CommitTournamentCards(AccountOwners.Lease owner, Character expected,
+            PreparedDungeonSettlement prepared, TournamentCardClaim claim)
+        {
+            var result = inner.CommitTournamentCards(owner, expected, prepared, claim);
+            if (loseTournament) { loseTournament = false; throw new IOException("test tournament committed result lost"); }
+            return result;
+        }
         public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
             inner.ResetDailyFatigue(owner, expected, day, now);
         public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);

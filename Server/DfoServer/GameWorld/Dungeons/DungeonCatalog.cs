@@ -171,6 +171,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } quest] }] ? quest.Value : 0;
     // [tournament dungeon] 1：魂·黄龙/青龙大会等比赛副本（实验性，依据来自 Go 项目反汇编）。
     public bool IsTournament => RawSections.Where(row => row.Tag == "tournament dungeon").ToArray() is [{ Tokens: [{ Type: 0, Value: 1 }] }];
+    public DungeonTournamentRewards? TournamentRewards { get; init; }
     // 团本：raid dungeon=1，raid normal dungeon/anton dungeon 为无参标记。冒险团推荐通关不计团本。
     public bool IsRaid => RawSections.Any(row => row.Tag == "raid dungeon" && row.Tokens is [{ Type: 0, Value: 1 }]) ||
         RawSections.Any(row => (row.Tag is "raid normal dungeon" or "anton dungeon") && row.Tokens.Count == 0);
@@ -451,6 +452,8 @@ internal sealed class DungeonCatalog
         return definitions.GetOrAdd(id, _ => new(() =>
         {
             var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains);
+            if (definition.IsTournament)
+                definition = definition with { TournamentRewards = DungeonTournamentRewards.Parse(definition) };
             if (!definition.RequiresGriefEntryContract) return definition;
             if (!GriefTower.FloorsByDungeon.TryGetValue(id, out var floor))
                 throw new InvalidDataException("悲叹副本未登记于楼层专表: " + id);

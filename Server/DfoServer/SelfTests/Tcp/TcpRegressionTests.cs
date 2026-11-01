@@ -277,6 +277,7 @@ internal static class TcpRegressionTests
             DungeonMonsterPlanTests.Run(resources.Archive);
             SinglePlayerDungeonRunTests.Run(resources.Archive);
             DungeonSettlementTests.RunResources(resources.Archive);
+            TournamentSettlementTests.RunResources(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources);
             GriefTowerClearTests.RunResources(resources.Archive,resources.ItemResources.Items,resources.ItemResources.EpicPieces);
             DungeonSettlementTests.RunAdventureResources(resources.Archive);
             DungeonSettlementTests.RunProficiencyResources(resources.Archive);

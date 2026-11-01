@@ -959,7 +959,7 @@ internal static class QuestSceneTests
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
             TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null,byte growType = 0,
-            DungeonIncountCatalog? incounts = null)
+            DungeonIncountCatalog? incounts = null,bool loseTournament = false,Func<Character,InventoryPlan>? inventorySetup = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -981,6 +981,8 @@ internal static class QuestSceneTests
                 }
                 created = Repository.CommitInventory(Owner, created, new(created.Inventory, created.Inventory with { Items = seeded }, "test_seed_items"));
             }
+            if (inventorySetup is not null)
+                created = Repository.CommitInventory(Owner,created,inventorySetup(created));
             if (growthContractExpiresAt is { } expiry)
                 Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                     { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(84,expiry) },"test_growth_contract"));
@@ -988,8 +990,9 @@ internal static class QuestSceneTests
             if (fatigueRemaining is { } remaining) Sql("UPDATE character_fatigue SET remaining=$p0", (int)remaining);
             ICharacterRepository repository = lost || loseGrowth ? new LostResultRepository(Repository) { LoseSceneResult = lost, LoseCompletionResult = false,
                 LoseGrowthResult = loseGrowth,GrowthLossCondition = growthLossCondition } : Repository;
-            if (loseSettlement)
-                repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:true);
+            if (loseSettlement || loseTournament)
+                repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:loseSettlement,
+                    loseTournament:loseTournament);
             Session = new(repository,towns,Owner,questCatalog: quests,
                 contracts: contracts,timeProvider: timeProvider,stageGraph: stages,incounts: incounts);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
