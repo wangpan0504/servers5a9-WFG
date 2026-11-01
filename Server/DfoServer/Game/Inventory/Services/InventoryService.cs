@@ -27,7 +27,17 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
         var source = character.Inventory.Find(new(InventoryListType.Equipment, slot));
         if (source is null || source.Core.Kind != ItemKind.Equipment)
             return InventoryResult.Reject();
-        return InventoryDurabilityService.Plan(character, slot, catalog.Get(source.Core.ItemId), DateTimeOffset.UtcNow);
+        var now = time.GetUtcNow();
+        var template = catalog.Get(source.Core.ItemId);
+        var wear = InventoryDurabilityService.Plan(character, slot, template, now);
+        if (template.Durability == 0 || template.EquipmentSlot is 13 or 24 or 30 ||
+            wear.Plan is not { } wearPlan || wearPlan.After.Find(source.Position)?.Core.Durability != 0)
+            return wear;
+        var repaired = InventoryRepairService.Automatic(character with { Inventory = wearPlan.After }, catalog, now, time);
+        if (repaired.Plan is not { } repairPlan) return wear;
+        // 损耗、全部修理及契约次数一次提交，不能先存零耐久再独立扣次。
+        return new(true, 0, new(character.Inventory, repairPlan.After, "equipment_durability_auto_repair",
+            new(character, repairPlan.CharacterPrecondition!.QualificationExpiresAt, time, requirePosition: true)));
     }
     public (InventoryDiscardPlan? Plan, ushort Error) Discard(Character character, InventoryDiscardRequest request)
     {

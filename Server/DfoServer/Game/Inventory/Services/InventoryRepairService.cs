@@ -20,13 +20,12 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
             return InventoryResult.Reject(19);
         var before = character.Inventory;
         var time = utcNow ?? clock.GetUtcNow();
-        var charged = before;
+        if (automatic) return Automatic(character, catalog, time, clock, clientBattleWear);
         var planned = before.Items;
         long total = 0;
         long now = time.ToUnixTimeSeconds();
         bool all = request.Position.Index == -1;
-        long? deadline = automatic ? Math.Min(DevilContractPolicy.Expiry(before.AccountWallet, 6),
-            DailyBoosterUsage.NextReset(time).ToUnixTimeSeconds()) : null;
+        long? deadline = null;
         ActionConsumableDefinition? tool = null;
         InventoryResult? paidTool = null;
         if (request.RepairItemSlot >= 0)
@@ -46,10 +45,6 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
         var candidates = all ? before.Items.Where(item => item.Position.List == InventoryListType.Equipment ||
             item.Position.List == InventoryListType.Main && item.Position.Index is >= 3 and <= 8).ToArray() :
             before.Find(request.Position) is { } single ? [single] : Array.Empty<InventoryItem>();
-        if (automatic && (!candidates.Any(item => item.Core.Kind == ItemKind.Equipment && (item.Core.Durability == 0 || clientBattleWear) &&
-                !item.IsExpired(now) && catalog.Get(item.Core.ItemId) is { Durability: > 0, EquipmentSlot: not (13 or 24 or 30) }) ||
-            !DevilContractPolicy.TryConsume(before, 6, 6, time, out charged)))
-            return InventoryResult.Reject(19);
         if (!all && candidates.Length == 0)
             return InventoryResult.Reject(17);
         foreach (var item in candidates)
@@ -65,13 +60,13 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
             // 一键修理覆盖普通穿戴与快捷装备，不把背包装备页、仓库或特殊盾牌一起收费。
             if (all && template.EquipmentSlot is 13 or 24 or 30)
                 continue;
-            // 单件的无变化目标仍须有效；批量只绑定实际修理及客户端战损回述的有效候选。
-            if ((!all || item.Core.Durability < template.Durability || automatic && clientBattleWear && template.Durability > 0) &&
+            // 单件的无变化目标仍须有效；批量只绑定实际修理的有效候选。
+            if ((!all || item.Core.Durability < template.Durability) &&
                 item.ExpireTime > 0 && (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
             if (item.Core.Durability >= template.Durability)
                 continue;
             int price = 0;
-            if (!automatic && tool?.Label != "[repair coupon]" &&
+            if (tool?.Label != "[repair coupon]" &&
                 !repair.TryPrice(template, item.Core.Durability, item.Core.Upgrade, request.Quick, out price))
                 return InventoryResult.Reject(10);
             total += price;
@@ -90,8 +85,43 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
             return new(true, 0, new(before, after with { Gold = checked(before.Gold - (uint)total) },
                 tool!.Label == "[repair coupon]" ? "equipment_repair_coupon" : "equipment_repair_item", new(character, deadline, clock, requirePosition: true)));
         }
-        return new(true, 0, new(before, charged with { Items = planned, Gold = checked(before.Gold - (uint)total) }, "equipment_repair",
-            new(character, deadline, clock, requirePosition: true)))
-            { WholeListRefresh = automatic && clientBattleWear };
+        return new(true, 0, new(before, before with { Items = planned, Gold = checked(before.Gold - (uint)total) }, "equipment_repair",
+            new(character, deadline, clock, requirePosition: true)));
+    }
+
+    internal static InventoryResult Automatic(Character character, ItemCatalog catalog, DateTimeOffset time,
+        TimeProvider clock, bool allowRestatement = false)
+    {
+        var before = character.Inventory;
+        long now = time.ToUnixTimeSeconds();
+        long deadline = Math.Min(DevilContractPolicy.Expiry(before.AccountWallet, 6),
+            DailyBoosterUsage.NextReset(time).ToUnixTimeSeconds());
+        if (deadline <= now || DevilContractPolicy.Used(before, 6, time) >= 6)
+            return InventoryResult.Reject(19);
+        var candidates = before.Items.Where(item =>
+                (item.Position.List == InventoryListType.Equipment ||
+                 item.Position.List == InventoryListType.Main && item.Position.Index is >= 3 and <= 8) &&
+                item.Core.Kind == ItemKind.Equipment && !item.IsExpired(now))
+            .Select(item => (Item: item, Template: catalog.Get(item.Core.ItemId)))
+            .Where(row => row.Template is { Durability: > 0, EquipmentSlot: not (13 or 24 or 30) }).ToArray();
+        if (!candidates.Any(row => row.Item.Core.Durability == 0))
+        {
+            // 48已完成修理后，迟到的23只确认满耐久现状，不再次消费免费次数。
+            return allowRestatement && candidates.Length != 0 &&
+                candidates.All(row => row.Item.Core.Durability >= row.Template.Durability)
+                ? new(true, 0, new(before, before, "equipment_repair_restatement", new(character, deadline, clock, requirePosition: true)))
+                : InventoryResult.Reject(19);
+        }
+        if (!DevilContractPolicy.TryConsume(before, 6, 6, time, out var charged))
+            return InventoryResult.Reject(19);
+        var items = before.Items;
+        foreach (var (item, template) in candidates)
+        {
+            if (item.Core.Durability >= template.Durability) continue;
+            if (item.ExpireTime > 0) deadline = Math.Min(deadline, item.ExpireTime);
+            items = items.Replace(item, item with { Core = item.Core with { Durability = template.Durability } });
+        }
+        return new(true, 0, new(before, charged with { Items = items }, "equipment_auto_repair",
+            new(character, deadline, clock, requirePosition: true)));
     }
 }

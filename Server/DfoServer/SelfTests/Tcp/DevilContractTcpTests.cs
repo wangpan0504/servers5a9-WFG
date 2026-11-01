@@ -173,21 +173,17 @@ internal static class DevilContractTcpTests
             peer.Barrier();
             That(State() == before, "自动修理在副本加载阶段不抢先消费契约次数");
             FormalDungeonTcpTests.Load(peer);
+            string repairedState = State();
             peer.Send(23, [0, 255, 255, 255, 255, 1, 0]);
             var ack = peer.Expect(1, 23).Body;
             That(ack.Length == 10 && ack[0] == 1 && U32(ack, 1) == 1000,
-                "正式战斗按客户端触发执行自动修理，不要求存档已提前变成零耐久");
-            var notifications = PartyDungeonTcpTests.Drain(peer);
-            var main = notifications.Single(packet => packet.Kind == 0 && packet.Opcode == 14 && packet.Body[0] == 0).Body;
-            That(main.Length == 3 + U16(main, 1) * 123 &&
-                Enumerable.Range(0, U16(main, 1)).Select(index => 3 + index * 123)
-                    .Any(at => U16(main, at) == 3 && U32(main, at + 2) == 10400 && U16(main, at + 11) == 33) &&
-                notifications.Any(packet => packet.Kind == 1 && packet.Opcode == 905 && packet.Body[13 + 6 * 9] == 2) &&
-                fixture.Query("SELECT gold FROM characters") is [[1000L]],
-                "战斗自动修理用完整槽位差量同步权威耐久和次数2，金币保持不变");
+                "满耐久的迟到自动修理请求只确认权威现状");
+            peer.Barrier();
+            That(State() == repairedState, "迟到23不再次消费次数、不写库或重发背包");
         }
         VerifyStaminaExemptions(fixture, clock);
         await fixture.StopAsync();
+        await VerifyNaturalRepair(source, root, resources);
 
         string MigrationAssets() => JsonSerializer.Serialize(fixture.Query("SELECT id,account,revision,gold FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets")) +
@@ -198,6 +194,116 @@ internal static class DevilContractTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items"));
+    }
+
+    static async Task VerifyNaturalRepair(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var r = resources.ItemResources;
+        var clock = new Clock();
+        var now = clock.GetUtcNow();
+        var service = new InventoryService(r.Items, r.GoldLimits, r.EpicPieces, clock: clock);
+        var item = new InventoryItem(100, new(InventoryListType.Equipment, 14),
+            InventoryRewardGrantService.Create(r.Items.Get(10400)) with { Durability = 1, EquipmentLockId = 1, EnchantCardId = 3175 });
+        var role = new Character(1, 0, "NaturalPolicy", 1, resources.Towns.Room, null)
+        {
+            Inventory = new([item], Gold: 1000)
+            { AccountWallet = AccountWallet.Empty.ActivateContract(586, 3 * 86400, now) }
+        };
+        for (int i = 1; i <= 6; i++)
+        {
+            var result = service.DecreaseDurability(role, 14);
+            var after = result.Plan!.After;
+            That(after.Find(item.Position) == item with { Core = item.Core with { Durability = 33 } } &&
+                DevilContractPolicy.Used(after, 6, now) == i && after.Gold == 1000,
+                "自然损耗前6次同计划免费修满，保留UID、锁和全部非耐久属性");
+            if (i == 1)
+            {
+                That(result.Plan.CharacterPrecondition is { } guard && guard.Matches(role) &&
+                    guard.IsExpired(DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds()), "自然修理计划绑定原角色与06点日切截止");
+                var expiring = role with { Inventory = role.Inventory with { Items = [item with { Core = item.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds() + 2) } }] } };
+                That(service.DecreaseDurability(expiring, 14).Plan!.CharacterPrecondition!.IsExpired(now.ToUnixTimeSeconds() + 2),
+                    "修理目标自身到期更早时，提交资格不能跨越装备期限");
+            }
+            role = role with { Inventory = after with { Items = [item] } };
+        }
+        var exhausted = service.DecreaseDurability(role, 14);
+        That(exhausted.Plan!.After.Find(item.Position)!.Core.Durability == 0 &&
+            DevilContractPolicy.Used(exhausted.Plan.After, 6, now) == 6, "自然损耗第7次正常减为零，不修理也不扣第7次");
+        clock.Set(now.AddDays(1).ToUnixTimeSeconds());
+        That(DevilContractPolicy.Used(service.DecreaseDurability(role, 14).Plan!.After, 6, clock.GetUtcNow()) == 1,
+            "自然损耗按次日真实业务日恢复额度，不沿用昨日6次");
+        clock.Set(now.AddDays(3).ToUnixTimeSeconds());
+        That(service.DecreaseDurability(role, 14).Plan!.After.Find(item.Position)!.Core.Durability == 0,
+            "服务6到期后，合法战斗损耗仍落库但不再免费修理");
+        clock.Set(now.ToUnixTimeSeconds());
+        That(service.DecreaseDurability(role with { Inventory = role.Inventory with { AccountWallet = AccountWallet.Empty } }, 14)
+            .Plan!.After.Find(item.Position)!.Core.Durability == 0, "无契约角色不能从自然损耗获得免费修理");
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "devil-natural-repair"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var character = repository.Create(owner, new("AutoRepair", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                DungeonState = CharacterDungeonState.NewOrdinary,
+                Inventory = new([
+                    new(0, new(InventoryListType.Equipment, 14), InventoryRewardGrantService.Create(r.Items.Get(10400)) with { Durability = 1 }),
+                    new(0, new(InventoryListType.Main, 3), InventoryRewardGrantService.Create(r.Items.Get(10400)) with { Durability = 2 }),
+                    new(0, new(InventoryListType.Main, 9), InventoryRewardGrantService.Create(r.Items.Get(10400)) with { Durability = 0 })], Gold: 1000)
+            });
+            InventoryService.Commit(repository, owner, character, new(true, 0, new(character.Inventory,
+                character.Inventory with { AccountWallet = character.Inventory.AccountWallet.ActivateContract(586, 86400, DateTimeOffset.UtcNow) },
+                "natural_repair_qualification")));
+        }
+        await fixture.StartAsync();
+        fixture.Sql("CREATE TRIGGER fail_natural_repair AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'natural repair rollback'); END");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); FormalDungeonTcpTests.EntryTown(peer); FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer);
+            peer.Barrier();
+            string before = State(); peer.Send(48, [14]); peer.Closed();
+            That(State() == before, "自然损耗触发后晚期SQL失败，损耗、全部修理、次数、金币和revision整笔回滚");
+        }
+        fixture.Sql("DROP TRIGGER fail_natural_repair");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier(); string before = State();
+            peer.Send(48, [14]); peer.Barrier();
+            That(State() == before, "城镇不能借损耗报告触发免费修理");
+            FormalDungeonTcpTests.EntryTown(peer); FormalDungeonTcpTests.Enter(peer);
+            before = State();
+            peer.Send(48, [14]); peer.Barrier();
+            That(State() == before, "Loading损耗报告不修理、不消费次数");
+            FormalDungeonTcpTests.Load(peer);
+            long revision = (long)fixture.Query("SELECT revision FROM characters")[0][0];
+            peer.Send(48, [14]);
+            var main = peer.Expect(0, 14).Body;
+            var worn = peer.Expect(0, 14).Body;
+            That(main[0] == 0 && U16(main, 1) == 1 && U16(main, 3) == 3 && U16(main, 14) == 33 &&
+                worn[0] == 3 && U16(worn, 1) == 1 && U16(worn, 3) == 14 && U16(worn, 14) == 33,
+                "仅发48自然损耗，零耐久即恢复穿戴与快捷装备并同步完整耐久差量，不等待23");
+            That(peer.Expect(1, 905).Body[13 + 6 * 9] == 1 &&
+                fixture.Query("SELECT gold,revision FROM characters") is [[1000L, long after]] && after == revision + 1 &&
+                fixture.Query("SELECT json_extract(i.item_core,'$.Durability') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.list_type=0 AND s.slot_index=9") is [[0L]],
+                "修理次数1与一次revision同时落库，金币及普通背包装备不变");
+            peer.Barrier(); before = State();
+            peer.Send(23, [0, 255, 255, 255, 255, 1, 0]); peer.Expect(1, 23); peer.Barrier();
+            That(State() == before, "自然修理后迟到23不重复扣次或提交");
+            peer.Send(48, [14]);
+            That(U16(peer.Expect(0, 14).Body, 14) == 32, "后续合法损耗继续按一格处理，不永久吞报告");
+            peer.Barrier();
+        }
+        await fixture.StopAsync(); await fixture.StartAsync("restart");
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            That(peer.DevilService0[13 + 6 * 9] == 1, "自然修理真实次数完整重启后仍投影为1/6");
+            peer.Barrier();
+        }
+        string State() => fixture.Snapshot("SELECT revision,gold,devil_usage FROM characters") +
+            fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
     }
 
     static void VerifyStaminaExemptions(TcpTestFixture fixture, Clock clock)
