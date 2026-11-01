@@ -242,7 +242,7 @@ internal static partial class PartyDungeonTcpTests
             {
                 group.ReadEntry(rejected);
                 That(rejected.All(rows => rows.Single(packet => packet is {Kind:0,Opcode:602}).Body is
-                    [28,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0]), "普通安徒恩全队首图分别同步个人零进度");
+                    [28,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0]), "普通安徒恩全队首图分别同步个人零进度及可继续资格");
                 group.Load();
                 var maze = definition.Mazes.Single();
                 var route = QuestStoryRouteTests.Path(maze.StaticTopology,new(group.Map[0],group.Map[1]),

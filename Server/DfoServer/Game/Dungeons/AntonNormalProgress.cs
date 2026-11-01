@@ -37,4 +37,8 @@ internal readonly record struct AntonNormalProgress(int Day, int Branch, int Com
 }
 
 internal sealed record AntonNormalAdmission(int Day, int Branch, AntonNormalSequenceCatalog Catalog);
-internal readonly record struct AntonNormalSequenceInfo(byte Stage, uint ClearBits, uint Branch);
+internal readonly record struct AntonNormalSequenceInfo(byte Stage, uint ClearBits, uint Branch)
+{
+    // 本服每日一条讨伐路线；尚未完成心脏时仍可继续，不能把零占位投影成资格耗尽。
+    public byte RemainingClears => Stage < 6 ? (byte)1 : (byte)0;
+}
