@@ -291,9 +291,37 @@ internal static class CargoTests
         }
     }
 
+    static void VerifyStepUpgrade(TownCatalog towns, ItemResources resources)
+    {
+        var service = new InventoryCargoService(resources.Items, resources.Cargo, resources.GoldLimits);
+        foreach (int id in new[] { 10007903, 10008055, 10008120, 2660237 })
+        {
+            var source = new InventoryItem(1, new(InventoryListType.Main, 65),
+                new ItemCore(id, GameWorld.Items.ItemKind.Consumable, 1));
+            foreach (ushort capacity in new ushort[] { 8, 24, 248 })
+            {
+                var role = new Character(1, 0, "CargoStep", 0, towns.InitialReturn, null)
+                    { Level = 60, Inventory = new([source]) { CargoCapacity = capacity } };
+                var result = service.PersonalUpgrade(role, 65);
+                That(result.Accepted && result.Plan!.After.CargoCapacity == capacity + 16 &&
+                    result.Plan.After.Find(source.Position) is null &&
+                    role.Inventory.CargoCapacity == capacity && role.Inventory.Find(source.Position) == source,
+                    "逐档金库券每次提升一档并扣一件，规划不修改原快照 " + id);
+            }
+            foreach (ushort capacity in new ushort[] { 264, 16, 48 })
+            {
+                var role = new Character(1, 0, "CargoStep", 0, towns.InitialReturn, null)
+                    { Level = 60, Inventory = new([source]) { CargoCapacity = capacity } };
+                That(!service.PersonalUpgrade(role, 65).Accepted && role.Inventory.Find(source.Position) == source,
+                    "逐档金库券满档或非法旧容量拒绝且不扣券 " + id);
+            }
+        }
+    }
+
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         VerifyAcquisition(towns, itemResources);
+        VerifyStepUpgrade(towns, itemResources);
         int checks = Count;
         That(itemResources.Items.Get(6).PersonalCargoUpgradeTarget == 40 &&
             itemResources.Items.Get(110).PersonalCargoUpgradeTarget == 40 &&
