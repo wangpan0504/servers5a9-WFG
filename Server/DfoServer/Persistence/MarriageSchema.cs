@@ -44,7 +44,9 @@ internal static class MarriageSchema
             command.Parameters.AddWithValue("$name", name);
             var actual = command.ExecuteScalar();
             if (actual is null) SqliteMigrations.Execute(db, tx, definition);
-            else if (actual is not string sql || SqliteMigrations.NormalizeTable(sql, name) != SqliteMigrations.NormalizeTable(definition, name))
+            else if (actual is not string sql ||
+                SqliteMigrations.NormalizeTable(sql, name) != SqliteMigrations.NormalizeTable(definition, name) &&
+                (name != "marriage_records" || SqliteMigrations.NormalizeTable(sql, name) != SqliteMigrations.NormalizeTable(MarriageSameAccountSchema.Definition, name)))
                 throw new InvalidDataException("婚姻关系表结构不兼容: " + name);
         }
         SqliteMigrations.Execute(db, tx, IndexesSql.Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal));

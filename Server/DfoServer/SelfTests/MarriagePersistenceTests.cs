@@ -17,6 +17,7 @@ internal static partial class MarriagePersistenceTests
     public static void RunCore()
     {
         int checks = Count;
+        DirectMarriageCases();
         InventoryDeadlines();
         HomeTravelAfterDivorce();
         using (var f = new Fixture())
@@ -409,7 +410,7 @@ internal static partial class MarriagePersistenceTests
             Guest = Create(GuestOwner, "Guest", 2);
         }
 
-        Character Create(AccountOwners.Lease owner, string name, byte job) => Repository.Create(owner,
+        public Character Create(AccountOwners.Lease owner, string name, byte job) => Repository.Create(owner,
             new(name, new(1, 0, 50, 50), null) { Job = job, Level = 30, Inventory = new([], Gold: 1000) });
         public Character ReadFirst() => Repository.LoadCharacter(FirstOwner, First.Slot);
         public Character ReadSecond() => Repository.LoadCharacter(SecondOwner, Second.Slot);
@@ -423,7 +424,7 @@ internal static partial class MarriagePersistenceTests
         public MailboxDelivery Delivery(string suffix, Character recipient) => new("marriage-test-" + suffix,
             Repository.FindMailRecipient(recipient.Name)!, "System", "Wedding gift", 17,
             [new(0, new(InventoryListType.Main, 121), new(10002609, ItemKind.Material, 1))], 1000);
-        SqliteConnection Open()
+        public SqliteConnection Open()
         {
             var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path, Pooling = false, ForeignKeys = true }.ToString());
             db.Open();

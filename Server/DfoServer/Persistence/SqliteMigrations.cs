@@ -322,6 +322,7 @@ internal static class SqliteMigrations
                 .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(174, "账号材料地面拾取持久回执", AccountMaterialPickupSchema.Upgrade),
         new(175, "角色任务提示书签", (db, tx) => Execute(db, tx, QuestNotifySchema)),
+        new(176, "GM同账号婚姻关系兼容", MarriageSameAccountSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2408,7 +2409,7 @@ internal static class SqliteMigrations
             (AntonNormalProgressSchema.Table,AntonNormalProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),
-            ("marriage_records",MarriageSchema.RecordsSql),
+            ("marriage_records",MarriageSameAccountSchema.Definition),
             ("marriage_active_members",MarriageSchema.ActiveMembersSql),
             (PvpArenaResultSchema.Table,PvpArenaResultSchema.Definition),
             (PvpRatingSchema.StateTable,PvpRatingSchema.StateDefinition),
@@ -2422,7 +2423,7 @@ internal static class SqliteMigrations
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
-            ("marriage_records",MarriageSchema.RecordsSql),
+            ("marriage_records",MarriageSameAccountSchema.Definition),
             ("marriage_active_members",MarriageSchema.ActiveMembersSql),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),

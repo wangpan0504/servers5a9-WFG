@@ -78,7 +78,8 @@ internal enum DevelopmentAction
     LukeRewardList,
     LukeRewardInspect,
     LukeRewardClaim,
-    CharacterScoreNotice
+    CharacterScoreNotice,
+    DirectMarriage
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -138,7 +139,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["index-status"] = (DevelopmentAction.IndexStatus, false, 0, 0),
         ["equip-slots"] = (DevelopmentAction.EquipSlots, true, 0, 1),
         ["appearance"] = (DevelopmentAction.Appearance, true, 0, 0),
-        ["expert-job"] = (DevelopmentAction.ExpertJob, true, 0, 2)
+        ["expert-job"] = (DevelopmentAction.ExpertJob, true, 0, 2),
+        ["direct-marriage"] = (DevelopmentAction.DirectMarriage, true, 2, 2)
     };
     public const string ChatInjectUsage = "用法：chat-inject <连接号> <L1|L2|L3|P3E|AAS|AAS8|AASU> <文本>（只对已在线连接有效；文本可含空格）";
     /// <summary><c>inject-raw</c> 正文上限（字节）：足以放下聊天/弹框任意变体，又不至于把一行 GM 命令撑爆。</summary>

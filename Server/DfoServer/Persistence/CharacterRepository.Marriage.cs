@@ -405,8 +405,8 @@ internal sealed partial class CharacterRepository : IMarriageStore
             if (reader.GetInt32(0) == record.FirstId) first = reader.GetString(1);
             else second = reader.GetString(1);
         }
-        if (first is null || second is null || StringComparer.Ordinal.Equals(first, second))
-            throw new InvalidOperationException("婚姻角色已删除或属于同一账号");
+        if (first is null || second is null)
+            throw new InvalidOperationException("婚姻角色已删除");
         return (first, second);
     }
 

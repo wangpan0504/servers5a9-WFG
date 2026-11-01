@@ -13,6 +13,9 @@ internal sealed record MarriageCharacterCard(MailboxRecipient Recipient, IReadOn
 
 internal interface IMarriageStore
 {
+    // GM离线专用；同账号复用同一owner，双方关系及唯一成员索引原子建立，不改双方库存。
+    MarriageRecord CommitDirectMarriage(AccountOwners.Lease firstOwner, AccountOwners.Lease secondOwner,
+        Character first, Character second, MarriageRecord after);
     MarriageRecord? FindMarriage(ushort characterId);
     MarriageRecord? FindMarriage(Guid id);
     MarriageRecord? FindMarriageByContext(uint contextId);

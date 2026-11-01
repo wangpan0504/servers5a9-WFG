@@ -10,7 +10,7 @@ namespace DfoServer.Development;
 
 // 开发GM专用的只读资源目录。搜索索引在第一次查询时于后台构建一次，只保存检索所需的少量字段；
 // 构建期间查询返回进度，不阻塞GM端口的5秒读写窗口，也不进入游戏请求路径。
-internal sealed class DevelopmentCatalog(PvfArchive pvf, ItemResources resources, QuestCatalog? quests)
+internal sealed partial class DevelopmentCatalog(PvfArchive pvf, ItemResources resources, QuestCatalog? quests)
 {
     // Grows：空脚本为全部分支；[usable first growtype] 写成 0–5 的位。无法识别的非空声明为 0，选了角色时不匹配任何分支。
     // Sub：武器子类，取自 PVF 路径中 weapon/ 之后的目录名（如 katana、beamsword）；非武器为空。
