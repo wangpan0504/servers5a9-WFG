@@ -11,10 +11,15 @@ internal static class MonsterAiProjection
     // 入队失败不能当作已应用继续发29，交给同一发送错误结束本次命令。
     public static Task SendAsync(GameConnectionContext context, FormalDungeonReceipt receipt, string action, Func<bool>? canSend = null)
     {
-        if (receipt.MonsterAi is not { } profile) return Task.CompletedTask;
+        bool counterRoom = receipt.Entry.RaidEntry?.Kind == Game.Raids.RaidKind.Fiendwar &&
+            Game.Titles.FiendwarTitleFacts.IsTeamDungeon(receipt.Entry.DungeonId);
+        if (receipt.MonsterAi is not { } && !counterRoom) return Task.CompletedTask;
+        var profile = receipt.MonsterAi ?? MonsterAiProfile.Native;
         DungeonMap map = receipt.Snapshot.CurrentMap;
-        byte[] body = MonsterAiPackets.Encode(context.NextMonsterAiSerial(), receipt.Entry.DungeonId, checked((uint)map.Id),
+        uint serial = context.NextMonsterAiSerial();
+        byte[] body = MonsterAiPackets.Encode(serial, receipt.Entry.DungeonId, checked((uint)map.Id),
             receipt.MapSeed, map.Position, profile);
+        context.FiendwarCounterRoom = counterRoom ? new(serial, receipt) : null;
         return context.Sender.Send(0, MonsterAiPackets.Opcode, body, action, canSend);
     }
 }

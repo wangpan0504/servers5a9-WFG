@@ -2186,6 +2186,12 @@ CREATE TABLE character_fiendwar_title_facts(
   PRIMARY KEY(character_id,quest_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
+CREATE TABLE character_fiendwar_counter_stream(
+  character_id INTEGER PRIMARY KEY, account TEXT NOT NULL,
+  stream TEXT NOT NULL CHECK(length(stream) BETWEEN 1 AND 256),
+  sequence INTEGER NOT NULL CHECK(sequence BETWEEN 1 AND 4294967295),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
 
 CREATE INDEX character_raid_rewards_account_time ON character_raid_reward_receipts(account,created_at);
 

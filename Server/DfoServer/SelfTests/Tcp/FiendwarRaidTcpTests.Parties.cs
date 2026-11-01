@@ -24,7 +24,10 @@ internal static partial class FiendwarRaidTcpTests
         var returned = new HashSet<ushort>();
         var results = new HashSet<ushort>();
         var victories = new HashSet<ushort>();
+        var counterRooms = new Dictionary<ushort, byte[]>();
+        var previousCounters = new Dictionary<ushort, byte[]>();
         bool titleReplayChecked = false;
+        bool counterRollbackChecked = false;
         bool readingSupport = false;
         try
         {
@@ -235,6 +238,7 @@ internal static partial class FiendwarRaidTcpTests
                 foreach (var peer in first) { peer.Send(42); Drain(peer); }
             }
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
+            That(count != 1 || counterRollbackChecked, "单人团队沿真实兵营终房完成一次破招生产者晚SQL回滚和重新入场");
             foreach (var peer in first) Move(peer, 30);
             var blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
             uint firstElement = symbols[(first[0].Id, 92)];
@@ -371,7 +375,7 @@ internal static partial class FiendwarRaidTcpTests
         }
         finally { foreach (var peer in peers) peer.Dispose(); }
 
-        TcpPeer Reconnect(int index)
+        TcpPeer Reconnect(int index, bool advanceToDeadline = true)
         {
             var old = peers[index]; ushort id = old.Id;
             string before = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", id);
@@ -381,7 +385,7 @@ internal static partial class FiendwarRaidTcpTests
                 Task.Delay(10).GetAwaiter().GetResult();
             var candidate = fixture.LukeRejoinCandidate(id);
             That(candidate is { OldOwnerReleased: true }, "漩涡真实断线释放原owner后保留原团五分钟候选");
-            if (count == 1) clock.Advance(299);
+            if (count == 1 && advanceToDeadline) clock.Advance(299);
             var fresh = Open(fixture, "fiend" + count + "x" + index,
                 gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
             peers[index] = fresh;
@@ -573,8 +577,11 @@ internal static partial class FiendwarRaidTcpTests
                         "真实网络包同时携带冻结HP及物魔攻击倍率，双世界按整团冻结人数");
                 }
                 else
-                    That(!frames.Any(row => row is { Kind: 0, Opcode: 32752 }), "满倍率团队保持原生属性，不发送额外覆盖");
+                    That(frames.Single(row => row is { Kind: 0, Opcode: 32752 }).Body is { Length: 56 } native &&
+                        native.Skip(24).All(value => value == 0), "满倍率团队只发送中性房间身份，不修改原生属性");
             }
+            foreach (var (peer, index) in team.Select((peer, index) => (peer, index)))
+                counterRooms[peer.Id] = rows[index].Single(row => row is { Kind: 0, Opcode: 32752 }).Body;
             Load(team); return rows;
         }
         void CheckUser(TcpPeer requester, TcpPeer target, byte server, uint key, ushort captain, byte members)
@@ -612,6 +619,8 @@ internal static partial class FiendwarRaidTcpTests
                     var move = new byte[100]; move[0] = checked((byte)path[index].X); move[1] = checked((byte)path[index].Y);
                     team[0].Send(45, move); rows = team.Select(Drain).ToArray();
                     map = rows[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body; Load(team);
+                    foreach (var (peer, ordinal) in team.Select((peer, ordinal) => (peer, ordinal)))
+                        counterRooms[peer.Id] = rows[ordinal].Single(row => row is { Kind: 0, Opcode: 32752 }).Body;
                 }
                 if (!terminal && index + 1 == path.Length) break;
                 ClearMap(team, map, index + 1 == path.Length);
@@ -620,10 +629,25 @@ internal static partial class FiendwarRaidTcpTests
         }
         void ClearMap(TcpPeer[] team, byte[] map, bool bossRoom)
         {
-            int count = map[18];
-            That(map.Length >= 19 + count * 22, "真实演员表完整");
+            map = VerifyCounterReports(fixture, team, map, counterRooms, previousCounters,
+                count == 1 && bossRoom && !counterRollbackChecked ? failed =>
+                {
+                    counterRollbackChecked = true;
+                    int area = locations[failed.Id];
+                    int index = peers.FindIndex(peer => ReferenceEquals(peer, failed));
+                    That(index >= 0, "晚SQL失败只重连原成员，不新建角色或攻坚队");
+                    team[0] = Reconnect(index, advanceToDeadline: false);
+                    var resumed = Clear(team, area, Enter(team, area), terminal: false);
+                    var freshMap = resumed[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
+                    That(counterRooms[team[0].Id] is { Length: 56 or 80 } &&
+                        Enumerable.Range(0, freshMap[18]).Any(actor => U32(freshMap, 19 + actor * 22 + 8) is 107013148 or 107013178),
+                        "重连按原区域重新进图并自然走到本体终房，取得新MAI和真实对象键再继续击杀");
+                    return freshMap;
+                } : null);
+            int actorCount = map[18];
+            That(map.Length >= 19 + actorCount * 22, "真实演员表完整");
             bool killed = false;
-            foreach (int index in Enumerable.Range(0, count).OrderBy(index => map[19 + index * 22 + 13] == 3))
+            foreach (int index in Enumerable.Range(0, actorCount).OrderBy(index => map[19 + index * 22 + 13] == 3))
             {
                 int offset = 19 + index * 22;
                 if (map[offset + 21] == 1 || map[offset + 13] == 9) continue;
@@ -631,6 +655,7 @@ internal static partial class FiendwarRaidTcpTests
                 // 统一经本测试的收包入口观察战场符号，避免公共清图探针先消费1530。
                 That(Drain(team[0]).Any(row => row is { Kind: 0, Opcode: 38 }), "正式实例接受实际怪物死亡");
                 foreach (var peer in team.Skip(1)) Drain(peer);
+                VerifyDeadCounterBody(fixture, team, U32(map, offset + 8), U16(map, offset + 6), previousCounters);
                 if (!titleReplayChecked)
                 {
                     titleReplayChecked = true;

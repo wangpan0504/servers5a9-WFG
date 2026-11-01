@@ -241,6 +241,7 @@ internal static partial class DatabaseSchemaTests
             QuestNotifyUpgrade(root);
             MarriageSameAccountUpgrade(root);
             PrivilegeServiceUpgrade(root);
+            FiendwarCounterUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);

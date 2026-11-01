@@ -23,6 +23,7 @@ internal static class SelfTestRunner
         await LukePhaseExitOwnerTests.RunCoreAsync();
         LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
+        NativeMonsterSpawnsTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();
