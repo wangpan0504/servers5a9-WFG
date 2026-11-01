@@ -855,6 +855,7 @@ internal static partial class SessionPlanningTests
                   VALUES({{id}},'fedcba1234567890abcdef1234567890',1,1,0,'{{fiendwarPayment}}');
                 INSERT INTO character_fiendwar_title_facts(character_id,account,quest_id,total,applied)
                   VALUES({{id}},'planning',7007,5,2);
+                INSERT INTO character_fiendwar_counter_stream VALUES({{id}},'planning','fixture-room',19);
                 INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,0,2,20261022,1,'{}','[]',1);
                 INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES({{id}},'planning','instance','{}','{}',NULL,1);

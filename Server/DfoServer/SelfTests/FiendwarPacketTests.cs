@@ -34,6 +34,13 @@ internal static class FiendwarPacketTests
         That(FiendwarRequests.Boss([2, 0, 0, 0, 4, 0, 0, 0]) == new FiendwarBossRequest(2, 4), "Boss请求2个u32");
         foreach (int length in new[] { 0, 4, 7, 9 })
             Reject<InvalidDataException>(() => FiendwarRequests.Boss(new byte[length]), "拒绝截断和多余字段");
+        var counter = new byte[40];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(counter, FiendwarCounterRequests.Magic);
+        foreach (int length in new[] { 0, 39, 41 })
+            Reject<InvalidDataException>(() => FiendwarCounterRequests.Parse(new byte[length]), "破招私报拒绝截断和尾字节");
+        That(!FiendwarCounterRequests.Parse(counter).Valid, "空房间和零序号不构造有效破招事件");
+        Reject<ArgumentOutOfRangeException>(() => new DfoServer.Network.Protocol.GameCommandRegistry().RegisterPrivate(417,
+            (_, _) => Task.FromResult(DfoServer.Network.Protocol.CommandResult.Handled), "fixture"), "扩展注册不允许劫持原生417");
         Console.WriteLine($"PASS {Count - before} 漩涡协议断言");
     }
 }

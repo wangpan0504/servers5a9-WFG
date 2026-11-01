@@ -13,6 +13,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
+    internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
     internal Action? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }

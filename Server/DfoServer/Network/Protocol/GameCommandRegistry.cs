@@ -26,16 +26,29 @@ internal sealed class GameCommandRegistry
     public void Register(CmdPacketType opcode, GameCommandHandler handler, string source,
         UserStateRequirement minimumState = UserStateRequirement.Owner, GameCommandGate? sharedGate = null)
     {
+        if (opcode >= CmdPacketType.END)
+            throw new ArgumentOutOfRangeException(nameof(opcode));
+        RegisterOpcode((ushort)opcode, handler, source, minimumState, sharedGate);
+    }
+
+    // 本服扩展只在保留区显式注册，不扩大原生枚举或把未知命令转成成功。
+    internal void RegisterPrivate(ushort opcode, GameCommandHandler handler, string source,
+        UserStateRequirement minimumState = UserStateRequirement.Owner, GameCommandGate? sharedGate = null)
+    {
+        if (opcode is < 0x7F00 or > 0x7FFF) throw new ArgumentOutOfRangeException(nameof(opcode));
+        RegisterOpcode(opcode, handler, source, minimumState, sharedGate);
+    }
+
+    void RegisterOpcode(ushort value, GameCommandHandler handler, string source,
+        UserStateRequirement minimumState, GameCommandGate? sharedGate)
+    {
         if (commands is not null)
             throw new InvalidOperationException("Command registry is already sealed");
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        if (opcode >= CmdPacketType.END)
-            throw new ArgumentOutOfRangeException(nameof(opcode));
         if (!Enum.IsDefined(minimumState)) throw new ArgumentOutOfRangeException(nameof(minimumState));
-        ushort value = (ushort)opcode;
         if (registrations.TryGetValue(value, out var previous))
-            throw new InvalidOperationException($"Duplicate command {opcode} ({value}): {previous.Source} / {source}");
+            throw new InvalidOperationException($"Duplicate command {(CmdPacketType)value} ({value}): {previous.Source} / {source}");
         registrations.Add(value, new(source, handler, minimumState, sharedGate));
     }
 

@@ -173,6 +173,18 @@ internal static class FiendwarGuideTcpTests
                 "引导直接16先发27再加载，已有15场景不重开");
             var info = entered.Single(row => row is { Kind: 0, Opcode: 28 }).Body;
             var map = entered.Single(row => row is { Kind: 0, Opcode: 29 }).Body;
+            var ai = entered.SingleOrDefault(row => row is { Kind: 0, Opcode: 32752 })?.Body;
+            peer.Send(DfoServer.Network.Parsers.FiendwarCounterRequests.Opcode, Build(writer =>
+            {
+                writer.Write(DfoServer.Network.Parsers.FiendwarCounterRequests.Magic);
+                writer.Write(ai is null ? 1u : U32(ai, 4)); writer.Write((uint)dungeon);
+                writer.Write(ai is null ? 1u : U32(ai, 12)); writer.Write(ai is null ? 1u : U32(ai, 16));
+                writer.Write((uint)(map[0] | map[1] << 8)); writer.Write(1u);
+                writer.Write(1u); writer.Write(107013178u); writer.Write(1u);
+            })); Read();
+            That(fixture.Query("SELECT count(*) FROM character_fiendwar_counter_stream WHERE character_id=$p0", peer.Id) is [[0L]] &&
+                fixture.Query("SELECT count(*) FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7006", peer.Id) is [[0L]],
+                "官方引导的破招报告不进入团队成就或去重流水");
             var definition = guide.EntryCatalog!.Find(dungeon)!;
             That(info[7] == (definition.Mazes.Count == 1 ? 0 : route), "引导固定遭遇选择本路线原迷宫");
             var path = AntonTcpProbe.Route(guide.EntryCatalog, dungeon, info[7], map[0], map[1], info[8], info[9]);

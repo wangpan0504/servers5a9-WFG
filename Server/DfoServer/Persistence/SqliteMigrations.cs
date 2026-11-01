@@ -325,6 +325,8 @@ internal static class SqliteMigrations
         new(176, "GM同账号婚姻关系兼容", MarriageSameAccountSchema.Upgrade),
         new(177, "角色礼遇特权期限与领取账本", (db, tx) => Execute(db, tx,
             PrivilegeServiceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(178, "漩涡原生破招流去重水位", (db, tx) => Execute(db, tx,
+            FiendwarCounterSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2444,6 +2446,7 @@ internal static class SqliteMigrations
             ("account_fiendwar_guides",RaidLifecycleSchema.FiendwarGuideBindings),
             ("character_fiendwar_recovery",FiendwarRecoverySchema.Definition),
             ("character_fiendwar_title_facts",FiendwarTitleFactsSchema.Definition),
+            ("character_fiendwar_counter_stream",FiendwarCounterSchema.Definition),
             ("account_material_balances",AccountMaterialSchema.Balances),
             ("account_material_audit",AccountMaterialSchema.Audit),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
