@@ -13,6 +13,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.SYNC_ITEM_SPACE, SynchronizeItemSpaceAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.DECREASE_DURABILITY, DecreaseDurabilityAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.MOVE_ITEMSPACE, MoveAsync, nameof(InventoryHandler));
         if (knightShields is not null)

@@ -13,6 +13,28 @@ internal static class InventoryProjectionTests
     public static void Run()
     {
         int start = TestCheck.Count;
+        foreach (byte selector in new byte[] { 0, 1, 15, 128, 255 })
+            TestCheck.That(Network.Parsers.Inventory.InventoryRequests.SynchronizeItemSpace([selector]) == selector,
+                "同步请求保留原选择字节");
+        foreach (byte[] malformed in new byte[][] { [], [255, 0] })
+        {
+            bool refused = false;
+            try { Network.Parsers.Inventory.InventoryRequests.SynchronizeItemSpace(malformed); }
+            catch (InvalidDataException) { refused = true; }
+            TestCheck.That(refused, "同步严格拒绝缺字节或额外正文");
+        }
+        var syncInventory = new InventorySnapshot([
+            new(1, new(InventoryListType.Equipment, 12), new(18400, ItemKind.Equipment, 1)),
+            new(2, new(InventoryListType.Equipment, 0), new(100, ItemKind.Avatar, 2)) { Avatar = new() },
+            new(3, new(InventoryListType.Main, 9), new(50000, ItemKind.Material, 1))]);
+        byte[] equipment = InventoryPackets.SpecialFull(syncInventory, InventoryListType.Equipment, 0);
+        TestCheck.That(equipment[0] == 3 && BinaryPrimitives.ReadUInt16LittleEndian(equipment.AsSpan(1)) == 2 &&
+            equipment.Length == 3 + 2 * 123 + 42 &&
+            BinaryPrimitives.ReadInt16LittleEndian(equipment.AsSpan(3)) == 0 &&
+            BinaryPrimitives.ReadInt16LittleEndian(equipment.AsSpan(3 + 123 + 42)) == 12,
+            "穿戴全量无扩展头，仅当前两件且有序，真实时装保留RAW30和RAW4");
+        TestCheck.That(InventoryPackets.SpecialFull(InventorySnapshot.Empty, InventoryListType.Equipment).SequenceEqual(new byte[] { 3, 0, 0 }),
+            "空穿戴仍发送零计数以清理客户端幽灵装备");
         var random = new Random(1702);
         foreach (ushort expansion in new ushort[] { 0, 8, 16, 24 })
             for (int sample = 0; sample < 30; sample++)

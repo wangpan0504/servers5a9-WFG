@@ -7,7 +7,7 @@ internal static class InventoryPackets
 {
     public static byte[] SpecialFull(InventorySnapshot inventory, InventoryListType list, long? utcSeconds = null)
     {
-        if (list is not (InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman))
+        if (list is not (InventoryListType.Equipment or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman))
             throw new ArgumentOutOfRangeException(nameof(list));
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);

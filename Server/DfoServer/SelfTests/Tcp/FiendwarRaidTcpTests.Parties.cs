@@ -165,6 +165,7 @@ internal static partial class FiendwarRaidTcpTests
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
             foreach (var peer in peers) VerifyCubeContractInRaid(fixture, peer);
+            foreach (var peer in peers) InventoryTcpTests.VerifyItemSpaceSynchronization(fixture, peer);
             clock.AdvanceWithoutCallbacks(3);
             SupportRequest(leader, [0], 0);
             // 实际移动/快照不会重播已写支援；另一分队也必须只收到一次。

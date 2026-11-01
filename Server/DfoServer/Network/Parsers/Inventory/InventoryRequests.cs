@@ -7,6 +7,13 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class InventoryRequests
 {
+    public static byte SynchronizeItemSpace(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 1)
+            throw new InvalidDataException("库存同步请求必须是一个字节");
+        return body[0];
+    }
+
     public static byte DurabilityLoss(ReadOnlySpan<byte> body)
     {
         if (body.Length != 1)
