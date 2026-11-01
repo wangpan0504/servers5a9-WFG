@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
@@ -57,11 +58,14 @@ internal static class AvatarCapacityTcpTests
         fixture.Sql("DROP TRIGGER fail_avatar_purchase");
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Send(64, Purchase());
+            peer.Select();
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
+            peer.Send(64, Purchase());
             That(peer.Expect(1, 64).Body[0] == 1, "装扮扩展购买成功");
             var avatar = peer.Expect(0, 13).Body;
             That(avatar[0] == 1 && U16(avatar, 1) == 112, "提交后立即同步扩展112即总217格");
             That(U32(peer.Expect(0, 53).Body, 1) == 1_000_000 - product.CeraPrice, "按资源价格扣款");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier(); string committed = State();
             peer.Send(64, Purchase()); peer.Expect(1, 64, [0, 0, 0]); peer.Barrier();
             That(State() == committed, "重复阶段不扣款也不发无效券");

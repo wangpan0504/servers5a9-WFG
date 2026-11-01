@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -42,11 +43,15 @@ internal static class GrowthCubeContractTcpTests
             That(Contracts().Count==0,"上号不扫描或消费遗留背包契约");
             peer.Send(535,[1,4]);peer.Expect(1,535,[0,1,0]);peer.Barrier();
             That(fixture.Query("SELECT * FROM cube_premium").Length==0,"未开通契约不能写选择或假装生效");
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(growth));
             Buy(peer,growth.CommodityId);peer.Expect(1,64);peer.Expect(0,53);
+            MileageAfter(peer, fixture, mileage);
             That(ReadPremium(peer.Expect(0,1760).Body).ContainsKey(84),"购买ACK和余额后1760开通成长84，不发实体14");
             Player(peer); Updated(peer, 84);
             growthExpiry=Contracts()[84];
+            mileage = MileageBefore(fixture, ExpectedCashMileage(cube));
             Buy(peer,cube.CommodityId);peer.Expect(1,64);peer.Expect(0,53);
+            MileageAfter(peer, fixture, mileage);
             var rights=ReadPremium(peer.Expect(0,1760).Body);
             That(rights.ContainsKey(84) && rights.ContainsKey(97),"统一目录保留成长并激活晶体，不覆盖其他服务");
             peer.Expect(0,901,[0,255]); Updated(peer, 97);peer.Barrier();cubeExpiry=Contracts()[97];
@@ -54,7 +59,9 @@ internal static class GrowthCubeContractTcpTests
             peer.Send(535,[1,4]);peer.Expect(1,535,[1,1,4]);peer.Expect(0,901,[1,4]);Player(peer);peer.Barrier();
             That(fixture.Query("SELECT selected,cube_type FROM cube_premium") is [[long selected,long type]] && selected==1 && type==4,
                 "本版535保存selected/cube_type并901回放，选择不扣晶块");
+            mileage = MileageBefore(fixture, ExpectedCashMileage(cube));
             Buy(peer,cube.CommodityId);peer.Expect(1,64);peer.Expect(0,53);
+            MileageAfter(peer, fixture, mileage);
             That(ReadPremium(peer.Expect(0,1760).Body).ContainsKey(97), "已有晶块选择的续期仍更新统一资格");
             Updated(peer,97);peer.Barrier();cubeExpiry=Contracts()[97];
             That(fixture.Query("SELECT selected,cube_type FROM cube_premium") is [[1L,4L]],

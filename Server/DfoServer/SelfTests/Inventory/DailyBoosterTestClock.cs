@@ -39,6 +39,21 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
             await signal.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
+    // 推进虚拟时间前确认指定活动边界已注册，避免把尚未创建的延时永远留在未来。
+    public async Task WaitForOneShotTimerAsync(DateTimeOffset dueAt)
+    {
+        long due = (dueAt - origin).Ticks;
+        while (true)
+        {
+            Task signal;
+            lock (sync)
+            {
+                if (timers.Any(row => row.Period == 0 && row.Due == due)) return;
+                signal = changed.Task;
+            }
+            await signal.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
     public void Advance(TimeSpan amount)
     {
         ClockTimer[] due;

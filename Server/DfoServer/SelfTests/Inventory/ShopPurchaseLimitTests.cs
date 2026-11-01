@@ -54,8 +54,11 @@ internal static partial class ShopPurchaseLimitTests
         That(packet.Length == 33 && packet[0] == 1 && I32(1) == 1 && I32(5) == 10309042 && I32(9) == 2 &&
             I32(13) == 1 && I32(17) == 10309042 && I32(21) == 2 && I32(25) == 0 && I32(29) == 0,
             "715新旧限购分别写两套原生缓存并保留四组完整包体");
-        foreach (string declaration in new[] { "", "`account` `weekly` 0", "`account` `weekly` -1", "`account` `weekly` 2147483648",
-            "`account` `weekly` 1 2", "`unknown` `weekly` 1", "`account` `yearly` 1", "`account` `weekly` 1 junk" })
+        foreach (string declaration in new[] { "`account` `weekly` 0", "`account` `weekly` -1", "`account` `weekly` 2147483648",
+            "`account` `weekly` 1 2", "`unknown` `weekly` 1", "`account` `yearly` 1", "`account` `weekly` 1 junk",
+            "`account` `agitwarseason` 5", "`unknown` `agitwarseason` 5", "`character` `agitwarseason` 0",
+            "`character` `agitwarseason` -1", "`character` `agitwarseason` 2147483648",
+            "`character` `agitwarseason` 5 6", "`character` `agitwarseason` 5 junk" })
         {
             bool rejected = false;
             try { _ = Parse(declaration); } catch (InvalidDataException) { rejected = true; }
@@ -69,6 +72,31 @@ internal static partial class ShopPurchaseLimitTests
         try { _ = ItemShopPrice.Parse(new("[purchase limit]\n`account` `weekly` 0\n[purchase limit]\n`account` `weekly` 6"), false, 0); }
         catch (InvalidDataException) { malformedRejected = true; }
         That(malformedRejected, "前一声明畸形时不能借后续完整声明忽略错误");
+        foreach (string declaration in new[] { "", "  ", "`character` `agitwarseason` 5" })
+        {
+            var unresolved = Parse(declaration);
+            That(unresolved.PeriodicLimit is null && unresolved.UnresolvedPurchaseLimits.Length == 1 &&
+                unresolved.UnresolvedPurchaseLimits.Single().Trim() == declaration.Trim(),
+                "已见空或角色公会战赛季声明保留原文，不伪装成支持周期或无限购买");
+            That(!ShopPurchaseLimitService.TryPlan(two, unresolved with { Limit = new(true, 4, true) }, 626, 10309042, 1,
+                beforeReset, out var unchanged, out var unresolvedDeadline) && ReferenceEquals(unchanged, two) && unresolvedDeadline is null,
+                "存在未解释声明时先拒绝购买，不改变旧计数、原快照或提交截止");
+            var repeated = ItemShopPrice.Parse(new("[purchase limit]\n" + declaration +
+                "\n[/purchase limit]\n[purchase limit]\n`account` `weekly` 6\n[/purchase limit]"), false, 0);
+            That(repeated.PeriodicLimit is { Count: 6, Period: ItemPurchasePeriod.Weekly } &&
+                repeated.UnresolvedPurchaseLimits.Length == 1 &&
+                !ShopPurchaseLimitService.TryPlan(two, repeated, 626, 10309042, 1, beforeReset, out var repeatedAfter, out var repeatedDeadline) &&
+                ReferenceEquals(repeatedAfter, two) && repeatedDeadline is null,
+                "后续合法声明保留末次值但不能掩盖先前未解释声明或放行购买");
+        }
+        var both = ItemShopPrice.Parse(new("[purchase limit]\n`account` `weekly` 6\n[/purchase limit]\n" +
+            "[purchase limit]\n`character` `agitwarseason` 5\n[/purchase limit]\n[purchase limit]\n[/purchase limit]"), false, 0);
+        That(both.PeriodicLimit is { Count: 6 } && both.UnresolvedPurchaseLimits.Length == 2 &&
+            both.UnresolvedPurchaseLimits[0].Trim() == "`character` `agitwarseason` 5" &&
+            string.IsNullOrWhiteSpace(both.UnresolvedPurchaseLimits[1]) &&
+            !ShopPurchaseLimitService.TryPlan(two, both, 626, 10309042, 1, beforeReset, out var bothAfter, out var bothDeadline) &&
+            ReferenceEquals(bothAfter, two) && bothDeadline is null,
+            "合法声明后的赛季及空声明按原顺序共同保留，不能静默覆盖成可购买");
         That(ItemShopPrice.Parse(new("[price]\n10"), false, 0).PeriodicLimit is null,
             "没有周期声明的普通商品不新增限购");
     }

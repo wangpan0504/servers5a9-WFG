@@ -64,11 +64,12 @@ internal static class SpecialAreaChannelTests
         var arena = new Location(119, 1, 270, 148);
         That(ChannelAreaLanding.IsChannelBoundTown(towns, 119), "119 混沌之村暴风雨是频道专属城镇");
         That(ChannelAreaLanding.ClientKeepsTownSnapshot(towns, rank, arena) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, arena) &&
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, free, arena) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, arena) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, arena) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, arena) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, free, new(38, 0, 1, 1)),
-            "勇士对决与团队页签类型互换保留快照；与普通/魔界大战互换不保留");
+            "勇士对决自由与排位之间保留快照；漩涡团队、普通及魔界大战均不能继承119快照");
         That(ChannelPackets.LoginChannelType(free) == 0 && ChannelPackets.LoginChannelType(rank) == 0,
             "勇士对决 ACK LOGIN 第 3 字节保持 0（未证客户端读取）");
         Console.WriteLine($"PASS {Count - before} 特殊区域页频道断言（非实机）");

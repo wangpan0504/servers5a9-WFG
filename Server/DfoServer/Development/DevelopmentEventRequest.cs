@@ -6,7 +6,7 @@ namespace DfoServer.Development;
 internal sealed record DevelopmentEventRequest(string Operation, ushort EventId, DateTimeOffset Start = default,
     DateTimeOffset End = default)
 {
-    public const string Usage = "event status|on|off|auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601>；登记64黄金卡牌双倍奖励、266积分商城和2532诺兰常驻状态；schedule支持64和266，时间须带Z或+08:00等时区；2532未配置或auto默认显示，266未配置默认关闭。";
+    public const string Usage = "event status|on|off|auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601>；登记64黄金卡牌双倍奖励、266积分商城和2532诺兰常驻状态；schedule支持64和266，时间须带Z或+08:00等时区；2532未配置或auto默认显示，266无强制状态且未配置时间表时默认常驻，显式off和已有时间表仍生效。";
 
     public static DevelopmentEventRequest Parse(string[] tokens)
     {

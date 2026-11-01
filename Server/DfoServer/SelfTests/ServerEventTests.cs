@@ -22,6 +22,37 @@ internal static class ServerEventTests
             var now = clock.GetUtcNow();
             var store = new ServerEventRepository(path);
             var events = new ServerEventService(store, clock);
+            string mileagePath = Path.Combine(root, "mileage-permanent.db");
+            var mileageClock = new ConsumableUseSessionTests.FakeClock();
+            var mileageStore = new ServerEventRepository(mileagePath);
+            var mileageEvents = new ServerEventService(mileageStore, mileageClock);
+            var permanent = mileageEvents.Read(ServerEventService.MileageShopId);
+            That(permanent is { Active: true, Schedule: { Revision: 0, OverrideActive: null, StartsAt: null, EndsAt: null } } &&
+                permanent.Schedule.IsActive(mileageClock.GetUtcNow()), "积分商城无配置默认常驻，服务与库存事务使用同一有效状态");
+            var permanentGuard = new DfoServer.Game.Inventory.Models.InventoryEventPrecondition(permanent.Schedule, mileageClock);
+            mileageClock.Advance(TimeSpan.FromDays(800));
+            That(mileageEvents.Read(266) == permanent && permanentGuard.Matches(mileageStore.Read(266)),
+                "默认积分商城跨日跨年仍有效，不追加时段或活动版本");
+            var mileageOff = mileageEvents.Override(266, false);
+            That(!mileageOff.Active && !permanentGuard.Matches(mileageOff.Schedule) &&
+                new ServerEventService(new ServerEventRepository(mileagePath), mileageClock).Read(266) == mileageOff,
+                "显式关闭持久恢复且旧活动前置不能因默认常驻绕过版本和off");
+            var mileageAuto = mileageEvents.Override(266, null);
+            That(mileageAuto.Active && new ServerEventService(new ServerEventRepository(mileagePath), mileageClock).Read(266) == mileageAuto,
+                "无时间表的auto恢复积分商城默认常驻并保存原版本");
+            var mileageNow = mileageClock.GetUtcNow();
+            mileageEvents.Schedule(266, mileageNow.AddSeconds(1), mileageNow.AddSeconds(3));
+            That(!mileageEvents.Read(266).Active, "显式积分时间表尚未开始时保持关闭");
+            mileageClock.Advance(TimeSpan.FromSeconds(1));
+            That(mileageEvents.Read(266).Active, "显式积分时间表开始端点有效");
+            var scheduledGuard = new DfoServer.Game.Inventory.Models.InventoryEventPrecondition(mileageStore.Read(266), mileageClock);
+            mileageClock.Advance(TimeSpan.FromSeconds(2));
+            That(!mileageEvents.Read(266).Active && !scheduledGuard.Matches(mileageStore.Read(266)),
+                "显式时间表结束端点关闭，事务前置不恢复默认常驻");
+            That(mileageEvents.Override(266, true).Active && !mileageEvents.Override(266, false).Active &&
+                !mileageEvents.Override(266, null).Active, "显式on和off覆盖时段，auto保留已结束的显式时段");
+            That(!mileageEvents.Read(64).Active && mileageEvents.Read(ServerEventService.NolanVisibilityId).Active,
+                "积分默认策略不改变黄金牌默认关闭或诺兰默认可见");
             That(events.Read(64) is { Active: false, Schedule.Revision: 0 }, "未配置活动保持关闭，不将PVF2011文案当作时间表");
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
             db.Open();

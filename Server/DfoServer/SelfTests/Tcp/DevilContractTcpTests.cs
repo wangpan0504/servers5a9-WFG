@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -82,10 +83,12 @@ internal static class DevilContractTcpTests
             foreach (var (commodity, slot, price) in new[] { (100882, 7, 200),
                 (100542, 0, 200), (100541, 3, 250), (100537, 4, 200), (100542, 0, 200) })
             {
+                var mileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(commodity)!));
                 peer.Send(64, Purchase(commodity));
                 That(peer.Expect(1, 64).Body[0] == 1, "独立魔王子服务购买成功");
                 balance -= price;
                 That(U32(peer.Expect(0, 53).Body, 1) == balance, "按PVF价格扣券");
+                MileageAfter(peer, fixture, mileage);
                 var overview = peer.Expect(0, 1760).Body;
                 That(overview.Length == 10 && overview[0] == 1 && overview[1] == 58,
                     "原生概览只发送58，不把内部580系列账本键发给客户端");
@@ -108,10 +111,12 @@ internal static class DevilContractTcpTests
             That(peer.Expect(1, 905).Body[13 + 3 * 9] == 0, "城镇上报保持服务器实际次数");
             That(State() == before, "伪造快照不写资产或计数");
             // 真实TCP购买套餐，八项期限、四种道具及扣款必须同次提交。
+            var packageMileage = MileageBefore(fixture, ExpectedCashMileage(r.CashShop.Product(103156)!));
             peer.Send(64, Purchase(103156));
             That(peer.Expect(1, 64).Body[0] == 1, "套餐购买开放");
             peer.Expect(0, 14);
             That(U32(peer.Expect(0, 53).Body, 1) == balance - 3880, "套餐扣款采用实际PVF价格");
+            MileageAfter(peer, fixture, packageMileage);
             peer.Expect(0, 1760);
             var all = peer.Expect(1, 905).Body;
             That(Enumerable.Range(0, 8).All(slot => U32(all, 9 + slot * 9) > DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "套餐激活八项期限");

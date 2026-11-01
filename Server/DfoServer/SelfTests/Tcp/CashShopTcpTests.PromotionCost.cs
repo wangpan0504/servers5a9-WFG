@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Diagnostics;
 using System.Text.Json;
 using static DfoServer.Testing.TcpPeer;
@@ -10,7 +11,7 @@ internal static partial class CashShopTcpTests
     sealed record PromotionLatency(int Index, double PlannedMilliseconds, double ActualMilliseconds, double DebtMilliseconds);
 
     // 单轮有界固定计划：预热2分钟，正式5分钟；每10秒一辆64行满包车，另账号每秒2次真实背包移动。
-    static async Task<int> PromotionCostAsync(TcpTestFixture fixture, TcpPeer buyer)
+    static async Task<int> PromotionCostAsync(TcpTestFixture fixture, TcpPeer buyer, DfoServer.GameWorld.Items.CashShopCatalog shop)
     {
         That(!System.Diagnostics.Debugger.IsAttached, "成本测量不挂调试器");
         string output = Environment.GetEnvironmentVariable("DFO_PROMOTION_COST_OUTPUT") ??
@@ -76,6 +77,7 @@ internal static partial class CashShopTcpTests
                 attemptedPurchases++;
                 if (fault == "buyer" && index == 2) buyer.Dispose();
                 double actual = Elapsed();
+                var mileage = MileageBefore(fixture, 63 * ExpectedCashMileage(shop.Product(105681)!) + ExpectedCashMileage(shop.Product(102925)!));
                 buyer.Send(64, cart);
                 double followActual = Elapsed();
                 attemptedFollowing++;
@@ -85,6 +87,7 @@ internal static partial class CashShopTcpTests
                 var packet = buyer.Read();
                 if (packet is { Kind: 0, Opcode: 14 }) packet = buyer.Read();
                 That(packet is { Kind: 0, Opcode: 53 }, "成本轮保留真实余额投影");
+                MileageAfter(buyer, fixture, mileage);
                 buyer.Expect(0, 99, [1, 0]);
                 double bought = Elapsed();
                 stage = "following";

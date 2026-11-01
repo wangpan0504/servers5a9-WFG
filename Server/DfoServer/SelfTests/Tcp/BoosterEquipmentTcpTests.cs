@@ -18,7 +18,9 @@ internal static class BoosterEquipmentTcpTests
     {
         var itemResources = resources.ItemResources;
         Inventory.BoosterEquipmentTests.Run(resources.Towns, resources.Characters, itemResources);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"), gm: true, resources: resources);
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        clock.Advance(DateTimeOffset.UtcNow - clock.GetUtcNow());
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-equipment"), gm: true, resources: resources, clock: clock);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -38,7 +40,7 @@ internal static class BoosterEquipmentTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            long earliestExpiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
+            long earliestExpiry = fixture.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
             SendSelect(peer, 3, [401000005]);
             ExpectAck(peer, 10005273, 3, [(401000005, 1)]);
             byte[] delta = peer.Expect(0, 14).Body;
@@ -47,7 +49,7 @@ internal static class BoosterEquipmentTcpTests
             byte[] weapon = EquipmentEntry(delta, 9);
             That(weapon[10] == 7 && weapon[87] == 3 && weapon[18] == 0 && U32(weapon, 14) == 0 &&
                 U16(weapon, 11) == itemResources.Items.Get(401000005).Durability &&
-                U32(weapon, 56) >= earliestExpiry && U32(weapon, 56) <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400,
+                U32(weapon, 56) >= earliestExpiry && U32(weapon, 56) <= fixture.UtcNow.ToUnixTimeSeconds() + 60 * 86400,
                 "fixed reinforcement and refinement occupy the verified raw fields without changing template or expiry");
             committedEntries.Add(weapon);
             SendSelect(peer, 4, [16000], count: 2);
@@ -57,6 +59,8 @@ internal static class BoosterEquipmentTcpTests
             CheckRandom(delta, 10);
             CheckRandom(delta, 11);
             peer.Barrier();
+            // 正常资源冷却到期后再进入晚期SQL故障，避免资格拒绝挡住事务覆盖。
+            clock.Advance(TimeSpan.FromMilliseconds(itemResources.Boosters.Get(10014751).CoolTime));
             string before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_equipment_reward BEFORE INSERT ON character_inventory_slots WHEN NEW.slot_index=13 BEGIN SELECT RAISE(ABORT,'equipment reward rollback'); END");
             SendSelect(peer, 5, [16000], count: 2);
@@ -77,6 +81,7 @@ internal static class BoosterEquipmentTcpTests
             Entry(delta, 5, -1, 0);
             CheckRandom(delta, 12);
             CheckRandom(delta, 13);
+            clock.Advance(TimeSpan.FromMilliseconds(itemResources.Boosters.Get(10014751).CoolTime));
             string before = Snapshot();
             SendSelect(peer, 5, [16000], count: 2);
             peer.Expect(1, 160, [0, 19, 0]);
@@ -100,12 +105,13 @@ internal static class BoosterEquipmentTcpTests
             SetExpirationDebug(fixture, false);
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "cash-shop-usable-period off", out relativeReply) &&
                 relativeReply == "OK {\"ignoreUsablePeriod\":false}", "独立关闭礼包相对期限忽略");
-            long earliestExpiry = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
+            clock.Advance(TimeSpan.FromMilliseconds(itemResources.Boosters.Get(10005273).CoolTime));
+            long earliestExpiry = fixture.UtcNow.ToUnixTimeSeconds() + 60 * 86400;
             SendSelect(peer, 7, [401000005]);
             ExpectAck(peer, 10005273, 7, [(401000005, 1)]);
             byte[] normalDelta = peer.Expect(0, 14).Body;
             uint normalExpiry = U32(EquipmentEntry(normalDelta, 15), 56);
-            That(normalExpiry >= earliestExpiry && normalExpiry <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60 * 86400,
+            That(normalExpiry >= earliestExpiry && normalExpiry <= fixture.UtcNow.ToUnixTimeSeconds() + 60 * 86400,
                 "GM关闭后，下一次开箱恢复原60天期限");
             peer.Barrier();
         }
@@ -135,6 +141,7 @@ internal static class BoosterEquipmentTcpTests
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_consumable_states ORDER BY kind,cool_group")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);

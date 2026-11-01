@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
@@ -41,11 +42,14 @@ internal static partial class CashShopTcpTests
             peer.Select();
             catalog = MakeCatalog(true);
             // 从未合法查询的连接，成功购买也没有changed；严格屏障不会跳过意外机器通知。
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(items.CashShop.Product((int)commodity)!));
             peer.Send(64, PromotionPageBuyBody(commodity));
             That(U32(peer.Expect(1, 64).Body, 6) == commodity, "未查询页面的真实购买保原商品成功ACK");
             peer.Expect(0, 14);
             That(U32(peer.Expect(0, 53).Body, 1) == 100000 - price, "未查询页面的真实购买只扣本车价格");
+            MileageAfter(peer, fixture, mileage);
             AssertPromotionNativeRefresh(peer.Expect(0, 108), 1, false, peer.ExpectedOpenEvents);
+            MileageLimitsAfterRefresh(peer, fixture);
             peer.Barrier();
 
             peer.Send(17, PromotionPageChatBody(PromotionPageNonceA));
@@ -58,15 +62,18 @@ internal static partial class CashShopTcpTests
             peer.Barrier();
 
             clock.Advance(TimeSpan.FromSeconds(12));
+            mileage = MileageBefore(fixture, ExpectedCashMileage(items.CashShop.Product((int)commodity)!));
             peer.Send(64, PromotionPageBuyBody(commodity));
             That(U32(peer.Expect(1, 64).Body, 6) == commodity, "页面view超过10秒后真实购买仍先原成功ACK");
             peer.Expect(0, 14);
             That(U32(peer.Expect(0, 53).Body, 1) == 100000 - 2 * price, "第二真实购买按原价格扣款");
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 99, [1, 0]);
             var changed = PromotionPageFields(peer.Expect(0, 1709).Body);
             That(changed.SequenceEqual(new[] { "1", "changed", PromotionPageNonceA, first[3], first[4], "2" }),
                 "ACK/库存/邮箱发布末端才发changed，长期view保原nonce/catalog并只给新revision");
             AssertPromotionNativeRefresh(peer.Expect(0, 108), 2, false, peer.ExpectedOpenEvents);
+            MileageLimitsAfterRefresh(peer, fixture);
             peer.Barrier();
             That(fixture.Query("SELECT count,revision FROM cash_shop_promotion_progress") is [[2L, 2L]] &&
                 fixture.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[2L]] &&

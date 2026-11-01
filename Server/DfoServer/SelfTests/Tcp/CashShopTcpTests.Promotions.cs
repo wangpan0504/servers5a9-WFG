@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -51,11 +52,13 @@ internal static partial class CashShopTcpTests
             FormalDungeonTcpTests.EntryTown(peer);
             FormalDungeonTcpTests.Enter(peer);
             FormalDungeonTcpTests.Load(peer);
+            var mileage = MileageBefore(fixture, 2 * ExpectedCashMileage(items.CashShop.Product(100004)!));
             peer.Send(64, request);
             for (int row = 0; row < 2; row++)
                 That(U32(peer.Expect(1, 64).Body, 6) == 100004, "重复商品行分别保持原成功ACK");
             peer.Expect(0, 14);
             That(U32(peer.Expect(0, 53).Body, 1) == 1800, "促销沿原库存和钱包投影顺序扣两行点券");
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 99, [1, 0]);
             peer.Barrier();
             That(fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[long count]] && count == 2 &&
@@ -102,8 +105,10 @@ internal static partial class CashShopTcpTests
             peer.Select();
             That(MailboxTcpTests.ReadList(peer.Mailbox.Single()).Summaries is [var gift] && gift.MailId == mailId &&
                 fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[2L]], "服务重建不丢原赠礼或清零累计");
+            var mileage = MileageBefore(fixture, 2 * ExpectedCashMileage(items.CashShop.Product(100004)!));
             peer.Send(64, request);
             peer.Expect(1, 64); peer.Expect(1, 64); peer.Expect(0, 14); peer.Expect(0, 53);
+            MileageAfter(peer, fixture, mileage);
             peer.Expect(0, 99, [1, 0]);
             peer.Barrier();
             That(fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[4L]] &&

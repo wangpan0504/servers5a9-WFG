@@ -98,7 +98,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] RaidWeeklyClearInfo { get; private set; } = [];
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
-    public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
+    public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
     internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }

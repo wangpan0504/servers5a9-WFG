@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -57,6 +58,7 @@ internal static partial class CashShopTcpTests
             var source = before.Inventory.Find(new(InventoryListType.Main, 65))!;
             That(source is { Uid: > 0, Core.ItemId: 490703365, Core.Count: 1 } && source.ExpireTime > DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 "晚SQL失败重登恢复同一有效实体券");
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(commodity)!));
             var started = DateTimeOffset.UtcNow;
             peer.Send(64, CouponBuy(490703365));
             Bought(peer, commodity);
@@ -98,6 +100,7 @@ internal static partial class CashShopTcpTests
             { writer.Write((byte)1); writer.Write(80100); writer.Write(0); writer.Write(0); }));
             That(saved.Inventory.AccountWallet.Get(DfoServer.Game.Currency.CurrencyKind.Cera) == 80100,
                 "ACK后完整同步清源和新奖励行，随后按19900原价同步账号余额80100");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
         }
         using (var peer = Open(fixture))

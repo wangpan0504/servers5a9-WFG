@@ -21,6 +21,7 @@ internal static class CargoTests
 {
     static void VerifyAcquisition(TownCatalog towns, ItemResources resources)
     {
+        RunMileagePersonalCargo(towns, resources);
         var now = DateTimeOffset.UtcNow;
         var role = new Character(1, 0, "CargoAcquire", 0, towns.InitialReturn, null)
             { Level = 60, Inventory = new([]) { AccountCargo = new(Capacity: 8) } };
@@ -89,6 +90,70 @@ internal static class CargoTests
         That(bought.Accepted && bought.Plan!.After.CargoCapacity == 40 && bought.Plan.After.Items.IsEmpty &&
             bought.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == 990,
             "主商品24格与附赠40格连续生效，最终合并不覆盖附赠扩容");
+    }
+
+    public static void RunMileagePersonalCargo(TownCatalog towns, ItemResources resources)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var leaf = resources.Items.Get(490705297);
+        That(leaf.Kind == GameWorld.Items.ItemKind.Consumable && leaf.StackableType == "[etc] 0" &&
+            leaf.PersonalCargoUpgradeTarget == 120 && leaf.HasAcquisitionEffect && leaf.IsPremiumService,
+            "积分金库券终叶保持原类型并识别具名120格服务");
+        That(new[] { 490705277, 490705285 }.All(id => resources.Items.Get(id).PersonalCargoUpgradeTarget == 0 &&
+            !resources.Items.Get(id).HasAcquisitionEffect), "两层原包装不提前识别为扩容服务");
+        var source = new Character(1, 0, "MileCargo", 0, towns.Room, towns.InitialReturn)
+        {
+            Level = 95,
+            Inventory = new([]) { CargoCapacity = 56, Gold = 9876,
+                AccountWallet = InventorySnapshot.Empty.AccountWallet.Set(CurrencyKind.Cera, 1234) }
+        };
+        var items = new InventoryService(resources.Items, resources.GoldLimits, resources.EpicPieces);
+        var boosters = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        var cargo = new InventoryCargoService(resources.Items, resources.Cargo, resources.GoldLimits);
+        Character Apply(Character character, InventoryResult result)
+        {
+            That(result.Accepted && ReferenceEquals(result.Plan!.Before, character.Inventory), "积分金库券沿正常快照规划");
+            return character with { Inventory = result.Plan!.After };
+        }
+        short Slot(Character character, int id) => character.Inventory.Items.Single(item => item.Core.ItemId == id).Position.Index;
+        var first = Apply(source, items.Grant(source, [new(490705277, 1)]));
+        var second = Apply(first, boosters.Open(first, new(Slot(first, 490705277), 1), out _, now));
+        That(second.Inventory.CargoCapacity == 56 && second.Inventory.Items.Single().Core is { ItemId: 490705285, Count: 1 },
+            "第一层只消费277并发出原285包装");
+        short used = Slot(second, 490705285);
+        var upgraded = Apply(second, boosters.Open(second, new(used, 1), out _, now));
+        That(upgraded.Inventory.CargoCapacity == 120 && upgraded.Inventory.Items.IsEmpty &&
+            upgraded.Inventory.Gold == source.Inventory.Gold && upgraded.Inventory.AccountWallet.Same(source.Inventory.AccountWallet) &&
+            upgraded.Inventory.AccountCargo == source.Inventory.AccountCargo && source.Inventory.CargoCapacity == 56 && source.Inventory.Items.IsEmpty,
+            "第二层单奖终叶即时扩容120格，不留STK、不二次收费或改账号金库");
+        That(!boosters.Open(upgraded, new(used, 1), out _, now).Accepted, "重复原槽开包不能再扩容");
+        foreach (ushort capacity in new ushort[] { 120, 136, 264 })
+        {
+            var holder = source with { Inventory = source.Inventory with { CargoCapacity = capacity } };
+            holder = Apply(holder, items.Grant(holder, [new(490705285, 1)]));
+            string before = JsonSerializer.Serialize(holder);
+            var rejected = boosters.Open(holder, new(Slot(holder, 490705285), 1), out _, now);
+            That(!rejected.Accepted && rejected.Plan is null && JsonSerializer.Serialize(holder) == before,
+                "已达或超过120格时整包拒绝并保留285 " + capacity);
+        }
+        var core = InventoryRewardGrantService.Create(leaf, utcNow: now);
+        var frozen = InventoryRewardGrantService.TryGrantCore(source, core, leaf, resources.EpicPieces, now);
+        var attached = new InventoryItem(9123, new(InventoryListType.Main, 65), core);
+        var mail = InventoryRewardGrantService.TryGrantItems(source, [attached], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(frozen.Accepted && mail.Accepted && frozen.Plan!.After.CargoCapacity == 120 && mail.Plan!.After.CargoCapacity == 120 &&
+            frozen.Plan.After.Items.IsEmpty && mail.Plan.After.Items.IsEmpty, "冻结核心与邮件实例复用同一120格获取效果");
+        That(!items.Grant(source, [new(490705297, 2)]).Accepted &&
+            !items.Grant(source with { Level = 0 }, [new(490705297, 1)]).Accepted &&
+            !InventoryRewardGrantService.TryGrantItems(source, [attached with { Core = core with { ExpireTime = 1 } }],
+                resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
+            "多张、等级不足和过期附件不吞券、不越过资格");
+        // 历史存量领域入口夹具；这不证明原生右键会发送408。
+        var old = attached with { Core = core with { Value = 2 } };
+        var legacy = source with { Inventory = source.Inventory with { Items = [old] } };
+        var redeemed = Apply(legacy, cargo.PersonalUpgrade(legacy, old.Position.Index));
+        That(redeemed.Inventory.CargoCapacity == 120 && redeemed.Inventory.Find(old.Position)?.Core.Count == 1 &&
+            !cargo.PersonalUpgrade(redeemed, old.Position.Index).Accepted,
+            "历史297沿已有408领域入口只消费一张，重复拒绝保留第二张");
     }
 
     public static void RunCore()
@@ -494,6 +559,22 @@ internal static class CargoTests
                 "Client u16 failure and upgrade tool slot");
             Reject(() => CargoRequests.Gold([1, 0, 0]), "truncated money request");
             Reject(() => CargoRequests.AccountUpgrade([0]), "nonempty account upgrade request");
+            var mileageBooster = new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
+            current = Commit(items.Grant(current, [new(490705277, 1)]));
+            short mileageSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 490705277).Position.Index;
+            current = Commit(mileageBooster.Open(current, new(mileageSlot, 1), out _));
+            mileageSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 490705285).Position.Index;
+            string beforeMileageFailure = Snapshot();
+            Sql("CREATE TRIGGER reject_mileage_cargo BEFORE INSERT ON cargo_audit_log BEGIN SELECT RAISE(ABORT,'fixture'); END");
+            Reject(() => Commit(mileageBooster.Open(current, new(mileageSlot, 1), out _)), "积分金库券扩容末端SQL失败");
+            Sql("DROP TRIGGER reject_mileage_cargo");
+            That(Snapshot() == beforeMileageFailure, "积分金库券失败保留原包装、全角色资产和审计");
+            var beforeMileage = current.Inventory;
+            current = Commit(mileageBooster.Open(current, new(mileageSlot, 1), out _));
+            That(current.Inventory.CargoCapacity == 120 && current.Inventory.Items.All(item => item.Core.ItemId is not (490705277 or 490705285 or 490705297)) &&
+                current.Inventory.AccountWallet.Same(beforeMileage.AccountWallet) && current.Inventory.Gold == beforeMileage.Gold &&
+                current.Inventory.AccountCargo == beforeMileage.AccountCargo, "积分金库券重新规划提交只升级个人容量并消费原包装");
+            That(!mileageBooster.Open(current, new(mileageSlot, 1), out _).Accepted, "积分金库券重复槽请求无二次提交");
             var restored = new CharacterRepository(path).List(owner).Single(role => role.Id == current.Id);
             That(JsonSerializer.Serialize(restored) == JsonSerializer.Serialize(current), "restart restores both owners and cargo state");
             That(Query("PRAGMA integrity_check") is "ok" && Query("SELECT count(*) FROM pragma_foreign_key_check") is 0L, "cargo foreign keys and integrity");

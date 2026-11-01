@@ -252,8 +252,11 @@ internal static class OtherverseAncientTests
         foreach (var row in rewardCatalog.Professions)
         {
             var card = rewardPolicy.Card(7167, (byte)row.Key.Job, (byte)row.Key.Grow, _ => 0, DateTimeOffset.UtcNow);
-            That(card is not null && row.Value.Set.Contains(card.ItemId) && !row.Value.Normal.Contains(card.ItemId),
-                "异界通关翻牌必出套装池，不回退裂魂散件");
+            if (row.Value.Set.IsEmpty)
+                That(card is null, "异界空套装池不生成翻牌装备，不回退裂魂散件");
+            else
+                That(card is not null && row.Value.Set.Contains(card.ItemId) && !row.Value.Normal.Contains(card.ItemId),
+                    "异界非空套装池翻牌必出套装，不回退裂魂散件");
         }
         foreach (int id in new[] { 10158125, 10158126, 490008217, 10158692, 10161066, 490003748, 490009451 })
             That(items.Items.ActionConsumable(id) is { Label: "[add dimension dungeon enter count]", Parameters: [1 or 5] },
@@ -344,20 +347,43 @@ internal static class OtherverseAncientTests
         void Clear(Fixture f, FormalDungeonReceipt opening, bool bonus = false)
         {
             var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
+            if (opening.Entry.Dimension is { HiddenBoss: true })
+            {
+                var ifliusRoom = opening.Entry.Maze.MapSpecification!.Single(map => rooms.Get(map, requirePassiveDefinitions: false).Monsters
+                    .Any(monster => monster.MonsterId is 107000256 or 107000257 or 107000258));
+                var toIflius = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, ifliusRoom.Position);
+                That(!toIflius.SkipLast(1).Contains(opening.Entry.BossMap.Position), "隐藏奖励支路可在终点领主之前实际到达");
+                path = toIflius.Concat(QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, ifliusRoom.Position,
+                    opening.Entry.BossMap.Position).Skip(1)).ToArray();
+            }
+            bool observedIflius = false;
             for (int at = 0; at < path.Length; at++)
             {
                 var loaded = f.Session.CompleteFormalDungeonLoading()!;
                 if (opening.Entry.Dimension is { HiddenBoss: true })
                 {
-                    var hiddenBoss = loaded.Monsters.Monsters.Single(monster => monster.IsBoss && monster.SourceMap is { } map &&
-                        opening.Entry.IsTerminalMap(map));
-                    That(hiddenBoss.MonsterId is 107000256 or 107000257 or 107000258,
-                        "真实隐藏路线终点为依普利乌斯：" + hiddenBoss.MonsterId);
-                    var hiddenDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
-                        id => new(id, "monster/synthetic.mob", null, null), items.Items.Get, dimensionRewards: rewardPolicy);
-                    var hiddenPlan = hiddenDrops.PrepareEntry(opening.Entry)(hiddenBoss);
-                    That(hiddenPlan.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 10304874) == true),
-                        "真实依普利乌斯死亡计划包含击败奖励礼盒10304874");
+                    foreach (var iflius in loaded.Monsters.Monsters.Where(monster => monster.MonsterId is 107000256 or 107000257 or 107000258))
+                    {
+                        observedIflius = true;
+                        var hiddenDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+                            id => new(id, "monster/synthetic.mob", null, null), items.Items.Get, dimensionRewards: rewardPolicy);
+                        var hiddenPlan = hiddenDrops.PrepareEntry(opening.Entry)(iflius);
+                        That(hiddenPlan.ResourceSource.Contains(DimensionRewardPolicy.IfliusRule),
+                            "真实隐藏路线依普利乌斯使用直接奖励合同：" + iflius.MonsterId);
+                        foreach (var material in new[] { (Id: 3311, Stacks: 3, Count: 10), (Id: 10303569, Stacks: 4, Count: 6), (Id: 3330, Stacks: 4, Count: 5), (Id: 10000204, Stacks: 2, Count: 8) })
+                        {
+                            var trial = hiddenPlan.Trials.Single(t => t.Items?.Entries.Any(r => r.Template.Id == material.Id) == true);
+                            That(trial.Threshold == 1 && trial.ProbabilityDenominator == 1 && trial.Attempts == material.Stacks &&
+                                trial.MinimumCount == material.Count && trial.MaximumCount == material.Count,
+                                "真实依普利乌斯直接材料保留原堆数和每堆数量：" + material.Id);
+                        }
+                        var rareIds = dimension.HiddenRewards.Where(row => row.Tier == opening.Entry.Dimension!.Tier).Select(row => row.Item).ToHashSet();
+                        That(hiddenPlan.Trials.Count(t => t.Items is { } pool && pool.Entries.Length > 0 &&
+                            pool.Entries.All(row => rareIds.Contains(row.Template.Id)) && t.Threshold == 1 &&
+                            t.ProbabilityDenominator == 1 && t.Attempts == 1 && t.MinimumCount == 1 && t.MaximumCount == 1) == 1 &&
+                            !hiddenPlan.Trials.Any(t => t.Items?.Entries.Any(row => row.Template.Id == 10304874) == true),
+                            "真实依普利乌斯直接抽取本档一件稀有奖励，不再发10304874礼盒");
+                    }
                 }
                 if (opening.Entry.Dimension is not null && loaded.Monsters.Monsters.FirstOrDefault(monster => monster.IsBoss &&
                     monster.SourceMap is { } map && opening.Entry.IsTerminalMap(map)) is { } boss)
@@ -369,16 +395,21 @@ internal static class OtherverseAncientTests
                     int middleTrials = forward(middle).Trials.Length;
                     int endTrials = forward(boss).Trials.Length;
                     var reverse = drops.PrepareEntry(opening.Entry);
-                    That(endTrials > middleTrials && reverse(boss).Trials.Length == endTrials && reverse(middle).Trials.Length == middleTrials,
-                        $"同模板中途和终点Boss正反调用均使用各自掉落计划：dungeon={opening.Entry.DungeonId},monster={boss.MonsterId},scripted={boss.IsScriptedBoss},friendly={boss.IsFriendly},apc={boss.AiCharacter is not null},trials={middleTrials}/{endTrials}");
+                    bool iflius = boss.MonsterId is 107000256 or 107000257 or 107000258;
+                    That((iflius ? endTrials == middleTrials : endTrials > middleTrials) &&
+                        reverse(boss).Trials.Length == endTrials && reverse(middle).Trials.Length == middleTrials,
+                        $"同模板中途和终点Boss正反调用保留普通领主位置区别及依普利乌斯直接奖励：dungeon={opening.Entry.DungeonId},monster={boss.MonsterId},scripted={boss.IsScriptedBoss},friendly={boss.IsFriendly},apc={boss.AiCharacter is not null},trials={middleTrials}/{endTrials}");
                 }
-                foreach (var monster in loaded.Monsters.Monsters.Where(monster => monster.IsBlocking).OrderBy(monster => monster.IsBoss))
+                foreach (var monster in loaded.Monsters.Monsters.Where(monster => monster.IsBlocking &&
+                    loaded.Snapshot.LivingMonsters.Contains(monster.ObjectKey)).OrderBy(monster => monster.IsBoss))
                     That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(loaded, monster),
                         SelfTestCatalogs.KillExperience(pvf), SelfTestCatalogs.Growth(pvf)).Outcome == DungeonRunOutcome.Accepted,
                         "远古仅报告实际当前房间演员死亡");
                 if (at + 1 < path.Length)
                     That(f.Session.MoveFormalDungeon((byte)path[at + 1].X, (byte)path[at + 1].Y) is not null, "远古沿真实门墙连接清房");
             }
+            if (opening.Entry.Dimension is { HiddenBoss: true })
+                That(observedIflius, "真实隐藏路线沿实际房间观察到依普利乌斯奖励怪物");
             var enabled = f.Session.EnableFormalDungeonSettlement();
             That(enabled is not null, "真实Boss死亡后才可结算");
             f.Session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);

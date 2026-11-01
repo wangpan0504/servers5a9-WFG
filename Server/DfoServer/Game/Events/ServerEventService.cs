@@ -4,7 +4,8 @@ internal sealed record ServerEventSchedule(ushort EventId, long Revision = 0, lo
     long? EndsAt = null, bool? OverrideActive = null)
 {
     public bool IsActive(DateTimeOffset now) => OverrideActive ??
-        (StartsAt is { } start && EndsAt is { } end && now.ToUnixTimeSeconds() >= start && now.ToUnixTimeSeconds() < end);
+        (StartsAt is { } start && EndsAt is { } end && now.ToUnixTimeSeconds() >= start && now.ToUnixTimeSeconds() < end ||
+         EventId == ServerEventService.MileageShopId && StartsAt is null && EndsAt is null);
 
     public void Validate()
     {

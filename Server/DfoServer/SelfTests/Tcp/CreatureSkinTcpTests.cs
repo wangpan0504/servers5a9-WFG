@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -127,6 +128,7 @@ internal static class CreatureSkinTcpTests
             buy[2] = 1;
             buy[5] = 255;
             BinaryPrimitives.WriteInt32LittleEndian(buy.AsSpan(7), commodity);
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(product));
             peer.Send(64, buy);
             var purchase = peer.Expect(1, 64).Body;
             That(purchase[0] == 1 && U32(purchase, 6) == commodity, "商城按原商品合同购买开栏券");
@@ -136,6 +138,7 @@ internal static class CreatureSkinTcpTests
             sourceSlot = checked((short)U16(delta, 3));
             That(U32(peer.Expect(0, 53).Body, 1) == 0 && fixture.Query("SELECT equipment_slot_flags FROM characters ORDER BY slot")[0] is [17L],
                 "商城扣除实际点券，购买不等同使用");
+            MileageAfter(peer, fixture, mileage);
             peer.Barrier();
             before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_skin_tcp BEFORE INSERT ON inventory_audit_log " +

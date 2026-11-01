@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Persistence;
@@ -50,12 +51,14 @@ internal static partial class CashShopTcpTests
             ushort id = repo.Create(owner, new("HongWire" + index, resources.Towns.Room, resources.Towns.InitialReturn)).Id;
             fixture.Sql("INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(93,$p0,4,1000)", id);
         }
+        var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(product.CommodityId)!));
         peer.Send(64, request);
         That(peer.Expect(1, 64).Body[0] == 1, "同连接人数达标后真实购买成功，不借旧人数投影拒绝");
         peer.Expect(0, 14);
         That(U32(peer.Expect(0, 53).Body, 1) == product.Cera &&
             fixture.Query("SELECT cera FROM character_guild_hongbao_purchases WHERE character_id=$p0", buyer) is [[long total]] && total == product.Cera,
             "Runtime注入正式红包目录，点券投影与实际角色购买累计一致");
+        MileageAfter(peer, fixture, mileage);
         peer.Barrier();
         peer.Send(1302, []);
         byte[] list = peer.Expect(1, 1302).Body;

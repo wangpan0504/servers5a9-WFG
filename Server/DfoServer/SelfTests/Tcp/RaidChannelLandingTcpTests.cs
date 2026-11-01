@@ -93,7 +93,7 @@ internal static partial class RaidChannelLandingTcpTests
             if (channel is 101 or 47 or 51 or 55)
                 That(peer.LoginEndpoint[3] == (channel switch { 101 => 24, 47 => 8, 51 => 4, _ => 5 }),
                     "连续换频道LOGIN绑定实际选中频道类型");
-            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
             // 共享房间38/1与安徒恩战舰入口19/0均为房间图，严格保留两边的1379→事件初始化包序。
             var entry = peer.Select(character.Slot, prepared: true);
             var location = entry.Single(packet => packet is { Kind: 0, Opcode: 24 }).Body;

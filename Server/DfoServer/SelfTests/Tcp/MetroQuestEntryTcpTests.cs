@@ -345,7 +345,7 @@ internal static class MetroQuestEntryTcpTests
                 sourceDungeon == dungeon && quest.RewardType == "[item]" &&
                 quest.Rewards is [{ Type: 0, Value: 0 }, { Type: 0, Value: 0 }] &&
                 (child ? quest.MainQuest == 3971 && quest.CompleteNpc == 1141 && QuestRelationProgress.ZeroRewardChild(quest) &&
-                    !QuestRelationProgress.TownLinkedChild(quest) : quest.MainQuest is null && quest.CompleteNpc == 1153 && quest.Prerequisites.SequenceEqual([4871])),
+                    QuestRelationProgress.ClearDialogueChild(quest, resources.Quests) && !QuestRelationProgress.TownLinkedChild(quest) : quest.MainQuest is null && quest.CompleteNpc == 1153 && quest.Prerequisites.SequenceEqual([4871])),
                 "3973/4872保留真实清图目标、父子、NPC和奖励，不借演出或寻物条件：" + id);
             var done = new HashSet<int> { child ? 3970 : 4871 };
             var entrance = Entrance(id, dungeon, done);
@@ -464,13 +464,14 @@ internal static class MetroQuestEntryTcpTests
                     "普通0的实际末击与原任务清图共事务，绑定原槽、Acceptance、实例、attempt及下一epoch");
                 if (child)
                 {
-                    That(Identity(peer.Id, 3971) == parentAcceptance && Scalar(peer.Id, 3971) == 0 &&
-                        fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3973", peer.Id).Length == 0 &&
-                        fixture.Query("SELECT acceptance_id,condition_type,consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3973", peer.Id)
-                            is [[string closedAcceptance, 3L, "[]"]] && closedAcceptance == acceptance &&
-                        peer.CompletedQuestHistory[4 + 3972] == 1 && peer.CompletedQuestHistory[4 + 3973] == 1,
-                        "合法39投影按原ZeroRewardChild合同归档3973，原子交付一次并令原父1到0");
-                    RejectFinish(peer, id);
+                    That(Identity(peer.Id, 3971) == parentAcceptance && Scalar(peer.Id, 3971) == 1 &&
+                        Identity(peer.Id, id) == acceptance && Scalar(peer.Id, id) == 0 &&
+                        fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3973", peer.Id).Length == 0 &&
+                        fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3973", peer.Id).Length == 0 &&
+                        peer.CompletedQuestHistory[4 + 3972] == 1 && peer.CompletedQuestHistory[4 + 3973] == 0,
+                        "合法39只达成3973清图条件，保留原NPC末子与父1，不在结算翻牌前归档或领奖");
+                    string before = Assets(); RejectFinish(peer, id); RejectFinish(peer, 3971);
+                    That(Assets() == before, "真实末击后父子34均不能跳过结算与NPC交付");
                 }
                 else
                 {
@@ -487,6 +488,12 @@ internal static class MetroQuestEntryTcpTests
                     "真实46结算普通0的同一实例、末图、attempt与epoch");
                 committed = Assets(); peer.Send(46, report); Drain();
                 That(Assets() == committed, "精确重复46不重复结算");
+                if (child)
+                {
+                    string before = Assets(); RejectFinish(peer, id); RejectFinish(peer, 3971);
+                    That(Assets() == before && Scalar(peer.Id, 3971) == 1 && Scalar(peer.Id, id) == 0,
+                        "真实46尚未免费翻牌时父子34仍拒绝，原清图条件与接取不变");
+                }
                 if (!child)
                 {
                     Finish(peer, id, 3);
@@ -498,6 +505,20 @@ internal static class MetroQuestEntryTcpTests
                 committed = Assets(); peer.Send(39, finalDeath); Drain();
                 That(Assets() == committed, "交付后迟到39不恢复旧任务或重复奖励");
                 Return(peer);
+                if (child)
+                {
+                    That(Identity(peer.Id, 3971) == parentAcceptance && Scalar(peer.Id, 3971) == 1 &&
+                        Identity(peer.Id, id) == acceptance && Scalar(peer.Id, id) == 0,
+                        "回城仍保留原NPC末子与父接取，尚未交付奖励");
+                    Finish(peer, id, 3);
+                    That(Identity(peer.Id, 3971) == parentAcceptance && Scalar(peer.Id, 3971) == 0 &&
+                        fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3973", peer.Id).Length == 0 &&
+                        fixture.Query("SELECT acceptance_id,condition_type,consumed FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3973", peer.Id)
+                            is [[string closedAcceptance, 3L, "[]"]] && closedAcceptance == acceptance &&
+                        peer.CompletedQuestHistory[4 + 3972] == 1 && peer.CompletedQuestHistory[4 + 3973] == 1,
+                        "回城真实34按原NPC末子合同唯一归档3973，原子交付并令原父1到0");
+                    RejectFinish(peer, id);
+                }
                 savedQuests = QuestState(peer.Id); savedAssets = StableAssets();
                 savedGrowth = PersistentGrowth();
 

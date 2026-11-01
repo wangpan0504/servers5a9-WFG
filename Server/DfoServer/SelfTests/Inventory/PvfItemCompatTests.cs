@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Infrastructure;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using PvfLib;
 
 namespace DfoServer.Testing.Inventory;
@@ -23,6 +26,24 @@ internal static class PvfItemCompatTests
             "同类附魔卡片10094771也按资源声明获得账号仓库资格，不按宝珠类型或编号特判");
         That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: false, AccountBoundAfterTrade: false } capsule &&
             capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊按限次交易模板读取，不伪装成无条件账号绑定");
+        foreach (var (id, kind, materialId, cost, declaration) in new[]
+        {
+            (10161087, ItemKind.Consumable, 10160847, 20, "`character` `agitwarseason` 5"),
+            (10161088, ItemKind.Consumable, 10160847, 20, "`character` `agitwarseason` 5"),
+            (490009846, ItemKind.Consumable, 10160887, 10, ""),
+            (490009852, ItemKind.Material, 490009179, 5, "")
+        })
+        {
+            var item = resources.Items.Get(id);
+            That(item.Id == id && item.Kind == kind && item.ShopPrice.Materials is [{ ItemId: var actualMaterial, Count: var actualCost }] &&
+                actualMaterial == materialId && actualCost == cost && item.ShopPrice.PeriodicLimit is null &&
+                item.ShopPrice.UnresolvedPurchaseLimits.Length == 1 && item.ShopPrice.UnresolvedPurchaseLimits.Single().Trim() == declaration,
+                "真实四种模板可完整加载并保留类型、材料价和未解释限购，不冒已支持赛季购买");
+            var snapshot = InventorySnapshot.Empty;
+            That(!ShopPurchaseLimitService.TryPlan(snapshot, item.ShopPrice, 1, id, 1, DateTimeOffset.UtcNow,
+                out var after, out var deadline) && ReferenceEquals(after, snapshot) && deadline is null,
+                "真实空或赛季限购商品购买拒绝且原库存及计数不变");
+        }
         var rows = PvfScript.List(pvf.ReadText("equipment/equipment.lst")).Concat(PvfScript.List(pvf.ReadText("stackable/stackable.lst"))).ToArray();
         var unexpected = new ConcurrentBag<string>();
         Parallel.ForEach(rows, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 8) }, row =>

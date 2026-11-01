@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -44,13 +45,14 @@ internal static class AuraActionTcpTests
             peer.Select(); peer.Barrier();
             var buy = new byte[19]; buy[2] = 1; buy[5] = 255;
             BinaryPrimitives.WriteInt32LittleEndian(buy.AsSpan(7), commodity);
+            var mileage = MileageBefore(fixture, ExpectedCashMileage(resources.ItemResources.CashShop.Product(commodity)!));
             peer.Send(64, buy);
             That(peer.Expect(1, 64).Body[0] == 1, "候选资源商城购买获得原材料券");
             byte[] delta = peer.Expect(0, 14).Body;
             slot = checked((short)U16(delta, 3));
             That(delta[0] == 0 && slot >= 121 && U32(delta, 5) == ticket && U32(delta, 9) == 1,
                 "券原Kind与Main材料页未迁移");
-            peer.Expect(0, 53); peer.Barrier();
+            peer.Expect(0, 53); MileageAfter(peer, fixture, mileage); peer.Barrier();
             string before = State();
             foreach (byte[] body in new[] { Action(slot, list: 1), Action(slot, reserved: 1), Action(slot, first: 1),
                 Action(slot, second: 1), Action(slot, action: 224), Action((short)(slot + 1)) })

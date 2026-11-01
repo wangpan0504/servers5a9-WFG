@@ -1,3 +1,4 @@
+using static DfoServer.Testing.CashMileageTcpChecks;
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
@@ -197,6 +198,7 @@ internal static class LimitCubeTcpTests
                 peer.Select();
                 var before = Read();
                 var started = DateTimeOffset.UtcNow;
+                var mileage = MileageBefore(fixture, ExpectedCashMileage(itemResources.CashShop.Product(offer.CommodityId)!));
                 Buy(peer, offer.CommodityId);
                 var ack = peer.Expect(1, 64).Body;
                 That(ack.Length == 24 && ack[0] == 1 && U32(ack, 6) == offer.CommodityId,
@@ -205,6 +207,7 @@ internal static class LimitCubeTcpTests
                 var balance = peer.Expect(0, 53).Body;
                 That(balance.Length == 13 && balance[0] == 1 && U32(balance, 1) == 0,
                     "原商城一次购买只扣资源价格并返回实际点券余额");
+                MileageAfter(peer, fixture, mileage);
                 peer.Barrier();
                 var ended = DateTimeOffset.UtcNow;
                 purchasedCharacter = Read();
