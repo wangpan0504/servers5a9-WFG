@@ -5,8 +5,8 @@ using PvfLib;
 namespace DfoServer.GameWorld.Items;
 
 // 官方风格战斗力（cp-official/v1）只读取装备脚本中的静态数值与伤害词条；不执行条件脚本，不读客户端面板。
-// Stat 为规范化名称；Mode 为 `+`/`%`；Element 仅白字（add absolute damage buff）使用，`all` 表示无属性白字。
-internal sealed record CombatEffectRow(string Stat, string Mode, string Element, int Value);
+// Stat 为规范化名称；Mode 为 `+`/`%`；Element 仅白字使用，`all` 表示无属性白字。Conditional 区分条件阶梯与普通叠加。
+internal sealed record CombatEffectRow(string Stat, string Mode, string Element, double Value, bool Conditional = false);
 internal sealed record CombatSetTier(int Threshold, ImmutableArray<CombatEffectRow> Rows);
 
 internal sealed partial class CharacterInvestmentMetadataCatalog
@@ -56,7 +56,7 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
             throw new InvalidDataException("战斗力装备模板不存在");
         var declaration = CombatEffective(EquipmentChain(Path("equipment", path)), "part set index");
         foreach (var row in declaration)
-            if (!row.IsBlock && FirstInt(row.Values) is > 0 and var id) return id;
+            if (!row.IsBlock && row.Values.FirstOrDefault(t => t.Type == 0).Value is > 0 and var id) return id;
         return null;
     }
 
@@ -94,31 +94,47 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
         return rows.ToImmutable();
     }
 
-    void Collect(PvfTokenSection row, ImmutableArray<CombatEffectRow>.Builder rows, bool root)
+    void Collect(PvfTokenSection row, ImmutableArray<CombatEffectRow>.Builder rows, bool root, bool conditional = false)
     {
+        conditional |= row.Name is "stat by condition" or "if" or "then" or "else" or "condition";
+        InvalidDataException Invalid() => new("战斗力词条无效: " + row.Name);
+        double Amount(int index)
+        {
+            if (index >= row.Values.Length || Number(row.Values[index]) is not { } value)
+                throw Invalid();
+            return value;
+        }
         switch (row.Name)
         {
             case var name when root && RootStats.Contains(name):
-                if (FirstInt(row.Values) is { } plain) rows.Add(new(name, "+", "", plain));
+                if (row.IsBlock || row.Values.IsEmpty) throw Invalid();
+                // 根属性允许资源中的数值向量，但不能越过坏字段寻找后续数值。
+                if (row.Values.Any(t => Number(t) is null)) throw Invalid();
+                rows.Add(new(name, "+", "", Amount(0), conditional));
                 return;
             case "stat":
             case "stat by condition":
-                if (row.Values.Length >= 3 && Text(row.Values[0]) is { } stat && StatBlockStats.Contains(stat) &&
-                    Text(row.Values[1]) is "+" or "%" && Number(row.Values[2]) is { } amount)
-                    rows.Add(new(stat, Text(row.Values[1])!, "", amount));
+                if (row.Values.IsEmpty || Text(row.Values[0]) is not { } stat) throw Invalid();
+                if (!StatBlockStats.Contains(stat)) break;
+                if (row.Values.Length < 3 || Text(row.Values[1]) is not ("+" or "%")) throw Invalid();
+                rows.Add(new(stat, Text(row.Values[1])!, "", Amount(2), conditional));
                 break;
             case "unique increase damage":
             case "unique increase critical damage":
-                if (row.Values.Length >= 3 && Text(row.Values[1]) == "%" && Number(row.Values[2]) is { } unique)
-                    rows.Add(new(row.Name, "%", "", unique));
+                if (row.Values.Length < 3 || row.Values[0].Type != 0 || Text(row.Values[1]) != "%") throw Invalid();
+                rows.Add(new(row.Name, "%", "", Amount(2), conditional));
                 break;
             case "add absolute damage buff":
-                if (row.Values.Length >= 4 && Text(row.Values[1]) is { } element && Text(row.Values[2]) == "%" &&
-                    Number(row.Values[3]) is { } white)
-                    rows.Add(new(row.Name, "%", element, white));
+                if (row.Values.Length < 4 || row.Values[0].Type != 0 ||
+                    Text(row.Values[1]) is not ("all" or "fire" or "water" or "dark" or "light") ||
+                    Text(row.Values[2]) is not ("+" or "%")) throw Invalid();
+                double white = Amount(3);
+                // 合法的 + 为固定追加伤害，不属于百分比白字乘区；仍验证结构与数值。
+                if (Text(row.Values[2]) == "%")
+                    rows.Add(new(row.Name, "%", Text(row.Values[1])!, white, conditional));
                 break;
         }
-        foreach (var child in row.Children) Collect(child, rows, root: false);
+        foreach (var child in row.Children) Collect(child, rows, root: false, conditional);
     }
 
     // 与 Effective 同为子层优先，但允许同名字段同时出现在条件块内（伤害词条常见）。
@@ -133,12 +149,14 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
     }
 
     string? Text(PvfToken token) => token.Type is 6 or 7 ? resolve(token.Value) : null;
-    static int? Number(PvfToken token) => token.Type switch
+    static double? Number(PvfToken token)
     {
-        0 => token.Value,
-        2 => (int)Math.Round(BitConverter.Int32BitsToSingle(token.Value)),
-        _ => null
-    };
-    static int? FirstInt(ImmutableArray<PvfToken> values) =>
-        values.IsDefaultOrEmpty ? null : values.Select(Number).FirstOrDefault(value => value is not null);
+        double value = token.Type switch
+        {
+            0 => token.Value,
+            2 => BitConverter.Int32BitsToSingle(token.Value),
+            _ => double.NaN
+        };
+        return double.IsFinite(value) ? value : null;
+    }
 }
