@@ -374,7 +374,7 @@ internal sealed partial class ItemCatalog
         .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
 
     public ImmutableArray<OrdinaryHellPassCost> OrdinaryHellPasses() => ordinaryHellPasses.Value
-        .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
+        .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind is ItemKind.Material or ItemKind.Quest).ToImmutableArray();
 
     public IReadOnlyList<(int ItemId, int Count)>? NeededMaterials(int id)
     {

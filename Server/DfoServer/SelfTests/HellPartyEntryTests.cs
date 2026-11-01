@@ -1,5 +1,6 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
@@ -138,10 +139,76 @@ internal static class HellPartyEntryTests
         Console.WriteLine($"PASS {Count-checks} 普通通行证入场与同事务回滚断言");
     }
 
+    internal static void RunOrdinaryQuestPass(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
+        QuestCatalog quests, SkillLearningCatalog skills)
+    {
+        int checks = Count;
+        const int questPass = 8247;
+        var template = items.Items.Get(questPass);
+        That(template.Kind == ItemKind.Quest, "普通表内8247保持任务物品模板，正常发放不能改造为材料");
+        var declared = items.Items.OrdinaryHellPasses();
+        int[] expectedQuestIds = [8247, 2682582, 2749403, 2749501, 2749535, 2749911, 10002090, 10002197, 10002586, 490000338];
+        That(declared.Length == 64 && declared.All(row => row.Count == 1) && !declared.Any(row => row.ItemId == 10161613) &&
+            declared.Where(row => items.Items.Get(row.ItemId).Kind == ItemKind.Quest).Select(row => row.ItemId).Order().SequenceEqual(expectedQuestIds.Order()),
+            "普通目录只增加明确表内十项任务票，保留原材料和历史票，例外限制仍不猜测");
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
+        var area = towns.Areas.Values.First(row => row.Level <= 95 && row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 291100308));
+        var done = baseDone95(area);
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town, area.Area, checked((ushort)(walk.X + walk.Width / 2)), checked((ushort)(walk.Y + walk.Height / 2)));
+        done.Add(6080);
+        foreach (int invitationCount in new[] { 0, 30 })
+        {
+            var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                done.Order().ToArray(), position: position, contracts: items.Contracts, fatigueRemaining: 100);
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                InventoryReward[] rewards = invitationCount == 0 ? [new(questPass, 2)] : [new(questPass, 2), new(3330, invitationCount)];
+                var granted = fixture.Session.PlanAndCommitInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                    rewards, items.Items, items.GoldLimits, items.EpicPieces, now, contracts: items.Contracts), requireTown: true);
+                That(granted.Accepted, "任务分类深渊票沿正常模板、发放和库存事务到账");
+                var before = fixture.Read();
+                var range = ItemSlotBoundService.Range(template.Kind, before.Inventory);
+                var actual = before.Inventory.Items.Where(item => item.Core.ItemId == questPass).ToArray();
+                That(actual.Length != 0 && actual.Sum(item => item.Core.Count) == 2 &&
+                    actual.All(item => item.Core.Kind == ItemKind.Quest && item.Position.List == InventoryListType.Main &&
+                        item.Position.Index >= range.Start && item.Position.Index <= range.End && !item.IsExpired(now.ToUnixTimeSeconds())),
+                    "正常发放保持真实任务分类槽位和有效数量，不使用夹具材料种票");
+                FormalDungeonReceipt? Enter() => fixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms,
+                    drops: drops, items: items.Items, pieces: items.EpicPieces, hellParty: true);
+                if (invitationCount != 0)
+                {
+                    fixture.Sql("CREATE TRIGGER fail_ordinary_quest_pass AFTER UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'ordinary quest pass rollback'); END");
+                    Reject<Microsoft.Data.Sqlite.SqliteException>(() => Enter(), "任务票扣费后尝试号写入失败必须回滚");
+                    That(QuestCompletionRepositoryTests.Same(before, fixture.Read()) && fixture.Session.DungeonSnapshot is null,
+                        "任务票、邀请函、疲劳及角色状态一起回滚，不安装半个副本");
+                    fixture.Sql("DROP TRIGGER fail_ordinary_quest_pass");
+                }
+                var receipt = Enter();
+                var after = fixture.Read();
+                That(receipt is { HellTicket.ItemId: questPass, HellTicket.Count: 1, LegendTicket: null } &&
+                    after.Inventory.Items.Where(item => item.Core.ItemId == questPass).Sum(item => item.Core.Count) == 1 &&
+                    after.Inventory.Items.Where(item => item.Core.ItemId == 3330).Sum(item => item.Core.Count) == invitationCount,
+                    "正常任务票可独立入场且优先邀请函，失败后公共入场重规划可重试");
+            }
+            finally
+            {
+                fixture.Session.End(); fixture.Owner.Dispose();
+            }
+        }
+        Console.WriteLine($"PASS {Count-checks} 表内任务分类普通深渊票正常发放与入场断言");
+    }
+
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
+        RunOrdinaryQuestPass(towns, pvf, characters, items, quests, skills);
         LegacyHellDropTests.RunResources(pvf, towns, items);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         foreach(var pair in InfernoQuestUnlock.Pairs)
