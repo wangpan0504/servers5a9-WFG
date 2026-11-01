@@ -1012,7 +1012,7 @@ internal static class DungeonSettlementSessionTests
         public void Dispose()
         {
             owner.Dispose();
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

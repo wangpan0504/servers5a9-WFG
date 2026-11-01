@@ -202,7 +202,7 @@ internal static class CeraPackageAvatarTests
         {
             resources.Items.PrefillTemplates(originals.Select(pair => KeyValuePair.Create(pair.Key, pair.Value)));
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

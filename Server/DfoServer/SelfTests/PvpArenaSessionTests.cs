@@ -274,7 +274,7 @@ internal static class PvpArenaSessionTests
                 return new(repository, towns, owner, entry: new(new(1, 40), channelType, "[pvp]"));
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 正式决斗会话、准入、精确离场与接管隔离断言");
     }
 }

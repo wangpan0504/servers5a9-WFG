@@ -139,7 +139,7 @@ internal static class InventoryWriteTests
             long Scalar(string sql) { using var command = db.CreateCommand(); command.CommandText = sql; return (long)command.ExecuteScalar()!; }
             void Sql(string sql) { using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - start} 库存比较、编码复用与独立审计断言");
     }
     static string? ReferenceHash(InventoryItem? item) => item is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(

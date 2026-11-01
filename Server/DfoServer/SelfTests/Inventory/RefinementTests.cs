@@ -219,7 +219,7 @@ internal static class RefinementTests
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Sql("SELECT count(*) FROM inventory_audit_log") + ":" +
                 Sql("SELECT count(*) FROM currency_audit_log") + ":" + Sql("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - start} refinement domain and transaction assertions");
     }
 

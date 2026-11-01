@@ -139,7 +139,7 @@ internal static partial class CashShopPromotionSessionTests
             finally { replacement?.Dispose(); }
             void SetPhase(SessionPhase phase) => typeof(GameSession).GetProperty(nameof(GameSession.Phase))!.SetValue(session, phase);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"Cash shop promotion boundaries: {Count - before} checks passed.");
     }
 

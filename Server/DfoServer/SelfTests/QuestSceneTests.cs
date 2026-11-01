@@ -1071,6 +1071,6 @@ internal static class QuestSceneTests
             using var command = db.CreateCommand(); command.CommandText = sql;
             return command.ExecuteScalar();
         }
-        public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root,true); }
+        public void Dispose() { Session.End(); Owner.Dispose(); TestFiles.DeleteDirectory(root,true); }
     }
 }

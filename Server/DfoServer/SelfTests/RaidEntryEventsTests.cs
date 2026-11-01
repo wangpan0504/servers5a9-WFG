@@ -72,7 +72,7 @@ internal static class RaidEntryEventsTests
         That(RaidEntryEvents.OpenEvents(store, tuesday).SequenceEqual(new ushort[] { 2449, 181 }), "周二 19:00 开超时空漩涡与安徒恩 → 事件 2449、181");
         That(new RaidEntryStore(directory).IsOpen("anton", tuesday), "anton 时段写盘后重开目录可读回");
         That(Inflate(SeriaLuckPackets.EventInfoCompressed(RaidEntryEvents.OpenEvents(store, tuesday))).Length == 68 + 2 * 15, "EVENT_INFO 追加 181 记录");
-        Directory.Delete(directory, true);
+        TestFiles.DeleteDirectory(directory, true);
 
         That(ChannelAreaLanding.FiendwarType == 45, "超时空之战频道类型是 CHANNEL_FIEND_WAR 0x2D");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-raid-channel-" + Guid.NewGuid().ToString("N"));
@@ -81,7 +81,7 @@ internal static class RaidEntryEventsTests
         That(fiend.Length == 1 && fiend[0].Type == 45 && fiend[0].Group == "[fiendwar]" && fiend[0].NameReference == "<chn_channel_info_048>",
             "内置 channel.txt 频道 39 [fiendwar] 写 type 45");
         That(channels.Channels.All(row => row.Type != 42) && channels.Entry(39).Type == ChannelAreaLanding.FiendwarType, "不再有 type 42 频道，入口类型与落点常量一致");
-        if (Directory.Exists(root)) Directory.Delete(root, true);
+        if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
         Console.WriteLine($"PASS {Count - before} 团本时段事件、次数表与超时空漩涡 type 45 断言（非实机）");
     }
 

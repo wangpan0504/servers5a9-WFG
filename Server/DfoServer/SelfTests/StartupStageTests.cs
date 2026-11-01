@@ -50,6 +50,6 @@ internal static class StartupStageTests
                 !output.ToString().Contains("Metrics") && !output.ToString().Contains("Failed catalog: OK"),
                 "复用启动英文纯文本展示，指标不整块输出控制台且失败无OK");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 }

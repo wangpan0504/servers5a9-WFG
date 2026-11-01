@@ -203,7 +203,7 @@ internal static class SettingsProtocolTests
             Reject<InvalidOperationException>(() => session.CanPublishClientSettings(latest), "旧generation不能发布设置");
             Reject<InvalidOperationException>(() => session.SaveGameOptions(service, game.ToImmutableArray()), "旧generation不能保存设置");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     static byte[] Body(byte[] data)

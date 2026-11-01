@@ -276,7 +276,7 @@ internal static class BoosterGrowTypeTests
         }
         finally
         {
-            if (complete) Directory.Delete(root,true);
+            if (complete) TestFiles.DeleteDirectory(root,true);
             else Console.Error.WriteLine("charactor SQL failure fixture retained: "+root);
         }
     }

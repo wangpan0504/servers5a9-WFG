@@ -448,6 +448,6 @@ internal static class WeaponSkinTests
             That(RosterWeaponSkin(CharacterPackets.Roster(roster), 0) == 32000 &&
                 RosterWeaponSkin(CharacterPackets.Roster(roster), 1) == 0, "按槽位顺序第一行有幻化、第二行保持0");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 }

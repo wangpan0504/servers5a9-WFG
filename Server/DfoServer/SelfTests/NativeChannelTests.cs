@@ -93,7 +93,7 @@ internal static class NativeChannelTests
             That(blocked.Port == port, "启动失败释放临时监听，可恢复原端口");
             blocked.Stop();
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} native channel lifecycle assertions");
     }
 

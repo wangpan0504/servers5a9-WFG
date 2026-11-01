@@ -146,7 +146,7 @@ internal static class CharacterProgressResetTests
                 restored.Learning.Trees.All(tree => tree.Sp == skills.TotalSp(60) && tree.Tp == skills.TotalTp(60)), "明确GM重置旧角色建立当前等级基线，不迁移历史布局");
             Reject(() => repository.ResetProgress(other, reset.Prepare(installed, new(CharacterProgressField.Level, other.Account, installed.Name, 60, 0))), "其他账号不能重置目标");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - start} GM等级、职业选项、双树重置和原子回滚断言");
         RunProfessions(towns, pvf, characters, resources);
     }
@@ -239,7 +239,7 @@ internal static class CharacterProgressResetTests
                 _ => new GameSession(repository, towns, owner), items: resources.Items, progress: reset);
             That(live.StartsWith("ERR ") && live.Contains("退出该账号"), "已连接账号明确要求离线");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - start} GM基础职业目录、原子切换及拒绝断言");
     }
 

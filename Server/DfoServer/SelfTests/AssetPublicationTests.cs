@@ -31,7 +31,7 @@ internal static class AssetPublicationTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
 
         Console.WriteLine($"PASS {TestCheck.Count - before} asset commit and publication assertions");

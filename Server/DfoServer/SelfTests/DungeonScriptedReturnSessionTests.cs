@@ -237,7 +237,7 @@ internal static class DungeonScriptedReturnSessionTests
                 Session.Selected!.ActiveMainQuests.Single().AcceptanceId == Acceptance,
                 "拒绝不改变角色、存档、原接取或Run身份/地图/清图");
         }
-        public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { Session.End(); Owner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }
 

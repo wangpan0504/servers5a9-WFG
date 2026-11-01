@@ -171,7 +171,7 @@ internal static class SpecialContainerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(folder, recursive: true);
+            TestFiles.DeleteDirectory(folder, recursive: true);
         }
         Console.WriteLine($"PASS special container domain: {Count - initial} assertions");
     }

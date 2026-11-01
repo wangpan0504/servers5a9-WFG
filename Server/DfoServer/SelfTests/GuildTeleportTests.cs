@@ -202,7 +202,7 @@ internal static class GuildTeleportTests
             Service.Dispose(); invitations.Dispose();
             foreach (var session in Sessions) { Parties.Detach(session); session.End(); }
             foreach (var owner in Owners) owner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 

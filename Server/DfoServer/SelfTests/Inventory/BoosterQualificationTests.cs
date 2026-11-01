@@ -114,7 +114,7 @@ internal static class BoosterQualificationTests
             finally { resources.Items.PrefillTemplates([new(rewardTemplate.Id, rewardTemplate), new(ordinaryId, ordinaryTemplate)]); }
             Places(resources, session);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void Places(ItemResources resources, GameSession session)

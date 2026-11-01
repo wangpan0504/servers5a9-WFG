@@ -225,7 +225,7 @@ internal static partial class DungeonSettlementTests
             Sql("DROP TRIGGER effective_upgrade_abort");
             _ = new CharacterRepository(path);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS guild dungeon transaction assertions {Count - before}");
     }
 }

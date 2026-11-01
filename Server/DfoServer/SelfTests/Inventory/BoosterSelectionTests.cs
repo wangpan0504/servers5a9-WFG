@@ -569,7 +569,7 @@ internal static class BoosterSelectionTests
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Query("SELECT count(*) FROM inventory_audit_log") + ":" +
                 Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         RunSpring2020NestedBoxLinks(towns, characters, itemResources);
         RunSpring2020ChildBoxOpenings(towns, characters, itemResources);
         RunSpring2020AvatarLegalOptions(towns, characters, itemResources);
@@ -1292,7 +1292,7 @@ internal static class BoosterSelectionTests
                 return command.ExecuteScalar();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     // 外盒只生成完整子盒实例，子盒仍等待玩家下一次真实选择。
@@ -1391,7 +1391,7 @@ internal static class BoosterSelectionTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, true);
+            if (completed) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine("SPRING2020_NESTED_FIXTURE_RETAINED " + root);
         }
 
@@ -1584,7 +1584,7 @@ internal static class BoosterSelectionTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, true);
+            if (completed) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine("SPRING2020_CHILD_FIXTURE_RETAINED " + root);
         }
 
@@ -1811,7 +1811,7 @@ internal static class BoosterSelectionTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, true);
+            if (completed) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine($"SPRING_AVATAR_OPTIONS_FIXTURE_RETAINED {root} completedRequests={requests} accepted={accepted} rejected={rejected}");
         }
 

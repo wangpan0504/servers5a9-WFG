@@ -86,6 +86,6 @@ internal static partial class DungeonGrowthRepositoryTests
             }
             finally { foreach (var lease in leases) lease.Dispose(); }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 }

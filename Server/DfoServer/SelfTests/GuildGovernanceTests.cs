@@ -244,7 +244,7 @@ internal static class GuildGovernanceTests
         finally
         {
             foreach (string file in new[] { path, path + "-wal", path + "-shm" })
-                if (File.Exists(file)) File.Delete(file);
+                if (File.Exists(file)) TestFiles.DeleteFile(file);
         }
     }
 

@@ -154,7 +154,7 @@ internal static class SqliteBusyRetryTests
             }
             TestCheck.That(propagated && constraintAttempts == 1, "非忙锁数据库错误只尝试一次并继续向上抛出");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 数据库忙锁重试、连接设置与丢弃边界断言");
     }
 

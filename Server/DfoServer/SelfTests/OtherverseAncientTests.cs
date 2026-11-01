@@ -461,6 +461,6 @@ internal static class OtherverseAncientTests
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"); db.Open();
             using var command = db.CreateCommand(); command.CommandText = text; command.ExecuteNonQuery();
         }
-        public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { Session.End(); Owner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }

@@ -181,7 +181,7 @@ internal static partial class PvpTotalTeamTests
                 using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 总力稳定阵容、归属、版本、重开及删角事务断言");
     }
 

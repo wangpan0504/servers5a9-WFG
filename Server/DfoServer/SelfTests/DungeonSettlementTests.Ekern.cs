@@ -52,7 +52,7 @@ internal static partial class DungeonSettlementTests
             var other = repository.Create(owner,Fixture("EkernOther"));
             That(repository.LoadEkernCycle(owner,other.Id,day).Normal == 0,"同账号其他角色进度隔离");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine("PASS 艾肯循环资源、第三次开图、事务回滚、幂等、仓储重建与日切");
         void Sql(string sql)
         {

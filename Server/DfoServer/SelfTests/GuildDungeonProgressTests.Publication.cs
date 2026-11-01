@@ -68,7 +68,7 @@ internal static partial class GuildDungeonProgressTests
             That(output.Frames.Count(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 744) == 1,
                 "退回选角后不能继续投递公会副本进度");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class HeldOutput : MemoryStream

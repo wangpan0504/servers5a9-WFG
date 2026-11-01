@@ -310,7 +310,7 @@ internal static class ClearAvatarTests
                 loaded.Inventory.Find(to)!.Avatar!.ClearAvatarSourceUid == loaded.Inventory.Find(from)!.Uid,
                 "外观编号、原件UID及完整时装详情一起持久化，重开仓储恢复");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static ItemTemplate Template(int slot, bool clone = false) =>

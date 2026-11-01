@@ -87,7 +87,7 @@ internal static class PvpPrivateCharacterTests
             void Sql(string sql,string? target=null)
             {using var db=new SqliteConnection("Data Source="+(target??path)+";Pooling=False");db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}
         }
-        finally {Directory.Delete(root,true);}
+        finally {TestFiles.DeleteDirectory(root,true);}
         Console.WriteLine($"PASS {Count-before} 专用决斗身份、分流、创建冷却及迁移断言");
     }
     public static void RunResources(DfoServer.GameWorld.Towns.TownCatalog towns,PvfLib.PvfArchive pvf,
@@ -176,7 +176,7 @@ internal static class PvpPrivateCharacterTests
                 That(new CharacterRepository(path).Create(owner,after).PvpPrivate?.RecreateDays==30,"精确到期可重新创建且冷却策略仍为30天");
             }
         }
-        finally {Directory.Delete(root,true);}
+        finally {TestFiles.DeleteDirectory(root,true);}
     }
 
     static void CreationWire()
@@ -236,7 +236,7 @@ internal static class PvpPrivateCharacterTests
             void Sql(string sql)
             {using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}
         }
-        finally {Directory.Delete(root,true);}
+        finally {TestFiles.DeleteDirectory(root,true);}
     }
 
     static void EquipmentTransfers(Character character)

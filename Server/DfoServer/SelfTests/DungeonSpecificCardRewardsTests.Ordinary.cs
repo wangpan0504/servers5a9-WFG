@@ -74,7 +74,7 @@ internal static partial class DungeonSpecificCardRewardsTests
             }
             string directory = Path.Combine(Path.GetTempPath(), "S5A9-ordinary-selection-" + Guid.NewGuid().ToString("N"));
             try { Run().GetAwaiter().GetResult(); }
-            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+            finally { if (Directory.Exists(directory)) TestFiles.DeleteDirectory(directory, true); }
             async Task Run()
             {
                 using var log = new ServerLog(directory);

@@ -157,6 +157,6 @@ internal static partial class TagEvildomConfigurationTests
             Reject<InvalidOperationException>(() => repository.CommitTagEvildomConfiguration(owner, cleaned, cleaned), "旧generation连零变化保存也拒绝");
             That(repository.ReadTagEvildomConfiguration(replacement).SameAssignments(cleaned), "新owner读取原真实配置而不是旧连接清理结果");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 }

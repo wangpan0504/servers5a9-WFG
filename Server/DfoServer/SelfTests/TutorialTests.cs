@@ -52,7 +52,7 @@ internal static class TutorialTests
                     "实际到账截断不允许修改原奖励额度");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     public static void RunCore()
@@ -128,7 +128,7 @@ internal static class TutorialTests
                 return command.ExecuteScalar();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void VerifyCinematicActors()

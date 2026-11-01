@@ -236,6 +236,6 @@ internal static class CharacterScoreNoticeTests
             _ => throw new InvalidDataException("empty box"), (_, _) => false,
             currentProfile ? _ => throw new InvalidDataException("empty chronicle") : null,
             currentProfile ? (_, _) => throw new InvalidDataException("empty dimension") : null, includeQualitySeedTier: currentProfile, includeAllWorn: currentProfile);
-        public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { Session.End(); Owner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }

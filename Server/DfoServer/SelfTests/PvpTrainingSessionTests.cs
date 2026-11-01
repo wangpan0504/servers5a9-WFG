@@ -166,7 +166,7 @@ internal static class PvpTrainingSessionTests
             }
 
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-before} 决斗训练Session生命周期、事务与身份断言");
     }
 }

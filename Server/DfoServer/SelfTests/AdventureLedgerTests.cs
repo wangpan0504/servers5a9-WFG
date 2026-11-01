@@ -34,7 +34,7 @@ internal static class AdventureLedgerTests
             Gm(Path.Combine(root, "gm.db"), growth, adventure, now);
             Deletion(Path.Combine(root, "deletion.db"), growth, adventure, now);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 冒险团开启、排除来源、GM改写与回滚断言");
     }
 

@@ -189,7 +189,7 @@ internal static class KnightShieldTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(folder, recursive: true);
+            TestFiles.DeleteDirectory(folder, recursive: true);
         }
     }
 

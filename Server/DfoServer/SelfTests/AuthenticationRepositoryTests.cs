@@ -29,12 +29,12 @@ internal static class AuthenticationRepositoryTests
             Check(changed.Succeeded && changed.Identity!.AuthGeneration > ok.Identity!.AuthGeneration, "password change advances revision");
             var reopened = new AuthenticationService(new AuthenticationRepository(path));
             Check(reopened.Verify("user-1", "new-password", IPAddress.Loopback, "matched-client", TimeSpan.FromMinutes(5)).Succeeded, "database reopens with credentials");
-            Check(File.ReadAllBytes(path).AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes("new-password")) < 0, "database does not contain plaintext password");
+            Check(TestFiles.ReadAllBytes(path).AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes("new-password")) < 0, "database does not contain plaintext password");
             Console.WriteLine($"PASS {TestCheck.Count - checks} authentication repository assertions");
         }
         finally
         {
-            Directory.Delete(folder, true);
+            TestFiles.DeleteDirectory(folder, true);
         }
     }
 

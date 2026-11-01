@@ -782,7 +782,7 @@ internal static class FormalDungeonPublicationTests
         {
             Log.Dispose();
             Owner.Dispose();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
     // 故障注入只丢弃真实仓储第一次提交后的返回值，不伪造SQL结果或领域确认。

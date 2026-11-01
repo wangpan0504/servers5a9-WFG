@@ -61,7 +61,7 @@ internal static partial class FormalDungeonTcpTests
         Write("{\"Enabled\":false,\"Rules\":[{\"DungeonId\":3,\"Warlike\":{\"Value\":90}}]}");
         Reload(true);
         Capture();
-        File.Delete(path);
+        TestFiles.DeleteFile(path);
         Reload(true);
         Capture();
         Console.WriteLine("PASS monster ai production TCP config/reload/29 ordering/private packet (synthetic client)");

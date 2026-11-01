@@ -73,7 +73,7 @@ internal static class QuestEligibilityMailTests
                 "重建角色只能收到角色域邀请，不能刷新账号域邀请");
             Console.WriteLine($"PASS {Count-checks} 首次任务资格邮件、角色/账号范围、原子回滚与跨日重放断言");
         }
-        finally { if(Directory.Exists(root))Directory.Delete(root,true); }
+        finally { if(Directory.Exists(root))TestFiles.DeleteDirectory(root,true); }
         void Sql(string sql){using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();using var c=db.CreateCommand();c.CommandText=sql;c.ExecuteNonQuery();}
         long CountRows(string table){using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();using var c=db.CreateCommand();c.CommandText="SELECT count(*) FROM "+table;return (long)c.ExecuteScalar()!;}
     }

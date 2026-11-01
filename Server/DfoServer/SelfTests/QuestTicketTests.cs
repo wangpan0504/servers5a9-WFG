@@ -268,7 +268,7 @@ internal static class QuestTicketTests
                 new StackableActionHandler(fixture.Catalog,items.Items,projection,log).Register(commands); commands.Seal(); return commands;
             }
         }
-        finally { Directory.Delete(logRoot,true); }
+        finally { TestFiles.DeleteDirectory(logRoot,true); }
         Console.WriteLine($"PASS {Count-checks} 普通77真实资源、Handler、问题、扣券原子性与发布恢复断言（非主线）");
     }
 

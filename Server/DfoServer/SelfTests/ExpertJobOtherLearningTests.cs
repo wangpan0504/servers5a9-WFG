@@ -69,7 +69,7 @@ internal static class ExpertJobOtherLearningTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (passed) Directory.Delete(root, true);
+            if (passed) TestFiles.DeleteDirectory(root, true);
             else Console.WriteLine("FAILED fixture retained: " + root);
         }
         Console.WriteLine($"PASS {Count - checks} 炼金与控偶图纸学习、回滚和重开断言");

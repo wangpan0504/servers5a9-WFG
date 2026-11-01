@@ -10,7 +10,7 @@ internal static partial class DatabaseSchemaTests
         string root = Path.Combine(Path.GetTempPath(), "S5A9-pvp-mission-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try { PvpMissionUpgrade(root); PvpDailyUpgrade(root); }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void PvpDailyUpgrade(string root)

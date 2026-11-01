@@ -102,7 +102,7 @@ internal static class MachineCharacterScoreTests
             That(f.Session.CharacterScoreNoticeStatus(capture, deadline) == "expired" && f.Session.CharacterScoreRemainingMilliseconds(capture, deadline) == 0, "排队不延长服务器期限");
             f.Session.EndSelfCharacterScore(capture);
         }
-        finally { Directory.Delete(logs, true); }
+        finally { TestFiles.DeleteDirectory(logs, true); }
     }
     static byte[] Body(string text) { byte[] data = ChatText.Encoding.GetBytes(text); byte[] body = new byte[11 + data.Length]; body[0] = 3; BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), (uint)data.Length); data.CopyTo(body, 11); return body; }
     sealed class Store : IChatDirectoryStore { public string? AccountOfCharacter(ushort id) => null; public string[] GuildMemberAccounts(long id) => []; }

@@ -338,7 +338,7 @@ internal static class LukeRaidStartTests
             }
 
         }
-        finally{foreach(var session in sessions)session.Disconnect();foreach(var lease in leases)lease.Dispose();Directory.Delete(root,true);}
+        finally{foreach(var session in sessions)session.Disconnect();foreach(var lease in leases)lease.Dispose();TestFiles.DeleteDirectory(root,true);}
         Console.WriteLine($"Luke raid start: {Count-before} assertions passed");
     }
     static async Task VerifyDisplayAsync(RaidActor actor, AntonRaidBattleView view)

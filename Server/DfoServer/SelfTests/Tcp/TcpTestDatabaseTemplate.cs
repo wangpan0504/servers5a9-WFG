@@ -21,6 +21,6 @@ internal static class TcpTestDatabaseTemplate
             return path;
         }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
         Directory.CreateDirectory(Path.GetDirectoryName(database)!);
-        File.Copy(template, database);
+        TestFiles.Copy(template, database);
     }
 }

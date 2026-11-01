@@ -561,7 +561,7 @@ internal static class DungeonEntryProbeTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
 
         Console.WriteLine($"PASS {Count - checks} dungeon entry probe assertions");

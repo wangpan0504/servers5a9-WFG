@@ -26,7 +26,7 @@ internal static class ProtocolArchitectureTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
 
         Console.WriteLine($"PASS {TestCheck.Count - before} protocol registration, owner, directory assertions");

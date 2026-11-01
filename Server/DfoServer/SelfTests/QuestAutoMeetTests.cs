@@ -242,7 +242,7 @@ internal static class QuestAutoMeetTests
                 commands.Seal(); return commands;
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 原43条及新增8660自动会面资源与合成31/33/34、普通奖励/回滚/恢复断言（不执行主线）");
     }
 

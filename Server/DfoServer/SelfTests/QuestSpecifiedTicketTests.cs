@@ -250,7 +250,7 @@ internal static class QuestSpecifiedTicketTests
                     "模拟提交成功返回丢失，Session沿同一冻结源与槽位结果恢复");
             }
         }
-        finally { Directory.Delete(logRoot,true); }
+        finally { TestFiles.DeleteDirectory(logRoot,true); }
         // 券回执已提交后只用于重复请求重放，不得继续阻塞远征取消等其它城镇业务；未提交的任务券规划仍互斥。
         using (var f=Fixture(TicketId,targetDefinitions,60,0,[Active(0,674),Active(1,649)]))
         {

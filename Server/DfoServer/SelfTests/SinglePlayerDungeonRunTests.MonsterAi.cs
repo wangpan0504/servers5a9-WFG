@@ -182,10 +182,10 @@ internal static partial class SinglePlayerDungeonRunTests
                 "同时设置固定值与倍率的规则整批拒绝");
             That(config.Answer("monster-ai status")!.StartsWith("OK ") && config.Answer("monster-ai reload extra")!.StartsWith("ERR "),
                 "状态查询和严格命令参数");
-            File.Delete(path);
+            TestFiles.DeleteFile(path);
             That(config.Answer("monster-ai reload")!.StartsWith("OK ") && !config.Settings.Current.Enabled,
                 "删除配置后关闭私有包并回到原生参数");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
     }
 }

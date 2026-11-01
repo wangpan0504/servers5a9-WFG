@@ -177,7 +177,7 @@ internal static class AntonRaidStartTests
         {
             foreach (var session in sessions) session.End();
             foreach (var owner in owners) owner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

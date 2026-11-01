@@ -237,7 +237,7 @@ internal static class SkillExtendedTests
             Check(deleted.Learning.Trees.All(tree => tree.Skills.All(skill => skill.Id != 46) && tree.Combos.All(combo => !combo.Children.Contains((ushort)46))),
                 "既有GM删除技能同事务移除连招引用，不留下损坏角色");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, recursive: true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     private static void Check(bool value, string name) => TestCheck.That(value, "技能扩展 " + name);

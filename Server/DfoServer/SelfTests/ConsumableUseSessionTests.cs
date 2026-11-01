@@ -563,6 +563,6 @@ internal static class ConsumableUseSessionTests
             using var db = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + Path.Combine(root, "game.db") + ";Pooling=False");
             db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
         }
-        public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { Session.End(); Owner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }

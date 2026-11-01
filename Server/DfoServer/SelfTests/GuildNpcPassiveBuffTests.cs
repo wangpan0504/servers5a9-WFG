@@ -74,7 +74,7 @@ internal static class GuildNpcPassiveBuffTests
                 npcs.GuardianBuff(session.CaptureGuildManagement()!) is null,
                 "退会清除守护石属性，不能沿角色旧快照继续授予");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
         Console.WriteLine($"PASS {Count - before} guild guardian passive assertions");
     }
 

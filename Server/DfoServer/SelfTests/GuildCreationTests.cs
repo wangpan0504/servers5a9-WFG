@@ -97,7 +97,7 @@ internal static class GuildCreationTests
         {
             foreach (string file in new[] { path, path + "-wal", path + "-shm" })
                 if (File.Exists(file))
-                    File.Delete(file);
+                    TestFiles.DeleteFile(file);
         }
         Console.WriteLine($"PASS {Count - before} 创建公会事务、花费扣减与失败回滚断言");
     }

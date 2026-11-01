@@ -212,7 +212,7 @@ internal static class DisjointSpecialTests
                 That(session.Selected!.Inventory.Find(request.Position)!.Core == core, "过期拒绝未恢复旧实例或覆盖当前核心");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void RunSessionChecks(ItemCatalog items, GoldLimitCatalog limits, EpicPieceCatalog pieces,
@@ -286,7 +286,7 @@ internal static class DisjointSpecialTests
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Query("SELECT count(*) FROM inventory_audit_log") +
                 ":" + Query("SELECT count(*) FROM currency_audit_log") + ":" + Query("SELECT count(*) FROM epic_piece_audit_log");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class EndpointRandom(bool high) : Random

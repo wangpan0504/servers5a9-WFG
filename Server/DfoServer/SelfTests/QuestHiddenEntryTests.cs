@@ -128,7 +128,7 @@ internal static class QuestHiddenEntryTests
                 output.Opcodes.SequenceEqual(new ushort[] {884}) && f.Receipts == 1,
                 "完成后884不重新开放任务或重复发奖");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         await VerifyClearedDialoguePackets(towns,characters,items,actual,learning,growth,parameters);
         Console.WriteLine($"PASS {Count-checks} 隐藏884/822、真实12071正式Handler包序及公共接取交付断言（内存发送器，非socket）");
     }
@@ -209,7 +209,7 @@ internal static class QuestHiddenEntryTests
                 f.Read().Inventory.Gold==rewarded.Inventory.Gold,
                 "12071重复正式34不再次发奖或增加金币");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
     }
 
     static StoryQuest Hidden() => QuestEligibilityTests.Quest(100) with

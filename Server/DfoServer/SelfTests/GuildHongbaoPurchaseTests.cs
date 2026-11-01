@@ -50,7 +50,7 @@ internal static class GuildHongbaoPurchaseTests
             That(Number("PRAGMA user_version") == 136 && Number("SELECT count(*) FROM pragma_table_info('character_guild_hongbao_purchases')") == 1,
                 "未知表升级失败保留原版本及结构");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS guild hongbao purchase catalog/schema assertions {Count - before}");
     }
 }

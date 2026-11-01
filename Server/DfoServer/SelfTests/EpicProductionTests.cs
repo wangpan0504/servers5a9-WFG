@@ -185,7 +185,7 @@ internal static class EpicProductionTests
                 using var command=db.CreateCommand();command.CommandText=sql;return command.ExecuteScalar();
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 史诗制作资源、选择及加工及成品结算事务断言；网络和客户端尚另验");
     }
 

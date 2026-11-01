@@ -252,7 +252,7 @@ internal static class SocialTests
             That(Scalar("SELECT count(*) FROM sqlite_schema WHERE name='player_trade_receipts'") == 0,
                 "独立社交迁移不创建交易表");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 社交协议、持久化、屏蔽、原子回滚及迁移断言");
     }
 

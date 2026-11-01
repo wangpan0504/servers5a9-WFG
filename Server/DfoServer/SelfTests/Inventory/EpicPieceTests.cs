@@ -168,7 +168,7 @@ internal static class EpicPieceTests
                 Query(path, "SELECT count(*) FROM currency_audit_log") + ":" + Query(path, "SELECT count(*) FROM epic_piece_audit_log") + ":" +
                 Query(path, "SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} epic book assertions; pieces={pieces.Entries.Length}, recipes={pieces.Recipes.Count}");
     }
 

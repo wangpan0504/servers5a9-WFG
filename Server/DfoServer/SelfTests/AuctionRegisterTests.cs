@@ -500,7 +500,7 @@ internal static class AuctionRegisterTests
         public void Dispose()
         {
             Owner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

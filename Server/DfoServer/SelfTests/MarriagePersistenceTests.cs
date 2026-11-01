@@ -444,7 +444,7 @@ internal static partial class MarriagePersistenceTests
         public void Dispose()
         {
             GuestOwner.Dispose(); SecondOwner.Dispose(); FirstOwner.Dispose();
-            SqliteConnection.ClearAllPools(); Directory.Delete(directory, true);
+            SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(directory, true);
         }
     }
 }

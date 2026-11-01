@@ -100,7 +100,7 @@ internal static class MarriageShopTests
                     using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
                 }
             }
-            finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+            finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(directory, true); }
         }
     }
 

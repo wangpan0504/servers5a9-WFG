@@ -147,7 +147,7 @@ internal static class PacketCaptureTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - checks} packet capture assertions");
     }

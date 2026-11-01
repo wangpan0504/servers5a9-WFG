@@ -159,7 +159,7 @@ internal static class ExpertJobCraftTests
             passed = true;
             void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
-        finally { SqliteConnection.ClearAllPools(); if (passed) Directory.Delete(root, true); else Console.WriteLine("FAILED fixture retained: " + root); }
+        finally { SqliteConnection.ClearAllPools(); if (passed) TestFiles.DeleteDirectory(root, true); else Console.WriteLine("FAILED fixture retained: " + root); }
         Console.WriteLine($"PASS {Count - checks} 副职业制作资源、钱包成本与原子提交断言");
     }
 }

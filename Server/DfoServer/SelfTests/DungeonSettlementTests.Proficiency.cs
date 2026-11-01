@@ -81,7 +81,7 @@ internal static partial class DungeonSettlementTests
             Check(Query("PRAGMA integrity_check") is "ok" && Convert.ToInt64(Query("SELECT count(*) FROM pragma_foreign_key_check")) == 0,
                 "熟练度拆分提交后数据库与外键完整");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关熟练度到账拆分、封顶与回执回放断言");
 
         (DungeonSettlementCommit Commit, SinglePlayerDungeonRun Run, PreparedDungeonSettlement Prepared) Settle(

@@ -158,6 +158,6 @@ internal static class GuildEconomyTests
                 "退会后旧角色快照不能继续授予经验福利");
             session.End();
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 }

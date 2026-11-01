@@ -472,7 +472,7 @@ internal static class InventoryBehaviorTests
                 check(rejected && before == JsonSerializer.Serialize(new CharacterRepository(Path.Combine(root, "game.db")).List(owner).Single()),
                     "真实库存提交复验当前时间并拒绝已到期候选，重开后角色、源、账号期限和版本均不变");
             }
-            finally { Directory.Delete(root, recursive: true); }
+            finally { TestFiles.DeleteDirectory(root, recursive: true); }
         }
     }
 

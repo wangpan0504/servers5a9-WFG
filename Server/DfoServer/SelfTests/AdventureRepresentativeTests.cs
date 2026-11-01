@@ -102,7 +102,7 @@ internal static class AdventureRepresentativeTests
                 Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "删除代表角色保留显式NULL职业格与账号进度，只推进一次账号版本，不级联清空冒险团");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Migrate();
     }
 
@@ -141,7 +141,7 @@ internal static class AdventureRepresentativeTests
                 }
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
     static SqliteConnection Open(string path) { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open(); return db; }
     static void Execute(SqliteConnection db, string sql) { using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }

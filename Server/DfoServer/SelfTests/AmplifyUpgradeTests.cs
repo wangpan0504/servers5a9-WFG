@@ -546,7 +546,7 @@ internal static class AmplifyUpgradeTests
         }
         finally
         {
-            if (passed && Directory.Exists(root)) Directory.Delete(root, true);
+            if (passed && Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine("433回归失败现场保留：" + root);
         }
         static string Inventory(InventorySnapshot value) => JsonSerializer.Serialize(value with

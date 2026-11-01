@@ -347,8 +347,8 @@ internal static class GuildPermitHandlerTests
         {
             foreach (string file in new[] { path, path + "-wal", path + "-shm" })
                 if (File.Exists(file))
-                    File.Delete(file);
-            Directory.Delete(root, recursive: true);
+                    TestFiles.DeleteFile(file);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

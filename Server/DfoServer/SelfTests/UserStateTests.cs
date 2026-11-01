@@ -209,7 +209,7 @@ internal static class UserStateTests
             session.End();
             That(session.Phase == SessionPhase.Unselected && replacement.IsCurrent, "旧会话收尾不修改或释放新owner");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 用户业务状态、阶段图、基础门禁及旧会话隔离断言");
     }
 }

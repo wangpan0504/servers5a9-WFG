@@ -231,7 +231,7 @@ internal static class NpcTradingTests
             That(nextDay.Accepted && nextDay.Plan!.After.Gold == 6666 && nextDay.Plan.After.Items.IsEmpty,
                 "the sale limit resets at the 06:00 UTC+8 boundary");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} NPC trading assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count);
     }

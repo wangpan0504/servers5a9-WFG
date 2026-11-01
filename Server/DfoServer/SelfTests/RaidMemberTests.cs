@@ -152,7 +152,7 @@ internal static class RaidMemberTests
         {
             foreach (var session in sessions) session.End();
             foreach (var lease in leases) lease.Dispose();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {Count - before} 团本成员、分队、权限、版本和会话清理断言");
     }

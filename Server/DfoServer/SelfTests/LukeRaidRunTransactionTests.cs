@@ -357,7 +357,7 @@ internal static class LukeRaidRunTransactionTests
         {
             foreach(var session in all)session.End();foreach(var lease in leases)lease.Dispose();
             SqliteConnection.ClearAllPools();
-            if(completed&&Directory.Exists(root))Directory.Delete(root,true);
+            if(completed&&Directory.Exists(root))TestFiles.DeleteDirectory(root,true);
             else Console.WriteLine("Luke Run事务失败现场保留："+root);
         }
         Console.WriteLine($"PASS {Count-before} 卢克Run真实资源、入场/清图/回城SQL故障恢复断言");

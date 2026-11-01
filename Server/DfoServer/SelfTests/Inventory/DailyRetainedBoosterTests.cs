@@ -168,6 +168,6 @@ internal static class DailyRetainedBoosterTests
             catch (InvalidOperationException) { generation = true; }
             That(generation, "旧owner generation不能再次写次数或奖励");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 }

@@ -147,7 +147,7 @@ internal static class LukeSceneNamespaceTests
             That(!logs.Contains(Id,StringComparison.Ordinal)&&!logs.Contains(hexId,StringComparison.Ordinal)&&!logs.Contains("private",StringComparison.Ordinal),"真实日志sink无ID/正文");
             That(!packets.Contains(hexId,StringComparison.Ordinal)&&!packets.Contains(BitConverter.ToString(Encoding.ASCII.GetBytes(Id)).Replace('-',' '),StringComparison.Ordinal)&&!packets.Contains("raw:",StringComparison.Ordinal)&&packets.Contains("luke scene reserved payload redacted",StringComparison.Ordinal),"真实抓包sink仅元数据与脱敏标志");
         }
-        finally{if(Directory.Exists(root))Directory.Delete(root,true);}
+        finally{if(Directory.Exists(root))TestFiles.DeleteDirectory(root,true);}
     }
     static byte[] Body(string text,byte kind=3)
     {

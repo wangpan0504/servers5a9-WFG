@@ -152,7 +152,7 @@ internal static class ExpertJobLearningTests
                 command.ExecuteNonQuery();
             }
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 副职业设计图资源、扣图原子性与重开恢复断言");
     }
     sealed class Clock : TimeProvider

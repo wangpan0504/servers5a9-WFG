@@ -311,7 +311,7 @@ internal static class QuestCorePublicationTests
                 Bytes(output.Frames.Single().AsSpan(16),[1,101,0],"关闭子32返回真实成功ACK");
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 合成TP、type70、经验封顶与跨场景交付的真实Handler、Sender包序及幂等发布断言（非主线实机）");
     }
 

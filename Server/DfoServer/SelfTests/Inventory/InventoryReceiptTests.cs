@@ -127,7 +127,7 @@ internal static class InventoryReceiptTests
             catch (InvalidOperationException) { expired = true; }
             TestCheck.That(expired, "旧 generation 不能复用回执发布");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} inventory receipt/publication assertions");
     }
 

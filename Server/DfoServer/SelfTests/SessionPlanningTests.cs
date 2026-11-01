@@ -688,7 +688,7 @@ internal static partial class SessionPlanningTests
 
         public void Sql(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -697,7 +697,7 @@ internal static partial class SessionPlanningTests
 
         public object? Scalar(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -706,7 +706,7 @@ internal static partial class SessionPlanningTests
 
         public string Rows(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False;Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -723,7 +723,7 @@ internal static partial class SessionPlanningTests
 
         string[] Tables()
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False");
+            using var db = new SqliteConnection("Data Source=" + Database);
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
@@ -733,6 +733,8 @@ internal static partial class SessionPlanningTests
             return tables.ToArray();
         }
 
+        // 快照逐表各开一次连接；夹具辅助连接走连接池，免去每表重开文件与重解析整套结构。
+        // 夹具 Dispose 经 TestFiles 删目录前释放池句柄。
         public string Snapshot() => Scalar("PRAGMA user_version") + ":" +
             Rows("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name") + ":" +
             string.Join('|', Tables().Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid")));
@@ -918,7 +920,7 @@ internal static partial class SessionPlanningTests
         public void Dispose()
         {
             Owner.Dispose();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 }

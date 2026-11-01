@@ -79,7 +79,7 @@ internal static class PvpRecordTests
                 ratings.Settle(second, b.Id, result.MatchId);
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - count} 决斗战绩只读聚合与持久来源断言");
     }
 }

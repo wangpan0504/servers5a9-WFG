@@ -76,7 +76,7 @@ internal static class CreatureQuestTests
                 db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void VerifyNativeEvolution(Character character, TcpTestResources resources)

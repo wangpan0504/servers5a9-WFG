@@ -258,6 +258,6 @@ internal static class GuildCargoTests
                 reopened.List(peerOwner).Single().Inventory.Find(new(InventoryListType.Main, 9))!.Uid == equipmentUid,
                 "重开数据库后仓库历史、完整装备所有权与UID仍一致");
         }
-        finally { SqliteConnection.ClearAllPools(); File.Delete(path); File.Delete(path + "-wal"); File.Delete(path + "-shm"); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteFile(path); TestFiles.DeleteFile(path + "-wal"); TestFiles.DeleteFile(path + "-shm"); }
     }
 }

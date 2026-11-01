@@ -157,7 +157,7 @@ internal static class AdventureNameTests
             using var replacement = owners.Acquire("names", () => { });
             Reject<InvalidOperationException>(() => repository.CommitAdventureName(owner, rename, catalog, now), "旧generation不能改写新owner的名称");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void Migration()
@@ -196,7 +196,7 @@ internal static class AdventureNameTests
                 }
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static SqliteConnection Open(string path) { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open(); return db; }

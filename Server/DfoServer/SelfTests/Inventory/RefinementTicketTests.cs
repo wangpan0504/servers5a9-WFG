@@ -163,7 +163,7 @@ internal static class RefinementTicketTests
             }
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Sql("SELECT count(*) FROM inventory_audit_log") + ":" + Sql("SELECT count(*) FROM currency_audit_log");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - start} refinement ticket and dependent-system interface assertions");
     }
 
@@ -256,7 +256,7 @@ internal static class RefinementTicketTests
         {
             if (fixtureCompleted)
             {
-                Directory.Delete(root, true);
+                TestFiles.DeleteDirectory(root, true);
             }
             else Console.Error.WriteLine("SPRING2020_409_FIXTURE_RETAINED " + root);
         }

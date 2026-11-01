@@ -274,7 +274,7 @@ internal static class CollectBoxTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - before} 宝珠收集箱真实PVF、事务与持久化断言");
     }

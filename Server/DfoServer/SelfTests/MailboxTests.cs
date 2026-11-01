@@ -226,7 +226,7 @@ internal static class MailboxTests
             Receiver.Select(0, resources.GoldLimits); Receiver.MarkReady();
             Service = new(Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
         }
-        public void Dispose() { ReceiverOwner.Dispose(); SenderOwner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { ReceiverOwner.Dispose(); SenderOwner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
     internal static ItemTemplate TradableMaterial(PvfArchive pvf, ItemResources resources)
     {

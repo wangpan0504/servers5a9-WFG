@@ -57,7 +57,7 @@ internal static partial class DungeonSettlementTests
                     "秘药与公会等其他额度分列持久化，冷打开保持");
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
     }
 
     internal static void RunExperienceBonusCore()

@@ -653,7 +653,7 @@ internal static class LotteryTests
             if (fixtureCompleted)
             {
                 SqliteConnection.ClearAllPools();
-                Directory.Delete(root, true);
+                TestFiles.DeleteDirectory(root, true);
             }
             else Console.Error.WriteLine("TREASURE_PRODUCT_CONTINUATION_FIXTURE_RETAINED " + root);
         }

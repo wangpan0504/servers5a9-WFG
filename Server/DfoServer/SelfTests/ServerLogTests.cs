@@ -185,7 +185,7 @@ internal static class ServerLogTests
 
             await CheckListenerCancellationAsync(options, root, catalog);
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} server stdout log assertions");
     }
 

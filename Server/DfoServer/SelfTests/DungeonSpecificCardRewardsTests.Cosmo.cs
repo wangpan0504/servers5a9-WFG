@@ -166,7 +166,7 @@ internal static partial class DungeonSpecificCardRewardsTests
             catch (Exception backupError) { Console.WriteLine("Cosmo failure backup unavailable: " + backupError.GetType().Name); }
             throw;
         }
-        finally { if (passed && Directory.Exists(directory)) Directory.Delete(directory, true);
+        finally { if (passed && Directory.Exists(directory)) TestFiles.DeleteDirectory(directory, true);
             else if (!passed) Console.WriteLine("FAILED cosmo fixture retained: " + directory); }
 
         async Task Run()

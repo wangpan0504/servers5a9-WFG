@@ -115,7 +115,7 @@ internal static class GuildHallWaitTests
         public void Sql(string sql) { using var c = Database.CreateCommand(); c.CommandText = sql; c.ExecuteNonQuery(); }
         public long Number(string sql) { using var c = Database.CreateCommand(); c.CommandText = sql; return Convert.ToInt64(c.ExecuteScalar()); }
         public long Points => Number("SELECT COALESCE(SUM(points),0) FROM guild_contribution_events WHERE source=7");
-        public void Dispose() { Database.Dispose(); Owner.Dispose(); SqliteConnection.ClearAllPools(); File.Delete(path); }
+        public void Dispose() { Database.Dispose(); Owner.Dispose(); SqliteConnection.ClearAllPools(); TestFiles.DeleteFile(path); }
     }
 
     static void Transactions()

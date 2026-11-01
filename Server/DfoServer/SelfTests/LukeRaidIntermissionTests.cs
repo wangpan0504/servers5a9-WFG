@@ -108,7 +108,7 @@ internal static class LukeRaidIntermissionTests
             }
             passed = true;
         }
-        finally { if (passed) Directory.Delete(root, true); else Console.WriteLine("FAIL fixture: " + root); }
+        finally { if (passed) TestFiles.DeleteDirectory(root, true); else Console.WriteLine("FAIL fixture: " + root); }
         Console.WriteLine($"PASS {Count - before} 卢克统一人数休息、提前开战和自动门禁断言");
     }
 

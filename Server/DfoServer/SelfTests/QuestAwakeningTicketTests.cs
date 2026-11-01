@@ -249,7 +249,7 @@ internal static class QuestAwakeningTicketTests
                     saved.Revision==before.Revision+1 && Receipts(f)==1,"19已发后ACK丢失重试同提交，不重复职业或消费");
             }
         }
-        finally {Directory.Delete(logRoot,true);}
+        finally {TestFiles.DeleteDirectory(logRoot,true);}
         Console.WriteLine($"PASS {Count-checks} 觉醒119/122真实资源、逐级资格、职业学习事务及发布恢复断言（非主线）");
 
         Character Role(byte job,byte grow,byte stage,QuestTicketDefinition ticket)

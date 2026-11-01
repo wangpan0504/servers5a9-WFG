@@ -30,7 +30,7 @@ internal static class TownTravelPublicationTests
             foreach (bool beforeClear in new[] { true, false })
                 await InterruptedAsync(reselect, beforeClear);
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} town travel publication assertions");
 
         async Task NormalAsync()

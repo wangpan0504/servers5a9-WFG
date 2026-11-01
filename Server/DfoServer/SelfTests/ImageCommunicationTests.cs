@@ -329,6 +329,6 @@ internal static class ImageCommunicationTests
         public long Receipts {get {using var db=Open();using var c=db.CreateCommand();c.CommandText="SELECT count(*) FROM character_quest_lifecycle_receipts";return (long)c.ExecuteScalar()!;}}
         SqliteConnection Open() {var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();return db;}
         public void Sql(string sql) {using var db=Open();using var c=db.CreateCommand();c.CommandText=sql;c.ExecuteNonQuery();}
-        public void Dispose() {Session.End();Owner.Dispose();Directory.Delete(root,true);}
+        public void Dispose() {Session.End();Owner.Dispose();TestFiles.DeleteDirectory(root,true);}
     }
 }

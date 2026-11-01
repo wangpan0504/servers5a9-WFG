@@ -152,7 +152,7 @@ internal static class QuestDungeonClearProgressTests
             long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
             SqliteConnection Open() { var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); return db; }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 条件通关计数、原子回滚、重放、重接及领奖断言（合成战斗）");
         RunRecommended(towns,pvf,characters,items);
         RunAlternatives(towns,pvf,characters,items);
@@ -344,7 +344,7 @@ internal static class QuestDungeonClearProgressTests
             That(finished.Receipt?.Commit.Character.CompletedQuests.Contains(6401) == true,
                 "34交付贮藏箱奖励："+finished.Outcome+" "+finished.Reason);
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 真实外传资源接取与未清图拒绝断言；不证明专用塔准入或客户端通关");
     }
 
@@ -427,7 +427,7 @@ internal static class QuestDungeonClearProgressTests
             long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
             SqliteConnection Open() { var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); return db; }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 列表通关45原接取、OR难度、清图/领奖回滚、重放及重开断言（合成战斗）");
     }
 
@@ -541,7 +541,7 @@ internal static class QuestDungeonClearProgressTests
             long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
             SqliteConnection Open() { var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); return db; }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} sub11 initialization threshold, real-clear rollback, replay and renewed-acceptance assertions");
     }
 

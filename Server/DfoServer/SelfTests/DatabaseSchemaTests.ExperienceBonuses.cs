@@ -75,7 +75,7 @@ internal static partial class DatabaseSchemaTests
             RejectDatabase(() => _ = new SqliteGameDatabase(path));
             Check(Snapshot(path) == malformed,"未知旧结构拒绝后原库、版本和数据不变");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
 
         static string Data(string file, string[] tables, string[][] columns)
         {

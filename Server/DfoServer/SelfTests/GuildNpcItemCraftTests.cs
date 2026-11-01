@@ -20,7 +20,7 @@ internal static class GuildNpcItemCraftTests
         string root = Path.Combine(Path.GetTempPath(), "guild-item-craft-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try { Schema(Path.Combine(root, "schema.db")); Run(Path.Combine(root, "game.db")); }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} guild NPC item craft assertions");
     }
 

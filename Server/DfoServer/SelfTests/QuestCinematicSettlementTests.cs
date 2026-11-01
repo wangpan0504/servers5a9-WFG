@@ -424,7 +424,7 @@ internal static class QuestCinematicSettlementTests
                     QuestCompletionRepositoryTests.Same(before,f.Read()),"成功确认31后重复33只回复ACK");
             }
         }
-        Directory.Delete(directory,true);
+        TestFiles.DeleteDirectory(directory,true);
     }
 
     sealed class MovieOutput(bool fail) : MemoryStream

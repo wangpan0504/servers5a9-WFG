@@ -78,7 +78,7 @@ internal static class GuildDirectoryTests
         {
             foreach (string file in new[] { path, path + "-wal", path + "-shm" })
                 if (File.Exists(file))
-                    File.Delete(file);
+                    TestFiles.DeleteFile(file);
         }
     }
 }

@@ -97,7 +97,7 @@ internal static class GriefTowerPersistenceTests
             command.CommandText="SELECT count(*) FROM sqlite_schema WHERE name IN('account_grief_tower','character_grief_tower')";
             That((long)command.ExecuteScalar()! == 0,"末表冲突回滚前两张新表，保留原冲突现场");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 悲叹入场账本、原子扣票与升级");
 
         SqliteConnection Open()

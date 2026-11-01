@@ -75,7 +75,7 @@ internal static class DungeonSelectionReturnTests
             That(session.CurrentDungeonSelection is null && session.Phase == SessionPhase.Unselected, "旧连接收尾只清本会话");
             GateReturnCore(root);
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} dungeon selection lifecycle assertions");
     }
 
@@ -200,7 +200,7 @@ internal static class DungeonSelectionReturnTests
                 }
             }
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} dungeon selection publication assertions");
     }
 

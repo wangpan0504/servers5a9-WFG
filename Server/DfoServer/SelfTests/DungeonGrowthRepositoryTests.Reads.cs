@@ -89,7 +89,7 @@ internal static partial class DungeonGrowthRepositoryTests
             That(JsonSerializer.Serialize(seeker) == JsonSerializer.Serialize(repository.LoadCharacter(owner, seeker.Slot)),
                 "库存复验失败不留下经验、revision或任务半提交");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 击杀精简读取、空规划、账号资产版本与回执恢复断言");
 
         void Sql(string sql)

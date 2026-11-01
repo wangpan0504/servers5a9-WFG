@@ -107,7 +107,7 @@ internal static class PlayerTradeRepositoryTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

@@ -250,7 +250,7 @@ internal static class AvatarDisjointTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} 现场时装分解资源、事务与持久化断言");
     }

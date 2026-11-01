@@ -96,7 +96,7 @@ internal static partial class CashShopPromotionSessionTests
             That(session.BuyCashShop(request, cash, service, out _, out var retry).Accepted && retry?.Progress.Count == 4,
                 "拒绝后重读真实角色与累计可正常购买，不永久卡住账号");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"Cash shop promotion session: {Count - checks} checks passed.");
         CashShopPromotionPersistenceTests.CommittedBusyBoundary(towns, resources).GetAwaiter().GetResult();
         RunPilotLimitBoundary(towns, resources);
@@ -246,7 +246,7 @@ internal static partial class CashShopPromotionSessionTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, true);
+            if (completed) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine($"Pilot limit fixture retained: {root}");
         }
         Console.WriteLine($"Cash shop pilot session limit: {Count - checks} checks passed.");

@@ -134,7 +134,7 @@ internal static class GriefTowerClearTests
                 }
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 悲叹冻结奖励、通关原子性及恢复（领域存储用例）");
 
         void Execute(string sql) { _=Query(sql); }

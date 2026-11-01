@@ -104,7 +104,7 @@ internal static class CharacterReadTests
             Reject<InvalidOperationException>(() => repository.LoadCharacter(owner, 0), "旧 generation 不能加载角色");
             TestCheck.That(repository.LoadCharacter(replacement, 0).Id == first.Id, "新 owner 可继续加载正常角色");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} 名册、按需角色与账号共享读取断言");
     }
 

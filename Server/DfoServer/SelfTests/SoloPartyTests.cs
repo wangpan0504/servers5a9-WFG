@@ -106,7 +106,7 @@ internal static class SoloPartyTests
             That(JsonSerializer.Serialize(repository.LoadCharacter(nextOwner, 0)) == finalStored,
                 "创建、接管与队伍收尾不额外写角色资产");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         VerifyMembership();
     }
 
@@ -168,7 +168,7 @@ internal static class SoloPartyTests
             foreach (var session in sessions) { parties.Detach(session); session.End(); }
             That(parties.Snapshot().Length == 0 && memory.Count == 0, "成员全部离开释放共享队伍与邀请索引");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class PartyClock : TimeProvider

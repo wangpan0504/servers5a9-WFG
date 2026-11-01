@@ -87,6 +87,6 @@ internal static class DailyBoosterUsageTests
             catch (SqliteException) { rejected = true; }
             That(rejected, "SQL约束拒绝非数组JSON，不能静默清次数");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 }

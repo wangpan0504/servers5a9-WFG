@@ -254,7 +254,7 @@ internal static class QuestPlayOnlyTests
                     "发送失败后重选从完整持久快照恢复，不重发领奖增量");
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 50条play-only资源及合成接取/交付/账号/回滚/恢复机制断言（非主线或客户端验收）");
     }
 

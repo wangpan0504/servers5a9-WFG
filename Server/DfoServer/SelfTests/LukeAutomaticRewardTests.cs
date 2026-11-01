@@ -193,7 +193,7 @@ internal static class LukeAutomaticRewardTests
         {
             timerService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             session.End();
-            if (passed) Directory.Delete(root, true);
+            if (passed) TestFiles.DeleteDirectory(root, true);
         }
     }
 

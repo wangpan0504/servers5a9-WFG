@@ -73,7 +73,7 @@ internal static class AccountCredentialStoreTests
                 TestCheck.That(Scalar(db, "SELECT count(*) FROM accounts") is 3L, "only successfully created accounts persist");
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} credential storage and concurrency assertions");
     }
 

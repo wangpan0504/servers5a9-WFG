@@ -154,7 +154,7 @@ internal static class PvpRatingSettlementTests
             }
             void Sql(string sql) => _ = Scalar(sql);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - beforeCount} 决斗评分持久来源、原子到账、重放及接管恢复断言");
         PvpRecordTests.RunCore();
     }

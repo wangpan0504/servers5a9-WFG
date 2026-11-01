@@ -44,7 +44,7 @@ internal static class GuildDungeonSchemaTests
                 Reject<InvalidDataException>(() => new CharacterRepository(path), "拒绝未来版本，不向下改写公会库");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS guild dungeon schema assertions {Count - before}");
     }
 }

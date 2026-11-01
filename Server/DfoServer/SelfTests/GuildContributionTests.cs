@@ -165,7 +165,7 @@ internal static class GuildContributionTests
             Reject<InvalidOperationException>(() => repository.ObserveGuildContribution(actor, GuildContributionSource.Chat, boundary),
                 "账号被接管后旧owner不能记贡献");
         }
-        finally { SqliteConnection.ClearAllPools(); File.Delete(path); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteFile(path); }
         Console.WriteLine($"PASS {Count - before} 公会贡献来源、日周边界及结算事务断言");
     }
 }

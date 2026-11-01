@@ -132,7 +132,7 @@ internal static partial class LukeRewardRestartTests
             finally
             {
                 SqliteConnection.ClearAllPools();
-                if(passed)Directory.Delete(root,true);else Console.WriteLine("Luke重启失败现场保留："+root);
+                if(passed)TestFiles.DeleteDirectory(root,true);else Console.WriteLine("Luke重启失败现场保留："+root);
             }
         }
         Console.WriteLine($"PASS {Count-before} 卢克真实子进程提交前/后未应答终止与权益幂等断言（GM非原客户端）");

@@ -313,7 +313,7 @@ internal static class RaidCleanupPublicationTests
             foreach (var stream in streams) stream.Dispose();
             foreach (var lease in leases) lease.Dispose();
             log.Dispose();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 }

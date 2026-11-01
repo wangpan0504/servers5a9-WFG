@@ -174,7 +174,7 @@ internal static partial class CashShopTests
         }
         finally
         {
-            if (complete) Directory.Delete(root, true);
+            if (complete) TestFiles.DeleteDirectory(root, true);
             else Console.Error.WriteLine("mapped coupon SQL failure fixture retained: " + root);
         }
     }

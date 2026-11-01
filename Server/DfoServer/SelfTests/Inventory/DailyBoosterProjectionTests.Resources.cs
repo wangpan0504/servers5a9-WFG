@@ -97,7 +97,7 @@ internal static partial class DailyBoosterProjectionTests
             finally { context.CommandGate.Release(); }
             TestCheck.That(clock.ActiveTimers == 0, "门禁内停止排队时钟可完成并回收timer");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     static Dictionary<int, byte> Consume(IEnumerable<byte[]> packets)

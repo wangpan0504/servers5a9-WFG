@@ -105,7 +105,7 @@ internal static partial class PvpTotalTeamTests
                 using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 总力更名扣券、回滚、重放、版本与期限断言");
     }
 }

@@ -438,7 +438,7 @@ internal static class BoosterCooldownTests
                 "旧generation不能提交另一角色的合法冷却计划");
             That(Snapshot(replacement) == before, "旧owner失败没有写入新冷却或奖励");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
 
         // SQL只在原有资源自测入口被root执行，测试源码不新增产品CLI或访问玩家库。
         object? Query(string sql)

@@ -234,7 +234,7 @@ internal static class GuildRankingTests
             That(Number("PRAGMA user_version") == 140 && Number("SELECT count(*) FROM sqlite_schema WHERE name='guild_ranking_party_clears'") == 0,
                 "榜表碰撞整段回滚，不留下半套升级或版本前移");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     // 028F82A0先从正文读成功字节，028F2970再把成功值传给排行回调；帧头kind不代替此字节。

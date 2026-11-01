@@ -79,6 +79,6 @@ internal static partial class DatabaseSchemaTests
                 skin.Contains("\"Owned\":[]", StringComparison.Ordinal),
                 "已确认旧皮肤v66补齐主线经验列后升级当前版本，保留角色、皮肤及冻结奖励，不回放历史");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 }

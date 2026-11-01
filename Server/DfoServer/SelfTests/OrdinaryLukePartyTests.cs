@@ -196,7 +196,7 @@ internal static class OrdinaryLukePartyTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if(Directory.Exists(root)) Directory.Delete(root,true);
+            if(Directory.Exists(root)) TestFiles.DeleteDirectory(root,true);
         }
         Console.WriteLine($"PASS {Count-before} 普通卢克组队日进度与个人首击合同断言");
     }

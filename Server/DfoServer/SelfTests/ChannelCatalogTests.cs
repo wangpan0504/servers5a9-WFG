@@ -98,7 +98,7 @@ internal static class ChannelCatalogTests
             File.WriteAllText(path, "invalid");
             Reject<InvalidDataException>(() => Infrastructure.ServerRuntime.LoadChannels(path), "外置脚本错误仍拒绝，不静默覆盖配置");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         var catalog = ChannelCatalog.Parse(source);
         foreach (int pvpType in new[] { 4, 5, 8, 13, 24 })
             That(!ChannelAreaLanding.SameSnapshotPredicates(22, pvpType) &&

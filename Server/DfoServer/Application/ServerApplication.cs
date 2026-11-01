@@ -95,16 +95,21 @@ public static class ServerApplication
             return 0;
         }
 
+        // 自测与正式服一样复用连接池：短开连接免去重复建 WAL 映射与解析结构；测试删除临时库前经 TestFiles 释放池句柄，
+        // 进程退出前整体释放。离线工具保持非池化。
+        if (command.Kind is ServerCommandKind.SelfTest or ServerCommandKind.SelfTestCore or ServerCommandKind.TcpTest)
+            SqliteDatabaseBootstrap.EnableRuntimePooling();
         if (command.Kind == ServerCommandKind.SelfTestCore)
         {
-            await SelfTestRunner.RunCoreAsync();
+            try { await SelfTestRunner.RunCoreAsync(); }
+            finally { SqliteDatabaseBootstrap.ReleaseRuntimePool(); }
             return 0;
         }
-
         // TCP 驱动按测试组共享只读资源；服务子进程自行解析 PVF，入口不再多加载一份。
         if (command.Kind == ServerCommandKind.TcpTest)
         {
-            await TcpRegressionTests.RunAsync(options, command.Arguments.FirstOrDefault());
+            try { await TcpRegressionTests.RunAsync(options, command.Arguments.FirstOrDefault()); }
+            finally { SqliteDatabaseBootstrap.ReleaseRuntimePool(); }
             return 0;
         }
         if (command.Kind == ServerCommandKind.AntonProbe)
@@ -197,7 +202,8 @@ public static class ServerApplication
             var characters = Load("Character resources", () => CharacterCatalog.Load(pvf, itemResources.Items));
             if (command.Kind == ServerCommandKind.SelfTest)
             {
-                await SelfTestRunner.RunAsync(towns, pvf, characters, itemResources);
+                try { await SelfTestRunner.RunAsync(towns, pvf, characters, itemResources); }
+                finally { SqliteDatabaseBootstrap.ReleaseRuntimePool(); }
                 return 0;
             }
 

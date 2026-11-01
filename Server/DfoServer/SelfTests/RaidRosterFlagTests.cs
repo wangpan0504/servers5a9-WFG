@@ -130,7 +130,7 @@ internal static class RaidRosterFlagTests
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     // 资源核对：常量必须与 PVF etc/enterablespecialchannel.etc 及任务文件一致；退役保留位不依赖资源资格。

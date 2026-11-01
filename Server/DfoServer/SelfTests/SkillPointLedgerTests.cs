@@ -230,7 +230,7 @@ internal static class SkillPointLedgerTests
                 session.Selected.Learning.ExpertContractExpiresAt == repository.LoadCharacter(owner, peer.Slot).Learning.ExpertContractExpiresAt,
                 "修改同账号其他角色的契约立即更新当前角色的账号状态，不覆盖其资产或额外SP");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     private static void Check(bool condition, string message) => TestCheck.That(condition, message);

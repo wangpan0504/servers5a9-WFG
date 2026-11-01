@@ -138,6 +138,6 @@ internal static class InventoryLockTests
                 Slots = Query("SELECT json_group_array(json_object('uid',item_uid,'list',list_type,'slot',slot_index)) FROM character_inventory_slots"),
                 Audit = Query("SELECT count(*) FROM inventory_audit_log") });
         }
-        finally { Directory.Delete(folder, true); }
+        finally { TestFiles.DeleteDirectory(folder, true); }
     }
 }

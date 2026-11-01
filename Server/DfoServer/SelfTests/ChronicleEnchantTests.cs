@@ -193,7 +193,7 @@ internal static class ChronicleEnchantTests
                 db.Open(); using var command = db.CreateCommand(); command.CommandText = text; command.ExecuteNonQuery();
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class MaximumRandom : Random

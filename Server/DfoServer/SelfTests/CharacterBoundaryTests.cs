@@ -90,7 +90,7 @@ internal static class CharacterBoundaryTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
 
         Console.WriteLine($"PASS {Count - checks} character boundary assertions");
