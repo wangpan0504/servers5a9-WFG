@@ -65,10 +65,12 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public BossRushHud? BossRushHud { get; init; }
 }
 internal sealed record EpicPiecePickup(int Index, int PieceId, int Amount, int Balance, long BookRevision);
+internal sealed record AccountMaterialPickup(int ItemId, int Amount, int Balance, long WalletRevision);
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
     bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0)
 {
     public EpicPiecePickup? EpicPiece { get; init; }
+    public AccountMaterialPickup? AccountMaterial { get; init; }
 }
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null)

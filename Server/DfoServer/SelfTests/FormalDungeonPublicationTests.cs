@@ -6,6 +6,8 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Party;
+using DfoServer.Game.Social;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -52,6 +54,8 @@ internal static class FormalDungeonPublicationTests
         await ReturnDuringSendAsync();
         await PickupLostResultAsync();
         await CollectionPublicationAsync();
+        await AccountMaterialPublicationAsync(false);
+        await AccountMaterialPublicationAsync(true);
         await DiscardPublicationAsync(false);
         await DiscardPublicationAsync(true);
         await ClearedQuestSendFailureAsync();
@@ -65,7 +69,7 @@ internal static class FormalDungeonPublicationTests
         {
             var commands = new GameCommandRegistry();
             new DungeonHandler(f.Log, catalog, rooms, growth, kills,
-                new TownProjection(towns, computer, presence, items.EpicPieces), new CharacterLevelProjection(computer),
+                new TownProjection(towns, computer, presence, items.EpicPieces, items: items.Items), new CharacterLevelProjection(computer),
                 global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items.Items, items.EpicPieces, items.GoldLimits,
                 prepareDrops: prepareDrops).Register(commands);
             if (inventoryActions is not null)
@@ -422,6 +426,73 @@ internal static class FormalDungeonPublicationTests
                 f.Session.CanPublishFormalDungeon(second!) && f.Session.Selected!.DungeonState!.LastAttempt == 2,
                 "迟到退出不把新副本角色加入城镇同屏，不破坏新run或身份预留");
         }
+        async Task AccountMaterialPublicationAsync(bool party)
+        {
+            using var f = new Fixture(towns, characters, learning, quests, false);
+            var pool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(items.Items.Get(10308807), 1) });
+            var generation = new DungeonDropGenerationPlan("合成必定掉落/真实账号材料模板", [new(10000, pool, 3, 3)]);
+            f.Session.BeginDungeonSelection();
+            using var stop = new CancellationTokenSource();
+            using var stream = new ControlledOutput();
+            await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(199, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+            var commands = Registry(f, prepareDrops: _ => _ => generation);
+            await commands.DispatchAsync(context, new(1, 16, Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000")));
+            var entry = f.Session.CompleteFormalDungeonLoading()!;
+            stream.Frames.Clear();
+            await commands.DispatchAsync(context, new(1, 39, Death(entry.Monsters.Monsters[0].ObjectKey, entry.Character.Id, 3)));
+            uint key = BinaryPrimitives.ReadUInt32LittleEndian(stream.Frames[0].AsSpan(20));
+            var original = f.Read();
+            byte[] request = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(request, key);
+            stream.Frames.Clear();
+            if (!party) await commands.DispatchAsync(context, new(1, 43, request));
+            else
+            {
+                // 使用实际原Run提交结果，单独验证组队发布边界；队伍生命周期由既有TCP覆盖。
+                using var observer = new Fixture(towns, characters, learning, quests, false, reserveFirstId: true);
+                Enter(observer);
+                var observerScene = observer.Session.CurrentFormalDungeonScene()!;
+                var observerBefore = observer.Read();
+                using var observerStop = new CancellationTokenSource();
+                using var observerStream = new ControlledOutput();
+                await using var observerSender = new GameConnectionSender(observer.Owner, observerStream, observerStop, 0, (_, _, _, _, _) => { });
+                var observerContext = new GameConnectionContext(new(200, IPAddress.Loopback, observerStream, observerStop), observer.Owner, observer.Session, observerSender);
+                var handler = new DungeonHandler(f.Log, catalog, rooms, growth, kills,
+                    new TownProjection(towns, computer, null, items.EpicPieces, items: items.Items), new CharacterLevelProjection(computer),
+                    items: items.Items, pieces: items.EpicPieces, goldLimits: items.GoldLimits);
+                handler.PreparePartyContext(context); handler.PreparePartyContext(observerContext);
+                var result = f.Session.PickFormalDungeonItem(key, items.Items, items.EpicPieces, items.GoldLimits);
+                var picker = new PartyMember(new SocialActor(f.Owner, f.Session, f.Session.Selected!, f.Session.SelectionEpoch),
+                    f.Session.PublicCharacter(f.Session.Selected!.Id)!, 0);
+                var viewer = new PartyMember(new SocialActor(observer.Owner, observer.Session, observer.Session.Selected!, observer.Session.SelectionEpoch),
+                    observer.Session.PublicCharacter(observer.Session.Selected!.Id)!, 1);
+                PartyMember[] members = [picker, viewer];
+                Check(observer.Session.CanPublishFormalDungeon(observerScene), "组队观察投影使用加载后实际角色快照与当前Run版本");
+                await f.Session.PartyDungeonNoticeArrived!(new(PartyDungeonNoticeKind.Pickup, picker, members,
+                    Scene: result.Receipt, Pickup: result, Peer: picker.Actor.Character.Id));
+                await observer.Session.PartyDungeonNoticeArrived!(new(PartyDungeonNoticeKind.Pickup, viewer, members,
+                    Scene: observerScene, Pickup: result, Peer: picker.Actor.Character.Id));
+                Check(observerStream.Opcodes.SequenceEqual(new ushort[] { 39 }) && Same(observerBefore, observer.Read()) &&
+                    BinaryPrimitives.ReadUInt16LittleEndian(observerStream.Frames[0].AsSpan(32)) == ushort.MaxValue,
+                    "组队旁观者仅移除地面对象，不接收拾取者钱包、额度、虚假实体或ACK，不修改自己的资产");
+            }
+            ushort[] expected = party ? [39, 563, 1460, 1461, 43, 574] : [39, 563, 1460, 1461, 43];
+            Check(stream.Opcodes.SequenceEqual(expected) &&
+                stream.Frames[0].Length == 35 && BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[0].AsSpan(32)) == ushort.MaxValue &&
+                stream.Frames[1].AsSpan(16).SequenceEqual(Convert.FromHexString("0001C74C9D0003000000")) &&
+                stream.Frames[4].AsSpan(16).SequenceEqual(new byte[] { 1 }),
+                "账号材料依次发布无实体拾取、563余额、两级额度和ACK，组队保留574任务尾包：" + string.Join(',', stream.Opcodes));
+            var committed = f.Read();
+            Check(committed.Inventory.Items.SequenceEqual(original.Inventory.Items) &&
+                committed.Inventory.AccountWallet.Material(10308807) is { Balance: 3, RaidEarned: 0 } &&
+                f.Count("character_dungeon_drop_pickups") == 1,
+                "真实材料拾取只写原钱包和一条原地面收据，不创建实体或攻坚周获得");
+            int sent = stream.Frames.Count;
+            await commands.DispatchAsync(context, new(1, 43, request));
+            Check(stream.Frames.Count == sent + 1 && stream.Frames[^1].AsSpan(16).SequenceEqual(new byte[] { 0, 19, 0 }) && Same(committed, f.Read()),
+                "同一地面材料重复请求不重复入账或补发钱包成功");
+        }
+
         async Task CollectionPublicationAsync()
         {
             using var f = new Fixture(towns, characters, learning, quests, false);
@@ -747,13 +818,14 @@ internal static class FormalDungeonPublicationTests
         public ServerLog Log { get; }
         public LostResultRepository? LostResult { get; }
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool lostResult,
-            bool losePickup = false, bool loseDiscard = false, NewCharacter? creation = null)
+            bool losePickup = false, bool loseDiscard = false, NewCharacter? creation = null, bool reserveFirstId = false)
         {
             path = Path.Combine(root, "game.db");
             repository = new(path, quests);
             Owner = new AccountOwners().Acquire("formal-publication", () => { });
             LostResult = lostResult ? new(repository, loseGrowth: !losePickup && !loseDiscard, losePickup: losePickup, loseDiscard: loseDiscard) : null;
             Session = new(LostResult is null ? repository : LostResult, towns, Owner);
+            if (reserveFirstId) repository.Create(Owner, CharacterCreation.Prepare("ReservedId", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get));
             Created = repository.Create(Owner, creation ?? CharacterCreation.Prepare("FormalSend", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });
             Session.Select(Created.Slot);
@@ -976,9 +1048,9 @@ internal static class FormalDungeonPublicationTests
         public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
             inner.CommitCollectBox(owner, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
-            DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces = null)
+            DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces = null, ItemCatalog? items = null)
         {
-            var result = inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces);
+            var result = inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces, items);
             PickupCalls++;
             PickupDuplicate = result.Duplicate;
             if (PickupCalls == 1 && losePickup) throw new IOException("合成拾取已提交但返回结果丢失");

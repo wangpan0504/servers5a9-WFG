@@ -237,6 +237,7 @@ internal static partial class DatabaseSchemaTests
             FiendwarRecoveryUpgrade(root);
             FiendwarTitlesUpgrade(root);
             AccountMaterialsUpgrade(root);
+            AccountMaterialPickupsUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);
@@ -772,7 +773,7 @@ internal static partial class DatabaseSchemaTests
             .Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal));
         string[] batchColumns = ColumnNames(db, batches).Where(name => name is not "\"freeze_format\"" and not "\"combat_sequence\"" and
             not "\"committed_epoch\"" and not "\"map_snapshot\"" and not "\"uses_collection\"").ToArray();
-        string[] pickupColumns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        string[] pickupColumns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"" and not "\"account_material\"").ToArray();
         bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
         Execute(db, "PRAGMA foreign_keys=OFF");
         try
@@ -789,7 +790,7 @@ internal static partial class DatabaseSchemaTests
         RewindQuestDungeonAlternatives(db);
         // 回退v45前的真实拾取定义，同时移除v162列及碎片分支，不能留下新旧混合夹具。
         const string pickups = "character_dungeon_drop_pickups";
-        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"" and not "\"account_material\"").ToArray();
         ChangeReceiptDefinition(db, pickups, _ => DungeonDropCollectionSchema.PreviousPickupDefinition, columns);
         foreach (string table in new[] { "character_dungeon_pickup_receipts", "character_dungeon_drop_pickups" })
             ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
@@ -3652,7 +3653,7 @@ internal static partial class DatabaseSchemaTests
         }
         // 集合依赖夹具使用真实旧版拾取定义，不能保留v162列及碎片分支。
         const string pickups = "character_dungeon_drop_pickups";
-        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"").ToArray();
+        string[] columns = ColumnNames(db, pickups).Where(name => name is not "\"receipt_format\"" and not "\"destination_list\"" and not "\"epic_piece\"" and not "\"account_material\"").ToArray();
         ChangeReceiptDefinition(db, pickups, _ => DungeonDropCollectionSchema.PreviousPickupDefinition, columns);
         Execute(db, """
             CREATE INDEX drop_dependency_index ON character_dungeon_drop_objects(core);

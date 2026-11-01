@@ -35,7 +35,7 @@ internal sealed partial class CharacterRepository
     }
 
     DungeonPickupCommit CommitDropCollectionPickup(AccountOwners.Lease dbOwner, Character expected,
-        DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces)
+        DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces, ItemCatalog? items)
     {
         var ground = prepared.Ground;
         ground.Content.Validate();
@@ -58,7 +58,7 @@ internal sealed partial class CharacterRepository
         else
         {
             VerifyStoredGround(db, tx, dbOwner, current.Id, ground);
-            if (ReadFrozenPickup(db, tx, dbOwner, current, prepared, pieces) is { } stored) return stored;
+            if (ReadFrozenPickup(db, tx, dbOwner, current, prepared, pieces, items) is { } stored) return stored;
         }
         var receipts = DungeonTransientReceipts.Get(dbOwner, prepared.Identity);
         if (receipts.Pickups.TryGetValue(ground.Reservation.GroundKey, out var previous))
@@ -69,6 +69,9 @@ internal sealed partial class CharacterRepository
         ValidateInventoryPlan(expected, plan);
         CurrencyKind? currency = ground.IsGold ? CurrencyKind.Gold : CurrencyWallet.RewardKind(ground.Core.ItemId);
         var piece = !ground.IsGold ? pieces?.ByPiece.GetValueOrDefault(ground.Core.ItemId) : null;
+        ItemTemplate? template = null;
+        if (!ground.IsGold && items is not null) items.TryGet(ground.Core.ItemId, out template);
+        var material = template?.AccountMaterial;
         int amount = ground.IsGold ? ground.GoldAmount : ground.Core.Count;
         InventorySlot destination = new(InventoryListType.Main, 0);
         if (piece is not null)
@@ -79,6 +82,20 @@ internal sealed partial class CharacterRepository
                 !plan.After.EpicPieces.Same(plan.Before.EpicPieces.Set(pieces!, piece.Index, (int)balance)) ||
                 !SameInventory(plan.After with { EpicPieces = plan.Before.EpicPieces }, new(plan.Before, plan.Before, "epic_piece_comparison")))
                 throw new InvalidDataException("碎片拾取必须只增加原冻结物品对应的账号图鉴数量");
+        }
+        else if (material is not null)
+        {
+            var before = plan.Before.AccountWallet.Material(ground.Core.ItemId);
+            long balance = (long)before.Balance + amount;
+            if (currency is not null || ground.Core.Kind != ItemKind.Material || amount > template!.StackLimit ||
+                (ground.Core with { Value = 1 }) != new ItemCore(ground.Core.ItemId, ItemKind.Material, 1) ||
+                balance > material.HoldingLimit || plan.ChangedSlots.Length != 0 ||
+                !plan.After.AccountWallet.Material(ground.Core.ItemId).Same(before with { Balance = checked((int)balance) }) ||
+                !SameInventory(plan.After with
+                {
+                    AccountWallet = plan.After.AccountWallet.SetMaterial(ground.Core.ItemId, before)
+                }, new(plan.Before, plan.Before, "account_material_comparison")))
+                throw new InvalidDataException("账号材料拾取必须只增加原材料完整余额，不改变实体、周额度或其他资产");
         }
         else if (currency is { } kindOfCurrency)
         {
@@ -105,20 +122,22 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("集合实体拾取没有保留完整冻结Core及原堆叠UID");
         }
         var committed = CommitInventoryInTransaction(db, tx, dbOwner, current, expected, plan);
-        var actual = currency is null && piece is null ? committed.Inventory.Find(destination)
+        var actual = currency is null && piece is null && material is null ? committed.Inventory.Find(destination)
             ?? throw new InvalidOperationException("提交后缺少目的物品") : null;
         var epicPiece = piece is null ? null : new EpicPiecePickup(piece.Index, piece.PieceId, amount,
             committed.Inventory.EpicPieces.Get(piece.Index), committed.Inventory.EpicPieces.Revision);
+        var accountMaterial = material is null ? null : new AccountMaterialPickup(ground.Core.ItemId, amount,
+            committed.Inventory.AccountWallet.Material(ground.Core.ItemId).Balance, committed.Inventory.AccountWallet.Revision);
         var cached = new DungeonTransientPickup(prepared, committed.Revision, destination, actual?.Uid ?? 0, actual?.Core,
             currency, amount, currency is { } kind ? CurrencyWallet.Get(committed.Inventory, kind) : 0,
-            committed.Inventory.AccountWallet.Revision, epicPiece);
-        if (!passive) SaveFrozenPickup(db, tx, dbOwner, committed, prepared, destination, actual?.Uid ?? 0, actual?.Core, currency, amount, epicPiece);
+            committed.Inventory.AccountWallet.Revision, epicPiece, accountMaterial);
+        if (!passive) SaveFrozenPickup(db, tx, dbOwner, committed, prepared, destination, actual?.Uid ?? 0, actual?.Core, currency, amount, epicPiece, accountMaterial);
         var itemRead = PrepareInventoryItemRead(db, tx, dbOwner.Account, committed.Id, current.Inventory, committed.Inventory);
         tx.Commit();
         RememberInventoryItems(committed.Inventory, itemRead);
         receipts.Pickups[ground.Reservation.GroundKey] = cached;
         cached.Committed = true;
-        return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount) { EpicPiece = epicPiece };
+        return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount) { EpicPiece = epicPiece, AccountMaterial = accountMaterial };
     }
 
     static InventorySlot PickupSlot(InventorySnapshot inventory, ItemCore core, short index)

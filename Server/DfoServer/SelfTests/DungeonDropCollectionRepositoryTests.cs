@@ -332,7 +332,7 @@ internal static class DungeonDropCollectionRepositoryTests
             var role = repository.Create(owner, new NewCharacter("DurableDB", new(38, 0, 1677, 222), null)
                 { DungeonState = CharacterDungeonState.NewOrdinary });
             string[] batchColumns = ["freeze_format", "combat_sequence", "committed_epoch", "map_snapshot", "uses_collection"];
-            string[] pickupColumns = ["receipt_format", "destination_list", "epic_piece"];
+            string[] pickupColumns = ["receipt_format", "destination_list", "epic_piece", "account_material"];
             using (var db = Open())
             using (var tx = db.BeginTransaction())
             {
@@ -340,7 +340,7 @@ internal static class DungeonDropCollectionRepositoryTests
                 command.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_dungeon_drop_pickups'";
                 string currentSql = (string)command.ExecuteScalar()!;
                 string published = DungeonDropCollectionSchema.PickupDefinition;
-                int currentStart = currentSql.IndexOf("CHECK((epic_piece", StringComparison.Ordinal);
+                int currentStart = currentSql.IndexOf("CHECK((account_material", StringComparison.Ordinal);
                 int currentEnd = currentSql.IndexOf("PRIMARY KEY(", currentStart, StringComparison.Ordinal);
                 int publishedStart = published.IndexOf("CHECK((destination_slot", StringComparison.Ordinal);
                 int publishedEnd = published.IndexOf("PRIMARY KEY(", publishedStart, StringComparison.Ordinal);
@@ -591,9 +591,9 @@ internal static class DungeonDropCollectionRepositoryTests
             var authority = new FixtureAuthority();
             That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([monsters], []), authority, out var run, out _),
                 "持久集合沿既有Run与可信死亡入口，不建立第二死亡入口");
-            var reservations = Enumerable.Range(0, 5).Select(index => new DungeonGroundReservation(20,
+            var reservations = Enumerable.Range(0, 6).Select(index => new DungeonGroundReservation(20,
                 checked((uint)(400 + index)), map, 100, 100, 0, index))
-                .Append(new DungeonGroundReservation(21, 405, map, 100, 100, 0)).ToArray();
+                .Append(new DungeonGroundReservation(21, 406, map, 100, 100, 0)).ToArray();
             var ground = new DungeonGroundState(run!, [monsters], reservations, "明确合成持久集合来源");
             That(run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
                 "持久集合使用完成加载的合法Run");
@@ -606,7 +606,8 @@ internal static class DungeonDropCollectionRepositoryTests
                 new(null, 25),
                 new(DungeonDropCreation.Create(resources.Items.Get(31440), 1, _ => 0, now,
                     amplification: new EquipmentAmplificationDropPolicy(resources.Amplifications.Rules))),
-                new(InventoryRewardGrantService.Create(resources.Items.Get(10300000), 3, now))
+                new(InventoryRewardGrantService.Create(resources.Items.Get(10300000), 3, now)),
+                new(InventoryRewardGrantService.Create(resources.Items.Get(10308807), 3, now))
             ];
             int draws = 0;
             var loot = ground.GetOrFreezeAssets(pending, () => { draws++; return contents; }, "fixture/durable-death-v1");
@@ -614,7 +615,7 @@ internal static class DungeonDropCollectionRepositoryTests
 
             if (scenario == 3)
             {
-                Sql("CREATE TRIGGER durable_object_fail AFTER INSERT ON character_dungeon_drop_objects WHEN NEW.ordinal=4 BEGIN SELECT RAISE(ABORT,'late durable object failure'); END");
+                Sql("CREATE TRIGGER durable_object_fail AFTER INSERT ON character_dungeon_drop_objects WHEN NEW.ordinal=5 BEGIN SELECT RAISE(ABORT,'late durable object failure'); END");
                 Reject<SqliteException>(() => repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot),
                     "最后一件冻结对象SQL失败须回滚同笔成长和前面全部冻结对象");
                 That(Query("SELECT count(*) FROM character_dungeon_growth_receipts") == 0 &&
@@ -684,10 +685,10 @@ internal static class DungeonDropCollectionRepositoryTests
                 }
                 That(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted && ground.PublishCommitted(pending, loot),
                     "SQL死亡重放完成后仍沿原Run确认并发布原对象");
-                That(ground.Snapshot.Items.Length == (scenario == 2 ? 0 : 5) &&
+                That(ground.Snapshot.Items.Length == (scenario == 2 ? 0 : 6) &&
                     Query("SELECT count(*) FROM character_dungeon_drop_batches") == 1 &&
-                    Query("SELECT count(*) FROM character_dungeon_drop_objects") == (scenario == 2 ? 0 : 5),
-                    "空集合有持久死亡头且零对象；命中保留五个独立对象");
+                    Query("SELECT count(*) FROM character_dungeon_drop_objects") == (scenario == 2 ? 0 : 6),
+                    "空集合有持久死亡头且零对象；命中保留六个独立对象");
             }
             else
             {
@@ -708,10 +709,10 @@ internal static class DungeonDropCollectionRepositoryTests
                     var plan = item.IsGold ? DungeonPickupPlanning.Gold(current, item.Content, resources.GoldLimits) :
                         DungeonPickupPlanning.Item(current, item.Content, resources.Items.Get(item.Core.ItemId), resources.GoldLimits, resources.EpicPieces, now);
                     That(plan.Accepted, "冻结道具、账号材料、金币与装备均沿真实拾取规划");
-                    if (scenario == 3 && item.Reservation.Ordinal is 0 or 4)
+                    if (scenario == 3 && item.Reservation.Ordinal is 0 or 4 or 5)
                     {
                         Sql("CREATE TRIGGER durable_pickup_fail AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'late durable pickup failure'); END");
-                        Reject<SqliteException>(() => repository.CommitDungeonPickup(owner, current, pickup, plan.Plan!, resources.EpicPieces),
+                        Reject<SqliteException>(() => repository.CommitDungeonPickup(owner, current, pickup, plan.Plan!, resources.EpicPieces, resources.Items),
                             "实际拾取receipt晚期失败须回滚已写库存、UID和revision");
                         That(SkillRepositoryTests.Equal(repository.LoadCharacter(owner, current.Slot), current) &&
                             Query("SELECT count(*) FROM character_dungeon_drop_pickups") == item.Reservation.Ordinal &&
@@ -721,13 +722,13 @@ internal static class DungeonDropCollectionRepositoryTests
                         DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
                     }
                     var before = current;
-                    var result = repository.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    var result = repository.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items);
                     DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
                     var reopened = new CharacterRepository(path);
-                    var replay = reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    var replay = reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items);
                     That(replay.Duplicate && replay.ProjectionCurrent && replay.Destination == result.Destination &&
                         replay.ItemUid == result.ItemUid && replay.Currency == result.Currency && replay.Amount == result.Amount &&
-                        replay.EpicPiece == result.EpicPiece &&
+                        replay.EpicPiece == result.EpicPiece && replay.AccountMaterial == result.AccountMaterial &&
                         SkillRepositoryTests.Equal(replay.Character, result.Character),
                         "拾取成功后清cache并重开Repository只回放实际UID、槽、数量和当前资产");
                     if (item.Reservation.Ordinal == 4)
@@ -740,12 +741,12 @@ internal static class DungeonDropCollectionRepositoryTests
                             "碎片真实图鉴余额及bookRevision持久重放，不伪造实体UID或货币");
                         Sql("UPDATE character_dungeon_drop_pickups SET epic_piece=json_set(epic_piece,'$.Index',99) WHERE ground_key=" + item.Reservation.GroundKey);
                         DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
-                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces),
+                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items),
                             "碎片JSON索引必须与原冻结物品及实际资源目录一致，不能借另一图鉴条目重放");
                         Sql("UPDATE character_dungeon_drop_pickups SET epic_piece=json_set(epic_piece,'$.Index',0) WHERE ground_key=" + item.Reservation.GroundKey);
                         var saved = reopened.Save(owner, replay.Character, replay.Character.Position, replay.Character.Return);
                         DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
-                        var late = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                        var late = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items);
                         That(late.Duplicate && !late.ProjectionCurrent && late.EpicPiece == result.EpicPiece &&
                             SkillRepositoryTests.Equal(late.Character, saved),
                             "碎片回执晚到保留当前角色revision，只关闭过期投影而不重复加图鉴");
@@ -755,11 +756,29 @@ internal static class DungeonDropCollectionRepositoryTests
                         That(result.ItemUid > int.MaxValue && result.Character.Inventory.Find(result.Destination) is { } actual &&
                             actual.Uid == result.ItemUid && actual.Core == item.Core,
                             "持久拾取receipt保留64位UID及原完整Core，三件消耗品不变一件");
+                    if (item.Reservation.Ordinal == 5)
+                    {
+                        That(result.ItemUid == 0 && result.Currency is null && result.EpicPiece is null &&
+                            result.AccountMaterial is { ItemId: 10308807, Amount: 3, Balance: 3 } material &&
+                            material.WalletRevision == before.Inventory.AccountWallet.Revision + 1 &&
+                            replay.Character.Inventory.Items.SequenceEqual(before.Inventory.Items) &&
+                            replay.Character.Inventory.AccountWallet.Material(material.ItemId) is { Balance: 3, RaidEarned: 0 },
+                            "账号材料持久回执携带实际钱包版本，不建实体、不占周额度、清缓存不重复到账");
+                        Sql("UPDATE character_dungeon_drop_pickups SET account_material=json_set(account_material,'$.ItemId',10305912) WHERE ground_key=" + item.Reservation.GroundKey);
+                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items),
+                            "持久账号材料JSON不能借另一材料编号重放");
+                        Sql("UPDATE character_dungeon_drop_pickups SET account_material=json_set(account_material,'$.ItemId',10308807) WHERE ground_key=" + item.Reservation.GroundKey);
+                        var saved = reopened.Save(owner, replay.Character, replay.Character.Position, replay.Character.Return);
+                        var late = reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items);
+                        That(late.Duplicate && !late.ProjectionCurrent && late.AccountMaterial == result.AccountMaterial &&
+                            SkillRepositoryTests.Equal(late.Character, saved), "账号材料迟到收据保留当前角色，旧版本不重发钱包结果");
+                        result = result with { Character = saved };
+                    }
                     if (item.Reservation.Ordinal == 0)
                     {
                         Sql("UPDATE character_dungeon_drop_pickups SET receipt_format=0");
                         DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
-                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces),
+                        Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items),
                             "历史格式拾取回执不能充当当前格式的去重成功");
                         That(SkillRepositoryTests.Equal(reopened.LoadCharacter(owner, before.Slot), result.Character) &&
                             Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE receipt_format=0") == 1,
@@ -769,26 +788,27 @@ internal static class DungeonDropCollectionRepositoryTests
                     var changedContent = item.IsGold ? new DungeonGroundContent(null, 26) :
                         new DungeonGroundContent(item.Core with { Value = item.Core.Value + 1 });
                     Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before,
-                        new(pickup.Identity, item with { Content = changedContent }), plan.Plan!, resources.EpicPieces),
+                        new(pickup.Identity, item with { Content = changedContent }), plan.Plan!, resources.EpicPieces, resources.Items),
                         "已领取key重放仍复验原完整内容，不能以receipt绕过来源校验");
                     Reject<InvalidDataException>(() => reopened.CommitDungeonPickup(owner, before,
-                        new(pickup.Identity with { InstanceId = Guid.NewGuid() }, item), plan.Plan!, resources.EpicPieces),
+                        new(pickup.Identity with { InstanceId = Guid.NewGuid() }, item), plan.Plan!, resources.EpicPieces, resources.Items),
                         "同数值key不能借另一实例回放原拾取");
                     DungeonTransientReceipts.Forget(owner, run.Snapshot.Identity);
-                    var twice = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces);
+                    var twice = new CharacterRepository(path).CommitDungeonPickup(owner, before, pickup, plan.Plan!, resources.EpicPieces, resources.Items);
                     That(twice.Duplicate && twice.ItemUid == result.ItemUid &&
                         SkillRepositoryTests.Equal(twice.Character, result.Character) && ground.ConfirmPickup(pickup),
                         "反复失去临时receipt也只消费一次原地面对象");
                     current = twice.Character;
                 }
-                That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 5 &&
-                    current.Revision == committed.Character.Revision + 6 &&
+                That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 6 &&
+                    current.Revision == committed.Character.Revision + 8 &&
                     current.Inventory.EpicPieces.Get(0) == 3 &&
+                    current.Inventory.AccountWallet.Material(10308807) is { Balance: 3, RaidEarned: 0 } &&
                     current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
                     current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == reserved.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) + 7 &&
                     current.Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
                     current.Inventory.Items.Single(item => item.Core.ItemId == 31440 && item.Position.List == InventoryListType.Main).Core == contents[3].Item &&
-                    draws == 1, "五件资产及五个持久拾取各一次，重复结果不增加数量、经验或抽样");
+                    draws == 1, "六件资产及六个持久拾取各一次，重复结果不增加数量、经验或抽样");
             }
             completed = true;
         }

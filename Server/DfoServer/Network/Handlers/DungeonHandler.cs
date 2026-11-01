@@ -768,7 +768,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount))
             : DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
                 receipt.Character.Id, new byte[8], receipt.Character.Id,
-                commit.EpicPiece is not null ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
+                commit.EpicPiece is not null || commit.AccountMaterial is not null
+                    ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
         await context.Notify(NotiPacketType.GET_ITEM, notice, "formal_pickup_notice", Guard);
         if (commit.EpicPiece is { } fragment)
         {
@@ -777,6 +778,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             log.Write("epic_piece_pickup", new { Connection = context.Id, Character = receipt.Character.Id,
                 Ground = parsed.GroundObjectKey, fragment.PieceId, fragment.Amount, fragment.Balance, fragment.BookRevision, commit.Duplicate });
         }
+        else if (commit.AccountMaterial is not null)
+            await town.AccountMaterialsAsync(context, receipt.Character, canSend: Guard);
         else
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 destination.List, [destination]), "formal_pickup_inventory", Guard);

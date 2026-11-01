@@ -139,8 +139,62 @@ internal static class AccountMaterialTests
             That(repository.LoadAccountWallet(other).Materials.IsEmpty, "账号材料不会串到其他账号");
             Console.WriteLine("PASS account material resources/persistence: 8 checks");
             RunBooster(towns, resources, repository, path);
+            RunShop(towns, resources, repository, path);
         }
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+
+    static void RunShop(TownCatalog towns, ItemResources resources, CharacterRepository repository, string path)
+    {
+        // 匹配资源的账号材料均未直接在售；隔离目录为已有商店商品声明账号容器，不修改共享PVF或目录。
+        const int itemId = 3175;
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var template = resources.Items.Get(Coin) with { Id = itemId,
+            ShopPrice = ItemShopPrice.Parse(new("[price]\n10"), false, 0) };
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [itemId] = template });
+        var shop = new InventoryShopService(catalog, resources.Shops, resources.GoldLimits, resources.EpicPieces);
+        using var owner = new AccountOwners().Acquire("material-shop", () => { });
+        int week = AccountMaterialService.RaidWeek(Now);
+        var character = repository.Create(owner, new("MatShop", towns.Room, towns.InitialReturn)
+        {
+            Inventory = InventorySnapshot.Empty with { Gold = 1000,
+                Items = [.. Enumerable.Range(121, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot),
+                    InventoryRewardGrantService.Create(resources.Items.Get(3167))))] }
+        });
+        var prior = new AccountMaterialBalance(3997).EarnRaid(character.Id, week, 1300);
+        character = repository.CommitInventory(owner, character, new(character.Inventory, character.Inventory with
+            { AccountWallet = character.Inventory.AccountWallet.SetMaterial(itemId, prior) }, "material_shop_fixture", new(character)));
+        var bought = shop.Buy(character, new(itemId, 3, 2, 1), out var receipt, Now);
+        That(bought.Accepted && bought.Plan!.ChangedSlots.IsEmpty && bought.Plan.After.Gold == 970 &&
+            bought.Plan.After.AccountWallet.Material(itemId).Same(prior with { Balance = 4000 }) &&
+            receipt is { Position.Index: -1, Count: 3, Core.ItemId: itemId, Core.Count: 3 },
+            "隔离账号材料直售满材料页仍足额到账，仅扣实际价款，不使用实体槽或攻坚获得额度");
+        byte[] body = ShopPackets.Bought(bought, receipt);
+        That(body.Length == 141 && body[0] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)) == 970 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(17)) == ushort.MaxValue &&
+            BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(19)) == itemId &&
+            BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(23)) == 3 && body[140] == 0,
+            "账号材料购买ACK21完整123B行使用FFFF和本次三件数量，不把最终四千余额写成购入数量");
+        using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
+        {
+            db.Open(); using var command = db.CreateCommand();
+            command.CommandText = "CREATE TRIGGER reject_shop_material BEFORE INSERT ON account_material_audit BEGIN SELECT RAISE(ABORT,'fixture'); END";
+            command.ExecuteNonQuery();
+            bool failed = false;
+            try { InventoryService.Commit(repository, owner, character, bought); }
+            catch (SqliteException) { failed = true; }
+            var reloaded = repository.LoadCharacter(owner, character.Slot);
+            That(failed && reloaded.Revision == character.Revision && reloaded.Inventory.Gold == 1000 &&
+                reloaded.Inventory.AccountWallet.Same(character.Inventory.AccountWallet) && reloaded.Inventory.Items.SequenceEqual(character.Inventory.Items),
+                "购买账号材料后段审计失败，费用、余额、周额度、库存及版本同事务回滚");
+            command.CommandText = "DROP TRIGGER reject_shop_material"; command.ExecuteNonQuery();
+        }
+        var committed = InventoryService.Commit(repository, owner, character, bought);
+        That(committed.Inventory.AccountWallet.Material(itemId).Balance == 4000 && committed.Inventory.Gold == 970 &&
+            committed.Inventory.Items.SequenceEqual(character.Inventory.Items) &&
+            !shop.Buy(committed, new(itemId, 1, 2, 1), out _, Now).Accepted,
+            "材料实际提交不创建额外UID；满持有额度拒绝下一笔并保留原资产");
+        Console.WriteLine("PASS isolated account material shop: 4 checks; matching resources have no direct material SKU");
     }
 
     static void RunBooster(TownCatalog towns, ItemResources resources, CharacterRepository repository, string path)

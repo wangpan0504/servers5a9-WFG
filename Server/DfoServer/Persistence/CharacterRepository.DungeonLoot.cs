@@ -43,13 +43,13 @@ internal sealed partial class CharacterRepository
     }
 
     public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
-        DungeonGroundPickupPreparation prepared, InventoryPlan plan, DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null) => owner.Execute(() =>
+        DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces = null, ItemCatalog? items = null) => owner.Execute(() =>
     {
         var ground = prepared.Ground;
         if (ground.InventoryOrigin is not null)
             return CommitDiscardPickup(owner, expected, prepared, plan);
         if (ground.UsesCollectionLedger || !ground.IsGold && pieces?.ByPiece.ContainsKey(ground.Core.ItemId) == true)
-            return CommitDropCollectionPickup(owner, expected, prepared, plan, pieces);
+            return CommitDropCollectionPickup(owner, expected, prepared, plan, pieces, items);
         ValidateLootCore(ground.Core);
         if (prepared.Identity.CharacterId != expected.Id || prepared.Identity.InstanceId != ground.DeathIdentity.InstanceId ||
             prepared.Identity.TaskAttempt != ground.DeathIdentity.TaskAttempt)

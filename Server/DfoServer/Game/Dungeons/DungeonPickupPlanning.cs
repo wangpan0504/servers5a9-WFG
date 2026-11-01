@@ -42,6 +42,15 @@ internal static class DungeonPickupPlanning
                 return InventoryResult.Reject();
             return Currency(character, kind, core.Count, limits);
         }
+        if (template.AccountMaterial is { } material)
+        {
+            if (core.Kind != ItemKind.Material || core.Count > template.StackLimit || core.IsExpired(now.ToUnixTimeSeconds()) ||
+                (core with { Value = 1 }) != new ItemCore(core.ItemId, ItemKind.Material, 1))
+                return InventoryResult.Reject(19);
+            var grant = AccountMaterialService.Grant(character.Inventory, character.Id, core.ItemId, core.Count, material, now, raidReward: false);
+            return grant.Accepted ? grant with { Plan = new(grant.Plan!.Before, grant.Plan.After,
+                "dungeon_pickup_account_material", new(character)) } : grant;
+        }
         return InventoryRewardGrantService.TryGrantCore(character, core, template, pieces, now, usePickupSlotPolicy: true);
     }
 

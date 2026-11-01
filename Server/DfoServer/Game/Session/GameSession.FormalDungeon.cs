@@ -1461,7 +1461,7 @@ internal sealed partial class GameSession
         }
         // 存储异常/结果不明保留同一准备；原key重试只读已提交receipt，不重发资产。
         DungeonPickupCommit commit;
-        try { commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!, pieces); }
+        try { commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!, pieces, items); }
         catch (InventoryQualificationExpiredException)
         {
             dungeon.Ground.CancelPickup(prepared);

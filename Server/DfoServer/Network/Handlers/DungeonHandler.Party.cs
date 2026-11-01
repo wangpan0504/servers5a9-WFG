@@ -416,13 +416,16 @@ internal sealed partial class DungeonHandler
         var body = commit.Currency == CurrencyKind.Gold
             ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot)
             : DungeonPickupPackets.OrdinaryNotification(key, picked.Character.Id, new byte[8], picked.Character.Id,
-                commit.EpicPiece is not null ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
+                commit.EpicPiece is not null || commit.AccountMaterial is not null
+                    ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
         await context.Notify(NotiPacketType.GET_ITEM, body, "party_pickup_notice", Guard);
         if (scene.Character.Id != picked.Character.Id) return;
         if (!commit.ProjectionCurrent) { context.Disconnect(); return; }
         if (commit.EpicPiece is { } fragment)
             await context.Notify(NotiPacketType.EPIC_BOOK_INFO,
                 EpicBookPackets.Info(picked.Character.Inventory.EpicPieces, pieces!, [fragment.Index]), "party_pickup_epic_piece", Guard);
+        else if (commit.AccountMaterial is not null)
+            await town.AccountMaterialsAsync(context, picked.Character, canSend: Guard);
         else
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(picked.Character.Inventory,
                 destination.List, [destination]), "party_pickup_inventory", Guard);
