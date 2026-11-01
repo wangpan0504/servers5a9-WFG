@@ -152,6 +152,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PcRoomBuffProjection.PostAsync(context);
         await GuildTrainingProjection.PostAsync(context, clear: true);
+        await BossSelectionBuffProjection.PostAsync(context, force: true);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
@@ -522,6 +523,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。
         await PcRoomBuffProjection.PostAsync(context, CanSend);
         await GuildTrainingProjection.PostAsync(context, clear: true);
+        await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);

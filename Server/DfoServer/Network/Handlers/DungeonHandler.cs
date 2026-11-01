@@ -446,6 +446,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await DungeonEnterCountProjection.RefreshGriefAsync(context, dungeons, Guard);
         else if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair })
             await DungeonEnterCountProjection.RefreshDespairAsync(context, dungeons, Guard);
+        await BossSelectionBuffProjection.PostAsync(context, canSend: Guard);
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         return CommandResult.Handled;
 
@@ -512,6 +513,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         await PcRoomBuffProjection.PostAsync(context, Guard);
         town.GuildEconomy?.Post(context, force: true);
         await GuildTrainingProjection.PostAsync(context);
+        await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Guard);
         if (receipt.ScriptedReturnId != Guid.Empty)
         {
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);

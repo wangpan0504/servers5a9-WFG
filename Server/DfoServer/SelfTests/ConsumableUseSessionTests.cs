@@ -39,10 +39,21 @@ internal static class ConsumableUseSessionTests
             That(boss.Use().Outcome == ConsumableUseOutcome.Committed && boss.Count == 2 &&
                 boss.Read().Inventory.BossSelectionBuff is { Remaining: 5 }, "城镇使用后源与五次效果一起落库");
             var saved = boss.Read().Inventory.BossSelectionBuff;
+            var projection = boss.Session.PlanBossSelectionProjection();
+            That(projection is { BuffId: 300, Remaining: 5, RemovedBuffId: 0 } && projection.IsCurrent() &&
+                boss.Session.PlanBossSelectionProjection() is null, "已提交五次只投影一次，普通请求不重复发BUFF");
+            var replay = boss.Session.PlanBossSelectionProjection(force: true);
+            That(replay is { BuffId: 300, Remaining: 5 } && replay.IsCurrent() && !projection!.IsCurrent(),
+                "Actor重建重投并使旧投影回执失效");
             boss.Session.ReturnToRoster(); boss.Select();
+            That(!replay!.IsCurrent() && boss.Session.PlanBossSelectionProjection() is { BuffId: 300, Remaining: 5 },
+                "重选只从持久库存重投并拒绝旧epoch发布");
             That(BossSelectionBuff.Same(saved, boss.Session.Selected!.Inventory.BossSelectionBuff), "重选只重读原次数与日截止，不补造药水");
             boss.Clock.Advance(TimeSpan.FromMilliseconds(saved!.UntilMilliseconds - boss.Clock.GetUtcNow().ToUnixTimeMilliseconds()));
             That(!boss.Read().Inventory.BossSelectionBuff!.Active(boss.Clock.GetUtcNow().ToUnixTimeMilliseconds()), "每日06:00等号使旧药效失效");
+            var expired = boss.Session.PlanBossSelectionProjection();
+            That(expired is { RemovedBuffId: 300, BuffId: 0, Remaining: 0 } && expired.IsCurrent() &&
+                boss.Session.PlanBossSelectionProjection() is null, "每日06:00仅移除原图标一次，不发零次487或续期");
         }
         using (var f = new Fixture(towns, characters))
         {

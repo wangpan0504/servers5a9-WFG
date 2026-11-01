@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
@@ -166,10 +167,21 @@ internal static partial class FormalDungeonTcpTests
                 cosmoCharacter = InventoryService.Commit(repository, owner, cosmoCharacter,
                     inventory.Grant(cosmoCharacter, usePass ? [new(3330, 40), new(10305821, 4), new(490705255, 1)] : [new(3330, 40), new(10305821, 4)]));
             }
+            int bossBuffId = usePass ? 1275 : 300;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            {
+                var repository = new CharacterRepository(fixture.Database);
+                var current = repository.LoadCharacter(owner, cosmoCharacter.Slot);
+                That(resources.ItemResources.RecoveryConsumables.TryGet(usePass ? 490012682 : 490705256, out var potion) &&
+                    potion.BossSelectionBuff is not null, "7191投影使用真实药型资源");
+                var after = current.Inventory with { BossSelectionBuff = new(usePass ? 490012682 : 490705256,
+                    usePass ? 2 : 1, DailyBoosterUsage.NextReset(DateTimeOffset.UtcNow).ToUnixTimeMilliseconds(), potion.BossSelectionBuff!) };
+                repository.CommitInventory(owner, current, new(current.Inventory, after, "test_boss_projection"));
+            }
             fixture.Sql("UPDATE character_fatigue SET remaining=8,used=maximum-8 WHERE character_id=$p0", cosmoCharacter.Id);
             using (var peer = Open(fixture))
             {
-                peer.Select(cosmoCharacter.Slot, prepared: true, resumeTown: true, room: false);
+                peer.Select(cosmoCharacter.Slot, prepared: true, resumeTown: true, room: false, bossBuff: (bossBuffId, usePass ? 2 : 1));
                 SelectMap(peer);
                 byte[] cosmoRequest = new byte[25];
                 BinaryPrimitives.WriteUInt32LittleEndian(cosmoRequest, 7191);
@@ -189,6 +201,11 @@ internal static partial class FormalDungeonTcpTests
                     information[18] == 0x0B && map[7] == 1,
                     "合法超星空16经正式分派发送28和29，保留独立深渊模式且不伪造柱子坐标");
                 peer.Expect(0, 14);
+                if (usePass)
+                    peer.Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(bossBuffId); writer.Write(1); writer.Write(0); writer.Write(0); }));
+                else
+                    peer.Expect(0, 488, Build(writer => { writer.Write((byte)1); writer.Write(bossBuffId); }));
                 peer.Barrier();
                 That(Tickets(peer.Id) == (usePass ? 40 : 0) &&
                     fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10305821", peer.Id) is var stones &&
@@ -198,6 +215,9 @@ internal static partial class FormalDungeonTcpTests
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                     "超星空真实TCP优先消耗1通行证，否则扣40邀请函和4灵石；均扣8疲劳，只建立一次尝试");
                 Load(peer);
+                if (usePass)
+                    peer.Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(bossBuffId); writer.Write(1); writer.Write(0); writer.Write(0); }));
                 peer.Expect(0, 36);
                 peer.Barrier();
                 string loaded = fixture.Snapshot();
@@ -205,13 +225,13 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(37, new byte[8]);
                 peer.Barrier();
                 That(fixture.Snapshot() == loaded, "超星空重复入场及加载不重复扣除或预留实例");
-                VerifyCosmoActualRoute(fixture, peer, resources, information, map);
+                VerifyCosmoActualRoute(fixture, peer, resources, information, map, usePass);
             }
         }
     }
     // 真实socket沿本次随机终点验收，不通过反复抽取或替换正式资源伪造白斯命中。
     // 三种指定领主和拾取SQL回滚另由受控Session/Handler资源用例完整覆盖。
-    static void VerifyCosmoActualRoute(TcpTestFixture fixture, TcpPeer peer, TcpTestResources resources, byte[] information, byte[] map)
+    static void VerifyCosmoActualRoute(TcpTestFixture fixture, TcpPeer peer, TcpTestResources resources, byte[] information, byte[] map, bool strongBuff)
     {
         var definition = SelfTestCatalogs.Dungeons(resources.Archive).Get(7191);
         var maze = definition.Mazes.Single(row => row.SourceOrdinal == information[7]);
@@ -223,7 +243,11 @@ internal static partial class FormalDungeonTcpTests
             {
                 byte[] move = new byte[100]; move[0] = (byte)route[room].X; move[1] = (byte)route[room].Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                Load(peer); peer.Expect(0, 36);
+                Load(peer);
+                if (strongBuff)
+                    peer.Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(1275); writer.Write(1); writer.Write(0); writer.Write(0); }));
+                peer.Expect(0, 36);
             }
             That(map[0] == route[room].X && map[1] == route[room].Y, "超星空TCP沿真实四房拓扑前进");
             foreach (int offset in Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
