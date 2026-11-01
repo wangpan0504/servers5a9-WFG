@@ -187,9 +187,18 @@ internal static class CreatureSystemTests
             InventoryRewardGrantService.Create(template));
         That(granted.Creature is { Name: "初始宠物", Level: 1, Satiety: 100 }, "统一授予使用CRE实体默认名，不用空串或装备物品名");
         That(CreatureRules.DefaultName(new string('中', 16)) == new string('中', 15), "默认名按30字节完整汉字截取");
-        foreach (string? name in new string?[] { null, "" })
-            That(CreatureCatalog.Read(1, 1, new PvfLib.PvfDocument("[name]\n`物品默认名`"),
-                new PvfLib.CreatureFile { Name = name }).Name == "物品默认名", "CRE未声明或显式空名称时回退EQU名称");
+        That(CreatureCatalog.Read(1, 1, new PvfLib.PvfDocument("[name]\n`物品默认名`"),
+            new PvfLib.CreatureFile()).Name == "物品默认名", "CRE未声明名称时保留EQU兜底");
+        That(CreatureCatalog.Read(1, 1, new PvfLib.PvfDocument("[name]\n`物品默认名`"),
+            new PvfLib.CreatureFile { Name = "" }).Name == "", "CRE显式空名称不得变成持久化的自定义显示名");
+        var unnamedCatalog = new CreatureCatalog(path => path.StartsWith("stackable/", StringComparison.Ordinal) ? "[stackable type]\n`[creature]` 1" : "[equipment type]\n`[creature]` 0\n[creature species]\n10\n[name]\n`物品默认名`",
+            _ => new PvfLib.CreatureFile { Name = "", MaximumLevel = 4 },
+            new Dictionary<int, string> { [7001] = "pet.equ" },
+            new Dictionary<int, string> { [25] = "rename.stk" },
+            new Dictionary<int, string> { [10] = "pet.cre" }, "2\n5\n9");
+        var unnamed = InventoryRewardGrantService.CreateItem(template with { CreatureName = unnamedCatalog.Get(7001)!.Name },
+            new(InventoryListType.Pet, 0), InventoryRewardGrantService.Create(template));
+        That(unnamed.Creature!.Name == "", "显式空CRE的新授予保留空名");
         var room = new DfoServer.GameWorld.Towns.Location(38, 1, 1, 1);
         var source = granted with { Uid = 101, Position = CreatureRules.EquippedSlot, Core = granted.Core with { Value = 101 },
             Creature = granted.Creature! with { Name = "", Level = 2, Experience = 3, ExpireTime = 2000 } };
@@ -203,6 +212,19 @@ internal static class CreatureSystemTests
         var customCharacter = character with { Inventory = new([custom, card]) };
         That(service.Normalize(customCharacter, 1000).Plan!.After.Find(CreatureRules.EquippedSlot) == custom,
             "非空自定义名归一不覆盖");
+        var unnamedService = new CreatureService(unnamedCatalog);
+        That(unnamedService.Normalize(character, 1000).Plan!.After.Find(CreatureRules.EquippedSlot) == source,
+            "显式空CRE的旧空名实例不回填装备名称");
+        foreach (string name in new[] { "自定义", "物品默认名" })
+        {
+            var named = source with { Creature = source.Creature! with { Name = name } };
+            var namedCharacter = character with { Inventory = new([named, card]) };
+            That(unnamedService.Normalize(namedCharacter, 1000).Plan!.After.Find(named.Position) == named,
+                "保留旧非空名，包括与装备名称相同的自定义名");
+        }
+        var unnamedReset = unnamedService.Rename(customCharacter, card.Position, "", 1000).Plan!.After;
+        That(unnamedReset.Find(source.Position)!.Creature!.Name == "" && unnamedReset.Find(card.Position)!.Core.Count == 1,
+            "显式空CRE的空名重置消费一次卡并恢复空名");
         var reset = service.Rename(customCharacter, card.Position, "", 1000).Plan!.After;
         That(reset.Find(CreatureRules.EquippedSlot)!.Creature!.Name == "初始宠物" && reset.Find(card.Position)!.Core.Count == 1,
             "空名改名仍消费一次卡，恢复实际资源默认名");

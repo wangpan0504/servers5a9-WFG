@@ -102,7 +102,7 @@ internal static class CreatureSkinTcpTests
             current = InventoryService.Commit(repository, owner, current,
                 new CurrencyService(resources.ItemResources.GoldLimits).Grant(current, CurrencyKind.Cera, 3000));
             var inventory = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
-            InventoryService.Commit(repository, owner, current, inventory.Grant(current, [new(63000, 1), new(63023, 1)]));
+            InventoryService.Commit(repository, owner, current, inventory.Grant(current, [new(400990446, 1), new(63023, 1)]));
             repository.Create(owner, new("SkinSecond", resources.Towns.Room, resources.Towns.InitialReturn)
             { Job = 15, Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills });
         }
@@ -164,17 +164,17 @@ internal static class CreatureSkinTcpTests
             peer.Barrier();
             That(Snapshot() == before, "重复旧源请求及缺券哨兵均不再扣费、不误引导已开通角色购买");
             string pets = PetAssets();
-            MoveCreature(peer, 0, 63000, 26, 0, 63000, 0);
-            MoveCreature(peer, 1, 63023, 33, 0, 63000, 63023);
+            MoveCreature(peer, 0, 400990446, 26, 0, 400990446, 0);
+            MoveCreature(peer, 1, 63023, 33, 0, 400990446, 63023);
             string equipped = Snapshot();
             peer.Send(19, MoveBody(1, 63023, 33, 0));
             peer.Expect(1, 19, [0, 23, 0, 7, 3]);
             peer.Barrier();
             That(Snapshot() == equipped, "旧源幻化穿入重放不能反向卸装或复制资产");
-            MoveCreature(peer, 5, 0, 26, 63000, 0, 0);
-            MoveCreature(peer, 5, 63000, 26, 0, 63000, 63023);
-            MoveCreature(peer, 1, 0, 33, 63023, 63000, 0);
-            MoveCreature(peer, 1, 63023, 33, 0, 63000, 63023);
+            MoveCreature(peer, 5, 0, 26, 400990446, 0, 0);
+            MoveCreature(peer, 5, 400990446, 26, 0, 400990446, 63023);
+            MoveCreature(peer, 1, 0, 33, 63023, 400990446, 0);
+            MoveCreature(peer, 1, 63023, 33, 0, 400990446, 63023);
             That(PetAssets() == pets, "真宠与幻化独立穿脱不更改任一UID、完整核心或成长详情");
         }
         await fixture.StopAsync();
@@ -183,7 +183,7 @@ internal static class CreatureSkinTcpTests
         {
             var selected = peer.Select();
             CheckPlayer(selected.Single(packet => packet.Kind == 0 && packet.Opcode == 2 && packet.Body[0] == 1).Body);
-            CheckActor(selected.Single(packet => packet.Kind == 0 && packet.Opcode == 2 && packet.Body[0] == 0).Body, 63000, 63023);
+            CheckActor(selected.Single(packet => packet.Kind == 0 && packet.Opcode == 2 && packet.Body[0] == 0).Body, 400990446, 63023);
             peer.Barrier();
         }
         using (var peer = Open(fixture))
@@ -248,6 +248,8 @@ internal static class CreatureSkinTcpTests
         int realOffset = 156 + nameWidth + body[133 + nameWidth] * 25;
         That(body[0] == 0 && body[132 + nameWidth] == 0 && U32(body, 94) == skin && U32(body, realOffset) == real,
             "城镇及重登分别恢复真实26声明和固定头独立外观，不以幻化覆盖真宠；卸真宠保留33资产但清外观");
+        if (real == 400990446)
+            That(U32(body, realOffset + 4) == 0, "维多利亚穿脱幻化及重登的Actor名称保持CRE显式空串");
         That(body[^18] == 100, "穿脱真宠及宠物外观后的Actor保留城镇队伍血蓝100%，不能等下次建队的153纠正");
     }
 }

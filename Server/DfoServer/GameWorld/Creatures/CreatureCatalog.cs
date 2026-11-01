@@ -144,7 +144,8 @@ internal sealed class CreatureCatalog
             script.EvolutionSpecies ?? 0, Integer(item, "output index", 0),
             script.SkillRecoveryTime ?? 0, script.OverSkillRecoveryTime ?? 0, script.OverSkillLevel ?? 0)
         {
-            Name = string.IsNullOrEmpty(script.Name) ? item.Section("name").Trim('`', ' ', '\r', '\n') : script.Name,
+            // 显式空名表示不显示实体名称，只有未声明时才使用装备名称兜底。
+            Name = script.Name ?? item.Section("name").Trim('`', ' ', '\r', '\n'),
             UsesExperienceItems = script.SelectiveGrowth is { UsingExperienceItem: not (null or 0) } growth &&
                 (growth.ItemA is >= 0 || growth.ItemB is >= 0 || growth.ExperienceItem is >= 0),
             ItemsPerLevel = divisor,
