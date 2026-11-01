@@ -188,14 +188,14 @@ internal sealed partial class CharacterRepository
     }
 
     static DungeonPickupCommit? ReadFrozenPickup(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,
-        Character current, DungeonGroundPickupPreparation prepared, EpicPieceCatalog? pieces = null)
+        Character current, DungeonGroundPickupPreparation prepared, EpicPieceCatalog? pieces = null, ItemCatalog? items = null)
     {
         var ground = prepared.Ground;
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT account,event_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,
-              after_balance,account_revision,revision,receipt_format,destination_list,epic_piece
+              after_balance,account_revision,revision,receipt_format,destination_list,epic_piece,account_material
             FROM character_dungeon_drop_pickups WHERE character_id=$id AND instance_id=$instance AND ground_key=$key
             """;
         command.Parameters.AddWithValue("$id", current.Id);
@@ -217,7 +217,23 @@ internal sealed partial class CharacterRepository
         InventorySlot destination = new(InventoryListType.Main, 0);
         long uid = 0;
         EpicPiecePickup? epicPiece = null;
-        if (!reader.IsDBNull(14))
+        AccountMaterialPickup? accountMaterial = null;
+        if (!reader.IsDBNull(15))
+        {
+            accountMaterial = JsonSerializer.Deserialize<AccountMaterialPickup>(reader.GetString(15))
+                ?? throw new InvalidDataException("持久账号材料回执缺少完整余额结果");
+            if (ground.IsGold || currency is not null || !reader.IsDBNull(14) || items is null ||
+                !items.TryGet(ground.Core.ItemId, out var template) || template.AccountMaterial is null ||
+                ground.Core.Kind != ItemKind.Material || amount > template.StackLimit ||
+                (ground.Core with { Value = 1 }) != new ItemCore(ground.Core.ItemId, ItemKind.Material, 1) ||
+                accountMaterial.ItemId != ground.Core.ItemId || accountMaterial.Amount != amount ||
+                accountMaterial.Balance < amount || accountMaterial.Balance > template.AccountMaterial.HoldingLimit ||
+                accountMaterial.WalletRevision <= 0)
+                throw new InvalidDataException("持久账号材料回执不属于原材料及完整冻结数量");
+            projection = projection && current.Inventory.AccountWallet.Revision == accountMaterial.WalletRevision &&
+                current.Inventory.AccountWallet.Material(accountMaterial.ItemId).Balance == accountMaterial.Balance;
+        }
+        else if (!reader.IsDBNull(14))
         {
             epicPiece = JsonSerializer.Deserialize<EpicPiecePickup>(reader.GetString(14))
                 ?? throw new InvalidDataException("持久碎片回执缺少完整图鉴结果");
@@ -242,19 +258,19 @@ internal sealed partial class CharacterRepository
             core.Validate();
             projection = projection && current.Inventory.Find(destination) is { } actual && actual.Uid == uid && actual.Core == core;
         }
-        return new(current, true, destination, uid, projection, currency, amount) { EpicPiece = epicPiece };
+        return new(current, true, destination, uid, projection, currency, amount) { EpicPiece = epicPiece, AccountMaterial = accountMaterial };
     }
 
     static void SaveFrozenPickup(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,
         Character committed, DungeonGroundPickupPreparation prepared, InventorySlot destination, long uid, ItemCore? core,
-        CurrencyKind? currency, int amount, EpicPiecePickup? epicPiece = null)
+        CurrencyKind? currency, int amount, EpicPiecePickup? epicPiece = null, AccountMaterialPickup? accountMaterial = null)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             INSERT INTO character_dungeon_drop_pickups(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,
-              destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision,receipt_format,destination_list,epic_piece)
-            VALUES($id,$account,$event,$key,$instance,$attempt,$epoch,$slot,$uid,$core,$currency,$amount,$balance,$accountRevision,$revision,1,$list,$epic)
+              destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision,receipt_format,destination_list,epic_piece,account_material)
+            VALUES($id,$account,$event,$key,$instance,$attempt,$epoch,$slot,$uid,$core,$currency,$amount,$balance,$accountRevision,$revision,1,$list,$epic,$material)
             """;
         command.Parameters.AddWithValue("$id", committed.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
@@ -263,9 +279,10 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$instance", prepared.Identity.InstanceId.ToString("N"));
         command.Parameters.AddWithValue("$attempt", prepared.Identity.TaskAttempt);
         command.Parameters.AddWithValue("$epoch", prepared.Identity.Epoch);
-        command.Parameters.AddWithValue("$slot", currency is null && epicPiece is null ? destination.Index : DBNull.Value);
-        command.Parameters.AddWithValue("$list", currency is null && epicPiece is null ? (int)destination.List : DBNull.Value);
-        command.Parameters.AddWithValue("$uid", currency is null && epicPiece is null ? uid : DBNull.Value);
+        bool physical = currency is null && epicPiece is null && accountMaterial is null;
+        command.Parameters.AddWithValue("$slot", physical ? destination.Index : DBNull.Value);
+        command.Parameters.AddWithValue("$list", physical ? (int)destination.List : DBNull.Value);
+        command.Parameters.AddWithValue("$uid", physical ? uid : DBNull.Value);
         command.Parameters.AddWithValue("$core", core is null ? DBNull.Value : JsonSerializer.Serialize(core));
         command.Parameters.AddWithValue("$currency", currency is { } kind ? (int)kind : DBNull.Value);
         command.Parameters.AddWithValue("$amount", amount);
@@ -273,6 +290,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$accountRevision", currency is null ? DBNull.Value : committed.Inventory.AccountWallet.Revision);
         command.Parameters.AddWithValue("$revision", committed.Revision);
         command.Parameters.AddWithValue("$epic", epicPiece is null ? DBNull.Value : JsonSerializer.Serialize(epicPiece));
+        command.Parameters.AddWithValue("$material", accountMaterial is null ? DBNull.Value : JsonSerializer.Serialize(accountMaterial));
         command.ExecuteNonQuery();
     }
 }

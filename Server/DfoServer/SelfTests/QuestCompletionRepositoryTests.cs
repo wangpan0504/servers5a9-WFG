@@ -473,7 +473,8 @@ internal static class QuestCompletionRepositoryTests
             return result;
         }
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan,
-            DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null) => inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces);
+            DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null, DfoServer.GameWorld.Items.ItemCatalog? items = null) =>
+            inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces, items);
         public Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared) =>
             inner.CommitDungeonDiscard(owner, prepared);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan)

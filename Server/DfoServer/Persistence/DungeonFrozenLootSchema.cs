@@ -45,7 +45,8 @@ internal static class DungeonFrozenLootSchema
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             query.Parameters.AddWithValue("$table", Pickups);
             string sql = (string)query.ExecuteScalar()!;
-            if (!sql.Contains("CHECK((epic_piece IS NULL", StringComparison.Ordinal))
+            if (!sql.Contains("CHECK((epic_piece IS NULL", StringComparison.Ordinal) &&
+                !sql.Contains("CHECK((account_material IS NULL", StringComparison.Ordinal))
             {
                 var (original, replacement) = EpicPieceAssetCheck(sql);
                 SqliteMigrations.ReplaceTableConstraint(db, tx, Pickups, original, replacement);
@@ -63,7 +64,8 @@ internal static class DungeonFrozenLootSchema
             if (index < 0) throw new InvalidDataException("持久冻结表缺少已确认约束: " + table);
             sql = sql.Insert(index, string.Join(",", columns) + ",");
         }
-        if (table == Pickups && !sql.Contains("CHECK((epic_piece IS NULL", StringComparison.Ordinal))
+        if (table == Pickups && !sql.Contains("CHECK((epic_piece IS NULL", StringComparison.Ordinal) &&
+            !sql.Contains("CHECK((account_material IS NULL", StringComparison.Ordinal))
         {
             var (original, replacement) = EpicPieceAssetCheck(sql);
             sql = sql.Replace(original, replacement, StringComparison.Ordinal);
@@ -101,12 +103,15 @@ internal static class DungeonFrozenLootSchema
             WHERE freeze_format=1 AND (combat_sequence IS NULL OR committed_epoch IS NULL OR map_snapshot IS NULL OR uses_collection IS NULL)
             """;
         if (Convert.ToInt64(query.ExecuteScalar()) != 0) throw new InvalidDataException("当前格式冻结头缺少完整来源");
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_dungeon_drop_pickups') WHERE name='account_material'";
+        bool accountMaterials = Convert.ToInt32(query.ExecuteScalar()) != 0;
         query.CommandText = """
             SELECT count(*) FROM character_dungeon_drop_pickups
             WHERE receipt_format=1 AND ((epic_piece IS NULL AND ((currency_kind IS NULL AND destination_list IS NULL) OR
               (currency_kind IS NOT NULL AND destination_list IS NOT NULL))) OR
               (epic_piece IS NOT NULL AND destination_list IS NOT NULL))
             """;
+        if (accountMaterials) query.CommandText += " AND account_material IS NULL";
         if (Convert.ToInt64(query.ExecuteScalar()) != 0) throw new InvalidDataException("当前格式拾取缺少实际容器身份");
     }
 }

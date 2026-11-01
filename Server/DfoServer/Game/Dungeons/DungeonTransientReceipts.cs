@@ -80,7 +80,7 @@ internal sealed class DungeonTransientFatigue(string rule, long beforeRevision, 
 // 不保留整份Character/Inventory快照；仅保存本次拾取的实际UID、核心、余额和提交版本。
 internal sealed class DungeonTransientPickup(DungeonGroundPickupPreparation preparation, long revision,
     InventorySlot destination, long uid, ItemCore? core, CurrencyKind? currency, int amount, long balance, long walletRevision,
-    EpicPiecePickup? epicPiece = null)
+    EpicPiecePickup? epicPiece = null, AccountMaterialPickup? accountMaterial = null)
 {
     public DungeonGroundPickupPreparation Preparation { get; } = preparation;
     public long Revision { get; } = revision;
@@ -97,12 +97,15 @@ internal sealed class DungeonTransientPickup(DungeonGroundPickupPreparation prep
         Verify(incoming);
         if (!Committed) throw new InvalidOperationException("拾取结果尚未确认，不能按成功回放");
         bool same = current.Revision == Revision;
-        bool projection = epicPiece is { } piece
+        bool projection = accountMaterial is { } material
+            ? same && current.Inventory.AccountWallet.Revision == material.WalletRevision &&
+                current.Inventory.AccountWallet.Material(material.ItemId).Balance == material.Balance
+            : epicPiece is { } piece
             ? same && current.Inventory.EpicPieces.Revision == piece.BookRevision && current.Inventory.EpicPieces.Get(piece.Index) == piece.Balance
             : currency is { } kind
             ? same && (!CurrencyWallet.IsAccount(kind) || current.Inventory.AccountWallet.Revision == walletRevision) &&
                 CurrencyWallet.Get(current.Inventory, kind) == balance
             : same && current.Inventory.Find(destination) is { } item && item.Uid == uid && item.Core == core;
-        return new(current, true, destination, uid, projection, currency, amount) { EpicPiece = epicPiece };
+        return new(current, true, destination, uid, projection, currency, amount) { EpicPiece = epicPiece, AccountMaterial = accountMaterial };
     }
 }

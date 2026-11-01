@@ -320,6 +320,7 @@ internal static class SqliteMigrations
         new(173, "账号材料余额与攻坚周额度", (db, tx) => Execute(db, tx,
             (AccountMaterialSchema.Balances + AccountMaterialSchema.Audit + AccountMaterialSchema.RewardIndex)
                 .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(174, "账号材料地面拾取持久回执", AccountMaterialPickupSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -954,7 +955,9 @@ internal static class SqliteMigrations
             string canonical = NormalizeTable(actual, table);
             if (canonical == NormalizeTable(current, table) ||
                 canonical == NormalizeTable(DungeonObjectKeySchema.Definition(current, table), table) ||
-                canonical == NormalizeTable(DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(current, table), table), table)) continue;
+                canonical == NormalizeTable(DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(current, table), table), table) ||
+                canonical == NormalizeTable(AccountMaterialPickupSchema.Definition(DungeonFrozenLootSchema.Definition(
+                    DungeonObjectKeySchema.Definition(current, table), table), table), table)) continue;
             if (canonical != NormalizeTable(previous, table))
                 throw new InvalidDataException("UID迁移不是已确认的原拾取结构: " + table);
             query.CommandText = """
@@ -2060,11 +2063,12 @@ internal static class SqliteMigrations
         if (query.ExecuteScalar() is not 0L) return;
         string batches = DungeonDropCollectionSchema.Definition.Split(';')
             .Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal));
+        string pickups = DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(DungeonDropCollectionSchema.PickupDefinition,
+            DungeonFrozenLootSchema.Pickups), DungeonFrozenLootSchema.Pickups);
         if (!KnownTable(db, tx, DungeonFrozenLootSchema.Batches,
                 DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(batches, DungeonFrozenLootSchema.Batches), DungeonFrozenLootSchema.Batches)) ||
-            !KnownTable(db, tx, DungeonFrozenLootSchema.Pickups,
-                DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(DungeonDropCollectionSchema.PickupDefinition,
-                    DungeonFrozenLootSchema.Pickups), DungeonFrozenLootSchema.Pickups)))
+            !KnownTable(db, tx, DungeonFrozenLootSchema.Pickups, pickups) &&
+            !KnownTable(db, tx, DungeonFrozenLootSchema.Pickups, AccountMaterialPickupSchema.Definition(pickups, DungeonFrozenLootSchema.Pickups)))
             throw new InvalidDataException("v160缺少普通普雷表且不符合已知完整冻结结构");
         DungeonFrozenLootSchema.Validate(db, tx);
         PreyNormalProgressSchema.Upgrade(db, tx);
@@ -2459,7 +2463,8 @@ internal static class SqliteMigrations
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             query.Parameters.AddWithValue("$table",table);
-            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(expected, table), table),table))
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(AccountMaterialPickupSchema.Definition(
+                DungeonFrozenLootSchema.Definition(DungeonObjectKeySchema.Definition(expected, table), table), table),table))
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         PvpRatingSchema.ValidateIndex(db, tx);

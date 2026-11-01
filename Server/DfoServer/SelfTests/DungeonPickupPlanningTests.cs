@@ -65,6 +65,22 @@ internal static class DungeonPickupPlanningTests
             core with { Value = 1001 }, core with { ItemId = 2 }, core with { Attr = 1 } })
             That(!DungeonPickupPlanning.Item(full, new(invalid), fragment, limits, pieces, now).Accepted,
                 "过期、超堆叠、错模板或携带装备属性的碎片拒绝，不把特殊核心折算成数量");
+        var material = fragment with { Id = 10308807, AccountMaterial = new(4000, 4000, 1300) };
+        var materialCore = new ItemCore(material.Id, ItemKind.Material, 3);
+        var prior = new AccountMaterialBalance(3997).EarnRaid(full.Id, AccountMaterialService.RaidWeek(now), 1300);
+        var materialOwner = full with { Inventory = full.Inventory with
+            { AccountWallet = full.Inventory.AccountWallet.SetMaterial(material.Id, prior) } };
+        var materialGrant = DungeonPickupPlanning.Item(materialOwner, new(materialCore), material, limits, pieces, now);
+        That(materialGrant.Accepted && materialGrant.Plan!.ChangedSlots.IsEmpty && materialGrant.Plan.ChangedCurrencies.IsEmpty &&
+            materialGrant.Plan.After.AccountWallet.Material(material.Id).Same(prior with { Balance = 4000 }) &&
+            materialGrant.Plan.After.Items.SequenceEqual(full.Inventory.Items),
+            "账号材料满背包仍完整到账，持有恰好到顶且不增加或重置攻坚周额度");
+        That(!DungeonPickupPlanning.Item(materialOwner, new(materialCore with { Value = 4 }), material, limits, pieces, now).Accepted,
+            "账号材料持有余量不足拒绝整件，不部分消费原冻结对象");
+        foreach (var invalid in new[] { materialCore with { Attr = 1 }, materialCore with { ExpireTime = (int)now.ToUnixTimeSeconds() + 60 },
+            materialCore with { Extension120 = 1 }, materialCore with { Value = 1001 } })
+            That(!DungeonPickupPlanning.Item(materialOwner, new(invalid), material, limits, pieces, now).Accepted,
+                "账号材料不丢弃特殊核心属性、期限或额外数量来折算钱包");
         Console.WriteLine($"PASS {Count - before} 地面金币纯规划与携带上限断言");
     }
 

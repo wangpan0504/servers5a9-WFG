@@ -98,6 +98,14 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         ItemCore? receivedCore = null;
         if (rewardKind is { } kind)
             position = new(InventoryListType.Main, ItemSlotBoundService.CurrencySlot(kind)!.Value);
+        else if (template.AccountMaterial is not null)
+        {
+            if (after.AccountWallet.Material(request.ItemId).Balance - paid.AccountWallet.Material(request.ItemId).Balance != count)
+                throw new InvalidDataException("账号材料购买未形成完整到账增量");
+            // ACK21仍带本次购入核心以更新购买计数；FFFF不占用Main实体，余额沿563发布。
+            position = new(InventoryListType.Main, -1);
+            receivedCore = InventoryRewardGrantService.Create(template, count, now);
+        }
         else
         {
             var received = after.Items.First(item => item.Core.ItemId == request.ItemId &&
