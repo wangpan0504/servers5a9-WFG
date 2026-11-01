@@ -427,6 +427,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 普通普雷终末没有后继选图；沿既有单人/组队回城提交释放实例与结算占用。
         if (option == 1 && current.Entry.IsOrdinaryPrey && current.Entry.DungeonId == 400000046)
             option = (byte)DungeonResultOption.ReturnTown;
+        // 希望入场已消费1598抽签许可，不能用旧任务原地重开；先提交退场，再从城镇重新抽签。
+        // 必须确认回城选项，缺失ACK会保留客户端结果页的输入锁。
+        if (option == (byte)DungeonResultOption.Retry && current.Entry.Hope is not null)
+            option = (byte)DungeonResultOption.ReturnTown;
         uint? retryTarget = option == 0 ? OrdinaryDungeonContinuation.Target(current.Entry, dungeons) : current.Entry.DungeonId;
         if (option == 0 && retryTarget is null) option = (byte)DungeonResultOption.ReturnTown;
         if (context.Session.PartyDungeon is { } party)

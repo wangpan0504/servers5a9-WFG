@@ -143,9 +143,40 @@ internal static partial class FormalDungeonTcpTests
         That(f.Query("SELECT count(*) FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id) is [[1L]] &&
             f.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest) is [[0L]],
             "同实例唯一收据且不污染普通完成历史");
-        peer.Send(42);peer.Expect(1,42,[1]);
-        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);peer.Expect(0,24);
+        peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
         QuestLifecycleTcpTests.DrainNotifications(peer);
+        // 独立测试库模拟最后一次已耗尽；不改变在线角色快照或通关回执。
+        f.Sql("UPDATE character_dungeon_incount SET daily_used=$p0,weekly_used=$p1 WHERE character_id=$p2 AND dungeon=$p3",
+            incountRow.Limit,Math.Max(incountRow.WeeklyLimit,1),created.Id,incountRow.CountKey);
+        string countsBeforeRetry = CountState();
+        string attemptBeforeRetry = f.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0",created.Id);
+        string rewardsBeforeRetry = f.Snapshot("SELECT * FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id);
+        peer.Send(72,[2,0]);peer.Expect(1,72,[1,2,0]);
+        peer.Send(72,[1,0]);
+        var returned = PartyDungeonTcpTests.Drain(peer);
+        int ack = Array.FindIndex(returned,p => p is {Kind:1,Opcode:72,Body:[1,1,2]});
+        int state = Array.FindIndex(returned,p => p is {Kind:0,Opcode:3,Body:[1,_,_,0]});
+        int townNotice = Array.FindIndex(returned,p => p is {Kind:0,Opcode:24});
+        That(ack >= 0 && state > ack && townNotice > state && returned.All(p => p.Opcode is not (28 or 29)),
+            "希望次数耗尽再次挑战必须确认回城并结束旧场景，不能静默丢弃72");
+        That(CountState() == countsBeforeRetry &&
+            f.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0",created.Id) == attemptBeforeRetry &&
+            f.Snapshot("SELECT * FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id) == rewardsBeforeRetry,
+            "希望拒绝重试不重扣次数、不创建尝试、不重复专属奖励");
+        peer.Send(72,[1,0]);peer.Barrier();
+        peer.Send(1598,[]);peer.Expect(1,1598,[1,0,0,0,0]);
+        peer.Send(15,Build(w=>w.Write((uint)8523)));peer.Expect(1,15,[1]);
+        QuestLifecycleTcpTests.DrainNotifications(peer);
+        peer.Send(16,entry);peer.Expect(1,16,[0,9,0,0]);peer.Barrier();
+        That(CountState() == countsBeforeRetry,"返回选图仍拒绝已耗尽次数，不绕过准入");
+        peer.Send(132);peer.Expect(1,132,[1]);QuestLifecycleTcpTests.DrainNotifications(peer);
+        f.Sql("UPDATE character_dungeon_incount SET daily_used=0,weekly_used=0 WHERE character_id=$p0 AND dungeon=$p1",
+            created.Id,incountRow.CountKey);
+        peer.Send(1598,[]);peer.Expect(1,1598,[1,0,0,0,0]);
+        peer.Send(15,Build(w=>w.Write((uint)8523)));peer.Expect(1,15,[1]);QuestLifecycleTcpTests.DrainNotifications(peer);
+        peer.Send(16,entry);That(peer.Expect(1,31).Body[0] == 1,"次数恢复后可重新选择希望并分配新任务");
+        peer.Expect(0,28);peer.Expect(0,29);QuestLifecycleTcpTests.DrainNotifications(peer);
+        peer.Send(42);peer.Expect(1,42,[1]);QuestLifecycleTcpTests.DrainNotifications(peer);
         var current = position;
         foreach (var (town,region) in new (byte,byte)[] { (54,1),(60,3),(60,1),(60,3),(54,1),(54,3),(63,0),(54,3),(54,1) })
         {
