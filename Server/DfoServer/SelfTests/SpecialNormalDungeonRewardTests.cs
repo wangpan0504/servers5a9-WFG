@@ -8,6 +8,7 @@ using DfoServer.GameWorld.Items;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Network.Builders;
 using DfoServer.Testing;
 using static DfoServer.Testing.TestCheck;
 
@@ -430,6 +431,9 @@ internal static class SpecialNormalDungeonRewardTests
                     state.Clear(admission with { Day = 20261024 }, 9607) == state &&
                     state.Information(20261026) == new AntonNormalSequenceInfo(0, 0, 1),
                     "终点重复不增量、迟到旧日不覆盖、跨日从首图重新开放");
+                That(AntonNormalSequencePackets.Information(state.Information(20261025))[13] == 0 &&
+                    AntonNormalSequencePackets.Information(state.Information(20261026))[13] == 1,
+                    "四分支完成心脏耗尽当日讨伐资格，跨日恢复，不能恒定开放或恒定压暗卡片");
                 That(!state.Allows(admission with { Day = 20261024 }, 9595) &&
                     !state.Allows(admission with { Branch = branch % 4 + 1 }, 9595), "拒绝回拨日与其他分支资格");
             }
@@ -456,6 +460,9 @@ internal static class SpecialNormalDungeonRewardTests
                 Play(fixture,catalog.Routes[0][index]);
                 var receipt = fixture.Session.CaptureAntonNormalSequence()!;
                 That(receipt.Info == new AntonNormalSequenceInfo((byte)(index+1),(1u << (index+1))-1,1), "真实六图逐次提交并开放后继");
+                var body = AntonNormalSequencePackets.Information(receipt.Info);
+                That(body[13] == (index < 5 ? 1 : 0) && body.AsSpan(14).SequenceEqual(new byte[2]),
+                    "真实结算后的可继续资格随六图进度投影，周次数不伪造");
                 fixture.Session.ReturnToRoster(); fixture.Session.Select(0,resumeTown:true); fixture.Session.MarkReady();
                 That(!fixture.Session.CanPublishAntonNormalSequence(receipt) && fixture.Session.CaptureAntonNormalSequence()!.Info == receipt.Info,
                     "重登读取持久进度并拒绝旧会话投影");

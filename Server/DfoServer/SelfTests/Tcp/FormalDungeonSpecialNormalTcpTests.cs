@@ -128,7 +128,8 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(871,[28,0,0,0]);
                 var body = peer.Expect(0,602).Body;
                 That(body.Length == 16 && U32(body) == 28 && body[4] == antonIndex && U32(body,5) == (1u << antonIndex)-1 &&
-                    U32(body,9) == antonBranch && body.AsSpan(13).SequenceEqual(new byte[3]), "序列28查询反映实际当日前序及分支");
+                    U32(body,9) == antonBranch && body[13] == 1 && body.AsSpan(14).SequenceEqual(new byte[2]),
+                    "序列28查询反映实际当日前序及分支，未完成讨伐保留卡片资格");
                 peer.Barrier();
             }
             if (sample.Id == 9595 && sample.Ticket)
@@ -415,7 +416,8 @@ internal static partial class FormalDungeonTcpTests
                             var antonProgress = fixture.Query("SELECT progress,branch FROM character_anton_normal_progress WHERE character_id=$p0",peer.Id);
                             That(antonProgress is [[long antonCompleted, long savedBranch]] && packet.Body.Length == 16 && U32(packet.Body) == 28 &&
                                 packet.Body[4] == antonCompleted && U32(packet.Body,5) == (1u << (int)antonCompleted)-1 && U32(packet.Body,9) == savedBranch &&
-                                packet.Body.AsSpan(13).SequenceEqual(new byte[3]), "安徒恩每次602与本角色已提交进度完全一致");
+                                packet.Body[13] == (antonCompleted < 6 ? 1 : 0) && packet.Body.AsSpan(14).SequenceEqual(new byte[2]),
+                                "安徒恩每次602与本角色已提交进度及剩余讨伐资格完全一致");
                             packets.Add(packet); continue;
                         }
                         if (prey)
