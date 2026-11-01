@@ -21,6 +21,14 @@ internal static class FiendwarPacketTests
             [1, 8, 12, 0xe8, 3, 0, 0, 0x58, 2, 0, 0], "timer10B精确偏移");
         Bytes(FiendwarPackets.Merchant(6, 120), [6, 120, 0, 0, 0], "商人停留秒数不能漏发");
         Bytes(FiendwarPackets.Symbols([(81, 1)]), [1, 81, 0, 0, 0, 1, 0, 0, 0], "符号行8B");
+        foreach (byte lane in new byte[] { 0, 1, 2 })
+        {
+            That(FiendwarRequests.SupportLane([lane]) == lane, "1570的三个原生路线号均可解析");
+            Bytes(FiendwarPackets.SupportNotice(lane), [lane], "NOTI1554只含路线号，不混入Boss操作或1530符号");
+        }
+        foreach (byte[] invalid in new byte[][] { [], [3], [255], [0, 0] })
+            Reject<InvalidDataException>(() => FiendwarRequests.SupportLane(invalid), "支援请求拒绝缺失、越界和尾字节");
+        Reject<ArgumentOutOfRangeException>(() => FiendwarPackets.SupportNotice(3), "支援通知不构造未知路线");
         Reject<ArgumentOutOfRangeException>(() => FiendwarPackets.Warnings(new (byte, byte)[256]), "禁止数量溢出截断");
         Reject<ArgumentOutOfRangeException>(() => FiendwarPackets.Users([new(3, 2, 1, 0)]), "未知成员操作拒绝");
         That(FiendwarRequests.Boss([2, 0, 0, 0, 4, 0, 0, 0]) == new FiendwarBossRequest(2, 4), "Boss请求2个u32");

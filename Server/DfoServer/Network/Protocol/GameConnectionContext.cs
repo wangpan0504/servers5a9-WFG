@@ -29,6 +29,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarMonsters { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
+    internal (Guid Instance, long Sequence)? FiendwarSupportDisplay { get; set; }
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
     public int Id => connection.Id;

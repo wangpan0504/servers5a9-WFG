@@ -10,6 +10,18 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed partial class DungeonHandler
 {
+    Task<CommandResult> FiendwarSupportAsync(GameConnectionContext context, Packet request)
+    {
+        byte lane;
+        try { lane = FiendwarRequests.SupportLane(request.Body); }
+        catch (InvalidDataException) { return Task.FromResult(CommandResult.Unhandled); }
+        var change = context.Session.RequestFiendwarSupport(lane);
+        log.Write("fiendwar_support_request", new { Connection = context.Id, Lane = lane, Accepted = change is not null });
+        if (change is not null) context.Session.PublishRaidCombat(change);
+        // ACK1570登记的046D14A0直接返回；只广播真实NOTI1554，不编造成功正文。
+        return Task.FromResult(CommandResult.Handled);
+    }
+
     async Task<CommandResult> FiendwarBossAsync(GameConnectionContext context, Packet request)
     {
         var report = FiendwarRequests.Boss(request.Body);
@@ -19,9 +31,8 @@ internal sealed partial class DungeonHandler
         log.Write("fiendwar_boss_report", new { Connection = context.Id, report.Operation, report.Value, Accepted = change is not null });
         if (change is null) return CommandResult.Handled;
         context.Session.PublishRaidCombat(change);
-        // 00D310D0只读一个世界索引字节；拒绝请求不伪造成功回执。
-        await context.Reply(CmdPacketType.FIEND_WAR_BOSS_PROC,
-            [(byte)(context.Session.Selected!.Position.Area == 30 ? 0 : 1)], "fiendwar_boss_report");
+        // 00D310D0是NOTI1554的团长支援消费者，与CMD1554的Boss报告无关。
+        // 成果由原战况快照发布，不把同号通知的路线字节伪造成Boss成功ACK。
         return CommandResult.Handled;
     }
 
