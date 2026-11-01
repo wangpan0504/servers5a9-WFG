@@ -127,24 +127,33 @@ internal static partial class FormalDungeonTcpTests
         That((long)f.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",created.Id)[0][0]==fatigueBefore-16,
             "真实网络完整四区域仅扣16疲劳");
         That(progressTransitions == 1, "希望完整迷宫恰有一次权威目标完成UI转换");
-        peer.Send(34,Build(w=>{w.Write((ushort)34);w.Write(quest);w.Write(ushort.MaxValue);w.Write((ushort)1);w.Write(ushort.MaxValue);}));
-        That(peer.Expect(1,34).Body[0]==1,"原目标达成并真实终点死亡后34发奖");
-        var rewardNotices = new List<WirePacket>();
-        QuestLifecycleTcpTests.DrainNotifications(peer,rewardNotices.Add);
+        peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
+        QuestLifecycleTcpTests.DrainNotifications(peer);
+        That(f.Query("SELECT count(*) FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id) is [[0L]] &&
+            f.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest) is [[1L]],
+            "翻牌完成前不自动提交已达成任务，任务仍保留到牌面提交");
+        peer.Send(69);
+        PartyDungeonTcpTests.Drain(peer);
+        peer.Send(70);
+        PartyDungeonTcpTests.Drain(peer);
+        peer.Send(71,[0,0]);
+        var rewardNotices = PartyDungeonTcpTests.Drain(peer).ToList();
+        int cardAckIndex = rewardNotices.FindIndex(packet => packet.Kind == 1 && packet.Opcode == 71);
+        int finishIndex = rewardNotices.FindIndex(packet => packet.Kind == 1 && packet.Opcode == 34);
         int activeIndex = rewardNotices.FindIndex(packet => packet.Opcode == 574);
         int historyIndex = rewardNotices.FindIndex(packet => packet.Opcode == 356);
-        That(activeIndex >= 0 && rewardNotices[activeIndex].Body.AsSpan().SequenceEqual(new byte[4]) && historyIndex > activeIndex,
-            "希望最后活动槽领奖后按空574→356恢复完成历史，不能清除城镇开路资格；实际通知="+
-            string.Join(',',rewardNotices.Select(packet => packet.Opcode)));
+        That(cardAckIndex >= 0 && finishIndex > cardAckIndex && activeIndex > finishIndex &&
+            historyIndex > activeIndex && rewardNotices[activeIndex].Body.AsSpan().SequenceEqual(new byte[4]),
+            "已达成希望任务在免费牌提交后自动ACK34、清活动槽并回放完成历史；实际通知="+
+            string.Join(',',rewardNotices.Select(packet => packet.Kind+":"+packet.Opcode)));
         var history = rewardNotices[historyIndex].Body;
         That(U32(history) == 30000 && Enumerable.Range(1,29999).All(id => history[4+id] ==
                 (done.Contains(id) || id == 13700 ? 1 : 0)),
-            "希望领奖完整回放原完成位和显示兼容位，不把希望任务写成普通完成或伪造其它通路");
+            "自动交付完整回放原完成位和显示兼容位，不把希望任务写成普通完成或伪造其它通路");
         That(f.Query("SELECT count(*) FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id) is [[1L]] &&
+            f.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest) is [[0L]] &&
             f.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest) is [[0L]],
-            "同实例唯一收据且不污染普通完成历史");
-        peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
-        QuestLifecycleTcpTests.DrainNotifications(peer);
+            "自动交付只写实例收据、清本次接取且不污染普通完成历史");
         // 独立测试库模拟最后一次已耗尽；不改变在线角色快照或通关回执。
         f.Sql("UPDATE character_dungeon_incount SET daily_used=$p0,weekly_used=$p1 WHERE character_id=$p2 AND dungeon=$p3",
             incountRow.Limit,Math.Max(incountRow.WeeklyLimit,1),created.Id,incountRow.CountKey);

@@ -150,6 +150,20 @@ internal sealed partial class GameSession
         });
     }
 
+    // 只在本次免费牌已经实际领取后尝试自动交付；未达成条件时仍由既有 CanClaim 拒绝。
+    public OperationHopeFinishReceipt? FinishOperationHopeAfterCard(
+        GameWorld.Quests.QuestCatalog quests, GameWorld.Quests.QuestRewardParameterCatalog parameters,
+        GameWorld.Items.ItemCatalog itemCatalog, GameWorld.Items.GoldLimitCatalog goldLimits,
+        GameWorld.Items.EpicPieceCatalog pieces, GameWorld.Characters.CharacterGrowthCatalog growth)
+    {
+        var questId = owner.Execute(() => Ready && Phase == SessionPhase.Settlement &&
+            formalDungeon is { HopeRewardConfirmed: false, Settlement: { SelectedCard: not null }, Run.HopeBinding: { } binding }
+                ? binding.Acceptance.QuestId : (ushort?)null);
+        return questId is { } id
+            ? FinishOperationHope(id, ushort.MaxValue, 1, quests, parameters, itemCatalog, goldLimits, pieces, growth)
+            : null;
+    }
+
     public bool CanPublishOperationHope(OperationHopeFinishReceipt receipt) => owner.Execute(() => Ready &&
         SelectionEpoch == receipt.SelectionEpoch && ReferenceEquals(Selected,receipt.Commit.Character) &&
         formalDungeon?.Run.Snapshot.Identity == receipt.Identity && Phase == SessionPhase.Settlement);

@@ -1,6 +1,7 @@
 using DfoServer.Game.Dungeons;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
 using DfoServer.Network.Protocol;
 using DfoServer.Network.Projection.Inventory;
 
@@ -8,7 +9,8 @@ namespace DfoServer.Network.Projection;
 
 // 每个连接最多一个翻牌计时任务；重复70不重置时钟，断线取消并等待收尾。
 internal sealed class DungeonCardProjection(GameConnectionContext context, ServerLog log,
-    InventoryProjection? inventory = null, PartyDungeonService? partyDungeons = null) : IAsyncDisposable
+    InventoryProjection? inventory = null, PartyDungeonService? partyDungeons = null,
+    QuestCompletionHandler? hopeCompletion = null) : IAsyncDisposable
 {
     CancellationTokenSource? cancellation;
     Task pending = Task.CompletedTask;
@@ -63,6 +65,9 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
                 if (result.Inventory is { } changed)
                     await (inventory ?? throw new InvalidOperationException("自动翻牌缺少库存投影")).RefreshAsync(context, changed);
                 if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+                // 仅有已完成任务会在牌面提交后通过既有原子领奖合同自动交付；未达成条件时静默跳过。
+                if (hopeCompletion is not null)
+                    await hopeCompletion.CompleteHopeAfterCardAsync(context);
                 log.Write("formal_free_card_revealed", new { Connection = context.Id, receipt.Snapshot.Identity });
             }
         }

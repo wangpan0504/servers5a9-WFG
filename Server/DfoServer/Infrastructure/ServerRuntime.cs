@@ -532,6 +532,9 @@ internal static class ServerRuntime
         EpicPieceShopService? epicPieceShop = null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
+        // 结算翻牌后的希望自动交付与手工 CMD34 共用同一任务完成发布器。
+        var questCompletion = new QuestCompletionHandler(quests, questParameters, itemResources.Items,
+            itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs);
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             selectionDungeons = dungeonCatalog;
@@ -655,7 +658,7 @@ internal static class ServerRuntime
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
                 prices: cardPrices,hopeRewards:hopeRewards,dimensionRewards:dimensionRewards,tayberrsRewards:tayberrsRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
-                imperialArena: imperialArenaProjection, parties: parties, lukeRaid: lukeRun, antonRaid: antonRun, preyRaid: preyRun);
+                imperialArena: imperialArenaProjection, parties: parties, lukeRaid: lukeRun, antonRaid: antonRun, preyRaid: preyRun, hopeCompletion: questCompletion);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else
@@ -836,8 +839,7 @@ internal static class ServerRuntime
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,
                     itemResources.EquipmentTransports, itemResources.EpicPieces, repository, clock)),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
-            new QuestCompletionHandler(quests, questParameters, itemResources.Items,
-                itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
+            questCompletion,
             new ClassChangeHandler(classChange, levelProjection, inventoryProjection, questProjection, projection, log, clock),
             new GrowUpChangeHandler(new Game.Characters.GrowUpChangeService(GrowUpChangeCatalog.Load(pvf), classChange),
                 levelProjection, inventoryProjection, questProjection, projection, log, clock),

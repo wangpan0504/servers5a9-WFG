@@ -12,6 +12,7 @@ internal sealed class OperationHopeRewardPolicy(OperationHopeRewardCatalog catal
     public const string Rule="operation-hope-server-compat-v1";
     readonly ConcurrentDictionary<(int,int),DungeonItemDropPool> pools=new();
     readonly DungeonItemDropPool sealing=new([new DungeonWeightedDropItem(items.Get(catalog.SealingItemId),1)]);
+    readonly DungeonItemDropPool hopeFragments=new([new DungeonWeightedDropItem(items.Get(10307438),1)]);
 
     internal DungeonItemDropPool Pool(byte job,byte grow)
     {
@@ -52,6 +53,7 @@ internal sealed class OperationHopeRewardPolicy(OperationHopeRewardCatalog catal
         var profession=entry.HopeRewardProfession ?? throw new InvalidDataException("希望掉落缺本人冻结职业");
         return new(plan.ResourceSource+";"+Rule+";"+OperationHopeRewardCatalog.PoolPath,
             plan.Trials.Add(new(1,Pool(profession.Job,profession.Grow),1,1,ProbabilityDenominator:1,Attempts:2))
+                .Add(new(1,hopeFragments,9,9,ProbabilityDenominator:1,Attempts:3))
                 .Add(new(catalog.SealingPermyriad,sealing,catalog.SealingItemCount,catalog.SealingItemCount,ProbabilityDenominator:10000)),
             plan.ReferenceQuality,plan.Amplification);
     }

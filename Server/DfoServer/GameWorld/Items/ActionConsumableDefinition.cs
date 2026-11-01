@@ -29,13 +29,16 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[add avatar preset]", Parameters.Count: 0 } or
                 { Label: "[character name change]", Parameters.Count: 0 } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
+                { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
                 { Label: "[creature transport stone]" or "[cargo transport stone]" or "[avatar transport stone]" or
                     "[flag transport stone]" or "[emblem transport stone]", Parameters: [>= 0] } or
                 { Label: "[change creature random]", Parameters.Count: >= 5 } or
                 { Label: "[change creature]", Parameters.Count: 4 } or
                 { Label: "[creature effect]", Parameters: [> 0] }) ||
-            (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 : raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
+            (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 :
+                action.Label == "[add dungeon incount item limit count]" ? raw.DeclaredUseActionPacket is not (null or 1) :
+                raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||

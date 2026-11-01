@@ -30,7 +30,8 @@ internal sealed class DungeonIncountTicketService(ItemCatalog items, DungeonInco
     {
         var source = expected.Inventory.Find(slot) ?? throw new InvalidDataException("追加券源不存在");
         var definition = items.ActionConsumable(source.Core.ItemId);
-        if (definition is not { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } ||
+        if (definition is not ({ Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
+            { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] }) ||
             incounts.Find(definition.Parameters[0]) is not { Limit: > 0, WeeklyLimit: > 0 } row)
             throw new InvalidDataException("追加券动作、参数或次数表不符");
         var now = Clock.GetUtcNow();
