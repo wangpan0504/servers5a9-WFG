@@ -314,6 +314,7 @@ internal static class SqliteMigrations
             FiendwarRecoverySchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(170, "漩涡真实成就事实与消费水位", (db, tx) => Execute(db, tx,
             FiendwarTitleFactsSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(171, "库存实例变更标记", InventoryItemRevisionSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2338,6 +2339,7 @@ internal static class SqliteMigrations
 
     internal static void ValidateSchema(SqliteConnection db, SqliteTransaction tx)
     {
+        InventoryItemRevisionSchema.Validate(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);
         BeastStageRewardSchema.Validate(db, tx);
         // 基线标识不能代替必需列检查；损坏或残缺结构不得进入监听阶段。
@@ -2468,6 +2470,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT inventory_items_revision FROM characters LIMIT 0",
+        "SELECT inventory_items_revision FROM account_cargo LIMIT 0",
         "SELECT character_id,account,instance_id,attempt,entry_epoch,day,dungeon_id,expected_used,state FROM character_beast_dungeon_reservations LIMIT 0",
         "SELECT character_id,account,instance_id,stage,event_id,map_id,monster_key,item_id FROM character_beast_stage_rewards LIMIT 0",
         "SELECT guild_id,region,channel FROM guild_recommended_channels LIMIT 0",

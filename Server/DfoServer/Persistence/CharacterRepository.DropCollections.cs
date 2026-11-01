@@ -45,7 +45,7 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitDropCollectionPickup", deferred: true);
         using var tx = write.Transaction;
-        var current = Require(db, tx, dbOwner.Account, expected.Name);
+        var current = Require(db, tx, dbOwner.Account, expected.Name, expected.Inventory);
         if (current.Id != expected.Id) throw new InvalidOperationException("集合拾取的角色归属变化");
         bool passive = ground.PassiveOrigin is not null;
         if (passive)
@@ -104,7 +104,7 @@ internal sealed partial class CharacterRepository
                     (before.Core with { Value = ground.Core.Value, SortLockFlag = ground.Core.SortLockFlag }) != ground.Core))
                 throw new InvalidDataException("集合实体拾取没有保留完整冻结Core及原堆叠UID");
         }
-        var committed = CommitInventoryInTransaction(db, tx, dbOwner, expected, plan);
+        var committed = CommitInventoryInTransaction(db, tx, dbOwner, current, expected, plan);
         var actual = currency is null && piece is null ? committed.Inventory.Find(destination)
             ?? throw new InvalidOperationException("提交后缺少目的物品") : null;
         var epicPiece = piece is null ? null : new EpicPiecePickup(piece.Index, piece.PieceId, amount,
@@ -113,7 +113,9 @@ internal sealed partial class CharacterRepository
             currency, amount, currency is { } kind ? CurrencyWallet.Get(committed.Inventory, kind) : 0,
             committed.Inventory.AccountWallet.Revision, epicPiece);
         if (!passive) SaveFrozenPickup(db, tx, dbOwner, committed, prepared, destination, actual?.Uid ?? 0, actual?.Core, currency, amount, epicPiece);
+        var itemRead = PrepareInventoryItemRead(db, tx, dbOwner.Account, committed.Id, current.Inventory, committed.Inventory);
         tx.Commit();
+        RememberInventoryItems(committed.Inventory, itemRead);
         receipts.Pickups[ground.Reservation.GroundKey] = cached;
         cached.Committed = true;
         return new(committed, false, destination, actual?.Uid ?? 0, true, currency, amount) { EpicPiece = epicPiece };

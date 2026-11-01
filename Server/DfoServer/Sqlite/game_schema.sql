@@ -2146,3 +2146,96 @@ CREATE TABLE character_fiendwar_title_facts(
   PRIMARY KEY(character_id,quest_id),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
 );
+
+ALTER TABLE characters ADD COLUMN inventory_items_revision INTEGER NOT NULL DEFAULT 0 CHECK(inventory_items_revision>=0);
+ALTER TABLE account_cargo ADD COLUMN inventory_items_revision INTEGER NOT NULL DEFAULT 0 CHECK(inventory_items_revision>=0);
+CREATE TRIGGER inventory_version_character_inventory_items_insert AFTER INSERT ON character_inventory_items
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_inventory_items_update AFTER UPDATE ON character_inventory_items
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account) OR (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account) OR (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_inventory_items_delete AFTER DELETE ON character_inventory_items
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account);
+END;
+CREATE TRIGGER inventory_version_character_inventory_slots_insert AFTER INSERT ON character_inventory_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_inventory_slots_update AFTER UPDATE ON character_inventory_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account) OR (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account) OR (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_inventory_slots_delete AFTER DELETE ON character_inventory_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account);
+END;
+CREATE TRIGGER inventory_version_character_title_book_slots_insert AFTER INSERT ON character_title_book_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_title_book_slots_update AFTER UPDATE ON character_title_book_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account) OR (id=NEW.character_id AND account=NEW.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account) OR (NEW.character_id IS NULL AND account=NEW.account);
+END;
+CREATE TRIGGER inventory_version_character_title_book_slots_delete AFTER DELETE ON character_title_book_slots
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id=OLD.character_id AND account=OLD.account);
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE (OLD.character_id IS NULL AND account=OLD.account);
+END;
+CREATE TRIGGER inventory_version_inventory_avatar_details_insert AFTER INSERT ON inventory_avatar_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_inventory_avatar_details_update AFTER UPDATE ON inventory_avatar_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid,NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid,NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_inventory_avatar_details_delete AFTER DELETE ON inventory_avatar_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid));
+END;
+CREATE TRIGGER inventory_version_inventory_creature_details_insert AFTER INSERT ON inventory_creature_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_inventory_creature_details_update AFTER UPDATE ON inventory_creature_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid,NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid,NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_inventory_creature_details_delete AFTER DELETE ON inventory_creature_details
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid));
+END;
+CREATE TRIGGER inventory_version_mailbox_attachments_insert AFTER INSERT ON mailbox_attachments
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_mailbox_attachments_update AFTER UPDATE ON mailbox_attachments
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid,NEW.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid,NEW.item_uid));
+END;
+CREATE TRIGGER inventory_version_mailbox_attachments_delete AFTER DELETE ON mailbox_attachments
+BEGIN
+    UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE (id,account) IN(SELECT character_id,account FROM character_inventory_items WHERE item_uid IN(OLD.item_uid));
+    UPDATE account_cargo SET inventory_items_revision=inventory_items_revision+1 WHERE account IN(SELECT account FROM character_inventory_items WHERE character_id IS NULL AND item_uid IN(OLD.item_uid));
+END;

@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Persistence;
 
@@ -200,7 +201,7 @@ internal sealed partial class CharacterRepository
         tx.Commit();
         return updated;
     });
-    Character Require(SqliteConnection db, SqliteTransaction tx, string account, string name)
+    Character Require(SqliteConnection db, SqliteTransaction tx, string account, string name, InventorySnapshot? reuseInventory = null)
     {
         Character character;
         using (var cmd = db.CreateCommand())
@@ -215,6 +216,6 @@ internal sealed partial class CharacterRepository
             character = Read(reader);
         }
 
-        return ReadProgress(db, character, tx);
+        return ReadProgress(db, character, tx, reuseInventory: reuseInventory);
     }
 }

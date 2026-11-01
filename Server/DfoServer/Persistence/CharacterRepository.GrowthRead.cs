@@ -14,7 +14,7 @@ internal sealed partial class CharacterRepository
         if (drops is { ReadsInventory: true } || drops?.Inventory.Changed == true ||
             drops is not null && quests is not null && expected.ActiveMainQuests.Any(active =>
                 quests.TryGet(active.QuestId, out var quest) && quest.Condition is "[seeking]" or "[seek n meet npc]"))
-            return Require(db, tx, account, expected.Name);
+            return Require(db, tx, account, expected.Name, expected.Inventory);
 
         using var query = db.CreateCommand();
         query.Transaction = tx;
@@ -22,7 +22,7 @@ internal sealed partial class CharacterRepository
         query.Parameters.AddWithValue("$name", expected.Name);
         query.CommandText = """
             SELECT c.*,COALESCE(w.revision,0) AS wallet_revision,COALESCE(a.revision,0) AS cargo_revision,
-              COALESCE(e.revision,0) AS epic_revision
+              COALESCE(e.revision,0) AS epic_revision,COALESCE(a.inventory_items_revision,0) AS account_items_revision
             FROM characters c LEFT JOIN account_wallets w ON w.account=c.account
             LEFT JOIN account_cargo a ON a.account=c.account LEFT JOIN account_epic_books e ON e.account=c.account
             WHERE c.account=$account AND c.name=$name
@@ -37,6 +37,8 @@ internal sealed partial class CharacterRepository
             var inventory = expected.Inventory;
             // 正常角色资产写入推进角色revision，共享资产另有账号版本。任一不符都读实际状态再复验。
             reload = stored.Id != expected.Id || stored.Revision != expected.Revision ||
+                !CanReuseInventoryItems(inventory, new(db.DataSource, account, expected.Id,
+                    Value("inventory_items_revision"), Value("account_items_revision"))) ||
                 Value("wallet_revision") != inventory.AccountWallet.Revision ||
                 Value("cargo_revision") != inventory.AccountCargo.Revision || Value("epic_revision") != inventory.EpicPieces.Revision ||
                 Value("gold") != inventory.Gold || Value("revive_coins") != inventory.ReviveCoins ||
@@ -45,9 +47,9 @@ internal sealed partial class CharacterRepository
                 Value("avatar_expansion") != inventory.AvatarExpansion || Value("cargo_capacity") != inventory.CargoCapacity ||
                 Value("stamina_until") != inventory.StaminaUntil || stored.EquipmentSlotFlags != expected.EquipmentSlotFlags;
         }
-        if (reload) return Require(db, tx, account, expected.Name);
+        if (reload) return Require(db, tx, account, expected.Name, expected.Inventory);
 
-        // 未变资产沿用本owner的在线快照，不新增缓存。GM进度不保证推进revision，相关前提仍逐项实读。
+        // 标记和实际读取证明一致时沿用原物品；GM进度不保证推进revision，相关前提仍逐项实读。
         var current = expected with
         {
             Slot = stored.Slot, Name = stored.Name, Position = stored.Position, Return = stored.Return,

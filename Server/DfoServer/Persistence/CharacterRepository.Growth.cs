@@ -76,7 +76,7 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)reader.GetInt64(15));
             }
         }
-        var current = duplicate || equipmentGrowth is not null ? Require(db, tx, owner.Account, expected.Name)
+        var current = duplicate || equipmentGrowth is not null ? Require(db, tx, owner.Account, expected.Name, duplicate ? null : expected.Inventory)
             : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("成长角色或账号已变化");
@@ -157,6 +157,7 @@ internal sealed partial class CharacterRepository
             WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         // 熟练度与角色经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
         // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
+        bool proficiencyChanged = false;
         if (current.DungeonState is { } dungeonState)
         {
             var proficiencyBefore = new ProficiencyProgress(dungeonState.ProficiencyLevel, dungeonState.ProficiencyExperience);
@@ -164,6 +165,7 @@ internal sealed partial class CharacterRepository
             if (ProficiencyProgression.Advance(proficiencyBefore, proficiencyGain, catalog) is { } proficiency)
             {
                 WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
+                proficiencyChanged = true;
                 proficiencyGained = checked((uint)proficiency.Credited);
             }
         }
@@ -188,29 +190,33 @@ internal sealed partial class CharacterRepository
         }
         // 复用本事务实读的角色和库存提交结果，只重读成长及任务实际可变的字段。
         // 不能使用调用方旧expected替代current，也不能发布带临时UID的库存规划。
-        command.CommandText = "SELECT level,revision FROM characters WHERE id=$id AND account=$account";
+        command.CommandText = "SELECT level,revision,experience FROM characters WHERE id=$id AND account=$account";
         byte committedLevel;
         long committedRevision;
+        ulong committedExperience;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read()) throw new InvalidOperationException("成长角色或账号已变化");
             committedLevel = checked((byte)reader.GetInt32(0));
             committedRevision = reader.GetInt64(1);
+            committedExperience = checked((ulong)reader.GetInt64(2));
         }
         var committed = inventoryCharacter with
         {
             Marriage = current.Marriage,
             Level = committedLevel,
             Revision = committedRevision,
-            Learning = ReadLearning(db, expected.Id, tx),
+            Learning = learningChanged ? ReadLearning(db, expected.Id, tx) : inventoryCharacter.Learning with { Experience = committedExperience },
             Skills = skillsChanged ? ReadCharacterSkills(db, expected.Id, tx) : current.Skills,
             SkillSwitchInventory = skillsChanged ? ReadSkillSwitchInventory(db, expected.Id, tx) : inventoryCharacter.SkillSwitchInventory,
-            DungeonState = ReadDungeonState(db, expected.Id, tx),
+            DungeonState = proficiencyChanged ? ReadDungeonState(db, expected.Id, tx) : inventoryCharacter.DungeonState,
             ActiveMainQuests = quests is null ? inventoryCharacter.ActiveMainQuests : ReadActiveMainQuests(db, expected.Id, tx)
         };
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
+        var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, committed.Id, current.Inventory, committed.Inventory);
         tx.Commit();
+        RememberInventoryItems(committed.Inventory, itemRead);
         CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
             { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [] };

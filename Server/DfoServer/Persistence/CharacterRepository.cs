@@ -163,7 +163,9 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         inventory = WriteCargo(db, transaction, owner, id, plan, inventory);
         WritePvpPrivateCreation(db,transaction,owner.Account,id,character);
         var accountQuests = ReadAccountQuests(db, id, transaction);
+        var itemRead = ReadInventoryItemRevision(db, transaction, owner.Account, id);
         transaction.Commit();
+        RememberInventoryItems(inventory, itemRead);
         return new Character(id, checked((ushort)slot), character.Name, 0, character.Position, character.Return)
         {
             PvpPrivate = character.PvpPrivateCreation is {} privateCreation ? new(privateCreation.RecreateDays) : null,
@@ -264,7 +266,8 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         BlacklistCount = reader.GetInt32(reader.GetOrdinal("blacklist_count"))
     };
     static Character ReadProgress(SqliteConnection db, Character character, SqliteTransaction? transaction = null, AccountInventory? shared = null,
-        (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null)
+        (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null,
+        InventorySnapshot? reuseInventory = null)
     {
         character = ReadQuestProgress(db, character, transaction, accountQuests);
         using var query = db.CreateCommand();
@@ -290,7 +293,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             ActiveMainQuests = ReadActiveMainQuests(db, character.Id, transaction),
             Learning = ReadLearning(db, character.Id, transaction),
             PermanentStats = ReadPermanentStats(db, character.Id, transaction),
-            Inventory = ReadInventory(db, character.Id, transaction, shared),
+            Inventory = ReadInventory(db, character.Id, transaction, shared, reuseInventory),
             SkillSwitchInventory = ReadSkillSwitchInventory(db, character.Id, transaction),
             DungeonState = ReadDungeonState(db, character.Id, transaction),
             Tutorial = ReadTutorial(db, character.Id, transaction),

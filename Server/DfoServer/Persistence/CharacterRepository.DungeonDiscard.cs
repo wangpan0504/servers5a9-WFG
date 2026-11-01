@@ -38,7 +38,7 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonDiscard", deferred: true);
         using var tx = write.Transaction;
-        var current = Require(db, tx, owner.Account, expected.Name);
+        var current = Require(db, tx, owner.Account, expected.Name, expected.Inventory);
         string action = InventoryGroundAction("discard", ground);
         if (current.Revision != expected.Revision && HasInventoryGroundCommit(db, tx, owner, expected.Id, action))
         {
@@ -50,7 +50,7 @@ internal sealed partial class CharacterRepository
         }
         if (current.DungeonState != state) throw new InvalidOperationException("地面丢弃的副本owner改变");
         var inventory = new InventoryPlan(plan.Inventory.Before, plan.Inventory.After, action, plan.Inventory.CharacterPrecondition);
-        var committed = CommitInventoryInTransaction(db, tx, owner, expected, inventory);
+        var committed = CommitInventoryInTransaction(db, tx, owner, current, expected, inventory);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -60,7 +60,9 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$attempt", state.LastAttempt);
         command.CommandText = "UPDATE character_dungeon_state SET next_object_key=$next WHERE character_id=$id AND account=$account AND next_object_key=$oldKey AND last_attempt=$attempt";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("地面丢弃key预留失去原owner");
+        var itemRead = ReadInventoryItemRevision(db, tx, owner.Account, committed.Id);
         tx.Commit();
+        RememberInventoryItems(committed.Inventory, itemRead);
         // 地面对象只属于原Run内存；已有对象key高水位与库存仍同事务保存。
         return committed with { DungeonState = state with { NextObjectKey = key + 1 } };
     });
@@ -108,7 +110,7 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitDiscardPickup", deferred: true);
         using var tx = write.Transaction;
-        var current = Require(db, tx, owner.Account, expected.Name);
+        var current = Require(db, tx, owner.Account, expected.Name, expected.Inventory);
         string action = InventoryGroundAction("pickup", ground);
         if (current.Revision != expected.Revision && HasInventoryGroundCommit(db, tx, owner, expected.Id, action))
         {
@@ -121,9 +123,11 @@ internal sealed partial class CharacterRepository
             return new(current, true, slot, actual.Uid, true);
         }
         var inventory = new InventoryPlan(plan.Before, plan.After, action, plan.CharacterPrecondition);
-        var committed = CommitInventoryInTransaction(db, tx, owner, expected, inventory);
+        var committed = CommitInventoryInTransaction(db, tx, owner, current, expected, inventory);
         var item = committed.Inventory.Find(slot) ?? throw new InvalidOperationException("已提交丢弃拾取缺目标物品");
+        var itemRead = ReadInventoryItemRevision(db, tx, owner.Account, committed.Id);
         tx.Commit();
+        RememberInventoryItems(committed.Inventory, itemRead);
         return new(committed, false, slot, item.Uid, true);
     }
 }

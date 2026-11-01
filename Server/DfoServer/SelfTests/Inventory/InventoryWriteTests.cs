@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -58,6 +59,15 @@ internal static class InventoryWriteTests
             }).ToImmutableArray() }, "attributes");
             Commit(current.Inventory with { Items = current.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Main, 121)
                 ? item with { Position = new(InventoryListType.AccountCargo, 0) } : item).ToImmutableArray() }, "transfer");
+            current = current with { Inventory = VerifyReadReuse(db, current) };
+            var unchangedItems = current.Inventory.Items;
+            long unchangedItemVersion = Scalar("SELECT inventory_items_revision FROM characters WHERE id=" + current.Id);
+            Commit(current.Inventory with { Gold = 123 }, "gold_only");
+            TestCheck.That(current.Inventory.Items == unchangedItems &&
+                Scalar("SELECT inventory_items_revision FROM characters WHERE id=" + current.Id) == unchangedItemVersion &&
+                Scalar("SELECT count(*) FROM inventory_audit_log WHERE action_name='gold_only'") == 0,
+                "只改金币不复制物品数组、不写实例槽位或消费审计");
+            Commit(current.Inventory with { Gold = 0 }, "gold_restore");
 
             var original = current.Inventory;
             foreach (var changed in new InventorySnapshot[]
@@ -83,11 +93,15 @@ internal static class InventoryWriteTests
             }
 
             long audits = Scalar("SELECT count(*) FROM inventory_audit_log");
+            long itemVersion = Scalar("SELECT inventory_items_revision FROM characters WHERE id=" + current.Id);
             string saved = JsonSerializer.Serialize(repository.LoadCharacter(owner, 0));
             Sql("CREATE TRIGGER fail_write_audit BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'audit failure'); END");
             var failed = current.Inventory with { Gold = 1, Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Avatar, 2), new(50003, ItemKind.Avatar, 0)) { Avatar = new() }) };
             Reject<SqliteException>(() => repository.CommitInventory(owner, current, new(current.Inventory, failed, "failed")), "编码复用不绕过事务内审计失败");
             Sql("DROP TRIGGER fail_write_audit");
+            TestCheck.That(Scalar("SELECT inventory_items_revision FROM characters WHERE id=" + current.Id) == itemVersion,
+                "末段审计失败同时回滚物品变更标记");
+            _ = ReadInventory(db, current, current.Inventory, reuse: true);
             TestCheck.That(JsonSerializer.Serialize(new CharacterRepository(path).LoadCharacter(owner, 0)) == saved && Scalar("SELECT count(*) FROM inventory_audit_log") == audits,
                 "后期失败回滚物品、详情、余额、版本及审计");
 
@@ -144,4 +158,103 @@ internal static class InventoryWriteTests
     }
     static string? ReferenceHash(InventoryItem? item) => item is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         item.Avatar is null && item.Creature is null ? JsonSerializer.Serialize(item.Core) : JsonSerializer.Serialize(new { item.Core, item.Avatar, item.Creature }))));
+
+    static InventorySnapshot VerifyReadReuse(SqliteConnection db, DfoServer.Game.Characters.Character character)
+    {
+        var original = character.Inventory;
+        var current = ReadInventory(db, character, original, reuse: true);
+        var derived = current with { Items = current.Items.SetItem(0, current.Items[0] with { Core = current.Items[0].Core with { Marker16 = 999 } }) };
+        var checkedInventory = ReadInventory(db, character, derived, reuse: false);
+        TestCheck.That(checkedInventory.Items.SequenceEqual(original.Items.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index)),
+            "with 派生快照不能继承原读取证明");
+        current = checkedInventory;
+        foreach (var item in original.Items)
+        {
+            string table = item.Avatar is not null ? "inventory_avatar_details" :
+                item.Creature is not null ? "inventory_creature_details" : "character_inventory_items";
+            string field = table == "character_inventory_items" ? "item_core" : "detail";
+            string saved;
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = $"SELECT {field} FROM {table} WHERE item_uid=$uid";
+                command.Parameters.AddWithValue("$uid", item.Uid);
+                saved = (string)command.ExecuteScalar()!;
+            }
+            string changed = item.Avatar is not null ? JsonSerializer.Serialize(item.Avatar with { Color1 = 99 }) :
+                item.Creature is not null ? JsonSerializer.Serialize(item.Creature with { Name = "Changed" }) :
+                JsonSerializer.Serialize(item.Core with { Marker16 = 999 });
+            Update(changed);
+            var actual = ReadInventory(db, character, current, reuse: false);
+            TestCheck.That(actual.Find(item.Position) != current.Find(item.Position), "同角色revision修改核心、详情或账号仓库仍强制重读");
+            Update(saved);
+            current = ReadInventory(db, character, actual, reuse: false);
+            TestCheck.That(current.Items.SequenceEqual(original.Items.OrderBy(row => row.Position.List).ThenBy(row => row.Position.Index)),
+                "还原字段后完整属性和归属保持不变");
+            void Update(string json)
+            {
+                using var command = db.CreateCommand();
+                command.CommandText = $"UPDATE {table} SET {field}=$json WHERE item_uid=$uid";
+                command.Parameters.AddWithValue("$uid", item.Uid);
+                command.Parameters.AddWithValue("$json", json);
+                command.ExecuteNonQuery();
+            }
+        }
+        var source = current.Items.Single(item => item.Position.List == InventoryListType.Avatar);
+        Move(2);
+        var moved = ReadInventory(db, character, current, reuse: false);
+        TestCheck.That(moved.Find(source.Position) is null && moved.Find(new(InventoryListType.Avatar, 2))?.Uid == source.Uid,
+            "同revision槽位变化失效旧读取证明");
+        Move(source.Position.Index);
+        current = ReadInventory(db, character, moved, reuse: false);
+        using (var rollback = db.BeginTransaction())
+        {
+            using var command = db.CreateCommand();
+            command.Transaction = rollback;
+            command.CommandText = "UPDATE character_inventory_items SET updated_at='rollback' WHERE item_uid=$uid";
+            command.Parameters.AddWithValue("$uid", source.Uid);
+            command.ExecuteNonQuery();
+            rollback.Rollback();
+        }
+        _ = ReadInventory(db, character, current, reuse: true);
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = "SELECT revision FROM characters WHERE id=$id";
+            command.Parameters.AddWithValue("$id", character.Id);
+            TestCheck.That(Convert.ToInt64(command.ExecuteScalar()) == character.Revision, "物品变更标记不改变角色业务revision");
+        }
+        return current;
+        void Move(short index)
+        {
+            using var command = db.CreateCommand();
+            command.CommandText = "UPDATE character_inventory_slots SET slot_index=$index WHERE item_uid=$uid";
+            command.Parameters.AddWithValue("$uid", source.Uid);
+            command.Parameters.AddWithValue("$index", index);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    static InventorySnapshot ReadInventory(SqliteConnection db, DfoServer.Game.Characters.Character character, InventorySnapshot expected, bool reuse)
+    {
+        int itemReads = 0;
+        SQLitePCL.strdelegate_authorizer authorize = (_, action, table, _, _, _) =>
+        {
+            if (action != SQLitePCL.raw.SQLITE_READ || table is not ("character_inventory_items" or "character_inventory_slots" or
+                "character_title_book_slots" or "inventory_avatar_details" or "inventory_creature_details" or "mailbox_attachments"))
+                return SQLitePCL.raw.SQLITE_OK;
+            itemReads++;
+            return reuse ? SQLitePCL.raw.SQLITE_DENY : SQLitePCL.raw.SQLITE_OK;
+        };
+        SQLitePCL.raw.sqlite3_set_authorizer(db.Handle, authorize, null);
+        InventorySnapshot actual;
+        try
+        {
+            using var read = db.BeginTransaction(deferred: true);
+            var method = typeof(CharacterRepository).GetMethod("ReadInventory", BindingFlags.NonPublic | BindingFlags.Static)!;
+            actual = (InventorySnapshot)method.Invoke(null, [db, character.Id, read, null, expected])!;
+        }
+        finally { SQLitePCL.raw.sqlite3_set_authorizer(db.Handle, (SQLitePCL.strdelegate_authorizer)null!, null); }
+        TestCheck.That(reuse ? itemReads == 0 && actual.Items == expected.Items : itemReads > 0,
+            "物品未变时禁止查询任何实例、槽位或详情表，变化或无证明时完整读取");
+        return actual;
+    }
 }
