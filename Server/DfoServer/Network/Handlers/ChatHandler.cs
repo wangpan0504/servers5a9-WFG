@@ -107,8 +107,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         if (SelfCharacterScoreProjection.MachineNamespace(send))
         {
             string? nonce = SelfCharacterScoreProjection.MachineNonce(send);
-            string status = nonce is null ? "invalid_request" : selfScore?.Query(context, nonce) ?? "unavailable";
-            log.Write("character_score_machine_query", new { Connection = context.Id, Status = status });
+            string status = nonce is null ? "invalid_request" : selfScore?.Query(context, nonce, SelfCharacterScoreProjection.MachineVersion(send)) ?? "unavailable";
+            log.Write("character_score_machine_query", new { Connection = context.Id, Version = SelfCharacterScoreProjection.MachineVersion(send), Status = status });
             return CommandResult.Handled;
         }
 

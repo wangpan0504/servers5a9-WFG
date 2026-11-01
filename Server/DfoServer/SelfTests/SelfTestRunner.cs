@@ -24,6 +24,7 @@ internal static class SelfTestRunner
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();
+        CombatPowerTests.RunCore();
         CharacterInvestmentMetadataTests.RunCore();
         DfoServer.Testing.Inventory.SpringTreasureDropTests.RunCore();
         ChronicleInvestmentTests.RunCore();
@@ -581,6 +582,7 @@ internal static class SelfTestRunner
         FatigueConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         ServerItemCycleTests.RunResource(pvf);
         ChronicleInvestmentTests.RunResource(itemResources);
+        CombatPowerTests.RunResource(itemResources);
         PermanentGrowthTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

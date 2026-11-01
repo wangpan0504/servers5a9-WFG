@@ -861,7 +861,8 @@ internal static class ServerRuntime
             new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online), repository), inventoryProjection, log,
                 new Game.Chat.NamedWhisperService(online, repository), guildContribution,
                 new SelfCharacterScoreProjection(new Game.Characters.CharacterInvestmentService(itemResources.Items,
-                    itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions)), chatEmoticons, promotionPage: promotionPage)
+                    itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions),
+                    new Game.Characters.CombatPowerService(itemResources.Items, itemResources.CharacterInvestmentMetadata, stats)), chatEmoticons, promotionPage: promotionPage)
         ];
         foreach (var module in modules)
             module.Register(commands);

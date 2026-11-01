@@ -7,7 +7,11 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Characters;
 
 internal sealed record CharacterInvestmentSnapshot(InvestmentSnapshot Equipment, byte Level, byte Job, byte GrowType,
-    ImmutableArray<InventoryItem> Worn, CollectBoxState CollectBox);
+    ImmutableArray<InventoryItem> Worn, CollectBoxState CollectBox)
+{
+    // 官方风格战斗力（cp-official/v1）的永久属性来源；建设分不读取。
+    public PermanentStatBonuses Permanent { get; init; } = PermanentStatBonuses.Empty;
+}
 internal sealed record CharacterInvestmentPart(string Module, string Source, int Score, bool Partial, bool Capped, string Note)
 {
     public EquipmentQualitySeedTier? Quality { get; init; }
@@ -42,7 +46,7 @@ internal static class CharacterInvestmentScore
         var box = character.CollectBox;
         return new(basis, character.Level, character.Job, character.GrowType, worn,
             new(box.SelectedBox, box.Items.IsDefault ? default : [.. box.Items],
-                box.Expirations.IsDefault ? default : [.. box.Expirations]));
+                box.Expirations.IsDefault ? default : [.. box.Expirations])) { Permanent = character.PermanentStats };
     }
 
     // 目录查询均在owner外；仅解析已装宿主及其依赖，不扫描玩家仓库或全PVF。
