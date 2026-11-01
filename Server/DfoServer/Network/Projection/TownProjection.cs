@@ -127,6 +127,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (devil is not null) context.Session.InitializeDevilContract(devil, timer.GetUtcNow());
         titles?.PrepareInitialization(context);
         adventure?.Prepare(context);
+        context.Session.InitializePrivilegeService();
         var settingReceipt = settings?.Capture(context);
         var c = context.Session.Selected ?? throw new InvalidOperationException("No selected character");
         await context.Reply(CmdPacketType.SELECT_CHARACTER, TownPackets.Select(c, context.Session.FatigueForClient(c),
@@ -151,6 +152,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c)), "skill_info");
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
+        await PrivilegeServiceProjection.PostAsync(context, initialization: true);
         await PcRoomBuffProjection.PostAsync(context);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true);

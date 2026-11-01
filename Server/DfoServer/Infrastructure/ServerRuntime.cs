@@ -354,7 +354,7 @@ internal static class ServerRuntime
         };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
-            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet());
+            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices);
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
@@ -485,6 +485,8 @@ internal static class ServerRuntime
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
+        new PrivilegeServiceHandler(new Game.PrivilegeServices.PrivilegeServiceRewards(itemResources.PrivilegeServices,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock), inventoryProjection, log).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
         // 拍卖行挂牌：SQL 在 Persistence/AuctionListingRepository，读用例与种子在 Game/Auction；
         // 条目字节快照的编码入口来自物品模块的 Builder。

@@ -776,6 +776,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_client_settings VALUES({{id}},'planning',zeroblob(512));
                 INSERT INTO character_game_settings VALUES({{id}},'planning',zeroblob(204));
                 INSERT INTO character_quest_notify VALUES({{id}},'planning',X'02000000000000000000000000000000');
+                INSERT INTO character_privilege_service VALUES({{id}},1000,2000000000,1,1,739916,5,739916,1);
                 INSERT INTO character_dungeon_state(character_id,account,next_object_key,last_attempt,
                   capsule_experience,proficiency_level,proficiency_experience) VALUES({{id}},'planning',256,1,0,0,0);
                 INSERT INTO character_adventure_credits VALUES({{id}},'planning',10,20);

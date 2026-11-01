@@ -48,6 +48,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         if (!CanSend())
             return;
         var current = receipt.Character;
+        if (plan.Before.PrivilegeService != current.Inventory.PrivilegeService)
+            await PrivilegeServiceProjection.PostAsync(context, receipt);
         // CMD19只转移已有实例；登记已配置时不能用本人Player重新初始化登记，否则0267BFA0会关闭UI355。
         // 完整穿戴差量安装核心/时装孔位，Actor保留克隆来源和宠物实体，1372随后更新同UID登记位置。
         bool preserveSkillSwitch = receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect &&

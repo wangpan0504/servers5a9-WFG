@@ -36,6 +36,7 @@ internal sealed class ItemResources
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
+    public PrivilegeServiceCatalog PrivilegeServices { get; }
     public DevilContractCatalog DevilContracts { get; }
     public MagicBoxCatalog MagicBoxes { get; }
     readonly Lazy<VendingMachineCatalog> vendingMachines;
@@ -117,6 +118,7 @@ internal sealed class ItemResources
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);
+        PrivilegeServices = PrivilegeServiceCatalog.Load(archive, CashShop, Items);
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
         UpgradeChronicles = new(archive, stackable, equipment);

@@ -240,6 +240,7 @@ internal static partial class DatabaseSchemaTests
             AccountMaterialPickupsUpgrade(root);
             QuestNotifyUpgrade(root);
             MarriageSameAccountUpgrade(root);
+            PrivilegeServiceUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);

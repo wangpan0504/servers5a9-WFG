@@ -1055,6 +1055,7 @@ internal sealed partial class TcpPeer : IDisposable
             if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..])
             {
                 PlayerBody = packet.Body;
+                ReadPrivilegeServiceInitialization();
                 // 网吧身份的入城在本人Player后紧接487特权buff，随后才是两祭坛次数初始化。
                 if (premiumPcRoom)
                 {
