@@ -150,8 +150,9 @@ internal static class OperationHopePartyTests
                         {
                             sawHidden=true;
                             That(deaths.All(n=>n.Death!.Drops.Count(g=>g.Core.Kind==DfoServer.GameWorld.Items.ItemKind.Equipment)==2 &&
-                                n.Death.Drops.All(g=>g.Core.Kind==DfoServer.GameWorld.Items.ItemKind.Equipment || g.Core.ItemId==490011160)),
-                                "真实隐藏领主死亡逐人冻结两件装备");
+                                n.Death.Drops.Where(g=>g.Core.ItemId==10307438).Select(g=>g.Core.Count).SequenceEqual(new[]{9,9,9}) &&
+                                n.Death.Drops.All(g=>g.Core.Kind==DfoServer.GameWorld.Items.ItemKind.Equipment || g.Core.ItemId is 10307438 or 490011160)),
+                                "真实隐藏领主死亡逐人冻结两件装备和三堆材料");
                             That(instance.ObserveDeath(sessions[0],monster.ObjectKey,s=>s.ObserveFormalDungeonDeath(observation,kills,growth)).Length==0,
                                 "重复隐藏死亡不能再次生成装备");
                         }

@@ -87,6 +87,30 @@ internal static class DungeonIncountTicketTests
             Reject<InvalidOperationException>(() => repository.CommitDungeonIncountTicket(owner, old, clock.GetUtcNow()), "旧owner不能扣券加次");
         }
         finally { session.End(); }
+
+        // 代号希望追加券：资源形状为 8523 -1 -1，使用后日、周追加额度都必须增加。
+        var hopeRow = incounts.Find(8523)!;
+        using var hopeOwner = owners.Acquire("hope-incount-ticket", () => { });
+        var hopeSlot = new InventorySlot(InventoryListType.Main,65);
+        var hopeCandidate = CharacterCreation.Prepare("HopeTicket", resources.Characters.Get(0), resources.Towns.Room, resources.Towns.InitialReturn, null);
+        repository.Create(hopeOwner, hopeCandidate with { Inventory = hopeCandidate.Inventory with { Items = hopeCandidate.Inventory.Items
+            .Add(new(0, hopeSlot, new(10307551, ItemKind.Consumable, 1) { ExpireTime = 2145852000 })) } });
+        var hopeSession = new GameSession(repository, resources.Towns, hopeOwner, incounts: incounts, timeProvider: clock);
+        try
+        {
+            hopeSession.Select(0); hopeSession.MarkReady();
+            That(resources.ItemResources.Items.ActionConsumable(10307551) is
+                { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] },
+                "代号希望追加券完整动作按资源识别");
+            var usedHope = hopeSession.UseDungeonIncountTicket(hopeSlot, service, repository);
+            var hopeUsage = repository.LoadDungeonIncount(hopeOwner, hopeSession.Selected!.Id, hopeRow.CountKey,
+                DungeonIncountPolicy.Period(clock.GetUtcNow(), incounts.WeeklyResetDay(hopeRow.CountKey)));
+            That(usedHope.Outcome == ConsumableUseOutcome.Committed && hopeUsage.DailyExtra == 1 && hopeUsage.WeeklyExtra == 1 &&
+                usedHope.Counts.Single(row => row.Dungeon == 8523) is { Daily: var daily, Weekly: var weekly } &&
+                daily == checked((byte)(hopeRow.Limit + 1)) && weekly == checked((byte)(hopeRow.WeeklyLimit + 1)),
+                "代号希望追加券同时增加日、周入场额度");
+        }
+        finally { hopeSession.End(); }
         Console.WriteLine($"PASS dungeon incount ticket {Count - before}");
 
         void Select() { session.Select(0); session.MarkReady(); }

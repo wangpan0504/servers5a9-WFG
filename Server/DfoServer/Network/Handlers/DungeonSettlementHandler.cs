@@ -27,7 +27,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null,
     ImperialArenaProjection? imperialArena = null, Game.Party.PartyService? parties = null,
     Game.Raids.LukeRaidDungeonService? lukeRaid = null,
-    Game.Raids.AntonRaidDungeonService? antonRaid = null, Game.Raids.AntonRaidDungeonService? preyRaid = null) : IGameCommandModule
+    Game.Raids.AntonRaidDungeonService? antonRaid = null, Game.Raids.AntonRaidDungeonService? preyRaid = null,
+    QuestCompletionHandler? hopeCompletion = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -222,7 +223,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             return CommandResult.Unhandled;
         await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, DungeonSettlementPackets.TournamentSelectState(current.Receipt.PartySlot),
             "formal_tournament_reward_state", () => context.Session.CanPublishTournamentCards(current));
-        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons);
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion);
         await context.Cards.StartAsync(current.Receipt);
         return CommandResult.Handled;
     }
@@ -255,7 +256,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (context.Session.PartyDungeon is { } party && party.CardSnapshot() is { } snapshot &&
             snapshot.Any(card => card?.FreeSelected == true || card?.Paid is not null))
             await DungeonCardProjection.PublishSelectionAsync(context, receipt, view, snapshot, "party_card_sync");
-        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons);
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion);
         await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
     }
@@ -305,6 +306,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (free?.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
         log.Write("formal_free_card_claimed", new { Connection = context.Id, receipt.Snapshot.Identity,
             free?.Duplicate, free?.MailId, Revision = receipt.Character.Revision });
+        // 翻牌提交完成后复用普通34交付；未完成任务或无牌可领时不写入、不自动发奖。
+        if (hopeCompletion is not null)
+            await hopeCompletion.CompleteHopeAfterCardAsync(context);
         return CommandResult.Handled;
     }
 
@@ -462,6 +466,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_focus", () => context.Session.CanPublishDungeonSettlement(current));
             return CommandResult.Handled;
         }
+        // 客户端若在4秒自动翻牌前直接点结果，先按已选牌补交希望任务，避免离场后留下不可完成任务。
+        if (hopeCompletion is not null)
+            await hopeCompletion.CompleteHopeAfterCardAsync(context);
         bool ordinaryRetry = current.Entry.IsOrdinary && !current.Entry.IsPractice && !current.Entry.IsTrainingRoom &&
             !current.Entry.IsClassExperience && !current.Entry.IsAltar && !current.Entry.IsDespair &&
             !current.Entry.IsCosmo && !current.Entry.IsInfernoParty && !current.Entry.IsBossRush &&
