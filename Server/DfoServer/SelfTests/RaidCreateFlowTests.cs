@@ -24,8 +24,11 @@ internal static class RaidCreateFlowTests
         int before = Count;
         byte[] list = RaidPackets.RaidList(0x02140001, "T1"u8.ToArray(), 0, 1, CharacterName.Encoding.GetBytes("licocon"));
         byte[] live = Convert.FromHexString(LiveT1);
-        That(list.Length == 91 && list.AsSpan(0, 90).SequenceEqual(live.AsSpan(0, 90)) && list[90] == 0,
-            "0x24E 记录与实机 t1 逐字节一致（只有尾 u8 +0xC4 改写 0）");
+        byte[] expected = live.ToArray();
+        expected[29] = 7; // 历史探针的零招募位改为原生默认三类全选，原始包保留不改。
+        expected[90] = 0;
+        That(list.Length == 91 && list.AsSpan().SequenceEqual(expected),
+            "0x24E仅招募对象E4和既有尾C4与历史探针不同，其余完整记录逐字节保持");
         That(Convert.ToHexString(RaidPackets.OpenWithMembers(0x02140001, [])) == "010014020300000000",
             "0x24F op3 M=0 与实机 23:07 包一致");
         byte[] open = RaidPackets.OpenWithMembers(0x02140001, [(1, CharacterName.Encoding.GetBytes("licocon"))]);

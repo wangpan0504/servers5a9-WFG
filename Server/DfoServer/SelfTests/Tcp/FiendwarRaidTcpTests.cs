@@ -92,7 +92,7 @@ internal static partial class FiendwarRaidTcpTests
         peer.Send(36, Area(115, 0, 1301, 428, 57, 1));
         Read("normal cross route");
         That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[57L, 1L]], "漩涡频道伪造36不能串入普通超时空之战");
-        peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(5u); writer.Write("fiend"u8); writer.Write(new byte[4]); }));
+        peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(5u); writer.Write("fiend"u8); writer.Write(new byte[] { 0, 0, 0, 7 }); }));
         That(Read("created").Any(packet => packet is { Kind: 1, Opcode: 664, Body: [1, ..] }), "无公会真实创建漩涡攻坚队");
         peer.Send(36, Area(57, 2, waiting.X, waiting.Y, 57, 1));
         That(Read("waiting with raid").Any(packet => packet is { Kind: 0, Opcode: 23 } && packet.Body[2] == 57 && packet.Body[3] == 2) &&

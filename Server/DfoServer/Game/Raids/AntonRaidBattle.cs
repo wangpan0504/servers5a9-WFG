@@ -157,13 +157,20 @@ internal sealed partial class AntonRaidBattle
 
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
-    internal (int Id, int Value)[] SymbolSnapshot(AntonRaidBattleView view) =>
-        // 102是执行事件，零值也会打开原生结果菜单；统一节奏由服务端安全退场。
-        // 按名称和编号过滤，保留原规则非零执行值及其它同号状态。
-        script.Symbols.Where(row => row.Key != "[kill all character]" || row.Value != 102 ||
-                lukePacing is null && view.Symbols[row.Key] != 0)
-            .Select(row => (row.Value, view.Symbols[row.Key]))
-            .Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value))).OrderBy(row => row.Item1).ToArray();
+    internal (int Id, int Value)[] SymbolSnapshot(AntonRaidBattleView view)
+    {
+        // 102是执行事件：0130D8A0不检查值或old/new，收到0也会打开结果菜单。
+        // 四团资源均将其定义为击杀全员；按名称与编号匹配，不能误删其它同号状态。
+        // 统一节奏已由服务端安全退场，不投递102；原规则仅保留真正非零的执行值。
+        var symbols = script.Symbols.Where(row => row.Key != "[kill all character]" || row.Value != 102 ||
+            lukePacing is null && view.Symbols[row.Key] != 0).ToDictionary(row => row.Value, row => view.Symbols[row.Key]);
+        // 原生完整/简易血条按已完成次数选帧；领域HP仍是剩余次数，设施破坏符号保持原值。
+        if (Kind == RaidKind.Luke)
+            foreach (var dungeon in script.Phases[view.Phase].Dungeons)
+                symbols[script.Symbols[dungeon.HpSymbol]] = dungeon.HpRaw - view.Symbols[dungeon.HpSymbol];
+        return symbols.Select(row => (row.Key, row.Value)).Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value)))
+            .OrderBy(row => row.Item1).ToArray();
+    }
     internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>
         script.Phases.SelectMany(phase => phase.Dungeons).Select(d => d.Id).Distinct().Order()
             .Select(id => (id, view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
@@ -178,7 +185,8 @@ internal sealed partial class AntonRaidBattle
         LukeSanctumRoute? cardRoute = null, Random? lukeRouteRandom = null, bool lukeEnergyObjects = false,
         LukeRaidPacingPolicy? pacing = null, LukeRaidFlowPolicy? flow = null, LukeResourceRewards? lukeRewards = null,
         Random? preyRandom = null, FiendwarScript? fiendwar = null, FiendwarPacing? fiendwarPacing = null,
-        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0)
+        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
+        LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -233,6 +241,9 @@ internal sealed partial class AntonRaidBattle
         lukeFixedRoute = fixedRoute;
         lukeCardRoute = cardRoute;
         this.lukeRouteRandom = lukeRouteRandom ?? Random.Shared;
+        this.lukeCards = lukeCards;
+        this.lukeMazes = lukeMazes.IsDefault ? [] : lukeMazes;
+        if (cardRoute is not null) lukeCardGroup = this.lukeRouteRandom.Next(cardRoute.GroupCount);
         lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
@@ -273,6 +284,13 @@ internal sealed partial class AntonRaidBattle
         }
         if (Kind == RaidKind.Prey)
             symbols = InitializePreySymbols(phase, symbols);
+        if (Kind == RaidKind.Luke && phase == 0 && lukeCards is { Ready: true })
+            foreach (var (dungeon, symbol) in new[] { (5054, "[card set pattern a]"), (5055, "[card set pattern b]"), (5056, "[card set pattern c]") })
+            {
+                var patterns = lukeCards.Patterns(dungeon);
+                if (patterns.Length != 0 && symbols.ContainsKey(symbol))
+                    symbols = symbols.SetItem(symbol, patterns[lukeRouteRandom.Next(patterns.Length)]);
+            }
         foreach (var dungeon in definition.Dungeons) symbols = symbols.SetItem(dungeon.HpSymbol, dungeon.HpRaw);
         return Evaluate(new(Instance, revision, phase, AntonRaidBattleState.Fighting, symbols,
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => Kind == RaidKind.Prey && !PreyBranchMatches(d, symbols)

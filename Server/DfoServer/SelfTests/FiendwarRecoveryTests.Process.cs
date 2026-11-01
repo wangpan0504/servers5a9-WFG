@@ -30,7 +30,7 @@ internal static partial class FiendwarRecoveryTests
                 peer.Select(); Read(peer);
                 peer.Send(1426); Read(peer);
                 peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name(single ? "crash-guide" : "crash-team"));
-                    writer.Write(new byte[] { single ? (byte)1 : (byte)0, 0, 0, 0 }); }));
+                    writer.Write(new byte[] { single ? (byte)1 : (byte)0, 0, 0, 7 }); }));
                 That(Read(peer).Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "进程中断回归真实团队/引导建团");
                 byte area = single ? (byte)33 : (byte)2;
                 var arrival = resources.Towns.Entrance(new(57, 1, 0, 0), new(57, area, 0, 0), new HashSet<int> { 8672 })!;

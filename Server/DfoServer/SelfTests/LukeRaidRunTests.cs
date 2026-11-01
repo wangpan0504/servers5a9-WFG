@@ -66,6 +66,7 @@ internal static class LukeRaidRunTests
                     second.All(row => battle.HasDungeonContribution(row.Actor, row.Identity.InstanceId)),
                     "逻辑阶段终结后第二队已提交清图仍接纳精确参与，不重开旧阶段业务");
             }
+            long terminalRevision = battle.View.Revision;
             foreach (var row in first) battle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
             That(battle.HasPendingTransition, "最后预留释放前保留已提交事实和待转换");
             other!.Dispose(); other.Dispose();
@@ -75,8 +76,12 @@ internal static class LukeRaidRunTests
                 That(battle.View.State == AntonRaidBattleState.Fighting, "新Run成功安装后仍必须原事务退出才能提交候选");
                 foreach (var row in second) battle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
             }
-            That(!battle.HasPendingTransition && battle.View is { State: AntonRaidBattleState.Reward, Phase: 0, Revision: 1 },
+            That(!battle.HasPendingTransition && battle.View is { State: AntonRaidBattleState.Reward, Phase: 0 } &&
+                battle.View.Revision > terminalRevision,
                 "最后旧Run释放后仅一次Fighting到Reward，不直接跳phase");
+            var settledView = battle.View;
+            That(battle.ReleaseDungeon(first[0].Actor,first[0].Identity.InstanceId) is null&&ReferenceEquals(settledView,battle.View),
+                "重放旧Run退场不再递增revision或重播阶段转换");
             That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision) is null, "未装配Luke奖励合同不得绕过阶段领奖或索引空策略");
             That(first.All(row => battle.HasDungeonContribution(row.Actor, row.Identity.InstanceId)), "释放占用不丢已提交的当前成员参与事实");
         }
@@ -133,6 +138,8 @@ internal static class LukeRaidRunTests
                         new("[check dungeon state]", 0, 10, null, RaidDungeonState.Clear, null, [])], [Set("[clears]", 1, true)])]
             }) };
             var state = Battle(program);
+            That(state.SymbolSnapshot(state.View).Single(row => row.Id == program.Symbols["[hp]"]).Value == 0,
+                "卢克初始血条投影零次完成，领域剩余HP仍为三");
             for (int pass = 1; pass <= 3; pass++)
             {
                 var rows = Bindings(0);
@@ -156,6 +163,8 @@ internal static class LukeRaidRunTests
                     pass == 3 ? row.Identity with { Epoch = row.Identity.Epoch + 1 } : row.Identity,
                     10, [Guid.NewGuid()]) { ClearMap = map })).ToArray();
                 state.CompleteLukeDungeon(facts);
+                That(state.SymbolSnapshot(state.View).Single(row => row.Id == program.Symbols["[hp]"]).Value == pass,
+                    "原生血条按已完成次数递增，清一次只损失一格而非将剩余两次画成只剩一格");
                 That(state.View.Symbols["[hp]"] == 3 - pass && state.View.Symbols["[clears]"] == (pass == 3 ? 1 : 0) &&
                     state.View.Dungeons[10] == (pass == 3 ? RaidDungeonState.Clear : RaidDungeonState.Open),
                     "HP3按不同共享Run扣1，四份角色事实不扣4，第三次才触发Clear");
@@ -171,6 +180,8 @@ internal static class LukeRaidRunTests
             }
             Control(2);
             That(state.View.Symbols["[hp]"] == 3 && state.View.DungeonGenerations[10] == 2, "Clear重新Open恢复资源HP且推进目标代");
+            That(state.SymbolSnapshot(state.View).Single(row => row.Id == program.Symbols["[hp]"]).Value == 0,
+                "目标重新开放时原生血条恢复满格，不残留上代完成次数");
             var old = Bindings(0);
             using (var reservation = state.ReserveDungeon(new(state.Instance, 0, 1, RaidKind.Luke), 10, old)!) reservation.Install();
             Control(1);

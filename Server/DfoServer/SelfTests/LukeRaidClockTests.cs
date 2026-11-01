@@ -126,6 +126,9 @@ internal static class LukeRaidClockTests
             [1, 0xca, 0x13, 0, 0, 0, 0, 0, 0, 150, 0, 0, 0], "596正数13B独立字节期望，明确中间raw0");
         Bytes(Network.Builders.RaidCombatPackets.LukePositiveTimer(2, 5063, 0, 86400),
             [2, 0xc7, 0x13, 0, 0, 0, 0, 0, 0, 0x80, 0x51, 1, 0], "596恢复类与一天上界独立字节期望");
+        Bytes(Network.Builders.RaidCombatPackets.LukeExpiredTimer(1, 5066),
+            [1, 0xca, 0x13, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255],
+            "596清理使用客户端有符号now-1，不复用正数准备或发送零长度区间");
         foreach (var (kind, dungeon, raw, seconds) in new (sbyte, int, uint, uint)[]
             {(-1, 10, 0, 1), (0, 10, 0, 1), (3, 10, 0, 1), (1, 0, 0, 1), (1, -1, 0, 1),
              (1, 10, 1, 1), (1, 10, 0, 0), (2, 10, 0, 0), (1, 10, 0, 86401)})

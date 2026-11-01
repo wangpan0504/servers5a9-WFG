@@ -14,6 +14,30 @@ namespace DfoServer.Testing;
 // 补开战失败回包、关闭阶段推进、以及同一分队两人的迁图/586。不改服务端规则。
 internal static partial class AntonRaidGapTcpTests
 {
+    static void RetryAndAbandon(TcpPeer[] members, TcpPeer leader, int dungeon)
+    {
+        leader.Send(72, [1, 0]);
+        foreach (var peer in members)
+        {
+            var entered = AntonTcpProbe.Barrier(peer, "开放图真实再次挑战");
+            int ack = entered.FindIndex(packet => packet is { Kind: 1, Opcode: 72, Body: [1, 1, 0] });
+            int scene = entered.FindIndex(packet => packet is { Kind: 0, Opcode: 27, Body.Length: 42 });
+            int info = entered.FindIndex(packet => packet is { Kind: 0, Opcode: 28 } && U32(packet.Body) == dungeon);
+            That(ack >= 0 && scene > ack && info > scene && entered.FindIndex(packet => packet.Opcode == 29) > info &&
+                !entered.Any(packet => packet.Opcode == 24), "安徒恩全分队真实新Run按ACK72/27/28/29衔接，不伪造重试或中间回城");
+            peer.Send(37, new byte[8]);
+        }
+        foreach (var peer in members)
+            That(AntonTcpProbe.Barrier(peer, "再次挑战全员加载").Any(packet => packet is { Kind: 1, Opcode: 37, Body: [1] }),
+                "再次挑战新Run仍经过全员加载屏障");
+        foreach (var peer in members)
+        {
+            peer.Send(42);
+            That(AntonTcpProbe.Barrier(peer, "放弃新Run不追加清图").Any(packet => packet is { Kind: 0, Opcode: 24 }),
+                "未清新Run沿真实42回城，不追加单图胜利");
+        }
+    }
+
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await RunTicketsAsync(source, root, resources);
@@ -65,7 +89,7 @@ internal static partial class AntonRaidGapTcpTests
         using var poor = Open(fixture, "gappoor", gamePort: port, channelNumber: 19);
         broke.Select(); rich.Select(); poor.Select();
         AntonRaidTcpTests.Drain(broke); AntonRaidTcpTests.Drain(rich); AntonRaidTcpTests.Drain(poor);
-        broke.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Broke")); w.Write(new byte[4]); }));
+        broke.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Broke")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         AntonRaidTcpTests.Until(broke, 1, 664);
         AntonTcpProbe.Barrier(broke, "无票建队");
         broke.Send(669, Build(w => { w.Write(0u); w.Write((uint)broke.Id); w.Write(1u); }));
@@ -74,7 +98,7 @@ internal static partial class AntonRaidGapTcpTests
         Bytes(AntonRaidTcpTests.Until(broke, 1, 666).Body, [0, 19, 0], "一张票都没有时 666 回错误 19");
         That(fixture.Query("SELECT town, area FROM characters WHERE name='GapBroke'") is [[19L, 0L]], "无票开战留在频道落点 19/0，不进候战室 19/2");
 
-        rich.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rich")); w.Write(new byte[4]); }));
+        rich.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rich")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         AntonRaidTcpTests.Until(rich, 1, 664);
         poor.Send(10, AntonRaidTcpTests.Peer(rich.Id, 7, true));
         AntonRaidTcpTests.Until(poor, 1, 10);
@@ -140,7 +164,7 @@ internal static partial class AntonRaidGapTcpTests
         using var member = Open(fixture, "gapmate", gamePort: port, channelNumber: 19);
         leader.Select(); member.Select();
         AntonRaidTcpTests.Drain(leader); AntonRaidTcpTests.Drain(member);
-        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Party")); w.Write(new byte[4]); }));
+        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Party")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         uint raidKey = U32(AntonRaidTcpTests.Until(leader, 1, 664).Body, 1);
         member.Send(10, AntonRaidTcpTests.Peer(leader.Id, 7, true));
         AntonRaidTcpTests.Until(member, 1, 10);
@@ -165,7 +189,7 @@ internal static partial class AntonRaidGapTcpTests
         AntonTcpProbe.RejectClosed(leader, member, 999);
         leader.Send(15, BitConverter.GetBytes(210u));
         var opened = AntonTcpProbe.Barrier(leader, "15 打开 210");
-        AntonTcpProbe.Barrier(member, "15 打开 210 队员");
+        var memberOpened = AntonTcpProbe.Barrier(member, "15 打开 210 队员");
         That(opened.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }), "210 的 15 打开选图");
         AntonTcpProbe.RejectSelect(leader, member, 216);
         AntonTcpProbe.RejectSelect(leader, member, 210, 2);
@@ -173,9 +197,13 @@ internal static partial class AntonRaidGapTcpTests
         AntonTcpProbe.RejectSelect(leader, member, 999);
         var leaderReport = new AntonTcpProbe.AntonProbeReport();
         var memberReport = new AntonTcpProbe.AntonProbeReport();
+        AntonTcpProbe.Note(leaderReport, started);
+        AntonTcpProbe.Note(leaderReport, opened);
+        AntonTcpProbe.Note(memberReport, memberStarted);
+        AntonTcpProbe.Note(memberReport, memberOpened);
         for (int clear = 0; clear < 4; clear++)
         {
-            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear != 0,
+            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear >= 2,
                 loaded: clear == 0 ? () => AssertHpProjection(leader, member) : null);
             leader.Send(1361, Build(writer => { writer.Write((byte)1); writer.Write(raidKey); }));
             var panel = AntonTcpProbe.Barrier(leader, "双人清图后的个人计数");
@@ -184,6 +212,11 @@ internal static partial class AntonRaidGapTcpTests
                 "安徒恩共享Run的两个已提交成员都获得一次个人计数，不依赖117报告者");
             That(panel.All(packet => packet is not { Kind: 0, Opcode: 591 } || packet.Body.Length < 8 || U32(packet.Body, 4) != 3),
                 "计数查询和增量刷新不使用会强制打开面板的591/op3");
+            if (clear == 1)
+            {
+                RetryAndAbandon([leader, member], leader, 210);
+                continue;
+            }
             if (clear != 0) continue;
             member.Send(72, [1, 2]); AntonTcpProbe.Barrier(member, "一人先退出原Run");
             AntonTcpProbe.Barrier(leader, "同步先退出成员");
@@ -265,6 +298,16 @@ internal static partial class AntonRaidGapTcpTests
     static void AssertState(AntonTcpProbe.AntonProbeReport report, int dungeon, byte state)
     {
         byte[]? body = report.States.LastOrDefault(row => row.Length >= 6 && BinaryPrimitives.ReadInt32LittleEndian(row) == dungeon);
+        if (body is null)
+        {
+            // 状态未变化时不重复586；初值仍必须在实际接收的585完整行中存在且精确匹配。
+            byte[]? snapshot = report.DungeonSnapshots.LastOrDefault(row => row.Length >= 6 && row.Length == 6 + 5 * row[1] &&
+                Enumerable.Range(0, row[1]).Any(index => BinaryPrimitives.ReadInt32LittleEndian(row.AsSpan(2 + 5 * index)) == dungeon));
+            That(snapshot is not null && snapshot[0] == 0 && Enumerable.Range(0, snapshot[1]).Count(index =>
+                BinaryPrimitives.ReadInt32LittleEndian(snapshot.AsSpan(2 + 5 * index)) == dungeon && snapshot[6 + 5 * index] == state) == 1,
+                $"585实际初值必须恰有一行：{dungeon}={state}");
+            return;
+        }
         That(body is { Length: 6 } && body[4] == 0 && body[5] == state,
             $"586 应是 6 字节、保留字节 0、{dungeon} 状态 {state}，实际 " +
             (body is null ? "没有这张图" : Convert.ToHexString(body)));

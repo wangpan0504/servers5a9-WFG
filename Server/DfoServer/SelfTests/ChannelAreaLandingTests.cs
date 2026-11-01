@@ -129,8 +129,8 @@ internal static class ChannelAreaLandingTests
         var lukePlaced = CharacterSelection.Prepare(repo, owner, lukeHigh, towns, none, null, false, null, channel: luke);
         That(lukePlaced.Position == towns.Room, "卢克频道选角先进赛丽亚房间");
         var lukeExit = TownTravel.LeaveRoom(lukePlaced, towns, none, luke);
-        That(lukeExit.Position is { Town: 32, Area: 3, X: 754, Y: 211 } && lukeExit.Return == (ChannelAreaLanding.IsChannelBoundTown(towns, 32) ? lukePlaced.Return : towns.ResolveRoomReturn(lukeExit.Position!, lukeExit.Position, 95, none)),
-            "赛丽亚房间一次出门到卢克街区32/3，不再经32/0房间中转");
+        That(lukeExit.Position is { Town: 32, Area: 3, X: 754, Y: 211 } && lukeExit.Return == towns.InitialReturn,
+            "赛丽亚房间一次出门到卢克街区32/3，同时保留进入前的普通返回地区");
         That(TownTravel.LeaveRoom(lukeStayedProbe(repo, owner, towns), towns, none, luke).Position is { Town: var lowTown } && lowTown != 32, "卢克等级不足时按存档返回地区出门");
         var lukeLow = repo.Create(owner, new("Luke85", towns.Room, towns.InitialReturn) { Level = 85 });
         var lukeStayed = CharacterSelection.Prepare(repo, owner, lukeLow, towns, none, null, false, null, channel: luke);
@@ -191,6 +191,75 @@ internal static class ChannelAreaLandingTests
         var skyRole = repo.Create(owner, new("Sky", towns.Room, towns.InitialReturn));
         var stayed = CharacterSelection.Prepare(repo, owner, skyRole, towns, none, null, false, null, channel: sky);
         That(stayed.Position == towns.Room, "正式选角在条件不足时保持共享房间");
+
+        int[] raidDone = [12829, 3779, 2903, 4872, 8672, 8935];
+        foreach (var (type, group, town, area) in new (int, string, byte, byte)[]
+            { (23, "[raid]", 19, 2), (32, "[luke_raid]", 32, 4), (45, "[fiendwar]", 57, 2), (50, "[prey]", 59, 2) })
+        {
+            var bounds = towns.Areas[(town, area)].Map(raidDone.ToHashSet()).Bounds.First().Bounds;
+            var waiting = new Location(town, area, checked((ushort)(bounds.X + bounds.Width / 2)),
+                checked((ushort)(bounds.Y + bounds.Height / 2)));
+            var raidChannel = new ChannelEntry(new(2, (byte)(100 + type)), type, group);
+            var staleRole = repo.Create(owner, new("RaidStale" + type, waiting, towns.InitialReturn)
+                { Level = 95, CompletedQuests = raidDone });
+            foreach (var destination in new[] { elven, raidChannel })
+            {
+                staleRole = repo.Save(owner, staleRole, waiting, towns.InitialReturn);
+                var restoredSession = new GameSession(repo, towns, owner, entry: destination);
+                restoredSession.Select(staleRole.Slot, resumeTown: true);
+                staleRole = restoredSession.Selected!;
+                That(!restoredSession.TownSnapshotResumed && staleRole.Position != waiting &&
+                    staleRole.Position == (destination.Type == 23 ? ChannelAreaLanding.Place(towns, destination, 95, raidDone.ToHashSet()) : towns.Room) &&
+                    staleRole.Return == towns.InitialReturn,
+                    $"团本地区{town}/{area}在同频道重选或切普通频道均重建入口，保留原普通返回地区");
+                restoredSession.ReturnToRoster();
+            }
+            staleRole = repo.Save(owner, staleRole, towns.Room, waiting);
+            var repaired = CharacterSelection.Prepare(repo, owner, staleRole, towns, raidDone.ToHashSet(), null,
+                resumeTown: true, channel: elven);
+            That(repaired.Return == towns.InitialReturn, $"旧存档错误返回地区{town}/{area}不能再次把普通房间出口导回候战室");
+        }
+        That(!ChannelAreaLanding.IsRaidInstanceArea(new(32, 3, 754, 211)) &&
+            !ChannelAreaLanding.PreservesRoomReturn(towns, new Location(32, 3, 754, 211)) &&
+            ChannelAreaLanding.PreservesRoomReturn(towns, new Location(32, 4, 741, 356)),
+            "同城镇内精确区分普通32/3与团队32/4，不扩大为整座城镇的落点限制");
+        var lukeStreet = new Location(32, 3, 754, 211);
+        That(ChannelAreaLanding.PreservesRoomReturn(towns, lukeStreet, luke.Type) &&
+            !ChannelAreaLanding.PreservesRoomReturn(towns, lukeStreet, elven.Type),
+            "同一32/3只在卢克团队频道保留普通返回地区，普通频道仍能记住合法街区");
+        var returnRole = repo.Create(owner, new("LukeReturn", towns.Room, towns.InitialReturn)
+            { Level = 95, CompletedQuests = raidDone });
+        var raidCompleted = raidDone.ToHashSet();
+        var channelExit = TownTravel.LeaveRoom(returnRole, towns, raidCompleted, luke);
+        That(channelExit.Accepted && channelExit.Position is { Town: 32, Area: 3 } && channelExit.Return == towns.InitialReturn,
+            "卢克频道首次出门不将团队入口32/3覆盖为普通返回地区");
+        returnRole = repo.Save(owner, returnRole, channelExit.Position!, channelExit.Return);
+        var enterRoom = TownTravel.Plan(returnRole, new(32, 0, 433, 311, 5, 32, 3, 0), towns, raidCompleted, luke);
+        That(enterRoom.Accepted && enterRoom.Return == towns.InitialReturn,
+            "团队入口进入地区赛丽亚房间仍保留原普通返回地区");
+        var inRoom = repo.Save(owner, returnRole, enterRoom.Position!, enterRoom.Return);
+        var leaveLocalRoom = TownTravel.LeaveRoom(inRoom, towns, raidCompleted, luke);
+        That(leaveLocalRoom.Accepted && leaveLocalRoom.Position is { Town: 32, Area: 3 } && leaveLocalRoom.Return == towns.InitialReturn,
+            "地区赛丽亚房间出门也不能把32/3写入普通返回地区");
+        var localAreaExit = TownTravel.Plan(inRoom, new(32, 3, 754, 211, 5, 32, 0, 0), towns, raidCompleted, luke);
+        That(localAreaExit.Accepted && localAreaExit.Return == towns.InitialReturn,
+            "有坐标的地区房间出门请求同样保留普通返回地区");
+        returnRole = inRoom;
+        foreach (int? previous in new int?[] { luke.Type, null })
+        {
+            returnRole = repo.Save(owner, returnRole, lukeStreet, towns.InitialReturn);
+            returnRole = CharacterSelection.Prepare(repo, owner, returnRole, towns, raidCompleted, null,
+                channel: elven, previousChannelType: previous);
+            That(returnRole.Position == towns.Room && returnRole.Return == towns.InitialReturn,
+                "离开卢克或丢失进程频道历史后，已保留的普通返回地区不被入口覆盖");
+        }
+        returnRole = repo.Save(owner, returnRole, lukeStreet, lukeStreet);
+        returnRole = CharacterSelection.Prepare(repo, owner, returnRole, towns, raidCompleted, null, channel: elven);
+        That(returnRole.Return is { Town: 32, Area: 3 }, "合法普通卢克返回地区在无频道历史时仍可恢复");
+        returnRole = repo.Save(owner, returnRole, lukeStreet, null);
+        returnRole = CharacterSelection.Prepare(repo, owner, returnRole, towns, raidCompleted, null,
+            channel: elven, previousChannelType: luke.Type);
+        That(returnRole.Return == towns.InitialReturn, "已知来源卢克但旧存档缺返回地区时使用普通初始地区，不能记住团队入口");
         Console.WriteLine("ASSERT level-or-quest sky_catle stays 38/1");
 
         var fiendRole = repo.Create(owner, new("Fiend", towns.Room, towns.InitialReturn));

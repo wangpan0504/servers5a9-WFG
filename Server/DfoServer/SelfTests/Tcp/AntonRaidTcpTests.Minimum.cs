@@ -35,7 +35,7 @@ internal static partial class AntonRaidTcpTests
         peer.Select(); Drain(peer);
         byte[] Search(string name) => Build(w => { w.Write((byte)0); w.Write(0u); w.Write(0x100u); w.Write(0u); w.Write(Name(name)); });
         peer.Send(833, Search("")); Bytes(Until(peer, 0, 756).Body, new byte[12], "寻找攻坚队返回真实空招募列表并释放等待");
-        peer.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Solo")); w.Write(new byte[4]); }));
+        peer.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Solo")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         Until(peer, 0, 590); Until(peer, 0, 591); Until(peer, 1, 664);
         peer.Send(833, Search("Solo"));
         var found = Until(peer, 0, 756).Body;

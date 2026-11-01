@@ -24,6 +24,7 @@ internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] Title
     public RaidStarted? Started { get; init; }
     public int StartMinimum { get; init; } = 1;
     public bool Guide { get; init; }
+    public byte RecruitRoles { get; init; } = 7;
 }
 internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false)
 {
@@ -201,15 +202,16 @@ internal sealed partial class RaidRegistry
     static bool Same(RaidActor a, RaidActor b) => ReferenceEquals(a.Session, b.Session) && a.Epoch == b.Epoch &&
         ReferenceEquals(a.Owner, b.Owner) && a.Character == b.Character;
 
-    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity, int startMinimum = 1, bool guide = false) => actor.Owner.Execute(() =>
+    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity, int startMinimum = 1, bool guide = false,
+        byte recruitRoles = 7) => actor.Owner.Execute(() =>
     {
         lock (gate)
         {
-            if (!actor.CanManage || capacity is < 1 or > 255 || guide && (type is not (2 or 3) || capacity != 1 || startMinimum != 1) || FindCore(actor) is not null ||
+            if (!actor.CanManage || recruitRoles is < 1 or > 7 || capacity is < 1 or > 255 || guide && (type is not (2 or 3) || capacity != 1 || startMinimum != 1) || FindCore(actor) is not null ||
                 parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
             uint key = Allocate(actor.Channel);
             var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
-                [new(actor, 0, guide ? (byte)1 : (byte)0)], capacity, ++revision) { StartMinimum = startMinimum, Guide = guide };
+                [new(actor, 0, guide ? (byte)1 : (byte)0)], capacity, ++revision) { StartMinimum = startMinimum, Guide = guide, RecruitRoles = recruitRoles };
             parties.Add(key, party);
             waiting.Remove(actor.Character);
             return party;
@@ -229,13 +231,13 @@ internal sealed partial class RaidRegistry
         }
     });
 
-    public RaidChange? Rename(RaidActor actor, byte type, string title, byte[] titleBytes) => actor.Owner.Execute(() =>
+    public RaidChange? Rename(RaidActor actor, byte type, string title, byte[] titleBytes, byte? recruitRoles = null) => actor.Owner.Execute(() =>
     {
         lock (gate)
         {
             var old = FindCore(actor);
-            if (!actor.CanManage || old is null || old.Started is not null || old.Leader != actor.Character || old.Type != type) return null;
-            var updated = old with { Title = title, TitleBytes = titleBytes, Revision = ++revision };
+            if (!actor.CanManage || recruitRoles is < 1 or > 7 || old is null || old.Started is not null || old.Leader != actor.Character || old.Type != type) return null;
+            var updated = old with { Title = title, TitleBytes = titleBytes, RecruitRoles = recruitRoles ?? old.RecruitRoles, Revision = ++revision };
             parties[old.Key] = updated;
             return new RaidChange(old, updated);
         }

@@ -18,7 +18,7 @@ internal static class MonsterCardUpgradeTcpTests
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             Create("UpgradeTcp", 10310789, 4, 1);
-            Create("StackTcp", 3620, 2, 3);
+            Create("StackTcp", 3620, 2, 5);
             void Create(string name, int itemId, int slots, int count)
             {
                 var template = resources.ItemResources.Items.Get(itemId);
@@ -88,24 +88,24 @@ internal static class MonsterCardUpgradeTcpTests
         {
             peer.Select(1);
             peer.Barrier();
-            peer.Send(603, Convert.FromHexString("00E9000100EA00"));
+            peer.Send(603, Convert.FromHexString("00E9000300EA0000EA0000EA00"));
             peer.Expect(1, 603, Convert.FromHexString("0101240E000001"));
             peer.Expect(0, 14);
             peer.Barrier();
             var rows = Rows("StackTcp");
             That(rows.Length == 3 && rows.Count(row => Convert.ToInt64(row[5]) == 1) == 1 &&
-                rows.Sum(row => Convert.ToInt64(row[4])) == 5 &&
-                rows.Any(row => Convert.ToInt64(row[1]) == 233 && Convert.ToInt64(row[4]) == 2 && Convert.ToInt64(row[5]) == 0) &&
+                rows.Sum(row => Convert.ToInt64(row[4])) == 7 &&
+                rows.Any(row => Convert.ToInt64(row[1]) == 233 && Convert.ToInt64(row[4]) == 4 && Convert.ToInt64(row[5]) == 0) &&
                 rows.All(row => Convert.ToInt64(row[2]) > 0),
-                "普通卡整堆三张仅一张升级，材料只扣一张，新实例分配真实UID，剩余五张不丢失");
-            peer.Send(603, Convert.FromHexString("00E9000100E900"));
+                "普通卡五张仅一张升级，三张材料必成，新实例分配真实UID，剩余七张不丢失");
+            peer.Send(603, Convert.FromHexString("00E9000300E90000E90000E900"));
             peer.Expect(1, 603, Convert.FromHexString("0101240E000001"));
             peer.Expect(0, 14);
             peer.Barrier();
             rows = Rows("StackTcp");
             That(rows.Sum(row => Convert.ToInt64(row[4])) == 4 &&
                 rows.Any(row => Convert.ToInt64(row[1]) == 233 && Convert.ToInt64(row[4]) == 1 && Convert.ToInt64(row[5]) == 1),
-                "目标同源堆留一张升级、另扣一张材料，实际落库和差量同步一致");
+                "目标同源堆留一张升级、另扣三张材料，实际落库和差量同步一致");
             string afterSameSource = Snapshot("StackTcp");
             peer.Send(603, Convert.FromHexString("00E9000100E900"));
             peer.Expect(1, 603, [0, 22, 0]);

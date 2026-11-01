@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Raids;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
@@ -21,12 +22,11 @@ internal static partial class LukeRaidRunTcpTests
     }
     static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0)
     {
-        static WirePacket Until(TcpPeer peer, byte kind, ushort opcode, List<WirePacket>? collected = null)
+        static WirePacket Until(TcpPeer peer, byte kind, ushort opcode, List<WirePacket>? observed = null)
         {
             for (int index = 0; index < 256; index++)
             {
-                var packet = peer.Read();
-                collected?.Add(packet);
+                var packet = peer.Read(); observed?.Add(packet);
                 if (packet.Kind == kind && packet.Opcode == opcode) return packet;
             }
             throw new InvalidOperationException("production TCP expected packet not received");
@@ -35,7 +35,8 @@ internal static partial class LukeRaidRunTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "luke-production"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var definition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
-            SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items).Find(1)!;
+            SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items,
+            SelfTestCatalogs.Rooms(resources.Archive), lukeResourceChoices: LukeSanctumRoute.ResourceChoices).Find(1)!;
         var catalog = definition.Resources!.EntryCatalog!;
         var repository = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var port = ChannelTcpTests.Endpoints(fixture)[20];
@@ -66,7 +67,7 @@ internal static partial class LukeRaidRunTcpTests
                     var peer = Open(fixture, account, gamePort: port, channelNumber: 20); peer.Select(); peers.Add(peer);
                 }
                 var leader = peers[0];
-                leader.Send(664, Build(writer => { writer.Write((byte)1); writer.Write(Name("LukeFull")); writer.Write(new byte[4]); }));
+                leader.Send(664, Build(writer => { writer.Write((byte)1); writer.Write(Name("LukeFull")); writer.Write(new byte[] { 0, 0, 0, 5 }); }));
                 uint raidKey = U32(Until(leader, 1, 664).Body, 1);
                 for (int index = 1; index < count; index++)
                 {
@@ -119,6 +120,11 @@ internal static partial class LukeRaidRunTcpTests
                 {
                     var started = Drain(peer);
                     if (peer == leader) started.InsertRange(0, leaderStart);
+                    That(started.Count(packet => packet is { Kind: 0, Opcode: 1184 }) == 1,
+                        "正式Runtime开战向每名成员发送三圣所塔罗牌，资源装配不能遗漏");
+                    Validate(started.Single(packet => packet is { Kind: 0, Opcode: 1184 }));
+                    That(started.Any(packet => packet is { Kind: 0, Opcode: 776 }),
+                        "正式Runtime开战同步牌组怪物存活状态，不能只验证收到时的包体");
                     That(started.Any(packet => packet is { Kind: 0, Opcode: 583 }), "生产开团确实收到符号快照");
                     foreach (var packet in started.Where(packet => packet is { Kind: 0, Opcode: 583 })) Validate(packet);
                 }
@@ -142,21 +148,180 @@ internal static partial class LukeRaidRunTcpTests
                 var members = peers.Take(4).ToArray(); var others = peers.Skip(4).ToArray();
                 if (!recovery) SelectionBoundaries(members, leader, 5054);
                 int clearPhase = -1, phaseClears = 0;
+                var facilityRules = LukeSanctumObjectRules.Create(catalog.Script);
+                var facilityCounts = new Dictionary<int, int> { [117] = 0, [118] = 0, [119] = 0 };
+                List<WirePacket>[]? retryEntry = null;
+                void Movie(TcpPeer peer)
+                {
+                    peer.Send(659,[0]); var skip=Drain(peer,true);
+                    That(skip.Count(packet=>packet is {Kind:0,Opcode:599})==1 &&
+                        !skip.Any(packet=>packet.Opcode==600),"659零值只提示跳过，不提前标记已选或发奖");
+                    peer.Send(659,[0]); var repeated=Drain(peer,true);
+                    That(!repeated.Any(packet=>packet.Opcode is 599 or 600),"重复跳过不重播通知或发奖");
+                    peer.Send(659,[1]); var cards=Drain(peer,true);
+                    That(cards.Any(packet=>packet is {Kind:0,Opcode:587,Body:[4,0]}) &&
+                        cards.Any(packet=>packet is {Kind:0,Opcode:600,Body:[0 or 1,0]}),
+                        "演出完成推进原生翻牌显示，尚未选择时没有本人奖励结果");
+                    peer.Send(659,[1]);
+                    That(!Drain(peer,true).Any(packet=>packet.Opcode is 587 or 600),"重复完成不重建翻牌窗口");
+                }
                 void Run(int dungeon, byte phase)
                 {
-                    var entered = Enter(members, leader, dungeon); Load(members);
+                    var entered = retryEntry ?? Enter(members, leader, dungeon);
+                    retryEntry = null;
+                    Load(members);
+                    if(phase==0&&phaseClears==0)
+                    {
+                        leader.Send(72, [1, 0]);
+                        foreach (var peer in members)
+                            That(!Drain(peer, true).Any(packet => packet.Opcode is 72 or 28 or 29),
+                                "未清图72不能触发成功回执或替换任一成员Run");
+                        // 另一分队先消费真实入图快照，再独立核对随后695产生的634。
+                        foreach(var peer in others) Drain(peer,true);
+                        leader.Send(695,Build(writer=>{writer.Write(0x12345678u);writer.Write((byte)2);writer.Write(73u);writer.Write(41u);}));
+                        byte[] expected=Build(writer=>
+                        {
+                            writer.Write((byte)1);writer.Write((ushort)1);writer.Write((byte)members.Length);
+                            foreach(var member in members)writer.Write(member.Id);
+                            writer.Write(0u);writer.Write(0x12345678u);writer.Write((byte)2);writer.Write(73u);writer.Write(41u);
+                        });
+                        foreach(var peer in peers)
+                        {
+                            var status=Drain(peer,true);
+                            Bytes(status.Single(packet=>packet is {Kind:0,Opcode:634}).Body,expected,"695真实上报向全团投影同一634，不局限图内分队");
+                            That(!status.Any(packet=>packet.Opcode is 586 or 601),"实时HP只刷新状态，不重发副本状态或奖励");
+                        }
+                    }
+                    if (phase == 1 && dungeon == 5066)
+                        ProductionLiveHp(peers.ToArray(), members, leader);
+                    bool Timer(WirePacket packet, byte kind, uint seconds) => packet is { Kind: 0, Opcode: 596, Body.Length: 13 } &&
+                        packet.Body[0] == kind && U32(packet.Body, 1) == 5066 && U32(packet.Body, 9) == seconds;
+                    if (dungeon == 5061)
+                        That(entered.All(frames => frames.Count(packet => Timer(packet, 1, 600)) == 1),
+                            "首次进光王座向本队每人发送600秒储藏室增长计时，同代只写一次");
+                    if (dungeon == 5066 || dungeon == 5062)
+                        That(entered.All(frames => !frames.Any(packet => packet is { Kind: 0, Opcode: 596 } && U32(packet.Body, 1) == 5066)),
+                            "光王座退出后进储藏室及暗王座不重启已有增长/压制进度条");
                     if (clearPhase != phase)
                     {
+                        foreach (var peer in peers)
+                        {
+                            foreach (byte mode in new byte[] { 0, 2 })
+                            {
+                                Drain(peer, true);
+                                peer.Send(1361, Build(writer => { writer.Write(mode); writer.Write(raidKey); }));
+                                var panel = Until(peer, 1, 1361).Body;
+                                That(panel[0] == 1 && panel[1] == mode && RaidPanelTests.ReadRecordState(panel, 6) == (2, phase),
+                                    "首次进各阶段，图内与待命成员查询均使用真实阶段，不能回填开团P1");
+                                That(!RaidPanelTests.ReadGuideFlag(panel, 6), "一二阶段图内及城镇查询始终保留普通模式");
+                                That(RaidPanelTests.ReadRecruitRoles(panel, 6) == 5, "开战及阶段切换不清空或重置原招募对象");
+                                if (mode == 2) RaidPanelTests.ReadClears(panel);
+                                That(!Drain(peer, true).Any(packet => packet.Opcode is 587 or 601),
+                                    "查询实时记录不重播阶段动画或结算");
+                            }
+                        }
                         leader.Send(658, [0]);
                         var costs = Until(leader, 0, 598).Body;
                         That(U32(costs) == count && Enumerable.Range(0, count).All(index => costs[6 + 5 * index] == 2),
                             "正式副本内费用查询仍返回全员已提交状态，不被城镇开战快照门槛清空");
                         Until(leader, 1, 658);
                     }
+                    clock.Advance(7);
+                    bool terminal=dungeon==5056&&phaseClears==8 || dungeon==5062;
+                    if(terminal&&others.Length>0)
+                    {
+                        // 编队时第二队首名成员先入槽并成为队长；这里只请求选图，不安装Run。
+                        others[0].Send(15,new byte[4]);
+                        foreach(var peer in others)
+                            That(Drain(peer,true).Count(packet=>packet is {Kind:0,Opcode:27})==1,
+                                "另一分队真实停留选图场景，覆盖阶段末无Run成员自动退出");
+                    }
+                    var phaseResults=terminal?PhasePackets(peers):null;
+                    List<WirePacket> combatTimers = [], updates = [];
+                    // 生产原资源清图后隐藏普通目标，能源图进入Close恢复期；合成规则夹具仍检查Clear。
+                    IReadOnlyDictionary<int,RaidDungeonState>? finalStates = phase==1
+                        ? new Dictionary<int,RaidDungeonState>{{dungeon,dungeon is 5063 or 5066 ? RaidDungeonState.Close : RaidDungeonState.Hide}}
+                        : dungeon==5056&&phaseClears==8
+                            ? new Dictionary<int,RaidDungeonState>{{5054,RaidDungeonState.Hide},{5055,RaidDungeonState.Hide},{5056,RaidDungeonState.Hide}} : null;
                     Clear(fixture, members, others, leader, entered[0], catalog, phase,
-                        passiveTarget: dungeon == 5066 ? 64060 : dungeon == 5063 ? 64062 : null);
-                    foreach (var peer in members.Where(peer => peer != leader)) Return(members, peer, true, resultCommand: true);
-                    Return(members, leader, true, resultCommand: true);
+                        passiveTarget: dungeon == 5066 ? 64060 : dungeon == 5063 ? 64062 : null,
+                        observe: frames => { updates.AddRange(frames); combatTimers.AddRange(frames.Where(packet => packet.Opcode == 596)); },
+                        expectedStates: finalStates, phaseResults: phaseResults,
+                        roomCleared: phase == 0 ? room => ProductionFacility(peers.ToArray(), leader,
+                            definition.Resources.LukeObjects!, facilityRules, dungeon,
+                            entered[0].Single(packet => packet.Opcode == 28).Body[7], room, facilityCounts,
+                            phaseClears % 3, catalog.Script) : null,
+                        waypoints: phase == 0 ? ProductionFacilityStops(catalog, definition.Resources.LukeObjects!,
+                            dungeon, entered[0].Single(packet => packet.Opcode == 28).Body[7]) : null);
+                    if (dungeon == 5066)
+                        That(combatTimers.Count(packet => Timer(packet, 1, uint.MaxValue)) == members.Length &&
+                            combatTimers.Count(packet => Timer(packet, 2, 300)) == members.Length,
+                            "真实销毁能源对象后逐人结束增长旧条并开始300秒压制，不等待旧600秒到期");
+                    bool canRetry = phase == 0 && phaseClears % 3 < 2;
+                    That(terminal || updates.Count(packet => packet is { Kind: 0, Opcode: 261 } &&
+                        packet.Body.SequenceEqual(new byte[] { canRetry ? (byte)9 : (byte)0 })) == members.Length,
+                        "真实清图按各图剩余次数向本分队逐人发布一次再挑战资格，旁观队不获得清图按钮");
+                    List<WirePacket> returned = [];
+                    if (terminal)
+                    {
+                        returned=phaseResults![leader];
+                        foreach(var peer in others)
+                        {
+                            var frames=phaseResults[peer];
+                            That(frames.FindIndex(packet=>packet is {Kind:0,Opcode:24}) is var town&&town>=0&&
+                                frames.FindIndex(packet=>packet is {Kind:0,Opcode:601})>town,
+                                "选图待命成员也先24自动回城再601，不被阶段状态先行覆盖");
+                        }
+                        updates.AddRange(phaseResults.Values.SelectMany(frames=>frames));
+                        That(phaseResults.Values.All(frames=>!frames.Any(packet=>packet is {Kind:0,Opcode:261,Body:[9]})),
+                            "阶段全部结束没有再挑战资格，自动退场无42/72请求");
+                    }
+                    else if (phase == 0 && phaseClears % 3 < 2)
+                    {
+                        if (members.Length > 1)
+                        {
+                            members[1].Send(72, [1, 0]);
+                            foreach (var peer in members)
+                                That(!Drain(peer, true).Any(packet => packet.Opcode is 72 or 28 or 29),
+                                    "非队长不能替全分队再次挑战或先回成功");
+                        }
+                        var attempts = fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", leader.Id);
+                        retryEntry = Retry(members, leader, dungeon);
+                        That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", leader.Id)
+                            is [[long nextAttempt]] && attempts is [[long lastAttempt]] && nextAttempt == lastAttempt + 1,
+                            "再次挑战只新增一次真实持久尝试，不复用旧Run或重复扣圣所进度");
+                    }
+                    else if (phase == 0 && phaseClears == 2)
+                    {
+                        leader.Send(72, [1, 0]);
+                        foreach (var peer in members)
+                        {
+                            var exhausted = Drain(peer, true);
+                            That(exhausted.Any(packet => packet is { Kind: 1, Opcode: 72, Body: [1, 1, 2] }) &&
+                                exhausted.Any(packet => packet is { Kind: 0, Opcode: 24 }) &&
+                                !exhausted.Any(packet => packet.Opcode is 28 or 29),
+                                "圣所次数耗尽后旧按钮请求全分队正常回城，不假成功重开封闭图");
+                        }
+                    }
+                    else
+                    {
+                        foreach (var peer in members.Where(peer => peer != leader)) updates.AddRange(Return(members, peer, true, resultCommand: true));
+                        returned = Return(members, leader, true, resultCommand: true); updates.AddRange(returned);
+                    }
+                    if(terminal)
+                    {
+                        int town=returned.FindIndex(packet=>packet is {Kind:0,Opcode:24});
+                        int result=returned.FindIndex(packet=>packet is {Kind:0,Opcode:601});
+                        That(result>town&&U32(returned[result].Body,2)>0,"先安装城镇再结果演出，601使用真实非零阶段耗时");
+                    }
+                    if(dungeon==5062)
+                        That(updates.Where(packet=>packet is {Kind:0,Opcode:1446}).Any(packet=>
+                            RaidPanelTests.ReadWeeklyClears(packet.Body)[1]==(1u,1u)),"最终暗王座提交后即时发布真实日周通关次数各一");
+                    var rosterUpdates = terminal ? phaseResults!.Values.SelectMany(frames => frames).Concat(updates) : updates;
+                    That(rosterUpdates.Any(packet => packet is { Kind: 1, Opcode: 1361, Body: [1, 2, ..] } &&
+                        RaidPanelTests.ReadRecordState(packet.Body, 6).Phase == phase && !RaidPanelTests.ReadGuideFlag(packet.Body, 6) &&
+                        RaidPanelTests.ReadRecruitRoles(packet.Body, 6) == 5),
+                        "清图实时发布完整阶段及成员快照，不只更换计数留下旧阶段");
                     foreach (var peer in others) Drain(peer, true);
                     if (clearPhase != phase) { clearPhase = phase; phaseClears = 0; }
                     phaseClears++;
@@ -167,6 +332,8 @@ internal static partial class LukeRaidRunTcpTests
                         "原生1361返回本阶段真实个人次数，旁观分队不冒领，阶段切换后重新计数");
                 }
                 foreach (int dungeon in new[] { 5054, 5055, 5056 }) for (int step = 0; step < 3; step++) Run(dungeon, 0);
+                That(facilityCounts.Values.All(value => value > 0),
+                    "正常生产1/4/8人完整路线均实际报告三圣所设施，不以始终为零的快照冒充蓝格联通");
                 string instance = (string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0", leader.Id)[0][0]!;
                 That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL", instance)
                     is [[long p1]] && p1 == count, "完整P1九次圣所签发逐人持久资格");
@@ -183,13 +350,14 @@ internal static partial class LukeRaidRunTcpTests
                 }
                 else foreach (var peer in members)
                 {
-                    peer.Send(660, [1, 0]); var claimed = Drain(peer, true);
+                    Movie(peer);
+                    peer.Send(660, [1, 2]); var claimed = Drain(peer, true);
                     That(claimed.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) && claimed.Any(packet => packet.Opcode == 600),
                         "P1个人实际不渝结果与领取回执写出");
                     foreach (var other in peers.Where(other => other != peer)) Drain(other, true);
                 }
                 // 未参与的第二队按真实资格处理；P1原门槛为0，不能借漏领奖跳过休息屏障。
-                foreach (var peer in others) { peer.Send(660, [1, 0]); Drain(peer, true); foreach (var other in peers.Where(other => other != peer)) Drain(other, true); }
+                foreach (var peer in others) { Movie(peer); peer.Send(660, [1, 2]); Drain(peer, true); foreach (var other in peers.Where(other => other != peer)) Drain(other, true); }
                 leader.Send(666); Bytes(Until(leader, 1, 666).Body, [1], "团长真实提前启动P2，不重复扣票");
                 AwaitPhaseTwo(clock, peers.ToArray(), leader);
                 foreach (int dungeon in new[] { 5311, 5313, 5057, 5058, 5059, 5060, 5064, 5065, 5061, 5066, 5062 }) Run(dungeon, 1);
@@ -263,15 +431,21 @@ internal static partial class LukeRaidRunTcpTests
                     continue;
                 }
                 foreach (var peer in members)
+                {
+                    Movie(peer);
                     foreach (byte kind in new byte[] { 1, 0 })
                     {
-                        peer.Send(660, [kind, 0]); var claimed = Drain(peer, true);
+                        peer.Send(660, [kind, 3]); var claimed = Drain(peer, true);
                         That(claimed.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) && claimed.Any(packet => packet.Opcode == 600),
                             "P2个人/团队实际产物各自提交与展示");
                         foreach (var other in peers.Where(other => other != peer)) Drain(other, true);
                     }
+                }
                 That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0", instance)
                     is [[long receipts]] && receipts == count + 2 * members.Length, "冻结资格与真实参与领奖数对应，无重复箱内容");
+                leader.Dispose();
+                leader=Open(fixture,$"lkprod{count}_0",gamePort:port,channelNumber:20); peers[0]=leader; leader.Select();
+                That(RaidPanelTests.ReadWeeklyClears(leader.RaidWeeklyClearInfo)[1]==(1u,1u),"完整通关后重登仍从账本恢复一次日周次数");
                 Console.WriteLine($"PASS Luke production natural phases members={count}");
             }
             finally { foreach (var peer in peers) peer.Dispose(); }

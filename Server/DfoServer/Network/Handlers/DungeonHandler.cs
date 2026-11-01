@@ -205,7 +205,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (context.Session.ChannelEntry?.Type is 23 or 50 && (context.Session.StartedRaid is not null ||
             selection.DungeonIndex <= int.MaxValue && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid)?.Contains((int)selection.DungeonIndex) == true))
             return await SelectAntonAsync(context, selection);
-        if (context.Session.ChannelEntry?.Type == 32 && context.Session.StartedRaid is not null)
+        if (context.Session.ChannelEntry?.Type == 32)
         {
             var selectedParty = context.Session.CurrentParty?.Invoke();
             if (selectedParty is null || context.DispatchGates?.Holds(context, selectedParty.Commands) != true)
@@ -631,6 +631,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             return CommandResult.Handled;
         }
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (context.Session.RecordLukeNamedDeath(result) is { } namedChange) context.Session.PublishRaidCombat(namedChange);
         // 02B0FA96读取第二个u16作为可见性过滤；普通掉落显式为0，位置由客户端死亡对象散落链确定。
         if (receipt.Character.Marriage is { State: 4 } marriage &&
             marriage.Members.TryGetValue(receipt.Character.Id, out var member) &&

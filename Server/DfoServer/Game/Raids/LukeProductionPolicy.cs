@@ -25,7 +25,7 @@ internal static class LukeProductionPolicy
             Run = new("95jp/luke/resource-mazes-v1", script.Phases.SelectMany((phase, index) => phase.Dungeons.Select(row =>
                 new LukeRaidMazeChoice(index, row.Id, catalog.Find(row.Id)!.Mazes.First(maze => maze.QuestConnectionTokens.Count == 0).SourceOrdinal))).ToImmutableArray(),
                 LukeRaidRunEconomy.ControlledNoOrdinaryRewards) { UseResourceCardRoute = true, UseEnergyObjects = true },
-            Completion = completion, ResourceRewards = rewards,
+            Completion = completion, ResourceRewards = rewards, Cards = resources.LukeCardSet,
             Revival = new("95jp/luke/shared-resource-coins-v1"), Timers = new("95jp/luke/resource-timers-v1"),
             PhaseTimeout = LukeRaidPhaseTimeoutPolicy.Shared95,
             Facilities = new("95jp/luke/resource-facilities-v1", true) { UseResourceBudgets = true },

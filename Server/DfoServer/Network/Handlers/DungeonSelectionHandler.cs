@@ -147,8 +147,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             else await PartyDungeonProjection.PublishAsync(selected);
             return CommandResult.Handled;
         }
-        if (context.Session.ChannelEntry?.Type == 32 &&
-            context.Session.StartedRaid is not null && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
+        if (context.Session.ChannelEntry?.Type == 32 && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
             var selectedParty = context.Session.CurrentParty?.Invoke();
             if (selectedParty is null || context.DispatchGates?.Holds(context, selectedParty.Commands) != true)

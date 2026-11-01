@@ -70,6 +70,8 @@ internal sealed partial class AntonRaidBattle
                 if (run.Phase == 1)
                     battle.current = before with { LukePhaseCoinsUsed = checked((byte)((before.LukePhaseCoinsUsed ?? 0) + 1)),
                         Revision = before.Revision + 1 };
+                else if (battle.Kind == RaidKind.Luke)
+                    battle.current = before with { Revision = checked(before.Revision + 1) };
                 battle.lukeRevivalReservations.Remove(this);
                 var transition = battle.CommitPendingTransition();
                 if (transition is not null || !ReferenceEquals(before, battle.current)) Change = new(before, battle.current);

@@ -65,7 +65,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         var body = RaidPackets.SearchResults((uint)matches.Length, offset, rows.Select(p =>
             (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                 p.Members.Single(m => m.Actor.Character == p.Leader).Squad, RaidProjection.CanStart(p, lukeStart is not null),
-                checked((byte)p.Members.Length))).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet());
+                checked((byte)p.Members.Length), p.RecruitRoles)).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet());
         log.Write("raid_search_request", new { Connection = context.Id, parsed.RaidType, parsed.Offset,
             Total = matches.Length, Returned = rows.Length });
         // 查询回复是请求时的只读快照；目录并发变化不能吞掉唯一756、令原生窗口继续等待。
@@ -277,7 +277,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             var rows = registry.List(actor.Channel, type);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidPackets.RaidListBatch(rows.Select(p =>
                 (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
-                    p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null))).ToArray(),
+                    p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null), p.RecruitRoles)).ToArray(),
                     rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet()), "raid_recruiting_list",
                 () => actor.IsCurrent && registry.IsListSnapshot(actor.Channel, type, rows));
             var waitRows = registry.Waiting(actor.Channel, type);
@@ -297,7 +297,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (Actor(context) is not { } actor) return CommandResult.Unhandled;
         var current = registry.Find(actor);
-        var change = registry.Rename(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name));
+        var change = registry.Rename(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), parsed.Field);
         if (change?.After is not { } party)
         {
             ushort error = current is not null && current.Leader != actor.Character ? RaidPackets.ModifyNotLeader : RaidPackets.ModifyNoRaid;
@@ -325,7 +325,8 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         bool guide = parsed.RaidType is 2 or 3 && parsed.Field210 == 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
         bool validMode = parsed.RaidType is not (2 or 3) || parsed.Field210 <= 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
         var party = !validMode || actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
-            registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), guide ? 1 : definition.MemberMax, guide ? 1 : definition.StartMinimum, guide);
+            registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), guide ? 1 : definition.MemberMax,
+                guide ? 1 : definition.StartMinimum, guide, parsed.Flags);
         log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, Accepted = party is not null,
             Reason = party is null ? "raid-admission-or-membership" : null, Key = party?.Key.ToString("X8"), definition?.MemberMax, definition?.StartMinimum });
         if (party is null)
@@ -390,11 +391,15 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
         var party = registry.Find(parsed.Key, actor.Channel);
         bool accepted = party is not null && MatchesType(actor, party.Type);
+        var combat = accepted ? RaidProjection.CombatSnapshot(party!) : null;
         byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
-            CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party), party.Started is null ? (byte)0 : (byte)2,
-            party.Started?.Phase ?? 0, RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide,
-            clearCounts: RaidProjection.ClearCounts(party)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
-        await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)));
+            CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party),
+            combat is { } current ? (byte)current.View.State : party.Started is null ? (byte)0 : (byte)2,
+            checked((byte)(combat?.View.Phase ?? party.Started?.Phase ?? 0)), RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide,
+            clearCounts: combat is { } snapshot ? snapshot.Battle.RosterClears(snapshot.View) : RaidProjection.ClearCounts(party),
+            recruitRoles: party.RecruitRoles) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+        await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)) &&
+            (combat is null || combat.Value.Battle.IsCurrent(combat.Value.View)));
         return CommandResult.Handled;
     }
 

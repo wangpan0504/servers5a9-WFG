@@ -209,8 +209,10 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             var completed = QuestCompletion(captured);
             var target = new Location(area.Town, area.Area, 0, 0);
             if (towns.DestinationAdmission(target, captured.Level, completed) != "ready") { rejection = "waiting-room-access-denied"; return []; }
-            // 复用城镇入口算法读取真实门或到达标记，不猜候战室坐标。
-            var landing = towns.Entrance(captured.Position, target, completed) ?? area.Map(completed).Links
+            // 已在候战区的合法位置保持不动；跨区才读取真实门或到达标记。
+            var landing = captured.Position.Town == target.Town && captured.Position.Area == target.Area &&
+                towns.IsPosition(captured.Position, completed) ? captured.Position :
+                towns.Entrance(captured.Position, target, completed) ?? area.Map(completed).Links
                 .Where(l => l.Gate.Door).OrderBy(l => l.Town).ThenBy(l => l.Area)
                 .Select(l => towns.Entrance(new(l.Town, l.Area, 0, 0), target, completed)).FirstOrDefault(p => p is not null);
             if (landing is null) { rejection = "waiting-room-landing-unavailable"; return []; }

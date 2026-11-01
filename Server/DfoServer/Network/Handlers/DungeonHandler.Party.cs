@@ -129,7 +129,8 @@ internal sealed partial class DungeonHandler
             context.Session.PublishRaidCombat();
             return;
         }
-        if (notice.RaidBattleChange is not null) context.Session.PublishRaidCombat();
+        if (notice.RaidBattleChange is not null && notice.Kind is not (PartyDungeonNoticeKind.Departure or PartyDungeonNoticeKind.ResultReturn))
+            context.Session.PublishRaidCombat();
         if (notice.Kind == PartyDungeonNoticeKind.Departure && notice.Travel is { } departure)
         {
             if (context.Death is not null) await context.Death.StopAsync();
@@ -266,6 +267,9 @@ internal sealed partial class DungeonHandler
                     await PublishPartyHostAsync(context, notice.Members, Current);
                     await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "party_retry_transition", Current);
                 }
+                if (scene.Entry.RaidEntry?.Kind is DfoServer.Game.Raids.RaidKind.Anton or DfoServer.Game.Raids.RaidKind.Luke or DfoServer.Game.Raids.RaidKind.Prey)
+                    await context.Notify(NotiPacketType.EPLP_RECHALLENGE, DungeonSettlementPackets.RetryEligibility(false),
+                        "raid_entry_retry_disabled", Current);
                 await PublishPartyRosterAsync(context, notice.Members, Current);
                 await PublishPartyHostAsync(context, notice.Members, Current);
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "party_dungeon_information", Current);
@@ -327,6 +331,8 @@ internal sealed partial class DungeonHandler
                 if (scene.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
                     await DungeonSettlementProjection.EnableAsync(context);
                 await PublishEpicPieceShopAsync(context, prepare: false);
+                // 首次场景安装在30之后才完整可用；重放真实参与表和HP，不沿用加载前已写帧的去重缓存。
+                RaidCombatProjection.RestoreStatusForScene(context, Current);
                 break;
             case PartyDungeonNoticeKind.Move:
                 if (scene.NavigationReplay) break;

@@ -157,8 +157,8 @@ internal sealed partial class GameSession
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
-        if (ChannelEntry?.Type == ChannelAreaLanding.FiendwarType && !HasRaidDungeonAdmission)
-            return RejectFormal("fiendwar-raid-admission-required");
+        if (ChannelEntry?.Type is 23 or 32 or 45 or 50 && !HasRaidDungeonAdmission)
+            return RejectFormal("raid-dungeon-admission-required");
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
             return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
@@ -172,6 +172,10 @@ internal sealed partial class GameSession
             catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/fiendwar_kr/", StringComparison.Ordinal) == true &&
             catalog.Get((int)dungeonId).IsRaid)
             return RejectFormal("fiendwar-raid-admission-required");
+        // 普通卢克/安徒恩也带IsRaid分类，只有团队声明要求Battle准入，不能误封普通讨伐。
+        if (dungeonId <= int.MaxValue && catalog.DungeonPath((int)dungeonId) is not null &&
+            catalog.Get((int)dungeonId).RawSections.Any(row => row.Tag == "raid dungeon"))
+            return RejectFormal("raid-dungeon-admission-required");
         DazzlementTowerAdmission? dazzlement = null;
         if (dungeonId <= int.MaxValue && catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/towers/towerofdazzlement", StringComparison.Ordinal) == true &&
             catalog.Get((int)dungeonId).IsDazzlementTower)

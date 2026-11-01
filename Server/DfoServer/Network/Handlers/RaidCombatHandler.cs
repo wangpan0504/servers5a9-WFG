@@ -4,6 +4,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -14,8 +15,18 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.SELECT_RAID_REWARD_CARD, RewardAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.RAID_MOVIE_SKIP, MovieAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.RAID_SET_SYMBOL, FacilityAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.RAID_MONSTER_HP, HpAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
+    }
+
+    Task<CommandResult> MovieAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 1 || request.Body[0] > 1) return Task.FromResult(CommandResult.Unhandled);
+        if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
+        if (context.Session.RaidMovieSnapshot() is not { } movie) return Task.FromResult(CommandResult.Unhandled);
+        return Task.FromResult(RaidCombatProjection.Movie(context, movie.Actor, movie.Battle, movie.View, request.Body[0] == 1)
+            ? CommandResult.Handled : CommandResult.CloseConnection);
     }
 
     async Task<CommandResult> FacilityAsync(GameConnectionContext context, Packet request)
@@ -49,9 +60,14 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         RaidMonsterHpRequest report;
         try { report = RaidRequests.MonsterHp(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        if (context.Session.RaidCombatKind() == RaidKind.Anton && context.Session.PartyDungeon is { } party)
-            await DfoServer.Network.Projection.PartyDungeonProjection.PublishAsync(
-                party.ReportAntonHp(context.Session, report.RawValue, report.RawEntries));
+        if (context.Session.RaidCombatKind() is RaidKind.Anton or RaidKind.Luke or RaidKind.Prey && context.Session.PartyDungeon is { } party)
+        {
+            var notices = party.ReportAntonHp(context.Session, report.RawValue, report.RawEntries);
+            var own = notices.FirstOrDefault(notice => ReferenceEquals(notice.Recipient.Actor.Session, context.Session));
+            if (own is { Scene: { } scene, AntonHp: { } display } && context.Session.ReportRaidStatusHp(scene, display) is { } change)
+                context.Session.PublishRaidCombat(change);
+            else await DfoServer.Network.Projection.PartyDungeonProjection.PublishAsync(notices);
+        }
         return context.Session.RaidCombatView() is null ? CommandResult.Unhandled : CommandResult.Handled;
     }
 

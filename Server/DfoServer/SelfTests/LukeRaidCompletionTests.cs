@@ -31,6 +31,9 @@ internal static class LukeRaidCompletionTests
         var first=Enter(0,10,1);var second=Enter(4,11,2);
         Clear(first,10);
         var candidate=battle.PendingLukeSettlement()!;
+        That(!battle.RequiresLukeCompletedPhaseReturn(actors[0],battle.Instance,0),"阶段SQL未确认不允许自动退场");
+        That(battle.View.State==AntonRaidBattleState.Fighting&&battle.View.Dungeons[10]==RaidDungeonState.Clear&&
+            battle.View.Symbols["[hp]"]==0,"终图已提交地图与HP立即更新，Reward仍等待退场和资格事务屏障");
         That(candidate is {Phase:0,Week:20261018}&&candidate.Members.Take(4).All(member=>member.CommittedRuns==1)&&
             candidate.Members.Skip(4).All(member=>member.CommittedRuns==0),"终结线性化只冻结当时已提交参与");
         clock.Now=clock.Now.AddSeconds(2);
@@ -75,9 +78,18 @@ internal static class LukeRaidCompletionTests
                 var sealedPhase=emptyBattle.PendingLukeSettlement()!;
                 var denied=Receipt(sealedPhase) with {Members=Receipt(sealedPhase).Members.Select((row,index)=>row with
                     {Eligible=!none&&index==0,CountsAsClear=phase==1}).ToImmutableArray()};
-                emptyBattle.AcceptLukeSettlement(sealedPhase,denied);
+                long revision=emptyBattle.View.Revision;
+                var ready=emptyBattle.AcceptLukeSettlement(sealedPhase,denied);
+                That(ready is not null&&ready.After.Revision==revision+1&&
+                    emptyBattle.RequiresLukeCompletedPhaseReturn(actors[0],emptyBattle.Instance,phase),
+                    "阶段持久确认推进版本并通知自动退场，但不直接跳过正式Run释放");
+                That(!emptyBattle.RequiresLukeCompletedPhaseReturn(actors[0],Guid.NewGuid(),phase)&&
+                    !emptyBattle.RequiresLukeCompletedPhaseReturn(actors[0],emptyBattle.Instance,1-phase),"旧实例或旧阶段回调不能退新Run");
                 That(emptyBattle.View.State==AntonRaidBattleState.Fighting,"即便全拒绝且SQL已提交，旧Run仍阻止转换");
                 foreach(var row in rows)emptyBattle.ReleaseDungeon(row.actor,id);
+                That(cancelled is not null||emptyBattle.View.State==AntonRaidBattleState.Reward||
+                    !emptyBattle.RequiresLukeCompletedPhaseReturn(actors[0],emptyBattle.Instance,phase),
+                    "阶段已推进后撤销旧退场资格；Reward仍允许尚在选图的成员返回");
                 if(cancelled is not null)
                 {
                     That(emptyBattle.HasPendingTransition&&emptyBattle.View.Phase==0,"尚未Install的另一分队预留也构成退出屏障");

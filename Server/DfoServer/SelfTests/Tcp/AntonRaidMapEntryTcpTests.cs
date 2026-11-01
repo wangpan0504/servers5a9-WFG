@@ -80,6 +80,11 @@ internal static partial class AntonRaidMapEntryTcpTests
                 session.MarkReady();
                 sessions.Add(session);
                 var actor = new RaidActor(session, owner, session.SelectionEpoch, character.Id, character.Name, new(2, 19));
+                // 重登先清理实例地区；此夹具显式安装已提交开战位置，不借存档恢复候战资格。
+                var beforeStart = session.Selected!;
+                var committedStart = repository.Save(owner, beforeStart, waiting, beforeStart.Return);
+                session.InstallRaidStart(new(actor, beforeStart, waiting,
+                    new(beforeStart.Inventory, beforeStart.Inventory, "anton_map_fixture_start")), committedStart);
                 That(session.Selected!.Position == waiting && session.AuthorizeRaidDungeon(new(instance, actor, 0, (byte)(i + 1),
                     catalog, () => started, id => id == 210)), "夹具从原owner、候战室及已开战实例绑定分队入口");
                 var accept = listener.AcceptTcpClientAsync(stop.Token);

@@ -23,11 +23,10 @@ internal sealed record LukeRaidPacingPolicy(string Source, int StorageRecoverySe
 
         int token = original.Phases.SelectMany(phase => phase.Rules).SelectMany(rule => rule.Trigger.Concat(rule.Behavior))
             .Max(clause => clause.TokenIndex) + 1;
-        RaidClause OpenStorage() => new("[set dungeon state]", token++, 5066, null, RaidDungeonState.Open, null, [5066]);
         bool Trigger(RaidRule rule, string tag, int? dungeon = null, string? symbol = null) =>
             rule.Trigger.Any(clause => clause.Tag == tag && clause.DungeonId == dungeon && clause.Symbol == symbol);
 
-        int temples = 0, lightClears = 0, giveups = 0, fullEnergy = 0, storageTimers = 0, controlTimers = 0;
+        int temples = 0, storageEntries = 0, lightClears = 0, giveups = 0, fullEnergy = 0, storageTimers = 0, controlTimers = 0;
         var rules = ImmutableArray.CreateBuilder<RaidRule>();
         foreach (var rule in original.Phases[1].Rules)
         {
@@ -55,8 +54,7 @@ internal sealed record LukeRaidPacingPolicy(string Source, int StorageRecoverySe
                 rule.Trigger.Any(clause => clause is { Tag: "[if]", Symbol: "[temple clear]", RawIntegers: [2] }))
             {
                 temples++;
-                // 与王座一同开放，玩家可先压能源，也可直接进入王座；没有能源前置门禁。
-                actions = actions.Add(OpenStorage());
+                // 双圣殿只开放光王座；储藏室沿实际入王座事件开放，不能在候战时提前压制。
             }
             if (Trigger(rule, "[on change dungeon state]", 5061) &&
                 rule.Trigger.Any(clause => clause is { Tag: "[check dungeon state]", DungeonId: 5061, State: RaidDungeonState.Clear }))
@@ -80,9 +78,16 @@ internal sealed record LukeRaidPacingPolicy(string Source, int StorageRecoverySe
                     .Select(action => action is { Tag: "[set dungeon state]", DungeonId: 5066 }
                     ? action with { State = RaidDungeonState.Open } : action).ToImmutableArray();
             }
-            rules.Add(rule with { Behavior = actions });
+            var trigger = rule.Trigger;
+            if (trigger.Any(clause => clause is { Tag: "[on enter map]", MapId: 55845 }))
+            {
+                storageEntries++;
+                trigger = trigger.Select(clause => clause is { Tag: "[on enter map]", MapId: 55845 }
+                    ? new RaidClause("[on enter dungeon]", token++, 5061, null, null, null, [5061]) : clause).ToImmutableArray();
+            }
+            rules.Add(rule with { Trigger = trigger, Behavior = actions });
         }
-        if ((temples, lightClears, giveups, fullEnergy, storageTimers, controlTimers) != (1, 1, 2, 1, 2, 3))
+        if ((temples, storageEntries, lightClears, giveups, fullEnergy, storageTimers, controlTimers) != (1, 1, 1, 2, 1, 2, 3))
             throw new InvalidDataException("卢克统一节奏能源规则数量或时钟声明变化");
         // 原资源与token保留只读；本服差量不改地图、Boss、奖励或实例/SQL所有权。
         return original with { Phases = original.Phases.SetItem(1, original.Phases[1] with { Rules = rules.ToImmutable() }) };

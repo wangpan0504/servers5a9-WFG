@@ -84,7 +84,12 @@ internal static class RaidPanelTests
             Bytes(counted, expected, "四团原生成员包只改变已证通关字节，其余宽度和未知零值不变");
             var counts = ReadClears(counted);
             That(counts[7] == 9 && counts[9] == 255, "独立读包保留个人计数而非全团图数");
+            var secondPhase = RaidPackets.Information(2, 123, "panel"u8.ToArray(), type, 7, members[0].Name, members,
+                state: 2, phase: 1, clearCounts: counts);
+            That(ReadRecordState(secondPhase, 6) == (2, 1) && ReadClears(secondPhase).OrderBy(row => row.Key).SequenceEqual(counts.OrderBy(row => row.Key)),
+                "四团mode2完整消费实时阶段、队长块及成员计数，不沿用mode1固定偏移");
         }
+        foreach (byte modeType in new byte[] { 0, 1, 2, 3 })
         foreach (bool guide in new[] { false, true })
         foreach (bool canStart in new[] { false, true })
         {
@@ -92,14 +97,46 @@ internal static class RaidPanelTests
             (ushort Character, byte[] Name, byte Squad)[] members = [(7, name, 0)];
             var records = new[]
             {
-                (RaidPackets.RaidList(123, title, 2, 7, name, canStart: canStart, guide: guide), 4),
-                (RaidPackets.UpdateRecord(123, title, 2, 7, name, canStart: canStart, guide: guide), 8),
-                (RaidPackets.Information(2, 123, title, 2, 7, name, members, canStart: canStart, guide: guide), 6),
-                (RaidPackets.SearchResults(1, 0, [(123, title, 2, 7, name, 0, canStart, 1)], guide ? new HashSet<uint> { 123 } : null), 12)
+                (RaidPackets.RaidList(123, title, modeType, 7, name, canStart: canStart, guide: guide), 4),
+                (RaidPackets.UpdateRecord(123, title, modeType, 7, name, canStart: canStart, guide: guide), 8),
+                (RaidPackets.Information(0, 123, title, modeType, 7, name, members, canStart: canStart, guide: guide), 6),
+                (RaidPackets.Information(2, 123, title, modeType, 7, name, members, canStart: canStart, guide: guide), 6),
+                (RaidPackets.SearchResults(1, 0, [(123, title, modeType, 7, name, 0, canStart, 1, 7)], guide ? new HashSet<uint> { 123 } : null), 12),
+                (RaidPackets.RaidListBatch([(123, title, modeType, 7, name, 0, canStart, 7)], guide ? new HashSet<uint> { 123 } : null), 4)
             };
             foreach (var (body, offset) in records)
-                That(ReadGuideFlag(body, offset) == guide, "漩涡列表、更新、信息及搜索只投影实际引导模式，不借可开战串模式");
+                That(ReadGuideFlag(body, offset) == guide, "四团列表、更新、信息、目录及搜索只投影实际模式，完整编队或可开战不改变DC");
         }
+        foreach (byte type in new byte[] { 0, 1, 2, 3 })
+        foreach (byte roles in Enumerable.Range(1, 7).Select(value => (byte)value))
+        {
+            byte[] title = "recruit"u8.ToArray(), name = "leader"u8.ToArray();
+            (ushort Character, byte[] Name, byte Squad)[] members = [(7, name, 0)];
+            var records = new[]
+            {
+                (RaidPackets.RaidList(123, title, type, 7, name, recruitRoles: roles), 4),
+                (RaidPackets.UpdateRecord(123, title, type, 7, name, recruitRoles: roles), 8),
+                (RaidPackets.Information(2, 123, title, type, 7, name, members, recruitRoles: roles), 6),
+                (RaidPackets.Information(0, 123, title, type, 7, name, members, recruitRoles: roles), 6),
+                (RaidPackets.RaidListBatch([(123, title, type, 7, name, 0, false, roles)]), 4),
+                (RaidPackets.SearchResults(1, 0, [(123, title, type, 7, name, 0, false, 1, roles)]), 12)
+            };
+            foreach (var (body, offset) in records)
+            {
+                That(ReadRecruitRoles(body, offset) == roles, "四团全部记录入口保留七种合法招募组合");
+                int at = offset + 23 + title.Length;
+                That(body.AsSpan(at - 7, 7).IndexOfAnyExcept((byte)0) == -1,
+                    "招募位为记录末尾E4，前七个未知字节保持0且不挪动队长块");
+            }
+        }
+    }
+
+    internal static byte ReadRecruitRoles(byte[] body, int recordOffset)
+    {
+        int titleLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(recordOffset + 4)));
+        int at = checked(recordOffset + 23 + titleLength);
+        That(body.Length > at && body[at] is >= 1 and <= 7, "原生团记录招募对象非空且仅含已证低三位");
+        return body[at];
     }
 
     internal static bool ReadGuideFlag(byte[] body, int recordOffset)
@@ -140,10 +177,20 @@ internal static class RaidPanelTests
 
     internal static Dictionary<ushort, byte> ReadClears(byte[] body)
     {
-        That(body.Length >= 7 && body[0] == 1 && body[1] == 1, "成员更新使用原生1361成功mode1");
+        That(body.Length >= 7 && body[0] == 1 && body[1] is 1 or 2, "成员更新使用原生1361成功mode1或mode2");
         var result = new Dictionary<ushort, byte>();
-        int at = 7;
-        for (int index = 0; index < body[6]; index++)
+        int at = 6;
+        if (body[1] == 2)
+        {
+            That(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at)) == BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(2)),
+                "mode2记录与查询头指向同一攻坚队");
+            int titleLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at + 4)));
+            at = checked(at + 24 + titleLength);
+            int leaderNameLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at + 3)));
+            at = checked(at + 53 + leaderNameLength);
+        }
+        int count = body[at++];
+        for (int index = 0; index < count; index++)
         {
             int nameLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at + 3)));
             result.Add(BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(at)), body[at + 17 + nameLength]);
@@ -151,6 +198,14 @@ internal static class RaidPanelTests
         }
         That(at == body.Length, "成员计数读取完整消费包体，不跨入下一成员或留下尾字节");
         return result;
+    }
+
+    internal static (byte State, byte Phase) ReadRecordState(byte[] body, int recordOffset)
+    {
+        int titleLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(recordOffset + 4)));
+        int at = checked(recordOffset + 9 + titleLength);
+        That(body.Length > at + 1, "完整团记录保留状态和阶段字节");
+        return (body[at], body[at + 1]);
     }
 
     internal static void RunResources(PvfArchive pvf)

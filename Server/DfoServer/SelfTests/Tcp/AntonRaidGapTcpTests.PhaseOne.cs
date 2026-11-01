@@ -47,12 +47,15 @@ internal static partial class AntonRaidGapTcpTests
         That(AntonTcpProbe.Barrier(peer, "回城后重复图内回城").All(p => p.Opcode != 72), "回城后旧战况表请求不能重复退场");
         for (int clear = 0; clear < 4; clear++)
         {
-            AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true, leave: clear != 0);
+            AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true, leave: clear >= 2);
             AssertHp(210, 3 - clear);
+            if (clear == 1)
+            {
+                RetryAndAbandon([peer], peer, 210);
+                AssertHp(210, 2);
+                continue;
+            }
             if (clear != 0) continue;
-            peer.Send(72, [1, 0]);
-            That(AntonTcpProbe.Barrier(peer, "开放210不伪造重试失败").All(p => p.Opcode != 72),
-                "开放图直接重试仍未闭合，不冒充准入失败或回城");
             peer.Send(72, [1, 1]);
             var singleReturn = AntonTcpProbe.Barrier(peer, "阶段仍战斗时单图结算选图");
             Bytes(singleReturn.Single(p => p is { Kind: 1, Opcode: 72 }).Body, [1, 1, 1], "86选图语义映射为原option1");
@@ -288,7 +291,7 @@ internal static partial class AntonRaidGapTcpTests
                 clock.Advance(3);
                 var started = AntonTcpProbe.Barrier(peer, "自然开始P2");
                 That(started.Any(p => p is { Opcode: 587, Body: [2,1] }), "准备完成才进入第二阶段");
-                foreach (var packet in started.Where(p => p.Opcode == 583)) report.Symbols.Add(packet.Body.ToArray());
+                AntonTcpProbe.Note(report, started);
             }
             else if (!advances) That(!packets.Any(p => p is { Kind: 0, Opcode: 587 } && p.Body is [2,1] or [4,1]), "单种或重复奖励不提前推进");
         }

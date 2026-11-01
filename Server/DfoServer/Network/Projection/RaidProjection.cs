@@ -37,16 +37,34 @@ internal static class RaidProjection
     {
         if (party.Started is not { } started) return null;
         foreach (var member in party.Members)
-            if (member.Actor.IsCurrent && member.Actor.Session.CurrentRaidBattle(member.Actor) is { } battle &&
-                battle.Instance == started.InstanceId) return battle.RosterClears();
+            if (member.Actor.Session.RaidRosterClearSnapshot(member.Actor, started.InstanceId) is { } counts) return counts;
         return null;
     }
-    public static byte[] Record(RaidParty party, bool enableLuke = false) => RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type,
-        party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke), party.Guide);
-    public static byte[] List(RaidParty party, bool enableLuke = false) => RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type,
-        party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke), party.Guide);
+    internal static (AntonRaidBattle Battle, AntonRaidBattleView View)? CombatSnapshot(RaidParty party)
+    {
+        if (party.Started is not { } started) return null;
+        foreach (var member in party.Members)
+            if (member.Actor.Session.RaidRosterBattleSnapshot(member.Actor, started.InstanceId) is { } snapshot) return snapshot;
+        return null;
+    }
+
+    public static byte[] Record(RaidParty party, bool enableLuke = false)
+    {
+        var view = CombatSnapshot(party)?.View;
+        return RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type, party.Leader,
+            CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
+            view is null ? party.Started is null ? (byte)0 : (byte)2 : (byte)view.State,
+            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles);
+    }
+
+    public static byte[] List(RaidParty party, bool enableLuke = false)
+    {
+        var view = CombatSnapshot(party)?.View;
+        return RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type, party.Leader,
+            CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
+            view is null ? party.Started is null ? (byte)0 : (byte)2 : (byte)view.State,
+            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles);
+    }
 
     internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type is 0 or 2 || party.Type == 1 && enableLuke || party.Type == 3 && party.Guide) && party.Started is null &&
         party.Members.Length >= party.StartMinimum && party.Members.All(m => (party.Type == 2 || m.Squad != 0) && m.Actor.IsCurrent);
@@ -60,6 +78,7 @@ internal static class RaidProjection
         var party = receipt.Party;
         int index = Enumerable.Range(0, receipt.Reservations.Length).Single(i => receipt.Reservations[i].Actor.Character == recipient.Character);
         var character = receipt.Characters[index];
+        bool moved = receipt.Reservations[index].Expected.Position != character.Position;
         bool Guard() => recipient.IsCurrent && recipient.Session.StartedRaid?.InstanceId == party.Started!.InstanceId &&
             (party.Type != (byte)RaidKind.Luke || recipient.Session.CanChangeTownParty &&
                 recipient.Session.CanPublishRaid(recipient, party) && ReferenceEquals(recipient.Session.Selected, character) &&
@@ -68,7 +87,7 @@ internal static class RaidProjection
         {
             if (!Guard()) return false;
             // 清场先入队，其后的实际提交帧不因同次迁移递增发送epoch而丢弃。
-            town.QueueRaidDeparture(context, character, Guard);
+            if (moved) town.QueueRaidDeparture(context, character, Guard);
             return true;
         });
         if (!ready) return;
@@ -78,8 +97,7 @@ internal static class RaidProjection
                 Builders.Inventory.InventoryPackets.Delta(character.Inventory, Game.Inventory.Models.InventoryListType.Main, plan.ChangedSlots.ToArray()),
             receipt.Resync ? "raid_start_inventory_resync" : "raid_start_cost_committed", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
-            RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type, party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName),
-                party.Members.Single(m => m.Actor.Character == party.Leader).Squad, guide: party.Guide), "raid_start_record", Guard);
+            Record(party), "raid_start_record", Guard);
         foreach (var notice in receipt.Squads.Where(n => ReferenceEquals(n.Recipient.Actor.Session, recipient.Session)))
         {
             var original = notice.Guard;
@@ -92,7 +110,7 @@ internal static class RaidProjection
         Cost(context, rows, recipient, party.Type == (byte)RaidKind.Luke ? Guard : null);
         // 594无载荷，先安装同分队普通Party；其后11/12按同一普通接收器幂等确认。
         context.Sender.Post(0, (ushort)(party.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID), [], "raid_prepare", Guard);
-        recipient.Owner.Execute(() => { if (Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
+        recipient.Owner.Execute(() => { if (moved && Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
         if (party.Type == 2 && receipt.Battle is { } fiendwarInitial && recipient.Session.CurrentRaidBattle(recipient) is { } fiendwarBattle)
         {
             context.Sender.Post(0, (ushort)NotiPacketType.START_FIEND_WAR, [], "fiendwar_started", Guard,
@@ -102,7 +120,7 @@ internal static class RaidProjection
         }
         if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } initial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } currentBattle)
-            RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard);
+            RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard, restore: true);
         if (party.Type == (byte)RaidKind.Prey && receipt.Battle is { } preyInitial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } preyBattle)
         {

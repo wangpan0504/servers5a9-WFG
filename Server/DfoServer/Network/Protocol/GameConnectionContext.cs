@@ -21,6 +21,15 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal byte[]? RaidRosterDisplay { get; set; }
     internal DfoServer.Game.Raids.RaidWeeklyCycle? RaidClearLukeCycle { get; init; }
     internal (long Epoch, byte[] Body)? RaidClearDisplay { get; set; }
+    internal byte[]? RaidParticipationBody { get; set; }
+    internal DfoServer.Game.Raids.RaidRunDisplay[] RaidParticipationRows { get; set; } = [];
+    internal byte[]? RaidHpBody { get; set; }
+    internal (Guid Run, bool Available)? RaidRetryDisplay { get; set; }
+    internal (Guid Instance, byte[] Body)? LukeCardsDisplay { get; set; }
+    internal Guid LukeNamedInstance { get; set; }
+    internal Dictionary<int, bool> LukeNamedDisplays { get; } = [];
+    internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMoviePrompt { get; set; }
+    internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMovieCards { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
@@ -31,6 +40,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
     internal (Guid Instance, long Sequence)? FiendwarSupportDisplay { get; set; }
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
+    internal Dictionary<DfoServer.GameWorld.Raids.RaidTimer, DfoServer.Network.Projection.LukeTimerDisplay> LukeTimerDisplays { get; } = [];
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;

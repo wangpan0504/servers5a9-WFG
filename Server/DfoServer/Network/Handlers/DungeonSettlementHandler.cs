@@ -24,7 +24,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null,
     Game.Guild.GuildEconomyService? guildEconomy = null,
     Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null,
-    ImperialArenaProjection? imperialArena = null, Game.Party.PartyService? parties = null) : IGameCommandModule
+    ImperialArenaProjection? imperialArena = null, Game.Party.PartyService? parties = null,
+    Game.Raids.LukeRaidDungeonService? lukeRaid = null,
+    Game.Raids.AntonRaidDungeonService? antonRaid = null, Game.Raids.AntonRaidDungeonService? preyRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -319,6 +321,43 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         return CommandResult.Handled;
     }
 
+    PartyDungeonNotice[] RetryRaidDungeon(GameConnectionContext context, FormalDungeonReceipt previous,
+        PartyDungeonNotice[] selectionFallback)
+    {
+        var party = parties?.Current(context.Session);
+        if (partyDungeons is null || party is null || previous.Entry.RaidEntry is not { } raid ||
+            previous.Entry.DungeonId > int.MaxValue || context.DispatchGates?.Holds(context, party.Commands) != true)
+            return selectionFallback;
+        int dungeon = checked((int)previous.Entry.DungeonId);
+        string? rejection = null;
+        var selected = raid.Kind switch
+        {
+            Game.Raids.RaidKind.Luke => lukeRaid?.Select(context.Session, dungeon, party) ?? [],
+            Game.Raids.RaidKind.Anton => antonRaid?.Select(context.Session, dungeon, party, out rejection) ?? [],
+            Game.Raids.RaidKind.Prey => preyRaid?.Select(context.Session, dungeon, party, out rejection) ?? [],
+            _ => []
+        };
+        if (selected.Length == 0) return selectionFallback;
+        PartyDungeonNotice[] entered = [];
+        try
+        {
+            // 原Run已提交退场，但尚未发送72成功。重新捕获当前路线、资源与占用，不能沿用旧迷宫序号。
+            entered = partyDungeons.Enter(context.Session, previous.Entry.DungeonId, previous.Entry.Difficulty,
+                dungeons, rooms, null, null, null, null, onRejected: (reason, _) => rejection = reason);
+        }
+        finally
+        {
+            if (entered.Length == 0) context.Session.CancelRaidDungeonSelection(selected);
+        }
+        log.Write("formal_dungeon_entry", new { Connection = context.Id, Reason = "raid-result-retry", Dungeon = dungeon,
+            RaidType = (byte)raid.Kind, Accepted = entered.Length > 0, Party = party.Id,
+            RejectReason = entered.Length == 0 ? rejection ?? context.Session.LastFormalDungeonRejection ?? "raid-retry-entry-unavailable" : null });
+        // 失败保留已提交的选图身份，按option1结束客户端等待；绝不发送没有新Run的option0。
+        return entered.Length > 0
+            ? entered.Select(notice => notice.Kind == PartyDungeonNoticeKind.Entry ? notice with { State = 1 } : notice).ToArray()
+            : selected.Select(notice => notice with { Kind = PartyDungeonNoticeKind.ResultSelection, SceneTransition = true, Option = 1 }).ToArray();
+    }
+
     async Task<CommandResult> ResultCommandAsync(GameConnectionContext context, Packet request)
     {
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
@@ -402,8 +441,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (option <= 1)
             {
                 var notices = squad.RaidResultCommand(context.Session, option);
+                if (option == 0 && notices.Length > 0 && notices.All(notice => notice.Kind == PartyDungeonNoticeKind.ResultSelection))
+                    notices = RetryRaidDungeon(context, anton, notices);
                 string eventName = notices.Length == 0 ? "unimplemented" :
-                    notices[0].Kind == PartyDungeonNoticeKind.ResultSelection ? "dungeon_entry" : "formal_dungeon_return";
+                    notices[0].Kind is PartyDungeonNoticeKind.Entry or PartyDungeonNoticeKind.ResultSelection ? "dungeon_entry" : "formal_dungeon_return";
                 log.Write(eventName, new { Connection = context.Id, Reason = "anton-result-command", Dungeon = anton.Entry.DungeonId, option,
                     Accepted = notices.Length > 0, Party = squad.Id,
                     Action = notices.FirstOrDefault()?.Kind.ToString() ?? "unimplemented-open-retry-or-invalid-cohort" });

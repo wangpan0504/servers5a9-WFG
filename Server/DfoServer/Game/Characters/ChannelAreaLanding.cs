@@ -68,6 +68,11 @@ internal static class ChannelAreaLanding
     // 城镇里的街区不能写成共享房间的返回地区，否则普通频道的 1379 与出门城镇会变成战舰（#740 回归）。
     internal const byte AntonTown = 19;
 
+    // 四团WAITING ROOM分别为19/2、32/4、57/2、59/2；57的后续区域是同团战场。
+    // 卢克普通街区32/3不在此列。实例地区重登必须先回频道入口，再由原团重返恢复。
+    internal static bool IsRaidInstanceArea(Location position) => position is
+        { Town: 19, Area: 2 } or { Town: 32, Area: 4 } or { Town: 57, Area: >= 2 } or { Town: 59, Area: 2 };
+
     // 普通区域频道类型：channel.txt 的 21 个普通区域入口。选角出生共享房间，房间出口只认角色记住的返回地区（#740）；
     // 频道分组只决定特殊区域与团队频道的落点。与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”一致。
     internal const int OrdinaryType = 22;
@@ -178,6 +183,7 @@ internal static class ChannelAreaLanding
     // 不换城，反过来服务端改落点而客户端按快照留在原城，会让客户端随后按原城请求移动被 route-not-in-pvf/room-return-mismatch 拒绝。
     internal static bool ClientKeepsTownSnapshot(TownCatalog? towns, ChannelEntry? channel, Location position)
     {
+        if (IsRaidInstanceArea(position)) return false;
         if (channel is null)
             return true;
         if (channel.Type == SpecialAreaType) return false;
@@ -210,6 +216,10 @@ internal static class ChannelAreaLanding
     // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
     internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
         town is AntonTown or LegacyRetiredTown or PvpTown or XianVillageTown or 48 or 62 || IsChannelBoundTown(towns, town);
+
+    // 卢克频道与普通频道共用32/3入口：团队频道进出该城镇不能覆盖普通返回地区，普通频道仍允许记住32/3。
+    internal static bool PreservesRoomReturn(TownCatalog towns, Location position, int? channelType = null) =>
+        channelType == 32 && position.Town == 32 || IsRaidInstanceArea(position) || PreservesRoomReturn(towns, position.Town);
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
 

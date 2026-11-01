@@ -165,7 +165,7 @@ internal static class AntonTcpProbe
         var elapsed = Stopwatch.StartNew();
         peer.Send(833, Search(""));
         _ = Flush(peer, "833 寻找队");
-        peer.Send(664, TcpPeer.Build(w => { w.Write((byte)0); w.Write(TcpPeer.Name("Probe")); w.Write(new byte[4]); }));
+        peer.Send(664, TcpPeer.Build(w => { w.Write((byte)0); w.Write(TcpPeer.Name("Probe")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         var created = Flush(peer, "664 建队");
         if (created.Any(p => p is { Kind: 1, Opcode: 664, Body: [0, ..] }))
             throw new InvalidOperationException("664 被拒绝：" + Hex(created.Last(p => p.Opcode == 664).Body));
@@ -552,6 +552,7 @@ internal static class AntonTcpProbe
         Note(leaderReport, Flush(leader, "37 加载"));
         Note(memberReport, Barrier(member, "37 队员加载"));
         loaded?.Invoke();
+        int memberSymbolsBefore = memberReport.Symbols.Count, memberStatesBefore = memberReport.States.Count;
         var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
         ClearRoom(leader, map.Body, leaderReport, out ushort bossKey, out byte bossLevel,
             path[0].X == info.Body[8] && path[0].Y == info.Body[9], member, memberReport);
@@ -592,8 +593,8 @@ internal static class AntonTcpProbe
         Note(memberReport, memberCleared);
         if (leaderReport.Opcode586 == seen && !cleared.Any(packet => packet is { Kind: 0, Opcode: 115 or 586 }))
             throw new InvalidOperationException(dungeon + " 的分队清图没有 586，117 也没有确认");
-        if (memberReport.Opcode586 == 0)
-            throw new InvalidOperationException("队员没有收到 586");
+        if (memberReport.Symbols.Count == memberSymbolsBefore && memberReport.States.Count == memberStatesBefore)
+            throw new InvalidOperationException("队员没有收到本次清图的583血量或586状态更新");
         if (!leave) return;
         leader.Send(42);
         member.Send(42);
@@ -608,7 +609,7 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException("29 分队地图键或房间坐标不同步");
     }
 
-    static void Note(AntonProbeReport report, List<WirePacket> rows)
+    internal static void Note(AntonProbeReport report, List<WirePacket> rows)
     {
         foreach (var packet in rows)
         {

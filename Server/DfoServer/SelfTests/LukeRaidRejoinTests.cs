@@ -58,6 +58,11 @@ internal static class LukeRaidRejoinTests
                 That(actor.Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)), "沿合成已登记城镇门正常进入候战区");
             }
             var actors = Enumerable.Range(0, 3).Select(index => Login(index, true)).ToArray();
+            EnterWaiting(actors[0]);
+            var unstarted = actors[0].Session.Selected;
+            That(actors[0].Session.BeginDungeonSelection() is null &&
+                actors[0].Session.Phase == SessionPhase.Town && ReferenceEquals(actors[0].Session.Selected, unstarted),
+                "未开团残留在候战区也不能建立普通选图，原角色及Town阶段保持不变");
             raids.Create(actors[0], 1, "rejoin", "rejoin"u8.ToArray(), 8, 1);
             foreach (var member in actors.Skip(1))
             { raids.Invite(actors[0], member, 0); That(raids.Respond(member, actors[0].Character, true).Accepted, "原团邀请"); }

@@ -34,12 +34,17 @@ internal static partial class RaidCombatProjection
             foreach (var row in anton.DungeonSnapshot(view))
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                     RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state",
-                    () => Guard() && ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State),
+                    () => Guard() && DungeonChanged(context, view.Instance, row.Id, row.State),
                     () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
             if (anton.HasAntonRewards || anton.PhaseProgress)
                 PostAntonSnapshot(context, anton, view, Guard);
         }
         context.LukePhaseExit?.Notice(view, actor);
+        if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } statusBattle)
+        {
+            PostStatus(context, statusBattle, view, Guard);
+            PostRetryEligibility(context, Guard);
+        }
         if (view.PhaseExpired)
         {
             return;
@@ -50,16 +55,31 @@ internal static partial class RaidCombatProjection
             RaidClearProjection.Refresh(context, Guard);
     }
 
+    static void PostRetryEligibility(GameConnectionContext context, Func<bool> current)
+    {
+        if (context.Session.RaidDungeonResultFocus() is not { } receipt) return;
+        bool available = context.Session.CanRetryRaidResultDungeon();
+        var display = (Run: receipt.Snapshot.Identity.InstanceId, Available: available);
+        // 261只控制按钮资格。必须有全分队已提交的清图事实，不能借HP0、战况Clear或普通结果页推定。
+        context.Sender.Post(0, (ushort)NotiPacketType.EPLP_RECHALLENGE,
+            DungeonSettlementPackets.RetryEligibility(available), "raid_result_retry_eligibility",
+            () => current() && context.Session.CanPublishDungeonSettlement(receipt) &&
+                context.Session.RaidDungeonResultFocus()?.Snapshot.Identity.InstanceId == display.Run &&
+                context.Session.CanRetryRaidResultDungeon() == available && context.RaidRetryDisplay != display,
+            () => context.RaidRetryDisplay = display);
+    }
+
     static void PostRoster(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor, Func<bool> current)
     {
         context.Owner.Execute(() =>
         {
             if (!current() || context.Session.CaptureRaidRoster(actor) is not { Started: { } started } party ||
                 started.InstanceId != view.Instance || context.Session.CurrentRaidBattle(actor)?.RosterClears(view) is not { } clears) return false;
-            // 02349A20的mode1不依赖pending且不打开窗口，只替换成员表并刷新已开的面板。
+            // 02349A20的mode2同时替换实时阶段与成员表，不依赖pending、不打开窗口。
             // 591/op3会强制开窗，仅保留给原有建队、编队流程。
-            var body = RaidPackets.Information(1, party.Key, party.TitleBytes, party.Type, party.Leader,
-                DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party), clearCounts: clears);
+            var body = RaidPackets.Information(2, party.Key, party.TitleBytes, party.Type, party.Leader,
+                DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party),
+                (byte)view.State, checked((byte)view.Phase), guide: party.Guide, clearCounts: clears, recruitRoles: party.RecruitRoles);
             bool Guard() => current() && actor.Session.HasRaidKey(actor, party.Key) &&
                 (context.RaidRosterDisplay is not { } displayed || !body.AsSpan().SequenceEqual(displayed));
             context.Sender.Post(1, (ushort)CmdPacketType.REQUEST_RAID_INFO, body, "raid_clear_counts", Guard,
@@ -83,7 +103,7 @@ internal static partial class RaidCombatProjection
             () =>
             {
                 published = battle.DungeonSnapshot(view).Where(row =>
-                    ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State)).ToArray();
+                    DungeonChanged(context, view.Instance, row.Id, row.State)).ToArray();
                 return RaidCombatPackets.Dungeons(0, published, infectionDungeon);
             }, "raid_dungeon_snapshot", Guard, allowShorter: true, written: () =>
             {
@@ -94,10 +114,9 @@ internal static partial class RaidCombatProjection
         PostAntonTimers(context, battle, view, Guard);
     }
 
-    static bool ShouldPublishAntonDungeon(GameConnectionContext context, Guid instance, int dungeon,
-        GameWorld.Raids.RaidDungeonState state) => state != GameWorld.Raids.RaidDungeonState.Clear ||
-        context.AntonDungeonDisplayInstance != instance ||
-        context.AntonDungeonDisplays.GetValueOrDefault(dungeon) != state;
+    static bool DungeonChanged(GameConnectionContext context, Guid instance, int dungeon,
+        GameWorld.Raids.RaidDungeonState state) => context.AntonDungeonDisplayInstance != instance ||
+        !context.AntonDungeonDisplays.TryGetValue(dungeon, out var previous) || previous != state;
 
     static void RecordAntonDungeon(GameConnectionContext context, Guid instance, int dungeon,
         GameWorld.Raids.RaidDungeonState state)
@@ -132,7 +151,11 @@ internal static partial class RaidCombatProjection
         context.Owner.Execute(() =>
         {
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);
-            bool Show() => current() && context.RaidDisplay != identity;
+            bool SceneReady() => view.State != AntonRaidBattleState.Reward ||
+                context.Session.CurrentRaidBattle(actor)?.Kind != RaidKind.Luke ||
+                context.Session.Phase == Game.Session.SessionPhase.Town;
+            if (!SceneReady()) return false;
+            bool Show() => current() && SceneReady() && context.RaidDisplay != identity;
             // 587同state/phase仍会重新安装原生动画；601只判断，587成功写帧才确认。
             // 两包在本人owner内连续入队，无网络等待；仅使用Post，不用于QueuePublished的提前guard。
             // 601使用资格提交后冻结的真实阶段统计。
@@ -214,7 +237,7 @@ internal static partial class RaidCombatProjection
     }
 
     internal static void PostLukeSnapshot(GameConnectionContext context, AntonRaidBattle battle,
-        AntonRaidBattleView view, Func<bool> guard)
+        AntonRaidBattleView view, Func<bool> guard, bool restore = false)
     {
         if (battle.Kind != RaidKind.Luke || view.Instance != battle.Instance) return;
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
@@ -223,7 +246,13 @@ internal static partial class RaidCombatProjection
         // 586缺键会创建记录；不用585未知尾字段改变共享symbol7/8。
         foreach (var row in battle.DungeonSnapshot(view))
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
-                RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_snapshot", guard);
+                RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_snapshot",
+                // 显式开团恢复补齐非通关记录；Clear仍去重，避免重播横幅。
+                () => guard() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
+                    DungeonChanged(context, view.Instance, row.Id, row.State)),
+                () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
+        PostLukeTimers(context, battle, view, guard);
+        PostLukeCards(context, battle, view, guard);
     }
 
     internal static void PostPreySnapshot(GameConnectionContext context, AntonRaidBattle battle,
@@ -235,10 +264,12 @@ internal static partial class RaidCombatProjection
         foreach (var row in battle.DungeonSnapshot(view))
         {
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
-                RaidCombatPackets.DungeonState(row.Id, 0, row.State), "prey_dungeon_snapshot", guard);
+                RaidCombatPackets.DungeonState(row.Id, 0, row.State), "prey_dungeon_snapshot",
+                () => guard() && DungeonChanged(context, view.Instance, row.Id, row.State),
+                row.State != GameWorld.Raids.RaidDungeonState.Clear ? () => RecordAntonDungeon(context, view.Instance, row.Id, row.State) : null);
             if (row.State == GameWorld.Raids.RaidDungeonState.Clear)
                 context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(5, row.Id),
-                    "prey_dungeon_cleared", () => guard() && ShouldPublishAntonDungeon(context, view.Instance, row.Id, row.State),
+                    "prey_dungeon_cleared", () => guard() && DungeonChanged(context, view.Instance, row.Id, row.State),
                     () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
         }
         foreach (var timer in view.Timers.Keys.Where(timer => timer.Kind is 1 or 2))

@@ -34,6 +34,7 @@ internal sealed partial class AntonRaidBattle
         public bool GuildPartyRecorded { get; set; }
         public bool Cleared => ClearFacts.Count != 0;
         public bool AntonEnergyConfirmed { get; set; }
+        public AntonHpDisplay? Hp { get; set; }
         public long EnergyReturnEpoch { get; set; }
     }
     readonly Dictionary<Guid, RaidDungeonRun> dungeonRuns = [];
@@ -198,6 +199,7 @@ internal sealed partial class AntonRaidBattle
                     row.Identity.Epoch < run.MapEpochs.GetValueOrDefault(row.Actor))) return null;
             bool enter = !run.EnterConsumed;
             bool changedMap = map is not null && actors.Any(row => row.Identity.Epoch > run.MapEpochs.GetValueOrDefault(row.Actor));
+            if (changedMap) run.Hp = null;
             if (!enter && !changedMap) return null;
             var before = current;
             var candidate = before;
@@ -278,10 +280,10 @@ internal sealed partial class AntonRaidBattle
             pendingTransition = candidate;
             if (lukeCompletion is not null && candidate.State == AntonRaidBattleState.Reward)
                 _ = LukePhaseSettlement.Capture(this, candidate.Phase);
-            // 逻辑终结即停止旧阶段timer，不等旧Run全部退场；phase/Reward仍由退出屏障提交。
-            if (!before.Timers.IsEmpty)
-                current = before with { Timers = before.Timers.Clear(), TimerGenerations = before.TimerGenerations.Clear(), TimerAnchors = before.TimerAnchors.Clear(),
-                    TimerSequence = candidate.TimerSequence, Revision = before.Revision + 1 };
+            // 地图与HP先显示已提交终结事实；只有phase/Reward继续等待退出屏障。
+            current = before with { Dungeons = candidate.Dungeons, Symbols = candidate.Symbols,
+                Timers = before.Timers.Clear(), TimerGenerations = before.TimerGenerations.Clear(), TimerAnchors = before.TimerAnchors.Clear(),
+                TimerSequence = candidate.TimerSequence, Revision = before.Revision + 1 };
             if (Kind == RaidKind.Fiendwar)
                 current = candidate with { State = before.State, Revision = before.Revision + 1 };
             ScheduleLukeClockLocked();
@@ -326,6 +328,8 @@ internal sealed partial class AntonRaidBattle
                 Enumerable.Range(1, 16).Any(slot => current.Symbols[$"[area_{slot}]"] == run.Dungeon))
                 CommitBattleCandidate(current, RemovePreyArea(DamagePreyShip(current, PreyHeader("[single defence fail]")), checked((int)run.Dungeon)));
             run.Active.Remove(actor);
+            run.Hp = null;
+            current = current with { Revision = checked(current.Revision + 1) };
             if (Kind == RaidKind.Anton) entries.Remove((run.Id, actor.Character));
             if (run.Active.Count == 0)
             {

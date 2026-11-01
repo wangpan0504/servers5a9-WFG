@@ -366,6 +366,10 @@ internal static class ServerRuntime
         new TagEvildomHandler(tagEvildomProjection, projection, log).Register(commands);
         var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
             itemResources.Items, repository, tagEvildomProjection, log);
+        var monsterCardUpgradeRules = MonsterCardUpgradeRules.Parse(
+            Environment.GetEnvironmentVariable("DFO_MONSTER_CARD_UPGRADE_RULES") ?? "{}");
+        log.Write("startup", new { Stage = "Monster card material upgrades", State = "complete",
+            Rule = MonsterCardUpgradeRules.Source, monsterCardUpgradeRules.MaterialSuccessPercent });
         string raidSettingsPath = Path.Combine(options.DataDirectory, "raid-start.json");
         var raidSettings = File.Exists(raidSettingsPath)
             ? System.Text.Json.JsonSerializer.Deserialize<Game.Raids.RaidStartSettings>(File.ReadAllText(raidSettingsPath),
@@ -373,6 +377,7 @@ internal static class ServerRuntime
                 ?? throw new InvalidDataException("攻坚开战配置不能为空")
             : new Game.Raids.RaidStartSettings();
         var raidDefinitions = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf));
+        bool productionLukePolicy = lukeStartPolicy is null;
         if (lukeStartPolicy is null && raidDefinitions.Find(1) is { } productionLuke)
             lukeStartPolicy = Game.Raids.LukeProductionPolicy.Create(
                 GameWorld.Raids.RaidResourceLoader.Load(pvf, productionLuke, dungeonCatalog, itemResources.Items),
@@ -388,6 +393,9 @@ internal static class ServerRuntime
             log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray(), objectEvidence.RoomFailures, objectEvidence.RouteWarnings, objectEvidence.BlockingRouteIssues });
         if (raidCatalog.Find(1)?.Resources?.LukeCardSet is { Issues.IsEmpty: false } cardSetEvidence)
             log.Write("resource_warning", new { Source = "Luke cardset metadata", Reasons = cardSetEvidence.Issues.ToArray() });
+        // 初始策略早于房间资源装配；牌组必须绑定准备后的共享目录，不能沿用初始空引用。
+        if (productionLukePolicy && lukeStartPolicy is not null)
+            lukeStartPolicy = lukeStartPolicy with { Cards = raidCatalog.Find(1)?.Resources?.LukeCardSet };
         if (lukeStartPolicy?.Run?.FixedRouteOptions is { } diagnosticOptions && raidCatalog.Find(1)?.Resources?.EntryCatalog is { } diagnosticCatalog)
             log.Write("startup", new { Stage = "Luke fixed route resource inspection", State = "diagnostic-only",
                 Mazes = Game.Raids.LukeFixedCardRoute.InspectResources(diagnosticOptions, diagnosticCatalog, raidCatalog.Find(1)!.Resources!.LukeObjects) });
@@ -649,7 +657,7 @@ internal static class ServerRuntime
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
                 prices: cardPrices,hopeRewards:hopeRewards,dimensionRewards:dimensionRewards,tayberrsRewards:tayberrsRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
-                imperialArena: imperialArenaProjection, parties: parties);
+                imperialArena: imperialArenaProjection, parties: parties, lukeRaid: lukeRun, antonRaid: antonRun, preyRaid: preyRun);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else
@@ -748,7 +756,8 @@ internal static class ServerRuntime
             new MonsterCardBindHandler(new InventoryMonsterCardBindService(itemResources.Items,
                 itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new MonsterCardUpgradeHandler(new InventoryMonsterCardUpgradeService(itemResources.Items, itemResources.Enchantments,
-                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces,
+                rules: monsterCardUpgradeRules), inventoryProjection, log),
             new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
                 itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,

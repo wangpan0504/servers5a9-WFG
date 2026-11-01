@@ -26,6 +26,8 @@ internal static partial class RaidChannelLandingTcpTests
         var Switch = Switcher(fixture, resources, endpoints, character);
 
         byte normal = endpoints.Keys.Min();
+        const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
+        const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
         Switch(48, land: true, town: 48, "普通→帝国竞技场直接进入48/0准备场景");
         Switch(48, land: false, town: null, "帝国同频道重连保留正确准备场景");
         Switch(normal, land: true, town: 38, "帝国→普通仍回共享房间及原普通地区", area: 1, exit: 38);
@@ -34,27 +36,33 @@ internal static partial class RaidChannelLandingTcpTests
         fixture.Sql("UPDATE characters SET town=38,area=1,x=433,y=311 WHERE id=$p0", character.Id);
         Switch(46, land: true, town: 62, "同类型重连修复旧版共享房间落点");
         Switch(normal, land: true, town: 38, "再战→普通仍回共享房间及原普通地区", area: 1, exit: 38);
+        string originalReturn = fixture.Snapshot(returnSql, character.Id);
         // 用户确认：换频道先到赛丽亚房间 38/1，再出门才是对应地区。只有安徒恩 0x17（ARAD 03B87FE0 起始地点 19/0）直接落战舰。
         // 团本页签谓词相同（01EB5AF0）的换频道客户端保留城镇快照，服务端保留原位置；在赛丽亚房间里互换则出门按新频道落点。
         Switch(19, land: true, town: 19, "普通→安徒恩 19（0x17 直接落 19/0）");
         Switch(normal, land: true, town: 38, "安徒恩→普通（进赛丽亚房间，出门到艾尔文 38/0）", area: 1, exit: 38);
         Switch(20, land: true, town: 38, "普通→卢克 20（进赛丽亚房间，出门 32/3）", area: 1, exit: 32);
         Switch(39, land: true, town: 38, "卢克20→漩涡39清除旧城镇快照", area: 1, exit: 57);
+        That(fixture.Snapshot(returnSql, character.Id) == originalReturn, "卢克→漩涡两次出门不污染普通返回五字段");
+        Switch(normal, land: true, town: 38, "卢克→漩涡→普通出门恢复原普通地区", area: 1, exit: 38);
+        That(fixture.Snapshot(returnSql, character.Id) == originalReturn && fixture.Snapshot(positionSql, character.Id) == originalReturn,
+            "多跳切频道后普通房间出口位置与原返回五字段一致，不落回32/3");
+        Switch(39, land: true, town: 38, "普通→漩涡恢复后续跨团检查", area: 1, exit: 57);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（0x36 谓词不同，出门 67/1）", area: 1, exit: 67);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，留在房间）", area: 1);
         Switch(39, land: true, town: 38, "普雷42→漩涡39清除快照并进入真实团队招募区", area: 1, exit: 57);
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
-        const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
-        const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
         string beforePreyReturn = fixture.Snapshot(returnSql, character.Id);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/1）", area: 1, exit: 59);
         That(fixture.Snapshot(positionSql, character.Id) == "[[59,1,1217,98,0]]" &&
             fixture.Snapshot(returnSql, character.Id) == beforePreyReturn,
             "普雷1426一次出门保存59/1完整位置，原普通返回地区五字段不变");
         Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/1）");
+        Switch(normal, land: true, town: 38, "普雷→安徒恩→普通恢复原普通地区", area: 1, exit: 38);
+        That(fixture.Snapshot(returnSql, character.Id) == originalReturn && fixture.Snapshot(positionSql, character.Id) == originalReturn,
+            "四团多跳链结束仍保留原普通返回地区，普雷与安徒恩未产生同类污染");
         That(!endpoints.ContainsKey(49), "真实监听目录不再发布退役49频道");
-        var ordinaryReturn = new Location(32,3,754,211,0);
-        Switch(normal, land: true, town: 38, "团本频道返回普通房间并沿已保存地区出门", area: 1, exit: ordinaryReturn.Town);
+        var ordinaryReturn = new Location(38,0,622,196,0);
         string expectedReturn = $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X},{ordinaryReturn.Y},{ordinaryReturn.Direction}]]";
         That(fixture.Snapshot(positionSql,character.Id) == expectedReturn && fixture.Snapshot(returnSql,character.Id) == expectedReturn,
             "普通频道1379及1426之后完整位置和返回五字段与实际资源分支的唯一预期一致");

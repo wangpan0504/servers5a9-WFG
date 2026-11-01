@@ -22,6 +22,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
     public LukeRaidPacingPolicy? Pacing { get; init; }
     public LukeRaidFlowPolicy? Flow { get; init; }
     public LukeResourceRewards? ResourceRewards { get; init; }
+    public LukeCardSetCatalog? Cards { get; init; }
 }
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
@@ -113,7 +114,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
     string? PrepareBattle(out AntonRaidBattle? battle)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards, lukeCards: policy.Cards, lukeMazes: policy.Run?.Mazes ?? []); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }

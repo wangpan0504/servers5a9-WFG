@@ -32,8 +32,9 @@ internal static partial class LukeRaidRunTcpTests
             {
                 var entered=Enter(members,captain,dungeon);Load(members);
                 if(phase==1&&run==0) ManualCoins(fixture,members,others,phase,20);
-                Clear(fixture,members,others,captain,entered[0],catalog,phase);
                 bool terminal=run+1==definition.HpRaw;
+                var phaseResults=terminal?PhasePackets(peers):null;
+                Clear(fixture,members,others,captain,entered[0],catalog,phase,phaseResults:phaseResults);
                 string field=phase==0?"phase0":"phase1";
                 That(fixture.Query($"SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND {field}_receipt IS NOT NULL",instance)
                     is [[long receipts]]&&receipts==(terminal?8:0),"仅权威HP归零终结一次签发全团阶段资格，非每角色/每Run提前结算");
@@ -45,9 +46,13 @@ internal static partial class LukeRaidRunTcpTests
                         is [[0L]],"阶段资格不是奖励receipt，不领取不能提前改资产");
                 }
                 List<WirePacket> result=[];
-                foreach(var peer in members.Where(peer=>peer!=captain))result.AddRange(Return(members,peer,true));
-                result.AddRange(Return(members,captain,true));
-                foreach(var peer in others)result.AddRange(Drain(peer,true));
+                if(terminal) result.AddRange(phaseResults!.Values.SelectMany(frames=>frames));
+                else
+                {
+                    foreach(var peer in members.Where(peer=>peer!=captain))result.AddRange(Return(members,peer,true));
+                    result.AddRange(Return(members,captain,true));
+                    foreach(var peer in others)result.AddRange(Drain(peer,true));
+                }
                 if(terminal)
                 {
                     That(result.Count(packet=>packet is {Kind:0,Opcode:601}&&packet.Body[1]==phase)==8,

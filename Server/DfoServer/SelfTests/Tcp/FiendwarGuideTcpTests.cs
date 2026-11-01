@@ -127,7 +127,7 @@ internal static class FiendwarGuideTcpTests
 
         void Create(bool single)
         {
-            peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwGuide")); writer.Write(new byte[] { single ? (byte)1 : (byte)0, 0, 0, 0 }); }));
+            peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwGuide")); writer.Write(new byte[] { single ? (byte)1 : (byte)0, 0, 0, 7 }); }));
             var created = Read();
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "原生664模式字段创建对应团队或引导");
             That(RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4) == single,

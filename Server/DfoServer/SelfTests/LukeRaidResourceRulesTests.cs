@@ -155,15 +155,16 @@ internal static class LukeRaidResourceRulesTests
         void UnifiedThrones()
         {
             var attack = new RaidTimer(1, 5066); var recovery = new RaidTimer(2, 5066);
-            That(battle.View.Dungeons[5066] == RaidDungeonState.Open && !battle.View.Timers.ContainsKey(attack) &&
-                !battle.View.LukeEnergyActivated, "双圣殿后能源和王座同时开放，候战选图不提前增长");
+            That(battle.View.Dungeons[5066] == RaidDungeonState.Hide && !battle.View.Timers.ContainsKey(attack) &&
+                !battle.View.LukeEnergyActivated, "双圣殿后只开光王座，能源保持隐藏且不提前增长");
             long initial = 0;
             byte energySquad = actors.Length > 4 ? (byte)2 : (byte)1;
             if (scenario == 1)
             {
+                var firstLight = Enter(5061); Exit(firstLight);
                 var early = Enter(5066, energySquad);
                 initial = battle.View.TimerGenerations[attack];
-                That(battle.View.LukeEnergyActivated && battle.View.Timers[attack] == 600, "首次实际进入能源启动十分钟增长");
+                That(battle.View.LukeEnergyActivated && battle.View.Timers[attack] == 600, "首次进入光王座后退出压能源，十分钟增长不续期");
                 Clear(5066, early); Exit(early);
                 That(!battle.View.Timers.ContainsKey(attack) && battle.View.Timers[recovery] == 300,
                     "可先压能源，恢复窗口五分钟，攻击旧代失效");

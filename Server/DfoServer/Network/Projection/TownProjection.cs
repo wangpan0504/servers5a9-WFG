@@ -517,7 +517,6 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
 
     public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
     {
-        if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
         if (CanSend()) GuildDungeonPartyBuffProjection.Post(context, clear: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
@@ -534,6 +533,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(receipt.Character, CanSend);
         if (mailbox is not null) await mailbox.RestoreAsync(context, CanSend);
         Join(context, CanSend);
+        // 先安装城镇场景，再启动本阶段演出，避免24重建场景清掉刚收到的601/587。
+        if (receipt.RaidBattleChange is not null && CanSend()) context.Session.PublishRaidCombat();
+        RaidCombatProjection.RestoreStatusForScene(context, CanSend);
     }
 
     public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)

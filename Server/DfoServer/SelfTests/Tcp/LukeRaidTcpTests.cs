@@ -79,7 +79,14 @@ internal static class LukeRaidTcpTests
             That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10159649")
                 is [[16L]], "八名卢克成员各持两张真实门票，不能靠全员无票掩盖扣费");
             var leader = peers[0]; var observer = peers[8];
-            leader.Send(664, Build(w => { w.Write((byte)1); w.Write(Name("Luke")); w.Write(new byte[4]); }));
+            leader.Send(15, Build(w => w.Write(0u)));
+            Bytes(Until(leader, 1, 15).Body, [0, 1, 0], "未开团零15不能走普通选图");
+            leader.Send(16, Build(w => { w.Write(5058u); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0);
+                w.Write((byte)0); w.Write(ushort.MaxValue); w.Write(0u); w.Write((byte)0); w.Write(0u); w.Write((byte)0); w.Write(uint.MaxValue); }));
+            Bytes(Until(leader, 1, 16).Body, [0, 9, 0, 0], "未开团直接16不能将5058建立为普通实例");
+            Drain(leader, packet => That(packet.Opcode is not (27 or 28 or 29), "拒绝普通旁路不发布选图场景或加载通知"));
+            That(fixture.Snapshot() == before && Assets() == assets, "未开团15/16不修改位置、资产、疲劳或攻坚账本");
+            leader.Send(664, Build(w => { w.Write((byte)1); w.Write(Name("Luke")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
             var list = Until(leader, 0, 590).Body; uint key = U32(list, 4);
             That((key >> 16 & 255) == 20 && list[12 + checked((int)U32(list, 8))] == 1, "卢克招募key属于频道20且类型为1");
             Until(leader, 0, 591); Bytes(Until(leader, 1, 664).Body, Build(w => { w.Write((byte)1); w.Write(key); }), "卢克创建成功");
@@ -102,7 +109,7 @@ internal static class LukeRaidTcpTests
                 Bytes(Until(leader, 1, 669).Body, [1], "卢克按两支四人分队编组");
             }
             leader.Send(1361, Build(w => { w.Write((byte)0); w.Write(key); }));
-            LukeRaidStartTcpTests.AssertStartFlag(Until(leader, 1, 1361).Body, key, 0);
+            LukeRaidStartTcpTests.AssertNormalMode(Until(leader, 1, 1361).Body, key);
             var members = Information(observer, key, 1).Members;
             That(members.Count(m => m.Squad == 1) == 4 && members.Count(m => m.Squad == 2) == 4, "分队上限来自8人容量");
             foreach (var peer in new[] { leader, peers[1], observer })

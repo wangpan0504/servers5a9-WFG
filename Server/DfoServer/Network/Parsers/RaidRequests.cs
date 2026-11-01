@@ -8,11 +8,11 @@ namespace DfoServer.Network.Parsers;
 // u8  团本类型：01DC69B0 取当前频道类型减 0x17 查 01DC6A18 表（0x17/0x19→0，0x20→1，0x2D→2，0x32→3，0x3E→4，0x3F→5，其余→6）；
 //     魔界大战频道 0x36 落默认值 6，与实机 06 一致。
 // u32 字节数 + 队名（03BDF8E0）；随后依次 u8 窗口[+0x210]、u8 [+0x211]、u8 [+0x214]、u8 标志（局部 bl，0216E0BD 可清 bit2）。
-// 三个窗口字段与标志的业务含义未恢复，只原样保留。
+// 尾标志低三位分别为输出/协同/辅助招募对象，0216E330由记录+E4回填；三个窗口字段独立保留。
 internal readonly record struct CreateRaidRequest(byte RaidType, string Name, byte Field210, byte Field211, byte Field214, byte Flags);
 internal readonly record struct RaidSearchRequest(uint Offset, byte RaidType, string Name, bool Closed = false);
 
-// C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 [ebp-0x34]（含义未恢复，原样保留）。
+// C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 招募对象掩码。
 internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
 internal readonly record struct RaidManagerRequest(uint Operation, uint Character, uint Argument);
 internal readonly record struct RaidInfoRequest(byte Mode, uint Key);

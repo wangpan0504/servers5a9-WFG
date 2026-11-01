@@ -16,6 +16,7 @@ internal static partial class LukeRaidRunTcpTests
         var instance=(string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0 AND state=0",captain.Id)[0][0]!;
         foreach(var (dungeon,objectId,symbol) in new[]{(5054,64249,117),(5054,64249,117),(5055,64251,118),(5056,64252,119)})
         {
+            Dictionary<TcpPeer,List<WirePacket>>? completed=null;
             var entered=Enter(members,captain,dungeon);
             foreach(var peer in others)Drain(peer,true);
             byte[] info=entered[0].Single(packet=>packet.Opcode==28).Body;
@@ -69,18 +70,19 @@ internal static partial class LukeRaidRunTcpTests
                     foreach(var peer in members.Concat(others))
                         That(!Drain(peer,true).Any(packet=>packet.Opcode==601||packet is {Kind:0,Opcode:587,Body:[3,0]}),"SQL未成功保持旧阶段且没有结果");
                     fixture.Sql("DROP TRIGGER luke_facility_failure");
+                    completed=PhasePackets(members.Concat(others));
                     captain.Send(662,Body(symbol));
-                    var retry=Collect(captain);
-                    NoReward(retry,"SQL恢复成功但活跃Run未退出，不提前发布Reward/结果");
+                    var retry=Collect(captain,completed);
                     That(retry.Count(packet=>packet is {Kind:1,Opcode:662,Body:[1]})==1,"幸存同Run成员662重试原封存候选后才ACK");
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL",instance) is [[8L]],
                         "SQL重试仍提交原八人成员封存事实，断线不篡改候选");
+                    AwaitPhaseResults(members,others,completed,0);
                     string saved=fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY character_id,instance_id");
                     captain.Send(662,Body(symbol));
                     var replay=Collect(captain);
-                    NoReward(replay,"SQL恢复后的重复662仍不能越过活跃Run退出屏障");
-                    That(replay.Count(packet=>packet is {Kind:1,Opcode:662,Body:[1]})==1&&
-                        fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY character_id,instance_id")==saved,"已提交662重复不重签资格");
+                    NoReward(replay,"自动退场后的旧662不重复演出或翻牌");
+                    That(!replay.Any(packet=>packet.Opcode==662)&&
+                        fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY character_id,instance_id")==saved,"退场后的旧662无副本资格，不重复确认或重签");
                 }
                 else
                 {
@@ -94,17 +96,20 @@ internal static partial class LukeRaidRunTcpTests
                 reporter.Send(662,Body(symbol));CheckCount(Collect(reporter),symbol,2);
             }
             List<WirePacket> returned=[];
-            foreach(var peer in members.Where(peer=>peer!=captain))
+            if(completed is not null) returned.AddRange(completed.Values.SelectMany(frames=>frames));
+            else
             {
-                var partial=Return(members,peer,true);
-                foreach(var other in others)partial.AddRange(Drain(other,true));
-                NoReward(partial,"非末成员退出仍无Reward/结果，不把任意一次Return当全部退出");
-                if(dungeon!=5056)
+                foreach(var peer in members.Where(peer=>peer!=captain))
+                {
+                    var partial=Return(members,peer,true);
+                    foreach(var other in others)partial.AddRange(Drain(other,true));
+                    NoReward(partial,"非末成员退出仍无Reward/结果，不把任意一次Return当全部退出");
                     That(partial.Where(packet=>packet.Opcode==583).All(packet=>Symbol(packet.Body,symbol)==2),"非末成员退出不撤销同Run设施贡献");
-                returned.AddRange(partial);
+                    returned.AddRange(partial);
+                }
+                returned.AddRange(Return(members,captain,true));
+                foreach(var peer in others)returned.AddRange(Drain(peer,true));
             }
-            returned.AddRange(Return(members,captain,true));
-            foreach(var peer in others)returned.AddRange(Drain(peer,true));
             if(dungeon!=5056)
                 That(returned.Any(packet=>packet.Opcode==583)&&returned.Where(packet=>packet.Opcode==583).Last() is var last&&Symbol(last.Body,symbol)==0,
                     "真实末成员Return回滚未清图设施贡献，重复进5054不能累积");
@@ -159,7 +164,11 @@ internal static partial class LukeRaidRunTcpTests
                 }
             }
         }
-        List<WirePacket> Collect(TcpPeer sender)=>new[]{sender}.Concat(members.Concat(others).Where(peer=>peer!=sender)).SelectMany(peer=>Drain(peer,true)).ToList();
+        List<WirePacket> Collect(TcpPeer sender,Dictionary<TcpPeer,List<WirePacket>>? recorded=null)=>
+            new[]{sender}.Concat(members.Concat(others).Where(peer=>peer!=sender)).SelectMany(peer=>
+            {
+                var frames=Drain(peer,true);recorded?[peer].AddRange(frames);return frames;
+            }).ToList();
         void Rejected(TcpPeer peer,byte[] body,string message)
         {
             peer.Send(662,body);var frames=Collect(peer);
