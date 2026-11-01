@@ -16,6 +16,8 @@ internal sealed record EnhancementReceipt(EnhancementMode Mode, InventorySlot Ta
     public short TerminalSlot { get; init; } = -1;
     public int TerminalRemaining { get; init; }
     public bool InPlace { get; init; }
+    // 仅普通逐级升级表路径置位；定级/增量券及随机、幸运奖池不属于该路径。
+    public bool UsesLevelProbability { get; init; }
     public ImmutableArray<EnhancementRefund> Refunds { get; init; } = [];
 }
 internal readonly record struct EnhancementRefund(short Slot, int ItemId, int Count);

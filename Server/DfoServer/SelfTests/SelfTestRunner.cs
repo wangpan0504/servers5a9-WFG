@@ -115,6 +115,7 @@ internal static class SelfTestRunner
         EnchantmentTests.RunCore();
         Testing.Inventory.LotteryGoldCostTests.RunCore();
         EnhancementTests.RunCore();
+        await DfoServer.Testing.EquipmentUpgradeAnnouncementTests.RunCoreAsync();
         AmplificationTests.RunCore();
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();

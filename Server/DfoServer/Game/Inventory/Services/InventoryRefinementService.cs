@@ -83,7 +83,8 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             after = after with { Items = after.Items.Replace(target, target with { Core = target.Core with { GenuineUpgrade = newLevel } }) };
         receipt = new(request.MaterialSlot, material.Core.Count - cost.Count, oldLevel, succeeded, newLevel, request.Position)
         {
-            Target = after.Find(request.Position)!, SourceItemId = material.Core.ItemId, UsedTicket = ticket is not null
+            Target = after.Find(request.Position)!, SourceItemId = material.Core.ItemId, UsedTicket = ticket is not null,
+            Portable = ticket?.Portable == true
         };
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(target, [material]);
         // 失败抽签及同级券也消费材料；目标未产生差量时仍复验原实例的期限。

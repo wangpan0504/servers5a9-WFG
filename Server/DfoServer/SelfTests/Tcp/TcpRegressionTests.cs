@@ -382,6 +382,7 @@ internal static class TcpRegressionTests
         ("growth-cube-contract", GrowthCubeContractTcpTests.RunAsync),
         ("enchantment", EnchantmentTcpTests.RunAsync),
         ("enhancement", EnhancementTcpTests.RunAsync),
+        ("equipment-upgrade-announcements", EquipmentUpgradeAnnouncementTcpTests.RunAsync),
         ("amplification-options", AmplificationTcpTests.RunAsync),
         ("amplification-upgrade", AmplifyUpgradeTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),

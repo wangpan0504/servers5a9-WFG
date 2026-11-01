@@ -72,7 +72,7 @@ internal static class RefinementTicketTests
         {
             var role = Role(slot);
             var result = service.Refine(role, request with { Position = slot, Confirmation = 2 }, out var receipt, now);
-            That(result.Accepted && receipt is { UsedTicket: true, Succeeded: true, OldLevel: 7, NewLevel: 5, MaterialRemaining: 1, SourceItemId: 10007131, Announce: true },
+            That(result.Accepted && receipt is { UsedTicket: true, Succeeded: true, OldLevel: 7, NewLevel: 5, MaterialRemaining: 1, SourceItemId: 10007131, Announce: false },
                 "fixed ticket overwrites a higher level on damaged, sealed, sorted or quickbar/worn weapon");
             That(result.Plan!.After.Find(slot) == role.Inventory.Find(slot)! with { Core = core with { GenuineUpgrade = 5 } } &&
                 result.Plan.After.Find(Bag(5)) == role.Inventory.Find(Bag(5)) && result.Plan.After.Find(Bag(6)) == role.Inventory.Find(Bag(6)) && result.Plan.After.Gold == 1234,
@@ -86,7 +86,7 @@ internal static class RefinementTicketTests
         InventoryQualificationTests.CheckInputs(Role(Bag(3), core with { GenuineUpgrade = 5 }),
             role => service.Refine(role, request, out _, now), now.ToUnixTimeSeconds(), Bag(3), Bag(4));
         var plus = service.Refine(Role(Bag(3), coupon: Ticket(10007990)), request with { Confirmation = 1 }, out var plusReceipt, now);
-        That(plus.Accepted && plusReceipt is { UsedTicket: true, OldLevel: 7, NewLevel: 8, Announce: true }, "additional ticket reaches cap despite damaged durability");
+        That(plus.Accepted && plusReceipt is { UsedTicket: true, OldLevel: 7, NewLevel: 8, Announce: false }, "additional ticket reaches cap despite damaged durability without an announcement");
         var allowedCore = InventoryRewardGrantService.Create(items.Get(401000012)) with { Durability = 0, ExpireTime = 0 };
         That(service.Refine(Role(Bag(3), allowedCore, Ticket(10006551)), request with { ItemId = allowedCore.ItemId }, out _, now).Accepted,
             "declared special weapon remains eligible without added character job or level rules");

@@ -114,6 +114,8 @@ internal static class AmplifyUpgradeTests
             That(r.AmplifyUpgrades.Get(id) is { Kind:AmplifyUseKind.Portable, PendingRule:null },
                 "全量普查命中的普通服一次性增幅器均可按原限制消费：" + id);
         var rules = r.AmplifyUpgrades.Rules;
+        That(rules.NoticeLevel == 12 && r.AmplifyUpgrades.ReinforceRules.NoticeLevel == 12,
+            "强化与增幅分别保留各自PVF的notice门槛");
         That(rules.Steps.Length == 255 && rules.Steps[0] is { FailureWeight: 0, MaterialId: 3242, MaterialCount: 1 } &&
             rules.Steps[10] is { FailureWeight: 60000, PenaltyType: 3, MaterialCount: 11 }, "当前PVF普通amplify表按24列读取，不误选new amplify表");
         That(r.AmplifyUpgrades.Lucky.Length == 15 && r.AmplifyUpgrades.Lucky[14] == new LuckyAmplifyStep(14, 82, 0, 18),
