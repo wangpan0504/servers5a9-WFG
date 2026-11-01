@@ -18,7 +18,7 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Testing.Inventory;
 
-internal static class InventoryReceiptTests
+internal static partial class InventoryReceiptTests
 {
     public static async Task RunAsync(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
@@ -121,6 +121,7 @@ internal static class InventoryReceiptTests
                 TestCheck.That(rejectionSent.SequenceEqual(["held_aura_rejection"]),
                     "排队中的旧127失败ACK不发送给同owner新快照");
             }
+            await VerifyItemSpaceAsync(session, projection, itemResources, repository, owner, path);
             using var replacement = owners.Acquire(owner.Account, () => { });
             bool expired = false;
             try { session.CanPublishInventory(next.Receipt!); }

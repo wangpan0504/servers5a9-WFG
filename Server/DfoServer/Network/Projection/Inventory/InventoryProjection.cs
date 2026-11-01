@@ -10,7 +10,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection.Inventory;
 
-internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces,
+internal sealed partial class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces,
     CreatureProjection? creatures = null, SkinStorageProjection? skins = null)
 {
     public Task RefreshTitleAppearanceAsync(GameConnectionContext context, Character character, Func<bool> canSend) =>

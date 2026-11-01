@@ -54,6 +54,7 @@ internal static partial class InventoryTcpTests
         using (var peer = Open(fixture))
         {
             var entry = peer.Select();
+            VerifyItemSpaceSynchronization(fixture, peer);
             That(entry[4].Body.Length == 2096 && U16(entry[4].Body, 3) == 17 && U16(entry[4].Body, 374) == 65 && U32(entry[4].Body, 380) == 20,
                 "full inventory contains virtual balances and preseeded stacks");
             var stackUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=65", peer.Id)[0][0];
