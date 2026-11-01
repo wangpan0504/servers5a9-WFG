@@ -380,6 +380,28 @@ internal static class SkillExtendedTcpTests
             That(fixture.Query("SELECT skill_id FROM character_skill_commands WHERE character_id=" + defaultRole.Id).Length == 0,
                 "默认指令回放不写技能指令表");
             peer.Barrier();
+            // 两棵树分别重置；另一树的自定义指令不能被默认投影覆盖。
+            peer.Send(331, [1, 5, 0, 2, 2, 4]); peer.Expect(1, 331, [1]); peer.Barrier();
+            for (byte context = 0; context < 2; context++)
+            {
+                var before = Role(defaultRole.Slot).Learning;
+                peer.Send(491, [context, 0]); peer.Expect(1, 491, [1, context, 1]);
+                var reset = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
+                var saved = Role(defaultRole.Slot).Learning;
+                That(reset.All(tree => tree.Skills.Single(skill => skill.Id == 8).Command == "0C04") &&
+                    reset[0].Skills.Single(skill => skill.Id == 5).Command == "0204" &&
+                    reset[1].Skills.Single(skill => skill.Id == 5).Command == catalog.Get(0, 5).DefaultCommand,
+                    "剑影SP重置立即恢复两树三段斩按住方向默认指令，保留自定义及另一树默认");
+                That(reset.Zip(saved.Trees).All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
+                    pair.First.Skills.Select(skill => (skill.Slot, skill.Id, skill.Level))
+                        .SequenceEqual(pair.Second.Skills.Select(skill => (skill.Slot, skill.Id, skill.Level)))) &&
+                    saved.Trees[1 - context].Skills.SequenceEqual(before.Trees[1 - context].Skills) &&
+                    saved.Trees[1 - context].Sp == before.Trees[1 - context].Sp &&
+                    saved.Trees[1 - context].Tp == before.Trees[1 - context].Tp &&
+                    saved.Trees.All(tree => tree.Skills.Single(skill => skill.Id == 8).Command.Length == 0),
+                    "重置投影匹配提交后的点数等级槽位，另一树和默认指令存档保持");
+                peer.Barrier();
+            }
         }
         await fixture.StopAsync();
         Console.WriteLine("PASS C# TCP TP、觉醒赠技、指令默认/保存/重登、特殊职业创建/学习及连招编排；非Windows验收");

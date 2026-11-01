@@ -127,7 +127,9 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill reset receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
         await context.Reply(CmdPacketType.SKILL_INIT, SkillPackets.Reset(parsed.Context), "skill_reset_committed", Guard);
-        await SkillProjection.PublishAsync(context, receipt.Character, "skill_reset_info", "skill_reset_combo", Guard);
+        // 完整技能树会重建绑定；空存档必须显式补回资源默认指令，包括按住方向。
+        await SkillProjection.PublishAsync(context, receipt.Character, "skill_reset_info", "skill_reset_combo", Guard,
+            id => catalog.Get(receipt.Character.Job, id).DefaultCommand);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
