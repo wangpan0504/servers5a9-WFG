@@ -15,7 +15,8 @@ internal sealed partial class GameSession
         var children = owner.Execute(() => Selected?.ActiveMainQuests.Where(row => row.ConditionState == 0 &&
             quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ZeroRewardChild(quest) &&
             (parentQuestId is not null || Phase == SessionPhase.Town || !QuestRelationProgress.ClearDialogueChild(quest,quests)) &&
-            (parentQuestId is null || quest.MainQuest == parentQuestId && QuestRelationProgress.TownLinkedChild(quest)))
+            (parentQuestId is null || quest.MainQuest == parentQuestId &&
+                (QuestRelationProgress.TownLinkedChild(quest) || QuestRelationProgress.ClearDialogueChild(quest,quests))))
             .Select(row => row.QuestId).ToArray() ?? []);
         QuestCompletionReceipt? last = null;
         foreach (ushort id in children)
@@ -82,7 +83,7 @@ internal sealed partial class GameSession
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
         // 带NPC的末清图子任务保留到结算后对话；原生34可转向父任务，父子在一个领奖事务中关闭。
-        // 顺序父/清图对话父34在副本/结算内：CompleteNpc 若出现在城镇地图（TownCatalog，不按任务号白名单），当前房间 MAP [NPC] 须含该 NPC，否则拒绝。
+        // 顺序父及其末清图子在副本/结算交付时沿父CompleteNpc；城镇NPC须同时出现在当前MAP，否则拒绝。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
         bool clearDialogue = QuestRelationProgress.ClearDialogueChild(quest,quests) ||
             QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null;
@@ -95,17 +96,20 @@ internal sealed partial class GameSession
                 !expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,dialogueEntry))))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "清图对话任务不属于当前原接取实例" };
-        if ((QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && quest.CompleteNpc > 0 &&
+        // 末清图子归档推进的是父任务；交付场景沿父声明，子任务的对话NPC不能给无NPC父任务另加城镇门禁。
+        var deliveryQuest = QuestRelationProgress.ClearDialogueChild(quest,quests)
+            ? quests.Get(quest.MainQuest!.Value) : quest;
+        if ((QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && deliveryQuest.CompleteNpc > 0 &&
             captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
         {
-            int resolved = QuestClientSceneProgress.ResolveNpc(expected,quest.CompleteNpc,quest);
+            int resolved = QuestClientSceneProgress.ResolveNpc(expected,deliveryQuest.CompleteNpc,deliveryQuest);
             bool townNpc = resolved > 0 && towns.Areas.Values.Any(area =>
                 area.Default.Npcs.Any(npc => npc.Id == (uint)resolved) ||
                 area.Phases.Any(phase => phase.Npcs.Any(npc => npc.Id == (uint)resolved)));
             if (townNpc)
             {
                 bool atNpc = captured.Entry is { } entry && captured.Room is { NpcMetadataError: null } room &&
-                    quest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) == true &&
+                    deliveryQuest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) == true &&
                     expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,entry)) &&
                     room.Npcs.Any(npc => npc.Id == resolved);
                 if (!atNpc)
