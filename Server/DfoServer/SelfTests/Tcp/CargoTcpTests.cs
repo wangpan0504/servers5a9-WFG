@@ -29,6 +29,7 @@ internal static class CargoTcpTests
         const int beadId = 10094768;
         long beadUid;
         short beadSlot;
+        short stepSlot;
         string beadCore;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -42,6 +43,9 @@ internal static class CargoTcpTests
             // 模拟旧存档中的工具；新获得入口会立即扩容，不再产生此实体。
             current = repo.CommitInventory(owner, current, new(current.Inventory, current.Inventory with
                 { Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), new(6, GameWorld.Items.ItemKind.Consumable, 1))) }, "legacy_cargo_tool_fixture"));
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(10007903, 1)]));
+            stepSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 10007903).Position.Index;
+            That(current.Inventory.CargoCapacity == 8, "逐档券沿普通获取入口生成实体，不在获取时提前扩容");
             current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(beadId, 2)]));
             var bead = current.Inventory.Items.Single(item => item.Core.ItemId == beadId);
             beadUid = bead.Uid;
@@ -126,6 +130,13 @@ internal static class CargoTcpTests
             Transfer(peer, 12, 1, 1, 0, 0, 122, 0, 19, actualTargetSlot: 121);
             That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
                 "partial withdrawal merges full quantity and clears account stack");
+            peer.Send(408, Build(w => w.Write(stepSlot)));
+            peer.Expect(1, 408, [1]);
+            That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "逐档券成功后清空真实来源槽");
+            peer.Expect(0, 66, [1, 0, 24, 0]);
+            Cargo(peer.Expect(0, 13).Body, 2, 24, 0, 0);
+            peer.Send(408, Build(w => w.Write(stepSlot)));
+            peer.Expect(1, 408, [0, 17, 0]);
             peer.Send(408, [65, 0]);
             peer.Expect(1, 408, [1]);
             That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "personal upgrade consumes the requested tool");

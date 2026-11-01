@@ -663,6 +663,8 @@ internal sealed partial class ItemCatalog
             AccountBoundAfterTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } tradeLimit &&
                 tradeLimit.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase),
             PersonalCargoUpgradeTarget = cargoTarget,
+            AdvancesPersonalCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var cargoAction) &&
+                StackableActionCatalog.Arguments(cargoAction) is { Label: "[upgrade cargo]", Parameters.Count: 0 },
             ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
             Expiration = ItemExpiration.Parse(text),
             RefinementTicket = isEquipment ? null : RefinementTicketDefinition.Parse(text),

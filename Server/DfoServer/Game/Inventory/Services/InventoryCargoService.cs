@@ -115,6 +115,13 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         ushort target = template.PersonalCargoUpgradeTarget;
+        if (template.AdvancesPersonalCargo)
+        {
+            // 无参数的逐档券只沿本版17档容量表提升一档，不能替表外旧容量进位。
+            if (!CargoCatalog.SupportsPersonalCapacity(before.CargoCapacity) || before.CargoCapacity >= 264)
+                return InventoryResult.Reject(19);
+            target = checked((ushort)(before.CargoCapacity + 16));
+        }
         if (target <= before.CargoCapacity || !CargoCatalog.SupportsPersonalCapacity(target))
             return InventoryResult.Reject(19);
         var consumed = InventoryDeleteService.Plan(before, item.Position, item.Core.Value, 1);
