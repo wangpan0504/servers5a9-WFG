@@ -129,11 +129,11 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
         bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
-        CrackDimensionRewardServices? crackRewards = null)
+        CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
-            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards);
+            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards, allowDimensionHidden: allowDimensionHidden);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection ??= "state-changed-before-install";
@@ -296,7 +296,8 @@ internal sealed partial class GameSession
             var usage = repository.LoadDungeonIncount(owner, expected.Id, dimensionCatalog.DailyRow.CountKey, period);
             var hidden = repository.LoadDungeonIncount(owner, expected.Id, DimensionDungeonCatalog.Entrance, period);
             int extraEntries = DimensionEntryTicketService.Extra(expected.Inventory, IncountNow());
-            if (!DungeonIncountPolicy.CanEnter(dimensionCatalog.DailyRow with { Limit = dimensionCatalog.DailyLimit + extraEntries }, usage)) return RejectFormal("dimension-daily-exhausted");
+            usage = DimensionDungeonAdmission.NormalizeLegacyOverflow(usage, dimensionCatalog.BaseDailyLimit, extraEntries);
+            if (!DungeonIncountPolicy.CanEnter(dimensionCatalog.DailyRow with { Limit = dimensionCatalog.BaseDailyLimit + extraEntries }, usage)) return RejectFormal("dimension-daily-exhausted");
             bool hiddenBoss = shared?.Session.PreparedParty(shared).Dungeon.Entry.Dimension?.HiddenBoss ??
                 (allowDimensionHidden && DungeonIncountPolicy.CanEnter(dimensionCatalog.HiddenRow, hidden) &&
                  (draw ?? RandomNumberGenerator.GetInt32)(10000) < dimensionCatalog.HiddenRate(usage.DailyUsed + 1));
@@ -336,7 +337,7 @@ internal sealed partial class GameSession
                 if (!catalog.EkernCycle.CanEnter(dungeonId,cycle.Normal,cycle.Trial))
                     return RejectFormal("ekern-cycle-not-available");
             }
-            channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection);
+            channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection, dimension?.DailyBefore);
             if (costRejection is not null) return RejectFormal(costRejection);
         }
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真

@@ -33,7 +33,7 @@ internal sealed partial class GameSession
         (!entranceOnly || character.Position.Town == 17 && character.Position.Area is 3 or 5)
         ? (uint?)AncientGateProgression.Energy(character.Inventory, IncountNow()) : null);
 
-    public (uint BasicUsed, uint ExtraRemaining, byte HiddenUsed)? DimensionEntranceInfo(bool entranceOnly = false) => owner.Execute(() =>
+    public (uint BasicUsed, uint ExtraRemaining, byte HiddenRemaining)? DimensionEntranceInfo(bool entranceOnly = false) => owner.Execute(() =>
     {
         if (Selected is not { } character || incounts?.Dimension is not { } dimension ||
             entranceOnly && !(character.Position.Town == 17 && character.Position.Area is 2 or 4))
@@ -42,14 +42,15 @@ internal sealed partial class GameSession
         var used = repository.LoadDungeonIncount(owner, character.Id, dimension.DailyRow.CountKey, period);
         var hidden = repository.LoadDungeonIncount(owner, character.Id, DimensionDungeonCatalog.Entrance, period);
         int extra = DimensionEntryTicketService.Extra(character.Inventory, IncountNow());
-        return ((uint)Math.Min(used.DailyUsed, dimension.DailyLimit),
-            (uint)Math.Max(0, extra - Math.Max(0, used.DailyUsed - dimension.DailyLimit)),
-            (byte)Math.Min(hidden.WeeklyUsed, dimension.HiddenWeeklyLimit));
+        used = DimensionDungeonAdmission.NormalizeLegacyOverflow(used, dimension.BaseDailyLimit, extra);
+        return ((uint)Math.Min(used.DailyUsed, dimension.BaseDailyLimit),
+            (uint)Math.Max(0, extra - Math.Max(0, used.DailyUsed - dimension.BaseDailyLimit)),
+            (byte)Math.Max(0, dimension.HiddenWeeklyLimit - hidden.WeeklyUsed));
     });
 
     public InventoryResult UseDimensionEntryTicket(DfoServer.Game.Inventory.Models.InventorySlot position,
         DimensionEntryTicketService service) => PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
-            ? service.Plan(character, position, dimension.ExtraLimit, towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet())
+            ? service.Plan(character, position, DimensionEntryTicketService.UnlimitedExtraEntries, towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet())
                 ? "[seria room]" : "[village]") : InventoryResult.Reject(19), 19, usedItem: position);
 
     DateTimeOffset IncountNow() => (timeProvider ?? TimeProvider.System).GetUtcNow();
@@ -99,7 +100,7 @@ internal sealed partial class GameSession
     });
 
     DungeonEntryCost? EntryCost(Character expected, uint dungeonId, DungeonDefinition definition, EpicPieceCatalog? pieces, bool channelTown,
-        out string? rejection)
+        out string? rejection, DungeonIncountUsage? usageOverride = null)
     {
         rejection = null;
         // 未装载 DungeonIncountInfo（旧测试夹具）时保持原行为：不计次也不消耗。
@@ -107,7 +108,7 @@ internal sealed partial class GameSession
         int id = (int)dungeonId;
         var row = IncountRow(dungeonId);
         var period = IncountPeriod(row?.CountKey ?? id);
-        if (row is not null && !DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, expected.Id, row.CountKey, period)))
+        if (row is not null && !DungeonIncountPolicy.CanEnter(row, usageOverride ?? repository.LoadDungeonIncount(owner, expected.Id, row.CountKey, period)))
         {
             rejection = "dungeon-incount-exhausted";
             return null;

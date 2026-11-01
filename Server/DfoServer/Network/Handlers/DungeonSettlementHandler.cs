@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using DfoServer.Game.Session;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
@@ -472,7 +473,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 必须确认回城选项，缺失ACK会保留客户端结果页的输入锁。
         if (option == (byte)DungeonResultOption.Retry && current.Entry.Hope is not null)
             option = (byte)DungeonResultOption.ReturnTown;
-        uint? retryTarget = option == 0 ? OrdinaryDungeonContinuation.Target(current.Entry, dungeons) : current.Entry.DungeonId;
+        // 异界再次挑战从当前档位五张图中重新等概率抽取；随机池包含当前图。
+        uint? retryTarget = option == 0
+            ? current.Entry.Dimension is { } dimension
+                ? checked((uint)dimension.Catalog.RetryTarget(dimension.DungeonId, RandomNumberGenerator.GetInt32))
+                : OrdinaryDungeonContinuation.Target(current.Entry, dungeons)
+            : current.Entry.DungeonId;
         if (option == 0 && retryTarget is null) option = (byte)DungeonResultOption.ReturnTown;
         if (context.Session.PartyDungeon is { } party)
         {
@@ -482,7 +488,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             {
                 0 when partyDungeons is not null && retryTarget is { } target => partyDungeons.Enter(context.Session, target,
                     current.Entry.Difficulty, dungeons, rooms, drops, items, pieces, null,
-                    onRejected: (reason, slot) => rejectedRetry = (reason, slot))
+                    onRejected: (reason, slot) => rejectedRetry = (reason, slot), allowDimensionHidden: false)
                     .Select(n => n with { State = 1 }).ToArray(),
                 1 => party.ResultSelection(context.Session),
                 2 => party.ResultReturn(context.Session),

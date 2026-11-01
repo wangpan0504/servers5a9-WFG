@@ -24,6 +24,6 @@ internal static class DimensionEntranceProjection
             ReferenceEquals(captured.Selected, context.Session.Selected) && captured.SelectionEpoch == context.Session.SelectionEpoch &&
             captured.Phase == context.Session.Phase);
         await context.Notify(NotiPacketType.DIMENSION_GATE_ENTRANCE_INFO,
-            DungeonEnterCountPackets.Dimension(info.BasicUsed, info.ExtraRemaining, info.HiddenUsed), "dimension_entrance_info", Current);
+            DungeonEnterCountPackets.Dimension(info.BasicUsed, info.ExtraRemaining, info.HiddenRemaining), "dimension_entrance_info", Current);
     }
 }

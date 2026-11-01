@@ -157,8 +157,8 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
     public PartyDungeonNotice[] Enter(GameSession leader, uint dungeon, byte difficulty,
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
-        uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null,
-        Action<string, byte>? onRejected = null)
+        uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false,
+        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true)
     {
         var party = parties.Current(leader);
         if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
@@ -186,11 +186,11 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         try
         {
             // 共用物理路线时只在全员尚有隐藏周额度才抽隐藏，避免一人满额就随机拒绝整队。
-            bool allowDimensionHidden = party.Members.All(member => member.Actor.Session.CanUseDimensionHidden(dungeon));
+            bool canUseDimensionHidden = allowDimensionHidden && party.Members.All(member => member.Actor.Session.CanUseDimensionHidden(dungeon));
             foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
-                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, allowDimensionHidden);
+                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, canUseDimensionHidden);
                 if (plan is null)
                 {
                     if (member.Actor.Session.LastFormalDungeonRejection is { } reason)

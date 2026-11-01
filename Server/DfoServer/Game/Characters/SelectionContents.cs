@@ -41,7 +41,7 @@ internal sealed class SelectionContentsRules(TowerOfDespairCatalog despair, Grie
         int despairUsed = state.DespairUsage.CharacterEntries > 0 || state.Despair.LastClearDay == ShopPurchaseCount.Today(now) ? 1 : 0;
         int griefUsed = state.Grief.CharacterDay == QuestCycle.Day(now) ? grief.DeclaredEnterableCount : 0;
         return new(despairUsed, state.Despair.NextLayer - 1,
-            incounts.Dimension is { } dimension ? Usage(dimension.DailyRow.CountKey).DailyUsed : 0,
+            incounts.Dimension is { } dimension ? Math.Min(Usage(dimension.DailyRow.CountKey).DailyUsed, dimension.BaseDailyLimit) : 0,
             griefUsed, state.Grief.Layer - 1, [.. Enumerable.Range(0, 4).Select(kind =>
                 state.RaidClears.Where(row => row.Kind == kind && row.Week ==
                     RaidClearCounts.Week((byte)kind, now, lukeCycle))
