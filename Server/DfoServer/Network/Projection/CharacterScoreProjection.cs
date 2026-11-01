@@ -14,7 +14,8 @@ internal static class CharacterScoreProjection
     internal static CharacterScoreNoticeResult Send(GameSession session, CharacterScoreNoticeCapture capture,
         Func<CharacterInvestmentSnapshot, CharacterInvestmentResult> calculate,
         Func<CharacterInvestmentSnapshot, long?> boxExpiration,
-        Func<ushort, byte[], string, Func<bool>, bool> send, string? machineNonce = null)
+        Func<ushort, byte[], string, Func<bool>, bool> send, string? machineNonce = null,
+        Func<CharacterInvestmentSnapshot, CombatPowerResult>? combat = null)
     {
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
@@ -53,8 +54,19 @@ internal static class CharacterScoreProjection
                 CharacterInvestmentScore.ChronicleProfile => "v2.1",
                 _ => "v2"
             };
-            body = MachineCharacterScorePackets.Build(machineNonce, score.CharacterId, score.CharacterRevision,
-                "character-investment", version, score.Partial ? "partial" : "complete", score.Score, score.ScoreCapped, ttl);
+            if (combat is null)
+                body = MachineCharacterScorePackets.Build(machineNonce, score.CharacterId, score.CharacterRevision,
+                    "character-investment", version, score.Partial ? "partial" : "complete", score.Score, score.ScoreCapped, ttl);
+            else
+            {
+                var power = combat(snapshot);
+                if (power.CharacterId != snapshot.Equipment.CharacterId || power.CharacterRevision != snapshot.Equipment.CharacterRevision ||
+                    power.ObservedAt != snapshot.Equipment.ObservedAt)
+                    throw new InvalidDataException("战斗力计算身份无效");
+                body = MachineCharacterScorePackets.BuildCombat(machineNonce, power.CharacterId, power.CharacterRevision,
+                    power.Partial ? "partial" : "complete", power.Total, power.BaseScore, power.WhiteBp, power.YellowBp,
+                    power.CritDamageBp, power.EquipmentBp, power.Grade, ttl);
+            }
         }
         string status = session.CharacterScoreNoticeStatus(capture, deadline);
         if (status == "ready")
