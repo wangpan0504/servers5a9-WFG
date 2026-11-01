@@ -922,7 +922,8 @@ internal sealed partial class TcpPeer : IDisposable
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
-        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null)
+        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
+        (int BuffId, int Remaining)? bossBuff = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1061,6 +1062,9 @@ internal sealed partial class TcpPeer : IDisposable
                     TestCheck.That(buff.Length == 17 && buff[0] == 1 && U32(buff, 1) == 1249 && U32(buff, 5) == 0,
                         "网吧身份入城在本人Player后补发487特权buff，永久实例三项动态整数为0");
                 }
+                if (bossBuff is { } boss)
+                    Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(boss.BuffId); writer.Write(boss.Remaining); writer.Write(0); writer.Write(0); }));
                 if (ekernCycle is not null) Expect(0,656,ekernCycle);
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {

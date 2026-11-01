@@ -312,6 +312,7 @@ internal sealed partial class DungeonHandler
                 await PcRoomBuffProjection.PostAsync(context, Current);
                 town.GuildEconomy?.Post(context, force: true);
                 await GuildTrainingProjection.PostAsync(context);
+                await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Current);
                 GuildDungeonPartyBuffProjection.Post(context);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {

@@ -8,6 +8,7 @@ using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
@@ -125,6 +126,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         bool CanSend() => context.Session.CanPublishConsumable(guard);
         await context.Reply(CmdPacketType.USE_STACKABLE, ConsumableUsePackets.Ack(request, accepted, result.NativeNoConsumption),
             accepted ? "consumable_use_committed" : "consumable_use_rejected", CanSend);
+        if (accepted) await BossSelectionBuffProjection.PostAsync(context, canSend: CanSend);
         if (accepted && result.TownGiftItem != 0 && town is not null)
             await town.GiftEffectAsync(context, result.TownGiftItem, CanSend);
         if (accepted && result.Inventory is { Plan: { } plan, Receipt: { } recoveryReceipt } &&

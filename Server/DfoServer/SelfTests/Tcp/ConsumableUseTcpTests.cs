@@ -64,25 +64,35 @@ internal static partial class ConsumableUseTcpTests
                 // 正常使用专项准备有效库存实例，不让历史活动日期替代药剂关联和效果的验证。
                 core = core with { ExpireTime = 0 };
                 if (detailed) core = core with { Marker16 = 44, SortLockFlag = 1 };
+                var potionInventory = candidate.Inventory with
+                    { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), core)) };
+                if (id == 490705256)
+                    potionInventory = potionInventory with { Items = potionInventory.Items.Add(new(0, new(InventoryListType.Main, 66),
+                        InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490012682), 1, clock.GetUtcNow()) with { ExpireTime = 0 })) };
                 repository.Create(owner, candidate with { Name = name, Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
                 candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning),
-                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), core)) } });
+                Inventory = potionInventory });
             }
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
             peer.Select(2);
-            Use(peer, 65, 0, 490705256); Accepted(peer, 65, 0, 490705256); peer.Barrier();
+            Use(peer, 65, 0, 490705256); Accepted(peer, 65, 0, 490705256);
+            ExpectBossBuff(peer, 300, 5); peer.Barrier();
             That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
                 "截图药水通过真实CMD44分派和完整ACK生效，五次效果已提交");
             Use(peer, 65, 1, 490705256); Refused(peer, 1, 490705256); peer.Barrier();
             That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND list_type=0 AND slot_index=65", peer.Id) is [[2L]],
                 "一分钟冷却拒绝保留剩余两瓶，后续连接仍正常");
+            clock.Advance(TimeSpan.FromMinutes(1));
+            Use(peer, 66, 0, 490012682); Accepted(peer, 66, 0, 490012682);
+            peer.Expect(0, 488, Build(writer => { writer.Write((byte)1); writer.Write(300); }));
+            ExpectBossBuff(peer, 1275, 5); peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(2); peer.Barrier();
+            peer.Select(2, bossBuff: (1275, 5)); peer.Barrier();
             That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
                 "断线重连保留实际五次药效，不重复消费或补发");
         }
@@ -95,7 +105,7 @@ internal static partial class ConsumableUseTcpTests
             {
                 peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null); peer.Barrier();
                 var beforeUse = fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? Read(peer.Id) : null;
-                Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); peer.Barrier();
+                Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); ExpectBossBuff(peer, buff, count); peer.Barrier();
                 That(fixture.Query("SELECT json_extract(state_json,'$.Remaining'),json_extract(state_json,'$.Definition.BuffId') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
                     is [[var remaining, var kind]] && Equals(remaining, (long)count) && Equals(kind, (long)buff),
                     "原三款、六款兼容与十款原映射来源均经真实44消费，保存各自资源效果 " + id);
@@ -125,7 +135,7 @@ internal static partial class ConsumableUseTcpTests
             }
             using (var peer = Open(fixture))
             {
-                peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null); peer.Barrier();
+                peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null, bossBuff: (buff, count)); peer.Barrier();
                 That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
                     is [[var remaining]] && Equals(remaining, (long)count), "新药型重登保持真实次数，不赠药或续期");
                 if (installed is not null)
@@ -251,6 +261,9 @@ internal static partial class ConsumableUseTcpTests
         int Count(short slot) => fixture.Query("SELECT item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.list_type=0 AND s.slot_index=$p0 AND s.character_id=$p1", slot, activeId)
             is [var row] ? System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)row[0])!.Count : 0;
     }
+
+    static void ExpectBossBuff(TcpPeer peer, int buff, int remaining) => peer.Expect(0, 487, Build(writer =>
+        { writer.Write((byte)1); writer.Write(buff); writer.Write(remaining); writer.Write(0); writer.Write(0); }));
 
     static void Use(TcpPeer peer, ushort slot, uint check, int id, int argument = 0) => peer.Send(44, Build(w =>
         { w.Write(slot); w.Write((byte)0); w.Write(check); w.Write(id); w.Write(argument); }));
