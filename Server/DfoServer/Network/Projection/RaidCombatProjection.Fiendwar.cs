@@ -65,6 +65,13 @@ internal static partial class RaidCombatProjection
         context.Sender.Post(0, (ushort)NotiPacketType.FIEND_WAR_SET_SYMBOL,
             FiendwarPackets.Symbols(battle.SymbolSnapshot(view).Select(row => (checked((uint)row.Id), unchecked((uint)row.Value))).ToArray()),
             "fiendwar_symbols", Guard);
+        if (view.FiendwarSupport is { } support)
+        {
+            var identity = (support.Instance, support.Sequence);
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_SITUATION_NOTICE, FiendwarPackets.SupportNotice(support.Lane),
+                "fiendwar_support_notice", () => Guard() && context.FiendwarSupportDisplay != identity &&
+                    context.Session.CanPublishFiendwarSupport(support), () => context.FiendwarSupportDisplay = identity);
+        }
     }
 
     internal static ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimerSnapshot(AntonRaidBattleView view)

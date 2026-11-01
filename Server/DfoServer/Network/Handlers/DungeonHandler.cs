@@ -41,6 +41,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.FIEND_WAR_BOSS_PROC, FiendwarBossAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.RAID_SITUATION_NOTICE, FiendwarSupportAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SEQUENTIAL_DUNGEON_INFO, SequentialInfoAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);

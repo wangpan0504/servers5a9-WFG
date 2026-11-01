@@ -24,6 +24,7 @@ internal static partial class FiendwarRaidTcpTests
         var results = new HashSet<ushort>();
         var victories = new HashSet<ushort>();
         bool titleReplayChecked = false;
+        bool readingSupport = false;
         try
         {
             for (int index = 0; index < count; index++)
@@ -125,10 +126,22 @@ internal static partial class FiendwarRaidTcpTests
                 foreach (var peer in peers.Skip(1)) Drain(peer);
             }
             CompletePriorCommands();
+            SupportRequest(leader, [0], null);
             leader.Send(666);
             That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 666, Body: [1] }), "多人不预设路线分队也能开团");
             foreach (var peer in peers.Skip(1))
                 That(Drain(peer).Any(row => row is { Kind: 0, Opcode: 1522 }), "所有成员收到真实漩涡开战");
+            if (count > 1) SupportRequest(peers[1], [0], null);
+            SupportRequest(leader, [3], null);
+            SupportRequest(leader, [0, 0], null);
+            SupportRequest(leader, [0], 0);
+            SupportRequest(leader, [1], null);
+            clock.AdvanceMillisecondsWithoutCallbacks(2999);
+            SupportRequest(leader, [1], null);
+            clock.AdvanceMillisecondsWithoutCallbacks(1);
+            SupportRequest(leader, [1], 1);
+            clock.AdvanceWithoutCallbacks(3);
+            SupportRequest(leader, [2], 2);
             foreach (var (peer, index) in peers.Select((peer, index) => (peer, index)))
                 That(fixture.Query("SELECT guild_id,guild_joined_at FROM character_raid_runs WHERE character_id=$p0 AND state=0", peer.Id)
                     is [[long frozenGuild, long frozenJoined]] && frozenGuild ==
@@ -144,6 +157,11 @@ internal static partial class FiendwarRaidTcpTests
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
+            clock.AdvanceWithoutCallbacks(3);
+            SupportRequest(leader, [0], 0);
+            // 实际移动/快照不会重播已写支援；另一分队也必须只收到一次。
+            foreach (var peer in peers)
+                That(!Drain(peer).Any(row => row is { Kind: 0, Opcode: 1554 }), "同一支援事件在持续战况同步中不重播");
             foreach (var team in new[] { first, second }.Where(team => team.Length != 0))
                 foreach (var peer in team)
                 {
@@ -253,6 +271,7 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var peer in peers) Drain(peer);
             That(peers.All(peer => fixture.Query("SELECT state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[2L]]),
                 "两世界机制、汇合及正式死亡后只产生一次整团通关");
+            SupportRequest(peers[0], [0], null);
             foreach (var peer in white)
                 That(fixture.Query("SELECT quest_id,total,applied FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id IN(7003,7008) ORDER BY quest_id", peer.Id)
                         is var worldFacts && (count == 4 ? worldFacts is [[7003L, 1L, 1L]] : worldFacts is [[7003L, 1L, 1L], [7008L, 1L, 1L]]) &&
@@ -438,6 +457,8 @@ internal static partial class FiendwarRaidTcpTests
         }
         void Observe(TcpPeer peer, WirePacket frame)
         {
+                if (frame is { Kind: 0, Opcode: 1554 })
+                    That(readingSupport, "移动、进退图、重返及持续战况不重播已写或过期的支援提示");
                 That(frame is not { Kind: 0, Opcode: 587 }, "漩涡只走自己的1523状态合同");
                 if (frame is { Kind: 0, Opcode: 601, Body.Length: 10 }) results.Add(peer.Id);
                 if (frame is { Kind: 0, Opcode: 1523, Body: [3, 0, 0] }) victories.Add(peer.Id);
@@ -459,8 +480,28 @@ internal static partial class FiendwarRaidTcpTests
         void BossReport(TcpPeer[] team, uint operation, uint value)
         {
             team[0].Send(1554, Build(writer => { writer.Write(operation); writer.Write(value); }));
-            That(Drain(team[0]).Any(row => row is { Kind: 1, Opcode: 1554, Body.Length: 1 }), "原生1554报告通过正式实例校验");
+            var frames = Drain(team[0]);
+            That(frames.Any(row => row is { Kind: 0, Opcode: 1530 }), "Boss报告通过正式实例校验后发布真实机制符号");
+            That(!frames.Any(row => row.Opcode == 1554), "Boss报告不伪造同号支援通知或未知成功ACK");
             foreach (var peer in team.Skip(1)) Drain(peer);
+        }
+        void SupportRequest(TcpPeer source, byte[] body, byte? accepted)
+        {
+            string before = System.Text.Json.JsonSerializer.Serialize(fixture.Query(
+                "SELECT id,revision FROM characters ORDER BY id"));
+            source.Send(1570, body);
+            readingSupport = accepted.HasValue;
+            foreach (var peer in peers.OrderBy(peer => peer == source ? 0 : 1))
+            {
+                var frames = Drain(peer);
+                var notices = frames.Where(row => row is { Kind: 0, Opcode: 1554 }).ToArray();
+                That(notices.Length == (accepted.HasValue ? 1 : 0), "真实1570仅向原团全体广播一次合格团长支援，拒绝不通知");
+                if (accepted is { } lane) Bytes(notices.Single().Body, [lane], "真实1554完整字节为上中下路线号");
+                That(!frames.Any(row => row is { Kind: 1, Opcode: 1570 }), "1570不伪造原生空回调的成功ACK");
+            }
+            readingSupport = false;
+            That(before == System.Text.Json.JsonSerializer.Serialize(fixture.Query(
+                "SELECT id,revision FROM characters ORDER BY id")), "支援显示不修改角色持久revision或资产");
         }
         void Move(TcpPeer peer, int target, int? from = null)
         {

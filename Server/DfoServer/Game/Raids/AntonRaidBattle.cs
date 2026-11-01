@@ -14,6 +14,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<ushort, int> FiendwarPositions { get; init; } = ImmutableDictionary<ushort, int>.Empty;
     public ImmutableHashSet<Guid> FiendwarExpiredRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
     public FiendwarBossRound? FiendwarBoss { get; init; }
+    public FiendwarSupportNotice? FiendwarSupport { get; init; }
     public ImmutableDictionary<int, RaidClause> Deferred { get; init; } = ImmutableDictionary<int, RaidClause>.Empty;
     public ImmutableDictionary<int, long> DeferredAnchors { get; init; } = ImmutableDictionary<int, long>.Empty;
     public ImmutableDictionary<int, long> DeferredGenerations { get; init; } = ImmutableDictionary<int, long>.Empty;

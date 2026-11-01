@@ -9,6 +9,9 @@ internal readonly record struct FiendwarTimerRow(byte Area, byte Kind, uint End,
 // JP 00D31160登记1522–1530；各消费者按整行读取，禁止套用其它客户端的编号。
 internal static class FiendwarPackets
 {
+    // 00D310D0：NOTI1554只读一个路线字节，并播放对应团长支援提示。
+    internal static byte[] SupportNotice(byte lane) => lane <= 2 ? [lane] : throw new ArgumentOutOfRangeException(nameof(lane));
+
     // 00D307A0连续读取3B；状态语义由投影选择，构造器不推进战场。
     internal static byte[] State(byte operation, ushort argument)
     {
