@@ -36,15 +36,15 @@ internal static class MonsterCardUpgradeTests
         var fixture = new Fixture();
         var role = fixture.Role();
         var target = role.Inventory.Find(new(InventoryListType.Main, 233))!;
-        var success = fixture.Service(69).Apply(role, request, out var receipt, out _);
+        var success = fixture.Service(79).Apply(role, request, out var receipt, out _);
         That(success.Accepted && receipt is { Upgraded: true, ItemId: 1001, Level: 1 } &&
             success.Plan!.After.Find(target.Position) == target with { Core = target.Core with { EnchantUpgrade = 1 } } &&
             success.Plan.After.Items.Length == 1 && success.Plan.After.Gold == role.Inventory.Gold,
-            "两张材料70%边界命中：目标原UID与全部字段保留，仅卡片等级加一且不扣金币");
-        var failed = fixture.Service(70).Apply(role, request, out var failedReceipt, out _);
+            "两张材料80%边界命中：目标原UID与全部字段保留，仅卡片等级加一且不扣金币");
+        var failed = fixture.Service(80).Apply(role, request, out var failedReceipt, out _);
         That(failed.Accepted && failedReceipt is { Upgraded: false, Level: 0 } &&
             failed.Plan!.After.Items.SequenceEqual([target]) && role.Inventory.Items.Length == 3,
-            "70%边界外概率失败只扣各一张材料，保留目标和原始快照");
+            "80%边界外概率失败只扣各一张材料，保留目标和原始快照");
         var stack = fixture.Role(targetCount: 3);
         var split = fixture.Service(0).Apply(stack, request, out _, out _);
         That(split.Accepted && split.Plan!.After.Find(target.Position)?.Core is { Value: 2, EnchantUpgrade: 0 } &&
@@ -108,9 +108,8 @@ internal static class MonsterCardUpgradeTests
         That(!fixture.Service(80).Apply(full, request, out _, out _).Accepted,
             "容量资格先于随机结果，不能无空间时只结算失败");
         That(fixture.Rates.CardUpgradeChance(6, 1) == 40 && fixture.Rates.CardUpgradeChance(6, 2) == 80 &&
-            fixture.Rates.CardUpgradeChance(6, 3) == 100, "目录保留原资源40/80/100，材料业务成功率由本服规则覆盖");
+            fixture.Rates.CardUpgradeChance(6, 3) == 100, "传说卡材料1/2/3张的概率为40/80/100");
         Reject<InvalidDataException>(() => fixture.Rates.CardUpgradeChance(6, 4), "零概率材料数不可冒充有效升级配置");
-        MaterialSuccessRules();
         foreach (int[] levels in new[] { new[] { 1 }, new[] { 0, 2 }, new[] { 0, 0 } })
         {
             var catalog = new EnchantmentCatalog(_ => "", new Dictionary<int, string> { [1001] = "card.stk" }, _ => Table(levels));
@@ -128,51 +127,7 @@ internal static class MonsterCardUpgradeTests
             "升级后的四维由正式卡片index1完整效果派生");
         That(resources.Enchantments.CardMaximumLevel(3620) == 10 &&
             resources.MonsterCardBinds.CardUpgradeChance(0, 1) == 100,
-            "普通猫妖卡保留十级上限，原资源一张100不作为本服实际成功率");
-    }
-
-    static void MaterialSuccessRules()
-    {
-        var defaults = MonsterCardUpgradeRules.Parse("{}");
-        That(defaults.MaterialSuccessPercent.SequenceEqual([30, 70, 100]), "默认材料成功率为30/70/100，不是翻牌等级分布");
-        foreach (string json in new[] { "null", "{\"MaterialSuccessPercent\":[30,70]}",
-            "{\"MaterialSuccessPercent\":[-1,70,100]}", "{\"MaterialSuccessPercent\":[71,70,100]}",
-            "{\"MaterialSuccessPercent\":[30,70,99]}", "{\"MaterialSuccessPercent\":[30,101,100]}" })
-            Reject<InvalidDataException>(() => MonsterCardUpgradeRules.Parse(json), "无效规则不能静默回退或破坏三材料必成");
-        Reject<System.Text.Json.JsonException>(() => MonsterCardUpgradeRules.Parse("{\"MaterialSuccessPercents\":[30,70,100]}"), "配置拼写错误必须拒绝");
-        Reject<System.Text.Json.JsonException>(() => MonsterCardUpgradeRules.Parse("{\"MaterialSuccessPercent\":null}"), "集合字段为null须明确拒绝");
-        foreach (int rarity in new[] { 0, 6 })
-        {
-            var fixture = new Fixture(3, rarity);
-            for (byte level = 0; level < 3; level++)
-                foreach (int materials in new[] { 1, 2, 3 })
-                {
-                    var role = fixture.Role(materialCount: 3);
-                    var target = role.Inventory.Items[0];
-                    role = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Replace(target,
-                        target with { Core = target.Core with { EnchantUpgrade = level } }) } };
-                    int successes = 0;
-                    for (int roll = 0; roll < 100; roll++)
-                    {
-                        var result = fixture.Service(roll).Apply(role,
-                            new(233, Enumerable.Repeat((short)234, materials).ToImmutableArray()), out var receipt, out _);
-                        That(result.Accepted && receipt is not null && receipt.Level == level + (receipt.Upgraded ? 1 : 0),
-                            "各稀有度各升级级别只增一级，概率失败保留原级别");
-                        That(result.Plan!.After.Items.Where(item => item.Position.Index == 234).Sum(item => item.Core.Count) == 3 - materials &&
-                            result.Plan.After.Gold == role.Inventory.Gold, "每个随机结果都只消耗实际材料张数，不扣金币");
-                        if (receipt!.Upgraded) successes++;
-                    }
-                    That(successes == new[] { 30, 70, 100 }[materials - 1], "穷举百个抽样点，所有级别和稀有度都精确30/70/100");
-                }
-            That(!fixture.Service(0).Apply(fixture.Role(materialCount: 4), new(233, [234, 234, 234, 234]), out _, out _).Accepted,
-                "四张材料不扩成未经授权的新档位");
-        }
-        var configured = MonsterCardUpgradeRules.Parse("{\"MaterialSuccessPercent\":[0,100,100]}");
-        var customized = new Fixture();
-        That(customized.Service(0, configured).Apply(customized.Role(), new(233, [234]), out var miss, out _).Accepted &&
-            miss is { Upgraded: false }, "配置零成功率实际生效，失败仍消耗材料");
-        That(customized.Service(99, configured).Apply(customized.Role(), new(233, [234, 235]), out var hit, out _).Accepted &&
-            hit is { Upgraded: true }, "配置两材料100实际生效，保持真实升级流程");
+            "普通猫妖卡保留十级上限，普通卡一张材料必成");
     }
 
     static PvfTokenDocument Table(params int[] levels)
@@ -195,8 +150,6 @@ internal static class MonsterCardUpgradeTests
             [upgrade infos]
             [upgrade info]
             6 40 80 100 0 0
-            [upgrade info]
-            0 100 0 0 0 0
             [/upgrade infos]
             [bind result infos]
             [bind result info]
@@ -213,17 +166,16 @@ internal static class MonsterCardUpgradeTests
             [/bind shpere upgrade info]
             """);
 
-        public Fixture(int maximumLevel = 1, int rarity = 6)
+        public Fixture()
         {
             var paths = new Dictionary<int, string> { [1001] = "target.stk", [1002] = "mixed.stk", [1003] = "other.stk" };
             items = new(null!, new Dictionary<int, string>(), paths, 0);
             items.PrefillTemplates(paths.Keys.Select(id => new ItemTemplate(id, ItemKind.Profession, 0, 1, 0, 1000, 0,
-                id == 1002 ? 3 : rarity, 0, "[trade]", ushort.MaxValue, 0, "card", "[material expert job] 1")
+                id == 1002 ? 3 : 6, 0, "[trade]", ushort.MaxValue, 0, "card", "[material expert job] 1")
                 { IsMonsterCard = id != 1003 }).ToDictionary(row => row.Id));
-            enchantments = new(_ => "", paths, _ => Table(Enumerable.Range(0, maximumLevel + 1).ToArray()));
+            enchantments = new(_ => "", paths, _ => Table(0, 1));
         }
-        public InventoryMonsterCardUpgradeService Service(int roll, MonsterCardUpgradeRules? rules = null) =>
-            new(items, enchantments, Rates, limits, pieces, _ => roll, rules);
+        public InventoryMonsterCardUpgradeService Service(int roll) => new(items, enchantments, Rates, limits, pieces, _ => roll);
         public Character Role(int targetCount = 1, int materialCount = 1) => new(1, 0, "CardUpgrade", 0, new(1, 0, 10, 10), null)
         {
             Level = 95,
