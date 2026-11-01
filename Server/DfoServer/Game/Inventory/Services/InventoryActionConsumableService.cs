@@ -8,7 +8,7 @@ namespace DfoServer.Game.Inventory.Services;
 internal static class InventoryActionConsumableService
 {
     public static InventoryResult Plan(Character character, InventorySlot position, ActionConsumableDefinition definition,
-        string place, TimeProvider clock, DateTimeOffset? utcNow = null, int count = 1)
+        string place, TimeProvider clock, DateTimeOffset? utcNow = null, int count = 1, bool ignoreCooldown = false)
     {
         var now = utcNow ?? clock.GetUtcNow();
         var source = character.Inventory.Find(position);
@@ -16,7 +16,7 @@ internal static class InventoryActionConsumableService
             source.Core.ItemId != definition.Item.Id || count <= 0 || source.Core.Count < count || source.Core.EquipmentLockId != 0 ||
             source.IsExpired(now.ToUnixTimeSeconds()) || !ItemSlotBoundService.Allows(character.Inventory, position, source.Core.Kind) ||
             !definition.Item.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, definition.Item) ||
-            !definition.AllowsPlace(place) || character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
+            !definition.AllowsPlace(place) || !ignoreCooldown && character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
                 row.CoolGroup == definition.CoolGroup && row.Active(now.ToUnixTimeMilliseconds())))
             return InventoryResult.Reject(19);
         var removed = InventoryDeleteService.Plan(character.Inventory, position, source.Core.ItemId, count);

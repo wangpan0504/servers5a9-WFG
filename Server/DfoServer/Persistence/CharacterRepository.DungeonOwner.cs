@@ -123,11 +123,30 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         DungeonIncountCommit? counted = null;
         if (charge.Dimension is { } dimension)
         {
+            var storedUsage = ReadDungeonIncount(db, tx, expected.Id, owner.Account, dimension.Catalog.DailyRow.CountKey, dimension.Period);
+            var normalizedUsage = DimensionDungeonAdmission.NormalizeLegacyOverflow(storedUsage,
+                dimension.Catalog.BaseDailyLimit, dimension.ExtraEntries);
+            if (normalizedUsage != storedUsage)
+            {
+                using var normalize = db.CreateCommand();
+                normalize.Transaction = tx;
+                normalize.CommandText = """
+                    UPDATE character_dungeon_incount SET daily_used=$daily
+                    WHERE character_id=$id AND account=$account AND dungeon=$dungeon AND day=$day;
+                    """;
+                normalize.Parameters.AddWithValue("$daily", normalizedUsage.DailyUsed);
+                normalize.Parameters.AddWithValue("$id", expected.Id);
+                normalize.Parameters.AddWithValue("$account", owner.Account);
+                normalize.Parameters.AddWithValue("$dungeon", dimension.Catalog.DailyRow.CountKey);
+                normalize.Parameters.AddWithValue("$day", dimension.Period.Day);
+                normalize.ExecuteNonQuery();
+                storedUsage = normalizedUsage;
+            }
             var wantedUsage = partyCounted is null ? dimension.DailyBefore :
                 new DungeonIncountUsage(checked(dimension.DailyBefore.DailyUsed + 1), checked(dimension.DailyBefore.WeeklyUsed + 1));
             if (dimension.DungeonId != charge.DungeonId ||
                 partyCounted is { } actualUsage && actualUsage != wantedUsage ||
-                ReadDungeonIncount(db, tx, expected.Id, owner.Account, dimension.Catalog.DailyRow.CountKey, dimension.Period) != wantedUsage)
+                storedUsage != wantedUsage)
                 throw new InvalidOperationException("异界入场计数已变化，不能提交旧抽样");
             if (dimension.HiddenCharge is { } hidden)
             {

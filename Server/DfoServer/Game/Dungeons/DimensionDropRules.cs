@@ -14,7 +14,7 @@ internal sealed record DimensionTierDropRules(DimensionNamedDropRules Named, Dim
 internal sealed record DimensionDropRules
 {
     public string Mode { get; init; } = "server-v2";
-    public bool ExtraEntryEquipment { get; init; }
+    public bool ExtraEntryEquipment { get; init; } = true;
     public string SetRateSource { get; init; } = "table";
     public ImmutableDictionary<int, DimensionTierDropRules> Tiers { get; init; } =
         new Dictionary<int, DimensionTierDropRules>

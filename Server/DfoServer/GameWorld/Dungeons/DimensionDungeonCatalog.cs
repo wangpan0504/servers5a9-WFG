@@ -10,6 +10,8 @@ internal sealed class DimensionDungeonCatalog
     public ImmutableDictionary<int, int> Tiers { get; }
     public int DailyLimit { get; }
     public int ExtraLimit { get; }
+    // PVF 的 max daily enter count 是基础次数与追加次数的合计；客户端按基础 5 次显示。
+    public int BaseDailyLimit => DailyLimit - ExtraLimit;
     public int HiddenWeeklyLimit { get; }
     public ImmutableDictionary<int, int> HiddenRates { get; }
     public ImmutableArray<(int Tier, int Item, int Value)> HiddenRewards { get; }
@@ -41,14 +43,24 @@ internal sealed class DimensionDungeonCatalog
         Materials = [.. Enumerable.Range(0, materials.Length / 3).Select(index => (materials[index * 3], materials[index * 3 + 1], materials[index * 3 + 2]))];
         DailyLimit = Scalar("max daily enter count"); ExtraLimit = Scalar("max extra enter count");
         HiddenWeeklyLimit = Scalar("hidden boss appear count on week");
-        if (DailyLimit == 0 || Tiers.Any(row => row.Key <= 0 || row.Value is < 0 or > 2) ||
+        if (DailyLimit == 0 || ExtraLimit > DailyLimit || Tiers.Any(row => row.Key <= 0 || row.Value is < 0 or > 2) ||
             HiddenRates.Any(row => row.Key < 1 || row.Value is < 0 or > 10000) ||
             HiddenRewards.Any(row => row.Tier is < 0 or > 2 || row.Item <= 0 || row.Value <= 0) ||
             Materials.Any(row => row.Tier is < 0 or > 2 || row.Group is < 0 or > 1 || row.Item <= 0))
             throw new InvalidDataException("异界资源业务边界无效");
-        DailyRow = new(0, [.. Tiers.Keys.Order()], DailyLimit, false, 0);
+        DailyRow = new(0, [.. Tiers.Keys.Order()], BaseDailyLimit, false, 0);
     }
 
     public bool Contains(int dungeon) => Tiers.ContainsKey(dungeon);
     public int HiddenRate(int entryCount) => HiddenRates.GetValueOrDefault(Math.Min(entryCount, HiddenRates.Keys.Max()));
+
+    // 再次挑战从当前档位实际登场的五张图中等概率抽取；包含当前图，约1/5概率原地重开。
+    public int RetryTarget(int current, Func<int, int> draw)
+    {
+        if (!Tiers.TryGetValue(current, out int tier)) throw new InvalidDataException("再次挑战缺少当前异界档位");
+        int[] candidates = [.. Tiers.Where(row => row.Value == tier).Select(row => row.Key).Order()];
+        int index = draw(candidates.Length);
+        if (index < 0 || index >= candidates.Length) throw new InvalidDataException("异界再次挑战随机索引越界");
+        return candidates[index];
+    }
 }

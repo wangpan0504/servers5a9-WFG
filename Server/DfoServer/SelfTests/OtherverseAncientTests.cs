@@ -51,10 +51,83 @@ internal static class OtherverseAncientTests
             "配置局部覆盖保留各档其余默认值");
     }
 
+    static void RunEntryRegression(PvfArchive pvf, ItemResources items)
+    {
+        var incounts = DungeonIncountCatalog.Load(pvf);
+        var dimension = incounts.Dimension!;
+        That(dimension.DailyLimit == 10 && dimension.ExtraLimit == 5 && dimension.BaseDailyLimit == 5 && dimension.DailyRow.Limit == 5,
+            "异界资源合计十次拆为基础五次与追加五次");
+        int[] tierZero = [.. dimension.Tiers.Where(row => row.Value == 0).Select(row => row.Key).Order()];
+        That(tierZero.Length == 5 && dimension.RetryTarget(tierZero[^1], _ => 0) == tierZero[0] &&
+            dimension.RetryTarget(tierZero[0], bound => bound - 1) == tierZero[^1],
+            "再次挑战随机目标限定当前档位五图并覆盖首尾抽样");
+
+        using var f = new Fixture(pvf, TownCatalog.Load(pvf), items, incounts, 2);
+        for (int used = 0; used < dimension.BaseDailyLimit; used++)
+        {
+            var opening = f.Enter(tierZero[used], 0, _ => 0);
+            That(opening.Entry.Dimension is not null, "基础次数内可正常进入：" + used);
+            That(f.Session.ReturnFromFormalDungeon() is not null, "基础次数内正常返城：" + used);
+        }
+        That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit &&
+            f.Session.BeginDungeonSelection() is not null &&
+            f.Session.EnterFormalDungeon((uint)tierZero[0], 0, 0, SelfTestCatalogs.Dungeons(pvf), SelfTestCatalogs.Rooms(pvf), pieces: items.EpicPieces) is null,
+            "基础五次后无追加券不能进入第六次");
+        f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+        That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "基础五次用尽后815显示5/5、追加0、隐藏剩余0");
+
+        var granted = f.Session.PlanAndCommitInventory(character => new InventoryService(items.Items, items.GoldLimits, items.EpicPieces)
+            .Grant(character, [new(10161066, 2)]));
+        That(granted.Accepted, "发放两张真实五次追加券");
+        var source = f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10161066).Position;
+        var tickets = new DimensionEntryTicketService(items.Items);
+        That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0),
+            "第一张五次券使基础上限不变、额外剩余增加五次");
+        That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 10, 0),
+            "追加次数不设五张上限，第二张五次券继续生效");
+        const int extraCapacity = 10;
+        for (int extra = 0; extra < extraCapacity; extra++)
+        {
+            var opening = f.Enter(tierZero[extra % tierZero.Length], 0, _ => 0);
+            var info = f.Session.DimensionEntranceInfo();
+            That(opening.Entry.Dimension is { HiddenBoss: false } && info is (5, var remaining, 0) &&
+                remaining == (uint)(extraCapacity - extra - 1),
+                "追加入场逐次扣减额外剩余：" + extra);
+            That(f.Session.ReturnFromFormalDungeon() is not null, "追加次数内正常返城：" + extra);
+        }
+        That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit + extraCapacity &&
+            f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon((uint)tierZero[0], 0, 0, SelfTestCatalogs.Dungeons(pvf), SelfTestCatalogs.Rooms(pvf), pieces: items.EpicPieces) is null,
+            "基础五次加十次追加合计十五次后不能进入第十六次");
+        That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "追加次数用尽后815仍显示基础5/5、追加0、隐藏剩余0");
+        // 旧版本把资源合计值当基础上限，可能留下 daily_used=10 的历史行。
+        // 新规则只在超出“基础+已购追加”时把旧口径遗留降回基础，随后追加券仍可正常使用。
+        using (var legacy = new Fixture(pvf, TownCatalog.Load(pvf), items, incounts, 2))
+        {
+            var grantedLegacy = legacy.Session.PlanAndCommitInventory(character => new InventoryService(items.Items, items.GoldLimits, items.EpicPieces)
+                .Grant(character, [new(10158125, 1), new(10158126, 1), new(490008217, 1)]));
+            That(grantedLegacy.Accepted, "旧口径修复夹具发放三张一次追加券");
+            var legacyTickets = new DimensionEntryTicketService(items.Items);
+            foreach (int ticketId in new[] { 10158125, 10158126, 490008217 })
+            {
+                var slot = legacy.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == ticketId).Position;
+                That(legacy.Session.UseDimensionEntryTicket(slot, legacyTickets).Accepted, "旧口径修复夹具追加券生效：" + ticketId);
+            }
+            var period = DungeonIncountPolicy.Period(DateTimeOffset.UtcNow);
+            int legacyId = legacy.Read().Id;
+            legacy.Sql($"DELETE FROM character_dungeon_incount WHERE character_id={legacyId} AND dungeon={dimension.DailyRow.CountKey}");
+            legacy.Sql($"INSERT INTO character_dungeon_incount(character_id,account,dungeon,day,daily_used,week,weekly_used) SELECT id,account,{dimension.DailyRow.CountKey},{period.Day},10,{period.Week},0 FROM characters WHERE id={legacyId}");
+            That(legacy.Session.DimensionEntranceInfo() is (5, 3, 2), "旧口径daily_used=10在超上限时降为基础5并恢复三张追加券");
+            var legacyOpening = legacy.Enter(7165, 0, _ => 0);
+            That(legacyOpening.Entry.Dimension is not null && legacy.Usage(dimension.DailyRow.CountKey).DailyUsed == 6,
+                "旧口径修复后首张追加券实际进入并把持久计数从5推进到6");
+        }
+        Console.WriteLine("PASS 异界基础/追加次数与随机再挑战目标断言");
+    }
     // 与TCP异界组共享只读资源，先核对真实MOB标记，再测试专用计划，避免另起服务。
     internal static void RunDropRegression(PvfArchive pvf, ItemResources items)
     {
         RunDropRulesCore();
+        RunEntryRegression(pvf, items);
         var dimension = DungeonIncountCatalog.Load(pvf).Dimension!;
         var catalog = new DimensionRewardCatalog(pvf, items.Items);
         var policy = new DimensionRewardPolicy(dimension, catalog, items.Items);
@@ -75,6 +148,30 @@ internal static class OtherverseAncientTests
         var named = new DungeonPlannedMonster(0, 500, source.Monster.MonsterId, 95, source.Monster)
             { SourceMap = source.Map };
         That(named.Source!.IsNamed, "R1 MOB命名标记冻结进入Source，未借用强化限制");
+        var baseDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+            id => new(id, "monster/synthetic.mob", null, null), items.Items.Get);
+        var baseNamedPlan = baseDrops.Prepare(named.MonsterId, named.CandidateLevel, named.RewardType, 2);
+        That(baseNamedPlan.Trials.Any(t => t.Category is DungeonDropCategory.Equipment or DungeonDropCategory.Materials),
+            "基础PVF计划包含装备或材料骰，必须由异界专用规则替换而不叠加");
+        var replacedNamed = policy.Extend(baseNamedPlan, entry, named);
+        That(!replacedNamed.Trials.Any(t => t.Category is DungeonDropCategory.Equipment or DungeonDropCategory.Materials),
+            "异界专用规则替换基础装备/材料骰，避免双份掉落");
+        var baseLotusPlan = baseDrops.Prepare(107005028, 85, 0, 0);
+        var lotusBoss = named with { MonsterId = 107005028, Source = named.Source! with { RankKind = "[boss]" }, SourceMap = entry.BossMap };
+        var replacedLotus = policy.Extend(baseLotusPlan, entry, lotusBoss);
+        That(!replacedLotus.Trials.Any(t => t.Category is DungeonDropCategory.Equipment or DungeonDropCategory.Materials) &&
+            replacedLotus.Generate(_ => 0, DateTimeOffset.UtcNow).Any(row => row.Item is { Kind: ItemKind.Equipment }),
+            "真实长脚罗特斯107005028基础装备/材料被专用掉落替换且仍产出一套装备");
+        var lotusDummy = named with
+        {
+            MonsterId = 107005037,
+            Source = named.Source! with { RankKind = "[boss]" },
+            SourceMap = entry.BossMap,
+            IsDummyMapBoss = true
+        };
+        var replacedLotusDummy = policy.Extend(baseDrops.Prepare(107005037, 85, 0, 0), entry, lotusDummy);
+        That(replacedLotusDummy.Trials.All(t => t.Category == DungeonDropCategory.Gold),
+            "长脚罗特斯[dummy]阶段演员107005037只保留金币，不产生第二套装备或材料");
         var empty = new DungeonDropGenerationPlan("regression", []);
         var plan = policy.Extend(empty, entry, named);
         That(plan.ResourceSource.Contains("otherverse-rewards-server-v2") && plan.ResourceSource.Contains(DimensionRewardPolicy.AuraRule) && plan.ResourceSource.Contains(DimensionRewardPolicy.HolyAuraRule), "v2计划标记实际规则及本人拍板普通/神圣气息规则");
@@ -179,10 +276,12 @@ internal static class OtherverseAncientTests
                 if (tier == 0)
                     That(selected.Generate(_ => 0, now).Where(r => r.Item is { Kind: ItemKind.Equipment })
                         .All(r => catalog.Professions[(0, 1)].Normal.Contains(r.Item!.ItemId)), "R3 普通档从不进入套装池");
-                var extra = current with { Dimension = current.Dimension! with { DailyBefore = new(dimension.DailyLimit, 0) } };
-                var noEquipment = policy.Extend(empty, extra, actor);
-                That(!noEquipment.Generate(_ => 0, now).Any(r => r.Item is { } item && catalog.Professions.Values.Any(p => p.Normal.Contains(item.ItemId) || p.Set.Contains(item.ItemId))), "R4 追加次数禁止职业装备");
-                if (actor.IsBoss) That(noEquipment.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 3311) == true), "R4 材料保留");
+                var extra = current with { Dimension = current.Dimension! with { DailyBefore = new(dimension.BaseDailyLimit, 0) } };
+                var extraEquipment = policy.Extend(empty, extra, actor);
+                That(extraEquipment.Generate(_ => 0, now).Any(r => r.Item is { } item && catalog.Professions.Values.Any(p => p.Normal.Contains(item.ItemId) || p.Set.Contains(item.ItemId))), "R4 追加次数保留职业装备");
+                if (actor.IsBoss) That(extraEquipment.Trials.Any(t => t.Items?.Entries.Any(r => r.Template.Id == 3311) == true), "R4 材料保留");
+                var disabled = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"extraEntryEquipment\":false}"));
+                That(!disabled.Extend(empty, extra, actor).Generate(_ => 0, now).Any(r => r.Item is { } item && catalog.Professions.Values.Any(p => p.Normal.Contains(item.ItemId) || p.Set.Contains(item.ItemId))), "R4 显式关闭追加装备仍生效");
             }
         }
         var compatibility = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"mode\":\"compat-v1\"}"));
@@ -231,6 +330,9 @@ internal static class OtherverseAncientTests
         var card = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"setRateSource\":\"card\"}"));
         That(card.Extend(empty, entry, named).Trials.Single(t => !t.RarityPools.IsDefaultOrEmpty).RarityPools.Single().AlternatePermille == catalog.CardRates[2].SetPercent * 10,
             "显式card来源沿翻牌套装率");
+        That(policy.Extend(empty, entry with { Dimension = entry.Dimension! with { DailyBefore = new(dimension.BaseDailyLimit, 0) } }, named)
+                .Trials.Count(t => !t.RarityPools.IsDefaultOrEmpty) == 1,
+            "默认规则在追加券入场仍保留绿名职业装备判定");
         var extraPolicy = new DimensionRewardPolicy(dimension, catalog, items.Items, DimensionDropRules.Parse("{\"extraEntryEquipment\":true}"));
         That(extraPolicy.Extend(empty, entry with { Dimension = entry.Dimension! with { DailyBefore = new(10, 0) } }, named).Trials.Count(t => !t.RarityPools.IsDefaultOrEmpty) == 1,
             "显式追加开关允许装备");
@@ -243,6 +345,9 @@ internal static class OtherverseAncientTests
     public static void Run(PvfArchive pvf, ItemResources items)
     {
         int before = Count;
+        var baseDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+            id => new(id, "monster/synthetic.mob", null, null), items.Items.Get);
+
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
         var rooms = SelfTestCatalogs.Rooms(pvf);
         var incounts = DungeonIncountCatalog.Load(pvf);
@@ -262,7 +367,7 @@ internal static class OtherverseAncientTests
             That(items.Items.ActionConsumable(id) is { Label: "[add dimension dungeon enter count]", Parameters: [1 or 5] },
                 "七种正式追加券完整读取原动作、地点和冷却：" + id);
         var towns = TownCatalog.Load(pvf);
-        That(dimension.Tiers.Count == 15 && dimension.DailyLimit == 10 && dimension.ExtraLimit == 5 && dimension.HiddenWeeklyLimit == 2,
+        That(dimension.Tiers.Count == 15 && dimension.DailyLimit == 10 && dimension.BaseDailyLimit == 5 && dimension.ExtraLimit == 5 && dimension.HiddenWeeklyLimit == 2,
             "现代异界读取十五图及真实日周上限");
         foreach (int id in dimension.Tiers.Keys.Order())
         {
@@ -278,33 +383,50 @@ internal static class OtherverseAncientTests
         }
         using (var f = new Fixture(pvf, towns, items, incounts, 2))
         {
-            for (int used = 0; used < 10; used++)
+            for (int used = 0; used < dimension.BaseDailyLimit; used++)
             {
                 var opening = f.Enter(7165 + used % 3, checked((byte)(used % 3)), _ => 0);
                 That(opening.Entry.Dimension?.HiddenBoss == (used < 2), "隐藏领主每周最多两次，其后切普通路线");
                 That(f.Session.ReturnFromFormalDungeon() is not null, "异界返城保留个人已用次数");
             }
             That(f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon(7165, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null,
-                "十五图共享十次，不能换图绕过上限");
-            That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == 10 && f.Usage(7100).WeeklyUsed == 2,
-                "日次数和隐藏周次数均持久保存");
+                "基础五次用尽后不能换图绕过上限");
+            That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit && f.Usage(7100).WeeklyUsed == 2,
+                "基础日次数和隐藏周次数均持久保存");
             f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
-            That(f.Session.DimensionEntranceInfo() is (10, 0, 2),
-                "重选角色仍投影用尽状态");
+            That(f.Session.DimensionEntranceInfo() is (5, 0, 0),
+                "重选角色仍投影基础五次用尽、追加为零、隐藏剩余零");
             var granted = f.Session.PlanAndCommitInventory(character => new InventoryService(items.Items, items.GoldLimits, items.EpicPieces)
                 .Grant(character, [new(10161066, 2)]));
             That(granted.Accepted, "合成夹具发放两张真实五次券");
             var source = f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10161066).Position;
             var tickets = new DimensionEntryTicketService(items.Items);
-            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (10, 5, 2),
-                "追加五次与一张券同事务保存，已耗尽基本次数可继续");
+            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0),
+                "追加五次与一张券同事务保存，基础次数用尽后可继续");
             var ticketUsed = f.Read();
             That(!f.Session.UseDimensionEntryTicket(source, tickets).Accepted && QuestCompletionRepositoryTests.Same(ticketUsed, f.Read()),
                 "当日追加总上限五次，第二张券不消耗");
-            var extraOpening = f.Enter(7165, 0, _ => 0);
-            That(extraOpening.Entry.Dimension is { HiddenBoss: false } && f.Session.DimensionEntranceInfo() is (10, 4, 2),
-                "额外入场扣额外剩余，不重置或绕过隐藏周额度");
-            That(f.Session.ReturnFromFormalDungeon() is not null, "额外入场可正常返城");
+            for (int extra = 0; extra < dimension.ExtraLimit; extra++)
+            {
+                var extraOpening = f.Enter(7165 + extra % 3, 0, _ => 0);
+                var remaining = f.Session.DimensionEntranceInfo();
+                That(extraOpening.Entry.Dimension is { HiddenBoss: false } && remaining is (5, var extraRemaining, 0) &&
+                    extraRemaining == (uint)(dimension.ExtraLimit - extra - 1),
+                    "额外入场逐次扣额外剩余，不重置或绕过隐藏周额度");
+                That(f.Session.ReturnFromFormalDungeon() is not null, "额外入场可正常返城");
+            }
+            That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.DailyLimit &&
+                f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon(7165, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null,
+                "基础五次加追加五次合计十次，之后不可再进入");
+            That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "十次用尽后815仍显示基础5/5、追加0、隐藏剩余0，不出现负数");
+        }
+        using (var f = new Fixture(pvf, towns, items, incounts, 2))
+        {
+            var opening = f.Enter(7177, 0, bound => bound == 10000 ? 9999 : 0);
+            var settled = Clear(f, opening);
+            var retry = f.Session.RetryFormalDungeon(settled.Receipt!, dungeons, rooms, SelfTestCatalogs.MonsterDrops(pvf), items.Items, items.EpicPieces);
+            That(retry is not null && retry.Entry.DungeonId == 7165 && retry.Entry.Dimension is { HiddenBoss: false } && retry.Entry.Dimension?.Tier == opening.Entry.Dimension?.Tier,
+                "再次挑战从当前档位登场地下城中随机抽取，而不是固定重开上一张图");
         }
         foreach (int id in Enumerable.Range(7101, 7).Where(dungeons.ContainsDungeon))
         {
@@ -344,7 +466,7 @@ internal static class OtherverseAncientTests
         }
         Console.WriteLine($"PASS {Count-before} 异界日周路线、远古双材料及事务断言（合成入场，非实机）");
 
-        void Clear(Fixture f, FormalDungeonReceipt opening, bool bonus = false)
+        FormalDungeonSettlementResult Clear(Fixture f, FormalDungeonReceipt opening, bool bonus = false)
         {
             var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
             if (opening.Entry.Dimension is { HiddenBoss: true })
@@ -444,6 +566,8 @@ internal static class OtherverseAncientTests
             var claimed = f.Read();
             That(f.Session.SelectFormalDungeonFreeCard(0, 0) is { Duplicate: true } && QuestCompletionRepositoryTests.Same(claimed, f.Read()),
                 "重复选牌不重复领取");
+            return result;
+
         }
     }
 

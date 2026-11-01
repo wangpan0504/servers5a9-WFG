@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
@@ -14,6 +15,10 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
     public const string BossMaterialRule = "otherverse-boss-material-personal-v1";
     public const string CardSetRule = "otherverse-card-set-only-v1";
     public const string IfliusRule = "otherverse-iflius-video-v1";
+    public const string LotusRule = "otherverse-lotus-boss-v1";
+    public const string LotusDummyRule = "otherverse-lotus-dummy-no-base-v1";
+    const int LotusBossMonsterId = 107005028;
+    const int LotusDummyMonsterId = 107005037;
     readonly DimensionDropRules rules = Validated(configuredRules ?? DimensionDropRules.Default);
     public string ActiveRule => rules.Rule;
     static DimensionDropRules Validated(DimensionDropRules value) { value.Validate(); return value; }
@@ -46,6 +51,7 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
         if (entry.Dimension is not { } admission || !monster.CanReportDeath || monster.IsFriendly ||
             monster.AiCharacter is not null || !monster.IsBoss || monster.SourceMap is not { } map || !entry.IsTerminalMap(map)) return plan;
         var profession = entry.DimensionRewardProfession ?? throw new InvalidDataException("异界掉落缺少本人冻结职业");
+        // 基础PVF计划已含装备/材料骰；异界专用规则改为替换这两类，避免同一怪同时发基础骰与专用骰。
         var trials = plan.Trials.ToBuilder();
         // 每个合法Boss发一份各组材料；表只声明物品，本服固定数量1，不把组号当数量。
         foreach (var material in dimension.Materials.Where(row => row.Tier == admission.Tier))
@@ -70,11 +76,21 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
     {
         if (entry.IsPractice || entry.DungeonId is < 7165 or > 7179 || entry.Dimension is not { } admission ||
             !monster.CanReportDeath || monster.IsFriendly || monster.AiCharacter is not null) return plan;
-        bool boss = monster.IsBoss && monster.SourceMap is { } map && entry.IsTerminalMap(map);
-        bool named = !monster.IsBoss && (monster.Source?.IsNamed == true || entry.NamedMonsters.Contains(monster.MonsterId));
+        bool terminal = monster.SourceMap is { } map && entry.IsTerminalMap(map);
+        // 罗特斯宫殿终点同时生成[dummy]阶段演员107005037与真实长脚罗特斯107005028；dummy只保留金币。
+        bool lotusDummy = terminal && monster.MonsterId == LotusDummyMonsterId &&
+            (monster.IsDummyMapBoss || monster.IsScriptedBoss);
+        if (lotusDummy)
+            return new(plan.ResourceSource + ";" + LotusDummyRule,
+                plan.Trials.Where(trial => trial.Category == DungeonDropCategory.Gold).ToImmutableArray(),
+                plan.ReferenceQuality, plan.Amplification);
+        bool lotusBoss = terminal && monster.MonsterId == LotusBossMonsterId;
+        bool boss = terminal && (monster.IsBoss || lotusBoss);
+        bool named = !boss && (monster.Source?.IsNamed == true || entry.NamedMonsters.Contains(monster.MonsterId));
         bool iflius = monster.MonsterId is 107000256 or 107000257 or 107000258;
         if (!boss && !named && !iflius) return plan;
-        var trials = plan.Trials.ToBuilder();
+        // 基础PVF计划已含装备/材料骰；异界专用规则改为替换这两类，避免同一怪同时发基础骰与专用骰。
+        var trials = plan.Trials.Where(trial => trial.Category is not (DungeonDropCategory.Equipment or DungeonDropCategory.Materials or DungeonDropCategory.MonsterItems)).ToImmutableArray().ToBuilder();
         if (iflius)
         {
             // 依普利乌斯是随机奖励怪物，不是终点领主；截图显示基础材料按多个独立堆叠掉落。
@@ -126,7 +142,7 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
                     new DungeonWeightedDropItem(items.Get(10090760), 1)]), 1, 1, ProbabilityDenominator: 100));
         }
 
-        if (rules.ExtraEntryEquipment || admission.DailyBefore.DailyUsed < admission.Catalog.DailyLimit)
+        if (rules.ExtraEntryEquipment || admission.DailyBefore.DailyUsed < admission.Catalog.BaseDailyLimit)
         {
             var normal = Pool(profession.Job, profession.Grow, false);
             var set = Pool(profession.Job, profession.Grow, true);
@@ -143,6 +159,7 @@ internal sealed class DimensionRewardPolicy(DimensionDungeonCatalog dimension, D
         string source = plan.ResourceSource + ";" + ActiveRule + ";" + DimensionRewardCatalog.PoolPath;
         if (named) source += ";" + AuraRule + ";" + HolyAuraRule;
         if (boss) source += ";" + BossMaterialRule;
+        if (lotusBoss) source += ";" + LotusRule;
 
         return new(source, trials, plan.ReferenceQuality, plan.Amplification);
 
