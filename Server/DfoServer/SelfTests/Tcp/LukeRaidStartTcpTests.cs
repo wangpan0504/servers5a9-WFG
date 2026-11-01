@@ -390,12 +390,17 @@ internal static class LukeRaidStartTcpTests
             void CheckInitialSnapshot(List<WirePacket> frames)
             {
                 var symbols=frames.Single(p=>p.Opcode==583).Body;
-                int symbolCount=raw.Symbols.Count+(energyObjects?2:0);
+                int symbolCount=raw.Symbols.Count-1+(energyObjects?2:0);
                 That(symbols.Length==1+symbolCount*8&&symbols[0]==symbolCount,"初态583完整有界符号表");
                 var actual=Enumerable.Range(0,symbols[0]).ToDictionary(i=>checked((int)U32(symbols,1+i*8)),i=>checked((int)U32(symbols,5+i*8)));
                 if(energyObjects)That(actual[113]==0&&actual[114]==0,"ACT原值113/114独立初始化，不映射138/139");
                 foreach(var symbol in raw.Symbols)
                 {
+                    if (symbol.Value == 102)
+                    {
+                        That(!actual.ContainsKey(102), "初态102零事件必须省略，不能触发未清图结果菜单");
+                        continue;
+                    }
                     int expected=raw.Phases[0].Dungeons.FirstOrDefault(d=>d.HpSymbol==symbol.Key)?.HpRaw??0;
                     That(actual[symbol.Value]==expected,"使用PVF显式symbol ID和原HP初值，不按数组下标");
                 }

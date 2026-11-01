@@ -6,6 +6,21 @@ namespace DfoServer.Network.Parsers;
 
 internal static class SettingsRequests
 {
+    public static ImmutableArray<byte> QuestNotify(ReadOnlySpan<byte> body)
+    {
+        // 02280B00：count:u8及至多四个qid:u32；选角恢复则固定读取四个u32。
+        if (body.IsEmpty || body[0] > QuestNotifyRules.Slots || body.Length != 1 + body[0] * sizeof(uint))
+            throw new InvalidDataException("任务提示保存数量或正文长度无效");
+        byte[] packed = new byte[QuestNotifyRules.Length];
+        body[1..].CopyTo(packed);
+        for (int slot = 0; slot < body[0]; slot++)
+            if (BinaryPrimitives.ReadUInt32LittleEndian(packed.AsSpan(slot * sizeof(uint))) == 0)
+                throw new InvalidDataException("任务提示保存不能包含空编号");
+        var entries = ImmutableArray.Create(packed);
+        QuestNotifyRules.Validate(entries);
+        return entries;
+    }
+
     public static ImmutableArray<byte> RecentEmoticons(ReadOnlySpan<byte> body)
     {
         // 02602440整块发送85B，含13B不透明保留区；通知1384不带该前缀。

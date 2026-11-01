@@ -655,6 +655,13 @@ CREATE TABLE currency_audit_log(
 
 CREATE UNIQUE INDEX character_account_identity ON characters(id,account);
 
+CREATE TABLE character_quest_notify(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=16),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
 CREATE TABLE account_client_settings(
     account TEXT NOT NULL PRIMARY KEY REFERENCES accounts(account_id),
     game_options BLOB NOT NULL CHECK(typeof(game_options)='blob' AND length(game_options)=204)

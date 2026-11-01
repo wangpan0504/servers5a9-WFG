@@ -4,7 +4,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class ClientSettingsTcpTests
+internal static partial class ClientSettingsTcpTests
 {
     const string HotkeyAccount = "keyowner";
     static readonly byte[] CommonKeys = "I01\t77\nI02\t55\nI03\t73\nI04\t58\nI05\t60\nC00\t134\nJ00\t134\nK02\t31\n"u8.ToArray();
@@ -127,6 +127,7 @@ internal static class ClientSettingsTcpTests
             Select(peer, 1, shared, second);
             Exit(peer);
         }
+        QuestNotifyScope(fixture, timings);
         using (timings.Measure("stop"))
             await fixture.StopAsync();
         string persisted = Settings(fixture, timings);

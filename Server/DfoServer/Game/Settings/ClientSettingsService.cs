@@ -23,7 +23,13 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
         var saved = store.Load(owner, characterId);
         if (!saved.Hotkeys.IsDefault) HotkeySettingsRules.Validate(saved.Hotkeys);
         if (!saved.RecentEmoticons.IsDefault) ValidateRecentEmoticons(saved.RecentEmoticons);
+        if (!saved.QuestNotify.IsDefault) QuestNotifyRules.Validate(saved.QuestNotify);
         return saved;
+    }
+    public bool SaveQuestNotify(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries)
+    {
+        QuestNotifyRules.Validate(entries);
+        return store.SaveQuestNotify(owner, characterId, entries);
     }
     public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text)
     {

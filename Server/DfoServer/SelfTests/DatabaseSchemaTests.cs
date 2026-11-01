@@ -238,6 +238,7 @@ internal static partial class DatabaseSchemaTests
             FiendwarTitlesUpgrade(root);
             AccountMaterialsUpgrade(root);
             AccountMaterialPickupsUpgrade(root);
+            QuestNotifyUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);

@@ -55,8 +55,9 @@ internal static partial class AntonRaidTcpTests
         var symbols = packets.Single(p => p.Opcode == 583).Body;
         int Symbol(int id) => Enumerable.Range(0, symbols[0]).Where(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * i)) == id)
             .Select(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * i))).Single();
-        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 41 && Symbol(7) == 0 && Symbol(50) == 4,
-            "开战583发送完整真实符号快照：显式清除旧感染存在位，symbol50=[210 DGN HP]为PVF初值4");
+        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 40 && Symbol(7) == 0 && Symbol(50) == 4 &&
+            Enumerable.Range(0, symbols[0]).All(i => U32(symbols, 1 + 8 * i) != 102),
+            "开战583省略102零执行事件，其余40项完整保留：清旧感染存在位及真实HP初值4");
         That(packets.Any(p => p.Opcode == 9) && packets.Any(p => p.Opcode == 594) && packets.Any(p => p.Opcode == 24),
             "单人完整分队、准备和迁移链");
         VerifyCosts(packets.Single(p => p.Opcode == 598).Body, [peer.Id], 2, 1);

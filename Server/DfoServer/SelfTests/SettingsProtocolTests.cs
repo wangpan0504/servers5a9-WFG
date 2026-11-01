@@ -12,11 +12,12 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class SettingsProtocolTests
+internal static partial class SettingsProtocolTests
 {
     public static void Run()
     {
         int before = Count;
+        QuestNotify();
         ChatEmoticons();
         byte[] game = Enumerable.Range(0, 204).Select(i => (byte)i).ToArray();
         byte[] character = Enumerable.Repeat((byte)255, 512).ToArray();
@@ -234,6 +235,7 @@ internal static class SettingsProtocolTests
 
     sealed class SettingsStore : IClientSettingsStore
     {
+        public bool SaveQuestNotify(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) => throw new NotSupportedException();
         public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort id, uint itemId, long? expiresAt = null) => throw new NotSupportedException("此夹具只验证原有设置正文");

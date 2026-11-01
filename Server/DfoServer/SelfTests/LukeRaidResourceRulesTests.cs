@@ -39,6 +39,8 @@ internal static class LukeRaidResourceRulesTests
                 clause.DungeonId is 5061 or 5062)), "离开任一王座均不再全团关闭能源/踢能源队");
         }
         var battle=new AntonRaidBattle(script,kind:RaidKind.Luke,completion:completion,pacing:pacing);
+        That(battle.SymbolSnapshot(battle.View).All(row => row.Id != 102),
+            "初始102零值不进入583，不能在开团或首次入图触发原生结果菜单");
         foreach(var actor in actors)That(battle.JoinStart(actor),"原始角色身份登记到纯解释器");
         foreach(int dungeon in route == 1 ? new[] {5054,5055,5056} : new[] {5054,5056,5055})
             for(int run=0;run<3;run++)
@@ -87,6 +89,8 @@ internal static class LukeRaidResourceRulesTests
         Clear(5061,throne);Exit(throne);
         That(battle.View.Dungeons[5062]==RaidDungeonState.Open&&battle.View.Dungeons[5066]==RaidDungeonState.Hide&&
             battle.View.Symbols["[kill all character]"]==1,"原王座转换保留KILL符号事实，但本纯解释器不伪造死亡/扣币或线上消费者");
+        That(battle.SymbolSnapshot(battle.View).Single(row => row.Id == 102).Value == 1,
+            "未使用统一节奏时保留原规则真正的102执行值，不按数值删除其它有效符号");
         var final=Enter(5062);battle.ObserveLukeRun(final[0].Identity.InstanceId,final,55846);Clear(5062,final);Exit(final);
         That(battle.HasPendingTransition&&battle.View.Timers.IsEmpty,"原P2终结立即停旧phase活动timer，仍等独立提交屏障");
         CommitDomainOnly();That(battle.View.State==AntonRaidBattleState.Completed,"原两阶段规则领域终结完成，非SQL/网络通关验收");
@@ -194,6 +198,8 @@ internal static class LukeRaidResourceRulesTests
                 Clear(5066, pressed); Exit(pressed); concurrent = [];
                 That(!battle.View.LukeEnergyBlocked && battle.View.Symbols["[energy save effect]"] == 0 && battle.View.Timers[recovery] == 300,
                     "满能源后仍须真实清图压制，不自动完成");
+                That(battle.SymbolSnapshot(battle.View).All(row => row.Id != 102),
+                    "统一节奏满能源仍只走服务端安全退场，不投递102零值或原生击杀事件");
                 light = Enter(5061); battle.ObserveLukeRun(light[0].Identity.InstanceId, light, 55845);
                 That(light.All(row => !battle.RequiresLukeEnergyReturn(row.Actor, row.Identity.InstanceId)), "压制后新王座Run不受旧退场标记影响");
             }

@@ -183,7 +183,8 @@ internal static partial class AntonRaidMapEntryTcpTests
             peers[0].Send(37, new byte[8]);
             That(Read(peers[0]).All(p => p.Opcode != 30), "首成员加载不能提前释放共享屏障");
             peers[1].Send(37, new byte[8]);
-            foreach (var peer in peers.Take(2))
+            // 先等最后加载者处理完37；另一连接的1278不能证明该请求已经完成广播。
+            foreach (var peer in new[] { peers[1], peers[0] })
             {
                 var loaded = Read(peer);
                 int acknowledgment = loaded.FindIndex(p => p is { Kind: 1, Opcode: 37 });

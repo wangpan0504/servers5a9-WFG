@@ -49,7 +49,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys,q0.quick_chat,q1.quick_chat,e.entries FROM characters r
+            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys,q0.quick_chat,q1.quick_chat,e.entries,n.entries FROM characters r
             LEFT JOIN account_client_settings a ON a.account=r.account
             LEFT JOIN character_client_settings c ON c.character_id=r.id AND c.account=r.account
             LEFT JOIN character_game_settings g ON g.character_id=r.id AND g.account=r.account
@@ -57,6 +57,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
             LEFT JOIN account_quick_chat q0 ON q0.account=r.account AND q0.bank=0
             LEFT JOIN account_quick_chat q1 ON q1.account=r.account AND q1.bank=1
             LEFT JOIN account_recent_emoticons e ON e.account=r.account
+            LEFT JOIN character_quest_notify n ON n.character_id=r.id AND n.account=r.account
             WHERE r.id=$id AND r.account=$account
             """;
         command.Parameters.AddWithValue("$id", characterId);
@@ -66,7 +67,7 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         {
             if (!reader.Read()) throw new InvalidDataException("设置角色不属于当前账号");
             snapshot = new(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3), Read(reader, 4), Read(reader, 5),
-                RecentEmoticons: Read(reader, 6));
+                RecentEmoticons: Read(reader, 6), QuestNotify: Read(reader, 7));
         }
         command.CommandText = "SELECT emoticon_id,macro FROM account_chat_emoticons WHERE account=$account ORDER BY emoticon_id";
         using var macros = command.ExecuteReader();
@@ -306,6 +307,43 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         update.Parameters.Add("$payload", SqliteType.Blob).Value = payload.ToArray();
         if (update.ExecuteNonQuery() != 1)
             throw new InvalidDataException("角色设置未提交");
+        tx.Commit();
+        return true;
+    });
+
+    public bool SaveQuestNotify(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries) => owner.Execute(() =>
+    {
+        QuestNotifyRules.Validate(entries);
+        using var db = database.Open();
+        using (var read = db.BeginRead())
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = read;
+            query.CommandText = """
+                SELECT n.entries FROM characters c
+                LEFT JOIN character_quest_notify n ON n.character_id=c.id AND n.account=c.account
+                WHERE c.id=$id AND c.account=$account
+                """;
+            query.Parameters.AddWithValue("$id", characterId);
+            query.Parameters.AddWithValue("$account", owner.Account);
+            using var reader = query.ExecuteReader();
+            if (!reader.Read()) throw new InvalidDataException("任务提示角色不属于当前账号");
+            if (reader.IsDBNull(0) ? entries.All(value => value == 0) : entries.AsSpan().SequenceEqual((byte[])reader.GetValue(0)))
+                return false;
+        }
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveQuestNotify");
+        using var tx = write.Transaction;
+        using var update = db.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText = """
+            INSERT INTO character_quest_notify(character_id,account,entries) VALUES($id,$account,$entries)
+            ON CONFLICT(character_id) DO UPDATE SET entries=excluded.entries
+            WHERE character_quest_notify.account=excluded.account
+            """;
+        update.Parameters.AddWithValue("$id", characterId);
+        update.Parameters.AddWithValue("$account", owner.Account);
+        update.Parameters.Add("$entries", SqliteType.Blob).Value = entries.ToArray();
+        if (update.ExecuteNonQuery() != 1) throw new InvalidDataException("任务提示书签未提交");
         tx.Commit();
         return true;
     });

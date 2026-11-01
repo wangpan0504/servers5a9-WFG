@@ -158,7 +158,11 @@ internal sealed partial class AntonRaidBattle
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
     internal (int Id, int Value)[] SymbolSnapshot(AntonRaidBattleView view) =>
-        script.Symbols.Select(row => (row.Value, lukePacing is not null && row.Value == 102 ? 0 : view.Symbols[row.Key]))
+        // 102是执行事件，零值也会打开原生结果菜单；统一节奏由服务端安全退场。
+        // 按名称和编号过滤，保留原规则非零执行值及其它同号状态。
+        script.Symbols.Where(row => row.Key != "[kill all character]" || row.Value != 102 ||
+                lukePacing is null && view.Symbols[row.Key] != 0)
+            .Select(row => (row.Value, view.Symbols[row.Key]))
             .Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value))).OrderBy(row => row.Item1).ToArray();
     internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>
         script.Phases.SelectMany(phase => phase.Dungeons).Select(d => d.Id).Distinct().Order()

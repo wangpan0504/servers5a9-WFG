@@ -321,6 +321,7 @@ internal static class SqliteMigrations
             (AccountMaterialSchema.Balances + AccountMaterialSchema.Audit + AccountMaterialSchema.RewardIndex)
                 .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(174, "账号材料地面拾取持久回执", AccountMaterialPickupSchema.Upgrade),
+        new(175, "角色任务提示书签", (db, tx) => Execute(db, tx, QuestNotifySchema)),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2373,6 +2374,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV127),
+            ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
@@ -2606,6 +2608,7 @@ internal static class SqliteMigrations
         "SELECT [account_id],[salt],[password_hash],[iterations],[disabled],[revision] FROM [accounts] LIMIT 0",
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
+        "SELECT character_id,account,entries FROM character_quest_notify LIMIT 0",
         "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity],[quest_cycle_day],[equipment_slot_flags] FROM [characters] LIMIT 0",
         "SELECT [character_id],[quest_id],[daily_period],[answer] FROM [character_completed_quests] LIMIT 0",
@@ -2713,6 +2716,15 @@ internal static class SqliteMigrations
             character_id INTEGER PRIMARY KEY,
             account TEXT NOT NULL,
             character_options BLOB NOT NULL CHECK(typeof(character_options)='blob' AND length(character_options)=512),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal const string QuestNotifySchema = """
+        CREATE TABLE IF NOT EXISTS character_quest_notify(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=16),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
         """;

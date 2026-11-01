@@ -103,6 +103,10 @@ internal static partial class FiendwarRaidTcpTests
         That(started.Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }), "单人不编固定分队即可正式开战");
         That(started.Any(packet => packet is { Kind: 0, Opcode: 1522, Body: [] }), "漩涡开战使用原生空体1522");
         That(started.Any(packet => packet is { Kind: 0, Opcode: 1525 }), "开战发布真实战场成员位置");
+        var initialSymbols = started.Last(packet => packet is { Kind: 0, Opcode: 1530 }).Body;
+        That(initialSymbols.Length == 1 + initialSymbols[0] * 8 &&
+            Enumerable.Range(0, initialSymbols[0]).All(index => U32(initialSymbols, 1 + index * 8) != 102),
+            "漩涡开战保留原生1530状态行，省略击杀全员的102零执行事件");
         That(started.Any(packet => packet is { Kind: 0, Opcode: 1528 } && packet.Body[0] > 0),
             "正式开战即发布原生1528兵线与设施时钟");
         That(fixture.Query("SELECT raid_type,state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[2L, 0L]],

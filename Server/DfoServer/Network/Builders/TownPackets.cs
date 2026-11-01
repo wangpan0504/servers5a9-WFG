@@ -15,8 +15,10 @@ internal enum ActorSceneState : byte { Town = 0, Dungeon = 1 }
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
 internal static partial class TownPackets
 {
-    public static byte[] Select(Character character, CharacterFatigueState? displayedFatigue = null)
+    public static byte[] Select(Character character, CharacterFatigueState? displayedFatigue = null,
+        System.Collections.Immutable.ImmutableArray<byte> questNotify = default)
     {
+        if (!questNotify.IsDefault) DfoServer.Game.Settings.QuestNotifyRules.Validate(questNotify);
         var fatigue = displayedFatigue ?? character.Fatigue ?? CharacterFatigueState.NewOrdinary;
         fatigue.Validate();
         using (var stream = new MemoryStream())
@@ -49,7 +51,7 @@ internal static partial class TownPackets
             }
 
             writer.Write(0u);
-            writer.Write(new byte[16]); // 020296D0: four quest bookmarks.
+            writer.Write(questNotify.IsDefault ? new byte[16] : questNotify.ToArray()); // 020296D0：四个任务提示书签。
             writer.Write(character.Position.Town); // 02341BCA 读初始城镇，02341E12 用它切换城镇；此处不是职业。
             bool training = character.Tutorial is { Completed: false };
             // 03B32D50逐项设置完成位；空列表保留客户端按TutorialFlow选择首个训练副本的路径。
