@@ -7,6 +7,8 @@ internal sealed record RefinementReceipt(short MaterialSlot, int MaterialRemaini
     public required InventoryItem Target { get; init; }
     public int SourceItemId { get; init; }
     public bool UsedTicket { get; init; }
+    public bool Portable { get; init; }
     public bool NeedsAttributeRefresh => Position.List == InventoryListType.Equipment && OldLevel != NewLevel;
-    public bool Announce => NewLevel >= 5 && (!UsedTicket || Succeeded);
+    public bool UsesLevelProbability => !UsedTicket || Portable;
+    public bool Announce => NewLevel >= 6 && UsesLevelProbability;
 }

@@ -275,6 +275,8 @@ internal static class ServerRuntime
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
+        var upgradeAnnouncements = new EquipmentUpgradeAnnouncementProjection(online, itemResources.Items,
+            itemResources.AmplifyUpgrades.ReinforceRules.NoticeLevel, itemResources.AmplifyUpgrades.Rules.NoticeLevel, log);
         var inventoryBoosters = new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugSettings: debugSettings, contracts: itemResources.Contracts,
             avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions, attributePairs: attributePairs);
@@ -755,7 +757,7 @@ internal static class ServerRuntime
             new AvatarAbilityChangeHandler(new InventoryAvatarAbilityChangeService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
             new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement, clock: clock), inventoryProjection,
-                guildBenefits: guildNpcBenefitService),
+                guildBenefits: guildNpcBenefitService, announcements: upgradeAnnouncements),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
             new AvatarEmblemHandler(new InventoryAvatarEmblemService(itemResources.Items, clock), inventoryProjection, log),
@@ -767,7 +769,7 @@ internal static class ServerRuntime
                 amplification: new InventoryAmplifyUpgradeService(itemResources.Items, itemResources.AmplifyUpgrades, itemResources.Enhancements,
                     itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, towns, clock: clock,
                     consumables: itemResources.RecoveryConsumables)), inventoryProjection, log,
-                guildNpcBenefitService),
+                guildNpcBenefitService, upgradeAnnouncements),
             new AmplificationHandler(new InventoryAmplificationService(itemResources.Items, itemResources.Amplifications,
                 itemResources.Enhancements, towns, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),

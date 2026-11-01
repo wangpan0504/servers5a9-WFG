@@ -11,7 +11,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class EnhancementHandler(InventoryEnhancementService service, InventoryProjection projection, ServerLog log,
-    GuildNpcBenefitService? guildBenefits = null) : IGameCommandModule
+    GuildNpcBenefitService? guildBenefits = null, EquipmentUpgradeAnnouncementProjection? announcements = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.UPGRADE_ITEM, Handle, nameof(EnhancementHandler));
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
@@ -60,6 +60,7 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
             if (receipt.TerminalSlot >= 0) acknowledged.Add(new(InventoryListType.Main, receipt.TerminalSlot));
         }
         await projection.RefreshAsync(context, result, acknowledged);
+        if (result.Accepted && receipt is not null) announcements?.Enhancement(context, result, receipt);
         return CommandResult.Handled;
     }
 }

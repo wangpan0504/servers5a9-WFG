@@ -25,6 +25,7 @@ internal sealed record AmplifyUpgradeRules(ImmutableArray<AmplifyUpgradeStep> St
     ImmutableArray<float> RarityWeights, ImmutableArray<float> TypeWeights, ImmutableDictionary<int, int> DestroyLevels,
     ImmutableDictionary<int, int> MaximumLevels, UpgradeDestroyBonus Bonus)
 {
+    public int? NoticeLevel { get; init; }
     public int Gold(ItemTemplate item)
     {
         int type = item.EquipmentSlot == 12 ? 0 : item.EquipmentSlot == 25 ? 12 : item.EquipmentSlot - 12;
@@ -98,7 +99,11 @@ internal sealed class AmplifyUpgradeCatalog
             row.MaterialId, row.MaterialCount)).ToImmutableArray(), costs, rarity, types,
             Named(document.Sections, "destroy level by rarity", resolve).ToImmutableDictionary(row => row.Key, row => checked((int)row.Value)),
             Named(document.Sections, "max upgrade level by rarity", resolve).ToImmutableDictionary(row => row.Key, row => checked((int)row.Value)),
-            ParseBonus(document, resolve));
+            ParseBonus(document, resolve))
+        {
+            NoticeLevel = document.Sections.LastOrDefault(row => row.Name == "notice") is { } notice
+                ? AmplificationFiles.Scalar(notice) : null
+        };
     }
 
     internal static ImmutableArray<LuckyAmplifyStep> ParseLucky(PvfTokenDocument document, Func<int, string> resolve, bool reinforce = false)

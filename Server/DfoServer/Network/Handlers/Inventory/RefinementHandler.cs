@@ -10,7 +10,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class RefinementHandler(InventoryRefinementService refinement, InventoryProjection projection,
-    IRefinementEffects? effects = null, GuildNpcBenefitService? guildBenefits = null) : IGameCommandModule
+    IRefinementEffects? effects = null, GuildNpcBenefitService? guildBenefits = null,
+    EquipmentUpgradeAnnouncementProjection? announcements = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.UPGRADE_ITEM_SEPARATE, Handle, nameof(RefinementHandler));
 
@@ -32,6 +33,7 @@ internal sealed class RefinementHandler(InventoryRefinementService refinement, I
         await context.Reply(CmdPacketType.UPGRADE_ITEM_SEPARATE, RefinementPackets.Ack(result, receipt),
             result.Accepted ? "equipment_refined" : "equipment_refinement_rejected");
         await projection.RefreshAsync(context, result);
+        if (result.Accepted && receipt is not null) announcements?.Refinement(context, result, receipt);
         if (result.Accepted && effects is not null && committed is not null && receipt is not null)
         {
             // 只在lease内开始发布/入队，网络等待在外；回调失败不回滚资产或重试本次锻造。

@@ -85,6 +85,20 @@ internal sealed class OnlineSessionDirectory
         return delivered;
     }
 
+    // 正式服务器组公告共用现有连接索引与有界发送泵，不等待任何接收者socket，也不持发送者锁遍历账号。
+    public int PostServerGroup(byte server, ushort opcode, byte[] body, string action, Func<bool> sourceCurrent)
+    {
+        int delivered = 0;
+        foreach (var connection in connections.SnapshotValues())
+        {
+            if (!sourceCurrent()) break;
+            if (connection.GuardedProbe is not { } post || connection.Session.CaptureServerBroadcastGuard(server) is not { } current)
+                continue;
+            if (post(opcode, body, action, () => current() && sourceCurrent())) delivered++;
+        }
+        return delivered;
+    }
+
     /// <summary>只在连接仍指向同一会话时移除，避免旧连接误删同号的新会话。</summary>
     public void RemoveConnection(int connectionId, GameSession session)
     {
