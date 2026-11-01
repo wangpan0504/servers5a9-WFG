@@ -57,7 +57,7 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonPickup", deferred: true);
         using var tx = write.Transaction;
-        var current = Require(db, tx, owner.Account, expected.Name);
+        var current = Require(db, tx, owner.Account, expected.Name, expected.Inventory);
         if (current.Id != expected.Id) throw new InvalidOperationException("拾取角色归属变化");
         // 存储的原掉落是资格来源，网络坐标/token不在资产判断中。
         VerifyStoredGround(db, tx, owner, current.Id, ground);
@@ -97,7 +97,9 @@ internal sealed partial class CharacterRepository
         var character = current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };
         var cached = new DungeonTransientPickup(prepared, character.Revision, slot, actual.Uid, actual.Core, null, ground.Core.Count, 0, 0);
         SaveFrozenPickup(db, tx, owner, character, prepared, slot, actual.Uid, actual.Core, null, ground.Core.Count);
+        var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, character.Id, current.Inventory, character.Inventory);
         tx.Commit();
+        RememberInventoryItems(character.Inventory, itemRead);
         receipts.Pickups[ground.Reservation.GroundKey] = cached;
         cached.Committed = true;
         return new DungeonPickupCommit(character, false, slot, actual.Uid, true, null, ground.Core.Count);

@@ -250,7 +250,9 @@ internal sealed partial class CharacterRepository
         using var write = db.BeginWrite("CharacterRepository.CommitInventory");
         using var transaction = write.Transaction;
         var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
+        var itemRead = ReadInventoryItemRevision(db, transaction, owner.Account, character.Id);
         transaction.Commit();
+        RememberInventoryItems(character.Inventory, itemRead);
         return character;
     });
 
@@ -308,7 +310,7 @@ internal sealed partial class CharacterRepository
         Character expected, InventoryPlan plan, IReadOnlySet<long>? retained = null, IReadOnlyDictionary<long, InventoryItem>? incoming = null)
     {
         ValidateInventoryPlan(expected, plan);
-        var current = Require(db, transaction, owner.Account, expected.Name);
+        var current = Require(db, transaction, owner.Account, expected.Name, expected.Inventory);
         return CommitInventoryInTransaction(db, transaction, owner, current, expected, plan, retained, incoming);
     }
 
@@ -456,13 +458,16 @@ internal sealed partial class CharacterRepository
         return left.Items.All(item => seen.Add(item.Position) && item == plan.BeforeIndex.Find(item.Position));
     }
 
-    static InventorySnapshot ReadInventory(SqliteConnection db, ushort characterId, SqliteTransaction? transaction = null, AccountInventory? shared = null)
+    static InventorySnapshot ReadInventory(SqliteConnection db, ushort characterId, SqliteTransaction? transaction = null,
+        AccountInventory? shared = null, InventorySnapshot? reuseInventory = null)
     {
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$id", characterId);
         command.CommandText = "SELECT c.inventory_expansion,c.gold,c.revive_coins,c.win_points,c.gold_carry_limit,c.auction_gold_limit,c.account,c.cargo_capacity," +
-            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until,c.daily_booster_usage,c.weapon_skin_state,c.avatar_preset_state,c.npc_favor FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
+            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until,c.daily_booster_usage,c.weapon_skin_state,c.avatar_preset_state,c.npc_favor," +
+            "c.inventory_items_revision,COALESCE(a.inventory_items_revision,0) FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id " +
+            "LEFT JOIN account_cargo a ON a.account=c.account WHERE c.id=$id";
         ushort expansion, capacity;
         uint gold;
         int coins, wins, carry, auction;
@@ -475,6 +480,7 @@ internal sealed partial class CharacterRepository
         ImmutableArray<DailyBoosterUsage> dailyBoosterUses;
         ImmutableArray<NpcFavorPoint> npcFavor;
         long staminaUntil;
+        InventoryItemRead itemRead;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read())
@@ -495,10 +501,12 @@ internal sealed partial class CharacterRepository
             weaponSkins = JsonSerializer.Deserialize<SkinStorageState>(reader.GetString(14)) ?? throw new InvalidDataException("角色武器幻化状态缺失");
             avatarPresets = JsonSerializer.Deserialize<AvatarPresetState>(reader.GetString(15)) ?? throw new InvalidDataException("角色装扮预设状态缺失");
             npcFavor = JsonSerializer.Deserialize<ImmutableArray<NpcFavorPoint>>(reader.GetString(16));
+            itemRead = new(db.DataSource, account, characterId, reader.GetInt64(17), reader.GetInt64(18));
         }
 
-        shared ??= ReadAccountInventory(db, account, transaction);
-        var items = ReadInventoryItems(db, account, characterId, transaction).AddRange(shared.Items)
+        bool reuseItems = CanReuseInventoryItems(reuseInventory, itemRead);
+        shared ??= ReadAccountInventory(db, account, transaction, includeItems: !reuseItems);
+        var items = reuseItems ? reuseInventory!.Items : ReadInventoryItems(db, account, characterId, transaction).AddRange(shared.Items)
             .OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray();
         var purchases = ReadShopPurchases(db, account, characterId, transaction).AddRange(shared.Purchases)
             .OrderBy(row => row.NpcId).ThenBy(row => row.ItemId).ThenByDescending(row => row.AccountWide)
@@ -515,6 +523,7 @@ internal sealed partial class CharacterRepository
             ServerItems = ReadServerItems(db, transaction, characterId)
         };
         inventory.Validate();
+        RememberInventoryItems(inventory, itemRead);
         return inventory;
     }
 
@@ -560,6 +569,7 @@ internal sealed partial class CharacterRepository
         var before = plan.Before;
         string reason = plan.Reason;
         var slots = plan.ChangedSlots;
+        if (slots.IsEmpty) return after;
         var changed = slots.ToHashSet();
         var written = new Dictionary<long, (InventoryItem Item, string Hash)>();
         using var command = db.CreateCommand();

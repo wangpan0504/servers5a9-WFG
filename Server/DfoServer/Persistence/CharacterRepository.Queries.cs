@@ -99,8 +99,8 @@ internal sealed partial class CharacterRepository
     sealed record AccountInventory(AccountWallet Wallet, AccountCargoState Cargo, EpicPieceBook Pieces,
         ImmutableArray<InventoryItem> Items, ImmutableArray<ShopPurchaseCount> Purchases, SkinStorageState Skins);
 
-    static AccountInventory ReadAccountInventory(SqliteConnection db, string account, SqliteTransaction? transaction) =>
+    static AccountInventory ReadAccountInventory(SqliteConnection db, string account, SqliteTransaction? transaction, bool includeItems = true) =>
         new(ReadAccountWallet(db, account, transaction), ReadAccountCargo(db, account, transaction),
-            ReadEpicPieces(db, account, transaction), ReadInventoryItems(db, account, null, transaction),
+            ReadEpicPieces(db, account, transaction), includeItems ? ReadInventoryItems(db, account, null, transaction) : [],
             ReadShopPurchases(db, account, 0, transaction), ReadAccountSkins(db, account, transaction));
 }

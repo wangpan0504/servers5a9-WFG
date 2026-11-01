@@ -79,11 +79,13 @@ internal static partial class DungeonGrowthRepositoryTests
             var noDrop = QuestDropPlan.Create(seeker, seekRun.Entry, new(new Dictionary<int,StoryQuest>(),
                 new Dictionary<int,ItemTemplate>(), pieces),
                 seekDeath.Death.EventId, seekDeath.Death.Identity, seekDeath.Result.Snapshot.CurrentMap.Id, 1, 1, false, _ => 0, DateTimeOffset.UtcNow);
+            // 模拟库存变化使旧读取证明失效；空奖励不能绕过寻物任务的真实库存复验。
+            Sql("UPDATE characters SET inventory_items_revision=inventory_items_revision+1 WHERE id=" + seeker.Id);
             Sql("ALTER TABLE character_inventory_items RENAME TO inventory_not_used_by_growth");
             try
             {
                 Reject<SqliteException>(() => repository.CommitDungeonGrowth(owner, seeker, seekRun, seekDeath, reward, growth, questDrops: noDrop),
-                    "寻物任务即使无新增掉落也必须核对库存，不能从空规划误入免读路径");
+                    "寻物任务的库存标记变化后必须重读，不能从空规划误入免读路径");
             }
             finally { Sql("ALTER TABLE inventory_not_used_by_growth RENAME TO character_inventory_items"); }
             That(JsonSerializer.Serialize(seeker) == JsonSerializer.Serialize(repository.LoadCharacter(owner, seeker.Slot)),
