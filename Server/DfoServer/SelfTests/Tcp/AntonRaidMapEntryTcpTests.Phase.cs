@@ -25,7 +25,7 @@ namespace DfoServer.Testing;
 
 internal static partial class AntonRaidMapEntryTcpTests
 {
-    // 两个开关都打开时，沿真实 117 和 586 核对阶段 0 里不依赖计时到期的战况。不发送 596/597，也不进阶段 1。
+    // 两个开关都打开时，沿真实 117 和 585/586 核对阶段 0 里不依赖计时到期的战况。不发送 596/597，也不进阶段 1。
     static async Task VerifyPhaseProgressAsync(ServerOptions source, string root, TcpTestResources resources, RaidDefinition definition)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-phase-progress"), resources: resources);
@@ -56,6 +56,8 @@ internal static partial class AntonRaidMapEntryTcpTests
         var leases = new List<AccountOwners.Lease>();
         var peers = new List<TcpPeer>();
         var workers = new List<Task>();
+        var displayedStates = new Dictionary<int, byte>();
+        RaidActor[] actors = [];
         using var stop = new CancellationTokenSource();
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -80,7 +82,7 @@ internal static partial class AntonRaidMapEntryTcpTests
                 session.HasMultiplePartyMembers = () => parties.HasMultipleMembers(session);
                 sessions.Add(session);
             }
-            var actors = sessions.Select(session => session.CaptureRaidActor(raids)!).ToArray();
+            actors = sessions.Select(session => session.CaptureRaidActor(raids)!).ToArray();
             raids.Create(actors[0], 0, "phase", "phase"u8.ToArray(), 20, 1);
             raids.Invite(actors[0], actors[1], 0);
             That(raids.Respond(actors[1], actors[0].Character, true).Accepted, "阶段推进夹具加入原团");
@@ -101,7 +103,7 @@ internal static partial class AntonRaidMapEntryTcpTests
             for (int remaining = 3; remaining > 0; remaining--)
             {
                 var partial = ClearDungeon(210);
-                That(StateOf(partial, 210) == 0 && StateOf(partial, 212) == 2 &&
+                That(StateOf(210) == 0 && StateOf(212) == 2 &&
                     sessions[0].RaidCombatView()!.Symbols["[210 dgn hp]"] == remaining,
                     "双人Run仅扣一次HP，前三轮不开放后续图");
                 var symbols = partial.Last(packet => packet is { Kind: 0, Opcode: 583 }).Body;
@@ -120,20 +122,20 @@ internal static partial class AntonRaidMapEntryTcpTests
             }, fighting: true);
             LeaveBoth();
             peers[0].Send(15, new byte[4]);
-            Read(peers[0]); Read(peers[1]);
+            ReadPhase(peers[0]); ReadPhase(peers[1]);
             peers[0].Send(16, Request(211));
-            That(Read(peers[0]).Any(packet => packet is { Kind: 1, Opcode: 16 }) && sessions[0].DungeonSnapshot is null,
+            That(ReadPhase(peers[0]).Any(packet => packet is { Kind: 1, Opcode: 16 }) && sessions[0].DungeonSnapshot is null,
                 "211 仍是 close，16 拒绝且没有 Run");
 
             var afterBlue = ClearDungeon(212);
-            That(StateOf(afterBlue, 212) == 1 && StateOf(afterBlue, 213) == 0, "212 clear 的 586 末字节是 close");
+            That(StateOf(212) == 1 && StateOf(213) == 0, "212 clear 的实际线上状态为 close");
             LeaveBoth();
             var afterRed = ClearDungeon(214);
-            That(StateOf(afterRed, 214) == 1 && StateOf(afterRed, 215) == 0, "214 clear 的 586 末字节是 close");
+            That(StateOf(214) == 1 && StateOf(215) == 0, "214 clear 的实际线上状态为 close");
             LeaveBoth();
             ClearDungeon(213); LeaveBoth();
             var afterLeg = ClearDungeon(213);
-            That(StateOf(afterLeg, 213) == 3 && sessions[0].RaidCombatView() is { State: AntonRaidBattleState.Fighting, Phase: 0 } view &&
+            That(StateOf(213) == 3 && sessions[0].RaidCombatView() is { State: AntonRaidBattleState.Fighting, Phase: 0 } view &&
                 view.Symbols["[1phase success]"] == 0, "单腿 clear 发布 Clear，阶段成功仍是 0");
             LeaveBoth();
             ClearDungeon(215); LeaveBoth();
@@ -161,14 +163,14 @@ internal static partial class AntonRaidMapEntryTcpTests
             if (sessions[0].Phase != SessionPhase.MapSelect)
             {
                 peers[0].Send(15, new byte[4]);
-                Read(peers[0]); Read(peers[1]);
+                ReadPhase(peers[0]); ReadPhase(peers[1]);
             }
             peers[0].Send(16, Request(dungeon));
-            var opened = Read(peers[0]);
-            Read(peers[1]);
+            var opened = ReadPhase(peers[0]);
+            ReadPhase(peers[1]);
             That(opened.Any(packet => packet is { Kind: 0, Opcode: 29 }), dungeon + " 的 16 发布真实 29");
             peers[0].Send(37, new byte[8]); peers[1].Send(37, new byte[8]);
-            Read(peers[0]); Read(peers[1]);
+            ReadPhase(peers[0]); ReadPhase(peers[1]);
             var scene = sessions[0].CurrentFormalDungeonScene()!;
             var route = QuestStoryRouteTests.Path(scene.Entry.Maze.StaticTopology, scene.Entry.StartMap.Position, scene.Entry.BossMap.Position);
             var party = sessions[0].PartyDungeon!;
@@ -202,20 +204,24 @@ internal static partial class AntonRaidMapEntryTcpTests
             BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(17), 504);
             peers[0].Send(117, body);
             var result = Until(peers[0], 115);
-            Read(peers[1]);
-            That(result.Any(packet => packet is { Kind: 0, Opcode: 586 }),
-                "117 后发布 586，实际 " + string.Join(',', result.Select(packet => packet.Kind + ":" + packet.Opcode)));
+            ReadPhase(peers[1]);
+            That(result.Any(packet => packet is { Kind: 0, Opcode: 585 or 586 }),
+                "117 后发布实际585/586状态，实际 " + string.Join(',', result.Select(packet => packet.Kind + ":" + packet.Opcode)));
+            var battle = sessions[0].CurrentRaidBattle(actors[0])!;
+            foreach (var row in battle.DungeonSnapshot(battle.View))
+                That(StateOf(row.Id) == (byte)row.State, "每次清图后客户端累计状态与已提交战况一致：" + row.Id);
             That(!result.Any(packet => packet.Opcode is 596 or 597 or 601), "阶段迁移不发送 596、597 或没有奖励策略时的 601");
             return result;
         }
 
-        static List<WirePacket> Until(TcpPeer peer, ushort opcode)
+        List<WirePacket> Until(TcpPeer peer, ushort opcode)
         {
             var rows = new List<WirePacket>();
             for (int i = 0; i < 80; i++)
             {
                 var packet = peer.Read();
                 rows.Add(packet);
+                Observe(packet);
                 if (packet is { Kind: 0, Opcode: var id } && id == opcode) return rows;
             }
             throw new InvalidOperationException("没有等到 NOTI " + opcode);
@@ -223,8 +229,8 @@ internal static partial class AntonRaidMapEntryTcpTests
 
         void LeaveBoth()
         {
-            peers[0].Send(42); Read(peers[0]); Read(peers[1]);
-            peers[1].Send(42); Read(peers[1]);
+            peers[0].Send(42); ReadPhase(peers[0]); ReadPhase(peers[1]);
+            peers[1].Send(42); ReadPhase(peers[1]);
             That(sessions.All(session => session.Phase == SessionPhase.Town && session.DungeonSnapshot is null), "42 后两人都回到候战室");
         }
 
@@ -256,23 +262,57 @@ internal static partial class AntonRaidMapEntryTcpTests
             return request;
         }
 
-        static void AssertStates(List<WirePacket> packets, Dictionary<int, byte> expected, bool fighting)
+        void AssertStates(List<WirePacket> packets, Dictionary<int, byte> expected, bool fighting)
         {
             foreach (var (id, state) in expected)
-                That(StateOf(packets, id) == state, $"586 里 {id} 的状态字节为 {state}");
+                That(StateOf(id) == state, $"585/586累计的 {id} 状态字节为 {state}");
             if (fighting)
                 That(!packets.Any(packet => packet is { Kind: 0, Opcode: 587 }), "同phase Fighting不重复发布587演出");
             else
                 Bytes(packets.Last(packet => packet is { Kind: 0, Opcode: 587 }).Body, [3, 0], "双腿成功后587是Reward/0");
         }
 
-        static byte StateOf(List<WirePacket> packets, int dungeon)
+        List<WirePacket> ReadPhase(TcpPeer peer)
         {
-            var row = packets.LastOrDefault(packet => packet is { Kind: 0, Opcode: 586, Body.Length: >= 6 } &&
-                BinaryPrimitives.ReadInt32LittleEndian(packet.Body) == dungeon);
-            That(row is not null, dungeon + " 缺少 586，已有 " + string.Join(',', packets.Where(packet => packet.Opcode == 586)
-                .Select(packet => BinaryPrimitives.ReadInt32LittleEndian(packet.Body) + ":" + packet.Body[5])));
-            return row!.Body[5];
+            var packets = Read(peer);
+            if (ReferenceEquals(peer, peers[0]))
+                foreach (var packet in packets) Observe(packet);
+            return packets;
+        }
+
+        void Observe(WirePacket packet)
+        {
+            if (packet is { Kind: 0, Opcode: 585 })
+            {
+                That(packet.Body.Length >= 6 && packet.Body.Length == 6 + 5 * packet.Body[1], "585完整条目数与包长严格一致");
+                var ids = new HashSet<int>();
+                for (int i = 0; i < packet.Body[1]; i++)
+                {
+                    int at = 2 + 5 * i;
+                    int id = BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(at));
+                    That(ids.Add(id), "585同帧地下城身份不重复");
+                    ObserveState(id, packet.Body[at + 4]);
+                }
+            }
+            else if (packet is { Kind: 0, Opcode: 586 })
+            {
+                That(packet.Body.Length == 6, "586严格6字节布局");
+                ObserveState(BinaryPrimitives.ReadInt32LittleEndian(packet.Body), packet.Body[5]);
+            }
+        }
+
+        void ObserveState(int dungeon, byte state)
+        {
+            That(state <= 3, "原生地图状态在Open/Close/Hide/Clear范围内");
+            That(state != 3 || !displayedStates.TryGetValue(dungeon, out byte previous) || previous != 3,
+                "585和586共享消费者，不重复发布同一Clear横幅：" + dungeon);
+            displayedStates[dungeon] = state;
+        }
+
+        byte StateOf(int dungeon)
+        {
+            That(displayedStates.ContainsKey(dungeon), dungeon + " 缺少真实585/586初始化或变更");
+            return displayedStates[dungeon];
         }
     }
 }

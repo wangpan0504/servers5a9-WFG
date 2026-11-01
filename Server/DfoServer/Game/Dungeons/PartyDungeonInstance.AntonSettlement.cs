@@ -13,9 +13,8 @@ internal sealed partial class PartyDungeonInstance
             pendingDeath is not null || pendingScene is not null) return [];
         bool complete = current.Length == party.Members.Length &&
             current.All(m => party.Members.Any(original => original.Actor == m.Actor));
-        // 开放图的直接重试仍缺95新Run/场景衔接；不能以实现缺口冒充准入失败。
-        if (option == 0 && complete && leader.CanRetryAntonResultDungeon()) return [];
-        bool select = option == 1 && complete;
+        // 再挑战先结束全分队原Run；调用方沿正式Select/Enter建立新Run，成功后才回复option0。
+        bool select = complete && (option == 1 || option == 0 && current.All(m => m.Actor.Session.CanRetryRaidResultDungeon()));
         var result = PartyDungeonService.Exit(store, current,
             select ? PartyDungeonExitKind.ResultSelection : PartyDungeonExitKind.ResultReturn);
         if (result.Length == 0) return [];

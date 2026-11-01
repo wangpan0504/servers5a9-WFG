@@ -9,6 +9,9 @@ internal static partial class LukeRaidRunTcpTests
     static void ManualCoins(TcpTestFixture fixture, TcpPeer[] members, TcpPeer[] others, byte phase, int count)
     {
         var all = members.Concat(others).ToArray();
+        byte[] hp = Build(writer => { writer.Write(17u); writer.Write((byte)2); writer.Write(73u); writer.Write(41u); });
+        members[0].Send(695, hp);
+        foreach (var member in all) Drain(member, phaseResults: true);
         for (int index = 0; index < count; index++)
         {
             var peer = members[index % members.Length];
@@ -29,6 +32,25 @@ internal static partial class LukeRaidRunTcpTests
                 "正常41扣本人原钱包一币并发原ACK/绝对余额14");
             That(frames.All(row => row.Rows.All(packet => packet.Opcode != 587 && packet.Opcode != 659)),
                 "每次复活不重播587、不借有副作用659刷新计数");
+            foreach (var frame in frames)
+            {
+                var status = frame.Rows.Single(packet => packet is { Kind: 0, Opcode: 634 });
+                using var reader = new BinaryReader(new MemoryStream(status.Body));
+                int rows = reader.ReadByte(), matched = 0;
+                for (int row = 0; row < rows; row++)
+                {
+                    reader.ReadUInt16();
+                    var ids = Enumerable.Range(0, reader.ReadByte()).Select(_ => reader.ReadUInt16()).ToArray();
+                    uint used = reader.ReadUInt32(), context = reader.ReadUInt32();
+                    var values = Enumerable.Range(0, reader.ReadByte()).Select(_ => reader.ReadUInt32()).ToArray();
+                    if (!ids.Contains(peer.Id)) continue;
+                    matched++;
+                    That(used == index + 1 && context == 17 && values.SequenceEqual(new uint[] { 73, 41 }),
+                        "扣币提交后立即向图内及另一分队同步本Run实际用币，保留既有Boss血量");
+                }
+                That(matched == 1 && reader.BaseStream.Position == reader.BaseStream.Length,
+                    "634精确匹配一个真实分队，完整消费全部战况行");
+            }
             if (phase == 0)
                 That(frames.All(row => row.Rows.All(packet => packet.Opcode != 778)), "P1权威池不发无效phase计数778");
             else
@@ -41,6 +63,9 @@ internal static partial class LukeRaidRunTcpTests
                 Convert.ToInt64(fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0", peer.Id)[0][0]) == coins - 1,
                 "重复41不再次扣本人币或推进共享计数");
         }
+        members[0].Send(695, hp);
+        That(all.SelectMany(member => Drain(member, phaseResults: true)).All(packet => packet.Opcode != 634),
+            "后续相同HP上报不把已用币覆盖回零，也不重发相同战况");
         if (phase == 0 && count == 8)
         {
             var peer = members[0]; byte[] key = [(byte)peer.Id, (byte)(peer.Id >> 8)];

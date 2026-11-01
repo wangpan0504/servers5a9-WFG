@@ -35,7 +35,7 @@ internal static class RaidChannelTypeTcpTests
                 var learning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
                     { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning);
                 var role = repository.Create(owner, candidate with { Level = 95, AcceptedStoryLevel = 95,
-                    CompletedQuests = [12829, 3779, 2903, 4872, 8935], InitialLearning = learning });
+                    CompletedQuests = [12829, 3779, 2903, 4872, 8935, 8672], InitialLearning = learning });
                 var items = resources.ItemResources;
                 DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, role,
                     new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces)
@@ -43,9 +43,40 @@ internal static class RaidChannelTypeTcpTests
             }
             using var peer = Open(fixture, account, gamePort: endpoints[(byte)channel], channelNumber: (byte)channel);
             peer.Select(); AntonRaidTcpTests.Drain(peer);
+            byte recruitRoles = checked((byte)(1 + ticketCase % 7));
             peer.Send(664, Build(writer => { writer.Write((byte)raidType); writer.Write(Name("Ticket"));
-                writer.Write(new byte[] { guide ? (byte)1 : (byte)0, 0, 0, 0 }); }));
-            That(AntonRaidTcpTests.Until(peer, 1, 664).Body is [1, ..], "四团原生664创建供费用查询的真实攻坚队");
+                writer.Write(new byte[] { guide ? (byte)1 : (byte)0, 0, 0, recruitRoles }); }));
+            var initial = AntonRaidTcpTests.Until(peer, 0, 590).Body;
+            That(RaidPanelTests.ReadGuideFlag(initial, 4) == guide, "四团真实建队DC仅取实际模式，不随可开战人数变化");
+            That(RaidPanelTests.ReadRecruitRoles(initial, 4) == recruitRoles, "四团普通/引导建队列表回填实际招募对象");
+            var created = AntonRaidTcpTests.Until(peer, 1, 664).Body;
+            That(created is [1, ..], "四团原生664创建供费用查询的真实攻坚队");
+            uint key = U32(created, 1);
+            string changedTitle = "Changed" + ticketCase;
+            foreach (byte changedRoles in Enumerable.Range(1, 7).Select(value => (byte)value))
+            {
+                peer.Send(670, Build(writer => { writer.Write((byte)raidType); writer.Write(Name(changedTitle)); writer.Write(changedRoles); }));
+                var changed = AntonRaidTcpTests.Until(peer, 0, 591).Body;
+                That(U32(changed, 4) == 2 && RaidPanelTests.ReadRecruitRoles(changed, 8) == changedRoles,
+                    "四团七种改名招募组合经真实670和591回填，不被默认7覆盖");
+                Bytes(AntonRaidTcpTests.Until(peer, 1, 670).Body, [1], "队长修改标题及招募对象成功");
+                foreach (byte mode in new byte[] { 0, 2 })
+                {
+                    peer.Send(1361, Build(writer => { writer.Write(mode); writer.Write(key); }));
+                    That(RaidPanelTests.ReadRecruitRoles(AntonRaidTcpTests.Until(peer, 1, 1361).Body, 6) == changedRoles,
+                        "四团重新查询完整记录继续保留真实招募对象");
+                }
+            }
+            foreach (byte invalid in new byte[] { 0, 8, 255 })
+            {
+                peer.Send(670, Build(writer => { writer.Write((byte)raidType); writer.Write(Name("Invalid")); writer.Write(invalid); }));
+                Bytes(AntonRaidTcpTests.Until(peer, 1, 670).Body, [0, 19, 0], "非法招募对象不提交改名");
+            }
+            peer.Send(833, Build(writer => { writer.Write((byte)0); writer.Write(0u); writer.Write(0x100u);
+                writer.Write((uint)raidType); writer.Write(Name(changedTitle)); }));
+            var search = AntonRaidTcpTests.Until(peer, 0, 756).Body;
+            That(U32(search) >= 1 && U32(search, 8) >= 1 && RaidPanelTests.ReadRecruitRoles(search, 12) == 7,
+                "非法修改后搜索仍保留最后合法标题及招募组合");
             if (box != 0)
             {
                 peer.Send(658, [0]);

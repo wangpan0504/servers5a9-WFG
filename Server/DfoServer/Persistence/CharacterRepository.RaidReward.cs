@@ -80,7 +80,9 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
                 eligibility.Instance != prepared.Instance || eligibility.RaidType != prepared.RaidType || eligibility.Phase != prepared.Phase ||
                 eligibility.Event == Guid.Empty || eligibility.Event.ToString("N") != eligibilityRow.GetString(1) ||
                 eligibility.Anchor != eligibilityRow.GetInt64(2) || eligibility.Offers.IsDefault ||
-                eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == prepared.Card) is not { } authorized ||
+                prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source && prepared.Card > 3 ||
+                eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card ==
+                    (prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source ? 0 : prepared.Card)) is not { } authorized ||
                 !authorized.Grants.SequenceEqual(prepared.Grants)) return null;
         }
         if (inventory.AccountMaterialRaidWeek is { } materialWeek &&

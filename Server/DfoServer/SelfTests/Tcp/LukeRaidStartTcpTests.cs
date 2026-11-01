@@ -262,10 +262,10 @@ internal static class LukeRaidStartTcpTests
             for(int index=0;index<4;index++)peers.Add(CreatePeer(index));
             foreach(var peer in peers)Drain(peer);
             var leader=peers[0];
-            leader.Send(664,Build(w=>{w.Write((byte)1);w.Write(Name("LkStart"));w.Write(new byte[4]);}));
+            leader.Send(664,Build(w=>{w.Write((byte)1);w.Write(Name("LkStart"));w.Write(new byte[] { 0, 0, 0, 7 });}));
             Until(leader,0,590);Until(leader,0,591);var createdRaid=Until(leader,1,664).Body;
             Bytes(createdRaid[..1],[1],"真实Runtime创建Luke团");uint raidKey=U32(createdRaid,1);
-            CheckFlag(leader,raidKey,0);
+            CheckNormalMode(leader,raidKey);
             for(int index=1;index<peers.Count;index++)
             {
                 leader.Send(10,Peer(peers[index].Id,0,true));Until(leader,1,10);Until(peers[index],0,7);
@@ -278,7 +278,7 @@ internal static class LukeRaidStartTcpTests
                 Bytes(Until(leader,1,669).Body,[1],"允许一人与三人分队，不伪限定满员");
                 foreach(var peer in peers)Drain(peer);
             }
-            foreach(var peer in peers)CheckFlag(peer,raidKey,1);
+            foreach(var peer in peers)CheckNormalMode(peer,raidKey);
             byte[] SingleParty()=>Build(w=>{w.Write((byte)0);w.Write((byte)0);w.Write(Name("Party : 1"));w.Write((byte)4);
                 w.Write(uint.MaxValue);w.Write((byte)5);w.Write((ushort)0);w.Write((byte)0);w.Write((byte)0);w.Write((ushort)0);w.Write((byte)7);});
             leader.Send(12,SingleParty());var existing=Until(leader,0,9).Body;Until(leader,0,26);Drain(leader);
@@ -290,13 +290,17 @@ internal static class LukeRaidStartTcpTests
             foreach(var frames in first)
             {
                 CheckInitialSnapshot(frames);
+                var startRecord=frames.Single(p=>p.Opcode==591&&p.Body.Length>=16&&U32(p.Body,4)==2).Body;
+                int stateAt=17+checked((int)U32(startRecord,12));
+                That(startRecord[stateAt]==2&&startRecord[stateAt+1]==0,
+                    "真实开战591发布进行中首阶段，NPC菜单不被待开战记录覆盖");
                 int prepare=frames.FindIndex(p=>p.Opcode==594),party=frames.FindIndex(p=>p.Opcode==9);
                 That(party>=0&&party<prepare&&prepare<frames.FindIndex(p=>p.Opcode==587),"普通完整名单先于594，再发布真实Battle首阶段");
             }
             That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=$p0",raw.EntryCost!.ItemId)
                 is [[long total]]&&total==4*raw.EntryCost.Count,"四人成本各扣一次真实PVF门票");
             That(fixture.Query("SELECT count(*) FROM characters WHERE town=$p0 AND area=$p1",raw.WaitingRoom!.Town,raw.WaitingRoom.Area) is [[4L]],"全部提交到当前PVF候战室");
-            CheckFlag(leader,raidKey,0);
+            CheckNormalMode(leader,raidKey);
             string committed=fixture.Snapshot();
             // 首次发布已写出；重试恢复名单/资产/图状态，但不能重播同阶段动画。
             foreach(var peer in peers)Drain(peer);
@@ -327,7 +331,7 @@ internal static class LukeRaidStartTcpTests
             for(int index=4;index<12;index++)peers.Add(CreatePeer(index));
             foreach(var peer in peers)Drain(peer);
             leader=peers[0];
-            leader.Send(664,Build(w=>{w.Write((byte)1);w.Write(Name("LkEight"));w.Write(new byte[4]);}));
+            leader.Send(664,Build(w=>{w.Write((byte)1);w.Write(Name("LkEight"));w.Write(new byte[] { 0, 0, 0, 7 });}));
             Until(leader,0,590);Until(leader,0,591);var opened=Until(leader,1,664);
             Bytes(opened.Body[..1],[1],"同Runtime创建满员团");
             for(int index=1;index<8;index++)Join(leader,peers[index]);
@@ -401,8 +405,7 @@ internal static class LukeRaidStartTcpTests
                         That(!actual.ContainsKey(102), "初态102零事件必须省略，不能触发未清图结果菜单");
                         continue;
                     }
-                    int expected=raw.Phases[0].Dungeons.FirstOrDefault(d=>d.HpSymbol==symbol.Key)?.HpRaw??0;
-                    That(actual[symbol.Value]==expected,"使用PVF显式symbol ID和原HP初值，不按数组下标");
+                    That(actual[symbol.Value]==0,"使用PVF显式symbol ID；初态原生血条为零次完成，其余机制符号为原零值");
                 }
                 var states=frames.Where(p=>p.Opcode==586).ToArray();
                 That(states.Length==15&&states.Select(p=>U32(p.Body)).Distinct().Count()==15,"初态覆盖全部15图以清除旧阶段残留");
@@ -524,20 +527,21 @@ internal static class LukeRaidStartTcpTests
             "自然666经Runtime绑定与重放同一个真实Started/Battle实例，未额外Attach");
     }
 
-    static void CheckFlag(TcpPeer peer,uint key,byte expected)
+    static void CheckNormalMode(TcpPeer peer,uint key)
     {
         peer.Send(1361,Build(w=>{w.Write((byte)0);w.Write(key);}));
-        AssertStartFlag(Until(peer,1,1361).Body,key,expected);
+        AssertNormalMode(Until(peer,1,1361).Body,key);
     }
-    internal static void AssertStartFlag(byte[] body,uint key,byte expected)
+    internal static void AssertNormalMode(byte[] body,uint key)
     {
-        That(body.Length>=22&&body[0]==1&&body[1]==0&&U32(body,2)==key&&U32(body,6)==key,"能力检查来自完整1361 mode0原生记录");
+        That(body.Length>=22&&body[0]==1&&body[1]==0&&U32(body,2)==key&&U32(body,6)==key,"普通模式检查来自完整1361 mode0原生记录");
         int at=14+checked((int)U32(body,10));
-        That(at+16<=body.Length&&body[at]==1&&body[at+7]==expected,"Luke记录+DC与Runtime实际可用启动能力一致");
+        That(at+16<=body.Length&&body[at]==1&&body[at+7]==0,"Luke未编队、已编队可开战及Started都保留普通模式，不让客户端错用单人阶段");
     }
 
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 596 }) { LukeRaidRunTcpTests.ValidateRuleTimer(packet); return; }
         if (packet is { Kind: 0, Opcode: 765 }) { RaidPanelTests.ReadMemberStates(packet.Body); return; }
         That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0]==0 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
         2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 590 or 591 or 592 or 593 or 594 or 598,

@@ -12,8 +12,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
     readonly object gate = new();
     readonly CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(context.Stop);
     Task pending = Task.CompletedTask;
-    sealed record ExitRequest(AntonRaidBattleView View, RaidActor Actor, Guid? Run);
-    (Guid Instance, int Phase, Guid? Run)? scheduled;
+    enum ExitReason { PhaseExpired, Energy, Encounter, PhaseCompleted }
+    sealed record ExitRequest(AntonRaidBattleView View, RaidActor Actor, Guid? Run, ExitReason Reason);
+    (Guid Instance, int Phase, Guid? Run, ExitReason Reason)? scheduled;
     ExitRequest? requested;
     bool running;
     bool disposed;
@@ -21,16 +22,23 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
 
     internal void Notice(AntonRaidBattleView view, RaidActor actor)
     {
-        Guid? run = view.PhaseExpired ? null : context.Session.CurrentRaidBattle(actor)?.LukeEnergyReturnRun(actor);
+        var battle = context.Session.CurrentRaidBattle(actor);
+        var reason = view.PhaseExpired ? ExitReason.PhaseExpired : ExitReason.Energy;
+        Guid? run = view.PhaseExpired ? null : battle?.LukeEnergyReturnRun(actor);
         if (!view.PhaseExpired && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } currentRun &&
-            view.FiendwarExpiredRuns.Contains(currentRun)) run = currentRun;
-        if (!view.PhaseExpired && run is null) return;
+            view.FiendwarExpiredRuns.Contains(currentRun)) { run = currentRun; reason = ExitReason.Encounter; }
+        if (!view.PhaseExpired && battle?.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase) == true)
+        {
+            run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
+            reason = ExitReason.PhaseCompleted;
+        }
+        if (!view.PhaseExpired && run is null && reason != ExitReason.PhaseCompleted) return;
         lock (gate)
         {
-            var identity = (view.Instance, view.Phase, run);
+            var identity = (view.Instance, view.Phase, run, reason);
             if (disposed || scheduled == identity) return;
             scheduled = identity;
-            requested = new(view, actor, run);
+            requested = new(view, actor, run, reason);
             if (!running) { running = true; pending = DrainAsync(); }
         }
     }
@@ -54,8 +62,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
 
     async Task ExitAsync(ExitRequest request)
     {
-        var (view, actor, run) = request;
-        string reason = run is null ? "phase" : view.Fiendwar is not null ? "encounter" : "energy";
+        var (view, actor, run, exitReason) = request;
+        string reason = exitReason switch { ExitReason.PhaseCompleted => "completed", ExitReason.Encounter => "encounter",
+            ExitReason.Energy => "energy", _ => "phase" };
         int failures = 0;
         bool returnCommitted = false;
         AntonRaidBattle? originalBattle = null;
@@ -72,7 +81,9 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         gates = await DispatchGateScope.EnterAsync(context, stop.Token);
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
                             battle.Instance != view.Instance ||
-                            (run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||
+                            (exitReason == ExitReason.PhaseCompleted
+                                ? !battle.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase)
+                                : run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||
                                 battle.Kind == RaidKind.Fiendwar && battle.View.FiendwarExpiredRuns.Contains(runId) &&
                                 context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) : !battle.View.PhaseExpired)) return;
                         originalBattle = battle;
@@ -90,11 +101,12 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                             using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
                             await town.ReturnFromFormalDungeonAsync(context,
                                 new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
+                            if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
                         }
                         return;
                     }
-                    // 能源回调只能退当时被标记的原Run；旧回调不能退出后来安装的新图。
-                    if (run is { } expected && instance.Id != expected) return;
+                    // 回调只能退出捕获的原Run；选图或候战时排入的回调不能退出后来安装的新图。
+                    if (run is { } expected ? instance.Id != expected : exitReason == ExitReason.PhaseCompleted) return;
                     using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members, stop.Token);
                     var departure = dungeons.Depart(context.Session);
                     if (departure.Error != 0)
@@ -121,7 +133,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             catch (Exception error) when (error is IOException or InvalidOperationException or DbException)
             {
                 log.Write(prefix + "_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Error = error.Message });
-                if (run is null && !returnCommitted && error is (DbException or InvalidDataException)) originalBattle?.FaultExpiredLukePhase(view.Instance);
+                if (exitReason == ExitReason.PhaseExpired && !returnCommitted && error is (DbException or InvalidDataException)) originalBattle?.FaultExpiredLukePhase(view.Instance);
                 context.Disconnect();
                 return;
             }

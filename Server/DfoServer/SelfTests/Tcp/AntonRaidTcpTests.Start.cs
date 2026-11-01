@@ -16,7 +16,7 @@ internal static partial class AntonRaidTcpTests
         foreach (var peer in members) Drain(peer);
         Drain(observer);
         var leader = members[0];
-        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("StartOK")); w.Write(new byte[4]); }));
+        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("StartOK")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         uint key = U32(Until(leader, 0, 590).Body, 4);
         Until(leader, 0, 591); Until(leader, 1, 664);
         for (int i = 1; i < members.Length; i++)
@@ -112,7 +112,9 @@ internal static partial class AntonRaidTcpTests
         {
             var selecting = new List<WirePacket>();
             for (int n = 0; n < 64 && !selecting.Any(p => p is { Kind: 0, Opcode: 27 }); n++) selecting.Add(peer.Read());
-            VerifyMap(selecting.Single(p => p.Opcode == 585).Body);
+            // 开团时已逐项核对完整14图；选图没有状态变化，不重复下发同一列表。
+            Bytes(selecting.Single(p => p.Opcode == 585).Body, [0, 0, 0, 0, 0, 0],
+                "选图585只保留首字节、空变化列表与感染索引0，沿用已验证的初始地图状态");
             That(selecting.All(p => p.Opcode is not (587 or 28 or 29)), "多人分队打开选图同步地图，不重播阶段或伪造入场");
         }
         leader.Send(132);

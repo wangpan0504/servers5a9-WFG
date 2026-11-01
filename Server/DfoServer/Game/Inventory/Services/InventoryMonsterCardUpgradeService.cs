@@ -5,9 +5,18 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, EnchantmentCatalog enchantments,
-    MonsterCardBindCatalog cards, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null)
+    MonsterCardBindCatalog cards, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null,
+    MonsterCardUpgradeRules? rules = null)
 {
     readonly Func<int, int> draw = random ?? Random.Shared.Next;
+    readonly MonsterCardUpgradeRules upgradeRules = PrepareRules(rules);
+
+    static MonsterCardUpgradeRules PrepareRules(MonsterCardUpgradeRules? configured)
+    {
+        var result = configured ?? new();
+        result.Validate();
+        return result;
+    }
 
     public InventoryResult Apply(Character character, MonsterCardUpgradeRequest request,
         out MonsterCardUpgradeReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
@@ -27,7 +36,9 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
         {
             if (target!.Core.EnchantUpgrade >= enchantments.CardMaximumLevel(target.Core.ItemId))
                 return Reject("maximum-level", out rejection);
-            chance = cards.CardUpgradeChance(targetTemplate!.Rarity, request.MaterialSlots.Length);
+            if (!cards.SupportsCardUpgradeRarity(targetTemplate!.Rarity))
+                return Reject("upgrade-rarity", out rejection);
+            chance = upgradeRules.Chance(request.MaterialSlots.Length);
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {

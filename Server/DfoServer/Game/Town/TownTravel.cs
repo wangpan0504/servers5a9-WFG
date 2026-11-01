@@ -100,13 +100,14 @@ internal static class TownTravel
         // 特殊区域与团队频道的赛丽亚房间按频道落点出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)
-            return ChannelExit(character, towns, completed, exit);
+            return ChannelExit(character, towns, completed, exit, channel);
         // 房间返回 0 仍绑定存档返回点；地图传送门对象（实测 PathKind 6）按 PVF warpgate 目标放行，
         // 等级与前置任务由 Admission 的 portal 分支继续校验；菜单 5 同样按传送目标处理。
         bool portal = request.TargetNpc == 0 && towns.IsRoom(character.Position, completed) &&
             (request.PathKind == 5 ||
              request.PathKind != 0 && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
-        string reason = towns.Admission(character.Position, target, character.Level, completed, character.Return, portal, request.TargetNpc);
+        string reason = towns.Admission(character.Position, target, character.Level, completed,
+            RoomDoorReturn(character, towns, completed, channel), portal, request.TargetNpc);
         // 57/1的团队门condition1、引导门condition2；真实未开战攻坚队及模式由Session核验。
         // 仅解释对应模式的已证门，不放行其他地图或跨模式条件。
         if (reason == "route-state-required" && (fiendwarWaiting || fiendwarGuideWaiting) && channel?.Type == ChannelAreaLanding.FiendwarType &&
@@ -132,10 +133,10 @@ internal static class TownTravel
         // 频道起始城镇（安徒恩战舰 19、只能经频道进入的 67 等）内走动不改返回地区，离开频道后仍回进入前的普通地区。
         var kept = OrdinaryDistrict(character.Return);
         var back = target.Town == 101 ? character.Return :
-            towns.IsRoom(target, completed) && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position.Town)
+            towns.IsRoom(target, completed) && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position, channel?.Type)
             ? kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
-            : ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
-            ? kept
+            : ChannelAreaLanding.PreservesRoomReturn(towns, target, channel?.Type)
+            ? kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
             : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
             : towns.ResolveRoomReturn(target, kept, character.Level, completed);
@@ -151,26 +152,37 @@ internal static class TownTravel
         if (!towns.IsRoom(character.Position, completed))
             return TownTravelPlan.Reject("not-in-ready-room");
         if (ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit)
-            return ChannelExit(character, towns, completed, exit);
-        var back = character.Return ?? towns.DefaultReturn(character.Position, completed);
+            return ChannelExit(character, towns, completed, exit, channel);
+        var back = RoomDoorReturn(character, towns, completed, channel) ?? towns.DefaultReturn(character.Position, completed);
         var target = back is null ? null : towns.Entrance(character.Position, back, completed);
         if (target is null)
             return TownTravelPlan.Reject("return-gate-unavailable");
         string reason = towns.Admission(character.Position, target, character.Level, completed, back);
-        return reason == "ready" ? new(target, target, reason) : TownTravelPlan.Reject(reason);
+        var remembered = ChannelAreaLanding.PreservesRoomReturn(towns, target, channel?.Type)
+            ? OrdinaryDistrict(character.Return) ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
+            : target;
+        return reason == "ready" ? new(target, remembered, reason) : TownTravelPlan.Reject(reason);
     }
 
     // 频道落点已由 ChannelAreaLanding.Decide 校验目录、等级/任务准入与门口可站。频道专属城镇（115/59/67 等）不覆盖原返回地区，
     // 离开频道后赛丽亚房间仍回进入前的普通地区。
-    static TownTravelPlan ChannelExit(Character character, TownCatalog towns, IReadOnlySet<int> completed, Location exit)
+    static TownTravelPlan ChannelExit(Character character, TownCatalog towns, IReadOnlySet<int> completed, Location exit, ChannelEntry? channel)
     {
         // 返回地区规则与原 CharacterSelection 频道落点一致：专属城镇保留进入前地区，其余按落点解析房间返回地区。
-        var back = ChannelAreaLanding.PreservesRoomReturn(towns, exit.Town)
+        var back = ChannelAreaLanding.PreservesRoomReturn(towns, exit, channel?.Type)
             ? towns.ResolveRoomReturn(character.Position, OrdinaryDistrict(character.Return), character.Level, completed)
             : towns.ResolveRoomReturn(exit, exit, character.Level, completed);
         return new(exit, back, "ready");
     }
 
+    // 团队地区的房间仍从本地门出入；独立保留的普通返回地区只供离开频道后使用。
+    static Location? RoomDoorReturn(Character character, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel) =>
+        towns.IsRoom(character.Position, completed) &&
+        (character.Position.Town != towns.Room.Town || character.Position.Area != towns.Room.Area) &&
+        ChannelAreaLanding.PreservesRoomReturn(towns, character.Position, channel?.Type)
+            ? towns.DefaultReturn(character.Position, completed) : character.Return;
+
     // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
-    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.XianVillageTown } ? null : saved;
+    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.XianVillageTown } ||
+        saved is not null && ChannelAreaLanding.IsRaidInstanceArea(saved) ? null : saved;
 }

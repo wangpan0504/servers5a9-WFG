@@ -77,20 +77,20 @@ internal static class RaidCreateTcpTests
             peer.Expect(1, 667, [0, 0x13, 0]);
             peer.Send(666, []);
             peer.Expect(1, 666, [0, 0x13, 0]);
-            peer.Send(670, Convert.FromHexString("03030000006162630" + "0"));
+            peer.Send(670, Convert.FromHexString("030300000061626305"));
             var modified = peer.Expect(0, 591).Body;
             That(U32(modified) == key && U32(modified, 4) == 2 && U32(modified, 8) == key && U32(modified, 12) == 3 &&
                 modified.AsSpan(16, 3).SequenceEqual("abc"u8) && modified[19] == 3,
                 "MODIFY_RAID_INFO：NOTI 0x24F op2 = key + 2 + 整条记录（新标题 abc、类型 3）");
             peer.Expect(1, 670, [1]);
-            peer.Send(670, Convert.FromHexString("02030000006162630" + "0"));
+            peer.Send(670, Convert.FromHexString("020300000061626305"));
             peer.Expect(1, 670, [0, 0x13, 0]);
             peer.Send(665, [(byte)id, (byte)(id >> 8)]);
             peer.Expect(1, 665, [1, 0]);
             peer.Send(665, [(byte)id, (byte)(id >> 8)]);
             peer.Send(666, []);
             peer.Expect(1, 666, [0, 0x13, 0]);
-            peer.Send(670, Convert.FromHexString("03030000006162630" + "0"));
+            peer.Send(670, Convert.FromHexString("030300000061626305"));
             peer.Expect(1, 670, [0, 0x13, 0]);
             peer.Send(667, [0, 3]);
             peer.Expect(1, 667, [1]);

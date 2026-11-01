@@ -81,6 +81,11 @@ internal static class LukeRaidStartTests
             LukeFacilityBridgeTests.RunCore(actors.Take(8).ToArray());
             LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
             await LukeRewardRejectionTests.RunAsync(actors[8],root);
+            var waitingPosition = landing with { X = 24, Y = 18, Direction = 1 };
+            var waitingCharacter = sessions[7].Selected!;
+            var waitingSaved = repository.Save(actors[7].Owner, waitingCharacter, waitingPosition, waitingCharacter.Return);
+            sessions[7].InstallRaidStart(new(actors[7], waitingCharacter, waitingPosition,
+                new(waitingCharacter.Inventory, waitingCharacter.Inventory, "luke_start_fixture_position")), waitingSaved);
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
             { raids.Invite(leader,actors[index],0); That(raids.Respond(actors[index],leader.Character,true).Accepted,"Luke通过原邀请加入"); }
@@ -237,18 +242,28 @@ internal static class LukeRaidStartTests
                 parties.Snapshot().Length==2&&parties.IsCurrent(existing)&&Scalar("SELECT count(*) FROM inventory_audit_log WHERE action_name LIKE 'luke_raid_start:%'")==0,
                 "末成员SQL失败整团角色/费用/位置/Battle/Started回滚，已有队伍及无关队伍不变");
             That(Scalar("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=100")==20 &&
-                Scalar("SELECT count(*) FROM characters WHERE town=32 AND area=4")==0,"独立SQL读取确认没有部分费用或迁移");
+                Scalar("SELECT count(*) FROM characters WHERE town=32 AND area=4")==1,"独立SQL读取确认没有部分费用或迁移，原候战成员保位");
             That(Scalar("SELECT count(*) FROM character_raid_runs")==0,"末成员失败也回滚全部666生命周期签发");
             Sql("DROP TRIGGER fail_luke;"); await Dispatch();
             That(result is {Error:0,Receipt.Party.Started.Participants.Length:8},"八人费用提交与唯一实例绑定成功");
             var firstReceipt=result!.Receipt!;
             That(!RaidProjection.CanStart(firstReceipt.Party,enableLuke:true),"已Started不再次投影招募开战旗标");
+            var startedRecord = RaidProjection.Record(firstReceipt.Party);
+            int recordState = 17 + BitConverter.ToInt32(startedRecord, 12);
+            That(startedRecord[recordState] == 2 && startedRecord[recordState + 1] == 0,
+                "开战记录明确发布进行中与实际阶段，不以默认待开战状态恢复NPC菜单");
             var instance=firstReceipt.Party.Started!.InstanceId;
+            That(actors[4].Owner.Execute(()=>RaidProjection.ClearCounts(firstReceipt.Party)) is { Count:0 },
+                "持另一分队成员owner时仍可读取原Battle通关快照，不嵌套取得首成员账号锁");
+            That(actors[4].Owner.Execute(() => RaidProjection.CombatSnapshot(firstReceipt.Party)) is { View.Phase: 0 } &&
+                leader.Session.RaidRosterBattleSnapshot(leader, Guid.NewGuid()) is null &&
+                leader.Session.RaidRosterBattleSnapshot(leader with { Epoch = leader.Epoch + 1 }, instance) is null,
+                "实时阶段快照不嵌套成员账号锁，拒绝错误实例和选角代次");
             await VerifyDisplayAsync(leader,firstReceipt.Battle!);
             That(Scalar($"SELECT count(*) FROM character_raid_runs WHERE instance_id='{instance:N}' AND raid_type=1 AND state=0 AND phase0_receipt IS NULL AND phase1_receipt IS NULL")==8,
                 "666同SQL签发八人精确实例入场事实，不预填阶段资格或通关");
             That(sessions.Take(8).Select((s,i)=>s.StartedRaid?.InstanceId==instance&&s.RaidCombatView()?.Instance==instance&&
-                s.Selected!.Position==landing&&s.Selected.Inventory.Items.Single().Core.Count==1&&
+                s.Selected!.Position==(i==7?waitingPosition:landing)&&s.Selected.Inventory.Items.Single().Core.Count==1&&
                 s.Selected.Inventory.Items.Single().Uid==original[i].Inventory.Items.Single().Uid).All(x=>x),"真实提交角色、Started和Battle同实例，扣一次且保持UID");
             That(parties.IsCurrent(existing)&&parties.Snapshot().Length==3&&firstReceipt.Squads.Length==8,"已有精确队伍不改版本，缺队原子安装，全员完整名单供594恢复");
             long audits=Scalar("SELECT count(*) FROM inventory_audit_log WHERE action_name LIKE 'luke_raid_start:%'");
@@ -267,6 +282,8 @@ internal static class LukeRaidStartTests
             await DelayedPublicationAsync(firstReceipt,actors[1],()=>departure=leaving.Leave(actors[1],actors[1].Character),"首发排队后离团");
             That(departure is not null&&sessions[1].RaidCombatView() is null&&!sessions[1].CanPublishRaidBattle(actors[1],oldView)&&
                 sessions[2].RaidCombatView()?.Instance==instance,"精确离团只清本人实例绑定，旧发布失效但其它成员不受影响");
+            That(sessions[1].RaidRosterBattleSnapshot(actors[1], instance) is null,
+                "离团后不能以旧名册身份恢复实时阶段显示");
             That(!sessions[2].DetachRaidCombatStart(actors[2],Guid.NewGuid())&&sessions[2].RaidCombatView()?.Instance==instance,
                 "错误实例迟到清理不能删除当前绑定");
             That(Scalar("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=100")==12,

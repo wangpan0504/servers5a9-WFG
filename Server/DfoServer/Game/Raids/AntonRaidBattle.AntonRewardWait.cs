@@ -5,10 +5,11 @@ namespace DfoServer.Game.Raids;
 internal sealed partial class AntonRaidBattle
 {
     readonly AntonRewardCards antonCards = new();
+    internal bool SelectableRewardCards => HasAntonRewards || Kind == RaidKind.Luke && lukeResourceRewards is not null;
 
     internal bool MatchesAntonCardReplay(PreparedRaidReward reward, byte requested)
     {
-        lock (gate) return HasAntonRewards && reward.Instance == Instance &&
+        lock (gate) return SelectableRewardCards && reward.Instance == Instance &&
             antonCards.MatchesReplay(reward.Phase, reward.Character, requested, reward.Card);
     }
 
@@ -16,10 +17,10 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!HasAntonRewards || !actor.IsCurrent || current.State != AntonRaidBattleState.Reward ||
+            if (!SelectableRewardCards || !actor.IsCurrent || current.State != AntonRaidBattleState.Reward ||
                 current.Phase != phase || current.ClockFaulted || pendingTransition is not null ||
                 !members.TryGetValue(actor, out var policy) ||
-                AntonEligibility(actor.Character, phase) is not { Eligible: true } ||
+                (HasAntonRewards ? AntonEligibility(actor.Character, phase) : LukeEligibility(actor.Character, phase)) is not { Eligible: true } ||
                 policy[phase].Offers.SingleOrDefault(offer => offer.Kind == kind && offer.Card == 0) is not { } frozen)
                 return null;
             if (antonCards.Select(phase, actor.Character, squad, requested) is not { } card) return null;

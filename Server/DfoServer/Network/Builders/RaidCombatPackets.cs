@@ -5,6 +5,71 @@ namespace DfoServer.Network.Builders;
 
 internal static class RaidCombatPackets
 {
+    // 015F8790：i8阶段/图数，u16图号/u8布局/i8牌数，逐牌u32模板/u8保留，尾部为自动展示标记。
+    internal static byte[] LukeCards(LukeCardsDisplay display)
+    {
+        if (display.Phase > 1 || display.Dungeons.Length > sbyte.MaxValue ||
+            display.Dungeons.Any(row => row.Monsters.Length > sbyte.MaxValue))
+            throw new InvalidDataException("卢克牌组超出客户端范围");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(display.Phase); writer.Write(checked((byte)display.Dungeons.Length));
+        foreach (var row in display.Dungeons)
+        {
+            writer.Write(row.Dungeon); writer.Write(row.Pattern); writer.Write(checked((byte)row.Monsters.Length));
+            foreach (int monster in row.Monsters) { writer.Write(checked((uint)monster)); writer.Write((byte)0); }
+        }
+        // 03B94791..C6仅在卢克城镇自动展示未读牌组；读取后客户端自行清除此标记。
+        writer.Write(display.Phase == 0 ? (byte)1 : (byte)0);
+        return stream.ToArray();
+    }
+
+    internal static byte[] LukeNamed(int monster, bool killed)
+    {
+        byte[] body = new byte[5];
+        BinaryPrimitives.WriteInt32LittleEndian(body, monster); body[4] = killed ? (byte)1 : (byte)0;
+        return body;
+    }
+
+    // 02389A10：逐行u32地下城/u8操作/u8人数/u16角色；0移除，2静默登记，不重播通关横幅。
+    internal static byte[] Participation(IReadOnlyList<RaidRunDisplay> previous, IReadOnlyList<RaidRunDisplay> current,
+        bool notifyClears = false)
+    {
+        // op4不修改参与位置，只报告本次Run已经提交的通关；不能从DGN最终Hide/Close反推。
+        var cleared = notifyClears ? current.Where(row => row.Cleared &&
+            !previous.Any(old => old.Run == row.Run && old.Cleared)).ToArray() : [];
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(checked((byte)(previous.Count + current.Count + cleared.Length)));
+        Write(previous, 0);
+        Write(current, 2);
+        Write(cleared, 4);
+        return stream.ToArray();
+        void Write(IReadOnlyList<RaidRunDisplay> rows, byte operation)
+        {
+            foreach (var row in rows)
+            {
+                writer.Write(row.Dungeon); writer.Write(operation); writer.Write(checked((byte)row.Members.Length));
+                foreach (ushort member in row.Members) writer.Write(member);
+            }
+        }
+    }
+
+    internal static byte[] StatusHp(IReadOnlyList<RaidRunDisplay> rows)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(checked((byte)rows.Count));
+        foreach (var row in rows)
+        {
+            writer.Write((ushort)row.Squad); writer.Write(checked((byte)row.Members.Length));
+            foreach (ushort member in row.Members) writer.Write(member);
+            writer.Write(row.UsedCoins); writer.Write(row.Context); writer.Write(checked((byte)row.Values.Length));
+            foreach (uint value in row.Values) writer.Write(value);
+        }
+        return stream.ToArray();
+    }
+
     // 02397850：outer、分队号、登记成员、已用币、695首u32、同序百分比。图集帧1..20直接画分队号。
     internal static byte[] AntonHp(DfoServer.Game.Dungeons.AntonHpDisplay display)
     {
@@ -28,7 +93,7 @@ internal static class RaidCombatPackets
         return body;
     }
     // Luke专用准备层：02386120按1/4/4/4读取，01DD06DE忽略中间列并保存now+seconds。
-    // 零秒不是RESET，kind2 UI存在除零风险；本方法未接入正式投影。
+    // 零秒不是RESET，kind2 UI存在除零风险；取消计时使用独立的已过期区间。
     public static byte[] LukePositiveTimer(sbyte kind, int dungeon, uint ignoredRaw, uint seconds)
     {
         if (kind is not (1 or 2)) throw new ArgumentOutOfRangeException(nameof(kind));
@@ -40,6 +105,15 @@ internal static class RaidCombatPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), checked((uint)dungeon));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(5), ignoredRaw);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), seconds);
+        return body;
+    }
+
+    // 01DD06B0按32位加法保存now+末列；FFFFFFFF使end=now-1。
+    // 01DD0810先拒绝end<now，既不等待旧计时结束，也不进入零长度比例计算。
+    internal static byte[] LukeExpiredTimer(sbyte kind, int dungeon)
+    {
+        byte[] body = LukePositiveTimer(kind, dungeon, 0, 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), uint.MaxValue);
         return body;
     }
 

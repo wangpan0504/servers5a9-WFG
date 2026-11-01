@@ -31,8 +31,8 @@ internal static partial class LukeRaidRunTcpTests
                 }
                 That(found,"自然时钟在有界通知预算内向两队发出5056开放状态");
             }
-            That(rows[index].Any(Opened)&&!rows[index].Any(p=>p.Opcode is 587 or 596 or 597 or 600),
-                "自然到期只投影已提交DGN状态，不重播阶段动画或猜测计时界面/奖励预览");
+            That(rows[index].Any(Opened)&&!rows[index].Any(p=>p.Opcode is 587 or 597 or 600),
+                "自然到期发布DGN状态及已证按图596，不重播阶段动画或奖励预览");
         }
         Load(first); Load(second);
         var waiting=System.Diagnostics.Stopwatch.StartNew();bool faulted=false;

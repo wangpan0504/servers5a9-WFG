@@ -52,7 +52,7 @@ internal static partial class AntonRaidTcpTests
             That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296")
                 is [[40L]], "二十名参团角色均真实持有两张门票，团外观察者无票，拒绝不能靠全团无票掩盖扣费");
             var leader = peers[0]; var observer = peers[20];
-            leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Anton")); w.Write(new byte[4]); }));
+            leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Anton")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
             var list = Until(leader, 0, 590).Body;
             uint key = U32(list, 4);
             That((key >> 16 & 255) == 19, "招募key属于实际频道19");
@@ -236,7 +236,7 @@ internal static partial class AntonRaidTcpTests
             foreach (var peer in peers) Drain(peer);
             That(Information(observer, key, 2) is { Members.Length: 19 } inherited && inherited.Leader == peers[1].Id,
                 "最早幸存成员继任，key保持不变");
-            peers[1].Send(670, Build(w => { w.Write((byte)0); w.Write(Name("Next")); w.Write((byte)0); }));
+            peers[1].Send(670, Build(w => { w.Write((byte)0); w.Write(Name("Next")); w.Write((byte)7); }));
             Bytes(Until(peers[1], 1, 670).Body, [1], "继任队长可以改名");
             foreach (var peer in peers) Drain(peer);
             peers[3].Send(3, [1]); Until(peers[3], 1, 3); peers[3].Closed();

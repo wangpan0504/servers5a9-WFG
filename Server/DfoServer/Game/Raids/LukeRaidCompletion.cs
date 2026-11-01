@@ -64,6 +64,7 @@ internal sealed partial class AntonRaidBattle
         public int Phase { get; }
         public DateTimeOffset Anchor { get; }
         public int Week { get; }
+        public uint Seconds { get; }
         public string Source { get; }
         public int WeeklyClearLimit { get; }
         public bool FinalPhase { get; }
@@ -77,6 +78,8 @@ internal sealed partial class AntonRaidBattle
             var policy = battle.lukeCompletion!;
             Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; FinalPhase = phase + 1 == battle.PhaseCount; Anchor = battle.lukeClock.GetUtcNow();
             Week = policy.Cycle.Key(Anchor); Source = policy.Source; WeeklyClearLimit = policy.WeeklyClearLimit;
+            Seconds = battle.lukePhaseAnchor is { } start
+                ? checked((uint)Math.Max(0, Math.Floor(battle.lukeClock.GetElapsedTime(start).TotalSeconds))) : 0;
             Policy = policy.Phases[phase];
             GuildParties = battle.guildClearParties.ToImmutableDictionary();
             FiendwarNoFacilities = battle.Kind == RaidKind.Fiendwar && battle.fiendwarDefinition is { Guide: false } &&
@@ -133,6 +136,8 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate) return lukePhaseCommits.GetValueOrDefault(phase)?.Members.SingleOrDefault(row => row.Character == character);
     }
+    internal uint? LukeResultSeconds(int phase)
+    { lock (gate) return lukeSettlements.GetValueOrDefault(phase)?.Seconds; }
     bool RequiresReward(RaidActor actor, int phase) => Kind is not (RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar) || lukeCompletion is null ||
         lukePhaseCommits.GetValueOrDefault(phase)?.Members.Any(row => row.Character == actor.Character && row.Eligible) == true;
 
@@ -156,6 +161,15 @@ internal sealed partial class AntonRaidBattle
             ? candidate : null;
     }
 
+    internal bool RequiresLukeCompletedPhaseReturn(RaidActor actor, Guid instance, int phase)
+    {
+        lock (gate) return Kind == RaidKind.Luke && Instance == instance && current.Phase == phase &&
+            !current.ClockFaulted && actor.IsCurrent && members.ContainsKey(actor) &&
+            (pendingTransition is { State: AntonRaidBattleState.Reward } terminal && terminal.Phase == phase ||
+                current.State == AntonRaidBattleState.Reward) &&
+            lukePhaseCommits.ContainsKey(phase);
+    }
+
     internal AntonRaidBattleChange? AcceptLukeSettlement(LukePhaseSettlement candidate, LukePhaseCommit receipt)
     {
         lock (gate)
@@ -173,7 +187,13 @@ internal sealed partial class AntonRaidBattle
                 return null;
             }
             lukePhaseCommits.Add(candidate.Phase, receipt);
-            return CommitPendingTransition();
+            var transition = CommitPendingTransition();
+            if (transition is not null || Kind != RaidKind.Luke ||
+                pendingTransition is not { State: AntonRaidBattleState.Reward }) return transition;
+            // 持久资格确认后发布退场事实；正式Run仍由原退出路径释放，不能越过资产屏障直接翻牌。
+            var before = current;
+            current = current with { Revision = checked(current.Revision + 1) };
+            return new(before, current);
         }
     }
 }

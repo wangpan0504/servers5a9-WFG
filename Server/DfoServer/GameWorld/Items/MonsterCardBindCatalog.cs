@@ -41,6 +41,8 @@ internal sealed class MonsterCardBindCatalog
     public IReadOnlyDictionary<int, int> SphereUpgradeChances => sphereUpgradeChances;
     public IEnumerable<MonsterCardBindUpgradeRow> UpgradeRows => upgradeRows.Values;
 
+    public bool SupportsCardUpgradeRarity(int rarity) => upgradeRows.ContainsKey(rarity);
+
     public int CardUpgradeChance(int rarity, int materials)
     {
         if (materials is < 1 or > 4 || !upgradeRows.TryGetValue(rarity, out var row) ||

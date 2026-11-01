@@ -217,7 +217,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 客户端没有保留换频道快照时（普通频道与团队页签频道互换、进出魔界大战等类型谓词不一致的换频道），按普通选角落点和包序。
             // 旧频道类型已知（同一服务端进程内的上一次选角）时直接比较谓词；否则按存档城镇推断。
             int? previousType = ChannelEntry is null ? null : channelHistory?.Previous(owner.Account);
-            bool resumed = resumeTown && !ChannelAreaLanding.LeavesRetiredTown(character.Position) &&
+            bool resumed = resumeTown && !ChannelAreaLanding.IsRaidInstanceArea(character.Position) &&
+                !ChannelAreaLanding.LeavesRetiredTown(character.Position) &&
                 ChannelAreaLanding.AllowsFiendwarTown(ChannelEntry, character.Position.Town) &&
                 (ChannelEntry is not null && previousType is int previous
                 ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
@@ -233,7 +234,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (ChannelEntry?.Type is 39 or 53 &&
                 character.Position.Town != (ChannelEntry.Type == 39 ? 48 : 62))
                 resumed = false;
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry, previousType);
             TownSnapshotResumed = resumed;
             if (ChannelEntry is not null)
                 channelHistory?.Record(owner.Account, ChannelEntry.Type);

@@ -11,17 +11,24 @@ internal static class CharacterSelection
 {
     public static Character Prepare(ICharacterRepository repository, AccountOwners.Lease owner, Character character,
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
-        ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null) => owner.Execute(() =>
+        ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null,
+        int? previousChannelType = null) => owner.Execute(() =>
     {
         bool leavingRetiredTown = ChannelAreaLanding.LeavesRetiredTown(character.Position);
-        if (leavingRetiredTown) resumeTown = false;
+        bool leavingRaidInstance = ChannelAreaLanding.IsRaidInstanceArea(character.Position);
+        // 同城普通/团队入口按来源频道区分；重启丢失频道历史时，保留已经独立记住的普通地区。
+        // 普通卢克32/3自身的返回记忆不清除，也不把缺少来源的旧32/3存档一律判成团队地区。
+        bool preservesReturn = ChannelAreaLanding.PreservesRoomReturn(towns, character.Position, previousChannelType ?? channel?.Type) ||
+            previousChannelType is null && character.Position is { Town: 32, Area: 0 or 3 } &&
+            character.Return is { Town: not 32 };
+        if (leavingRetiredTown || leavingRaidInstance) resumeTown = false;
         // 专属中央公园的旧位置/返回地区归回正常中央公园；仍由目录核对等级、任务及房间门口。
         // 频道专属街区已有普通返回地区时，从共享房间解析该记忆，不能让当前街区覆盖它。
         // 无返回地区的旧存档仍从原地区恢复；决斗场与五陵继续使用共享房间默认地区。
         var returnSource = leavingRetiredTown
             ? new Location(ChannelAreaLanding.CentralParkTown, 1, 0, 0)
-            : character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ||
-              character.Return is not null && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position.Town)
+            : leavingRaidInstance || character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ||
+              preservesReturn && (character.Return is not null || character.Position.Town == 32)
                 ? towns.Room : character.Position;
         if (resumeTown && towns.IsGuildHall(character.Position, completed))
         {
@@ -48,7 +55,8 @@ internal static class CharacterSelection
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
             // 旧存档可能把战舰街区记成返回地区；共享房间的 1379 与出门都取它，按初始地区修复，位置保持不变。
-            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.LegacyRetiredTown or ChannelAreaLanding.XianVillageTown })
+            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.LegacyRetiredTown or ChannelAreaLanding.XianVillageTown } ||
+                character.Return is { } saved && ChannelAreaLanding.IsRaidInstanceArea(saved))
                 character = repository.Save(owner, character, character.Position,
                     towns.ResolveRoomReturn(towns.Room, OrdinaryDistrict(character.Return), character.Level, completed));
         }
@@ -97,7 +105,7 @@ internal static class CharacterSelection
         return character;
 
         // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
-        Location? OrdinaryDistrict(Location? saved) => saved?.Town switch
+        Location? OrdinaryDistrict(Location? saved) => saved is not null && ChannelAreaLanding.IsRaidInstanceArea(saved) ? null : saved?.Town switch
         {
             ChannelAreaLanding.AntonTown or ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown => null,
             ChannelAreaLanding.LegacyRetiredTown => new(ChannelAreaLanding.CentralParkTown, 1, 0, 0),

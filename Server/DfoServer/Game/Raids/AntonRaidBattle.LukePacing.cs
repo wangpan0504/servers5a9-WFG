@@ -15,8 +15,11 @@ internal sealed partial class AntonRaidBattle
             return state with { LukeEnergyBlocked = true, LukeEnergyOverloadEpoch = checked(state.LukeEnergyOverloadEpoch + 1) };
         if (dungeon == 5066 && state.Dungeons[5066] == RaidDungeonState.Clear)
             state = state with { LukeEnergyBlocked = false };
-        if (state.LukeEnergyActivated || fact is not { Kind: RaidStageFactKind.EnterDungeon, Dungeon: 5061 or 5062 or 5066 } ||
-            state.Dungeons.GetValueOrDefault(5066) != RaidDungeonState.Open) return state;
+        if (state.LukeEnergyActivated || fact is not { Kind: RaidStageFactKind.EnterDungeon, Dungeon: 5061 }) return state;
+        // 入王座事实先激活时钟，随后同一次规则求值开放储藏室并设置计时。
+        // 已开放的兼容夹具仍沿同一个锚点初始化，不按人数切换规则。
+        if (state.Dungeons.GetValueOrDefault(5066) != RaidDungeonState.Open)
+            return state with { LukeEnergyActivated = true };
         var attack = new RaidTimer(1, 5066);
         long generation = checked(state.TimerSequence + 1);
         return state with { LukeEnergyActivated = true, TimerSequence = generation,

@@ -164,7 +164,8 @@ internal static class LukeFacilityBridgeTests
             reopened.SetMechanism(reopened.Instance,reopened.View.Revision,"[reopen]",1);
             var newGeneration=reopened.View;
             foreach(var row in rows) reopened.ReleaseDungeon(row.Actor,run);
-            That(ReferenceEquals(newGeneration,reopened.View),"旧目标代末成员离场不回滚新代状态");
+            That(reopened.View == (newGeneration with { Revision = newGeneration.Revision + rows.Length }),
+                "旧目标代成员离场只刷新各自退出的Revision，不回滚新代任何状态");
             if(dungeon==5054)
             {
                 RaidScript Trigger(string behavior)=>script with {Phases=script.Phases.SetItem(0,script.Phases[0] with

@@ -137,10 +137,17 @@ internal static class AntonRaidCombatTcpTests
                 BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(13), 6);
                 peer.Send(117, body);
                 Bytes(peer.Expect(0, 586).Body, [3, 0, 0, 0, 0, 3], "已提交清图先更新真实DGN状态，未收到585也可建键");
+                if (phase == 0)
+                {
+                    Bytes(peer.Expect(0, 584).Body, [0], "无RaidRun的手工战斗夹具初始化空地下城参与表");
+                    Bytes(peer.Expect(0, 634).Body, [0], "无RaidRun的手工战斗夹具初始化空怪物血量表");
+                }
                 Bytes(peer.Expect(0, 601).Body, [0, (byte)phase, 17, 0, 0, 0, 0x34, 0x12, 3, 1], "601先安装配置明确的本阶段结果");
                 Bytes(peer.Expect(0, 587).Body, [3, (byte)phase], "587随后打开本阶段奖励");
+                // 未创建正式攻坚账本，阶段清图后不重复发送未变化的1446。
                 Bytes(peer.Expect(0, 115).Body, [1, 1, (byte)boss.ObjectKey, (byte)(boss.ObjectKey >> 8)], "117确认仅回实际Boss键");
                 var rewardView = battle.View;
+                That(session.RaidMovieSnapshot() is null, "卢克659显示接线不能接管安徒恩既有电影和奖励展示");
                 peer.Send(117, body); peer.Expect(0, 115);
                 That(ReferenceEquals(rewardView, battle.View), "重复117不再次完成阶段");
 

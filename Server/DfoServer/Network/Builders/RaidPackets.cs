@@ -43,11 +43,11 @@ internal static class RaidPackets
 
     // NOTI 0x24F RAID_MODIFY op2（023C8937）：u32 key, u32 2, 整条记录（01DD08E0，与 0x24E 记录同形、无尾 u8）；只更新已有记录，不存在即丢弃。
     public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false) => Build(writer =>
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7) => Build(writer =>
     {
         writer.Write(key);
         writer.Write(2u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles);
     });
 
     // ACK658 RAID_ENTRY_COST_INFO（0233C3E0，0234A067 注册）：成功直接返回，不读字段；失败才走 01DC6600。
@@ -100,9 +100,9 @@ internal static class RaidPackets
 
     // 记录（01DD08E0）：u32 key；str(0x100) 标题 +0x04；u8 +0x24 团本类型（01DDADC0 按 raid.lst 下标取脚本与 PHASE NAME）；
     // u8 +0x28；u8 +0x30 阶段下标（-1 当 0）；u32 +0x34；u8 +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4；队长成员块 +0x38。
-    // +0x28/+0x34/+0xDC.. 语义未证明，写 0（实机 2026-10-21 23:07 同形记录未崩溃）。
+    // +0xE4低三位为输出/协同/辅助招募掩码，0216E580→0216E330回填勾选；未知字节保持0。
     public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false)
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7)
     {
         writer.Write(key);
         WriteText(writer, title, TextLimit);
@@ -110,19 +110,21 @@ internal static class RaidPackets
         writer.Write(state);                 // +0x28
         writer.Write(phase);                 // +0x30
         writer.Write(0u);                    // +0x34
-        // +DC 回填 CREATE_RAID +210；漩涡/普雷的团队与引导不能借可开战状态串模式。
-        writer.Write(guide || raidType is not (2 or 3) && canStart ? (byte)1 : (byte)0);
-        writer.Write(new byte[8]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
+        // +DC是CREATE_RAID +210的单人/引导模式；601会据此覆盖阶段，不得写入开战能力。
+        // canStart仅保留内部构包调用兼容；人数检查由现有客户端补丁和服务端启动服务分别承担。
+        writer.Write(guide ? (byte)1 : (byte)0);
+        writer.Write(new byte[7]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5
+        writer.Write(recruitRoles);         // +0xE4
         WriteMember(writer, leader, leaderName, leaderSquad);
     }
 
     // NOTI 0x24E RAID_LIST（023CAE20）：u32 n；n × { 记录 ; u8 → 记录+0xC4 }；重复 key 不覆盖旧记录。
     // +0xC4 > 1 时 START_RAID 跳过客户端人数检查，语义未证明，写 0。
     public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
-        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false) => Build(writer =>
+        byte state = 0, byte phase = 0, bool canStart = false, bool guide = false, byte recruitRoles = 7) => Build(writer =>
     {
         writer.Write(1u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart, guide, recruitRoles);
         writer.Write((byte)0);
     });
 
@@ -144,26 +146,28 @@ internal static class RaidPackets
         WriteMembers(writer, members, clearCounts);
     });
 
-    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart)> rows,
+    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte RecruitRoles)> rows,
         IReadOnlySet<uint>? guides = null) => Build(writer =>
     {
         writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
-            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true);
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true,
+                recruitRoles: row.RecruitRoles);
             writer.Write((byte)0);
         }
     });
 
     // NOTI756/023CAEF0：三个u32，随后逐条完整记录、u8人数及人数个u8；尾无额外正文。
     public static byte[] SearchResults(uint total, uint offset,
-        IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte Members)> rows,
+        IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte Members, byte RecruitRoles)> rows,
         IReadOnlySet<uint>? guides = null) => Build(writer =>
     {
         writer.Write(total); writer.Write(offset); writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
-            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true);
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart, guide: guides?.Contains(row.Key) == true,
+                recruitRoles: row.RecruitRoles);
             writer.Write(row.Members);
             writer.Write(new byte[row.Members]); // 逐成员附加状态尚未恢复，保持未知零值，不冒充准备或通关资格。
         }
@@ -172,11 +176,11 @@ internal static class RaidPackets
     // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
     public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
         IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false, bool guide = false,
-        IReadOnlyDictionary<ushort, byte>? clearCounts = null) => Build(writer =>
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null, byte recruitRoles = 7) => Build(writer =>
     {
         if (mode > 2) throw new InvalidDataException("团本查询mode错误");
         writer.Write((byte)1); writer.Write(mode); writer.Write(key);
-        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart, guide);
+        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart, guide, recruitRoles);
         if (mode is 1 or 2) WriteMembers(writer, members, clearCounts);
     });
 

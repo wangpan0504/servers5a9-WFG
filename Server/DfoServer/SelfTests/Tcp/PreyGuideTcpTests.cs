@@ -37,7 +37,7 @@ internal static class PreyGuideTcpTests
         using var peer = Open(fixture, "preyflow", gamePort: ChannelTcpTests.Endpoints(fixture)[42], channelNumber: 42);
         peer.Select();
         Read("selected");
-        peer.Send(664, Build(writer => { writer.Write((byte)3); writer.Write(5u); writer.Write("guide"u8); writer.Write(new byte[] { 1, 0, 0, 0 }); }));
+        peer.Send(664, Build(writer => { writer.Write((byte)3); writer.Write(5u); writer.Write("guide"u8); writer.Write(new byte[] { 1, 0, 0, 7 }); }));
         var created = Read("created");
         That(created.Any(packet => packet is { Kind: 1, Opcode: 664, Body: [1, ..] }), "TCP真实664创建单人引导团");
         peer.Send(666);

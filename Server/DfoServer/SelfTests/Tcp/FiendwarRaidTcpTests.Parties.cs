@@ -66,7 +66,7 @@ internal static partial class FiendwarRaidTcpTests
             That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "普通药使用真实目录声明");
             clock.Advance(checked((ordinary.CoolTime + 999) / 1000));
             var leader = peers[0];
-            leader.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("Fiend")); writer.Write(new byte[4]); }));
+            leader.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("Fiend")); writer.Write(new byte[] { 0, 0, 0, 7 }); }));
             var created = Drain(leader);
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
             uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
@@ -112,7 +112,7 @@ internal static partial class FiendwarRaidTcpTests
             }
             if (count == 4)
             {
-                leader.Send(670, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwPanel")); writer.Write((byte)0); }));
+                leader.Send(670, Build(writer => { writer.Write((byte)2); writer.Write(Name("FwPanel")); writer.Write((byte)7); }));
                 That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 670, Body: [1] }), "漩涡团长通过原面板改名");
                 foreach (var peer in peers.Skip(1)) Drain(peer);
                 leader.Send(669, Build(writer => { writer.Write(1u); writer.Write((uint)peers[1].Id); writer.Write(0u); }));

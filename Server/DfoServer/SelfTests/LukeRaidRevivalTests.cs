@@ -30,13 +30,21 @@ internal static class LukeRaidRevivalTests
         var battle = new AntonRaidBattle(script, kind: RaidKind.Luke, revival: new("fixture/shared-manual-coins"));
         foreach (var actor in actors) That(battle.Join(actor, policies), "配额领域登记同一当前actor");
         var first = Enter(0, 10, 1, actors.Take(4).ToArray());
+        That(battle.ReportStatusHp(first[0].Actor, first[0].Identity,
+            new(1, [.. first.Select(row => row.Actor.Character)], 0, 17, [73, 41])) is not null,
+            "复活前保留真实HP上下文，后续币数不得沿用这次旧快照");
         for (int index = 0; index < 8; index++)
         {
             var row = first[index % 4];
             using var token = battle.ReserveLukeRevival(row.Actor, row.Identity, index / 4 + 1)!;
             That(token is not null, "P1共享池前8次按实际死亡事实预留");
             That(battle.ReserveLukeRevival(row.Actor, row.Identity, index / 4 + 1) is null, "同actor不能并发占用两次");
+            long revision = battle.View.Revision;
             token!.Commit(); token!.Commit();
+            var status = battle.StatusSnapshot(battle.View).Single();
+            That(battle.View.Revision == revision + 1 && token.Change?.After == battle.View &&
+                status.UsedCoins == index + 1 && status.Context == 17 && status.Values.SequenceEqual(new uint[] { 73, 41 }),
+                "P1每次提交立即产生一次新版战况，保留HP并独立更新实际用币，重复确认不推进");
         }
         That(battle.ReserveLukeRevival(first[0].Actor, first[0].Identity, 3) is null && battle.View.LukePhaseCoinsUsed is null,
             "四名角色合计8次耗尽，P1不借778伪同步");

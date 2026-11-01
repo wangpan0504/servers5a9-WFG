@@ -79,9 +79,29 @@ internal static class RaidMemberTests
             }
             var actors = Enumerable.Range(0, 21).Select(Make).ToArray();
             var leader = actors[0];
-            var first = registry.Create(leader, 0, "a", "a"u8.ToArray(), 20)!;
+            foreach (byte invalid in new byte[] { 0, 8, 255 })
+                That(registry.Create(leader, 0, "invalid", [], 20, recruitRoles: invalid) is null && registry.Count == 0,
+                    "非法招募对象不建团、不分配key或污染目录");
+            var first = registry.Create(leader, 0, "a", "a"u8.ToArray(), 20, recruitRoles: 5)!;
             That(first.Key == 0x02130001 && first.Members.Length == 1 && registry.Count == 1, "真实频道key及单人创建");
             That(registry.Create(leader,0,"b","b"u8.ToArray(),20) is null && registry.IsCurrent(first), "重复创建不丢已有聚合");
+            That(first.RecruitRoles == 5, "创建保存实际输出/辅助招募组合");
+            foreach (byte invalid in new byte[] { 0, 8, 255 })
+                That(registry.Rename(leader, 0, "invalid", [], invalid) is null && registry.IsCurrent(first),
+                    "非法改名招募位不改变标题、掩码或revision");
+            foreach (byte roles in Enumerable.Range(1, 7).Select(value => (byte)value))
+            {
+                var renamed = registry.Rename(leader, 0, "roles", "roles"u8.ToArray(), roles)!.After!;
+                That(renamed.RecruitRoles == roles && renamed.Key == first.Key && renamed.Leader == first.Leader &&
+                    renamed.Title == "roles" && renamed.TitleBytes.AsSpan().SequenceEqual("roles"u8),
+                    "七种招募组合与标题共同提交，保留原key及队长来源");
+                That(RaidPanelTests.ReadRecruitRoles(Network.Projection.RaidProjection.List(renamed), 4) == roles &&
+                    RaidPanelTests.ReadRecruitRoles(Network.Projection.RaidProjection.Record(renamed), 8) == roles,
+                    "领域真实状态经过列表及变更投影，不能回落默认7");
+            }
+            registry.Rename(leader, 0, "selected", "selected"u8.ToArray(), 3);
+            That(registry.Rename(leader, 0, "plain", "plain"u8.ToArray())!.After!.RecruitRoles == 3,
+                "既有仅改标题调用保留原招募对象");
             for (int index = 1; index < 20; index++)
             {
                 That(registry.AddWaiting(actors[index],0) is null, "登记当前会话待机");

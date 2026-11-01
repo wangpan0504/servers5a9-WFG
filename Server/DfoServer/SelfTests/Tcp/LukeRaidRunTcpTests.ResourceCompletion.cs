@@ -15,9 +15,13 @@ internal static partial class LukeRaidRunTcpTests
         for(int run=0;run<hp;run++)
         {
             var entered=Enter(members,captain,5054);Load(members);
-            Clear(fixture,members,others,captain,entered[0],catalog,0);
-            foreach(var peer in members.Where(peer=>peer!=captain))Return(members,peer,true);
-            Return(members,captain,true);
+            bool terminal=run+1==hp;
+            Clear(fixture,members,others,captain,entered[0],catalog,0,phaseResults:terminal?PhasePackets(peers):null);
+            if(!terminal)
+            {
+                foreach(var peer in members.Where(peer=>peer!=captain))Return(members,peer,true);
+                Return(members,captain,true);
+            }
             foreach(var peer in others)Drain(peer,true);
         }
         That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL AND state=0",instance) is [[8L]],
@@ -58,11 +62,14 @@ internal static partial class LukeRaidRunTcpTests
         foreach(int dungeon in new[]{5311,5313})
         {
             var entered=Enter(members,captain,dungeon);Load(members);
-            Clear(fixture,members,others,captain,entered[0],catalog,1);
+            Clear(fixture,members,others,captain,entered[0],catalog,1,phaseResults:dungeon==5313?PhasePackets(peers):null);
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase1_receipt IS NOT NULL",instance)
                 is [[long receipts]] && receipts==(dungeon==5311?0:8), "P2仅1次清图不签资格，显式第二目标终结才密封八人事实");
-            foreach(var peer in members.Where(peer=>peer!=captain))Return(members,peer,true);
-            Return(members,captain,true);
+            if(dungeon!=5313)
+            {
+                foreach(var peer in members.Where(peer=>peer!=captain))Return(members,peer,true);
+                Return(members,captain,true);
+            }
             foreach(var peer in others)Drain(peer,true);
         }
         foreach(var peer in members)

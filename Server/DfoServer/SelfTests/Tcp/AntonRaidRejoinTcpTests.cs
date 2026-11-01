@@ -59,7 +59,7 @@ internal static class AntonRaidRejoinTcpTests
         member.Select();
         AntonRaidTcpTests.Drain(leader);
         AntonRaidTcpTests.Drain(member);
-        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rejoin")); w.Write(new byte[4]); }));
+        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rejoin")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
         var createdList = AntonRaidTcpTests.Until(leader, 0, 590).Body;
         uint key = U32(createdList, 4);
         AntonRaidTcpTests.Until(leader, 0, 591);
