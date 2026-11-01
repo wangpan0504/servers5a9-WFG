@@ -4,7 +4,10 @@ using DfoServer.Game.Dungeons;
 namespace DfoServer.Game.Raids;
 
 internal sealed record RaidRunDisplay(Guid Run, uint Dungeon, byte Squad, ImmutableArray<ushort> Members,
-    uint UsedCoins, uint Context, ImmutableArray<uint> Values, bool Cleared);
+    uint UsedCoins, uint Context, ImmutableArray<uint> Values, bool Cleared)
+{
+    public ImmutableArray<ushort> ClearedMembers { get; init; } = [];
+}
 
 internal sealed partial class AntonRaidBattle
 {
@@ -15,7 +18,7 @@ internal sealed partial class AntonRaidBattle
             .OrderBy(run => run.Dungeon).ThenBy(run => run.Squad).Select(run => new RaidRunDisplay(run.Id, run.Dungeon,
                 run.Squad, [.. run.Active.Where(actor => actor.IsCurrent).OrderBy(actor => actor.Character).Select(actor => actor.Character)],
                 Kind == RaidKind.Luke ? checked((uint)run.RevivalUsed) : run.Hp?.UsedCoins ?? checked((uint)run.RevivalUsed),
-                run.Hp?.Context ?? 0, run.Hp?.Values ?? [], run.Cleared)).ToArray();
+                run.Hp?.Context ?? 0, run.Hp?.Values ?? [], run.Cleared) { ClearedMembers = run.ClearedMembers }).ToArray();
     }
 
     internal AntonRaidBattleChange? ReportStatusHp(RaidActor actor, DungeonRunIdentity identity, AntonHpDisplay display)

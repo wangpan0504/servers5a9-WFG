@@ -49,8 +49,10 @@ internal static class RaidCombatPackets
         {
             foreach (var row in rows)
             {
-                writer.Write(row.Dungeon); writer.Write(operation); writer.Write(checked((byte)row.Members.Length));
-                foreach (ushort member in row.Members) writer.Write(member);
+                // 通关成员在事实提交时冻结，不能随逐人退场缩成最后一人。
+                var members = operation == 4 ? row.ClearedMembers : row.Members;
+                writer.Write(row.Dungeon); writer.Write(operation); writer.Write(checked((byte)members.Length));
+                foreach (ushort member in members) writer.Write(member);
             }
         }
     }

@@ -90,8 +90,9 @@ internal sealed partial class AntonRaidBattle
                 members.Keys.Any(m => m.Character == actor.Character)) return false;
             if (lukeCompletion is { } completion)
             {
-                var policies = memberRewardPolicies.GetValueOrDefault(actor.Character,
-                    lukeResourceRewards?.Create(actor.Session.PremiumPcRoom) ?? completion.Phases.Select(phase => phase.Rewards).ToImmutableArray());
+                var policies = memberRewardPolicies.TryGetValue(actor.Character, out var frozen)
+                    ? frozen
+                    : lukeResourceRewards?.Create(actor.Session.PremiumPcRoom) ?? completion.Phases.Select(phase => phase.Rewards).ToImmutableArray();
                 if (!Join(actor, policies)) return false;
                 originalLukePolicies.Add(actor.Character, policies);
             }
@@ -375,6 +376,7 @@ internal sealed partial class AntonRaidBattle
                 Dungeons = before.Dungeons.SetItem(dungeon, remaining == 0 ? RaidDungeonState.Clear : RaidDungeonState.Open) },
                 remaining == 0 ? dungeon : null, hp != remaining ? definition.HpSymbol : null, null);
             run.ClearFacts.Add(actor, fact);
+            run.FreezeClearedMembers();
             if (!run.GuildPartyRecorded) RecordGuildClearParty([actor.Character]);
             if (run.RosterContributions.Add(actor.Character)) RecordRosterClear(run.Phase, actor.Character);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;

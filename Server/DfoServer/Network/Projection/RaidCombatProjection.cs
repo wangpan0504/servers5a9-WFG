@@ -32,10 +32,13 @@ internal static partial class RaidCombatProjection
         {
             // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
             foreach (var row in anton.DungeonSnapshot(view))
+            {
+                if (!context.Owner.Execute(() => Guard() && DungeonChanged(context, view.Instance, row.Id, row.State))) continue;
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                     RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state",
                     () => Guard() && DungeonChanged(context, view.Instance, row.Id, row.State),
                     () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
+            }
             if (anton.HasAntonRewards || anton.PhaseProgress)
                 PostAntonSnapshot(context, anton, view, Guard);
         }
@@ -245,12 +248,17 @@ internal static partial class RaidCombatProjection
         // 覆盖本实例全部15图；非当前phase显式Hide，防上阶段/旧团残留Open。
         // 586缺键会创建记录；不用585未知尾字段改变共享symbol7/8。
         foreach (var row in battle.DungeonSnapshot(view))
+        {
+            // 已显示的不变状态不占发送队列；仍在写出时复核，显式恢复继续补全非Clear记录。
+            if (!context.Owner.Execute(() => guard() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
+                DungeonChanged(context, view.Instance, row.Id, row.State)))) continue;
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                 RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_snapshot",
                 // 显式开团恢复补齐非通关记录；Clear仍去重，避免重播横幅。
                 () => guard() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
                     DungeonChanged(context, view.Instance, row.Id, row.State)),
                 () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
+        }
         PostLukeTimers(context, battle, view, guard);
         PostLukeCards(context, battle, view, guard);
     }
@@ -263,6 +271,7 @@ internal static partial class RaidCombatProjection
             RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "prey_symbol_snapshot", guard);
         foreach (var row in battle.DungeonSnapshot(view))
         {
+            if (!context.Owner.Execute(() => guard() && DungeonChanged(context, view.Instance, row.Id, row.State))) continue;
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                 RaidCombatPackets.DungeonState(row.Id, 0, row.State), "prey_dungeon_snapshot",
                 () => guard() && DungeonChanged(context, view.Instance, row.Id, row.State),

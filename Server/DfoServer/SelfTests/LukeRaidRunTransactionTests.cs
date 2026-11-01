@@ -6,6 +6,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Party;
+using DfoServer.Game.PrivilegeServices;
 using DfoServer.Game.Raids;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
@@ -60,6 +61,7 @@ internal static class LukeRaidRunTransactionTests
             int dungeon=definition.Resources.Script.Phases[0].Dungeons[0].Id;
             foreach(int failureIndex in phaseExpiry?new[]{0,1,2,3,4,5,6,7,8}:new[]{0,1,3})
             {
+                bool privilegeCase = failureIndex == 0 && !phaseExpiry;
                 var sessions=Enumerable.Range(0,4).Select(index=>
                 {
                     var owner=owners.Acquire($"raidrun{failureIndex}-{index}",()=>{});leases.Add(owner);
@@ -73,16 +75,54 @@ internal static class LukeRaidRunTransactionTests
                     var funded=repository.LoadCharacter(owner,0)!;
                     InventoryService.Commit(repository,owner,funded,new(true,0,new(funded.Inventory,
                         funded.Inventory with {ReviveCoins=30},"fixture_raid_coins")));
+                    if (privilegeCase && index != 2)
+                    {
+                        var current = repository.LoadCharacter(owner, 0)!;
+                        long now = phaseClock.GetUtcNow().ToUnixTimeSeconds();
+                        var privilege = new PrivilegeServiceState(index == 3 ? now : now - 60,
+                            index == 1 ? now : now + 86400, items.PrivilegeServices.CurrentSeason,
+                            items.PrivilegeServices.CurrentSeason, PrivilegeServicePolicy.Day(phaseClock.GetUtcNow()), 1, 0, 0);
+                        InventoryService.Commit(repository, owner, current, new(true, 0, new(current.Inventory,
+                            current.Inventory with { PrivilegeService = privilege }, "fixture_luke_privilege")));
+                    }
                     var session=new GameSession(phaseExpiry?wrapped:repository,resources.Towns,owner,questCatalog:resources.Quests,entry:new(new(2,20),32,"[raid]"));
                     all.Add(session);session.Select(0);session.MarkReady();session.CurrentParty=()=>parties.Current(session);return session;
                 }).ToArray();
                 var actors=sessions.Select(session=>session.CaptureRaidActor(raids)!).ToArray();
+                if (privilegeCase) FrozenMemberRewards(resources, definition, actors);
                 That(raids.Create(actors[0],1,"RunTx","RunTx"u8.ToArray(),8,1) is not null,"事务夹具沿原Registry创建Luke团");
                 foreach(var actor in actors.Skip(1)){raids.Invite(actors[0],actor,0);That(raids.Respond(actor,actors[0].Character,true).Accepted,"事务夹具原邀请接受");}
                 foreach(var actor in actors)raids.Assign(actors[0],actor.Character,1);
                 var raid=raids.Find(actors[0])!;
-                That(start.Start(actors[0],raid,definition,[],()=>true).Error==0,"领域自然Start同事务安装Party/Started/Battle，不手工Attach");
+                var actualStart = start;
+                LukeResourceRewards? privilegeRewards = null;
+                if (privilegeCase)
+                {
+                    privilegeRewards = new(definition.Resources.Script, items.Items, items.Boosters);
+                    var completion = new LukeRaidCompletionPolicy(LukeResourceRewards.Source, 2,
+                        new(DayOfWeek.Sunday, new TimeOnly(6, 0), TimeSpan.FromHours(8)),
+                        privilegeRewards.Create(false, draw: _ => 0).Select(reward => new LukePhaseCompletionPolicy(0, 2, reward)).ToImmutableArray(),
+                        LukeParticipationCutoff.TerminalCommittedFacts);
+                    actualStart = new(raids, parties, repository, resources.Towns, items.EpicPieces,
+                        policy with { ResourceRewards = privilegeRewards, Completion = completion }, phaseClock, items.Items, phaseTimers);
+                }
+                That(actualStart.Start(actors[0],raid,definition,[],()=>true).Error==0,"领域自然Start同事务安装Party/Started/Battle，不手工Attach");
                 var battle=sessions[0].CurrentRaidBattle(actors[0])!;
+                if (privilegeRewards is not null)
+                    for (int index = 0; index < actors.Length; index++)
+                    {
+                        bool active = index is 0 or 3;
+                        var low = privilegeRewards.Create(false, active, _ => 0);
+                        var high = privilegeRewards.Create(false, active, maximum => maximum - 1);
+                        for (int phase = 0; phase < 2; phase++)
+                        {
+                            var expected = low[phase].Offers.Single(offer => offer.Kind == 1);
+                            That(AntonRaidBattle.SameLukeOffers([expected], [high[phase].Offers.Single(offer => offer.Kind == 1)]),
+                                "本版个人基础及礼遇产物固定，随机团队牌不参与资格断言");
+                            That(AntonRaidBattle.SameLukeOffers([expected], [battle.RewardPolicy(actors[index], phase)!.Offers.Single(offer => offer.Kind == 1)]),
+                                "实际Start逐人读取购买角色资格，过期和未购买者不继承团长礼遇，起始相等有效");
+                        }
+                    }
                 That(run.Select(sessions[0],dungeon,parties.Current(sessions[0])).Length==4,"原服务准备四人选择上下文");
                 if(phaseExpiry)
                 {
@@ -332,7 +372,17 @@ internal static class LukeRaidRunTransactionTests
                     Persistent()==persistent&&sessions[0].Selected!.Inventory.ConsumableStates.Length==1,
                     "回城失败保持原Run与固定普通分队，不先释放占用");
                 Sql("DROP TRIGGER fail_luke_return");
-                foreach(var session in sessions)That(service.Depart(session,preserveSolo:true).Error==0,"原回城事务释放每名Run成员");
+                foreach(var session in sessions)
+                {
+                    That(service.Depart(session,preserveSolo:true).Error==0,"原回城事务释放每名Run成员");
+                    if (ReferenceEquals(session, sessions[0]))
+                    {
+                        var display = battle.StatusSnapshot(battle.View).Single();
+                        That(display.Members.Length == 3 && display.Cleared &&
+                            display.ClearedMembers.SequenceEqual(actors.Select(actor => actor.Character).Order()),
+                            "真实回城释放参与位置后，通关通知仍保留提交时四人，迟发不能缩成剩余成员");
+                    }
+                }
                 That(parties.IsCurrent(party)&&sessions.All(session=>session.PartyDungeon is null),"全部回Town保留同party ID与revision，Run成员全部释放");
                 var leaving=new AntonRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces);
                 That(leaving.Leave(actors[3],actors[3].Character) is not null&&!parties.IsCurrent(party)&&
@@ -363,6 +413,32 @@ internal static class LukeRaidRunTransactionTests
         Console.WriteLine($"PASS {Count-before} 卢克Run真实资源、入场/清图/回城SQL故障恢复断言");
         void Sql(string sql){using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}
     }
+    static void FrozenMemberRewards(TcpTestResources resources, RaidDefinition definition, RaidActor[] actors)
+    {
+        var items = resources.ItemResources;
+        var raw = definition.Resources!.Script;
+        var resourcesRewards = new LukeResourceRewards(raw, items.Items, items.Boosters);
+        var frozen = actors.Select((actor, index) => (actor.Character,
+            Rewards: resourcesRewards.Create(false, index == 0, _ => 0)))
+            .ToImmutableDictionary(row => row.Character, row => row.Rewards);
+        var completion = new LukeRaidCompletionPolicy(LukeResourceRewards.Source, 2,
+            new(DayOfWeek.Sunday, new TimeOnly(6, 0), TimeSpan.FromHours(8)),
+            frozen[actors[0].Character].Select(reward => new LukePhaseCompletionPolicy(0, 2, reward)).ToImmutableArray(),
+            LukeParticipationCutoff.TerminalCommittedFacts);
+        var invalid = new LukeResourceRewards(raw with
+            { Phases = raw.Phases.Select(phase => phase with { Rewards = [] }).ToImmutableArray() }, items.Items, items.Boosters);
+        Reject<InvalidDataException>(() => invalid.Create(false), "未冻结的无效默认奖池必须实际拒绝");
+        var battle = new AntonRaidBattle(AntonRaidBattleTests.Script(10, 20), kind: RaidKind.Luke,
+            completion: completion, lukeRewards: invalid, memberRewards: frozen);
+        foreach (var actor in actors)
+        {
+            That(battle.JoinStart(actor), "已冻结各人奖池时不读取或重抽默认奖池");
+            for (int phase = 0; phase < 2; phase++)
+                That(ReferenceEquals(battle.RewardPolicy(actor, phase), frozen[actor.Character][phase]),
+                    "有礼遇和无礼遇成员分别保留自身两阶段冻结奖励");
+        }
+    }
+
     sealed class ClockOwner(LukeRaidClocks value):IDisposable
     {
         internal LukeRaidClocks Value=>value;

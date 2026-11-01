@@ -254,6 +254,7 @@ internal sealed partial class AntonRaidBattle
                 var key = (0, row.Actor.Character);
                 lukeParticipation[key] = checked(lukeParticipation.GetValueOrDefault(key) + 1);
             }
+            run.FreezeClearedMembers();
             var candidate = ProjectFiendwar(before with { FiendwarDungeonTimers = before.FiendwarDungeonTimers.Remove(encounter.Area) }, field);
             if (bossClear) candidate = candidate with { FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(run.Id) };
             CommitBattleCandidate(before, candidate);

@@ -78,7 +78,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             if (KeepaliveHandler.IsKeepalive(opcode))
                 return;
             log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsSensitiveCommand(opcode) ? PacketCapture.RedactedCommandBody(opcode) : Convert.ToHexString(body.Span) });
-        }, connection.CaptureSent);
+        }, connection.CaptureSent, (stage, error) => log.Write("game_send_failed", new
+        {
+            Connection = connection.Id, Stage = stage, Reason = error?.GetType().Name, Message = error?.Message
+        }));
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
