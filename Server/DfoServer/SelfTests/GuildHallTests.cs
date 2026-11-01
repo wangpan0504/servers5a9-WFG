@@ -102,7 +102,7 @@ internal static class GuildHallTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools(); File.Delete(path); File.Delete(path + "-wal"); File.Delete(path + "-shm");
+            SqliteConnection.ClearAllPools(); TestFiles.DeleteFile(path); TestFiles.DeleteFile(path + "-wal"); TestFiles.DeleteFile(path + "-shm");
         }
         Console.WriteLine($"PASS {Count - before} 公会大厅会籍准入、撤销与持久迁出核心断言");
     }

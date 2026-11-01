@@ -110,6 +110,6 @@ internal static class DungeonDropControlTests
             That(config.Answer("drop-control status")!.Contains("\"version\":1") &&
                 config.Answer("drop-control reload extra")!.StartsWith("ERR "), "查询包含能力版本，命令参数严格验证");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
     }
 }

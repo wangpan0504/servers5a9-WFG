@@ -313,7 +313,7 @@ internal static class BoosterNativeSelectionTests
                     That(session.PlanAndCommitBooster(Open, realPlaces).Accepted, "实际源允许Town时经真实Session提交且只消耗一次 " + sourceId);
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     // 枚举已实现职业并按源资源选择合法级别，不改写模板或绕过源资格。

@@ -5,13 +5,15 @@ namespace DfoServer.Persistence;
 internal static class SqliteDatabaseBootstrap
 {
     private static readonly object Gate = new();
-    // 正式服务进程才复用连接：每次击杀、存档都会短开连接，非池化时每次都要重新打开文件、建 WAL 映射并重解析整套结构。
-    // 自测、离线工具保持非池化，删除临时目录或替换数据库文件时不会被池里的句柄占住。
+    // 正式服务与自测进程复用连接：每次击杀、存档都会短开连接，非池化时每次都要重新打开文件、建 WAL 映射并重解析整套结构。
+    // 离线工具（准备角色、导入等）保持非池化，备份或替换数据库文件时不会被池里的句柄占住。
+    // 自测开池后，删除、复制或直接读取临时库文件之前必须先 ReleaseRuntimePool（测试侧统一经 TestFiles）。
     static volatile bool runtimePooling;
 
     public static void EnableRuntimePooling() => runtimePooling = true;
 
-    // 停服前释放池内句柄，让最后一个连接完成检查点；之后备份或替换 game.db 拿到的是完整主库文件。
+    // 停服前、自测删改库文件前释放池内句柄，让最后一个连接完成检查点；之后备份、复制或删除 game.db 拿到的是完整主库文件。
+    // 正在使用的连接不受影响，归还时直接关闭而不再入池。
     public static void ReleaseRuntimePool()
     {
         if (runtimePooling) SqliteConnection.ClearAllPools();

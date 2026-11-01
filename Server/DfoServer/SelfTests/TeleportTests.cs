@@ -461,6 +461,6 @@ internal static class TeleportTests
             using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False"); db.Open();
             using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery();
         }
-        public void Dispose() { Owner.Dispose(); Directory.Delete(root, recursive: true); }
+        public void Dispose() { Owner.Dispose(); TestFiles.DeleteDirectory(root, recursive: true); }
     }
 }

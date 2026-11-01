@@ -86,7 +86,7 @@ internal static class SkillTreeExpansionTests
                 db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 技能方案权益、事务与切换断言");
     }
 

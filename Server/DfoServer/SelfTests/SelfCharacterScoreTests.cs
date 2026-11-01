@@ -81,7 +81,7 @@ internal static class SelfCharacterScoreTests
             That(query.Query(context) == "queued", "计算异常finally释放占用，可在冷却后重试");
             await sender.DrainAsync();
         }
-        finally { Directory.Delete(logs, true); }
+        finally { TestFiles.DeleteDirectory(logs, true); }
     }
 
     internal static async Task ConcurrentCapture(string? nonce = null)

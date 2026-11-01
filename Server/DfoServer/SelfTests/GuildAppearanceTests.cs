@@ -134,7 +134,7 @@ internal static class GuildAppearanceTests
             That(Number("SELECT count(*) FROM guild_appearance") == 0 && Number("SELECT count(*) FROM pragma_foreign_key_check") == 0,
                 "解散外键清除外观，不留下孤立记录");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 
     internal static void AssertActorMark(byte[] body, uint expected)

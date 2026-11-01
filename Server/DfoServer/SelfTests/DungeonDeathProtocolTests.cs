@@ -360,7 +360,7 @@ internal static class DungeonDeathProtocolTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {Count - checks} dungeon death handler assertions");
     }

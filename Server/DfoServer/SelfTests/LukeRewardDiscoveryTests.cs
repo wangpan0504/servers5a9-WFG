@@ -155,6 +155,6 @@ internal static class LukeRewardDiscoveryTests
                 return string.Join("\n", result);
             }
         }
-        finally { SqliteConnection.ClearAllPools(); if (passed) Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); if (passed) TestFiles.DeleteDirectory(root, true); }
     }
 }

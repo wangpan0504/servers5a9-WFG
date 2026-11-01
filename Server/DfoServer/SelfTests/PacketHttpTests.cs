@@ -164,7 +164,7 @@ internal static class PacketHttpTests
                 return int.Parse(line.Split(' ')[1]);
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 本机包查询HTTP、客户端过滤、安全边界及取消断言");
     }
 }

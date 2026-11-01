@@ -301,7 +301,7 @@ internal static class TownSelectionTests
         public void Dispose()
         {
             Owner.Dispose();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 }

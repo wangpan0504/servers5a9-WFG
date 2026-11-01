@@ -120,7 +120,7 @@ internal static partial class DungeonSpecificCardRewardsTests
         {
             string directory = Path.Combine(Path.GetTempPath(), "S5A9-hell-selection-" + Guid.NewGuid().ToString("N"));
             try { return Send().GetAwaiter().GetResult(); }
-            finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+            finally { if (Directory.Exists(directory)) TestFiles.DeleteDirectory(directory, true); }
             async Task<List<byte[]>> Send()
             {
                 using var log = new ServerLog(directory);

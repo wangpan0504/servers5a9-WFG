@@ -148,7 +148,7 @@ internal static class TcpTestRetention
             {
                 // 链接本身删除，不进入目标目录。
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    Directory.Delete(path);
+                    TestFiles.DeleteDirectory(path);
                 else
                     DeleteTree(root, path);
             }
@@ -156,9 +156,9 @@ internal static class TcpTestRetention
             {
                 if ((attributes & FileAttributes.ReadOnly) != 0)
                     File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
-                File.Delete(path);
+                TestFiles.DeleteFile(path);
             }
         }
-        Directory.Delete(absolute);
+        TestFiles.DeleteDirectory(absolute);
     }
 }

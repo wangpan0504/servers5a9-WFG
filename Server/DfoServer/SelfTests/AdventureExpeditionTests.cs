@@ -239,7 +239,7 @@ internal static class AdventureExpeditionTests
                 reopened.State.Expeditions.SelectMany(run => run.Members).Distinct().Count() == 2,
                 "重开库恢复两个并行地区");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void Persist(AdventureCatalog catalog, AdventureExpeditionService service, DateTimeOffset now)
@@ -288,7 +288,7 @@ internal static class AdventureExpeditionTests
                 Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "远征已领取后允许删除角色，保留账号奖励与全部凭据身份，仅解除角色来源");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
     static void Migrate()
     {
@@ -324,7 +324,7 @@ internal static class AdventureExpeditionTests
                     "v31增量或回滚均保留账号名称版本和已解除代表");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
     static SqliteConnection Open(string path) { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open(); return db; }
     static void Execute(SqliteConnection db, string sql) { using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }

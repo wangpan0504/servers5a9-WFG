@@ -52,7 +52,7 @@ internal static class TcpTestFixtureProcessTests
             Append("invalid\n");
             Reject<System.Text.Json.JsonException>(() => fixture.Events(), "完整但损坏的记录仍失败，不能吞异常凑绿");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     static void ReadinessDiagnostics()
@@ -106,7 +106,7 @@ internal static class TcpTestFixtureProcessTests
                 unavailable.RootElement.GetProperty("Startup").GetProperty("Error").ValueKind == JsonValueKind.String,
                 "进程/日志诊断自身失败不会覆盖原始ready超时");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
 }

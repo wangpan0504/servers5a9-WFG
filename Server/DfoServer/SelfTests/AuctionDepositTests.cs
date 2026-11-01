@@ -243,7 +243,7 @@ internal static class AuctionDepositTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 
@@ -426,7 +426,7 @@ internal static class AuctionDepositTests
         {
             Owner.Dispose();
             if (Service is not null)
-                Directory.Delete(root, true);
+                TestFiles.DeleteDirectory(root, true);
         }
     }
 }

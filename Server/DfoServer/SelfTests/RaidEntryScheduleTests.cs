@@ -33,7 +33,7 @@ internal static class RaidEntryScheduleTests
         That(again.IsOpen("luke", At(DayOfWeek.Tuesday, 18, 0)) && !again.IsOpen("luke", At(DayOfWeek.Tuesday, 22, 0)), "重新打开后卢克时段仍在");
         That(!again.IsOpen("hyperspace", At(DayOfWeek.Tuesday, 19, 0)) && again.IsOpen("prey", At(DayOfWeek.Saturday, 12, 0)) && !again.IsOpen("prey", At(DayOfWeek.Saturday, 0, 0)),
             "超时空与普雷的时段互不影响");
-        Directory.Delete(directory, true);
+        TestFiles.DeleteDirectory(directory, true);
         Console.WriteLine($"PASS {Count - before} 团本每周入场时段断言");
     }
 }

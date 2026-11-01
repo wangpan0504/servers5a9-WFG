@@ -446,7 +446,7 @@ internal static class QuestManualSkipTests
                 commands.Seal(); return commands;
             }
         }
-        finally { Directory.Delete(logRoot,true); }
+        finally { TestFiles.DeleteDirectory(logRoot,true); }
         Console.WriteLine($"PASS {Count-checks} 手册真实Handler、1381/1431/1457、SQL原子与恢复断言（非主线实机）");
     }
 

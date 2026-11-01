@@ -510,7 +510,7 @@ internal static class PvpMatchingSessionTests
                 return new(repository, towns, owner, entry: new(new(1, channel), channelType, "[pvp]"));
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 匹配等待票据、双账号配对、加载与接管隔离断言");
     }
 }

@@ -351,7 +351,7 @@ internal static class InventorySelfTests
             void Sql(string sql) => Query(sql);
 
         }
-        finally { Directory.Delete(folder, true); }
+        finally { TestFiles.DeleteDirectory(folder, true); }
         Console.WriteLine($"PASS {Count - checks} inventory assertions; starter jobs=16");
     }
 }

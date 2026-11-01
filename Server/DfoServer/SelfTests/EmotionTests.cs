@@ -87,7 +87,7 @@ internal static class EmotionTests
                 Scalar("SELECT hex(hotkeys) FROM account_hotkey_settings") is "4930310937370A", "v28迁移保留v25称号、v26训练及v27键位原记录");
             Reject<SqliteException>(() => Execute("UPDATE characters SET emotion=32768"), "数据库约束拒绝越界心情");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - start} 心情原生字段、资源、角色隔离、SQL回滚及增量升级断言");
 
         void Execute(string sql)

@@ -122,7 +122,7 @@ internal static class BufferedLogTests
                 TestCheck.That(keys.Add((detail.GetProperty("worker").GetInt32(), detail.GetProperty("i").GetInt32())), "concurrent JSON records are complete and unique");
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} buffered log assertions");
     }
 

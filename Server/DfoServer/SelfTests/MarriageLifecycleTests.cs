@@ -154,7 +154,7 @@ internal static class MarriageLifecycleTests
                 reopened.LoadCharacter(secondOwner, second.Slot).Revision == committed.Second!.Revision,
                 "恢复退款仅投一封本金邮件，不直接改玩家金币、资产版本或重复发放");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(directory, true); }
         Console.WriteLine($"PASS {Count - checks} marriage lifecycle recovery assertions");
     }
 

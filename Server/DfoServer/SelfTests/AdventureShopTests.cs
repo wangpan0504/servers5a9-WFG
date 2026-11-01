@@ -91,7 +91,7 @@ internal static class AdventureShopTests
             That(Query(db, "SELECT count(*) FROM account_adventure_purchases") is 0L &&
                 Query(db, "SELECT count(*) FROM character_inventory_items") is 1L, "v31升级仅补空限购表，不删实体或补历史购买");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 冒险团购买字节、周期、原子资产及增量迁移断言");
     }
     static SqliteConnection Open(string path) { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open(); return db; }

@@ -90,11 +90,11 @@ internal static class NativeLoginTests
             TestCheck.That(racers.Count(t => t.Result.Succeeded) == 1, "racing first logins choose exactly one credential");
             var reopened = new AuthenticationService(new AuthenticationRepository(path));
             TestCheck.That(reopened.VerifyOrCreateLogin("alice", NativeLoginWire.Digest, IPAddress.Loopback, "fixture", TimeSpan.FromMinutes(5)).Succeeded, "native credentials persist after reopen");
-            TestCheck.That(File.ReadAllBytes(path).AsSpan().IndexOf(Encoding.ASCII.GetBytes(NativeLoginWire.Digest)) < 0, "database stores salted derived hash, not login digest");
+            TestCheck.That(TestFiles.ReadAllBytes(path).AsSpan().IndexOf(Encoding.ASCII.GetBytes(NativeLoginWire.Digest)) < 0, "database stores salted derived hash, not login digest");
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} native login assertions");
     }

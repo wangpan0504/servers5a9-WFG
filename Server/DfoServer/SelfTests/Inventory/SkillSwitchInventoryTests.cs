@@ -366,7 +366,7 @@ internal static class SkillSwitchInventoryTests
             That(character.SkillSwitchInventory.Same(SkillSwitchInventoryState.Empty),
                 "正式GM职业重置入口清除旧分支偏好");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     sealed class FixedClock(DateTimeOffset now) : TimeProvider

@@ -358,7 +358,7 @@ internal static class LukeRaidLifecycleTransactionTests
         finally
         {
             foreach(var session in sessions)session.End();foreach(var lease in leases)lease.Dispose();SqliteConnection.ClearAllPools();
-            if(done)Directory.Delete(root,true);else Console.WriteLine("Luke阶段事务失败现场保留："+root);
+            if(done)TestFiles.DeleteDirectory(root,true);else Console.WriteLine("Luke阶段事务失败现场保留："+root);
         }
         Console.WriteLine($"PASS {Count-before} 卢克阶段真实SQL故障、两阶段领取及满额开团断言");
         void Sql(string sql){using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}

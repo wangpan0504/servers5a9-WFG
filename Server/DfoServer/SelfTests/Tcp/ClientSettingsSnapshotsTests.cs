@@ -75,6 +75,6 @@ internal static class ClientSettingsSnapshotsTests
                 parent.GetProperty("ElapsedMs").GetDouble() >= childTotal,
                 "子阶段按调用累计min/max，父阶段包含子阶段而非独占时间，不按样本数量保存无界明细");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 }

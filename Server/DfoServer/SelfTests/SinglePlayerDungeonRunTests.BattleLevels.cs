@@ -146,11 +146,11 @@ internal static partial class SinglePlayerDungeonRunTests
                 "未知字段拒绝且不清空旧规则");
             That(config.Answer("monster-battle-level status")!.StartsWith("OK ") &&
                 config.Answer("monster-battle-level reload extra")!.StartsWith("ERR "), "状态查询和严格命令参数");
-            File.Delete(path);
+            TestFiles.DeleteFile(path);
             Directory.CreateDirectory(path);
             That(config.Answer("monster-battle-level reload")!.StartsWith("ERR ") && ReferenceEquals(config.Settings.Current, previous),
                 "配置路径不可读时拒绝重载，不能误判为缺失文件而清空旧规则");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
     }
 }

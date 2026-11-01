@@ -147,7 +147,7 @@ internal static class DungeonStoryEventPublicationTests
             void Sql(string sql) { using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
             long Scalar(string sql) { using var db = new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-before} 剧情事件真实Handler、Sender、SQLite回滚、重放及重选断言（合成场景）");
     }
 

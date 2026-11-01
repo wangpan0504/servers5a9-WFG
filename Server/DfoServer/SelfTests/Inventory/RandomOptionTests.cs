@@ -188,7 +188,7 @@ internal static class RandomOptionTests
             That(saved == JsonSerializer.Serialize(session.Selected) &&
                 saved == JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)), "回滚保留金币、核心和在线快照");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} random option resource/commit assertions");
     }
 }

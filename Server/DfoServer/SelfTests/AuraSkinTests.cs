@@ -130,7 +130,7 @@ internal static class AuraSkinTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 
@@ -181,7 +181,7 @@ internal static class AuraSkinTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 }

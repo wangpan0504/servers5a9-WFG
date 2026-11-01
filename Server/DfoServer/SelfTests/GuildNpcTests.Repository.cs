@@ -146,6 +146,6 @@ internal static partial class GuildNpcTests
             That(!repository.ContractGuildNpc(memberActor, catalog, GuildNpcCatalog.Guardian + 4, 0, Key(12), now + 2 * 86400).Success &&
                 unchanged == Snapshot(), "NPC管理权限被撤销后旧会话下一次请求不能继续扣公款续约");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
     }
 }

@@ -155,7 +155,7 @@ internal static class CurrencyTests
             void Sql(string sql) => Query(sql);
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + ":" + Query("SELECT count(*) FROM inventory_audit_log") + ":" + Query("SELECT count(*) FROM currency_audit_log");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {checks} currency assertions");
     }
 }

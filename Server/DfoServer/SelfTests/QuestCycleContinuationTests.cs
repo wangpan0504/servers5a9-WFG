@@ -379,6 +379,6 @@ internal static class QuestCycleContinuationTests
             .GetConstructors(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)
             .Single(constructor => constructor.GetParameters().Length == args.Length).Invoke(args);
 
-        public void Dispose() { Session.End(); owner.Dispose(); Directory.Delete(root,true); }
+        public void Dispose() { Session.End(); owner.Dispose(); TestFiles.DeleteDirectory(root,true); }
     }
 }

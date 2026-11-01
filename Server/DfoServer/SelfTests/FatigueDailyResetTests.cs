@@ -92,7 +92,7 @@ internal static class FatigueDailyResetTests
             That(check.ExecuteScalar() is 0L && repository.LoadCharacter(owner, character.Slot).Fatigue is null,
                 "疲劳owner删除级联清理日戳，未知余额不自动伪造");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 疲劳服务日、真实恢复事务、去重与回滚断言");
     }
 }

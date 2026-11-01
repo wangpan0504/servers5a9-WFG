@@ -247,7 +247,7 @@ internal static class OperationHopePartyTests
             {
                 foreach(var lease in leases) lease.Dispose();
                 SqliteConnection.ClearAllPools();
-                if(Directory.Exists(root)) Directory.Delete(root,true);
+                if(Directory.Exists(root)) TestFiles.DeleteDirectory(root,true);
             }
         }
     }

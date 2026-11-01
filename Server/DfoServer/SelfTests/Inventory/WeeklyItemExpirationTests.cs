@@ -170,7 +170,7 @@ internal static class WeeklyItemExpirationTests
         finally
         {
             session?.End(); SqliteConnection.ClearAllPools();
-            if (completed) Directory.Delete(root, true);
+            if (completed) TestFiles.DeleteDirectory(root, true);
             else Console.WriteLine("Weekly expiry失败现场保留：" + root);
         }
         Console.WriteLine($"PASS {Count-before} 真实卢克门票期限、原wire、选角持久化与SQL回滚断言");

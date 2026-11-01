@@ -143,7 +143,7 @@ internal static class AuctionKeyPriceTests
         public void Dispose()
         {
             owner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

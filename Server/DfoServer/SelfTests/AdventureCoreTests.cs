@@ -231,7 +231,7 @@ internal static class AdventureCoreTests
             using var current = new AccountOwners().Acquire("other", () => { });
             That(repo.ReadAdventure(current, catalog, now).State.Name == "other", "查询按账号隔离，不借用其他账号名称");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void RaidContentCounts(CharacterRepository repo, AccountOwners.Lease owner, AdventureCatalog catalog,
@@ -311,7 +311,7 @@ internal static class AdventureCoreTests
                 }
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static SqliteConnection Open(string path)

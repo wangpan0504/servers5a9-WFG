@@ -104,7 +104,7 @@ internal static class TcpTestReceiptsTests
             using var unchanged = JsonDocument.Parse(File.ReadAllText(path));
             That(TcpTestReceipts.IsReusable(unchanged.RootElement), "其他收据写失败不改已完成记录");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} structured TCP receipt assertions");
     }
 

@@ -148,7 +148,7 @@ internal static class ExpertJobTradeRepositoryTests
             }
             void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 副职业双角色事务、费用守恒、资格复验和回滚断言");
     }
 }

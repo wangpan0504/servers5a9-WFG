@@ -195,7 +195,7 @@ internal static class AuctionCommitTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

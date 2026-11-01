@@ -226,6 +226,6 @@ internal static class QuestQuickClearRepositoryTests
         }
         public void Sql(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         public long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
-        public void Dispose() { Owner.Dispose(); Directory.Delete(root,true); }
+        public void Dispose() { Owner.Dispose(); TestFiles.DeleteDirectory(root,true); }
     }
 }

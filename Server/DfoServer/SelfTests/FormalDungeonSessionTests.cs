@@ -2675,7 +2675,7 @@ internal static partial class FormalDungeonSessionTests
         {
             Session.End();
             Owner.Dispose();
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 }

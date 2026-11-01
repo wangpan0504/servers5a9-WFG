@@ -146,7 +146,7 @@ internal static class AdventureWeeklyTests
                 repo.ReadAdventureWeeklyRoster(owner, 20261022)[0].UsedAt(0) == 0 && repo.ReadAdventureWeeklyRoster(other, 20261022).IsEmpty,
                 "计数失败不推进revision或尝试号，其他账号不受影响");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 每周地下城信息解析、718/719构包、列归属与计数持久化断言");
     }
 

@@ -114,7 +114,7 @@ internal static partial class DungeonPassiveDropTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {Count - before} 特殊物品准入与拾取真实SQLite回滚、幂等和多类别资产断言");
 

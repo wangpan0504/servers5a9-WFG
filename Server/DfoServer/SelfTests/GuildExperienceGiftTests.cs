@@ -120,6 +120,6 @@ internal static class GuildExperienceGiftTests
                 "无会籍成员不消耗经验书且没有平行角色或经验状态");
             session.End();
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(directory, true); }
     }
 }

@@ -153,6 +153,6 @@ internal static class GuildNpcCraftTests
             That(Number("SELECT gold FROM characters WHERE id=" + character.Id) == originalGold,
                 "公共生产不改玩家金币和背包资产");
         }
-        finally { Directory.Delete(directory, true); }
+        finally { TestFiles.DeleteDirectory(directory, true); }
     }
 }

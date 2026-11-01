@@ -84,7 +84,7 @@ internal static class GuildAttendanceTests
             That(Number("SELECT count(*) FROM guild_attendance") == 0 &&
                 Number("SELECT count(*) FROM pragma_foreign_key_check") == 0, "解散级联清除出勤，无孤立记录");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 公会真实出勤、业务日与会籍隔离断言");
     }
 }

@@ -153,7 +153,7 @@ internal static class ExpertJobActionTests
             Reject<InvalidOperationException>(() => repository.CommitExpertJobAction(owner, enchanted), "附魔旧请求不可重复消耗");
             void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 副职业兼容规则、分解/附魔原子性与回滚断言");
     }
 }

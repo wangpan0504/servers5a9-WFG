@@ -117,7 +117,7 @@ internal static class DungeonRetiredEntryTests
                     "普通310五档保持原拓扑与入场：" + name + " / " + session.LastFormalDungeonRejection);
             }
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - before} 退役入口拒绝与普通五档分派断言（非实机）");
     }
 }

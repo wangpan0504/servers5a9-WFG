@@ -148,7 +148,7 @@ internal static class ServerItemCycleTests
                 repository.ReadAccountItemRefills(otherOwner)[9002].CharacterId==other.Id &&
                 repository.ReadAccountItemRefills(owner)[9002].CharacterId==first.Id,"不同账号补给归属及日戳独立");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root,true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 全局物品限次、补给、邮件、账号归属及真实事务断言");
     }
 }

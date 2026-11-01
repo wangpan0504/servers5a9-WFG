@@ -193,7 +193,7 @@ internal static class GuildApplicationTests
             foreach (var session in new[] { masterSession, memberSession, applicantSession, otherSession }) session.End();
             That(Number("SELECT count(*) FROM pragma_foreign_key_check") == 0, "申请和成员事务保留隔离库外键完整性");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     internal static GuildApplicationRow[] DecodeApplications(byte[] body)

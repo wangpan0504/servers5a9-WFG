@@ -164,6 +164,6 @@ internal static class TcpTestReceipts
             File.WriteAllText(temporary, JsonSerializer.Serialize(receipt));
             File.Move(temporary, path, overwrite: true);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally { if (File.Exists(temporary)) TestFiles.DeleteFile(temporary); }
     }
 }

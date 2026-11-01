@@ -110,7 +110,7 @@ internal static class DungeonEntryCostTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
         }
     }
 

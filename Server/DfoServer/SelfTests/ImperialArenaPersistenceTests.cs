@@ -161,7 +161,7 @@ internal static class ImperialArenaPersistenceTests
             That(Scalar("PRAGMA integrity_check") is "ok" && Scalar("SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "故障、重试与删角后数据库及外键完整性通过");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} 帝国购券、困难结算、每周荣誉故障事务与删角恢复断言");
     }
 }

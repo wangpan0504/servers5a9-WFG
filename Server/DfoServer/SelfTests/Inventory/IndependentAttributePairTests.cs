@@ -177,7 +177,7 @@ internal static class IndependentAttributePairTests
             using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
             That(Load().ValidatedFamilies == 0, "外部文件不可读时不能回退内嵌规则");
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally { if (Directory.Exists(directory)) TestFiles.DeleteDirectory(directory, true); }
     }
 
     static void Batch(Fixture fixture)

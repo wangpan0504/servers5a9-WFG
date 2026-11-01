@@ -236,7 +236,7 @@ internal static partial class EnchantmentTests
                 return JsonSerializer.Serialize(repository.LoadCharacter(owner, persisted.Slot)) + ":" + command.ExecuteScalar();
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true); }
     }
 
     static void MultipleCardResourcePlans(ItemResources resources, EnchantmentCatalog enchantments)

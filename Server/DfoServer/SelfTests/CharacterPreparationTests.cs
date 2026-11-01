@@ -104,7 +104,7 @@ internal static class CharacterPreparationTests
             That(reopened.List(owner).Single(row => row.Id == legacy.Id) is {DungeonState:null,Fatigue:null},
                 "新角色准备修复不替未知存量角色补造副本状态");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 实验角色副本owner及持久化断言");
     }
 

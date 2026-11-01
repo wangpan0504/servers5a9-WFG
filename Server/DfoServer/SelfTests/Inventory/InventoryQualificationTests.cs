@@ -115,7 +115,7 @@ internal static class InventoryQualificationTests
                     "到期拒绝保留完整源、目标、UID、金币及revision，不留下部分消费");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine("PASS 物品实际输入期限、无变化目标、无关资产及文件库提交竞态断言");
     }
 }

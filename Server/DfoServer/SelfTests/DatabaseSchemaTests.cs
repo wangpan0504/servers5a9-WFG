@@ -404,7 +404,7 @@ internal static partial class DatabaseSchemaTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 统一数据库基线、拒绝、重开及增量迁移原子性断言");
     }
@@ -1855,7 +1855,7 @@ internal static partial class DatabaseSchemaTests
             }
         }
         string rollback = Path.Combine(root, "master-quest-v14-rollback.db");
-        File.Copy(path, rollback);
+        TestFiles.Copy(path, rollback);
         using (var db = Open(rollback)) Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
         string before = Snapshot(rollback);
         RejectDatabase(() => new CharacterRepository(rollback));
@@ -3551,6 +3551,9 @@ internal static partial class DatabaseSchemaTests
     {
         var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false, ForeignKeys = true }.ToString());
         db.Open();
+        // 临时迁移夹具只验结构与数据，不验掉电持久性：关闭逐条自动提交的刷盘，回退脚本上百条 DDL 不再各等一次 fsync。
+        // 被测迁移仍走仓储自己的连接与同步级别。
+        using (var command = db.CreateCommand()) { command.CommandText = "PRAGMA synchronous=OFF"; command.ExecuteNonQuery(); }
         return db;
     }
 

@@ -84,7 +84,7 @@ internal static class MileageTests
                 That(Scalar(db, "SELECT mileage_cash_earned||':'||mileage_shop_purchases FROM account_wallets WHERE account='keep'") is "17:{\"2001\":2}",
                     "重开保留已购份数与消费累计，不因服务重启恢复额度");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine("PASS 商城积分钱包、原生通知及增量升级/DDL回滚断言");
 
         SqliteConnection Raw() { var db=new SqliteConnection("Data Source="+path+";Pooling=False"); db.Open(); return db; }

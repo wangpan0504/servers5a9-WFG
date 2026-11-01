@@ -865,6 +865,6 @@ internal static class AuctionListingTests
         }
 
         SqliteConnection Open() => Open(Path);
-        public void Dispose() => Directory.Delete(root, true);
+        public void Dispose() => TestFiles.DeleteDirectory(root, true);
     }
 }

@@ -280,7 +280,7 @@ internal static class DungeonDropCollectionRepositoryTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {Count - checks} 完整集合真实SQLite冻结、逐件拾取、回滚和结果恢复断言（正式结构，非实机）");
 
@@ -397,7 +397,7 @@ internal static class DungeonDropCollectionRepositoryTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, recursive: true);
+            if (completed) TestFiles.DeleteDirectory(root, recursive: true);
             else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
         }
         Console.WriteLine($"PASS {Count - checks} 持久冻结v159升级保留与DDL回滚断言");
@@ -523,7 +523,7 @@ internal static class DungeonDropCollectionRepositoryTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, recursive: true);
+            if (completed) TestFiles.DeleteDirectory(root, recursive: true);
             else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
         }
         Console.WriteLine($"PASS {Count - checks} 训练确定冻结回滚与持久重放SQLite断言");
@@ -794,7 +794,7 @@ internal static class DungeonDropCollectionRepositoryTests
         }
         finally
         {
-            if (completed) Directory.Delete(root, recursive: true);
+            if (completed) TestFiles.DeleteDirectory(root, recursive: true);
             else Console.WriteLine("PRESERVED_DURABLE_FIXTURE_ROOT " + root);
         }
         Console.WriteLine($"PASS {Count - checks} 持久冻结与拾取真实SQLite断言 case={scenario}（原Run仍在，非跨OS恢复）");

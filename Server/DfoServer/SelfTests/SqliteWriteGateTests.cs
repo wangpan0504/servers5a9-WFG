@@ -207,7 +207,7 @@ internal static class SqliteWriteGateTests
         finally
         {
             SqliteDbDiagnostics.Sink = previousSink;
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 单写者闸门串行、读并发、回滚归还与慢库诊断断言");
     }

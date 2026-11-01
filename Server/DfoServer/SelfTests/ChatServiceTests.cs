@@ -1143,7 +1143,7 @@ internal static class ChatServiceTests
             }
             finally { session.ChatNoticeArrived=null; receiving.ChatNoticeArrived=null; }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     /// <summary>
@@ -1334,7 +1334,7 @@ internal static class ChatServiceTests
             That(!events.Contains("\"Kind\":\"unimplemented\"", StringComparison.Ordinal),
                 "0x01A8 已注册，不再产生 unimplemented 日志");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     /// <summary>
@@ -1521,7 +1521,7 @@ internal static class ChatServiceTests
                 events.Contains("\"Truncated\":true"),
                 "chat_inject 日志记录新变体的 opcode 与截断标记");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     /// <summary>
@@ -1641,7 +1641,7 @@ internal static class ChatServiceTests
             That(!events.Contains("\"Kind\":\"unimplemented\"", StringComparison.Ordinal),
                 "inject-raw 不产生 unimplemented 噪音日志");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     /// <summary>CMD 0x0011 正文 = <c>[u8 type][u16 层 id][u32 arg][u32 textLen][CP936 文本]</c>，测试侧自己编码。</summary>

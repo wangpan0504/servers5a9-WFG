@@ -106,7 +106,7 @@ internal static class AccountDatabaseConcurrencyTests
             TestCheck.That(stale && JsonSerializer.Serialize(repository.LoadCharacter(replaced, current.Slot)) == original,
                 "接管后旧连接不能写库，新租约重载原已提交内容");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 账号并发SQLite、writer等待与事务回滚断言");
     }
 }

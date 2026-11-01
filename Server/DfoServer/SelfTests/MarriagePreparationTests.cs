@@ -219,7 +219,7 @@ internal static class MarriagePreparationTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(directory, true);
+            TestFiles.DeleteDirectory(directory, true);
         }
         Console.WriteLine($"PASS {Count - checks} marriage preparation ledger and capsule transaction assertions");
     }

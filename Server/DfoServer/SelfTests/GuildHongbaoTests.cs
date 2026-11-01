@@ -161,7 +161,7 @@ internal static class GuildHongbaoTests
             }
             finally { foreach (var lease in leases) lease.Dispose(); }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void RunSchema()
@@ -198,6 +198,6 @@ internal static class GuildHongbaoTests
                 }
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 }

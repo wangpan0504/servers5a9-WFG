@@ -156,6 +156,6 @@ internal static class GuildManagementTests
                 "成员、公告、邀请和退会均不修改角色资产或资产revision");
             masterSession.End(); memberSession.End(); targetSession.End();
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 }

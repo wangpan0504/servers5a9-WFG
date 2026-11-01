@@ -134,7 +134,7 @@ internal static class CharacterCreationTests
         }
         finally
         {
-            Directory.Delete(folder, true);
+            TestFiles.DeleteDirectory(folder, true);
         }
 
         Console.WriteLine($"PASS {Count - checks} ordinary character creation assertions; jobs=16");

@@ -118,7 +118,7 @@ internal static class InventoryExpansionTests
             That(repository.LoadCharacter(replacement, role.Slot).Inventory.Expansion == 8,
                 "接管拒绝不修改新owner的容量");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(folder, recursive: true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(folder, recursive: true); }
     }
 
     public static void RunResources(ItemCatalog items)

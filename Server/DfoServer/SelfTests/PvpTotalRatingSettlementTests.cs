@@ -144,7 +144,7 @@ internal static class PvpTotalRatingSettlementTests
             }
             void Sql(string sql) => _ = Scalar(sql);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 总力独立队伍评分、三角色经验、原子回滚及恢复断言");
     }
 }

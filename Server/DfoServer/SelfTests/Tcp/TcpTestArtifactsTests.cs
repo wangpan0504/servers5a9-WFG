@@ -98,7 +98,7 @@ internal static class TcpTestArtifactsTests
                 if (Path.GetDirectoryName(root) != parent || !Guid.TryParseExact(Path.GetFileName(root), "N", out _))
                     throw new IOException("Unexpected synthetic TCP artifact path");
                 if (Directory.Exists(root))
-                    Directory.Delete(root, true);
+                    TestFiles.DeleteDirectory(root, true);
             }
         }
         RunRetention();
@@ -124,7 +124,7 @@ internal static class TcpTestArtifactsTests
             TcpTestRetention.Apply(parent, new TcpTestRetention.Policy(5, TimeSpan.FromDays(3), 4096), now);
             TestCheck.That(Directory.Exists(latest) && !Directory.Exists(older), "PVF完整副本计入保留预算，最新失败现场仍保留");
         }
-        finally { Directory.Delete(parent, true); }
+        finally { TestFiles.DeleteDirectory(parent, true); }
     }
 
     // 保留策略：通过的旧轮次删除；失败轮次按数量、天数、体积裁剪且最新一个始终保留；运行中轮次不动。
@@ -166,7 +166,7 @@ internal static class TcpTestArtifactsTests
         }
         finally
         {
-            Directory.Delete(parent, true);
+            TestFiles.DeleteDirectory(parent, true);
         }
     }
 }

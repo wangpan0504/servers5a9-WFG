@@ -145,7 +145,7 @@ internal static class GrowUpChangeTests
             That(!session.CanPublishGrowUpChange(third) && session.ChangeGrowUp(service, new(5, true), now).Error == 30,
                 "返回选角后旧报价和旧发布回执失效");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(Path.GetDirectoryName(path)!, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(Path.GetDirectoryName(path)!, true); }
         Console.WriteLine($"PASS {Count - checks} 技能窗职业变更资格、费用、报价及真实事务断言");
 
         void Sql(string sql)

@@ -156,7 +156,7 @@ internal static class RaidPreparationTests
         {
             foreach (var session in sessions) session.End();
             foreach (var lease in leases) lease.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - before} 卢克准备快照、原子分队构造、门禁与幂等断言");
     }

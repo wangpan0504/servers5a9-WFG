@@ -67,7 +67,7 @@ internal static partial class DatabaseSchemaTests
             RejectDatabase(() => _ = new SqliteGameDatabase(path));
             Check(Snapshot(path) == malformed, "不同约束的熟练度列拒绝后原库、版本和数据不变");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine("PASS 熟练度到账列迁移、回滚与旧行缺省断言");
 
         static void RemoveProficiencySchema(SqliteConnection db)

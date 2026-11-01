@@ -168,7 +168,7 @@ internal static class CashShopPromotionTests
             That(CashShopPromotionCatalog.Load(path, shop, Template).Product(105681)?.Availability == PromotionAvailability.Disabled,
                 "目录读取独立类型化配置文件，关闭候选不加载未证消费者");
         }
-        finally { File.Delete(path); }
+        finally { TestFiles.DeleteFile(path); }
     }
 
     static void RetiredPermanentConfiguration()

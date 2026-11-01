@@ -228,7 +228,7 @@ internal static class AuctionBuyProbeTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

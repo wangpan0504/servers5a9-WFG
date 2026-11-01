@@ -168,7 +168,7 @@ internal static class GuildMedalTests
             }
             void Sql(string sql) => Query(sql);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void Reject(Action action, string message)

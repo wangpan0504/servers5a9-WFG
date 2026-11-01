@@ -334,7 +334,7 @@ internal static class BoosterEpicExchangeTests
                 return command.ExecuteScalar();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static Dictionary<(byte, byte), int[]> Expected() => new()

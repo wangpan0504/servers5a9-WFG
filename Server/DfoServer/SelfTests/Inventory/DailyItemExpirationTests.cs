@@ -228,7 +228,7 @@ internal static class DailyItemExpirationTests
                 cleaned.Inventory.Find(new(InventoryListType.Main, 66))!.Core.ItemId == source.Core.ItemId,
                 "选角清理已到期背包及个人仓库新实例，历史零期限同模板保留");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 
     // 冻结规划结果后，第一次提交预检仍有效，第二次读取才跨期限，验证真实事务内的复验。

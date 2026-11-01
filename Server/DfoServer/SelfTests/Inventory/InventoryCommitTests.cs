@@ -27,7 +27,7 @@ internal static class InventoryCommitTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 库存资格快照、同revision进度变更及提交恢复断言");
 

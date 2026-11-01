@@ -32,7 +32,7 @@ internal static class GuildNpcBenefitPersistenceTests
             Schema(Path.Combine(root, "schema.db"));
             Repository(Path.Combine(root, "benefits.db"));
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} guild NPC benefit persistence assertions");
     }
 

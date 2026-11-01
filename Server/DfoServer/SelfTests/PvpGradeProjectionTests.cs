@@ -83,7 +83,7 @@ internal static class PvpGradeProjectionTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - before} 决斗等级Actor投影及选角身份断言");
     }

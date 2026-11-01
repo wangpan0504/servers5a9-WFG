@@ -133,7 +133,7 @@ internal static class PvpTrainingSkillsTests
                 command.CommandText=sql;command.ExecuteNonQuery();
             }
         }
-        finally {Directory.Delete(root,true);}
+        finally {TestFiles.DeleteDirectory(root,true);}
         Console.WriteLine($"PASS {Count-before} 训练技能隔离、原子进度与升级断言");
     }
 }

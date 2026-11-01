@@ -184,7 +184,7 @@ internal static class CharacterRenameCardTests
                 repository.Delete(replacement, repository.LoadDeletionTarget(replacement, candidate.Slot));
             }
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 角色更名卡解析、资格事务及迁移断言");
     }
 

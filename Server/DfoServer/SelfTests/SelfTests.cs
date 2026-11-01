@@ -113,7 +113,7 @@ internal static class SelfTests
         }
         finally
         {
-            Directory.Delete(folder, true);
+            TestFiles.DeleteDirectory(folder, true);
         }
 
         Console.WriteLine($"PASS {Count - assertions} assertions");

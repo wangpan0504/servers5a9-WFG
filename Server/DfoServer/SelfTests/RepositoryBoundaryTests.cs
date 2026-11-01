@@ -50,7 +50,7 @@ internal static class RepositoryBoundaryTests
             owner.Dispose();
             TestCheck.That(JsonSerializer.Serialize(repository.List(replacement).Single()) == expected, "旧 owner 释放不影响新会话");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} resource-free repository boundary assertions");
     }
 

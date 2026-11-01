@@ -43,7 +43,7 @@ internal static class EvildomWarRecoverySchemaTests
                 SqliteConnection Open() { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"); db.Open(); return db; }
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS evildom war recovery schema {Count - before}");
     }
 }

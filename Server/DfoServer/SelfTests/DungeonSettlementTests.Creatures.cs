@@ -54,6 +54,6 @@ internal static partial class DungeonSettlementTests
                 db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 }

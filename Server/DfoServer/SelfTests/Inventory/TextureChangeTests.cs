@@ -161,7 +161,7 @@ internal static class TextureChangeTests
             That(JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot)) == snapshot,
                 "到期拒绝保留装备UID与核心、材料、金币、账号灵魂、revision及账本");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 材质转换协议、映射表、费用与字段保留断言");
     }
 

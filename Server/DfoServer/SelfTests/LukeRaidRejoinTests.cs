@@ -244,7 +244,7 @@ internal static class LukeRaidRejoinTests
         {
             foreach (var session in sessions) try { session.End(); } catch (InvalidOperationException) { }
             foreach (var lease in leases) lease.Dispose();
-            if (passed) Directory.Delete(root, true);
+            if (passed) TestFiles.DeleteDirectory(root, true);
         }
     }
 

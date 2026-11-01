@@ -30,7 +30,7 @@ internal static class GuildNpcEmblemConsumptionTests
         string root = Path.Combine(Path.GetTempPath(), "guild-emblem-consume-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try { Run(Path.Combine(root, "game.db")); }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} guild NPC emblem consumption assertions");
     }
 

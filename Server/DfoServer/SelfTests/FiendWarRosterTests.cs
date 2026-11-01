@@ -96,6 +96,6 @@ internal static class FiendWarRosterTests
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
     }
 }

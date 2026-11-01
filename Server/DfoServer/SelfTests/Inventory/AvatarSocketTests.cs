@@ -127,7 +127,7 @@ internal static class AvatarSocketTests
             That(!InventoryAvatarSocketService.Plan(persisted, request, opener, template, avatar, out _, clock: clock).Accepted,
                 "相同时钟到期后重新规划也拒绝");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} 时装开孔解析、资格及完整实例断言");
 
         Character Role(InventoryItem from, InventoryItem to) => character with { Inventory = character.Inventory with { Items = [from, to] } };

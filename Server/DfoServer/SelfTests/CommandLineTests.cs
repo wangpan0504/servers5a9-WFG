@@ -172,7 +172,7 @@ internal static class CommandLineTests
         finally
         {
             Environment.CurrentDirectory = workingDirectory;
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} command line assertions");
     }

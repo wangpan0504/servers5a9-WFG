@@ -179,7 +179,7 @@ internal static class AuctionWindowModeTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 

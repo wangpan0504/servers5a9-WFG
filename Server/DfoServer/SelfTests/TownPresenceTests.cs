@@ -530,7 +530,7 @@ internal static class TownPresenceTests
         {
             presence.Remove(aSend);
             presence.Remove(bSend);
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
 
         Console.WriteLine($"PASS {Count - assertions} town presence, queue, epoch and cleanup assertions");

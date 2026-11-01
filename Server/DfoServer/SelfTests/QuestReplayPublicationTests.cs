@@ -311,7 +311,7 @@ internal static class QuestReplayPublicationTests
                     "取消连图后新回放真实16仍可安装且只预留一次attempt");
             }
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-checks} 合成回放真实15/16/37 Handler发布、拒绝、重复预留及选角隔离断言（非主线/实机）");
     }
 

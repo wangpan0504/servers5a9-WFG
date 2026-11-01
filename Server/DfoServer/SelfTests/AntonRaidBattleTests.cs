@@ -114,7 +114,7 @@ internal static class AntonRaidBattleTests
                 That(Convert.ToInt64(command.ExecuteScalar()) == SqliteMigrations.CurrentVersion, "攻坚迁移完成后发布当前schema版本");
             }
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        finally { if (Directory.Exists(directory)) TestFiles.DeleteDirectory(directory, true); }
 
         SqliteConnection Open()
         {

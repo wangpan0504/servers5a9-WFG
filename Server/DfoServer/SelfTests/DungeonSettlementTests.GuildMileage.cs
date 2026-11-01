@@ -138,7 +138,7 @@ internal static partial class DungeonSettlementTests
                 "个人贡献末段失败时原经验、公共资金、贡献及结算回执全部回滚");
             Sql("DROP TRIGGER contribution_clear_fail");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 自然通关公共积分原子事务及重开幂等断言");
     }
 }

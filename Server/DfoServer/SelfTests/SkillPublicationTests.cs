@@ -35,7 +35,7 @@ internal static class SkillPublicationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {TestCheck.Count - before} 技能提交与发布断言");
     }
@@ -52,7 +52,7 @@ internal static class SkillPublicationTests
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: true, layout: true);
             await QueuedReplyAsync(towns, catalog, characters, root, reselect: false, layout: true);
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 换槽提交后发送失败与过期ACK断言");
     }
 

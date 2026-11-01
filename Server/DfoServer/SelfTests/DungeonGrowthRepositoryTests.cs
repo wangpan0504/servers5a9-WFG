@@ -199,7 +199,7 @@ internal static partial class DungeonGrowthRepositoryTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} 副本成长原子提交、去重、回滚与迁移断言");
         RunSessionPublication(towns, pvf, characters);
@@ -326,7 +326,7 @@ internal static partial class DungeonGrowthRepositoryTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} 副本成长在线发布、晚期失败及提交后恢复断言");
 
@@ -453,7 +453,7 @@ internal static partial class DungeonGrowthRepositoryTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} 击杀熟练度到账拆分、封顶与回执回放断言");
 

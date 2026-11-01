@@ -91,7 +91,7 @@ internal static class LukePhaseExitOwnerTests
             }
             passed = true;
         }
-        finally { if (passed) Directory.Delete(root, true); else Console.WriteLine("FAIL fixture: " + root); }
+        finally { if (passed) TestFiles.DeleteDirectory(root, true); else Console.WriteLine("FAIL fixture: " + root); }
         Console.WriteLine($"PASS {Count - before} 阶段退场owner接管与取消断言");
     }
 

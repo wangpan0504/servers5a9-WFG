@@ -178,7 +178,7 @@ internal static class AntonRaidRejoinTests
         {
             foreach (var session in sessions) try { session.End(); } catch (InvalidOperationException) { }
             foreach (var lease in leases) lease.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

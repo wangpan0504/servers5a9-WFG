@@ -245,6 +245,6 @@ internal static class OperationHopeSessionTests
         public OperationHopeFinishReceipt? Finish(ushort quest) => Session.FinishOperationHope(quest,ushort.MaxValue,1,
             resources.Quests,resources.Parameters,resources.Items.Items,resources.Items.GoldLimits,resources.Items.EpicPieces,resources.Growth);
         public void Sql(string sql) { using var db = new SqliteConnection("Data Source="+Path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
-        public void Dispose() { Owner.Dispose(); if (Directory.Exists(root)) Directory.Delete(root,true); }
+        public void Dispose() { Owner.Dispose(); if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
     }
 }

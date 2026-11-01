@@ -141,7 +141,7 @@ internal static class MarriageDungeonTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
         }
     }
 

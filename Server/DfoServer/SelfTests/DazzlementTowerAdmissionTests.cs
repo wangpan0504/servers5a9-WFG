@@ -101,7 +101,7 @@ internal static class DazzlementTowerAdmissionTests
             That(repo.LoadDazzlementTower(owner).Bindings.IsEmpty && repo.LoadCharacter(owner, character.Slot).Revision == character.Revision,
                 "v106升级建立空眩惑账本，保留旧角色资产与尝试号，不伪造历史绑定");
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 眩惑日周边界、账号绑定、事务回滚和持久化断言");
     }
 }

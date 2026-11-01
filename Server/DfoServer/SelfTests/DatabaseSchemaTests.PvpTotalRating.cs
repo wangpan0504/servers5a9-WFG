@@ -9,7 +9,7 @@ internal static partial class DatabaseSchemaTests
         string root = Path.Combine(Path.GetTempPath(), "S5A9-total-schema-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try { PvpTotalRatingUpgrade(root); }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void PvpTotalRatingUpgrade(string root)

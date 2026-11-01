@@ -106,6 +106,6 @@ internal static class NpcFavorTests
             Reject<InvalidOperationException>(()=>InventoryService.Commit(repository,owner,reopened,pending),"旧generation不能提交");
             That(repository.LoadCharacter(replacement,0).Inventory.NpcFavor[0].Points==1000,"接管不产生旧代际资产变化");
         }
-        finally { SqliteConnection.ClearAllPools();Directory.Delete(root,true); }
+        finally { SqliteConnection.ClearAllPools();TestFiles.DeleteDirectory(root,true); }
     }
 }

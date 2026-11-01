@@ -57,7 +57,7 @@ internal static class ItemUsePersistenceTests
             That(recovered.Inventory.Find(new(InventoryListType.Main, 9))?.Uid == attachment.Item.Uid,
                 "重开数据库后溢出奖励仍属于相同角色与栏位");
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
         Console.WriteLine($"PASS {Count - before} 礼包满包真实邮件、完整核心及领取恢复断言");
     }
 }

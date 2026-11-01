@@ -95,7 +95,7 @@ internal static partial class DungeonGrowthRepositoryTests
                 EquipmentGrowthPlan.Create(actor with { Level = 95 }, run, pending, items, DateTimeOffset.UtcNow) is null,
                 "背包闲置装备与超过十级差敌人不刷成长经验");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 龙跃成长、自动晋阶与同事务回滚断言");
 
         void Sql(string sql)

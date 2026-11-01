@@ -43,7 +43,7 @@ internal static class EvildomWarRewardSchemaTests
                     "拒绝未来版本不改变库版本");
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS evildom war reward schema {Count - before}");
     }
 

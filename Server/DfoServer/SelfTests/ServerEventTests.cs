@@ -128,7 +128,7 @@ internal static class ServerEventTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - before} 活动时间表、GM覆盖、CAS、SQL回滚和无写查询断言");
     }

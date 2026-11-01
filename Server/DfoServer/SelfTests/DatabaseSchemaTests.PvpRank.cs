@@ -19,7 +19,7 @@ internal static partial class DatabaseSchemaTests
         string root=Path.Combine(Path.GetTempPath(),"S5A9-rank-schema-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try {PvpRankUpgrade(root);}
-        finally {Directory.Delete(root,true);}
+        finally {TestFiles.DeleteDirectory(root,true);}
     }
 
     static void PvpRankUpgrade(string root)

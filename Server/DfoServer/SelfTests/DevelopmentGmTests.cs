@@ -411,7 +411,7 @@ internal static class DevelopmentGmTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
 
         Console.WriteLine($"PASS {Count - checks} development GM assertions");

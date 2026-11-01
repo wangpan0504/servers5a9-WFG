@@ -473,6 +473,6 @@ internal static class MailboxPersistenceTests
             return JsonSerializer.Serialize(rows);
         }
         public void Integrity() => TestCheck.That(Query("PRAGMA integrity_check") is "ok" && Query("SELECT count(*) FROM pragma_foreign_key_check") is 0L, "邮件资产与数据库外键完整");
-        public void Dispose() { OtherOwner.Dispose(); ReceiverOwner.Dispose(); SenderOwner.Dispose(); Directory.Delete(root, true); }
+        public void Dispose() { OtherOwner.Dispose(); ReceiverOwner.Dispose(); SenderOwner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }

@@ -146,7 +146,7 @@ internal static class EquipmentPeriodChangeTests
             That(rejected && JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot)) == before,
                 "目标恰到期后文件库拒绝旧计划，源、目标UID和核心、冷却与revision全部保持");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine("PASS 誓约之缚武器制作图成对装配、不扣商店材料与核心保留断言");
     }
 }

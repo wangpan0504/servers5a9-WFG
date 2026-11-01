@@ -523,7 +523,7 @@ internal static class AuctionBuyTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
     }
 
@@ -786,7 +786,7 @@ internal static class AuctionBuyTests
         {
             SellerOwner.Dispose();
             BuyerOwner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 

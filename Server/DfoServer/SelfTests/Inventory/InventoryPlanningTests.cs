@@ -123,6 +123,6 @@ internal static class InventoryPlanningTests
                 return (result, error);
             }
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 }

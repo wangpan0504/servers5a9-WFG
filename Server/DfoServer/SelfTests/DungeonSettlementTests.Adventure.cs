@@ -121,7 +121,7 @@ internal static partial class DungeonSettlementTests
             Check(Query("PRAGMA integrity_check") is "ok" && Convert.ToInt64(Query("SELECT count(*) FROM pragma_foreign_key_check")) == 0,
                 "多次冒险团结算后数据库与外键仍然完整");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关冒险团折算、里程、结晶胶囊、回滚与重放断言");
 
         SqliteConnection Open()

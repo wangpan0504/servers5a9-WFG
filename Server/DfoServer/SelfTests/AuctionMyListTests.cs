@@ -319,7 +319,7 @@ internal static class AuctionMyListTests
         public void Dispose()
         {
             owner.Dispose();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 }

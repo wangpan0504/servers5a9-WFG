@@ -65,7 +65,7 @@ internal static partial class PromotionPageSessionTests
             That(ledger.Verified && ledger.Progress is { Count: 2, Revision: 1 } && ledger.AwardMask27 == 1,
                 "成功购买后的新读取恢复同一真实账本，不靠页面状态虚构累计");
         }
-        finally { session?.End(); Directory.Delete(directory, true); }
+        finally { session?.End(); TestFiles.DeleteDirectory(directory, true); }
         Console.WriteLine($"Promotion page purchase integration: {Count - before} checks passed.");
     }
 

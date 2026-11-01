@@ -160,7 +160,7 @@ internal static class NpcFavorOperationTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            Directory.Delete(root, true);
+            TestFiles.DeleteDirectory(root, true);
         }
     }
 

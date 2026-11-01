@@ -530,7 +530,7 @@ internal static partial class GmWebServerTests
             foreach (var client in slowReaders) client.Dispose();
             await server.WaitAsync(TimeSpan.FromSeconds(10));
         }
-        Directory.Delete(directory, true);
+        TestFiles.DeleteDirectory(directory, true);
         Console.WriteLine($"PASS {TestCheck.Count - before} GM 网页站点接口、写操作校验与审计断言");
     }
 }

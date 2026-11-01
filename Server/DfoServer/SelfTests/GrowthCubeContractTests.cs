@@ -224,7 +224,7 @@ internal static class GrowthCubeContractTests
             repository.Delete(owner,repository.LoadDeletionTarget(owner,created.Slot));
             That(repository.List(owner).Length==0,"角色删除清除cube_premium，账号契约不随角色消失");
         }
-        finally { Directory.Delete(root,true); }
+        finally { TestFiles.DeleteDirectory(root,true); }
     }
 
     static void VerifyAcquisitionIndices(PremiumContractCatalog catalog)

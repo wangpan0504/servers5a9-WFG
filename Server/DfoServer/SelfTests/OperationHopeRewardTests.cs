@@ -225,7 +225,7 @@ internal static class OperationHopeRewardTests
         public string Rows(string sql) => JsonSerializer.Serialize(TcpTestFixture.Rows(Path,sql));
         public void Sql(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         public SqliteConnection Open() { var db = new SqliteConnection("Data Source="+Path+";Pooling=False;Foreign Keys=True"); db.Open(); return db; }
-        public void Dispose() { Owner.Dispose(); if (Directory.Exists(root)) Directory.Delete(root,true); }
+        public void Dispose() { Owner.Dispose(); if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
     }
 
     sealed class Authority : DungeonCombatAuthority

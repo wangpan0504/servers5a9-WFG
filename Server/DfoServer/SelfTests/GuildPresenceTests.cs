@@ -120,7 +120,7 @@ internal static class GuildPresenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestFiles.DeleteDirectory(root, recursive: true);
         }
         Console.WriteLine($"PASS {Count - before} 公会在线观察、会话生命周期及失败隔离断言");
     }

@@ -143,7 +143,7 @@ internal static class QuestAutoDailyTests
             Console.WriteLine($"PASS {Count-checks} 地轨自动每日兼容规则、真实周期事务和旧副本隔离断言");
             void Sql(string sql) { using var db=new SqliteConnection("Data Source="+Path.Combine(root,"game.db")+";Pooling=False"); db.Open(); using var c=db.CreateCommand();c.CommandText=sql;c.ExecuteNonQuery(); }
         }
-        finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if(Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
     }
 
     // 资源层只验证接取后升级的领奖边界；真实死亡、提交与重放由所属TCP组验证。

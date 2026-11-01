@@ -88,7 +88,7 @@ internal static partial class ShopPurchaseLimitTests
             }
             void Sql(string sql) => Query(sql);
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
 
     static void SchemaUpgrade(string path)

@@ -733,7 +733,7 @@ internal static class ClientSettingsStoreTests
         {
             Owner.Dispose();
             OtherOwner.Dispose();
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true);
         }
     }
 }

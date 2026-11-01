@@ -93,7 +93,7 @@ internal static class PvpTotalRosterTests
             replacement.End();
             That(!replacement.CanUsePvpTotalRoster(fresh), "断线清除当前发布名册绑定");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 总力发布名册、三角色索引与生命周期断言");
     }
 }

@@ -127,6 +127,6 @@ internal static class StoryDigestTests
         {
             using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
         }
-        public void Dispose() { Owner.Dispose(); Directory.Delete(root,recursive: true); }
+        public void Dispose() { Owner.Dispose(); TestFiles.DeleteDirectory(root,recursive: true); }
     }
 }

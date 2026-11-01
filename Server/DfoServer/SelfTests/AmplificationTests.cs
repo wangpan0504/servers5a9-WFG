@@ -259,7 +259,7 @@ internal static class AmplificationTests
                 }
             }
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally { if (Directory.Exists(root)) TestFiles.DeleteDirectory(root, true); }
     }
 
     internal static AmplificationRules Rules() => new(55,

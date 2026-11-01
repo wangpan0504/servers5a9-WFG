@@ -30,7 +30,7 @@ internal static partial class FormalDungeonTcpTests
         Write([new(3, null, -2, 100)]);
         Reload(true);
         Compare(Capture(), -2);
-        File.Delete(Path.Combine(fixture.Options.DataDirectory, "monster-battle-level.json"));
+        TestFiles.DeleteFile(Path.Combine(fixture.Options.DataDirectory, "monster-battle-level.json"));
         Reload(true);
         Compare(Capture(), 0);
         Console.WriteLine("PASS monster battle level production TCP config/reload/session/29/default restoration (synthetic client)");

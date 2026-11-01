@@ -197,7 +197,7 @@ internal static class BoosterEquipmentTests
             string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + Query("SELECT count(*) FROM inventory_audit_log") + ":" +
                 Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} booster equipment assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
     }

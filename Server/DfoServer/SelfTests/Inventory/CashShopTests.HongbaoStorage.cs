@@ -107,6 +107,6 @@ internal static partial class CashShopTests
             That(Number("SELECT count(*) FROM character_guild_hongbao_purchases") == 0,
                 "删角事务级联清理个人红包购买记录，不遗留外键依赖");
         }
-        finally { Directory.Delete(root, true); }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 }

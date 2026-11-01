@@ -222,7 +222,7 @@ internal static class ClassChangeTests
             That(!session.CanPublishClassChange(switched) && session.ChangeClass(service, new(67, 4, false), now).Error == 30,
                 "返回选角后旧发布回执失效，不消费旧源或安装旧结果");
         }
-        finally { SqliteConnection.ClearAllPools(); Directory.Delete(Path.GetDirectoryName(path)!, true); }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(Path.GetDirectoryName(path)!, true); }
         Console.WriteLine($"PASS {Count - checks} 职业互转、觉醒隔离及真实事务断言");
 
         void Sql(string sql)
