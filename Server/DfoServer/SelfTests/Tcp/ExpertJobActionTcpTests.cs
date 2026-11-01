@@ -117,7 +117,7 @@ internal static class ExpertJobActionTcpTests
         {
             peer.Select(1, expertJobInfo: EnchantInfo(300));
             enchanterDaily = Daily(enchanterId);
-            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
+            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); ReadOpen(peer);
             string before = Snapshot();
             SendEnchant(peer, machineId); peer.Expect(1, 601, [0, 19, 0]); peer.Barrier();
             That(Snapshot() == before, "附魔跨玩家请求不冒充本人结算");
@@ -129,12 +129,14 @@ internal static class ExpertJobActionTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1, expertJobInfo: EnchantInfo(300));
-            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
+            peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); ReadOpen(peer);
             SendEnchant(peer, enchanterId);
+            Bytes(peer.Expect(0, 538).Body[22..], [3, 0, 1, 2], "本人附魔升至Lv7同步店铺新增资格");
             peer.Expect(0, 14); peer.Expect(0, 574); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
             peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(7u); w.Write((uint)recipe.Rarity); }));
             peer.Barrier();
             peer.Send(599, Build(w => w.Write(enchanterId)));
+            Bytes(peer.Expect(0, 538).Body[22..], [3, 0, 1, 2], "升级后进入本人店铺保留三项资格");
             peer.Expect(1, 599, Build(w => { w.Write((byte)1); w.Write((byte)3); w.Write(enchanterId); w.Write(299u); }));
             That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={enchanterId} AND quest_id=11009") is [[0L]],
                 "真实附魔成功且教程状态改变时仍送完整ACK，不被旧回执守卫吞掉");
@@ -188,6 +190,12 @@ internal static class ExpertJobActionTcpTests
             peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
             peer.Barrier();
         }
+    }
+    static void ReadOpen(TcpPeer peer)
+    {
+        Bytes(peer.Expect(0, 538).Body[22..], [2, 0, 1], "Lv6本人开店只有两项资格");
+        Bytes(peer.Expect(0, 544).Body[8..], [2, 0, 1], "本人544不清空资格");
+        peer.Expect(1, 598, [1]);
     }
     static InventorySlot Bag(int slot) => new(InventoryListType.Main, (short)slot);
     static void UseMachine(TcpPeer peer, ushort slot, ushort actor) => peer.Send(235, Build(writer =>

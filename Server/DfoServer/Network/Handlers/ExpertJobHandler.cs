@@ -305,13 +305,21 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         var store = new ExpertJobStoreRecord(character.Id, character.ExpertJobType, parsed.Mode, ((char)grade).ToString(),
             parsed.First, parsed.Second, parsed.Third, parsed.Fourth, grade, (uint)Math.Max(0, character.ExpertMachineEndurance))
         { Town = character.Position.Town, Area = character.Position.Area };
+        store = store.WithStatus(character, scripts);
         stores?.Open(store);
         byte[] notice = ExpertJobPackets.CreateStoreNotice(store);
         presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE, notice,
             "expert_job_store_created");
         if (parsed.Mode == 3)
-            presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.UPDATE_EXPERT_JOB_STORE,
-                ExpertJobPackets.UpdateStoreNotice(parsed.Mode, character.Id, store.Name), "expert_job_store_goods");
+        {
+            byte[] goods = ExpertJobPackets.UpdateStoreNotice(parsed.Mode, character.Id, store.Name, store.Rarities.ToArray());
+            presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.UPDATE_EXPERT_JOB_STORE, goods, "expert_job_store_goods");
+            // 同屏广播排除本人；本人进入店铺也从演员店铺对象复制资格。
+            bool Current() => ReferenceEquals(context.Session.Selected, character) && context.Session.ExpertJobStoreOpen &&
+                stores is not null && stores.TryGet(character.Id, out var live) && ReferenceEquals(live, store);
+            await context.Notify(NotiPacketType.CREATE_EXPERT_JOB_STORE, notice, "expert_job_store_self", Current);
+            await context.Notify(NotiPacketType.UPDATE_EXPERT_JOB_STORE, goods, "expert_job_store_self_goods", Current);
+        }
         await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
         return CommandResult.Handled;
     }
@@ -352,6 +360,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         context.Session.QuoteExpertJobStore(store);
+        if (store.Mode == 3)
+            await context.Notify(NotiPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.CreateStoreNotice(store),
+                "expert_job_enter_qualifications", () => stores.TryGet(actor, out var live) && ReferenceEquals(live, store));
         byte[] body = store.Mode == 3
             ? ExpertJobPackets.EnterStoreKind3(store.OwnerId, store.Endurance)
             : ExpertJobPackets.EnterStoreKind0(store.Grade, store.First, store.Endurance);
@@ -431,14 +442,17 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
     {
         if (!ReferenceEquals(context.Session.Selected, character) || !context.Session.ExpertJobStoreOpen ||
             stores is null || !stores.TryGet(character.Id, out var before)) return false;
-        byte grade = checked((byte)(character.ExpertJobType == 3 ? character.ExpertMachineGrade :
-            scripts.Level(character.ExpertJobType, character.ExpertJobExperience)));
-        var current = before with { Grade = grade, Name = ((char)grade).ToString(), Endurance = (uint)character.ExpertMachineEndurance };
+        var current = before.WithStatus(character, scripts);
         if (current == before) return true;
         if (!stores.TryUpdate(before, current)) return false;
-        if (grade != before.Grade)
-            presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
-                ExpertJobPackets.CreateStoreNotice(current), "expert_job_store_grade");
+        if (current.Grade != before.Grade || !current.Rarities.SequenceEqual(before.Rarities))
+        {
+            byte[] notice = ExpertJobPackets.CreateStoreNotice(current);
+            presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE, notice, "expert_job_store_grade");
+            if (current.Mode == 3)
+                context.Sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE, notice, "expert_job_store_self_grade",
+                    () => ReferenceEquals(context.Session.Selected, character) && stores.TryGet(character.Id, out var live) && ReferenceEquals(live, current));
+        }
         return true;
     });
 

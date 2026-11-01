@@ -94,7 +94,7 @@ internal static class ExpertJobPackets
     public static byte[] CreateStoreNotice(DfoServer.Game.ExpertJob.ExpertJobStoreRecord store)
     {
         if (store.Grade is < 1 or > 11) throw new InvalidDataException("副职业商店等级不合法");
-        return CreateStoreNotice(store.Mode, store.OwnerId, ((char)store.Grade).ToString(), null,
+        return CreateStoreNotice(store.Mode, store.OwnerId, ((char)store.Grade).ToString(), store.Rarities.ToArray(),
             store.Town, store.Area, store.Second, store.Third, store.First);
     }
 
