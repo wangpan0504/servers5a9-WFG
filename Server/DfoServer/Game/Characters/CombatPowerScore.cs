@@ -49,17 +49,19 @@ internal static class CombatPowerScore
         double intelligence = ((levelStats?.MagicalAttack ?? 0) + permanent.Intelligence) / 10d;
         double physical = 0, magical = 0, separate = 0, physicalCrit = 0, magicalCrit = 0, allElement = 0;
         var element = Elements.ToDictionary(e => e, _ => 0d, StringComparer.Ordinal);
-        int equipmentBp = 0, yellowMax = 0, yellowAdd = 0, critMax = 0, critAdd = 0, allAttack = 0;
+        double equipmentBp = 0, yellowMax = 0, yellowAdd = 0, critMax = 0, critAdd = 0, allAttack = 0;
         double skillAttack = 1;
-        var whiteRows = new List<(string Element, int Value)>();
+        var whiteRows = new List<(string Element, double Value)>();
 
         void Apply(ImmutableArray<CombatEffectRow> rows, string source)
         {
-            // 同一来源同一词条若有多档条件值，只取最高档，避免把互斥条件累加。
-            foreach (var group in rows.GroupBy(r => (r.Stat, r.Mode, r.Element)))
+            // 普通声明逐条叠加；仅同一来源的条件阶梯按同名词条取最高档。
+            var effective = rows.Where(r => !r.Conditional).Concat(rows.Where(r => r.Conditional)
+                .GroupBy(r => (r.Stat, r.Mode, r.Element)).Select(g => g.MaxBy(r => r.Value)!));
+            foreach (var row in effective)
             {
-                int value = group.Max(r => r.Value);
-                var (stat, mode, elem) = group.Key;
+                double value = row.Value;
+                var (stat, mode, elem) = (row.Stat, row.Mode, row.Element);
                 switch (stat)
                 {
                     case "physical attack" when mode == "+": strength += value; break;
@@ -124,7 +126,7 @@ internal static class CombatPowerScore
             {
                 foreach (var tier in setTiers(id).Where(t => t.Threshold <= count))
                 {
-                    equipmentBp += SetPieceBp * tier.Threshold;
+                    equipmentBp += (double)SetPieceBp * tier.Threshold;
                     Apply(tier.Rows, $"set:{id}/threshold:{tier.Threshold}");
                 }
             }
