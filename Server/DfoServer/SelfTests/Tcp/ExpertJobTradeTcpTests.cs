@@ -93,7 +93,20 @@ internal static class ExpertJobTradeTcpTests
         using (var enchanter = Open(fixture, "gamma"))
         {
             enchanter.Select(expertJobInfo: EnchantInfo(300)); enchanter.Send(1426); Drain(enchanter); Drain(buyer);
-            OpenShop(enchanter, 35, mode: 3, grade: 4); Drain(enchanter); Drain(buyer); Enter(buyer, enchantId, mode: 3);
+            OpenShop(enchanter, 35, mode: 3, grade: 4);
+            var opened = Drain(enchanter);
+            var visible = Drain(buyer);
+            That(opened.Any(p => p.Opcode == 538) && opened.Any(p => p.Opcode == 544), "#986店主本人必须收到独立店铺资格投影538/544");
+            foreach (var frames in new[] { opened, visible })
+            {
+                Bytes(frames.Single(p => p.Opcode == 538).Body[22..], [2, 0, 1], "Lv4附魔店538携带与个人205一致的两项资格");
+                Bytes(frames.Single(p => p.Opcode == 544).Body[8..], [2, 0, 1], "544不得以空列表覆盖开店资格");
+            }
+            buyer.Send(36, Area(38, 1, 450, 234, 38, 0)); Drain(buyer); Drain(enchanter);
+            buyer.Send(1426);
+            Bytes(Drain(buyer).Single(p => p.Opcode == 538).Body[22..], [2, 0, 1], "后入场538保留店主资格");
+            Drain(enchanter);
+            Enter(buyer, enchantId, mode: 3);
             long ownerGold = Gold(enchantId);
             buyer.Send(601, Build(w => { w.Write(enchantId); w.Write(recipe.RecipeId); w.Write((byte)2);
                 w.Write((byte)0); w.Write((ushort)5); w.Write((byte)0); w.Write((ushort)cardSlot); }));
@@ -136,7 +149,10 @@ internal static class ExpertJobTradeTcpTests
     static void Enter(TcpPeer peer, ushort actor, byte mode = 0)
     {
         peer.Send(599, Build(w => w.Write(actor)));
-        var ack = Drain(peer).Single(p => p.Opcode == 599).Body;
+        var packets = Drain(peer);
+        if (mode == 3)
+            That(packets.Single(p => p.Opcode == 538).Body[22..].SequenceEqual(new byte[] { 2, 0, 1 }), "599前同步当前店铺资格快照");
+        var ack = packets.Single(p => p.Opcode == 599).Body;
         That(mode == 0 ? ack is [1, 0, 1, _, _, _, _, _, _, _, _] :
             ack is [1, 3, _, _, 44, 1, 0, 0] && U16(ack, 2) == actor,
             "同屏店铺完整success/kind/真实等级不得移位，可进入并记住报价");
