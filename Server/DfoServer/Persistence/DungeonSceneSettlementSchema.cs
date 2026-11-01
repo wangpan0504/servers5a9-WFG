@@ -56,7 +56,7 @@ internal static class DungeonSceneSettlementSchema
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             Scene, Settlement, "character_quest_clear_receipts", "character_quest_completion_receipts",
-            "character_dungeon_card_rewards", "character_dungeon_card_options"
+            "character_dungeon_card_rewards", "character_dungeon_card_options", "character_dungeon_tournament_rewards"
         };
         bool added;
         do

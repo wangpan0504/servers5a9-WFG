@@ -336,6 +336,8 @@ internal static class QuestCompletionRepositoryTests
         public Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now) => inner.GrantBlackDiamondFatigue(owner, expected, now);
         public DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,DungeonCardDelivery delivery,DateTimeOffset now)
             => inner.CommitPaidDungeonCard(owner,expected,prepared,delivery,now);
+        public TournamentCardCommit CommitTournamentCards(AccountOwners.Lease owner, Character expected,
+            PreparedDungeonSettlement prepared, TournamentCardClaim claim) => inner.CommitTournamentCards(owner, expected, prepared, claim);
         public DungeonFreeCardCommit CommitFreeDungeonCard(AccountOwners.Lease owner, Character expected,
             PreparedDungeonSettlement prepared, DungeonCardDelivery delivery)
             => inner.CommitFreeDungeonCard(owner, expected, prepared, delivery);

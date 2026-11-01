@@ -65,6 +65,8 @@ internal interface ICharacterRepository
         DungeonCardDelivery delivery,DateTimeOffset now);
     DungeonFreeCardCommit CommitFreeDungeonCard(AccountOwners.Lease owner, Character expected,
         PreparedDungeonSettlement prepared, DungeonCardDelivery delivery);
+    TournamentCardCommit CommitTournamentCards(AccountOwners.Lease owner, Character expected,
+        PreparedDungeonSettlement prepared, TournamentCardClaim claim);
     DfoServer.Game.Currency.AccountWallet LoadAccountWallet(AccountOwners.Lease owner);
     CharacterRosterEntry[] ListRoster(AccountOwners.Lease owner);
     Character LoadCharacter(AccountOwners.Lease owner, ushort slot);

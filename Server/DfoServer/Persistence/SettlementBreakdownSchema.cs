@@ -74,7 +74,7 @@ internal static class SettlementBreakdownSchema
             parents.Add(table, references);
         }
         var selected = new HashSet<string>(StringComparer.Ordinal) { Settlement };
-        var allowed = new HashSet<string>(StringComparer.Ordinal) { Settlement, Breakdown, BreakdownOptions };
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { Settlement, Breakdown, BreakdownOptions, "character_dungeon_tournament_rewards" };
         bool added;
         do
         {

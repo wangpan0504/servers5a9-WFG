@@ -43,6 +43,14 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
     public BossRushClearReward? BossRush { get; } = bossRush;
+    public DungeonTournamentReward? Tournament { get; private set; }
+    public void FreezeTournament(DungeonTournamentReward? reward)
+    {
+        if (reward is null) return;
+        if (Tournament is not null && !ReferenceEquals(Tournament, reward))
+            throw new InvalidOperationException("同一大会不能替换原冻结牌面");
+        Tournament = reward;
+    }
     public int? EkernDay { get; private set; }
     public void FreezeEkernDay(int day) => EkernDay ??= day;
     public AncientGateClear? AncientGate { get; private set; }

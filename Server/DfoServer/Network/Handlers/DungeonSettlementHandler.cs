@@ -141,13 +141,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
             previousLearning: previous.Learning);
-        if (!receipt.Entry.IsTutorial && !cosmo && !grief && !war && !bossRush)
+        if (!tournament && !receipt.Entry.IsTutorial && !cosmo && !grief && !war && !bossRush)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
         {
-            context.TournamentRewardSelection[0] = context.TournamentRewardSelection[1] = DungeonSettlementPackets.TournamentUnselected;
+            var tournamentState = context.Session.TournamentRewardState()
+                ?? throw new InvalidOperationException("大会结算缺少本实例冻结牌面");
             await context.Notify(NotiPacketType.TOURNAMENT_CLEAR_REWARD,
-                DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, effective), "formal_tournament_clear_reward", Guard);
+                DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, effective, tournamentState.Reward), "formal_tournament_clear_reward", Guard);
         }
         else if (grief)
             await context.Notify(NotiPacketType.TOG_CLEAR_REWARD,GriefTowerPackets.ClearReward(receipt.ClearTimeMilliseconds,
@@ -214,24 +215,22 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
 
     async Task<CommandResult> TournamentStateAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 0 || context.Session.FormalDungeonResultFocus() is not { Entry.IsTournament: true } current)
+        if (request.Body.Length != 0 || context.Session.OpenTournamentCards() is not { } current)
             return CommandResult.Unhandled;
-        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, DungeonSettlementPackets.TournamentSelectState(0),
-            "formal_tournament_reward_state", () => context.Session.CanPublishDungeonSettlement(current));
+        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, DungeonSettlementPackets.TournamentSelectState(current.Receipt.PartySlot),
+            "formal_tournament_reward_state", () => context.Session.CanPublishTournamentCards(current));
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons);
+        await context.Cards.StartAsync(current.Receipt);
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> TournamentSelectAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 2 || request.Body[0] >= DungeonSettlementPackets.TournamentCardRows ||
-            request.Body[1] >= DungeonSettlementPackets.TournamentCardsPerRow ||
-            context.Session.FormalDungeonResultFocus() is not { Entry.IsTournament: true } current)
+        if (request.Body.Length != 2 || context.Session.SelectTournamentCard(request.Body[0], request.Body[1]) is not { } selected)
             return CommandResult.Unhandled;
-        var selected = context.TournamentRewardSelection;
-        // 每行只能选一张；重复选同一张按幂等回显，选另一张忽略。卡均为空卡，不发放物品。
-        if (selected[request.Body[0]] == DungeonSettlementPackets.TournamentUnselected) selected[request.Body[0]] = request.Body[1];
-        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT, DungeonSettlementPackets.TournamentSelection(0, selected),
-            "formal_tournament_reward_selected", () => context.Session.CanPublishDungeonSettlement(current));
+        await DungeonCardProjection.PublishTournamentAsync(context, selected, inventoryProjection, "formal_tournament_reward_selected");
+        log.Write("formal_tournament_reward_selected", new { Connection = context.Id, selected.Receipt.Snapshot.Identity,
+            selected.Choices, selected.Complete, selected.Duplicate, selected.MailId });
         return CommandResult.Handled;
     }
 

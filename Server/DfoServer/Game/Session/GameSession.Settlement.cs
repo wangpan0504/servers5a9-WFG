@@ -43,6 +43,11 @@ internal sealed partial class GameSession
         public int LuckyStarTotal { get; set; }
         public DungeonCardRewardPolicy? CardPolicy { get; init; }
         public DungeonCardClaimPreparation? Claim { get; set; }
+        public DungeonTournamentReward? Tournament => Pending.Tournament;
+        public byte[] TournamentChoices { get; } = [255, 255];
+        public TournamentCardClaim? TournamentClaim { get; set; }
+        public bool TournamentClaimed { get; set; }
+        public uint? TournamentMail { get; set; }
     }
 
     public (FormalDungeonReceipt Receipt, ushort? BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
@@ -162,6 +167,15 @@ internal sealed partial class GameSession
                 rushCharacter with { Inventory = creatureInventory?.After ?? rushCharacter.Inventory },griefItems,griefPieces,
                 capture.Dungeon.Draw,(timeProvider ?? TimeProvider.System).GetUtcNow());
         }
+        DungeonTournamentReward? tournament = null;
+        if (!capture.Prepared && capture.ValidReport && capture.Character is not null &&
+            capture.Dungeon is { Entry.IsTournament: true, Run.ClearFact: not null } tournamentDungeon)
+        {
+            if (cards is null) return new(DungeonRunOutcome.Rejected);
+            tournament = cards.PrepareTournament(dungeons.Get(checked((int)tournamentDungeon.Entry.DungeonId)),
+                tournamentDungeon.Entry.Difficulty, tournamentDungeon.Draw,
+                (timeProvider ?? TimeProvider.System).GetUtcNow());
+        }
         return owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null ||
@@ -174,8 +188,12 @@ internal sealed partial class GameSession
         if (dungeon.Settlement is null && !dungeon.SettlementEnabled && NonCombatCinematicTerminal(dungeon) is not null)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var previous = Selected!;
-        var reward = dungeon.Settlement?.Pending.Reward ?? rewards.Calculate(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),
-            dungeon.Entry.Difficulty, rankPoint);
+        var definitionForReward = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
+        var tournamentRules = definitionForReward.TournamentRewards;
+        var reward = dungeon.Settlement?.Pending.Reward ?? (dungeon.Entry.IsTournament
+            ? new DungeonClearExperienceReward(tournamentRules!.Experience[DungeonTournamentPlan.RoundCount], 0,
+                tournamentRules.Experience[DungeonTournamentPlan.RoundCount], -1, DungeonTournamentRewards.Rule, definitionForReward.Path)
+            : rewards.Calculate(definitionForReward, dungeon.Entry.Difficulty, rankPoint));
         if (dungeon.Settlement is null)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -197,7 +215,7 @@ internal sealed partial class GameSession
             ? AncientGateProgression.Prepare(Selected!.Inventory, IncountNow()) : null);
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
-        bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.Maze.IsGriefTower ||
+        bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
             dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null;
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !noClearCards ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
@@ -215,6 +233,7 @@ internal sealed partial class GameSession
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         prepared.Pending.FreezeAncientGate(ancientGate);
+        prepared.Pending.FreezeTournament(tournament);
         if (dungeon.Entry.DungeonId is 5097 or 5098 && !dungeon.Entry.IsPractice && dungeon.Entry.IsOrdinary)
             prepared.Pending.FreezeEkernDay(ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()));
         var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
@@ -238,7 +257,7 @@ internal sealed partial class GameSession
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = noClearCards ? null : cards };
+            { CardPolicy = dungeon.Entry.IsTournament || !noClearCards ? cards : null };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -356,7 +375,7 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsTournament == true || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Entry.IsBossRush == true ||
             formalDungeon?.Settlement is not { Committed: true } settlement)
             return null;
@@ -371,7 +390,7 @@ internal sealed partial class GameSession
 
     public FormalFreeCardResult? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute<FormalFreeCardResult?>(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsTournament == true || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Entry.IsBossRush == true ||
             formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
             row != 0 || card >= DungeonCardView.ChoiceCount || settlement.SelectedCard is { } old && old != card ||
@@ -426,7 +445,7 @@ internal sealed partial class GameSession
 
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
-        formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Entry.Maze.IsGriefTower != true &&
+        formalDungeon?.Entry.IsTournament != true && formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Entry.Maze.IsGriefTower != true &&
         formalDungeon?.Entry.IsBossRush != true &&
         formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
 
@@ -452,7 +471,7 @@ internal sealed partial class GameSession
     public FormalPaidCardResult? SelectFormalDungeonPaidCard(byte row,byte choice,DungeonCardRewardPolicy cards,
         DateTimeOffset? utcNow = null) => owner.Execute(() =>
     {
-        if (row is not (1 or 2) || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
+        if (row is not (1 or 2) || !Ready || Phase != SessionPhase.Settlement || Selected is null || formalDungeon?.Entry.IsTournament == true ||
             formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options ||
             options.PaidDisabled || choice >= DungeonCardView.ChoiceCount ||
             settlement.Claim is { } pending && (pending.Side != 1 || pending.Choice != choice))
@@ -513,7 +532,7 @@ internal sealed partial class GameSession
         return result;
     });
 
-    bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null;
+    bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null || formalDungeon?.Settlement?.TournamentClaim is not null;
     static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
         (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
             dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);

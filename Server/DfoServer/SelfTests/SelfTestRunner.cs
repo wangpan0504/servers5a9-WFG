@@ -187,6 +187,7 @@ internal static class SelfTestRunner
         DungeonKillExperienceCatalogTests.RunCore();
         DungeonCatalogTests.RunCore();
         DungeonSettlementTests.RunCore();
+        TournamentSettlementTests.Run();
         DungeonSelectionReturnTests.RunCore();
         DungeonPickupProtocolTests.Run();
         DungeonPickupPlanningTests.RunCore();
@@ -521,7 +522,7 @@ internal static class SelfTestRunner
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
         GriefTowerClearTests.RunResources(pvf,itemResources.Items,itemResources.EpicPieces);
-        TournamentSettlementTests.Run();
+        TournamentSettlementTests.RunResources(towns,pvf,characters,itemResources);
         MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);
         BossRushTests.Run(pvf);

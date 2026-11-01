@@ -29,7 +29,7 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
 
     public async Task StartAsync(FormalDungeonReceipt receipt)
     {
-        if (!context.Session.ScheduleFormalDungeonCard(receipt)) return;
+        if (!(receipt.Entry.IsTournament ? context.Session.ScheduleTournamentCard(receipt) : context.Session.ScheduleFormalDungeonCard(receipt))) return;
         await StopAsync();
         cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.Stop);
         pending = RevealAsync(receipt, cancellation.Token);
@@ -39,10 +39,19 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
     {
         try
         {
+            // df_game_r 的大会选牌定时器47同样为4秒；复用连接取消与收尾，不另建计时任务。
             await Task.Delay(TimeSpan.FromSeconds(4), stop);
             using (var gates = await DispatchGateScope.EnterAsync(context, stop))
             {
                 using var publication = !gates.HasShared ? null : context.Sender.QueuePublication(() => context.Owner.IsCurrent && !context.Stop.IsCancellationRequested);
+                if (expected.Entry.IsTournament)
+                {
+                    if (context.Session.RevealTournamentCards(expected) is not { } tournament) return;
+                    await PublishTournamentAsync(context, tournament, inventory, "formal_tournament_auto_reveal");
+                    log.Write("formal_tournament_reward_selected", new { Connection = context.Id, expected.Snapshot.Identity,
+                        tournament.Choices, tournament.Complete, tournament.Duplicate, tournament.MailId, Automatic = true });
+                    return;
+                }
                 if (context.Session.RevealFormalDungeonCard(expected) is not { } result) return;
                 var receipt = result.Receipt;
                 var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("自动翻牌展示已失效");
@@ -60,8 +69,20 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
         catch (OperationCanceledException) when (stop.IsCancellationRequested || context.Stop.IsCancellationRequested) { }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            log.Write("formal_free_card_failed", new { Connection = context.Id, expected.Snapshot.Identity, Error = error.Message });
+            log.Write(expected.Entry.IsTournament ? "formal_tournament_reward_failed" : "formal_free_card_failed",
+                new { Connection = context.Id, expected.Snapshot.Identity, Error = error.Message });
         }
+    }
+
+    internal static async Task PublishTournamentAsync(GameConnectionContext context, FormalTournamentCardResult result,
+        InventoryProjection? inventory, string action)
+    {
+        await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT,
+            DungeonSettlementPackets.TournamentSelection(result.Receipt.PartySlot, result.Reward, result.Choices.AsSpan()), action,
+            () => context.Session.CanPublishTournamentCards(result));
+        if (result.Inventory is { } changed)
+            await (inventory ?? throw new InvalidOperationException("大会领奖缺少库存投影")).RefreshAsync(context, changed);
+        if (result.MailId is not null) context.Session.NotifyMailbox(result.Receipt.Character.Id);
     }
 
     async Task StopAsync()

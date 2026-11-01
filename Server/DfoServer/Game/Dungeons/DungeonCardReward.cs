@@ -78,9 +78,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             int value = draw(bound);
             return value >= 0 && value < bound ? value : throw new InvalidDataException("翻牌随机值越界");
         }
-        long basis = Math.Max(1, (long)gold.BaseAmount * 175 / 1000);
-        long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * confirmedKills));
-        amount += (Next(gold.VariancePercent * 2 + 1) - gold.VariancePercent) * amount / 100;
+        long amount = GoldAmount(level, difficulty, confirmedKills, Next);
         var now = utcNow ?? DateTimeOffset.UtcNow;
         if (dungeon.IsTayberrs)
             return (tayberrsRewards ?? throw new NotSupportedException("泰波尔斯缺少材料奖励策略"))
@@ -132,6 +130,63 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             $"{DungeonDropRuleCatalog.CommonPath};{DungeonDropRuleCatalog.MonsterPath};{dungeon.Path}", now.ToUnixTimeSeconds());
         reward.Validate();
         return reward;
+    }
+
+    long GoldAmount(int level, byte difficulty, int kills, Func<int, int> draw)
+    {
+        if (difficulty >= DifficultyRates.Length || kills < 0)
+            throw new InvalidDataException("翻牌金币难度或击杀数无效");
+        var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
+        if (gold.Level == 0) throw new NotSupportedException("副本等级缺少翻牌金币引用");
+        long basis = Math.Max(1, (long)gold.BaseAmount * 175 / 1000);
+        long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * kills));
+        int variance = draw(gold.VariancePercent * 2 + 1);
+        if (variance < 0 || variance > gold.VariancePercent * 2) throw new InvalidDataException("翻牌金币随机值越界");
+        return amount + (variance - gold.VariancePercent) * amount / 100;
+    }
+
+    public DungeonTournamentReward PrepareTournament(DungeonDefinition dungeon, byte difficulty,
+        Func<int, int>? draw = null, DateTimeOffset? utcNow = null)
+    {
+        var definition = dungeon.TournamentRewards ?? throw new InvalidDataException("大会缺少专属奖励表");
+        if (dungeon.BasisLevel is not > 0) throw new InvalidDataException("大会缺少基准等级");
+        var randomSource = draw ?? random ?? Random.Shared.Next;
+        int Next(int bound)
+        {
+            int value = randomSource(bound);
+            return value >= 0 && value < bound ? value : throw new InvalidDataException("大会奖励随机值越界");
+        }
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        // df_game_r 的大会生成引用只生成一次金币基准，再乘本副本倍率，不乘四轮击杀数量。
+        int gold = checked((int)Math.Min(int.MaxValue, decimal.Floor(
+            GoldAmount(dungeon.BasisLevel.Value, difficulty, 1, Next) * definition.GoldRate)));
+        ImmutableArray<DungeonCardReward> Row(int round)
+        {
+            var result = ImmutableArray.CreateBuilder<DungeonCardReward>(2);
+            for (int i = 0; i < 2; i++)
+            {
+                int amount = 0;
+                ItemCore? item = null;
+                if (definition.Cards.TryGetValue(round, out var weights))
+                {
+                    int roll = Next(weights.Total);
+                    if (roll < weights.Gold) amount = gold;
+                    else if (roll < weights.Gold + weights.Item)
+                    {
+                        int itemRoll = Next(definition.Items.Sum(row => row.Weight));
+                        foreach (var row in definition.Items)
+                        {
+                            if (itemRoll >= row.Weight) { itemRoll -= row.Weight; continue; }
+                            item = DungeonDropCreation.Create(items.Get(row.ItemId), row.Count, Next, now);
+                            break;
+                        }
+                    }
+                }
+                result.Add(new(amount, item, DungeonTournamentRewards.Rule, dungeon.Path, now.ToUnixTimeSeconds()));
+            }
+            return result.MoveToImmutable();
+        }
+        return new(Row(4), Row(5));
     }
 
     public DungeonCardOptions? PrepareOptions(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
