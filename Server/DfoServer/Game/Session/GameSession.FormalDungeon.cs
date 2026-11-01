@@ -1285,6 +1285,13 @@ internal sealed partial class GameSession
             dungeon.Run.RetireNonCombatObject(key);
             return new FormalDungeonDeathResult(issued.Outcome,FormalReceipt(),key) { ReportedTarget = target };
         }
+        if (dungeon.Run.FindCurrentFiendwarDynamic(dungeon.Run.Snapshot.Identity, issued.Death.MonsterKey, includeRetired: true) is not null)
+        {
+            var retired = dungeon.Run.RetireCurrentFiendwarDynamic(issued.Death);
+            return retired is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate
+                ? new FormalDungeonDeathResult(retired, FormalReceipt(), issued.Death.MonsterKey) { SpecialChildRetired = true }
+                : new FormalDungeonDeathResult(retired);
+        }
         if (issued.Outcome == DungeonRunOutcome.Duplicate && dungeon.Route.AllRooms.Any(room => room.Monsters.Any(monster =>
             monster.IsSpecialChild && monster.ObjectKey == issued.Death.MonsterKey)))
             return new FormalDungeonDeathResult(DungeonRunOutcome.Duplicate) { ReportedTarget = target };

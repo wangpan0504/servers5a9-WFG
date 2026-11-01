@@ -17,13 +17,14 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class TeleportTests
+internal static partial class TeleportTests
 {
     const string PotionText = "[stackable type]\n`[teleport potion]` 0\n[minimum level]\n60\n[cool time]\n10000\n[int data]\n1 2\n[/int data]";
     const string AuraText = "[equipment type]\n`[aurora avatar]` 0\n[aura ability]\n`[solo teleport]` 420\n[/aura ability]";
 
     public static void RunCore()
     {
+        PrivilegeTeleport();
         using (var store = new Fixture())
         {
             store.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) SELECT id,account,3,51 FROM characters");
@@ -417,7 +418,8 @@ internal static class TeleportTests
         readonly GoldLimitCatalog limits = new("[gold limit from level]\n0 100000\n1 100000\n[/gold limit from level]");
         readonly EpicPieceCatalog pieces = new("[piece list]\n1 2\n[/piece list]");
         public PotionTeleportRequest Request { get; } = new(65, 2600014, 0, new(2, 0, 20, 20, 1));
-        public Fixture(bool loseLifecycleResult = false, QuestCatalog? quests = null)
+        public Fixture(bool loseLifecycleResult = false, QuestCatalog? quests = null,
+            DfoServer.GameWorld.Channels.ChannelEntry? channel = null)
         {
             Quests = quests ?? new(new() { [100] = QuestEligibilityTests.Quest(100) });
             Directory.CreateDirectory(root); Owner = Owners.Acquire("teleport", () => { }); Repository = new(Database, Quests);
@@ -437,7 +439,10 @@ internal static class TeleportTests
             {
                 OnAuraRead?.Invoke();
                 return new(id, ItemKind.Avatar, 9, 1, 0, 1, 0, 2, 1, "free", ushort.MaxValue, 0, "Aura");
-            }, Clock);
+            }, Clock, privilege: DfoServer.GameWorld.Items.PrivilegeServiceCatalog.Parse(
+                "[now season]\n1\n[teleport cooltime]\n5\n[daily login reward]\n1 1108 1\n[/daily login reward]\n" +
+                "[accumulate login reward]\n[season]\n1\n[reward]\n5 1108 1\n[/reward]\n[/accumulate login reward]",
+                [new(700911, 490703912, 1, 100, "privilege service", 30)]));
             Repository.Create(Owner, new("Teleport", new(2, 0, 10, 10), towns.InitialReturn)
             {
                 Level = 60,
@@ -446,7 +451,7 @@ internal static class TeleportTests
             });
             Session = new(loseLifecycleResult
                 ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseLifecycleResult = true }
-                : Repository, towns, Owner, questCatalog: Quests);
+                : Repository, towns, Owner, questCatalog: Quests, entry: channel);
         }
         // 合成会面无赠品，不读取物品资源；复用真实任务事务及恢复路径。
         public QuestLifecycleReceipt? AcceptQuest() => Session.ChangeQuest(100, QuestLifecycleAction.Accept, Quests, null!, limits, pieces);

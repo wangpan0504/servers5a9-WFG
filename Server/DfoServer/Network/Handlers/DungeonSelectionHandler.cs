@@ -87,6 +87,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Unhandled;
         if (context.Session.ChannelEntry?.Type == 45 && fiendwarRaid is not null)
         {
+            if (context.Session.CurrentFiendwarKeyPreparation() is { } waiting && waiting.Dungeon == entry.DungeonIndex)
+                return CommandResult.Handled;
             DfoServer.Game.Dungeons.PartyDungeonNotice[] selected = [];
             string? reason = "fiendwar-raid-required";
             if (entry.DungeonIndex <= int.MaxValue && fiendwarRaid.Find(context.Session) is { } raid)
@@ -107,6 +109,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             log.Write("fiendwar_selection", new { Connection = context.Id, Dungeon = entry.DungeonIndex, Members = selected.Length, Reason = reason });
             if (selected.Length == 0)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "fiendwar_selection_rejected");
+            else if (selected.All(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.RaidSelection))
+                _ = GameSession.HoldFiendwarKeySelections(selected);
             else await PartyDungeonProjection.PublishAsync(selected);
             return CommandResult.Handled;
         }

@@ -280,6 +280,19 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             }
         });
 
+    public Character[]? TryCommitPartyDungeonRecoveryExit(IReadOnlyList<PartyDungeonExitReservation> reservations, out string? failureReason)
+    {
+        failureReason = null;
+        try { return CommitPartyDungeonExit(reservations); }
+        catch (SqliteException error) when (!SqliteBusyRetry.IsBusy(error))
+        {
+            // 原提交栈已退出并完整回滚；保留暂停Run及连接，让原成员稍后重试。
+            // SQLBUSY仍交给原分派层有界重试，不在这里另建循环。
+            failureReason = error.Message;
+            return null;
+        }
+    }
+
     static void InstallEntryFatigue(AccountOwners.Lease owner, DungeonEntryCharge charge, DungeonTransientFatigue? fatigue)
     {
         if (fatigue is null) return;

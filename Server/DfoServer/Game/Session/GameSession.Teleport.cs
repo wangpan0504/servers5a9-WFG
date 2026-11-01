@@ -49,11 +49,15 @@ internal sealed partial class GameSession
             if (targetCurrent?.Invoke() == false) return new TeleportResult("player-target-changed");
             // 冷资源解析耗时不占用成功后的冷却时长；只平移本次实际启动的那一类。
             long elapsed = Math.Max(0, clock.GetUtcNow().ToUnixTimeMilliseconds() - plan.Now);
-            plan = plan with { Cooldowns = new(
-                plan.Cooldowns.PotionUntil == character.TeleportCooldowns.PotionUntil ? plan.Cooldowns.PotionUntil : checked(plan.Cooldowns.PotionUntil + elapsed),
-                plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed),
-                plan.Cooldowns.UpgradeAuraUntil == character.TeleportCooldowns.UpgradeAuraUntil ? plan.Cooldowns.UpgradeAuraUntil : checked(plan.Cooldowns.UpgradeAuraUntil + elapsed),
-                plan.Cooldowns.PartyAuraUntil == character.TeleportCooldowns.PartyAuraUntil ? plan.Cooldowns.PartyAuraUntil : checked(plan.Cooldowns.PartyAuraUntil + elapsed)) };
+            plan = plan with { Cooldowns = plan.Cooldowns with
+            {
+                PotionUntil = Shift(plan.Cooldowns.PotionUntil, character.TeleportCooldowns.PotionUntil),
+                AuraUntil = Shift(plan.Cooldowns.AuraUntil, character.TeleportCooldowns.AuraUntil),
+                UpgradeAuraUntil = Shift(plan.Cooldowns.UpgradeAuraUntil, character.TeleportCooldowns.UpgradeAuraUntil),
+                PartyAuraUntil = Shift(plan.Cooldowns.PartyAuraUntil, character.TeleportCooldowns.PartyAuraUntil),
+                PrivilegeUntil = Shift(plan.Cooldowns.PrivilegeUntil, character.TeleportCooldowns.PrivilegeUntil)
+            } };
+            long Shift(long next, long previous) => next == previous ? next : checked(next + elapsed);
             if (guildRequestId is not null)
             {
                 var committed = repository.CommitGuildMapTeleport(owner, plan, guildRequestId);

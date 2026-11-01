@@ -35,6 +35,45 @@ internal sealed class PvfStringPool
         }
     }
 
+    internal bool TryFindValue(string text, out int value)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Contains('\0'))
+            throw new ArgumentException("PVF string lookup does not accept embedded NUL", nameof(text));
+        // 每次仅复用一个查询缓冲，不建立全池字符串缓存或暴露可变池字节。
+        Span<char> buffer = text.Length <= 256 ? stackalloc char[256] : new char[text.Length];
+        return TryFindInPool(ansi, false, text, buffer, out value) ||
+            TryFindInPool(wide, true, text, buffer, out value);
+    }
+
+    private bool TryFindInPool(byte[] pool, bool unicode, string text, Span<char> buffer, out int value)
+    {
+        int step = unicode ? 2 : 1;
+        for (int start = 0; start < pool.Length;)
+        {
+            int end = start;
+            while (end + step <= pool.Length && (pool[end] != 0 || unicode && pool[end + 1] != 0))
+                end += step;
+            if (end + step > pool.Length) break;
+            ReadOnlySpan<byte> bytes = pool.AsSpan(start, end - start);
+            // 与Resolve保持UTF-8优先、GB18030回退及UTF-16替换字符语义。
+            Encoding encoding = SelectEncoding(bytes, unicode, out int count);
+            if (count == text.Length &&
+                buffer[..encoding.GetChars(bytes, buffer)].SequenceEqual(text.AsSpan()))
+            {
+                int candidate = unicode ? start + 1 : checked(start * 2);
+                if (string.Equals(Resolve(candidate), text, StringComparison.Ordinal))
+                {
+                    value = candidate;
+                    return true;
+                }
+            }
+            start = end + step;
+        }
+        value = 0;
+        return false;
+    }
+
     internal void AppendTo(StringBuilder target, int value)
     {
         ReadOnlySpan<byte> bytes = Locate(value, out bool unicode);

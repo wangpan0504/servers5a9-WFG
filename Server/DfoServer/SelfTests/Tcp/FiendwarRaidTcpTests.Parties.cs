@@ -28,6 +28,7 @@ internal static partial class FiendwarRaidTcpTests
         var previousCounters = new Dictionary<ushort, byte[]>();
         bool titleReplayChecked = false;
         bool counterRollbackChecked = false;
+        int dynamicSpawnRooms = 0;
         bool readingSupport = false;
         try
         {
@@ -183,6 +184,7 @@ internal static partial class FiendwarRaidTcpTests
                     VerifyConsumable(fixture, peer, true, 11);
                     VerifyConsumable(fixture, peer, false, 12);
                 }
+            if (count == 4) entry = VerifyKeyRecovery(fixture, first, entry, Drain, () => Enter(first, 15));
             // 本场四币由不同角色依次消耗；第五次不能借个人计数重新获得额度。
             for (int index = 0; index <= 4; index++)
             {
@@ -239,6 +241,7 @@ internal static partial class FiendwarRaidTcpTests
             }
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
             That(count != 1 || counterRollbackChecked, "单人团队沿真实兵营终房完成一次破招生产者晚SQL回滚和重新入场");
+            That(dynamicSpawnRooms > 0, "每种人数的团队真实终房均完成动态召唤生成及零奖励退休");
             foreach (var peer in first) Move(peer, 30);
             var blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
             uint firstElement = symbols[(first[0].Id, 92)];
@@ -549,19 +552,19 @@ internal static partial class FiendwarRaidTcpTests
             if (!direct)
             {
                 team[0].Send(15, BitConverter.GetBytes(dungeon));
-                var selected = team.Select(Drain).ToArray();
-                That(selected[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "同区域四人自动临时成队并接受15");
-                That(selected.All(frames => frames.Count(row => row is { Kind: 0, Opcode: 27 }) == 1), "团队15先为每名成员建立一次原生选图场景");
             }
             byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone();
             BinaryPrimitives.WriteInt32LittleEndian(request, dungeon); team[0].Send(16, request);
             var rows = team.Select(Drain).ToArray();
+            AntonTcpProbe.CompleteFiendwarEntry(team, rows, Drain);
+            if (!direct)
+                That(rows[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "同区域四人完成对象键握手后接受连续15/16");
             var map = rows[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             foreach (var frames in rows)
             {
-                That(frames.Count(row => row is { Kind: 0, Opcode: 27 }) == (direct ? 1 : 0) &&
-                    (!direct || frames.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < frames.FindIndex(row => row is { Kind: 0, Opcode: 28 })),
-                    "团队直接16先发27再加载，已有15场景不重开");
+                That(frames.Count(row => row is { Kind: 0, Opcode: 27 }) == 1 &&
+                    frames.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < frames.FindIndex(row => row is { Kind: 0, Opcode: 28 }),
+                    "团队完成握手后只建立一次原生选图场景，再完整加载");
                 Bytes(frames.Single(row => row is { Kind: 0, Opcode: 29 }).Body, map, "同遭遇共用真实地图、种子和怪物键");
                 int scaledCount = Math.Min(4, area is 30 or 31 ? count : team.Length);
                 if (scaledCount < 4)
@@ -644,6 +647,7 @@ internal static partial class FiendwarRaidTcpTests
                         "重连按原区域重新进图并自然走到本体终房，取得新MAI和真实对象键再继续击杀");
                     return freshMap;
                 } : null);
+            if (VerifyDynamicSpawns(fixture, team, map, counterRooms)) dynamicSpawnRooms++;
             int actorCount = map[18];
             That(map.Length >= 19 + actorCount * 22, "真实演员表完整");
             bool killed = false;

@@ -13,6 +13,12 @@ namespace DfoServer.Testing;
 
 internal static partial class FiendwarRaidTcpTests
 {
+    // 轮转真实迷宫，确保每种人数都经过光、暗及核心原资源；不依赖随机碰巧抽到目标房。
+    sealed class MazeCoverageRandom : Random
+    {
+        int next;
+        public override int Next(int maxValue) => maxValue > 0 ? next++ % maxValue : base.Next(maxValue);
+    }
     internal static void VerifyConsumable(TcpTestFixture fixture, TcpPeer peer, bool accepted, uint check,
         int itemId = 10312385)
     {
@@ -59,7 +65,8 @@ internal static partial class FiendwarRaidTcpTests
         var clock = new LukeRaidClockTests.Clock();
         DatabaseSchemaTests.FiendwarUpgrade(Path.Combine(root, "fiendwar-schema"));
         DatabaseSchemaTests.RaidGuildContributionUpgrade(Path.Combine(root, "fiendwar-schema"));
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-flow"), resources: resources, clock: clock);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-flow"), resources: resources, clock: clock,
+            fiendwarMazeRandom: new MazeCoverageRandom());
         await fixture.StartAsync();
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire("fiendflow", () => { }))

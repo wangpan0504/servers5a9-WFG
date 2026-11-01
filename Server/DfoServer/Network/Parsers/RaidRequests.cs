@@ -20,14 +20,24 @@ internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
 internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEntries);
 internal readonly record struct RaidRewardCardRequest(byte Kind, byte Card);
 internal readonly record struct RaidUserRequest(byte Server, ushort Character, byte Channel);
-internal readonly record struct RaidOtherUserRequest(byte Server, ushort Character, byte Mode, byte Channel);
+internal readonly record struct RaidOtherUserRequest(byte Server, ushort Character, byte Mode, byte Channel,
+    byte RawView = 0, uint RequestId = 0);
 
 internal static partial class RaidRequests
 {
     // 01C04D43..01C04D9E：曾用名窗口跨频道分支写server/character/mode1/channel。
     public static RaidOtherUserRequest OtherUser(ReadOnlySpan<byte> body)
     {
-        if (body.Length != 5) throw new InvalidDataException("RAID_OTHER_CHANNEL_USERINFO需要5字节角色定位与模式");
+        if (body.Length < 5) throw new InvalidDataException("RAID_OTHER_CHANNEL_USERINFO缺少角色定位与模式");
+        // 原生mode3丢失页面，配套补丁在原5B后补页面及非零请求号；其他模式仍严格5B。
+        if (body[3] == 3)
+        {
+            if (body.Length != 10 || body[5] is < 1 or > 5 || BinaryPrimitives.ReadUInt32LittleEndian(body[6..]) == 0)
+                throw new InvalidDataException("跨频道决斗查询需要完整页面和请求号");
+            return new(body[0], BinaryPrimitives.ReadUInt16LittleEndian(body[1..]), 3, body[4], body[5],
+                BinaryPrimitives.ReadUInt32LittleEndian(body[6..]));
+        }
+        if (body.Length != 5) throw new InvalidDataException("跨频道资料模式不接受附加字段");
         return new(body[0], BinaryPrimitives.ReadUInt16LittleEndian(body[1..]), body[3], body[4]);
     }
 

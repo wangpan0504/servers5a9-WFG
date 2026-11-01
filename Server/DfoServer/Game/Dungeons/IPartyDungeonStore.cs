@@ -24,11 +24,16 @@ internal sealed record PartyDungeonExitReservation(AccountOwners.Lease Owner, Ch
     public bool Changed => Position != Expected.Position || Inventory is not null || Hope is not null;
 }
 internal sealed record PartyHopeExit(OperationHopeCatalog Catalog, ActiveMainQuest Acceptance);
-internal enum PartyDungeonExitKind { SelectionReturn, ResultReturn, ResultSelection, HellSelection, EvildomWarRetreat }
+internal enum PartyDungeonExitKind { SelectionReturn, ResultReturn, ResultSelection, HellSelection, EvildomWarRetreat, FiendwarKeyRecovery }
 
 // 全员入场费用和尝试号必须在同一事务提交，不能由协调器依次调用单人提交。
 internal interface IPartyDungeonStore
 {
     PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations);
     Character[] CommitPartyDungeonExit(IReadOnlyList<PartyDungeonExitReservation> reservations);
+    Character[]? TryCommitPartyDungeonRecoveryExit(IReadOnlyList<PartyDungeonExitReservation> reservations, out string? failureReason)
+    {
+        failureReason = null;
+        return CommitPartyDungeonExit(reservations);
+    }
 }

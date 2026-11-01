@@ -36,8 +36,7 @@ internal sealed partial class GameSession
             var prepared = dungeon.PendingInventoryDiscard;
             if (prepared is null)
             {
-                uint key = dungeon.NextObjectKey;
-                if (key == expected.Id) key++;
+                uint key = dungeon.Ground.NextFreeInventoryObjectKey(dungeon.NextObjectKey, expected.Id);
                 if (key is 0 or > ushort.MaxValue) return new DungeonInventoryDiscardResult(19);
                 var ground = new DungeonGroundObject(Guid.NewGuid(), identity,
                     new(expected.Id, key, dungeon.Run.Snapshot.CurrentMap, request.X, request.Y, 0), plan.GroundCore)

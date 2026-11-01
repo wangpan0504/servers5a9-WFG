@@ -42,6 +42,7 @@ internal static class FiendwarGuideTcpTests
         using var peer = Open(fixture, "fwguide", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
+        int dynamicSpawnRooms = 0;
         Select();
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
@@ -103,6 +104,7 @@ internal static class FiendwarGuideTcpTests
                 That(clears[2] == (0u, 1u), "漩涡次日只重置日额度，保留周二周期内已通关数");
             }
         }
+        That(dynamicSpawnRooms > 0, "引导原路线实际走过独立父子模板的生成和零奖励退休");
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=2", peer.Id) is [[4L]],
             "两次引导各两类奖励，不新建另一种团本奖励账本");
         Create(true); Move(1, 33); peer.Send(666);
@@ -161,16 +163,15 @@ internal static class FiendwarGuideTcpTests
             if (!direct)
             {
                 peer.Send(15, BitConverter.GetBytes(dungeon));
-                var selected = Read();
-                That(selected.Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }) &&
-                    selected.Count(row => row is { Kind: 0, Opcode: 27 }) == 1, "引导区域先打开独立原生选图场景");
             }
             byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone(); BinaryPrimitives.WriteInt32LittleEndian(request, dungeon);
             peer.Send(16, request); var entered = Read();
+            if (!direct)
+                That(entered.Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "引导连续15/16在握手后接受真实选图");
             That(entered.Any(row => row is { Kind: 0, Opcode: 28 }), "引导正式选图进入：" + dungeon);
-            That(entered.Count(row => row is { Kind: 0, Opcode: 27 }) == (direct ? 1 : 0) &&
-                (!direct || entered.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < entered.FindIndex(row => row is { Kind: 0, Opcode: 28 })),
-                "引导直接16先发27再加载，已有15场景不重开");
+            That(entered.Count(row => row is { Kind: 0, Opcode: 27 }) == 1 &&
+                entered.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < entered.FindIndex(row => row is { Kind: 0, Opcode: 28 }),
+                "引导连续15/16或直接16均只打开一次原生选图场景，再完整加载");
             var info = entered.Single(row => row is { Kind: 0, Opcode: 28 }).Body;
             var map = entered.Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             var ai = entered.SingleOrDefault(row => row is { Kind: 0, Opcode: 32752 })?.Body;
@@ -193,9 +194,13 @@ internal static class FiendwarGuideTcpTests
                 if (step > 0)
                 {
                     var move = new byte[100]; move[0] = checked((byte)path[step].X); move[1] = checked((byte)path[step].Y);
-                    peer.Send(45, move); map = Read().Single(row => row is { Kind: 0, Opcode: 29 }).Body;
+                    peer.Send(45, move); var moved = Read();
+                    map = moved.Single(row => row is { Kind: 0, Opcode: 29 }).Body;
+                    ai = moved.Single(row => row is { Kind: 0, Opcode: 32752 }).Body;
                 }
                 peer.Send(37, new byte[8]); Read();
+                That(ai is not null, "引导房间向动态原生召唤提供当前MAI身份");
+                if (FiendwarRaidTcpTests.VerifyDynamicSpawns(fixture, [peer], map, new() { [peer.Id] = ai! })) dynamicSpawnRooms++;
                 if (dungeon == 5350 && route == 0 && step == 0)
                 {
                     FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 21, 1114);

@@ -222,6 +222,13 @@ public sealed class PvfArchive : IDisposable
         return strings!.Resolve(value);
     }
 
+    // 仅查找完整且已终止的字符串项，不将任意后缀偏移暴露为可复用字符串。
+    public bool TryFindStringValue(string text, out int value)
+    {
+        EnsureOpen();
+        return strings!.TryFindValue(text, out value);
+    }
+
     private byte[] ReadChunk(int index)
     {
         EnsureOpen();

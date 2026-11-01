@@ -327,6 +327,7 @@ internal static class SqliteMigrations
             PrivilegeServiceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(178, "漩涡原生破招流去重水位", (db, tx) => Execute(db, tx,
             FiendwarCounterSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(179, "礼遇传送独立冷却", (db, tx) => AddAuraCooldown(db, tx, "privilege_until")),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -479,12 +480,19 @@ internal static class SqliteMigrations
             Execute(db, tx, $"ALTER TABLE character_teleport_cooldowns ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column}>=0)");
             return;
         }
+        ValidateTeleportCooldownColumn(db, tx, column);
+    }
+
+    static void ValidateTeleportCooldownColumn(SqliteConnection db, SqliteTransaction tx, string column)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
         command.CommandText = $"SELECT count(*) FROM pragma_table_info('character_teleport_cooldowns') WHERE name='{column}' AND upper(type)='INTEGER' AND \"notnull\"=1 AND dflt_value='0'";
-        if (Convert.ToInt32(command.ExecuteScalar()) != 1) throw new InvalidDataException("光环传送冷却列结构不符：" + column);
+        if (Convert.ToInt32(command.ExecuteScalar()) != 1) throw new InvalidDataException("传送冷却列结构不符：" + column);
         command.CommandText = "SELECT sql FROM sqlite_schema WHERE name='character_teleport_cooldowns' AND type='table'";
         string sql = string.Concat(((string)command.ExecuteScalar()!).Where(value => !char.IsWhiteSpace(value)));
         if (!sql.Contains($"CHECK({column}>=0)", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("光环传送冷却列缺少范围约束：" + column);
+            throw new InvalidDataException("传送冷却列缺少范围约束：" + column);
     }
 
     internal const string QuestDailyClearSchema = """
@@ -2354,6 +2362,7 @@ internal static class SqliteMigrations
 
     internal static void ValidateSchema(SqliteConnection db, SqliteTransaction tx)
     {
+        ValidateTeleportCooldownColumn(db, tx, "privilege_until");
         InventoryItemRevisionSchema.Validate(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);
         BeastStageRewardSchema.Validate(db, tx);
@@ -2590,7 +2599,7 @@ internal static class SqliteMigrations
         "SELECT account,campaign,period,realm,promotion_group,count,revision FROM cash_shop_promotion_progress LIMIT 0",
         "SELECT account,campaign,period,realm,promotion_group,rules_version,global_purchase,order_id,reward_snapshot,mail_id FROM cash_shop_promotion_awards LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
-        "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns LIMIT 0",
+        "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
         "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",

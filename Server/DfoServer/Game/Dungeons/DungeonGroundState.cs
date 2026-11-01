@@ -107,6 +107,20 @@ internal sealed class DungeonGroundState
     readonly Dictionary<uint, ItemState> groundItems = [];
     readonly HashSet<ushort> failedOrCreating = [];
     readonly HashSet<uint> occupiedKeys = [];
+    // 动态演员与掉落共用原Run对象键空间，退休后仍占位，不能把旧死亡套给新对象。
+    internal bool HasFreeDynamicKey(ushort key) => key != 0 && !HasPendingOperation && !occupiedKeys.Contains(key);
+    internal uint NextFreeInventoryObjectKey(uint first, ushort character)
+    {
+        for (uint key = Math.Max(1u, first); key < ushort.MaxValue; key++)
+            if (key != character && !occupiedKeys.Contains(key) && run.FiendwarObjectKeys?.Contains((ushort)key) != true)
+                return key;
+        return 0;
+    }
+    internal void ReserveDynamicKey(ushort key)
+    {
+        if (!HasFreeDynamicKey(key) || !occupiedKeys.Add(key))
+            throw new InvalidOperationException("动态演员对象键已经占用或地面操作未完成");
+    }
     readonly Dictionary<DungeonMap, ImmutableArray<DungeonGroundObject>> passiveByMap;
     DungeonGroundPickupPreparation? pendingPickup;
     DungeonGroundObject? pendingInventoryDrop;
@@ -218,7 +232,8 @@ internal sealed class DungeonGroundState
         if (pendingInventoryDrop is not null)
             return ReferenceEquals(pendingInventoryDrop, ground);
         ground.Content.Validate();
-        if (!occupiedKeys.Add(ground.Reservation.GroundKey)) return false;
+        if (ground.Reservation.GroundKey < ushort.MaxValue && run.FiendwarObjectKeys?.Contains((ushort)ground.Reservation.GroundKey) == true ||
+            !occupiedKeys.Add(ground.Reservation.GroundKey)) return false;
         groundItems.Add(ground.Reservation.GroundKey, new(ground, null));
         pendingInventoryDrop = ground;
         return true;

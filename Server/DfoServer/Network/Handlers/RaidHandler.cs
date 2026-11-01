@@ -15,7 +15,8 @@ namespace DfoServer.Network.Handlers;
 // 这里不为它补建类型 6 的团本记录。
 internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
     AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null,
-    Game.Party.PartyService? parties = null, LukeRaidRejoin? lukeRejoin = null, TownProjection? town = null) : IGameCommandModule
+    Game.Party.PartyService? parties = null, LukeRaidRejoin? lukeRejoin = null, TownProjection? town = null,
+    Game.Pvp.PvpRecordQuery? records = null) : IGameCommandModule
 {
     public RaidHandler(ServerLog log) : this(log, RaidCatalog.Empty, new RaidRegistry()) { }
 

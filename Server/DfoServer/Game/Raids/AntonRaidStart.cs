@@ -56,7 +56,7 @@ internal sealed class RaidStartCommands : IDisposable
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
-    FiendwarRewards? fiendwarRewards = null)
+    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null)
 {
     public RaidChange? Leave(RaidActor actor, ushort target)
     {
@@ -147,7 +147,8 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var kind = fiendwar ? RaidKind.Fiendwar : prey ? RaidKind.Prey : RaidKind.Anton;
         var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
-            fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute);
+            fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
+            fiendwarMazeRandom: fiendwarMazeRandom);
         battle.PrepareFiendwarPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");

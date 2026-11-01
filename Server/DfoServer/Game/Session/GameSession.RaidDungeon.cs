@@ -38,6 +38,7 @@ internal sealed partial class GameSession
     {
         if (!CanBeginRaidDungeonSelection(admission))
             throw new InvalidOperationException("团本选图安装前身份已变化");
+        InvalidateFiendwarKeyPreparation(preserveScene: true);
         raidDungeonAdmission = admission;
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position)
             { Raid = selection };
