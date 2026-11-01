@@ -23,7 +23,7 @@ internal static class CreatureSystemTcpTests
             catalog.Get(63033) is { Species: 13, EvolutionQuest: true, EvolutionSpecies: 14 } &&
             catalog.Evolution(belz, 13)?.ItemId == 63033 && catalog.Level(283, belz) == 19 && catalog.Level(315, belz) == 20,
             "原版PVF普通宠物经验表、等级及两段进化资格");
-        That(catalog.Get(63407) is { UsesExperienceItems: true, ItemsPerLevel: 10,
+        That(catalog.Get(63407) is { Name: "", UsesExperienceItems: true, ItemsPerLevel: 10,
             SelectiveGrowth: { ItemA: 10098003, ItemB: 10098002, ExperienceItem: 10098004 } },
             "原版CRE嵌套成长类型和每级喂食次数可被正式解析器读取");
         That(catalog.ExperienceItem(10005895) is { Kind: 1, Amount: 50 } &&
@@ -121,8 +121,9 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1);
-            peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name(CreatureRules.DefaultName(catalog.Get(63407)!.Name))]);
             peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name='creature_normalize' AND character_id=$p0", peer.Id) is [[0L]],
+                "显式空CRE的已初始化成长宠物选角不补名、不写归一事务或发送多余改名通知");
             InventoryItem exchangeMaterial;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
                 exchangeMaterial = repository.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.Main, 67))!;
@@ -147,7 +148,9 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(2);
-            peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name(CreatureRules.DefaultName(catalog.Get(63407)!.Name))]);
+            peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name='creature_normalize' AND character_id=$p0", peer.Id) is [[0L]],
+                "显式空CRE的已初始化成长宠物选角不补名、不写归一事务或发送多余改名通知");
             peer.Send(44, Build(writer => { writer.Write((ushort)66); writer.Write((byte)0); writer.Write(1u); writer.Write(10098004); writer.Write(0); }));
             peer.Expect(1, 44, Build(writer => { writer.Write((byte)1); writer.Write((ushort)66); writer.Write((byte)0); writer.Write(1u); writer.Write(10098004); }));
             peer.Expect(0, 102, [21, 1, 200, 0, 0, 0, 10, 5]);
