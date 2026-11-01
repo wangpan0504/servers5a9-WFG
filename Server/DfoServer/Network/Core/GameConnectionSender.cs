@@ -24,6 +24,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     readonly CancellationTokenSource connection;
     readonly Action<byte, ushort, ushort, ReadOnlyMemory<byte>, string> sent;
     readonly Action<byte[]>? capture;
+    readonly Action<string, Exception?>? failed;
+    int failureReported;
     readonly Channel<Message> queue = Channel.CreateBounded<Message>(new BoundedChannelOptions(256) { SingleReader = true, AllowSynchronousContinuations = false, FullMode = BoundedChannelFullMode.Wait });
     readonly object queueGate = new();
     readonly Dictionary<(ushort, long), RemoteTownActor> moves = [];
@@ -35,7 +37,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     long epoch;
     long pendingBytes;
     bool closed;
-    public GameConnectionSender(AccountOwners.Lease owner, Stream stream, CancellationTokenSource connection, ushort sequence, Action<byte, ushort, ushort, ReadOnlyMemory<byte>, string> sent, Action<byte[]>? capture = null)
+    public GameConnectionSender(AccountOwners.Lease owner, Stream stream, CancellationTokenSource connection, ushort sequence, Action<byte, ushort, ushort, ReadOnlyMemory<byte>, string> sent, Action<byte[]>? capture = null, Action<string, Exception?>? failed = null)
     {
         this.owner = owner;
         this.stream = stream;
@@ -43,6 +45,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         this.sequence = sequence;
         this.sent = sent;
         this.capture = capture;
+        this.failed = failed;
         cancellation = new(CancelConnection);
         pump = Run();
     }
@@ -187,7 +190,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                 }
             }
         }
-        if (!accepted) Cancel();
+        if (!accepted) { ReportFailure("move-queue"); Cancel(); }
     }
 
     bool Enqueue(Message message)
@@ -201,7 +204,11 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         lock (queueGate)
             accepted = TryEnqueue(message with { Bytes = bytes }, bytes);
         // 标记取消并异步执行回调，不能从源账号/成员锁内重入另一账号。
-        if (!accepted) Cancel();
+        if (!accepted)
+        {
+            ReportFailure("queue", new IOException($"Game send queue rejected action={message.Own?.Action ?? "scene"} pending={queue.Reader.Count} bytes={PendingBytes}"));
+            Cancel();
+        }
         return accepted;
     }
 
@@ -218,6 +225,12 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 
     static long ActorBytes(RemoteTownActor actor) => (long)actor.Actor.Length + actor.State.Length + actor.Position.Length + 3 * 16 +
         (actor.Area.IsEmpty ? 0 : actor.Area.Length + 16L) + actor.EchonSets.Sum(body => body.Length + 16L);
+
+    void ReportFailure(string stage, Exception? error = null)
+    {
+        if (!connection.IsCancellationRequested && Interlocked.Exchange(ref failureReported, 1) == 0)
+            failed?.Invoke(stage, error);
+    }
 
     void Cancel() => _ = cancellation.Value;
 
@@ -375,6 +388,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         catch (Exception ex)
         {
             // 泵的任何失败都结束该连接并释放等待者；不能留下无人消费的可靠发送任务。
+            ReportFailure("pump", ex);
             failure = ex is IOException or OperationCanceledException or InvalidOperationException ? ex : new IOException("Game sender failed", ex);
             Cancel();
         }

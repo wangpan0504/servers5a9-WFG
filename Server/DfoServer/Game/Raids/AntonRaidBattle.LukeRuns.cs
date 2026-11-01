@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Raids;
 
@@ -30,6 +31,9 @@ internal sealed partial class AntonRaidBattle
         public bool EnterConsumed { get; set; }
         public Dictionary<RaidActor, long> MapEpochs { get; } = [];
         public Dictionary<RaidActor, DungeonClearFact> ClearFacts { get; } = [];
+        public ImmutableArray<ushort> ClearedMembers { get; private set; } = [];
+        public void FreezeClearedMembers() => ClearedMembers =
+            [.. Active.Where(actor => actor.IsCurrent).Select(actor => actor.Character).Order()];
         public HashSet<ushort> RosterContributions { get; } = [];
         public bool GuildPartyRecorded { get; set; }
         public bool Cleared => ClearFacts.Count != 0;
@@ -175,6 +179,7 @@ internal sealed partial class AntonRaidBattle
                 int count = lukeParticipation.GetValueOrDefault(key);
                 lukeParticipation[key] = count == int.MaxValue ? count : count + 1;
             }
+            run.FreezeClearedMembers();
             CommitBattleCandidate(before, candidate);
             return new(before, current);
         }

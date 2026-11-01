@@ -55,7 +55,12 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             : new RaidLifecycleAdmission(policy.Source, now);
         reservations = reservations.Select(row => row with { Lifecycle = admission }).ToImmutableArray();
         // 构造可执行聚合可能拒绝不支持规则，必须在SQL之前完成，不能付费后才发现语义缺失。
-        if (PrepareBattle(out var preparedBattle) is { } executionRejection) return new(19, executionRejection);
+        var memberRewards = policy.ResourceRewards is { } resources
+            ? reservations.ToImmutableDictionary(row => row.Expected.Id,
+                row => resources.Create(row.Actor.Session.PremiumPcRoom,
+                    row.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())))
+            : null;
+        if (PrepareBattle(out var preparedBattle, memberRewards) is { } executionRejection) return new(19, executionRejection);
         var battle = preparedBattle!;
         var instance = battle.Instance;
         bool needsClock = policy.Timers is not null || policy.PhaseTimeout is not null;
@@ -111,10 +116,11 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
         return PolicyRejection(definition) ?? PrepareBattle(out _);
     }
 
-    string? PrepareBattle(out AntonRaidBattle? battle)
+    string? PrepareBattle(out AntonRaidBattle? battle,
+        ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards, lukeCards: policy.Cards, lukeMazes: policy.Run?.Mazes ?? []); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities, cardRoute: policy.Run?.CardRoute, lukeEnergyObjects: policy.Run?.UseEnergyObjects == true, pacing: policy.Pacing, flow: policy.Flow, lukeRewards: policy.ResourceRewards, memberRewards: memberRewards, lukeCards: policy.Cards, lukeMazes: policy.Run?.Mazes ?? []); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }
