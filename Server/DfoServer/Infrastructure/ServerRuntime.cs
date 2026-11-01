@@ -366,10 +366,6 @@ internal static class ServerRuntime
         new TagEvildomHandler(tagEvildomProjection, projection, log).Register(commands);
         var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
             itemResources.Items, repository, tagEvildomProjection, log);
-        var monsterCardUpgradeRules = MonsterCardUpgradeRules.Parse(
-            Environment.GetEnvironmentVariable("DFO_MONSTER_CARD_UPGRADE_RULES") ?? "{}");
-        log.Write("startup", new { Stage = "Monster card material upgrades", State = "complete",
-            Rule = MonsterCardUpgradeRules.Source, monsterCardUpgradeRules.MaterialSuccessPercent });
         string raidSettingsPath = Path.Combine(options.DataDirectory, "raid-start.json");
         var raidSettings = File.Exists(raidSettingsPath)
             ? System.Text.Json.JsonSerializer.Deserialize<Game.Raids.RaidStartSettings>(File.ReadAllText(raidSettingsPath),
@@ -756,8 +752,7 @@ internal static class ServerRuntime
             new MonsterCardBindHandler(new InventoryMonsterCardBindService(itemResources.Items,
                 itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new MonsterCardUpgradeHandler(new InventoryMonsterCardUpgradeService(itemResources.Items, itemResources.Enchantments,
-                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces,
-                rules: monsterCardUpgradeRules), inventoryProjection, log),
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
                 itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
