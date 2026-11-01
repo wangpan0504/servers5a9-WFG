@@ -34,6 +34,11 @@ internal static class InventoryMaterialConsumptionService
                     return InventoryResult.Reject();
                 after = after with { EpicPieces = after.EpicPieces.Set(pieces, piece.Index, balance - count) };
             }
+            else if (after.AccountWallet.Materials.TryGetValue(itemId, out var material))
+            {
+                if (material.Balance < count) return InventoryResult.Reject();
+                after = after with { AccountWallet = after.AccountWallet.SetMaterial(itemId, material with { Balance = material.Balance - count }) };
+            }
             else if (CurrencyWallet.RewardKind(itemId) is { } currency)
             {
                 var spent = CurrencyService.Spend(after, currency, count);

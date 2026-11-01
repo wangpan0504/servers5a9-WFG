@@ -25,6 +25,16 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
     public ushort CharacterSlotCapacity { get; init; } = 32;
     public int Mileage { get; init; }
     public MileageShopState MileageShop { get; init; } = MileageShopState.Empty;
+    public ImmutableSortedDictionary<int, AccountMaterialBalance> Materials { get; init; } = ImmutableSortedDictionary<int, AccountMaterialBalance>.Empty;
+    public AccountMaterialBalance Material(int itemId) => Materials.GetValueOrDefault(itemId) ?? AccountMaterialBalance.Empty;
+    public AccountWallet SetMaterial(int itemId, AccountMaterialBalance value)
+    {
+        if (itemId <= 0) throw new InvalidDataException("账号材料编号无效");
+        value.Validate();
+        return this with { Materials = value.Balance == 0 && value.RaidWeek == 0 ? Materials.Remove(itemId) : Materials.SetItem(itemId, value) };
+    }
+    public bool SameMaterials(AccountWallet other) => Materials.Count == other.Materials.Count &&
+        Materials.All(pair => other.Materials.TryGetValue(pair.Key, out var value) && pair.Value.Same(value));
     public ImmutableSortedDictionary<int, long> PremiumContracts => Contracts ?? ImmutableSortedDictionary<int, long>.Empty;
     public int Get(CurrencyKind kind) => kind switch
     {
@@ -65,10 +75,15 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
         return this with { SeriaLuck = value };
     }
     public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && Mileage == other.Mileage && MileageShop.Same(other.MileageShop) && SeriaLuck == other.SeriaLuck &&
-        Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts);
+        Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts) && SameMaterials(other);
     public void Validate()
     {
         MileageShop.Validate();
+        foreach (var (id, value) in Materials)
+        {
+            if (id <= 0) throw new InvalidDataException("账号材料编号无效");
+            value.Validate();
+        }
         if (CharacterSlotCapacity is < 32 or > 62 || Revision < 0 || RentalPoints < 0 || Mileage < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key is CurrencyKind.RentalPoint or CurrencyKind.Mileage || pair.Value <= 0) ||
             PremiumContracts.Any(pair => pair.Key <= 0 || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");

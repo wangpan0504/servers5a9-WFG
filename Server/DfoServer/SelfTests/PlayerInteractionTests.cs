@@ -119,6 +119,22 @@ internal static class PlayerInteractionTests
             "公开公会名使用CP936长度前缀");
         That(reader.ReadUInt32() == 0 && reader.ReadByte() == 0 && reader.ReadByte() == 0 && stream.Position == stream.Length,
             "公开尾部列表与状态完全消费，没有本人的皮肤仓库数据");
+        var channel = new DfoServer.GameWorld.Channels.ChannelIdentity(64, 12);
+        var actor = TownPackets.Actor(character, 0, channel, 0);
+        var raid = RaidCharacterPackets.Information(channel, character.Id, actor, body);
+        Bytes(raid[..5], [12, 0x34, 0x12, 64, 12], "757外层目标头后直接读取第一段server/channel，没有NOTI2分派头");
+        That(BitConverter.ToUInt16(raid, 121) == character.Id && raid[actor.Length] == 64 && raid[actor.Length + 1] == 12 &&
+            BitConverter.ToUInt32(raid, actor.Length + 2) == 37 && raid[actor.Length + 8] == 1 &&
+            raid[actor.Length + 9] == 1 && raid[actor.Length + 10] == 1 &&
+            BitConverter.ToUInt16(raid, actor.Length + 11) == character.Id &&
+            BitConverter.ToUInt64(raid, actor.Length + 13) == 0x0102030405060708UL &&
+            BitConverter.ToUInt32(raid, actor.Length + 21) == 89 && BitConverter.ToUInt32(raid, actor.Length + 25) == 8550 &&
+            raid.Length == actor.Length + body.Length - 3,
+            "757两段边界保持目标身份、9B公开头、u64经验和89B真实属性块，不插本人17B头或多余count");
+        Reject<InvalidDataException>(() => RaidCharacterPackets.Information(new(64, 11), character.Id, actor, body), "详情拒绝混入不同频道");
+        Reject<InvalidDataException>(() => RaidCharacterPackets.Information(channel, 99, actor, body), "详情拒绝拼接不同角色");
+        Reject<InvalidDataException>(() => RaidCharacterPackets.Information(channel, character.Id, actor,
+            TownPackets.Player(character, stats, 37, channel, DateTimeOffset.UnixEpoch)), "757拒绝套用本人属性正文");
         Console.WriteLine($"PASS {Count - before} 玩家菜单与公开资料协议断言");
     }
 }

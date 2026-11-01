@@ -22,6 +22,7 @@ internal static class TradeTcpTests
         int materialId = MailboxTests.TradableMaterial(resources.Archive, resources.ItemResources).Id;
         var firstItem = SeedItem(fixture, resources, "tradea", materialId, 5);
         var secondItem = SeedItem(fixture, resources, "tradeb", 10400, 1);
+        var card = SeedItem(fixture, resources, "tradea", 490007851, 5);
         inviter.Select();
         invitee.Select();
         inviter.Barrier();
@@ -77,6 +78,7 @@ internal static class TradeTcpTests
         WriteFailure(fixture, inviter, invitee, token, secondItem.Uid);
         MovedItem(fixture, inviter, invitee, token, secondItem.Uid);
         EmptyTrade(inviter, invitee, token);
+        LimitedCardTrade(fixture, inviter, invitee, token, card);
         inviter.Send(10, Build(writer =>
         {
             writer.Write(invitee.Id);
@@ -359,13 +361,60 @@ internal static class TradeTcpTests
             "成交后双方物品与数量交换且来源消失");
     }
 
-    private static void MoveItem(TcpPeer actor, TcpPeer other, InventoryItem item, bool take)
+    private static void LimitedCardTrade(TcpTestFixture fixture, TcpPeer first, TcpPeer second, uint token, InventoryItem source)
+    {
+        first.Send(10, Build(writer => { writer.Write(second.Id); writer.Write((byte)1); writer.Write(token); writer.Write(new byte[4]); }));
+        first.Expect(1, 10, [1]);
+        second.Expect(0, 7);
+        second.Send(11, Build(writer => { writer.Write(first.Id); writer.Write((byte)1); writer.Write(0u); }));
+        second.Expect(1, 11);
+        first.Expect(0, 8);
+        MoveItem(first, second, source, false, 2);
+        MoveItem(first, second, source, true, 2);
+        MoveItem(first, second, source, false, 2);
+        first.Send(24, [5]); first.Expect(1, 24, [1]); second.Expect(0, 17);
+        second.Send(24, [5]); second.Expect(1, 24, [1]); first.Expect(0, 17);
+        first.Expect(0, 655, []); second.Expect(0, 655, []);
+        first.Send(24, [1]); first.Expect(1, 24, [1]); second.Expect(0, 17);
+        second.Send(24, [1]); second.Expect(1, 24, [1]); first.Expect(0, 17);
+        first.Expect(0, 18); second.Expect(0, 18);
+        var firstDelta = first.Expect(0, 1681).Body;
+        var secondDelta = second.Expect(0, 1681).Body;
+        var repository = new CharacterRepository(fixture.Database);
+        using var firstOwner = new AccountOwners().Acquire("tradea", () => { });
+        using var secondOwner = new AccountOwners().Acquire("tradeb", () => { });
+        var remaining = repository.List(firstOwner).Single().Inventory.Items.Single(item => item.Uid == source.Uid);
+        var received = repository.List(secondOwner).Single().Inventory.Items.Single(item => item.Core.ItemId == source.Core.ItemId);
+        That(remaining.Core == source.Core with { Value = 3 } && received.Core == source.Core with { Value = 2, Extension120 = 0x51 },
+            "真实交易请求拆堆仅绑定转出卡片，取回重放不消耗次数");
+        That(firstDelta.SequenceEqual(DfoServer.Network.Builders.Inventory.InventoryPackets.Delta(repository.List(firstOwner).Single().Inventory,
+                source.Position.List, [remaining.Position])) &&
+            secondDelta.SequenceEqual(DfoServer.Network.Builders.Inventory.InventoryPackets.Delta(repository.List(secondOwner).Single().Inventory,
+                received.Position.List, [received.Position])), "成交1681真实发布源余量和offset120绑定状态");
+        first.Barrier(); second.Barrier();
+        first.Send(10, Build(writer => { writer.Write(second.Id); writer.Write((byte)1); writer.Write(token); writer.Write(new byte[4]); }));
+        first.Expect(1, 10, [1]); second.Expect(0, 7);
+        second.Send(11, Build(writer => { writer.Write(first.Id); writer.Write((byte)1); writer.Write(0u); }));
+        second.Expect(1, 11); first.Expect(0, 8);
+        second.Send(19, Build(writer =>
+        {
+            writer.Write((byte)received.Position.List); writer.Write((ushort)received.Position.Index); writer.Write(received.Core.ItemId);
+            writer.Write(1u); writer.Write((byte)4); writer.Write((ushort)3); writer.Write(0u); writer.Write(0u); writer.Write(-1); writer.Write((ushort)0);
+        }));
+        second.Expect(1, 19, [0, 1, 0]);
+        first.Send(24, [0]); first.Expect(1, 24, [1]); first.Expect(0, 16); second.Expect(0, 16);
+        first.Barrier(); second.Barrier();
+        That(repository.List(secondOwner).Single().Inventory.Items.Single(item => item.Uid == received.Uid) == received,
+            "绑定卡片再次上交易栏拒绝且实例不变");
+    }
+
+    private static void MoveItem(TcpPeer actor, TcpPeer other, InventoryItem item, bool take, int? transferCount = null)
     {
         byte source = take ? (byte)4 : (byte)item.Position.List;
         byte destination = take ? (byte)item.Position.List : (byte)4;
         ushort sourceSlot = take ? (ushort)3 : checked((ushort)item.Position.Index);
         ushort destinationSlot = take ? checked((ushort)item.Position.Index) : (ushort)3;
-        uint count = checked((uint)item.Core.Count);
+        uint count = checked((uint)(transferCount ?? item.Core.Count));
         actor.Send(19, Build(writer =>
         {
             writer.Write(source);

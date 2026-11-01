@@ -93,11 +93,11 @@ internal static class UserStateTests
             var owners = new AccountOwners(memory);
             using var owner = owners.Acquire("states", () => { });
             repository.Create(owner, new("StateRole", point, point) { Level = 85, CompletedQuests = [12829, 3779] });
-            var session = new GameSession(repository, towns, owner, entry: new(new(2, 19), 23, "[raid]"));
+            var session = new GameSession(repository, towns, owner, entry: new(new(2, 37), 22, "[harlem]"));
             var online = new OnlineSessionDirectory(memory);
             online.Register(owner, session);
             That(online.Snapshot().Length == 0, "诊断查询不把未选角连接伪装成在线角色");
-            That(session.ChannelEntry is { Identity.Number: 19, Type: 23, Group: "[raid]" } && session.GetState() == UserState.CharacterSelect,
+            That(session.ChannelEntry is { Identity.Number: 37, Type: 22, Group: "[harlem]" } && session.GetState() == UserState.CharacterSelect,
                 "分类入口是会话只读上下文，未实现玩法不因入口标签自动改变user状态");
             using var stop = new CancellationTokenSource();
             using var stream = new MemoryStream();
@@ -187,7 +187,7 @@ internal static class UserStateTests
             var townReceipt = new TownTravelReceipt(session.Selected!, owner.Generation, session.SelectionEpoch);
             That(session.CheckState(UserState.Town) && session.CanPublishTravel(townReceipt),
                 "城镇投影使用正式user状态与当前角色回执");
-            session.BeginDungeonSelection();
+            That(session.BeginDungeonSelection() is not null, "普通频道夹具真实建立选图上下文，不借未开团团队频道绕过准入");
             That(!session.CanPublishTravel(townReceipt),
                 "已进入选图时旧城镇回执不能发布state0或把新上下文加入城镇");
             var selection = session.CurrentDungeonSelection;

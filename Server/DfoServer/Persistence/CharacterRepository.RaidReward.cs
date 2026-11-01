@@ -83,6 +83,9 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
                 eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == prepared.Card) is not { } authorized ||
                 !authorized.Grants.SequenceEqual(prepared.Grants)) return null;
         }
+        if (inventory.AccountMaterialRaidWeek is { } materialWeek &&
+            materialWeek != DfoServer.Game.Inventory.Services.AccountMaterialService.RaidWeek(now))
+            return null;
         var current = CommitInventoryInTransaction(db, tx, owner, expected, inventory);
         // WriteOverflowMail由库存writer调用；只读取本次已投递邮件的稳定键，不另建投递事务。
         var mailIds = ImmutableArray.CreateBuilder<uint>();

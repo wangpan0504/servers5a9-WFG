@@ -642,10 +642,18 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
                 shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty,
-                ignoreUsablePeriod: ignoreUsablePeriod);
+                ignoreUsablePeriod: ignoreUsablePeriod,
+                raidReward: grants.Any(row => catalog.TryGet(row.ItemId, out var template) && template.AccountMaterial is
+                    { WeeklyAccountLimit: > 0 } or { WeeklyCharacterLimit: > 0 }));
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
+        // 礼盒是尚未兑换的实体，不在翻牌发盒时计入材料所得。
+        // 兑换必须足额到账；额度或持有空间不足时保留整盒，不能扣盒后静默吞掉余量。
+        foreach (var (id, count) in totals)
+            if (catalog.TryGet(id, out var template) && template.AccountMaterial is not null &&
+                after.AccountWallet.Material(id).Balance - paid.AccountWallet.Material(id).Balance != count)
+                return InventoryResult.Reject(4) with { RejectReason = "booster_account_material_limit" };
         if (definition.SetsDisjointInstanceType)
         {
             var grantedSlots = grant.Plan.ChangedSlots.ToHashSet();
@@ -655,6 +663,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     DestructionSoulForbidden = definition.ForbidsDestructionSouls } } : item).ToImmutableArray() };
         }
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
+        if (grant.Plan.AccountMaterialRaidWeek is { } materialWeek)
+        {
+            long weekDeadline = AccountMaterialService.WeekStart(materialWeek).AddDays(7).ToUnixTimeSeconds();
+            if (deadline is null || weekDeadline < deadline) deadline = weekDeadline;
+        }
         if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
             deadline = acquiredUntil;
         if (materialDeadline is not null && (deadline is null || materialDeadline < deadline)) deadline = materialDeadline;
@@ -677,7 +690,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             SelectionSummary = trace is null ? null : IndependentAttributePairSampler.Describe(selectionPolicy.Policy!, trace)
         };
         return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems)
-        { UsedItems = [new(source.Core.ItemId, request.Count)] });
+        { UsedItems = [new(source.Core.ItemId, request.Count)], AccountMaterialRaidWeek = grant.Plan.AccountMaterialRaidWeek });
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }

@@ -9,11 +9,32 @@ internal sealed partial class RaidHandler
         Parsers.RaidOtherUserRequest parsed;
         try { parsed = Parsers.RaidRequests.OtherUser(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        // 其它mode分别通向不同原生窗口，未恢复其合同前不返回通用成功。
-        if (parsed.Mode != 1 || Actor(context) is not { } actor) return CommandResult.Unhandled;
+        // 3为独立决斗信息；未恢复其合同前不返回通用成功。
+        if (parsed.Mode is not (0 or 1 or 2) || Actor(context) is not { } actor) return CommandResult.Unhandled;
         if (context.Session.ChannelEntry is not { } entry || !MatchesType(actor, Game.Raids.RaidTypes.FromChannelType(entry.Type)))
             return CommandResult.Unhandled;
         var target = online?.FindReadyCharacter(parsed.Character);
+        if (parsed.Mode is 0 or 2)
+        {
+            // 使用目标会话的不可变角色数据，不跨账号嵌套取得owner。
+            var snapshot = target?.PublicCharacter(parsed.Character);
+            if (snapshot is null || snapshot.Channel.ServerIndex != parsed.Server || snapshot.Channel.Number != parsed.Channel)
+                return CommandResult.Handled;
+            bool CurrentTarget() => actor.IsCurrent && context.Session.ChannelEntry?.Identity == actor.Channel &&
+                snapshot.IsUnchanged() && target!.ChannelEntry?.Identity == snapshot.Channel;
+            if (parsed.Mode == 0)
+            {
+                if (town is null) return CommandResult.Unhandled;
+                await town.OtherPlayerAsync(context, snapshot, CurrentTarget, raid: true);
+                log.Write("raid_character_info", new { Connection = context.Id, parsed.Character, parsed.Server, parsed.Channel });
+                return CommandResult.Handled;
+            }
+            await context.Notify(NotiPacketType.RAID_OTHER_CHANNEL_USER_TITLE_BOOK,
+                Builders.TitlePackets.RaidBook(snapshot.Character.Inventory, snapshot.Channel.ServerIndex,
+                    snapshot.Channel.Number, parsed.Character), "raid_character_title_book", CurrentTarget);
+            log.Write("raid_character_title_book", new { Connection = context.Id, parsed.Character, parsed.Server, parsed.Channel });
+            return CommandResult.Handled;
+        }
         var history = target?.NameHistory(parsed.Character);
         if (history is null || history.Target.Channel.ServerIndex != parsed.Server || history.Target.Channel.Number != parsed.Channel)
             return CommandResult.Handled;

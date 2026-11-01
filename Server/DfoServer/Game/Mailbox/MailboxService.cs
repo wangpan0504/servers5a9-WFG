@@ -110,6 +110,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             var core = item.Core.IsStackable ? item.Core with { Value = input.Count } : item.Core;
             if (Normalize(template.AttachType) == "trade limit")
                 core = core with { Attr = (byte)((core.Attr & 31) | (((core.Attr >> 5) - 1) << 5)) };
+            core = StackableTradePolicy.AfterTransfer(core, template);
             attachments.Add(item with { Uid = remaining is null ? item.Uid : 0, Core = core });
         }
         after = after with { Gold = checked((uint)(character.Inventory.Gold - cost)) };
@@ -119,6 +120,9 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
     }
 
     public static MailboxError TransferError(InventoryItem item, ItemTemplate template, string senderAccount, string recipientAccount, long now)
+        => TransferError(item, template, senderAccount == recipientAccount, now);
+
+    public static MailboxError TransferError(InventoryItem item, ItemTemplate template, bool sameAccount, long now)
     {
         if (item.Core.SortLockFlag != 0 || item.Core.EquipmentLockId != 0)
             return MailboxError.LockedItem;
@@ -130,13 +134,16 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             return MailboxError.InvalidAttachment;
         if (template.PvpFreeEquipment || item.Core.TradeRestriction != 0)
             return MailboxError.NotTradable;
+        if (StackableTradePolicy.Applies(item.Core, template))
+            return StackableTradePolicy.CanTransfer(item.Core, template, sameAccount)
+                ? MailboxError.None : MailboxError.AccountBound;
         string attach = Normalize(template.AttachType);
         return attach switch
         {
             "free" => MailboxError.None,
             "trade limit" => item.Core.Attr >> 5 != 0 ? MailboxError.None : MailboxError.NotTradable,
             "sealing" or "seal" => item.Core.SealFlag != 0 ? MailboxError.None : MailboxError.NotTradable,
-            _ when attach.Contains("account", StringComparison.Ordinal) => senderAccount == recipientAccount ? MailboxError.None : MailboxError.AccountBound,
+            _ when attach.Contains("account", StringComparison.Ordinal) => sameAccount ? MailboxError.None : MailboxError.AccountBound,
             _ => MailboxError.NotTradable
         };
     }

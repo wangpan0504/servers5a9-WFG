@@ -317,6 +317,9 @@ internal static class SqliteMigrations
         new(171, "库存实例变更标记", InventoryItemRevisionSchema.Upgrade),
         new(172, "武斗大会翻牌资产领取回执", (db, tx) => Execute(db, tx,
             DungeonTournamentRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(173, "账号材料余额与攻坚周额度", (db, tx) => Execute(db, tx,
+            (AccountMaterialSchema.Balances + AccountMaterialSchema.Audit + AccountMaterialSchema.RewardIndex)
+                .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2431,6 +2434,8 @@ internal static class SqliteMigrations
             ("account_fiendwar_guides",RaidLifecycleSchema.FiendwarGuideBindings),
             ("character_fiendwar_recovery",FiendwarRecoverySchema.Definition),
             ("character_fiendwar_title_facts",FiendwarTitleFactsSchema.Definition),
+            ("account_material_balances",AccountMaterialSchema.Balances),
+            ("account_material_audit",AccountMaterialSchema.Audit),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_ekern_cycle",EkernCycleSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_rename_pending",CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2458,6 +2463,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         PvpRatingSchema.ValidateIndex(db, tx);
+        AccountMaterialSchema.ValidateIndex(db, tx);
         PvpTotalRatingSchema.ValidateIndex(db, tx);
         using var constraints = db.CreateCommand();
         constraints.Transaction = tx;

@@ -20,6 +20,7 @@ internal static class RaidMemberTests
     {
         int before = Count;
         RaidCleanupPublicationTests.RunCore();
+        RaidCrossChannelTests.RunCore();
         var info = RaidRequests.Information([2, 1, 0, 19, 2]);
         That(info.Mode == 2 && info.Key == 0x02130001, "1361严格消费mode和key");
         var management = RaidRequests.Manager([0,0,0,0, 7,0,0,0, 5,0,0,0]);

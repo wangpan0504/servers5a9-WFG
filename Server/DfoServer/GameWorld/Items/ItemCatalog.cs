@@ -91,6 +91,7 @@ internal sealed partial class ItemCatalog
         IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null)
     {
         pvf = archive;
+        accountMaterialLimits = new(() => ReadAccountMaterialLimits(archive));
         EquipmentGrowth = new(archive, equipment);
         this.equipment = equipment;
         this.stackable = stackable;
@@ -643,6 +644,8 @@ internal sealed partial class ItemCatalog
             // 旧银质工具的32格声明经兼容约定映射到本版40格，不映射其他表外容量。
             if (cargoTarget == 32) cargoTarget = 40;
         }
+        var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
+            declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
@@ -660,8 +663,9 @@ internal sealed partial class ItemCatalog
             CreatureName = kind == ItemKind.Creature ? creatures?.Get(id)?.Name : null,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
-            AccountBoundAfterTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } tradeLimit &&
-                tradeLimit.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase),
+            AccountMaterial = ReadAccountMaterial(id, isEquipment, kind, text, stackLimit),
+            AccountBoundAfterTrade = accountTrade is not null,
+            AccountBindingTradeLimit = accountTrade?.Count ?? 0,
             PersonalCargoUpgradeTarget = cargoTarget,
             ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
             Expiration = ItemExpiration.Parse(text),

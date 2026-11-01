@@ -37,7 +37,8 @@ internal static partial class FiendwarRaidTcpTests
                 var role = repository.Create(owner, candidate with { Level = 95, AcceptedStoryLevel = 95,
                     CompletedQuests = [8672], InitialLearning = learning });
                 var items = resources.ItemResources;
-                var grant = InventoryRewardGrantService.TryGrantBatch(role, [new(10306760, 2), new(10312385, 2)],
+                var grant = InventoryRewardGrantService.TryGrantBatch(role,
+                    [new(10306760, 2), new(10312385, 2), new(1114, 3), new(7180, 2)],
                     items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
                 var funded = InventoryService.Commit(repository, owner, role, grant);
                 repository.CommitInventory(owner, funded, new(funded.Inventory, funded.Inventory with { ReviveCoins = 20 }, "fixture_fiendwar_coins"));
@@ -51,15 +52,22 @@ internal static partial class FiendwarRaidTcpTests
                         count == 8 && index == 5 ? 2000 + count : 1000 + count, role.Id);
                 var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
                 peers.Add(peer); peer.Select(); Drain(peer); locations.Add(peer.Id, 2);
-                VerifyPotentialPotion(fixture, peer, false, 10);
+                VerifyConsumable(fixture, peer, false, 10);
+                VerifyConsumable(fixture, peer, true, 20, 1114);
             }
+            That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "普通药使用真实目录声明");
+            clock.Advance(checked((ordinary.CoolTime + 999) / 1000));
             var leader = peers[0];
             leader.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name("Fiend")); writer.Write(new byte[4]); }));
             var created = Drain(leader);
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
             uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
             byte server = checked((byte)(raidKey >> 24));
-            if (count == 1) VerifyNameHistory(fixture, resources, repository, leader, server);
+            if (count == 1)
+            {
+                VerifyNameHistory(fixture, resources, repository, leader, server);
+                VerifyCrossChannel(fixture, resources, repository, leader, server, raidKey);
+            }
             That(!RaidPanelTests.ReadGuideFlag(created.Single(row => row is { Kind: 0, Opcode: 590 }).Body, 4), "可单人开战的完整团队面板不显示引导标记");
             foreach (var (peer, index) in peers.Skip(1).Select((peer, index) => (peer, index)))
             {
@@ -139,8 +147,11 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var team in new[] { first, second }.Where(team => team.Length != 0))
                 foreach (var peer in team)
                 {
-                    VerifyPotentialPotion(fixture, peer, true, 11);
-                    VerifyPotentialPotion(fixture, peer, false, 12);
+                    VerifyConsumable(fixture, peer, false, 21, 1114);
+                    VerifyConsumable(fixture, peer, false, 22, 1114);
+                    VerifyBlockedLegacyConsumable(fixture, peer);
+                    VerifyConsumable(fixture, peer, true, 11);
+                    VerifyConsumable(fixture, peer, false, 12);
                 }
             // 本场四币由不同角色依次消耗；第五次不能借个人计数重新获得额度。
             for (int index = 0; index <= 4; index++)
@@ -299,6 +310,33 @@ internal static partial class FiendwarRaidTcpTests
                 }
             That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=2", peer.Id) is [[2L]]),
                 "同框架1/4/8人实际各领取两类末期奖励");
+            foreach (var peer in peers)
+            {
+                That(fixture.Query("SELECT m.balance FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807 AND m.balance<>0", peer.Id).Length == 0,
+                    "660领取的是原始不渝礼盒，未兑换不提前记材料或周获得");
+                var box = fixture.Query("SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=10306817", peer.Id);
+                That(box.Length == 1, "真实翻牌领取150不渝礼盒，重复660不复制礼盒");
+                short slot = Convert.ToInt16(box[0][0]);
+                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
+                var opened = Drain(peer);
+                var expectedAck = Build(writer =>
+                {
+                    writer.Write((byte)1); writer.Write((byte)0); writer.Write(10306817); writer.Write(slot);
+                    writer.Write(0); writer.Write(0); writer.Write((ushort)1); writer.Write(10308807); writer.Write(150);
+                });
+                That(opened.Count(row => row is { Kind: 1, Opcode: 160 } && row.Body.SequenceEqual(expectedAck)) == 1 &&
+                    opened.Any(row => row is { Kind: 0, Opcode: 563, Body.Length: 10 } && row.Body[0] == 1 &&
+                    U32(row.Body, 2) == 10308807 && U32(row.Body, 6) == 150) &&
+                    opened.Any(row => row is { Kind: 0, Opcode: 1460 }) && opened.Any(row => row is { Kind: 0, Opcode: 1461 }),
+                    "真实160开盒后同步账号余额与两级周额度");
+                string materialState = fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
+                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
+                That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 160, Body: [0, 19, 0] }) &&
+                    materialState == fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
+                    "重复打开已消费礼盒不再计余额或周额度");
+            }
+            That(peers.All(peer => fixture.Query("SELECT m.balance,m.raid_earned FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807", peer.Id)
+                is [[150L, 150L]]), "团队原始礼盒实际兑换150不渝，重复660和160均不重复计入");
             That(guildSnapshot == fixture.Snapshot("SELECT * FROM guild_contribution_events WHERE source=5 ORDER BY character_id"),
                 "通关贡献不依赖660翻牌，领取及重复请求均不再发分");
             Console.WriteLine("PASS fiendwar native encounter roster=" + count);

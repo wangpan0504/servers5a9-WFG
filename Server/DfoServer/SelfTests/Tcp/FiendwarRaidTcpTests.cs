@@ -13,25 +13,45 @@ namespace DfoServer.Testing;
 
 internal static partial class FiendwarRaidTcpTests
 {
-    internal static void VerifyPotentialPotion(TcpTestFixture fixture, TcpPeer peer, bool accepted, uint check)
+    internal static void VerifyConsumable(TcpTestFixture fixture, TcpPeer peer, bool accepted, uint check,
+        int itemId = 10312385)
     {
-        var source = fixture.Query("SELECT s.slot_index,i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=10312385", peer.Id).Single();
+        var source = fixture.Query("SELECT s.slot_index,i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=$p1", peer.Id, itemId).Single();
         ushort slot = Convert.ToUInt16(source[0]);
         long uid = Convert.ToInt64(source[1]);
         var before = System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)source[2])!;
         long audits = Convert.ToInt64(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0", peer.Id)[0][0]);
-        peer.Send(44, Build(writer => { writer.Write(slot); writer.Write((byte)0); writer.Write(check); writer.Write(10312385); writer.Write(0); }));
-        var rows = AntonTcpProbe.Barrier(peer, "fiendwar potential potion");
+        long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0]);
+        peer.Send(44, Build(writer => { writer.Write(slot); writer.Write((byte)0); writer.Write(check); writer.Write(itemId); writer.Write(0); }));
+        var rows = AntonTcpProbe.Barrier(peer, "fiendwar consumable");
         Bytes(rows.Single(row => row is { Kind: 1, Opcode: 44 }).Body,
             Build(writer => { writer.Write(accepted ? (byte)1 : (byte)0); writer.Write(accepted ? slot : (ushort)123);
-                writer.Write((byte)0); writer.Write(check); writer.Write(10312385); }),
-            "潜能药通过真实44完整回应，保留源槽和核验值");
-        That(!rows.Any(row => row is { Kind: 0, Opcode: 14 }), "潜能药成功由ACK自扣，不重复发送源14");
+                writer.Write((byte)0); writer.Write(check); writer.Write(itemId); }),
+            "真实44完整回应物品使用，保留源槽和核验值");
+        That(!rows.Any(row => row is { Kind: 0, Opcode: 14 }), "药品成功由ACK自扣，拒绝也不重复发送源14");
         var after = System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
             "SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", uid)[0][0])!;
         That(after == (accepted ? before with { Value = before.Value - 1 } : before) &&
             Convert.ToInt64(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0", peer.Id)[0][0]) == audits + (accepted ? 1 : 0),
-            "潜能药只在合法副本实际扣原UID一瓶并提交一条审计，拒绝保留完整Core和审计");
+            "药品只在合法场景实际扣原UID一瓶并提交一条审计，拒绝保留完整Core和审计");
+        That(accepted || Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0]) == revision,
+            "使用拒绝不修改角色持久revision");
+    }
+
+    internal static void VerifyBlockedLegacyConsumable(TcpTestFixture fixture, TcpPeer peer)
+    {
+        var source = fixture.Query("SELECT s.slot_index,i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=7180", peer.Id).Single();
+        string before = System.Text.Json.JsonSerializer.Serialize(fixture.Query(
+            "SELECT revision,revive_coins,(SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0) FROM characters WHERE id=$p0", peer.Id));
+        peer.Send(30, BitConverter.GetBytes(Convert.ToUInt16(source[0])));
+        var rows = AntonTcpProbe.Barrier(peer, "fiendwar legacy consumable");
+        Bytes(rows.Single(row => row is { Kind: 1, Opcode: 30 }).Body, [0, 19, 0],
+            "漩涡正式实例拒绝非44币券入口，不能绕过专用消耗品门禁");
+        That(!rows.Any(row => row is { Kind: 0, Opcode: 14 }) &&
+            Equals(fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", source[1])[0][0], source[2]) &&
+            System.Text.Json.JsonSerializer.Serialize(fixture.Query(
+                "SELECT revision,revive_coins,(SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0) FROM characters WHERE id=$p0", peer.Id)) == before,
+            "拒绝币券保留原UID/Core、复活币、revision和审计，不先发钱包或源物品通知");
     }
 
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)

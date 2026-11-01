@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Trade;
+using DfoServer.GameWorld.Items;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -10,12 +11,12 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     public (Character First, Character Second) CommitPlayerTrade(AccountOwners.Lease firstOwner, AccountOwners.Lease secondOwner,
-        Character first, Character second, TradeTicket ticket, TradeSettlementPlan plan) =>
-        CommitPlayerTrade(firstOwner, secondOwner, first, second, plan.First, plan.Second, ticket: ticket);
+        Character first, Character second, TradeTicket ticket, TradeSettlementPlan plan, ItemCatalog? items = null) =>
+        CommitPlayerTrade(firstOwner, secondOwner, first, second, plan.First, plan.Second, ticket: ticket, items: items);
 
     public (Character First, Character Second) CommitPlayerTrade(AccountOwners.Lease firstOwner, AccountOwners.Lease secondOwner,
         Character first, Character second, InventoryPlan firstPlan, InventoryPlan secondPlan,
-        IReadOnlySet<long>? firstTransfers = null, IReadOnlySet<long>? secondTransfers = null, TradeTicket? ticket = null) =>
+        IReadOnlySet<long>? firstTransfers = null, IReadOnlySet<long>? secondTransfers = null, TradeTicket? ticket = null, ItemCatalog? items = null) =>
         AccountOwners.Lease.ExecuteTogether(firstOwner, secondOwner, () =>
         {
             if (first.Id == second.Id || firstPlan.Reason != "player_trade" || secondPlan.Reason != "player_trade" ||
@@ -29,7 +30,7 @@ internal sealed partial class CharacterRepository
             Dictionary<long, InventoryItem> firstIncoming, secondIncoming;
             if (ticket is not null)
             {
-                var verified = TradeSettlement.Plan(first, second, ticket);
+                var verified = TradeSettlement.Plan(first, second, ticket, items);
                 if (verified is null || !Matches(verified.First, firstPlan) || !Matches(verified.Second, secondPlan))
                     throw new InvalidDataException("交易计划与冻结报价不一致");
                 firstTransfers = ticket.FirstOffer.Items.Where(line => line.Count == line.Item.Core.Count).Select(line => line.Item.Uid).ToHashSet();

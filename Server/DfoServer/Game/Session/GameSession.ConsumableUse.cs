@@ -24,8 +24,10 @@ internal sealed partial class GameSession
         access.PersonalCapacity == character.Inventory.CargoCapacity &&
         access.AccountCapacity == character.Inventory.AccountCargo.Capacity;
 
-    bool CanUseDungeonItem(int itemId) => !IsImperialArenaCombat &&
-        (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true);
+    bool CanUseDungeonItem(int itemId, IReadOnlySet<uint>? allowedDungeons = null) => !IsImperialArenaCombat &&
+        (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true) &&
+        (formalDungeon is not { Entry.RaidEntry.Kind: Raids.RaidKind.Fiendwar } fiendwar ||
+            allowedDungeons?.Contains(fiendwar.Entry.DungeonId) == true);
 
     void CommitDungeonItemUse(int itemId)
     {
@@ -69,7 +71,7 @@ internal sealed partial class GameSession
             if (ClosedUse(service, request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
-            if (!CanUseDungeonItem(request.ItemId))
+            if (!CanUseDungeonItem(request.ItemId, definition.AllowedDungeons))
                 return Reject("grief-item-not-allowed-or-exhausted");
             if (definition.AllowedDungeons is { } allowed &&
                 (Phase != SessionPhase.Dungeon || formalDungeon is not { } restricted || !allowed.Contains(restricted.Entry.DungeonId)))

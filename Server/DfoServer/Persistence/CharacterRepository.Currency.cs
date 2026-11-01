@@ -51,6 +51,7 @@ internal sealed partial class CharacterRepository
         using (var reader = command.ExecuteReader())
             while (reader.Read()) balances.Add((CurrencyKind)reader.GetInt32(0), reader.GetInt32(1));
         var wallet = new AccountWallet(revision, balances.ToImmutable(), rentalPoints, seriaLuck, contracts.ToImmutable()) { CharacterSlotCapacity = characterSlots, Mileage = mileage, MileageShop = mileageShop };
+        wallet = wallet with { Materials = ReadAccountMaterials(db, account, transaction) };
         wallet.Validate();
         return wallet;
     }
@@ -76,7 +77,7 @@ internal sealed partial class CharacterRepository
         bool contractsChanged = !before.AccountWallet.PremiumContracts.SequenceEqual(after.AccountWallet.PremiumContracts);
         bool seriaLuckChanged = before.AccountWallet.SeriaLuck != after.AccountWallet.SeriaLuck;
         if (before.AccountWallet.CharacterSlotCapacity != after.AccountWallet.CharacterSlotCapacity || changes.Any(CurrencyWallet.IsAccount) || contractsChanged || seriaLuckChanged ||
-            !before.AccountWallet.MileageShop.Same(after.AccountWallet.MileageShop))
+            !before.AccountWallet.MileageShop.Same(after.AccountWallet.MileageShop) || plan.AccountMaterialsChanged)
         {
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$account", owner.Account);
@@ -105,6 +106,7 @@ internal sealed partial class CharacterRepository
             }
             after = after with { AccountWallet = after.AccountWallet with { Revision = checked(before.AccountWallet.Revision + 1) } };
         }
+        WriteAccountMaterials(db, transaction, owner, characterId, plan);
         foreach (var kind in changes)
         {
             command.Parameters.Clear();

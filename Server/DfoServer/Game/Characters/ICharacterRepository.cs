@@ -91,7 +91,8 @@ internal interface ICharacterRepository
     GrowUpChangeCommit CommitGrowUpChange(AccountOwners.Lease owner, GrowUpChangePlan plan);
     DfoServer.Game.ExpertJob.ExpertJobTradeCommit CommitExpertJobTrade(AccountOwners.Lease customerLease, AccountOwners.Lease ownerLease, DfoServer.Game.ExpertJob.ExpertJobTradePlan plan);
     (Character First, Character Second) CommitPlayerTrade(AccountOwners.Lease firstOwner, AccountOwners.Lease secondOwner,
-        Character first, Character second, DfoServer.Game.Trade.TradeTicket ticket, DfoServer.Game.Trade.TradeSettlementPlan plan);
+        Character first, Character second, DfoServer.Game.Trade.TradeTicket ticket, DfoServer.Game.Trade.TradeSettlementPlan plan,
+        DfoServer.GameWorld.Items.ItemCatalog? items = null);
     Character CommitExpertJobAction(AccountOwners.Lease owner, DfoServer.Game.ExpertJob.ExpertJobActionPlan plan);
     Character CommitExpertJobLearning(AccountOwners.Lease owner, DfoServer.Game.ExpertJob.ExpertJobLearningPlan plan);
     Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected);

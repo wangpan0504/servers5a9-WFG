@@ -27,6 +27,21 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
 {
     const ushort JonathanVisibleEvent = 2395;
     internal bool MileageAvailable => mileageShop?.Available == true;
+    internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
+        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
+    {
+        foreach (var body in AccountMaterialPackets.Balances(character.Inventory.AccountWallet, before))
+            await context.Notify(NotiPacketType.ACCOUNT_MATERIAL_STORAGE_INFO, body,
+                before is null ? "account_material_initialize" : "account_material_committed", canSend);
+        if (items is null) return;
+        var now = timer.GetUtcNow();
+        await context.Notify(NotiPacketType.RAID_ACCOUNT_REWARD_LIMIT,
+            AccountMaterialPackets.Limits(character.Inventory.AccountWallet, character.Id, items.RaidAccountMaterialLimits, now, true),
+            "account_material_raid_account_limit", canSend);
+        await context.Notify(NotiPacketType.RAID_CHARAC_REWARD_LIMIT,
+            AccountMaterialPackets.Limits(character.Inventory.AccountWallet, character.Id, items.RaidAccountMaterialLimits, now, false),
+            "account_material_raid_character_limit", canSend);
+    }
     internal DfoServer.Game.Inventory.Models.KnightShieldDeck KnightShieldDeck(Character character) =>
         knightShields?.EffectiveDeck(character) ?? character.Inventory.ShieldDeck;
 
@@ -86,7 +101,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     }
 
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
-        Func<bool> canSend)
+        Func<bool> canSend, bool raid = false)
     {
         var character = snapshot.SkillCharacter;
         var now = timer.GetUtcNow();
@@ -97,7 +112,12 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             snapshot.Channel, now);
         // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
         await context.Notify(NotiPacketType.USERINFO, actor, "other_player_actor", canSend);
-        await context.Notify(NotiPacketType.USERINFO, player, "other_player_info", canSend);
+        // 757的Actor消费者只查已有对象，必须先沿原USERINFO安装目标频道缓存。
+        if (raid)
+            await context.Notify(NotiPacketType.RAID_OTHER_CHANNEL_USERINFO,
+                RaidCharacterPackets.Information(snapshot.Channel, character.Id, actor, player), "raid_character_info", canSend);
+        else
+            await context.Notify(NotiPacketType.USERINFO, player, "other_player_info", canSend);
         foreach (var set in EchonEquipmentPackets.Snapshot(character))
             await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "other_player_echon_set", canSend);
     }
@@ -174,6 +194,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.UPGRADE_CARRY_GOLD, CurrencyPackets.GoldLimit(c.Inventory), "gold_limit_initialize");
         await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(c.Inventory.AccountWallet), "account_cera_initialize");
         await DungeonCardMembershipProjection.RefreshAsync(context, frozenAt: appearanceTime);
+        await AccountMaterialsAsync(context, c);
         await context.Notify(NotiPacketType.MILEAGE_DATA, MileagePackets.State(c.Inventory.AccountWallet), "account_mileage_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
         if (epicProduction is not null)

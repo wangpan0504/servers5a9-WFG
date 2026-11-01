@@ -192,7 +192,8 @@ internal sealed partial class CharacterRepository
             return AuctionListingBuyResult.Reject(AuctionBuyError.RaceLost,
                 $"挂牌 {plan.ListingId} 在提交前过期（{listing.ExpiresAtUnix} ≤ {plan.SettledAtUnix}）");
         if (listing.BuyoutPrice != plan.UnitPrice || listing.ItemCount != plan.ItemCount ||
-            listing.ItemTemplateId != plan.ItemTemplateId || listing.SellerCharacterId != plan.SellerCharacterId)
+            listing.ItemTemplateId != plan.ItemTemplateId || listing.SellerCharacterId != plan.SellerCharacterId ||
+            listing.ItemKind != plan.ItemKind || !listing.ItemEntry.AsSpan().SequenceEqual(plan.SourceItemEntry.AsSpan()))
             return AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan,
                 $"挂牌 {plan.ListingId} 的内容在规划后变化：单价 {listing.BuyoutPrice}/{plan.UnitPrice}、" +
                 $"数量 {listing.ItemCount}/{plan.ItemCount}、模板 {listing.ItemTemplateId}/{plan.ItemTemplateId}、" +

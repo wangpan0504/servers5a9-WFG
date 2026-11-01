@@ -1120,6 +1120,7 @@ internal sealed partial class TcpPeer : IDisposable
         }
         foreach (var notice in expected.Skip(afterCargo))
         {
+            if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization();
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();

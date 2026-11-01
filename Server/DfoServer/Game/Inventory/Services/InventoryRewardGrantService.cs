@@ -74,8 +74,8 @@ internal static class InventoryRewardGrantService
 
     public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
         DateTimeOffset? utcNow = null, bool shopExpiration = false, PremiumContractCatalog? contracts = null, bool allowOverflowMail = false,
-        bool ignoreUsablePeriod = false)
-        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail, ignoreUsablePeriod);
+        bool ignoreUsablePeriod = false, bool raidReward = false)
+        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail, ignoreUsablePeriod, raidReward);
 
     public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool allowOverflowMail = false)
@@ -84,7 +84,7 @@ internal static class InventoryRewardGrantService
 
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
-        PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false)
+        PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false)
     {
         var inventory = character.Inventory;
         var wallet = inventory;
@@ -93,6 +93,7 @@ internal static class InventoryRewardGrantService
         var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
         var now = utcNow ?? DateTimeOffset.UtcNow;
         bool acquiredCargo = false;
+        int? accountMaterialWeek = null;
         long? acquisitionDeadline = null;
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
@@ -134,6 +135,21 @@ internal static class InventoryRewardGrantService
                 continue;
             }
             var template = catalog.Get(reward.ItemId);
+            if (template.AccountMaterial is { } material)
+            {
+                if (reward.Upgrade != 0 || reward.Refinement != 0 || reward.EnchantUpgrade != 0 ||
+                    reward.CustomAbilityGrade is not null || reward.Quality is not null ||
+                    !template.Expiration.SupportsCreation ||
+                    instances is not null && (instances[rewardIndex].Core.Kind != template.Kind ||
+                        instances[rewardIndex].Core.IsExpired(now.ToUnixTimeSeconds())))
+                    return InventoryResult.Reject(19);
+                if (raidReward && (material.WeeklyAccountLimit != 0 || material.WeeklyCharacterLimit != 0))
+                    accountMaterialWeek = AccountMaterialService.RaidWeek(now);
+                var materialGrant = AccountMaterialService.Grant(wallet, character.Id, reward.ItemId, reward.Count, material, now, raidReward);
+                if (!materialGrant.Accepted) return materialGrant;
+                wallet = materialGrant.Plan!.After;
+                continue;
+            }
             if (template.HasAcquisitionEffect)
             {
                 if (reward.Upgrade != 0 || reward.Refinement != 0) return InventoryResult.Reject(19);
@@ -201,7 +217,8 @@ internal static class InventoryRewardGrantService
         var after = wallet with { Items = placement.Items() };
         after.Validate(allocating: true);
         return new(true, 0, new(inventory, after, "reward_grant",
-            acquiredCargo ? new(character, acquisitionDeadline) : null, overflowItems: overflow));
+            acquiredCargo ? new(character, acquisitionDeadline) : null, overflowItems: overflow)
+            { AccountMaterialRaidWeek = accountMaterialWeek });
     }
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
@@ -218,7 +235,7 @@ internal static class InventoryRewardGrantService
         core = InventoryKindCompatibility.Normalize(core, template);
         if (
             core.Kind is not (ItemKind.Equipment or ItemKind.Talisman or ItemKind.GuildMedal) && !core.IsStackable ||
-            CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
+            CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId) || template.AccountMaterial is not null)
             return InventoryResult.Reject();
         try
         {

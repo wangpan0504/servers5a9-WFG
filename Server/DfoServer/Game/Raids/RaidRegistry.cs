@@ -155,6 +155,7 @@ internal sealed partial class RaidRegistry
             var started = expected with { Started = result.Start, Revision = ++revision };
             parties[expected.Key] = started;
             foreach (var key in invitations.Where(i => i.Value.Raid == expected.Key).Select(i => i.Key).ToArray()) invitations.Remove(key);
+            RemoveCrossRaidLocked(expected.Key);
             return new(0, "started", new(started, reservations, result.Characters, result.Notices, cost));
         }
     }
@@ -275,6 +276,7 @@ internal sealed partial class RaidRegistry
                 parties[old.Key] = updated;
                 foreach (var key in invitations.Where(p => p.Value.Raid == old.Key).Select(p => p.Key).ToArray())
                     invitations.Remove(key);
+                RemoveCrossRaidLocked(old.Key);
                 return new(old, updated);
             }
         });
@@ -305,6 +307,7 @@ internal sealed partial class RaidRegistry
         else parties[old.Key] = updated;
         foreach (var key in invitations.Where(p => p.Value.Raid == old.Key ||
             Same(p.Value.Source, actor) || Same(p.Value.Target, actor)).Select(p => p.Key).ToArray()) invitations.Remove(key);
+        RemoveCrossRaidLocked(old.Key);
         return new(old, updated is { Members.IsEmpty: true } ? null : updated, actor, kicked);
     }
 
@@ -327,6 +330,11 @@ internal sealed partial class RaidRegistry
             foreach (var key in invitations.Where(p =>
                 ReferenceEquals(p.Value.Source.Session, session) && p.Value.Source.Epoch == epoch ||
                 ReferenceEquals(p.Value.Target.Session, session) && p.Value.Target.Epoch == epoch).Select(p => p.Key).ToArray()) invitations.Remove(key);
+            foreach (var row in crossInvitations.Where(p =>
+                ReferenceEquals(p.Value.Source.Session, session) && p.Value.Source.Epoch == epoch ||
+                ReferenceEquals(p.Value.Target.Session, session) && p.Value.Target.Epoch == epoch).ToArray()) crossInvitations.Remove(row.Key);
+            // 散人换频道只清旧会话通知，已获队长授权的短期凭证仍由新owner复验。
+            PruneCrossLocked();
         }
         return new(removedWaiting.ToImmutableArray(), changes.ToImmutableArray());
     }
@@ -365,6 +373,8 @@ internal sealed partial class RaidRegistry
 
     public RaidJoinResult Respond(RaidActor recipient, ushort sourceCharacter, bool accept, uint peer = 0)
     {
+        if (peer == 0 && (accept ? ConsumeCross(recipient, sourceCharacter) : DeclineCross(recipient, sourceCharacter)) is { } cross)
+            return cross;
         RaidInvitation? captured;
         lock (gate) invitations.TryGetValue((sourceCharacter, recipient.Character), out captured);
         if (captured is null || !Same(captured.Target, recipient)) return new(false);

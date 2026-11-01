@@ -27,7 +27,7 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, receipt.Character);
 
     public static (InventoryResult First, InventoryResult Second)? CommitPlayerTrade(GameSession first, GameSession second,
-        Character firstExpected, Character secondExpected, TradeTicket ticket, TradeSettlementPlan plan)
+        Character firstExpected, Character secondExpected, TradeTicket ticket, TradeSettlementPlan plan, DfoServer.GameWorld.Items.ItemCatalog items)
     {
         return AccountOwners.Lease.ExecuteTogether<(InventoryResult, InventoryResult)?>(first.ExpertJobOwner, second.ExpertJobOwner, () =>
         {
@@ -38,7 +38,7 @@ internal sealed partial class GameSession
                 !EligibleItems(ticket.FirstOffer) || !EligibleItems(ticket.SecondOffer) ||
                 !ticket.TryBeginCommit()) return null;
             var (savedFirst, savedSecond) = first.ExpertJobRepository.CommitPlayerTrade(first.ExpertJobOwner, second.ExpertJobOwner,
-                firstExpected, secondExpected, ticket, plan);
+                firstExpected, secondExpected, ticket, plan, items);
             first.Selected = savedFirst;
             second.Selected = savedSecond;
             return (Result(first, savedFirst, firstExpected, plan.First), Result(second, savedSecond, secondExpected, plan.Second));

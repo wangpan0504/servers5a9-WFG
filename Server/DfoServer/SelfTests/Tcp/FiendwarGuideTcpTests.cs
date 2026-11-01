@@ -31,7 +31,8 @@ internal static class FiendwarGuideTcpTests
                 CompletedQuests = [8672], InitialLearning = learning });
             var items = resources.ItemResources;
             var funded = InventoryService.Commit(repository, owner, role,
-                InventoryRewardGrantService.TryGrantBatch(role, [new(10306760, 2), new(10309054, 3), new(10312385, 2)],
+                InventoryRewardGrantService.TryGrantBatch(role,
+                    [new(10306760, 2), new(10309054, 3), new(10312385, 2), new(1114, 3), new(7180, 2)],
                     items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()));
             repository.CommitInventory(owner, funded, new(funded.Inventory, funded.Inventory with { ReviveCoins = 20 }, "fixture_guide_coins"));
         }
@@ -42,7 +43,10 @@ internal static class FiendwarGuideTcpTests
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
         Select();
-        FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, false, 10);
+        FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
+        FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
+        That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "引导普通药使用真实目录声明");
+        clock.Advance(checked((ordinary.CoolTime + 999) / 1000));
         That(clears.Count == 4 && clears[2] == (0u, 0u), "初次登录四类团本次数初始化为真实零记录");
         for (int route = 0; route < 2; route++)
         {
@@ -182,8 +186,11 @@ internal static class FiendwarGuideTcpTests
                 peer.Send(37, new byte[8]); Read();
                 if (dungeon == 5350 && route == 0 && step == 0)
                 {
-                    FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, true, 11);
-                    FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, false, 12);
+                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 21, 1114);
+                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 22, 1114);
+                    FiendwarRaidTcpTests.VerifyBlockedLegacyConsumable(fixture, peer);
+                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 11);
+                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 12);
                 }
                 if (dungeon == 5350 && route == 0 && step == 0)
                     for (int revival = 0; revival < 6; revival++)

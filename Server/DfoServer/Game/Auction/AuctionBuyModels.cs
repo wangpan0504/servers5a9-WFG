@@ -261,7 +261,10 @@ internal sealed record AuctionBuyPlan(
     ImmutableArray<AuctionCustodyMail> Custody,
     InventoryPlan Inventory,
     long SettledAtUnix,
-    long ExpiresAtUnix);
+    long ExpiresAtUnix)
+{
+    public ImmutableArray<byte> SourceItemEntry { get; init; } = [];
+}
 
 /// <summary>规划结果：失败也返回同一种类型（`Error` 非 None、`Options` 为 null），并带上进日志的原因。</summary>
 internal sealed record AuctionBuyDecision(AuctionBuyError Error, AuctionBuyPlan? Options, string? Detail = null)

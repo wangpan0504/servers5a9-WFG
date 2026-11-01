@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Mailbox;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Trade;
 
@@ -13,16 +15,16 @@ internal sealed record TradeSettlementPlan(InventoryPlan First, InventoryPlan Se
 
 internal static class TradeSettlement
 {
-    public static TradeSettlementPlan? Plan(Character first, Character second, TradeTicket ticket)
+    public static TradeSettlementPlan? Plan(Character first, Character second, TradeTicket ticket, ItemCatalog? items = null)
     {
         if (first.Id != ticket.First.CharacterId || second.Id != ticket.Second.CharacterId ||
-            !PlanSide(first.Inventory, ticket.FirstOffer, ticket.SecondOffer, out var firstPlan, out var firstReceived) ||
-            !PlanSide(second.Inventory, ticket.SecondOffer, ticket.FirstOffer, out var secondPlan, out var secondReceived))
+            !PlanSide(first.Inventory, ticket.FirstOffer, ticket.SecondOffer, items, out var firstPlan, out var firstReceived) ||
+            !PlanSide(second.Inventory, ticket.SecondOffer, ticket.FirstOffer, items, out var secondPlan, out var secondReceived))
             return null;
         return new(firstPlan!, secondPlan!, firstReceived, secondReceived);
     }
 
-    static bool PlanSide(InventorySnapshot before, TradeOffer outgoing, TradeOffer incoming,
+    static bool PlanSide(InventorySnapshot before, TradeOffer outgoing, TradeOffer incoming, ItemCatalog? catalog,
         out InventoryPlan? plan, out ImmutableArray<(ushort TradeSlot, InventorySlot Destination)> received)
     {
         plan = null;
@@ -50,6 +52,15 @@ internal static class TradeSettlement
         foreach (var line in incoming.Items)
         {
             if (line.Item.Uid <= 0 || line.Count <= 0 || line.Count > line.Item.Core.Count) return false;
+            var core = line.Item.Core.IsStackable ? line.Item.Core with { Value = line.Count } : line.Item.Core;
+            if (catalog is not null)
+            {
+                if (!catalog.TryGet(core.ItemId, out var template) ||
+                    template.AttachType.Replace("`", "").Trim().Trim('[', ']').Equals("trade limit", StringComparison.OrdinalIgnoreCase) ||
+                    MailboxService.TransferError(line.Item, template, sameAccount: false, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) != MailboxError.None)
+                    return false;
+                core = StackableTradePolicy.AfterTransfer(core, template);
+            }
             var list = ItemSlotBoundService.List(line.Item.Core.Kind);
             var (start, end) = ItemSlotBoundService.Range(line.Item.Core.Kind, before);
             InventorySlot? destination = null;
@@ -68,7 +79,7 @@ internal static class TradeSettlement
             {
                 Uid = split ? 0 : line.Item.Uid,
                 Position = position,
-                Core = split ? line.Item.Core with { Value = line.Count } : line.Item.Core
+                Core = core
             });
             used.Add(position);
             destinations.Add((line.Slot, position));

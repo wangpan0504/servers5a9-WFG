@@ -31,6 +31,9 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_LIST, SearchAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_USERINFO, OtherUserAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_REQUEST_JOIN, CrossRequestAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_RESPONSE_JOIN, CrossResponseAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_USER_MOVE_CHANNEL_FAIL, CrossCancelAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_CHECK_RAID_USER, CheckUserAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_MEMBER_CHANGE_STATE, MemberStateAsync, nameof(RaidHandler), UserStateRequirement.WorldReady);
         // CMD668 REJOIN_RAID 与同号 NOTI668 REAL_ESTATE_STATE 是两套枚举，这里只注册命令。
@@ -54,8 +57,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         // 当前查询只返回一次快照，没有后台订阅；原生mode1关闭也不回造成功包。
         if (parsed.Closed) return CommandResult.Handled;
         if (!MatchesType(actor, parsed.RaidType)) return CommandResult.Unhandled;
-        // 当前频道的正式招募目录；不以未知跨频道加入合同发布其它频道的可加入记录。
-        var snapshot = registry.List(actor.Channel, parsed.RaidType);
+        var snapshot = registry.CrossList(parsed.RaidType);
         var matches = snapshot.Where(p => p.Title.Contains(parsed.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
         uint offset = Math.Min(parsed.Offset, (uint)matches.Length);
         // 02171960..0217196D按页号乘33发送偏移，保持同一页宽，不创建额外会话或后台查询。
