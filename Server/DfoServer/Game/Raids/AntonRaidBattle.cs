@@ -9,6 +9,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     ImmutableDictionary<string, int> Symbols, ImmutableDictionary<int, RaidDungeonState> Dungeons,
     ImmutableDictionary<RaidTimer, int> Timers)
 {
+    // 仅保存六个已证影片事件的最后规则写入代，随候选提交，不由网络快照制造事件。
+    public ImmutableDictionary<int, long> AntonMovieEvents { get; init; } = ImmutableDictionary<int, long>.Empty;
     public FiendwarFieldState? Fiendwar { get; init; }
     public ImmutableDictionary<int, FiendwarTimer> FiendwarDungeonTimers { get; init; } = ImmutableDictionary<int, FiendwarTimer>.Empty;
     public ImmutableDictionary<ushort, int> FiendwarPositions { get; init; } = ImmutableDictionary<ushort, int>.Empty;
@@ -414,15 +416,23 @@ internal sealed partial class AntonRaidBattle
         return script.Phases[current.Phase].Dungeons.Any(row => row.Id == dungeon);
     }
 
-    // 机制值只能来自服务端已验证的机制；网络 RAID_SET_SYMBOL 不调用这个入口。
+    bool IsAntonMovieSymbol(string symbol) => Kind == RaidKind.Anton &&
+        script.Symbols.TryGetValue(symbol, out int id) && id is >= 121 and <= 125 or 128;
+
+    AntonRaidBattleView StampAntonMovie(AntonRaidBattleView state, string symbol) =>
+        IsAntonMovieSymbol(symbol)
+            ? state with { AntonMovieEvents = state.AntonMovieEvents.SetItem(script.Symbols[symbol], checked(state.Revision + 1)) }
+            : state;
+
+    // 机制值只能来自服务端已验证的机制；影片相同值仍是新事件，网络 RAID_SET_SYMBOL 不调用本入口。
     public AntonRaidBattleChange? SetMechanism(Guid instance, long revision, string symbol, int value)
     {
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
-                !current.Symbols.TryGetValue(symbol, out int previous) || previous == value) return null;
+                !current.Symbols.TryGetValue(symbol, out int previous) || previous == value && !IsAntonMovieSymbol(symbol)) return null;
             var before = current;
-            CommitBattleCandidate(before, Evaluate(StampLukeFacilityWrite(before with { Symbols = before.Symbols.SetItem(symbol, value) }, symbol), null, symbol, null));
+            CommitBattleCandidate(before, Evaluate(StampAntonMovie(StampLukeFacilityWrite(before with { Symbols = before.Symbols.SetItem(symbol, value) }, symbol), symbol), null, symbol, null));
             return new(before, current);
         }
     }
@@ -546,6 +556,7 @@ internal sealed partial class AntonRaidBattle
                                 _ => throw new InvalidDataException("未支持的攻坚符号运算 " + action.Operator)
                             };
                             state = StampLukeFacilityWrite(state, key);
+                            state = StampAntonMovie(state, key);
                             if (state.Symbols[key] != value)
                             { state = state with { Symbols = state.Symbols.SetItem(key, value) }; events.Enqueue((null, key, null, null)); }
                             break;

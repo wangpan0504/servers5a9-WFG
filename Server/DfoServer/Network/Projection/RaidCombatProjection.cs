@@ -120,14 +120,27 @@ internal static partial class RaidCombatProjection
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
             1 + battle.SymbolSnapshot(view).Length * 8, () =>
             {
-                // 01BEB2F4按本次2=1直接播30205，不比较旧值；其余符号保留既有同步合同。
-                publishedSymbols = battle.SymbolSnapshot(view).Where(row => row.Id != 2 ||
-                    context.AntonMeteoDisplay != (view.Instance, row.Value)).ToArray();
+                // 121–125、128是已证影片事件；01BEAE60各分支连值为0也会加载影片，不能当普通状态全量重发。
+                var symbols = battle.SymbolSnapshot(view);
+                publishedSymbols = symbols.Where(row => row.Id is >= 121 and <= 125 or 128
+                    ? row.Value != 0 && view.AntonMovieEvents.TryGetValue(row.Id, out long movieEvent) &&
+                        (context.AntonMovieDisplayInstance != view.Instance ||
+                        context.AntonMovieDisplays.GetValueOrDefault(row.Id) != movieEvent)
+                    : row.Id != 2 || context.AntonMeteoDisplay != (view.Instance, row.Value)).ToArray();
                 return RaidCombatPackets.Symbols(publishedSymbols);
             }, "raid_infection_state", Guard, allowShorter: true, written: () =>
             {
                 foreach (var row in publishedSymbols)
                     if (row.Id == 2) context.AntonMeteoDisplay = (view.Instance, row.Value);
+                // 只在当前快照成功写帧后确认。以规则事件代去重，保留未归零的再次SET 1。
+                if (context.AntonMovieDisplayInstance != view.Instance)
+                {
+                    context.AntonMovieDisplays.Clear();
+                    context.AntonMovieDisplayInstance = view.Instance;
+                }
+                foreach (var row in publishedSymbols)
+                    if (view.AntonMovieEvents.TryGetValue(row.Id, out long movieEvent))
+                        context.AntonMovieDisplays[row.Id] = movieEvent;
             });
         PostAntonTimers(context, battle, view, Guard);
     }
