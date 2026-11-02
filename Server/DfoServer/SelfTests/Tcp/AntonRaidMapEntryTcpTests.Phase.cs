@@ -106,6 +106,7 @@ internal static partial class AntonRaidMapEntryTcpTests
                 That(StateOf(210) == 0 && StateOf(212) == 2 &&
                     sessions[0].RaidCombatView()!.Symbols["[210 dgn hp]"] == remaining,
                     "双人Run仅扣一次HP，前三轮不开放后续图");
+                That(!MovieValues(partial).Any(), "前三次黑雾不发送零值影片事件");
                 var symbols = partial.Last(packet => packet is { Kind: 0, Opcode: 583 }).Body;
                 That(Enumerable.Range(0, symbols[0]).Any(index =>
                     BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * index)) == 50 &&
@@ -116,6 +117,7 @@ internal static partial class AntonRaidMapEntryTcpTests
                 LeaveBoth();
             }
             var afterBlack = ClearDungeon(210);
+            That(MovieValues(afterBlack).SequenceEqual([(122, 1)]), "黑雾第四次仅触发一次破雾影片122");
             AssertStates(afterBlack, new()
             {
                 [210] = 2, [211] = 1, [212] = 0, [213] = 0, [214] = 0, [215] = 0, [216] = 2
@@ -128,6 +130,23 @@ internal static partial class AntonRaidMapEntryTcpTests
                 "211 仍是 close，16 拒绝且没有 Run");
 
             var meteoBattle = sessions[0].CurrentRaidBattle(actors[0])!;
+            meteoBattle.Publish(meteoBattle.View);
+            That(!MovieValues(ReadPhase(peers[0])).Any(), "相同revision不重播影片");
+            ReadPhase(peers[1]);
+            meteoBattle.SetMechanism(meteoBattle.Instance, meteoBattle.View.Revision, "[movie smoke out]", 0);
+            meteoBattle.Publish(meteoBattle.View);
+            That(!MovieValues(ReadPhase(peers[0])).Any(), "归零只复位，不发送会触发影片的零值");
+            ReadPhase(peers[1]);
+            meteoBattle.SetMechanism(meteoBattle.Instance, meteoBattle.View.Revision, "[movie smoke out]", 1);
+            meteoBattle.Publish(meteoBattle.View);
+            That(MovieValues(ReadPhase(peers[0])).SequenceEqual([(122, 1)]), "归零后的下一次置位仍可播放");
+            ReadPhase(peers[1]);
+            long previousMovie = meteoBattle.View.AntonMovieEvents[122];
+            That(meteoBattle.SetMechanism(meteoBattle.Instance, meteoBattle.View.Revision, "[movie smoke out]", 1) is not null &&
+                meteoBattle.View.AntonMovieEvents[122] > previousMovie, "新的同值影片事件提交新代");
+            meteoBattle.Publish(meteoBattle.View);
+            That(MovieValues(ReadPhase(peers[0])).SequenceEqual([(122, 1)]), "未归零的下一次真实SET 1仍播放，不把规则事件当快照");
+            ReadPhase(peers[1]);
             meteoBattle.SetMechanism(meteoBattle.Instance, meteoBattle.View.Revision, "[meteo passive create]", 1);
             meteoBattle.Publish(meteoBattle.View);
             That(MeteoValues(ReadPhase(peers[0])).SequenceEqual([1]), "陨石首次置位只发布一次2=1");
@@ -136,6 +155,7 @@ internal static partial class AntonRaidMapEntryTcpTests
             That(!MeteoValues(ReadPhase(peers[0])).Any(), "同revision快照重放不重播火山字幕");
             ReadPhase(peers[1]);
             var afterBlue = ClearDungeon(212);
+            That(!MovieValues(afterBlue).Any(), "其它地下城清图不重播破雾影片");
             That(!MeteoValues(afterBlue).Any(), "其它地下城清图快照不重播仍为1的陨石字幕");
             That(StateOf(212) == 1 && StateOf(213) == 0, "212 clear 的实际线上状态为 close");
             LeaveBoth();
@@ -168,6 +188,13 @@ internal static partial class AntonRaidMapEntryTcpTests
             foreach (var session in sessions) session.End();
             foreach (var owner in leases) owner.Dispose();
         }
+
+        static IEnumerable<(int Id, int Value)> MovieValues(IEnumerable<WirePacket> packets) => packets
+            .Where(packet => packet is { Kind: 0, Opcode: 583 })
+            .SelectMany(packet => Enumerable.Range(0, packet.Body[0]).Select(index => (
+                Id: BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(1 + 8 * index)),
+                Value: BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(5 + 8 * index)))))
+            .Where(row => row.Id is >= 121 and <= 125 or 128);
 
         static IEnumerable<int> MeteoValues(IEnumerable<WirePacket> packets) => packets
             .Where(packet => packet is { Kind: 0, Opcode: 583 })
