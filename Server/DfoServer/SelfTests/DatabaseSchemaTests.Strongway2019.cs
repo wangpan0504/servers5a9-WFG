@@ -1,5 +1,6 @@
 using DfoServer.Persistence;
 using DfoServer.Testing;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -35,16 +36,29 @@ internal static partial class DatabaseSchemaTests
                     if (scenario == "wrong-statistics")
                         Execute(db, "ALTER TABLE character_strongway2019_statistics ADD COLUMN unknown INTEGER");
                 }
-                string current = Snapshot(path);
+                string current = StrongwayReplaySnapshot(path);
+                Dictionary<string, (long Page, string? Sql)> existingPages;
                 using (var db = Open(path))
                 {
                     RewindReleasedBattlePassTables(db, previousVersion);
+                    existingPages = StrongwayReplayPages(db);
                     Execute(db, $"PRAGMA user_version={previousVersion}");
                 }
                 if (scenario == "replay")
                 {
                     _ = new CharacterRepository(path);
-                    Check(Snapshot(path) == current, $"{previousVersion}重放至181/182保留两表、周索引、上游结构、完整奖励与历史事实及角色资产");
+                    // 未来空战令表须真实重建，SQL换行、插入顺序和新页号可变；逻辑结构、历史行及原有对象不变。
+                    Check(StrongwayReplaySnapshot(path) == current,
+                        $"{previousVersion}重放至181/182保留全部表、列、索引、约束、rowid、完整奖励与历史事实及角色资产");
+                    using (var db = Open(path))
+                    {
+                        var replayedPages = StrongwayReplayPages(db);
+                        Check(existingPages.All(row => replayedPages.TryGetValue(row.Key, out var actual) && actual == row.Value),
+                            "重放保留任何原有对象的页号和原始DDL，只新增回退时已移除的未来空战令结构");
+                    }
+                    string saved = Snapshot(path);
+                    _ = new CharacterRepository(path);
+                    Check(Snapshot(path) == saved, "重放成功后重开保留完整结构、所有物理页号、历史行与版本");
                     continue;
                 }
                 string invalid = Snapshot(path);
@@ -54,5 +68,36 @@ internal static partial class DatabaseSchemaTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - before} 首期181/182兼容重放及严格结构拒绝");
+    }
+
+    static string StrongwayReplaySnapshot(string path)
+    {
+        using var db = Open(path);
+        // 仅这九张未来空表的DDL已核实不含跨行字面量、引用标识符或注释；不规范化其它SQL或任何数据行。
+        return string.Join('|', Query(db, "PRAGMA user_version"),
+            Query(db, """
+                SELECT group_concat(type||':'||name||':'||tbl_name||':'||coalesce(
+                    CASE WHEN tbl_name IN ('account_battle_pass_seasons','account_battle_pass_claims',
+                        'battle_pass_season_rules','account_battle_pass_mission_progress','account_battle_pass_mission_claims',
+                        'account_battle_pass_source_events','account_battle_pass_certificate_orders',
+                        'account_battle_pass_cera_consumption','account_battle_pass_cera_orders')
+                    THEN replace(sql,char(13)||char(10),char(10)) ELSE sql END,''),'|')
+                FROM (SELECT * FROM sqlite_schema ORDER BY name)
+                """),
+            string.Join('|', TableNames(db).Select(table =>
+            {
+                string[] columns = ColumnNames(db, table);
+                return table + ':' + System.Text.Json.JsonSerializer.Serialize(columns) + ':' + Rows(db, table, columns);
+            })));
+    }
+
+    static Dictionary<string, (long Page, string? Sql)> StrongwayReplayPages(SqliteConnection db)
+    {
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT name,rootpage,sql FROM sqlite_schema";
+        using var reader = command.ExecuteReader();
+        var pages = new Dictionary<string, (long Page, string? Sql)>(StringComparer.Ordinal);
+        while (reader.Read()) pages.Add(reader.GetString(0), (reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+        return pages;
     }
 }
