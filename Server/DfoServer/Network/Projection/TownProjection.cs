@@ -54,7 +54,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         long? minimumPromotionRevision = null)
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
-        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
+        var now = timer.GetUtcNow();
+        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now);
         openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
@@ -62,7 +63,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
         long eventEpoch = context.Session.SelectionEpoch;
-        bool battlePass = IsBattlePassEventActive(timer.GetUtcNow());
+        bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
         IReadOnlyList<EventInfoDesignPage> designPages = [];
         Func<bool>? publish = canSend;
@@ -80,7 +81,11 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             designPages = PromotionNativeDesignPage.Create(snapshot) is { } page ? [page] : [];
             publish = Current;
         }
-        byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent], designPages: designPages);
+        byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents,
+            activeEvents: battlePass ? [JonathanVisibleEvent, BattlePassEventId] : [JonathanVisibleEvent],
+            designPages: designPages,
+            firstValues: battlePass ? new Dictionary<ushort, uint>
+                { [BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds()) } : null);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
             await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);

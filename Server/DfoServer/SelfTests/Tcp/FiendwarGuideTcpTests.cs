@@ -52,7 +52,11 @@ internal static class FiendwarGuideTcpTests
         var guide = modes.FiendwarGuide!;
         using var peer = Open(fixture, "fwguide", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
         if (battlePass)
+        {
             peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
+            peer.ExpectedBattlePassEnd = checked((uint)new BattlePassMissionPolicy("fiendwar-notice-fixture", startAt,
+                BattlePassCatalog.Load(resources.Archive)).End.ToUnixTimeSeconds());
+        }
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
         var missionPackets = new List<byte[]>();

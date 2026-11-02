@@ -149,8 +149,8 @@ internal static partial class CashShopTcpTests
         }
     }
 
-    internal static void AssertPromotionNativeRefresh(WirePacket packet, long count, bool disabled, IReadOnlyList<ushort> extraEvents)
-        => AssertPromotionNativeEvents(ReadPromotionNativeRefresh(packet), count, disabled, extraEvents);
+    internal static void AssertPromotionNativeRefresh(WirePacket packet, long count, bool disabled, IReadOnlyList<ushort> extraEvents, uint? battlePassEnd = null)
+        => AssertPromotionNativeEvents(ReadPromotionNativeRefresh(packet), count, disabled, extraEvents, battlePassEnd: battlePassEnd);
 
     // 只有缺少前史订单的合成累计夹具使用此入口，完整校验只读页与已知原累计。
     static void AssertPromotionNativeUnavailableRefresh(WirePacket packet, long count, IReadOnlyList<ushort> extraEvents)
@@ -178,7 +178,7 @@ internal static partial class CashShopTcpTests
         => AssertPromotionNativeEvents(payload, (long?)count, (bool?)disabled, extraEvents);
 
     internal static void AssertPromotionNativeEvents(byte[] payload, long? count, bool? disabled, IReadOnlyList<ushort> extraEvents,
-        long? unavailableCount = null)
+        long? unavailableCount = null, uint? battlePassEnd = null)
     {
         using var input = new MemoryStream(payload);
         using var reader = new BinaryReader(input, Encoding.UTF8);
@@ -260,12 +260,22 @@ internal static partial class CashShopTcpTests
                 "已知原生页保完整累计/下一档，专项仍精确核对期望累计和Disabled状态");
         }
         That(cursor == tokens.Length, "原生正文全部消费，不吞未知控件或尾部token");
-        That(reader.ReadByte() == 1 && reader.ReadByte() == 2, "原生活动可见位与原状态尾段项数完整");
+        That(reader.ReadByte() == 1, "原生活动可见位完整");
+        byte stateCount = reader.ReadByte();
+        That(stateCount == (battlePassEnd.HasValue ? 3 : 2),
+            battlePassEnd.HasValue && stateCount == 2 ? "EVENT2520_VALUE_ROW_MISSING" : "原状态尾段项数完整");
         foreach (ushort id in new ushort[] { 2037, 2395 })
         {
             That(reader.ReadUInt16() == id, "原active tail活动身份未丢失");
             for (int index = 0; index < 12; index++)
                 That(reader.ReadUInt32() == (id == 2037 && index == 0 ? 8u : 0u), "原active tail完整12个数值逐字段保留");
+        }
+        if (battlePassEnd is uint end)
+        {
+            That(reader.ReadUInt16() == 2520, "战令数值段事件身份正确");
+            That(reader.ReadUInt32() == end, "战令数值段首值等于赛季结束Unix秒");
+            for (int index = 1; index < 12; index++)
+                That(reader.ReadUInt32() == 0u, "战令数值段其余11项保持零");
         }
         That(input.Position == input.Length, "原生108逐字段消费至EOF，保持原其他事件和状态块");
     }

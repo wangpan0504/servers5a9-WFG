@@ -103,6 +103,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] LukeChannelCardsInfo { get; private set; } = [];
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+    public uint? ExpectedBattlePassEnd { get; set; }
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
     internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }
@@ -1379,10 +1380,13 @@ internal sealed partial class TcpPeer : IDisposable
                 EventInfoPayload = bounded[..length];
                 if (ValidateNativePromotionEvents is { } validate)
                     validate(EventInfoPayload);
-                else if (length != 148 + 15 * ExpectedOpenEvents.Length)
-                    CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents);
+                else if (U16(EventInfoPayload, 0) != 3 + ExpectedOpenEvents.Length)
+                    CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents, battlePassEnd: ExpectedBattlePassEnd);
                 else
                 {
+                    TestCheck.That(length == 148 + 15 * ExpectedOpenEvents.Length + (ExpectedBattlePassEnd.HasValue ? 50 : 0),
+                        ExpectedBattlePassEnd.HasValue && length == 148 + 15 * ExpectedOpenEvents.Length
+                            ? "EVENT2520_VALUE_ROW_MISSING" : "无促销页事件正文长度完整");
                     TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
                         writer.Write((ushort)(3 + ExpectedOpenEvents.Length));
@@ -1394,12 +1398,18 @@ internal sealed partial class TcpPeer : IDisposable
                             writer.Write(0u);
                             writer.Write((byte)0);
                         }
-                        writer.Write((byte)2);
+                        writer.Write((byte)(ExpectedBattlePassEnd.HasValue ? 3 : 2));
                         writer.Write((ushort)2037);
                         writer.Write(8u);
                         for (int index = 1; index < 12; index++) writer.Write(0u);
                         writer.Write((ushort)2395);
                         for (int index = 0; index < 12; index++) writer.Write(0u);
+                        if (ExpectedBattlePassEnd is uint end)
+                        {
+                            writer.Write((ushort)2520);
+                            writer.Write(end);
+                            for (int index = 1; index < 12; index++) writer.Write(0u);
+                        }
                     }), "独立核对赛丽亚2037、红包2378、乔纳森2395、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
                 }
             }

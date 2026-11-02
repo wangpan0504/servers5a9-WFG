@@ -22,6 +22,7 @@ internal static class ChannelEntryTcpTests
         await VerifyConnectionAddressesAsync(source, root, resources);
         await VerifyBattlePassEventBoundariesAsync(source, root, resources);
         await VerifyBattlePassEventLifecycleAsync(source, root, resources);
+        await VerifyBattlePassWithoutPromotionAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "channel-entry"), resources: resources);
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         string allDay = string.Join(",", Enumerable.Range(1, 7).Select(day => $"{{\"weekday\":{day},\"start\":\"00:00\",\"end\":\"24:00\"}}"));
@@ -236,6 +237,7 @@ internal static class ChannelEntryTcpTests
             using var peer = Open(fixture);
             peer.Create("Event2520");
             peer.ExpectedOpenEvents = item.Active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266];
+            peer.ExpectedBattlePassEnd = item.Active ? checked((uint)policy.End.ToUnixTimeSeconds()) : null;
             SelectAndCheck();
             peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             SelectAndCheck();
@@ -254,7 +256,7 @@ internal static class ChannelEntryTcpTests
             void SelectAndCheck()
             {
                 peer.Select();
-                CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
+                CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents, battlePassEnd: peer.ExpectedBattlePassEnd);
                 if (item.Configured)
                 {
                     peer.Expect(0, 1800);
@@ -265,8 +267,38 @@ internal static class ChannelEntryTcpTests
             }
         }
 
-        static void CheckReplacement(WirePacket packet, ushort[] extraEvents) =>
-            CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false, extraEvents);
+        void CheckReplacement(WirePacket packet, ushort[] extraEvents) =>
+            CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false, extraEvents,
+                extraEvents.Contains((ushort)2520) ? checked((uint)policy.End.ToUnixTimeSeconds()) : null);
+    }
+
+    static async Task VerifyBattlePassWithoutPromotionAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var start = new DateTimeOffset(2026, 10, 29, 6, 0, 0, TimeSpan.FromHours(8));
+        var policy = new BattlePassMissionPolicy("event2520-no-promotion", start, BattlePassCatalog.Load(resources.Archive));
+        var options = source with { BattlePassSeasonKey = policy.SeasonKey, BattlePassSeasonStart = start };
+        var clock = new Inventory.DailyBoosterTestClock(start);
+        var items = resources.ItemResources;
+        var promotions = DfoServer.GameWorld.Items.CashShopPromotionCatalog.Parse("[]", items.CashShop, items.Items.Get);
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "event2520-no-promotion"),
+            resources: resources, clock: clock, promotions: () => promotions, sharedResourcePath: true);
+        await fixture.StartAsync();
+        using var peer = Open(fixture);
+        peer.Create("NoPromo2520");
+        peer.ExpectedOpenEvents = [2532, 266, 2520];
+        peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            peer.Select();
+            That(U16(peer.EventInfoPayload, 0) == 3 + peer.ExpectedOpenEvents.Length,
+                "无10999时完整活动目录仍包含2520");
+            peer.Expect(0, 1800);
+            peer.Expect(0, 1801);
+            peer.Expect(0, 1802);
+            peer.Barrier();
+            if (attempt == 0) { peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2); }
+        }
+        await fixture.StopAsync();
     }
 
     static async Task VerifyBattlePassEventLifecycleAsync(ServerOptions source, string root, TcpTestResources resources)
@@ -328,7 +360,8 @@ internal static class ChannelEntryTcpTests
                 {
                     That(++refreshes <= expectedRefreshes, "赛季边界只发布一次完整108");
                     CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false,
-                        active ? [2532, 266, 2520] : [2532, 266]);
+                        active ? [2532, 266, 2520] : [2532, 266],
+                        active ? checked((uint)end.ToUnixTimeSeconds()) : null);
                 }
                 else if (packet is { Kind: 0, Opcode: 706 })
                 {

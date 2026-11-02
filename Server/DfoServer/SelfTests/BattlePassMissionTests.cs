@@ -43,6 +43,19 @@ internal static partial class BattlePassMissionTests
             "资源周组先耗尽时显式缩短结束，不扩写不存在的任务组");
         Reject<InvalidDataException>(() => new BattlePassMissionPolicy("bad", Start.AddDays(1), Catalog()),
             "未对齐周四06:00的显式本服开季拒绝");
+        var latestEnd = DateTimeOffset.FromUnixTimeSeconds(uint.MaxValue).ToOffset(TimeSpan.FromHours(8));
+        var latestStartLimit = latestEnd.AddDays(-policy.Days);
+        var localSix = new DateTimeOffset(latestStartLimit.Year, latestStartLimit.Month, latestStartLimit.Day,
+            6, 0, 0, latestStartLimit.Offset);
+        if (localSix > latestStartLimit) localSix = localSix.AddDays(-1);
+        int daysSinceThursday = ((int)localSix.DayOfWeek - (int)DayOfWeek.Thursday + 7) % 7;
+        var latestStart = localSix.AddDays(-daysSinceThursday);
+        var lastEncodable = new BattlePassMissionPolicy("last-encodable", latestStart, Catalog());
+        That(lastEncodable.End.ToUnixTimeSeconds() <= uint.MaxValue &&
+            lastEncodable.End.AddDays(7).ToUnixTimeSeconds() > uint.MaxValue,
+            "最后可配置的完整赛季结束时间可编码且下一周起点越界");
+        Reject<InvalidDataException>(() => new BattlePassMissionPolicy("unencodable", latestStart.AddDays(7), Catalog()),
+            "赛季结束超出原生活动时间范围时在策略初始化拒绝");
         var season = new BattlePassSeasonState(policy.SeasonKey, 0, 0, ImmutableHashSet<BattlePassRewardKey>.Empty);
         var slots = first.Select(row => new BattlePassMissionSlot(row, row.Key.Id == 51 ? 2_000_000_000L : 0, false, row.Key.Id == 51)).ToImmutableArray();
         byte[] body = new BattlePassMissionState(season, slots).ToPayload();
