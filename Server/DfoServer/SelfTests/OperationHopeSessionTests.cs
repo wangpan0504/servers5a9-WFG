@@ -1,14 +1,23 @@
+using System.Text.Json;
+using System.Reflection;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
+using DfoServer.Game.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Adventure;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
+using DfoServer.Network;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Protocol;
 using DfoServer.Persistence;
 using DfoServer.Testing;
 using Microsoft.Data.Sqlite;
@@ -128,7 +137,297 @@ internal static class OperationHopeSessionTests
                 "重选清理真实入场遗留任务，不重发旧实例奖励");
         }
         OperationHopePartyTests.Run(pvf,items);
+        TimerBusy(resources,pvf).GetAwaiter().GetResult();
+        HopeTimerBattlePass(resources,pvf).GetAwaiter().GetResult();
         Console.WriteLine($"PASS {Count-before} 代号希望Session入场与领奖链断言");
+    }
+
+    static async Task TimerBusy(Resources resources, PvfArchive pvf)
+    {
+        await TimerBusyCase(resources,pvf,invalidate:false);
+        await TimerBusyCase(resources,pvf,invalidate:true);
+    }
+
+    static async Task HopeTimerBattlePass(Resources resources, PvfArchive pvf)
+    {
+        await HopeTimerBattlePassCase(resources,pvf,publicationBusy:false,transactionFailure:false);
+        await HopeTimerBattlePassCase(resources,pvf,publicationBusy:false,transactionFailure:true);
+        await HopeTimerBattlePassCase(resources,pvf,publicationBusy:true,transactionFailure:false);
+    }
+
+    static async Task HopeTimerBattlePassCase(Resources resources, PvfArchive pvf, bool publicationBusy, bool transactionFailure)
+    {
+        var start=new DateTimeOffset(2026,10,29,6,0,0,TimeSpan.FromHours(8));
+        var policy=new BattlePassMissionPolicy("hope-timer-bp",start,BattlePassCatalog.Load(pvf));
+        int day=Enumerable.Range(0,policy.Days).First(i=>policy.Active(start.AddDays(i).AddHours(1)).Any(row=>row.Key.Id==49));
+        var clock=new HopeClock(start.AddDays(day).AddHours(1));
+        using var f=new Fixture(resources,preserveDirectory:true,policy:policy,clock:clock);
+        That(f.Session.BeginOperationHope(resources.Hope,resources.Dungeons,count=>count==9?6:0),"BP fixture freezes actual hope mission");
+        var entry=f.Enter();
+        var active=f.Session.Selected!.ActiveMainQuests.Single(row=>resources.Hope.Missions.ContainsKey(row.QuestId));
+        var path=Route(resources.Hope,entry.Entry.Maze,entry.Snapshot.CurrentMap.Position,550059);
+        for (int at=0;at<path.Length;at++)
+        {
+            if (at>0) That(f.Session.MoveFormalDungeon(checked((byte)path[at].Position.X),checked((byte)path[at].Position.Y)) is not null,"BP fixture advances actual route");
+            var loaded=f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("BP fixture loading rejected");
+            foreach (var monster in loaded.Monsters.Monsters.Where(row=>row.CanReportDeath && row.IsBlocking))
+            {
+                if (!f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey)) continue;
+                var observation=new NativeDungeonDeathObservation(monster.ObjectKey,loaded.Character.Id,0x111,loaded.Character.Id,
+                    600,1,0,checked((uint)monster.CandidateLevel),504,650,1,true,new string('D',64));
+                That(f.Session.ObserveFormalDungeonDeath(observation,resources.Kills,resources.Growth).Outcome==DungeonRunOutcome.Accepted,"BP fixture commits actual deaths");
+            }
+        }
+        var cards=new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf),resources.Items.DungeonDropItems,
+            resources.Items.Items,resources.Items.GoldLimits,resources.Items.EpicPieces,prices:SelfTestCatalogs.CardPrices(pvf),
+            hopeRewards:new(new OperationHopeRewardCatalog(pvf,resources.Items.Items),resources.Items.Items));
+        var enabled=f.Session.EnableFormalDungeonSettlement() ?? throw new InvalidOperationException("BP fixture cannot enable clear");
+        f.Session.ConfirmFormalDungeonSettlementEnabled(enabled.Receipt);
+        var settled=f.Session.SettleFormalDungeon(f.Created.Id,99,99,DungeonSettlementProtocolTests.Report(f.Created.Id,99),
+            resources.Dungeons,SelfTestCatalogs.ClearExperience(pvf),resources.Growth,cards);
+        That(settled is { Outcome:DungeonRunOutcome.Accepted, Card:not null, Receipt:not null } &&
+            f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null,
+            "BP fixture settles actual hope and opens cards");
+        var before=f.Repository.ReadBattlePassMissions(f.Owner,clock.GetUtcNow()) ?? throw new InvalidOperationException("BP fixture state missing");
+        That(before.Active && before.Slots.Single(row=>row.Instance.Key.Id==49).Count==0 &&
+            f.Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='operation_hope_completion'")==0,
+            "BP task 49 and hope source have no seeded progress");
+        if (transactionFailure)
+            f.Sql("CREATE TRIGGER hope_bp_fail AFTER INSERT ON account_battle_pass_mission_progress WHEN NEW.mission_id=49 BEGIN SELECT RAISE(ABORT,'hope BP transaction fail'); END");
+        if (publicationBusy)
+        {
+            SqliteDatabaseBootstrap.ReleaseRuntimePool();
+            using var setup=new SqliteConnection("Data Source="+f.Path+";Pooling=False"); setup.Open();
+            using var command=setup.CreateCommand(); command.CommandText="PRAGMA journal_mode=DELETE";
+            That(string.Equals(Convert.ToString(command.ExecuteScalar()),"delete",StringComparison.OrdinalIgnoreCase),"isolated BP publication uses DELETE journal for real exclusive read lock");
+        }
+        var stats=new CharacterStatComputer(CharacterCatalog.Load(pvf,resources.Items.Items));
+        var town=new TownProjection(resources.Towns,stats,null,resources.Items.EpicPieces);
+        var inventory=new InventoryProjection(stats,town,resources.Items.EpicPieces);
+        using var log=new ServerLog(System.IO.Path.GetDirectoryName(f.Path)!);
+        using var stop=new CancellationTokenSource();
+        using var stream=new MemoryStream();
+        var actions=new List<string>(); byte[]? bpPayload=null; SqliteConnection? locker=null;
+        long cardUid=0; short cardSlot=-1; int cardCount=0;
+        int wrappedBusy=0, rawBusy=0, historyPublished=0;
+        var observedPublicationBusy=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool Classify(Exception error)
+        {
+            if (error is IOException { InnerException: SqliteException sqlite } && SqliteBusyRetry.IsBusy(sqlite)) Interlocked.Increment(ref wrappedBusy);
+            bool busy=SqliteBusyRetry.IsBusy(error);
+            if (busy) Interlocked.Increment(ref rawBusy);
+            if (publicationBusy && Volatile.Read(ref historyPublished)==1 &&
+                (busy || error is IOException { InnerException: SqliteException inner } && SqliteBusyRetry.IsBusy(inner)))
+                observedPublicationBusy.TrySetResult();
+            return busy;
+        }
+        await using var sender=new GameConnectionSender(f.Owner,stream,stop,0,(_,_,_,body,action)=>
+        {
+            actions.Add(action);
+            if (action=="battle_pass_mission_state") bpPayload=body.ToArray();
+            if (action=="operation_hope_reward_completed") Interlocked.Increment(ref historyPublished);
+            if (action=="formal_free_card_auto_reveal")
+            {
+                var material=f.Session.Selected!.Inventory.Items.Single(row=>row.Core.ItemId==10307438);
+                cardUid=material.Uid; cardSlot=material.Position.Index; cardCount=material.Core.Count;
+            }
+            if (!publicationBusy || action!="operation_hope_reward_completed") return;
+            locker=new SqliteConnection("Data Source="+f.Path+";Pooling=False"); locker.Open();
+            using var command=locker.CreateCommand(); command.CommandText="BEGIN EXCLUSIVE"; command.ExecuteNonQuery();
+        });
+        var context=new GameConnectionContext(new(1,System.Net.IPAddress.Loopback,stream,stop),f.Owner,f.Session,sender);
+        var hope=new QuestCompletionHandler(resources.Quests,resources.Parameters,resources.Items.Items,resources.Items.GoldLimits,
+            resources.Items.EpicPieces,resources.Growth,log,new CharacterLevelProjection(stats));
+        await using var projection=new DungeonCardProjection(context,log,inventory,hopeCompletion:hope,isBusy:Classify);
+        try
+        {
+            await projection.StartAsync(settled.Receipt!);
+            var pending=(Task)(typeof(DungeonCardProjection).GetField("pending",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(projection)
+                ?? throw new InvalidOperationException("BP timer task missing"));
+            if (publicationBusy)
+            {
+                await observedPublicationBusy.Task.WaitAsync(TimeSpan.FromSeconds(95));
+                That(locker is not null && wrappedBusy+rawBusy>=1 && bpPayload is null,
+                    "post-commit BP refresh hits real SQLite busy after the original hope publication");
+                using (var command=locker!.CreateCommand()) { command.CommandText="ROLLBACK"; command.ExecuteNonQuery(); }
+                locker.Dispose(); locker=null;
+            }
+            await pending.WaitAsync(TimeSpan.FromSeconds(110));
+            if (transactionFailure)
+            {
+                var rolledBack=f.Read();
+                var unchanged=f.Repository.ReadBattlePassMissions(f.Owner,clock.GetUtcNow()) ?? throw new InvalidOperationException("rolled-back BP state missing");
+                That(f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==0 &&
+                    f.Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='operation_hope_completion'")==0 &&
+                    unchanged.Slots.Single(row=>row.Instance.Key.Id==49).Count==0 && unchanged.Season.Revision==before.Season.Revision &&
+                    rolledBack.ActiveMainQuests.Any(row=>row.AcceptanceId==active.AcceptanceId) &&
+                    rolledBack.Inventory.Items.Where(row=>row.Core.ItemId==10307438).Sum(row=>row.Core.Count)==settled.Card!.Item!.Count &&
+                    actions.Count(action=>action=="operation_hope_reward_auto_committed")==0,
+                    "late BP task failure rolls back hope reward, source and task while preserving the committed card");
+                f.Sql("DROP TRIGGER hope_bp_fail");
+                That(f.Session.SelectFormalDungeonFreeCard(0,0) is { Duplicate:true } && await hope.CompleteHopeAfterCardAsync(context),
+                    "original pending hope transaction succeeds once after late BP fault is removed");
+            }
+            var after=f.Read();
+            var pass=f.Repository.ReadBattlePassMissions(f.Owner,clock.GetUtcNow()) ?? throw new InvalidOperationException("committed BP state missing");
+            var finalMaterial=after.Inventory.Items.Single(row=>row.Core.ItemId==10307438);
+            That(pass.Slots.Single(row=>row.Instance.Key.Id==49).Count==1 && pass.Season.Revision==before.Season.Revision+1 &&
+                pass.Season.TotalExperience==before.Season.TotalExperience &&
+                f.Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='operation_hope_completion'")==1 &&
+                f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==1 &&
+                after.ActiveMainQuests.All(row=>row.AcceptanceId!=active.AcceptanceId) &&
+                cardUid>0 && finalMaterial.Uid==cardUid && finalMaterial.Position.Index==cardSlot && cardCount==settled.Card!.Item!.Count &&
+                finalMaterial.Core.Count==cardCount+60,
+                "automatic hope reward and task 49 commit once without awarding task experience");
+            string[] ordered=["formal_free_card_auto_reveal","operation_hope_reward_auto_committed","operation_hope_reward_inventory",
+                "operation_hope_reward_active","operation_hope_reward_completed"];
+            That(ordered.Select(action=>actions.IndexOf(action)).All(index=>index>=0) &&
+                ordered.Select(action=>actions.IndexOf(action)).SequenceEqual(ordered.Select(action=>actions.IndexOf(action)).Order()) &&
+                ordered.All(action=>actions.Count(value=>value==action)==1),"timer sends one ordered free-card and hope reward sequence");
+            That(bpPayload is not null && bpPayload.SequenceEqual(pass.ToPayload()) &&
+                actions.Count(action=>action=="battle_pass_mission_state")==1 && actions.IndexOf("battle_pass_mission_state")>actions.IndexOf("operation_hope_reward_completed"),
+                "timer publishes authoritative BP 1801 after hope, including after a read lock");
+            var duplicate=f.Session.SelectFormalDungeonFreeCard(0,0);
+            That(duplicate is { Duplicate:true } && !await hope.CompleteHopeAfterCardAsync(context) &&
+                f.Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='operation_hope_completion'")==1 &&
+                f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==1 &&
+                f.Repository.ReadBattlePassMissions(f.Owner,clock.GetUtcNow())!.Season.Revision==pass.Season.Revision,
+                "duplicate selection does not repeat committed hope reward or BP source");
+        }
+        finally
+        {
+            if (locker is not null) { using var command=locker.CreateCommand(); command.CommandText="ROLLBACK"; command.ExecuteNonQuery(); locker.Dispose(); }
+            stop.Cancel();
+        }
+    }
+
+    sealed class HopeClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow()=>now; }
+
+    static async Task TimerBusyCase(Resources resources, PvfArchive pvf, bool invalidate)
+    {
+        using var f = new Fixture(resources,preserveDirectory:true);
+        That(f.Session.BeginOperationHope(resources.Hope,resources.Dungeons,count => count == 9 ? 6 : 0),"busy fixture freezes actual hope mission");
+        var entry = f.Enter();
+        var active = f.Session.Selected!.ActiveMainQuests.Single(row => resources.Hope.Missions.ContainsKey(row.QuestId));
+        var path = Route(resources.Hope,entry.Entry.Maze,entry.Snapshot.CurrentMap.Position,550059);
+        for (int at=0; at<path.Length; at++)
+        {
+            if (at>0) That(f.Session.MoveFormalDungeon(checked((byte)path[at].Position.X),checked((byte)path[at].Position.Y)) is not null,"busy fixture advances actual path");
+            var loaded=f.Session.CompleteFormalDungeonLoading() ?? throw new InvalidOperationException("busy fixture loading rejected");
+            foreach (var monster in loaded.Monsters.Monsters.Where(row => row.CanReportDeath && row.IsBlocking))
+            {
+                if (!f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey)) continue;
+                var observation=new NativeDungeonDeathObservation(monster.ObjectKey,loaded.Character.Id,0x111,loaded.Character.Id,
+                    600,1,0,checked((uint)monster.CandidateLevel),504,650,1,true,new string('D',64));
+                That(f.Session.ObserveFormalDungeonDeath(observation,resources.Kills,resources.Growth).Outcome==DungeonRunOutcome.Accepted,"busy fixture commits actual deaths");
+            }
+        }
+        var cards=new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf),resources.Items.DungeonDropItems,
+            resources.Items.Items,resources.Items.GoldLimits,resources.Items.EpicPieces,prices:SelfTestCatalogs.CardPrices(pvf),
+            hopeRewards:new(new OperationHopeRewardCatalog(pvf,resources.Items.Items),resources.Items.Items));
+        var enabled=f.Session.EnableFormalDungeonSettlement() ?? throw new InvalidOperationException("busy fixture cannot enable clear");
+        f.Session.ConfirmFormalDungeonSettlementEnabled(enabled.Receipt);
+        var settled=f.Session.SettleFormalDungeon(f.Created.Id,99,99,DungeonSettlementProtocolTests.Report(f.Created.Id,99),
+            resources.Dungeons,SelfTestCatalogs.ClearExperience(pvf),resources.Growth,cards);
+        That(settled is { Outcome:DungeonRunOutcome.Accepted, Card:not null, Receipt:not null } &&
+            f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null,
+            "busy fixture settles actual hope and opens cards");
+        var stats=new CharacterStatComputer(CharacterCatalog.Load(pvf,resources.Items.Items));
+        var town=new TownProjection(resources.Towns,stats,null,resources.Items.EpicPieces);
+        var inventory=new InventoryProjection(stats,town,resources.Items.EpicPieces);
+        using var logOutput=new StringWriter();
+        using var log=new ServerLog(System.IO.Path.GetDirectoryName(f.Path)!,logOutput);
+        using var stop=new CancellationTokenSource();
+        using var stream=new MemoryStream();
+        var locked=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        SqliteConnection? locker=null;
+        int cardAcks=0, questAcks=0, historyNotices=0;
+        await using var sender=new GameConnectionSender(f.Owner,stream,stop,0,(_,_,_,_,action) =>
+        {
+            if (action=="operation_hope_reward_auto_committed") Interlocked.Increment(ref questAcks);
+            if (action=="operation_hope_reward_completed") Interlocked.Increment(ref historyNotices);
+            if (action!="formal_free_card_auto_reveal") return;
+            Interlocked.Increment(ref cardAcks);
+            locker=new SqliteConnection("Data Source="+f.Path+";Pooling=False"); locker.Open();
+            using var command=locker.CreateCommand(); command.CommandText="BEGIN IMMEDIATE"; command.ExecuteNonQuery();
+            locked.TrySetResult();
+        });
+        var context=new GameConnectionContext(new(1,System.Net.IPAddress.Loopback,stream,stop),f.Owner,f.Session,sender);
+        var hope=new QuestCompletionHandler(resources.Quests,resources.Parameters,resources.Items.Items,resources.Items.GoldLimits,
+            resources.Items.EpicPieces,resources.Growth,log,new CharacterLevelProjection(stats));
+        await using var projection=new DungeonCardProjection(context,log,inventory,hopeCompletion:hope,isBusy:SqliteBusyRetry.IsBusy);
+        using var gateStop=new CancellationTokenSource();
+        Task? gateWait=null;
+        bool gateReleased=false;
+        try
+        {
+            await projection.StartAsync(settled.Receipt!);
+            var pending=(Task)(typeof(DungeonCardProjection).GetField("pending",BindingFlags.Instance|BindingFlags.NonPublic)!
+                .GetValue(projection) ?? throw new InvalidOperationException("timer task missing"));
+            await locked.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            if (invalidate) gateWait=context.CommandGate.WaitAsync(gateStop.Token);
+            bool observedBusy=false;
+            for (int i=0;i<190 && !observedBusy;i++)
+            {
+                await Task.Delay(500);
+                log.Flush();
+                string logPath=System.IO.Path.Combine(System.IO.Path.GetDirectoryName(f.Path)!,"server.jsonl");
+                if (!File.Exists(logPath)) continue;
+                using var reader=new StreamReader(new FileStream(logPath,FileMode.Open,FileAccess.Read,FileShare.ReadWrite));
+                while (reader.ReadLine() is { } line)
+                {
+                    using var json=JsonDocument.Parse(line);
+                    var root=json.RootElement;
+                    string? kind=root.GetProperty("Kind").GetString();
+                    if (kind=="formal_hope_reward_busy") { observedBusy=true; break; }
+                    if (kind=="formal_free_card_failed" && root.GetProperty("Detail").TryGetProperty("Error",out var error))
+                    {
+                        string message=error.GetString() ?? "";
+                        if (message.Contains("SQLite Error 5",StringComparison.Ordinal) || message.Contains("SQLite Error 6",StringComparison.Ordinal)) observedBusy=true;
+                    }
+                }
+            }
+            That(observedBusy,"real SQLite busy observed after the original free-card ACK within 95 seconds");
+            That(f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==0,
+                "busy transaction has not committed the hope reward");
+            if (invalidate)
+            {
+                await gateWait!.WaitAsync(TimeSpan.FromSeconds(95));
+                f.Session.ReturnToRoster();
+            }
+            using (var command=locker!.CreateCommand()) { command.CommandText="ROLLBACK"; command.ExecuteNonQuery(); }
+            locker.Dispose(); locker=null;
+            if (invalidate) { context.CommandGate.Release(); gateReleased=true; }
+            await pending.WaitAsync(TimeSpan.FromSeconds(95));
+            var after=f.Read();
+            if (invalidate)
+            {
+                That(cardAcks==1 && questAcks==0 && historyNotices==0 &&
+                    f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==0 &&
+                    after.ActiveMainQuests.Any(row=>row.AcceptanceId==active.AcceptanceId) &&
+                    after.Inventory.Items.Where(row=>row.Core.ItemId==10307438).Sum(row=>row.Core.Count)==settled.Card!.Item!.Count,
+                    "timer does not deliver old hope reward after selection becomes invalid");
+                return;
+            }
+            if (questAcks==0 && f.Number("SELECT count(*) FROM character_operation_hope_reward_receipts")==0 &&
+                after.ActiveMainQuests.Any(row=>row.AcceptanceId==active.AcceptanceId))
+                throw new InvalidOperationException("FAIL: timer stopped after SQLite busy with hope reward uncommitted");
+            That(cardAcks==1 && questAcks==1 && historyNotices==1 && after.ActiveMainQuests.All(row=>row.AcceptanceId!=active.AcceptanceId) &&
+                after.Inventory.Items.Where(row=>row.Core.ItemId==10307438).Sum(row=>row.Core.Count)==settled.Card!.Item!.Count+60,
+                "timer resumes only hope delivery after busy, without replaying card or reward");
+            That(f.Session.ReturnFromFormalDungeon() is not null,"completed pending hope allows dungeon exit");
+        }
+        finally
+        {
+            if (locker is not null) { using var command=locker.CreateCommand(); command.CommandText="ROLLBACK"; command.ExecuteNonQuery(); locker.Dispose(); }
+            stop.Cancel();
+            if (gateWait is not null && !gateReleased)
+            {
+                gateStop.Cancel();
+                try { await gateWait; context.CommandGate.Release(); }
+                catch (OperationCanceledException) { }
+            }
+        }
     }
 
     static void VerifyHopeRewards(PvfArchive pvf,ItemResources items,Resources resources)
@@ -207,23 +506,25 @@ internal static class OperationHopeSessionTests
     sealed class Fixture : IDisposable
     {
         readonly Resources resources;
+        readonly bool preserveDirectory;
         readonly string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(),"S5A9-hope-session-"+Guid.NewGuid().ToString("N"));
         public string Path { get; }
         public AccountOwners.Lease Owner { get; }
         public CharacterRepository Repository { get; }
         public Character Created { get; }
         public GameSession Session { get; }
-        public Fixture(Resources resources)
+        public Fixture(Resources resources, bool preserveDirectory = false, BattlePassMissionPolicy? policy = null, TimeProvider? clock = null)
         {
-            this.resources = resources; Path = System.IO.Path.Combine(root,"game.db");
+            this.resources = resources; this.preserveDirectory = preserveDirectory; Path = System.IO.Path.Combine(root,"game.db");
             Repository = new(Path,resources.Quests,resources.Adventure,resources.Growth);
+            if (policy is not null) Repository.ConfigureBattlePassMissions(policy);
             new AuthenticationService(new AuthenticationRepository(Path)).Create("hope-session","fixture-password");
             Owner = new AccountOwners().Acquire("hope-session",() => { });
             Created = Repository.Create(Owner,new("HopeSession",new(54,4,40,200),null) { Level = 95, CompletedQuests = [6170],
                 DungeonState = CharacterDungeonState.NewOrdinary,
                 InitialLearning = new(resources.Growth.GetLevelStartExperience(95),[new(0,10,0,[]),new(1,20,0,[])]) });
             Repository.InitializeAdventure(Owner,resources.Adventure,DateTimeOffset.UtcNow);
-            Session = new(Repository,resources.Towns,Owner,questCatalog:resources.Quests,operationHope:resources.Hope,incounts:resources.Incounts);
+            Session = new(Repository,resources.Towns,Owner,questCatalog:resources.Quests,operationHope:resources.Hope,incounts:resources.Incounts,timeProvider:clock);
             Session.Select(Created.Slot,resumeTown: true); Session.MarkReady();
             That(Session.Selected!.Position is { Town: 54, Area: 4 },"正式换频道选角保留已存档的希望入口快照");
         }
@@ -245,6 +546,7 @@ internal static class OperationHopeSessionTests
         public OperationHopeFinishReceipt? Finish(ushort quest) => Session.FinishOperationHope(quest,ushort.MaxValue,1,
             resources.Quests,resources.Parameters,resources.Items.Items,resources.Items.GoldLimits,resources.Items.EpicPieces,resources.Growth);
         public void Sql(string sql) { using var db = new SqliteConnection("Data Source="+Path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
-        public void Dispose() { Owner.Dispose(); if (Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
+        public long Number(string sql) { using var db = new SqliteConnection("Data Source="+Path+";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }
+        public void Dispose() { Owner.Dispose(); if (!preserveDirectory && Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
     }
 }

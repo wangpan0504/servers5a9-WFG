@@ -688,7 +688,7 @@ internal static class ServerRuntime
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
                 prices: cardPrices,hopeRewards:hopeRewards,dimensionRewards:dimensionRewards,tayberrsRewards:tayberrsRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
-                imperialArena: imperialArenaProjection, parties: parties, lukeRaid: lukeRun, antonRaid: antonRun, preyRaid: preyRun, hopeCompletion: questCompletion);
+                imperialArena: imperialArenaProjection, parties: parties, lukeRaid: lukeRun, antonRaid: antonRun, preyRaid: preyRun, hopeCompletion: questCompletion, cardProjectionBusy: SqliteBusyRetry.IsBusy);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else

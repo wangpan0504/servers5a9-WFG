@@ -51,10 +51,10 @@ internal static class BattlePassMissionProjection
         catch (InvalidOperationException error) when (error.Message == "Stale account generation") { }
     }
 
-    public static Task RefreshAsync(GameConnectionContext context, DateTimeOffset now)
+    public static Task RefreshAsync(GameConnectionContext context, DateTimeOffset? now = null)
     {
         DfoServer.Game.Session.BattlePassMissionSessionState? state;
-        try { state = context.Session.ReadBattlePassMissionState(now); }
+        try { state = now is { } at ? context.Session.ReadBattlePassMissionState(at) : context.Session.ReadBattlePassMissionState(); }
         catch (System.Data.Common.DbException error)
         {
             // 调用方已提交业务并可能已发送成功帧，不能让分派层重试原请求。
