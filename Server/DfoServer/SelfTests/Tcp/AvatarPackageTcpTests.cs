@@ -432,6 +432,80 @@ internal static class AvatarPackageTcpTests
             "#1002 只保留一件装扮核心与详情");
     }
 
+    public static async Task RunSimilarGiftTypeAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var packages = resources.ItemResources.AvatarPackages;
+        await OpenSimilarAsync(10015116, 0, 0, 0, true, null, "10015116 type5/Length=5 三件套落到末行永久孔");
+        await OpenSimilarAsync(10004700, 0, 0, 0, true, null, "魔剑阿波菲斯 10004700 type4 短表永久武器");
+        await OpenSimilarAsync(490013273, 0, 0, 0, false, 401600007, "绝版武器装扮自选 490013273 选 401600007 type4 短表");
+
+        async Task OpenSimilarAsync(int boxId, byte job, byte category, byte subcategory, bool selectAll, int? pick, string label)
+        {
+            var items = resources.ItemResources.Items;
+            var definition = packages.Get(boxId);
+            var rows = definition.Categories.Single(row => row.Category == category && row.Subcategory == subcategory).Rows;
+            AvatarPackageRow[] selected = selectAll ? rows.ToArray() : [rows.Single(row => row.ItemId == pick)];
+            var choices = selected.Select(row =>
+            {
+                var avatar = packages.GetAvatar(row.ItemId);
+                byte ability = avatar.RequiresAbilityChoice ? (avatar.Abilities.Contains(0) ? (byte)0 : avatar.Abilities.Max()) : (byte)0;
+                return new AvatarPackageChoice(row.ItemId, ability);
+            }).ToArray();
+            var wireChoices = choices.Where(choice => packages.GetAvatar(choice.ItemId).RequiresAbilityChoice).ToArray();
+            byte[] body = Selection(73, selected, wireChoices);
+            if (category != 0 || subcategory != 0)
+            {
+                body[6] = category;
+                body[7] = subcategory;
+            }
+            var planned = new InventoryAvatarPackageService(items, packages, resources.ItemResources.GoldLimits,
+                resources.ItemResources.EpicPieces, new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true })
+                .Open(new Character(1, 0, "SimilarGift", 0, resources.Towns.Room, resources.Towns.InitialReturn)
+                {
+                    Job = job, Level = 95,
+                    Inventory = new([new(1000, Bag(73), InventoryRewardGrantService.Create(items.Get(boxId), shopExpiration: true))])
+                }, AvatarPackageRequests.Read(body, selected.Length, selected.Length), out _, DateTimeOffset.UtcNow);
+            That(planned.Accepted, label + " 进程内 Open accepted=" + planned.Accepted + " err=" + planned.Error +
+                " reason=" + planned.RejectReason);
+            await using var fixture = new TcpTestFixture(source, Path.Combine(root, "box-" + boxId), gm: true, resources: resources);
+            var repository = new CharacterRepository(fixture.Database);
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                repository.Create(owner, new("SimilarGift", resources.Towns.Room, resources.Towns.InitialReturn)
+                {
+                    Job = job, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(job).Skills,
+                    Inventory = new([new(0, Bag(73), InventoryRewardGrantService.Create(items.Get(boxId), shopExpiration: true))])
+                });
+            await fixture.StartAsync(startupTimeout: TimeSpan.FromMinutes(2));
+            BoosterTcpTests.SetExpirationDebug(fixture, true);
+            using (var peer = Open(fixture))
+            {
+                peer.Select(); peer.Barrier();
+                peer.Send(160, body);
+                BoosterTcpTests.ExpectAck(peer, boxId, 73, selected.Select(row => (row.ItemId, (int)row.Count)).ToArray());
+                BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 73, -1, 0);
+                byte[] granted = peer.Expect(0, 14).Body;
+                That(granted[0] == 1 && U16(granted, 1) == selected.Length && granted.Length == 3 + selected.Length * 165,
+                    label + " 装扮列表完整165B行");
+                foreach (var choice in choices)
+                    That(Enumerable.Range(0, selected.Length).Select(index => 3 + index * 165)
+                            .Any(at => U32(granted, at + 2) == choice.ItemId && U16(granted, at + 11) == choice.Ability),
+                        label + " 奖励 " + choice.ItemId);
+                peer.Barrier();
+                string before = Snapshot(fixture);
+                peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(before == Snapshot(fixture), label + " 耗尽重放不重复发放");
+            }
+            await fixture.StopAsync();
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            {
+                var kept = repository.List(owner).Single().Inventory.Items;
+                That(kept.Length == selected.Length && kept.All(item => item.Position.List == InventoryListType.Avatar) &&
+                    selected.All(row => kept.Any(item => item.Core.ItemId == row.ItemId)),
+                    label + " 源扣尽且奖励落装扮栏");
+            }
+        }
+    }
+
     // 保留原Job15跨职业领取；另用合法Job14真实开413，不手造或复制奖励UID。
     static async Task RunOrdinaryWeaponLifecycleAsync(ServerOptions source, string root, TcpTestResources resources)
     {

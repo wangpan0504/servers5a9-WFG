@@ -289,6 +289,14 @@ internal static class AvatarPackageTests
             "在范围内的 30 天与永久行仍按原下标读取");
         That(InventoryAvatarPackageService.ValidateRowDefinition(row with { Type = 5 }, template, avatar) is not null,
             "非商城永久档越界仍拒绝");
+        var fiveTable = shortTable.Add(new AvatarPackageType(0, default));
+        var five = avatar with { Types = fiveTable };
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row with { Type = 5 }, template, five) is null &&
+            InventoryAvatarPackageService.TryResolveGiftType(row with { Type = 5 }, template, five, out var fifth) &&
+            fifth.Days == 0,
+            "标准时装表 Length=5 type=5 落到末行永久");
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row with { Type = 6 }, template, five) is not null,
+            "越过末档超过一格仍拒绝");
         var timed = avatar with { Types = shortTable.SetItem(3, new AvatarPackageType(30, default)) };
         That(InventoryAvatarPackageService.ValidateRowDefinition(row, template, timed) is not null,
             "末行非永久时不把 type4 改写成有限期");
@@ -423,6 +431,7 @@ internal static class AvatarPackageTests
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
         SeaRageWeaponSelectionResources(towns, resources, packages);
+        SimilarGiftTypeResources(towns, resources, packages);
         LegacySelections(towns, resources, packages);
     }
 
@@ -879,6 +888,70 @@ internal static class AvatarPackageTests
         foreach (var bad in new[] { request with { Choices = [new(avatarId, 1)] }, request with { Category = 1 } })
             That(!service.Open(character, bad, out _, now).Accepted && character.Inventory == before,
                 "#1002 伪造属性或女鬼剑分类不消耗源");
+    }
+
+    static byte GiftAbility(AvatarPackageItemDefinition avatar) =>
+        avatar.RequiresAbilityChoice ? (avatar.Abilities.Contains(0) ? (byte)0 : avatar.Abilities.Max()) : (byte)0;
+
+    // #1002 同类：type=5 对 Length=5 末行永久越界（10015116）；另回归两件已覆盖的 type=4 短表武器盒。
+    static void SimilarGiftTypeResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
+            new() { IgnoreCashShopAbsoluteExpiration = true });
+        OpenBox(10015116, 0, 0, 0, selectAll: true, expectPermanent: false, lastSockets:
+        [
+            (101550787, new AvatarSocketTypes(1, 1, 0, 0, 0)),
+            (101500966, new AvatarSocketTypes(4, 4, 0, 0, 0)),
+            (101540883, new AvatarSocketTypes(8, 8, 0, 0, 0))
+        ]);
+        OpenBox(10004700, 0, 0, 0, selectAll: true, expectPermanent: true, lastSockets: [(101600025, default)]);
+        OpenBox(490013273, 0, 0, 0, selectAll: false, expectPermanent: true, lastSockets: [(401600007, default)], pick: 401600007);
+
+        void OpenBox(int boxId, byte job, byte category, byte subcategory, bool selectAll, bool expectPermanent,
+            (int ItemId, AvatarSocketTypes Sockets)[] lastSockets, int? pick = null)
+        {
+            var definition = packages.Get(boxId);
+            var rows = definition.Categories.Single(row => row.Category == category && row.Subcategory == subcategory).Rows;
+            AvatarPackageRow[] selected = selectAll ? rows.ToArray() : [rows.Single(row => row.ItemId == pick)];
+            That(definition.Available && selected.Length == lastSockets.Length, boxId + " 分类奖励数量");
+            foreach (var (itemId, sockets) in lastSockets)
+            {
+                var row = selected.Single(entry => entry.ItemId == itemId);
+                var avatar = packages.GetAvatar(itemId);
+                That(avatar.PendingRule is null && avatar.Types[^1].Days == 0 && row.Type >= avatar.Types.Length &&
+                    (row.Type == 4 || row.Type == avatar.Types.Length) &&
+                    InventoryAvatarPackageService.TryResolveGiftType(row, resources.Items.Get(itemId), avatar, out var type) &&
+                    type.Days == 0 && type.Sockets == sockets,
+                    boxId + "/" + itemId + " 越界落到末行永久 type=" + row.Type + " len=" + avatar.Types.Length +
+                    " pending=" + avatar.PendingRule);
+            }
+            var source = new InventoryItem(1000, Bag(),
+                InventoryRewardGrantService.Create(resources.Items.Get(boxId), shopExpiration: true));
+            Character character = new(1, 0, "SimilarGift", 0, towns.Room, towns.InitialReturn)
+                { Job = job, Level = 95, Inventory = new([source]) };
+            var choices = selected.Select(row => new AvatarPackageChoice(row.ItemId, GiftAbility(packages.GetAvatar(row.ItemId)))).ToArray();
+            var request = new AvatarPackageOpenRequest(73, 1, category, subcategory, selected.Select(row => row.ItemId).ToArray(),
+                choices.Where(choice => packages.GetAvatar(choice.ItemId).RequiresAbilityChoice).ToArray());
+            var result = service.Open(character, request, out var receipt, now);
+            That(result.Accepted && receipt is { ItemId: var granted } && granted == boxId && result.Plan is not null &&
+                result.Plan.After.Find(Bag()) is null,
+                boxId + " 开盒 accepted=" + result.Accepted + " err=" + result.Error + " reason=" + result.RejectReason +
+                " receipt=" + receipt?.ItemId);
+            foreach (var sample in lastSockets)
+            {
+                var item = result.Plan!.After.Items.Single(row => row.Core.ItemId == sample.ItemId);
+                int days = resources.Items.Get(sample.ItemId).Expiration.Days;
+                bool permanent = days <= 0;
+                That(permanent == expectPermanent && item.Avatar is not null && item.Core.ExpireTime == 0 &&
+                    item.Avatar.Socket0.Type == sample.Sockets.First && item.Avatar.Socket1.Type == sample.Sockets.Second &&
+                    item.ExpireTime == 0 == permanent,
+                    boxId + "/" + sample.ItemId + " expire=" + item.ExpireTime + " core=" + item.Core.ExpireTime +
+                    " avatar=" + item.Avatar?.ExpireTime + " days=" + days + " expectPermanent=" + expectPermanent +
+                    " sock=" + item.Avatar?.Socket0.Type + "," + item.Avatar?.Socket1.Type +
+                    " want=" + sample.Sockets.First + "," + sample.Sockets.Second);
+            }
+        }
     }
 
     static void FirstGrowResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
