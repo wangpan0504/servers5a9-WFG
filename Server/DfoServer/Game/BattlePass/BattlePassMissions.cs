@@ -61,6 +61,8 @@ internal sealed class BattlePassMissionPolicy
         Start = start;
         Days = Math.Min(catalog.DailyMissionIds.Length / 4, checked(7 * (catalog.WeeklyMissionIds.Length / 4)));
         End = start.AddDays(Days);
+        if (End.ToUnixTimeSeconds() > uint.MaxValue)
+            throw new InvalidDataException("战令赛季结束时间超出原生事件时间范围");
         RulesJson = JsonSerializer.Serialize(new
         {
             Version = 1, Category0 = "daily", Category1 = "weekly", Category2 = "season",
