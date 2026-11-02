@@ -1,0 +1,50 @@
+using System.Text.Json.Nodes;
+using DfoServer.GameWorld.Maps;
+using PvfLib;
+using static DfoServer.Testing.TestCheck;
+
+namespace DfoServer;
+
+internal static partial class MapGeometryTests
+{
+    private static void RunAnchorCore()
+    {
+        foreach (var (kind,tag,source) in new[]
+        {
+            ("dungeon_animation5","[animation]","[[6,\"a.ani\"],[6,\"[normal]\"],[0,672],[0,44],[0,0]]"),
+            ("dungeon_passive4","[passive object]","[[0,9000000],[0,672],[0,44],[0,0]]"),
+            ("dungeon_monster10_fixed_normal","[monster]","[[0,1],[0,2],[0,3],[0,672],[0,44],[0,10000],[0,6],[0,7],[6,\"[fixed]\"],[6,\"[normal]\"]]"),
+            ("dungeon_ai8","[ai character]","[[0,1],[0,672],[0,44],[0,0],[6,\"[enemy]\"],[6,\"[normal]\"],[0,6],[0,7]]"),
+            ("dungeon_event_xyz3","[event monster position]","[[0,672],[0,44],[0,0]]"),
+            ("dungeon_special11_single_child","[special passive object]","[[0,8815],[0,672],[0,44],[0,0],[0,1],[6,\"[trap]\"],[0,2211],[0,1],[0,3],[0,4],[0,-1]]")
+        })
+        {
+            const string path = "map/anchor.map";
+            string from = source[..^1] + "," + source[1..].Replace("[0,672]","[0,671]",StringComparison.Ordinal);
+            string to = from.Replace("[0,672]","[0,896]",StringComparison.Ordinal);
+            string Document(string target) => GeometryDocument([GeometryRule("anchor",path,kind,tag,
+                (JsonArray)JsonNode.Parse(from)!, (JsonArray)JsonNode.Parse(target)!)]);
+            var config = MapGeometryConfig.Parse(Document(to));
+            var pool = new List<string>();
+            PvfToken Text(byte type, string value)
+            {
+                int index = pool.IndexOf(value);
+                if (index < 0) { index = pool.Count; pool.Add(value); }
+                return new(type,index);
+            }
+            PvfToken[] Tokens(string values) => [Text(3,tag),..((JsonArray)JsonNode.Parse(values)!).Select(atom =>
+                atom![0]!.GetValue<int>() == 6 ? Text(6,atom[1]!.GetValue<string>()) : new PvfToken(0,atom[1]!.GetValue<int>())),Text(3,"[/" + tag[1..])];
+            string Resolve(int id) => pool[id];
+            var raw = Tokens(from); var expected = Tokens(to);
+            var output = config.Apply(path,raw,Resolve);
+            That(output.SequenceEqual(expected) && config.Apply(path,output,Resolve).SequenceEqual(expected), "末段插列仅移动X且多记录完整保持、目标幂等：" + kind);
+            That(config.SignatureKind(path) == "DCG3" && !MapGeometrySignature.ComputeAnchors(path,raw,Resolve).SequenceEqual(MapGeometrySignature.ComputeAnchors(path,output,Resolve)), "插列锚点完整进入独立DCG3：" + kind);
+            That(MapGeometrySignature.ComputeDungeon(path,raw,Resolve).SequenceEqual(MapGeometrySignature.ComputeDungeon(path,output,Resolve)), "普通图DCG2不因插列锚点协议改变：" + kind);
+            Reject<System.IO.InvalidDataException>(() => config.Apply(path,raw[..^1],Resolve), "锚点段必须真实闭合");
+            Reject<System.IO.InvalidDataException>(() => config.Apply(path,[..raw,..raw],Resolve), "重复锚点段拒绝");
+            Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,44]","[0,45]",StringComparison.Ordinal))), "锚点Y和身份不得顺便移动");
+            Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,671]","[0,895]",StringComparison.Ordinal))), "插列左侧X必须保持");
+            Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,896]","[0,897]",StringComparison.Ordinal))), "插列映射必须精确224");
+        }
+    }
+}

@@ -57,6 +57,15 @@ internal static class MapGeometrySignature
         "[ignore movable rect]", "[camera edge exception]"
     };
     private static readonly HashSet<string> TileTags = new(StringComparer.Ordinal) { "[pass type]" };
+    internal static readonly HashSet<string> AnchorTags = new(StringComparer.Ordinal)
+    {
+        "[animation]", "[passive object]", "[monster]", "[ai character]", "[event monster position]", "[special passive object]"
+    };
+    public static byte[] CanonicalAnchors(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
+        ScalarCanonical("DCG3"u8,path,tokens,resolve,DungeonTags.Concat(AnchorTags).ToHashSet(StringComparer.Ordinal),false);
+
+    public static byte[] ComputeAnchors(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
+        SHA256.HashData(CanonicalAnchors(path,tokens,resolve));
 
     // 副本标量段在下一个标签或EOF结束；不借用城镇DCG1必须闭合的块合同。
     public static byte[] CanonicalDungeon(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve) =>
@@ -80,7 +89,7 @@ internal static class MapGeometrySignature
         for (int i = 0; i < tokens.Count; ++i)
         {
             string tag = Label(i);
-            bool closed = !tile && Tags.Contains(tag);
+            bool closed = !tile && (Tags.Contains(tag) || tags.Contains(tag) && AnchorTags.Contains(tag));
             if (!tags.Contains(tag) && !closed) continue;
             int end = i + 1;
             if (closed)
