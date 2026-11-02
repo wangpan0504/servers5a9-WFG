@@ -8,6 +8,10 @@ internal static class TcpRegressionTests
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
         ("knight-shield", KnightShieldTcpTests.RunAsync),
+        ("battle-pass-period-manual", BattlePassOnlinePeriodTcpTests.ManualAsync),
+        ("battle-pass-period-daily", BattlePassOnlinePeriodTcpTests.DailyAsync),
+        ("battle-pass-period-weekly", BattlePassOnlinePeriodTcpTests.WeeklyAsync),
+        ("battle-pass-period-utc", BattlePassOnlinePeriodTcpTests.UtcAsync),
         ("fiendwar-raid-flow", FiendwarRaidTcpTests.RunAsync),
         ("fiendwar-guide", async (options, root, resources) =>
         {

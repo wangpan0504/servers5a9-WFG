@@ -1,3 +1,4 @@
+using DfoServer.Game.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Infrastructure;
@@ -62,6 +63,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             await town.LegacyServiceDayAsync(context);
             RaidClearProjection.Refresh(context);
         }
+        if (!await PublishBattlePassAsync(now)) return false;
         if (localPublished is { } local && local.Epoch == selectedEpoch && local.Day < localDay)
             await town.AssaultServiceDayAsync(context);
         if (legacyPublished is not { } oldLegacy || oldLegacy.Epoch != selectedEpoch || oldLegacy.Day <= legacyDay)
@@ -70,6 +72,25 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             localPublished = (selectedEpoch, localDay);
         return true;
     }
+
+    // 进度仍从原账号季读取，不触发登录来源；只补尚未实际投影的期段。
+    async Task<bool> PublishBattlePassAsync(DateTimeOffset now)
+    {
+        if (town.BattlePassMissions is not { } policy || now < policy.Start || now >= policy.End) return true;
+        int day = BattlePassDay(policy, now);
+        if (BattlePassPublished(policy, day)) return true;
+        var current = context.Session.ReadBattlePassMissionState(now);
+        if (current is null || !current.State.Active) return false;
+        await BattlePassMissionProjection.MissionsAsync(context, current.State, current.Receipt);
+        return BattlePassPublished(policy, day) && BattlePassDay(policy, clock.GetUtcNow()) == day;
+    }
+
+    bool BattlePassPublished(BattlePassMissionPolicy policy, int day) => context.Owner.Execute(() =>
+        context.BattlePassMissionDisplay is { } shown && shown.Epoch == context.Session.SelectionEpoch &&
+        shown.Period >= policy.Start.AddDays(day).ToUnixTimeSeconds());
+
+    static int BattlePassDay(BattlePassMissionPolicy policy, DateTimeOffset now) => now < policy.Start ? -1 :
+        now >= policy.End ? policy.Days : checked((int)((now - policy.Start).Ticks / TimeSpan.TicksPerDay));
 
     public async Task RefreshAsync()
     {
@@ -96,6 +117,13 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                 if (missions is not null && missionReset < next) next = missionReset;
                 var legacy = DailyBoosterUsage.NextReset(now);
                 if (legacy < next) next = legacy;
+                if (town.BattlePassMissions is { } policy && now < policy.End)
+                {
+                    var boundary = policy.Start.AddDays(BattlePassDay(policy, now) + 1);
+                    // 发布采样后才跨界时立即补刷，不能直接排到下一日。
+                    if (now >= policy.Start && !BattlePassPublished(policy, BattlePassDay(policy, now))) next = now;
+                    else if (boundary < next) next = boundary;
+                }
                 var delay = retrySeconds == 0 ? next - now : TimeSpan.FromSeconds(retrySeconds);
                 await Task.Delay(delay, clock, stop);
                 await context.CommandGate.WaitAsync(stop);

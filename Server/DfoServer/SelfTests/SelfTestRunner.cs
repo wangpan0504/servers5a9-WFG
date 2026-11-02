@@ -32,6 +32,7 @@ internal static class SelfTestRunner
         BattlePassMissionTests.RunCore();
         await BattlePassRewardTests.RunMissionAckAsync();
         await BattlePassRewardTests.RunReadyProjectionAsync();
+        await BattlePassMissionTests.RunOnlineReadyPeriodAsync();
         BattlePassEnhancementTests.RunCore();
         BattlePassRepairTests.RunCore();
         BattlePassCeraConsumptionTests.RunCore();
