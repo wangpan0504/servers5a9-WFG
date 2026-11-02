@@ -313,6 +313,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             TitleSections = ReadTitleSections(db, character.Id, transaction),
             CollectBox = ReadCollectBox(db, character.Id, transaction),
             EpicProduction = ReadEpicProduction(db, character.Id, transaction),
+            EpicWishes = ReadEpicWish(db, character.Id, transaction),
             PvpTrainingSkills = ReadPvpTrainingSkills(db,character.Id,transaction),
             PvpPrivate = ReadPvpPrivate(db,character.Id,transaction)
         };

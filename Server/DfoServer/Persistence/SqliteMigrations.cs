@@ -349,6 +349,8 @@ internal static class SqliteMigrations
         new(187, "战令任务周期与真实来源经验账", BattlePassMissionSchema.Upgrade),
         new(188, "战令资格购买原子订单", BattlePassCertificateSchema.Upgrade),
         new(189, "战令实际点券消费经验与累计余数", BattlePassCeraConsumptionSchema.Upgrade),
+        new(190, "角色史诗祈愿清单", static (db, tx) => Execute(db, tx,
+            EpicWishSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2530,6 +2532,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV180),
+            ("character_epic_wishes",EpicWishSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

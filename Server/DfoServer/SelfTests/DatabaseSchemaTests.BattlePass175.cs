@@ -139,7 +139,7 @@ internal static partial class DatabaseSchemaTests
                 var repository = new CharacterRepository(path);
                 _ = new CharacterRepository(path);
                 using (var db = Open(path))
-                    Check(Query(db, "PRAGMA user_version") is long version && version == 189 && version == SqliteMigrations.CurrentVersion &&
+                    Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
                         Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('account_battle_pass_seasons','account_battle_pass_claims','battle_pass_season_rules','account_battle_pass_mission_progress','account_battle_pass_mission_claims','account_battle_pass_source_events','account_battle_pass_certificate_orders','account_battle_pass_cera_consumption','account_battle_pass_cera_orders')") is 9L &&
                         Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L && AssetSnapshot(path) == assets &&
                         UpstreamRows(path) == upstreamRows &&
@@ -156,7 +156,7 @@ internal static partial class DatabaseSchemaTests
                         Query(db, "SELECT count(*) FROM character_privilege_service") is long privilegeRows && privilegeRows == (sourceVersion == 175 ? 0 : 1) &&
                         Query(db, "SELECT potion_until||':'||aura_until||':'||upgrade_aura_until||':'||party_aura_until||':'||privilege_until FROM character_teleport_cooldowns WHERE character_id=1") is string cooldowns &&
                         cooldowns == $"1000:2000:3000:4000:{(sourceVersion >= 179 ? 5000 : 0)}",
-                        $"{sourceVersion}升级189创建九张表，保留婚姻礼遇、漩涡水位、传送冷却和资产并可重复打开");
+                        $"{sourceVersion}升级当前版本创建九张战令表，保留婚姻礼遇、漩涡水位、传送冷却和资产并可重复打开");
                 var owners = new AccountOwners();
                 using var owner = owners.Acquire("pass-migrate", () => { });
                 var state = repository.ReadBattlePass(owner, "migration-season");

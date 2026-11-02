@@ -94,6 +94,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] DazzlementState { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public byte[] EpicProductionState { get; private set; } = [];
+    public byte[] EpicWishInformation { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
@@ -1222,6 +1223,21 @@ internal sealed partial class TcpPeer : IDisposable
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
             if (notice == ((byte)0, (ushort)3))
             {
+                EpicWishInformation = Expect(0, 1292).Body;
+                TestCheck.That(EpicWishInformation.Length > 0 && EpicWishInformation[0] <= 5 &&
+                    EpicWishInformation.Length == 1 + EpicWishInformation[0] * 4,
+                    "史诗祈愿在图鉴后初始化，保留至多五个完整u32槽");
+                int[] wishes = Enumerable.Range(0, EpicWishInformation[0])
+                    .Select(index => checked((int)U32(EpicWishInformation, 1 + index * 4))).ToArray();
+                TestCheck.That(wishes.Where(id => id != 0).Distinct().Count() == wishes.Count(id => id != 0),
+                    "祈愿初始化允许多个空槽但不重复非空装备");
+                if (fixture is not null)
+                {
+                    var savedWishes = fixture.Query("SELECT item_ids FROM character_epic_wishes WHERE character_id=$p0", U16(prefix[0].Body, 9));
+                    int[] expectedWishes = savedWishes.Length == 0 ? [] :
+                        System.Text.Json.JsonSerializer.Deserialize<int[]>((string)savedWishes[0][0]!)!;
+                    TestCheck.That(wishes.SequenceEqual(expectedWishes), "祈愿初始化逐槽匹配本人存档，不沿用其他角色清单");
+                }
                 var packet = Read();
                 TestCheck.That(packet.Kind==0 && packet.Opcode==1358 && packet.Body.Length==32 && U32(packet.Body,0)==U16(prefix[0].Body,9) &&
                     packet.Body[16]==0 && packet.Body[18]==0 && packet.Body[19]==0,

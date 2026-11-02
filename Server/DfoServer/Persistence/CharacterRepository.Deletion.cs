@@ -42,7 +42,7 @@ internal sealed partial class CharacterRepository
         "character_quest_special_reward_claims", "character_quest_effect_receipts",
         "character_active_main_quests", "character_completed_quests", "character_skill_bindings",
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
-        "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings", "character_quest_notify",
+        "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings", "character_quest_notify", "character_epic_wishes",
         "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_exp_bonus", "character_consumable_states", "character_expert_job", "character_expert_meta", "character_assault_daily", "character_beast_dungeon_entries", "character_crack_daily", "character_growup_change", "character_weekly_dungeon", "character_dungeon_incount",
         "character_collectbox_slots", "character_collectbox_expirations", "character_collectbox_state", "character_epic_production", "character_pvp_training_skills",
         "character_skill_switch_inventory_items", "character_skill_switch_inventory",

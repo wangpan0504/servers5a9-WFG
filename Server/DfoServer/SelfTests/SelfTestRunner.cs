@@ -387,6 +387,7 @@ internal static class SelfTestRunner
         DatabaseSchemaTests.RunStrongway2019Migrations();
         TutorialTests.RunCore();
         ClientSettingsStoreTests.Run();
+        EpicWishTests.RunCore();
         StoryDigestTests.Run();
         SettingsProtocolTests.Run();
         EmotionTests.RunCore();
@@ -613,6 +614,7 @@ internal static class SelfTestRunner
         EpicPieceTests.Run(towns, characters, itemResources);
         EpicExchangeTests.Run(towns, characters, itemResources);
         EpicProductionTests.RunResources(pvf,itemResources);
+        EpicWishTests.RunResources(itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
         CeraPackageAvatarTests.ShenxuanDefinitions(pvf, itemResources);
         BoosterTests.Run(towns, characters, itemResources);

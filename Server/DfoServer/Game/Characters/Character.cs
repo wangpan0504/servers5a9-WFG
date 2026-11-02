@@ -47,6 +47,7 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public SkillSwitchInventoryState SkillSwitchInventory { get; init; } = SkillSwitchInventoryState.Empty;
     public DfoServer.Game.CollectBox.CollectBoxState CollectBox { get; init; } = DfoServer.Game.CollectBox.CollectBoxState.Empty;
     public DfoServer.Game.EpicProduction.EpicProductionState EpicProduction { get; init; } = DfoServer.Game.EpicProduction.EpicProductionState.Empty;
+    public DfoServer.Game.EpicWish.EpicWishList EpicWishes { get; init; } = DfoServer.Game.EpicWish.EpicWishList.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }
     public DfoServer.Game.Town.TeleportCooldowns TeleportCooldowns { get; init; } = new();

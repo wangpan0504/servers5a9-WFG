@@ -111,6 +111,7 @@ $keywordGroups = [ordered]@{
     'CashShop|Cera' = 'cash-shop','cera-package'
     'Shop'       = 'shop'
     'Setting'    = 'settings','settings-storage'
+    'EpicWish'   = 'epic-wish','epic-wish-storage'
     'Tutorial'   = 'tutorial'
     'Channel'    = 'channel-entry'
     'TagEvildom' = 'tag-evildom','channel-entry'
