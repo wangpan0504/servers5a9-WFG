@@ -15,6 +15,7 @@ internal static partial class AntonTcpProbe
         internal readonly Queue<ushort> Available = new();
         internal readonly HashSet<ushort> Granted = [];
         internal readonly HashSet<ushort> Candidates = [];
+        internal List<WirePacket>? Entry;
         internal int Next = 1;
     }
 
@@ -22,8 +23,25 @@ internal static partial class AntonTcpProbe
 
     static bool IsFiendwarDungeon(int dungeon) => dungeon is >= 291100339 and <= 291100364 or >= 5350 and <= 5358;
 
+    static void RememberFiendwarEntry(TcpPeer peer, List<WirePacket> rows)
+    {
+        if (rows.Any(packet => packet is { Kind: 0, Opcode: 27 }) &&
+            rows.Any(packet => packet is { Kind: 0, Opcode: 28, Body.Length: >= 4 } && IsFiendwarDungeon(checked((int)TcpPeer.U32(packet.Body)))) &&
+            rows.Any(packet => packet is { Kind: 0, Opcode: 29 }))
+            keyLeases.GetOrCreateValue(peer).Entry = [.. rows];
+    }
+
+    internal static List<WirePacket> TakeFiendwarEntry(TcpPeer peer, int dungeon)
+    {
+        if (!keyLeases.TryGetValue(peer, out var state) || state.Entry is not { } rows ||
+            !rows.Any(packet => packet is { Kind: 0, Opcode: 28, Body.Length: >= 4 } && TcpPeer.U32(packet.Body) == (uint)dungeon))
+            throw new InvalidOperationException(dungeon + " 尚无真实36触发的完整入场场景");
+        state.Entry = null;
+        return rows;
+    }
+
     // 假客户端也走真实grant/ready，不以高键绕过整路线、Ground及所有成员的占用判断。
-    static bool ProcessFiendwarKeyNotice(TcpPeer peer, WirePacket packet)
+    internal static bool ProcessFiendwarKeyNotice(TcpPeer peer, WirePacket packet)
     {
         if (packet is not { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode }) return false;
         var body = packet.Body;

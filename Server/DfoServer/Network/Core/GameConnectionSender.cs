@@ -81,6 +81,20 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         return done.Task;
     }
 
+    // 自然区域共同入场必须区分真实写帧与守卫失效后的静默跳过。
+    internal async Task<bool> SendConfirmedAsync(byte kind, ushort opcode, byte[] body, string action, Func<bool> canSend)
+    {
+        bool written = false;
+        var outer = queuedPublication.Value?.Invoke();
+        bool Current() => (outer?.Invoke() ?? true) && canSend();
+        if (!owner.Execute(Current)) return false;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!Enqueue(new(Epoch, new(kind, opcode, body, action, done, Current, Written: () => written = true))))
+            done.TrySetException(new IOException("Game send queue unavailable"));
+        await done.Task;
+        return written;
+    }
+
     // 原生只读快照排队后仍须复核目录及角色；不改变已提交奖励的原发布语义。
     internal Task SendProtectedRevalidated(byte kind, ushort opcode, byte[] body, string action, Func<bool> canSend)
     {

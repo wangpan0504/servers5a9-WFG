@@ -111,6 +111,9 @@ internal static partial class FiendwarRaidTcpTests
         }
         var raid = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items).Find(2)!.Resources!;
+        var fieldEnemies = new HashSet<int>();
+        var fieldMonsters = new HashSet<int>();
+        var clearedAreas = new HashSet<int>();
         using var peer = Open(fixture, "fiendflow", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
         peer.Select();
         Read("selected");
@@ -155,10 +158,11 @@ internal static partial class FiendwarRaidTcpTests
             "商人区域来自原资源并提供完整停留秒数");
         Travel(merchant[0]);
         BuyMerchant(true, "at merchant");
-        Travel(raid.Fiendwar!.Areas[area].Neighbours.First(next => next is not (30 or 31)));
+        Travel(raid.Fiendwar!.Areas[area].Neighbours.First(next => next is not (30 or 31) &&
+            !fieldEnemies.Contains(next) && !fieldMonsters.Contains(next)));
         BuyMerchant(false, "left merchant");
         Travel(2);
-        Travel(15);
+        Travel(15, clearEncounter: false);
         var report = new AntonTcpProbe.AntonProbeReport();
         int eventsBeforeRadar = fixture.Events().Length;
         int radarDungeon = raid.Fiendwar!.Areas[15].DungeonId;
@@ -201,18 +205,27 @@ internal static partial class FiendwarRaidTcpTests
             That(expected ? Convert.ToInt64(after[0][0]) < Convert.ToInt64(before[0][0]) : Equals(after[0][0], before[0][0]),
                 "商人实际购买扣费，拒绝不扣费：" + action);
         }
-        void Travel(int target)
+        void Travel(int target, bool clearEncounter = true)
         {
-        var queue = new Queue<int>(); queue.Enqueue(area);
-        var previous = new Dictionary<int, int> { [area] = -1 };
-        while (queue.TryDequeue(out int current) && !previous.ContainsKey(target))
-            foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next is not (30 or 31)))
-                if (previous.TryAdd(next, current)) queue.Enqueue(next);
+        for (int budget = 0; area != target; budget++)
+        {
+        That(budget < 60, "按实际兵线逐区移动在完整地图预算内抵达目标");
+        var previous = FindPath(allowEnemies: false);
+        if (!previous.ContainsKey(target)) previous = FindPath(allowEnemies: true);
+        That(previous.ContainsKey(target), "原生地图存在合法目标路线，空路被封时正常清沿途真实遭遇");
         var path = new List<int>();
         for (int step = target; step != area; step = previous[step]) path.Add(step);
-        path.Reverse();
-        foreach (int next in path)
+        int next = path[^1];
+        Dictionary<int, int> FindPath(bool allowEnemies)
         {
+        var queue = new Queue<int>(); queue.Enqueue(area);
+        var links = new Dictionary<int, int> { [area] = -1 };
+        while (queue.TryDequeue(out int current) && !links.ContainsKey(target))
+            foreach (int node in raid.Fiendwar!.Areas[current].Neighbours.Where(node => node == target ||
+                node is not (30 or 31) && (allowEnemies || !fieldEnemies.Contains(node) && !fieldMonsters.Contains(node))))
+                if (links.TryAdd(node, current)) queue.Enqueue(node);
+        return links;
+        }
             var destination = new Location(57, checked((byte)next), 0, 0);
             var arrival = resources.Towns.Entrance(new(57, checked((byte)area), 0, 0), destination, new HashSet<int> { 8672 });
             That(arrival is not null, "资源有真实相邻区域落点：" + area + "->" + next);
@@ -221,9 +234,46 @@ internal static partial class FiendwarRaidTcpTests
             That(moved.Any(packet => packet is { Kind: 0, Opcode: 23 } && packet.Body[2] == 57 && packet.Body[3] == next),
                 "真实36沿三路战场移动：" + area + "->" + next);
             area = next;
+            if ((clearEncounter || next != target) && moved.Any(packet => packet is { Kind: 0, Opcode: 28 }))
+            {
+                int dungeon = raid.Fiendwar!.Areas[next].DungeonId;
+                int boundary = fixture.Events().Length;
+                var travelReport = new AntonTcpProbe.AntonProbeReport { Observe = packet => Observe([packet]) };
+                AntonTcpProbe.Enter(peer, raid.EntryCatalog!, dungeon, travelReport, clear: true, requireClearNotice: false);
+                That(fixture.Events().Skip(boundary).Any(row => row.GetProperty("Kind").GetString() == "formal_dungeon_death" &&
+                    row.GetProperty("Detail").TryGetProperty("ClearFact", out var fact) &&
+                    fact.ValueKind == System.Text.Json.JsonValueKind.Object && fact.GetProperty("DungeonId").GetUInt32() == (uint)dungeon &&
+                    row.GetProperty("Detail").GetProperty("Outcome").GetInt32() == 0),
+                    "商人与敌军同区或路线被封时先以真实39完成沿途遭遇，不在Loading或Dungeon放宽购买");
+                That(peer.SavedTownPosition().Area == next,
+                    "正常42回到遭遇所在原地区，再继续路线或真实商店购买");
+                clearedAreas.Add(next);
+                Read("cleared target encounter " + next);
+            }
         }
         }
 
-        List<WirePacket> Read(string action) => AntonTcpProbe.Barrier(peer, "fiendwar " + action);
+        List<WirePacket> Read(string action)
+        {
+            var rows = AntonTcpProbe.Barrier(peer, "fiendwar " + action);
+            Observe(rows);
+            return rows;
+        }
+        void Observe(IEnumerable<WirePacket> rows)
+        {
+            foreach (var frame in rows.Where(frame => frame is { Kind: 0, Opcode: 1526 or 1527 }))
+            {
+                int width = frame.Opcode == 1526 ? 10 : 14;
+                That(frame.Body.Length == 1 + frame.Body[0] * width, "主流程按完整原生兵线通知选择路线");
+                var units = frame.Opcode == 1526 ? fieldMonsters : fieldEnemies;
+                for (int index = 0; index < frame.Body[0]; index++)
+                {
+                    int at = 1 + index * width;
+                    if (U32(frame.Body, at + 6) == 1) units.Add(frame.Body[at]);
+                    else if (U32(frame.Body, at + 6) == 2) units.Remove(frame.Body[at]);
+                    else That(false, "主流程兵线仅接受原生增删操作");
+                }
+            }
+        }
     }
 }

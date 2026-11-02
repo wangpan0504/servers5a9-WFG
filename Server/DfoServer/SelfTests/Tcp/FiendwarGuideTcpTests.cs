@@ -249,19 +249,12 @@ internal static class FiendwarGuideTcpTests
         }
         void Clear(int dungeon, int route)
         {
-            bool direct = dungeon == 5350;
-            if (!direct)
-            {
-                peer.Send(15, BitConverter.GetBytes(dungeon));
-            }
-            byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone(); BinaryPrimitives.WriteInt32LittleEndian(request, dungeon);
-            peer.Send(16, request); var entered = Read();
-            if (!direct)
-                That(entered.Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "引导连续15/16在握手后接受真实选图");
-            That(entered.Any(row => row is { Kind: 0, Opcode: 28 }), "引导正式选图进入：" + dungeon);
+            var entered = AntonTcpProbe.TakeFiendwarEntry(peer, dungeon);
+            That(entered.Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "引导36确认后由真实对象键握手发布选图回执");
+            That(entered.Any(row => row is { Kind: 0, Opcode: 28 }), "引导真实36进入：" + dungeon);
             That(entered.Count(row => row is { Kind: 0, Opcode: 27 }) == 1 &&
                 entered.FindIndex(row => row is { Kind: 0, Opcode: 27 }) < entered.FindIndex(row => row is { Kind: 0, Opcode: 28 }),
-                "引导连续15/16或直接16均只打开一次原生选图场景，再完整加载");
+                "引导36确认后只打开一次原生选图场景，再完整加载");
             var info = entered.Single(row => row is { Kind: 0, Opcode: 28 }).Body;
             var map = entered.Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             var ai = entered.SingleOrDefault(row => row is { Kind: 0, Opcode: 32752 })?.Body;

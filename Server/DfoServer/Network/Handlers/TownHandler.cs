@@ -3,11 +3,13 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 using DfoServer.Game.Session;
+using DfoServer.Game.Town;
 
 namespace DfoServer.Network.Handlers;
 
 internal sealed class TownHandler(TownProjection projection, ServerLog log, TagEvildomProjection? tagEvildom = null,
-    DfoServer.Game.Raids.FiendwarDungeonService? fiendwar = null) : IGameCommandModule
+    DfoServer.Game.Raids.FiendwarDungeonService? fiendwar = null,
+    Func<GameConnectionContext, AreaRequest, Task<bool>>? fiendwarEncounter = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -38,6 +40,8 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         var session = context.Session;
         var requested = TownRequests.Area(request.Body);
         if (BlockTownAction(context, request))
+            return CommandResult.Handled;
+        if (fiendwarEncounter is not null && await fiendwarEncounter(context, requested))
             return CommandResult.Handled;
         bool accepted = session.Travel(requested, out var receipt);
         log.Write("travel", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, Requested = requested, session.Selected?.Position, session.Selected?.Revision });

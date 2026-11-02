@@ -1,7 +1,13 @@
+using System.Buffers.Binary;
+using System.Net;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Raids;
+using DfoServer.Game.Session;
 using DfoServer.GameWorld.Raids;
+using DfoServer.Network;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Protocol;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -88,5 +94,72 @@ internal static class FiendwarBattlefieldTests
         That(timeout.Failed && !timeout.Cleared && engine.Tick(timeout, start.AddHours(2)).State == timeout,
             "全团超时失败且终态幂等");
         Console.WriteLine($"PASS {Count - before} 漩涡战场规则断言");
+    }
+
+    internal static async Task RunTimerProjectionAsync(FiendwarScript team, FiendwarScript guide)
+    {
+        int before = Count;
+        foreach (var script in new[] { team, guide })
+        {
+            var clock = new LukeRaidClockTests.Clock(DateTimeOffset.FromUnixTimeSeconds(1793410200));
+            var battle = new AntonRaidBattle(script.Script, kind: RaidKind.Fiendwar, clock: clock, fiendwar: script);
+            var view = battle.View;
+            var deadline = view.Fiendwar!.Deadline;
+            uint total = script.Guide ? 1800u : 3600u;
+            using var owner = new AccountOwners().Acquire("fiendwar-timer-" + script.Guide, () => { });
+            var session = new GameSession(null!, null!, owner);
+
+            async Task<List<byte[]>> Capture(Action<GameConnectionContext> post, Action beforeWrite)
+            {
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                using var stream = new GameSenderBudgetTests.HeldStream();
+                var remainingFrames = new List<byte[]>();
+                await using var sender = new GameConnectionSender(owner, stream, stop, 0,
+                    (_, opcode, _, body, _) => { if (opcode == 597) remainingFrames.Add(body.ToArray()); });
+                var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
+                var held = sender.Send(0, 2, [1], "fiendwar_timer_fixture_hold");
+                await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                try { post(context); beforeWrite(); }
+                finally { stream.Release.TrySetResult(); }
+                await held.WaitAsync(TimeSpan.FromSeconds(5));
+                await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                That(sender.PendingBytes == 0, "漩涡计时及跳过的旧快照完整释放发送预算");
+                return remainingFrames;
+            }
+
+            bool actorCurrent = true;
+            var initial = await Capture(context =>
+            {
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => actorCurrent);
+                var otherBattle = new AntonRaidBattle(script.Script, kind: RaidKind.Fiendwar, clock: clock, fiendwar: script);
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, otherBattle.View, () => true);
+            }, () => { clock.AdvanceMillisecondsWithoutCallbacks(7250); actorCurrent = false; });
+            That(initial.Count == 1 && initial[0].Length == 5 && initial[0][0] == 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(initial[0].AsSpan(1)) == total - 7,
+                "团队60分钟/引导30分钟使用597槽0；慢队列按写帧时实际余秒，旧actor和另一实例不发布");
+
+            var restored = await Capture(context =>
+            {
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+            }, () => clock.AdvanceWithoutCallbacks(5));
+            That(restored.Count == 2 && restored.All(body => body.Length == 5 && body[0] == 0 &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)) == total - 12) && battle.View.Fiendwar!.Deadline == deadline,
+                "重返新连接及重复战况快照恢复同一截止，不重给完整攻略时间");
+
+            var stale = await Capture(context => RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true),
+                () => That(battle.SetMechanism(battle.Instance, view.Revision, "[radar state]",
+                    1 - view.Symbols["[radar state]"]) is not null && battle.View.Revision > view.Revision,
+                    "真实机制更新替换原战况revision"));
+            That(stale.Count == 0, "排队后成为旧revision的计时快照不能覆盖新战况");
+
+            That(battle.View is { State: AntonRaidBattleState.Fighting, PhaseExpired: false,
+                Fiendwar: { Failed: false, Cleared: false } }, "到期回归从仍存活的正式战场开始");
+            var expired = await Capture(context => RaidCombatProjection.PostFiendwarSnapshot(context, battle, battle.View, () => true),
+                () => clock.AdvanceWithoutCallbacks(checked((int)total)));
+            That(expired.Count == 0, "排队期间真实deadline到期不续时、不猜发终局清理包");
+        }
+        Console.WriteLine($"PASS {Count - before} 漩涡双模式原生总计时投影断言");
     }
 }

@@ -68,7 +68,7 @@ internal sealed class GameCommandRegistry
         context.Owner.Execute(() => true);
         commands.TryGetValue(request.Opcode, out var command);
         CommandResult result = CommandResult.Unhandled;
-        Action? after = null;
+        Func<Task>? after = null;
         using (var gates = await DispatchGateScope.EnterAsync(context, request, command?.SharedGate))
         {
             context.DispatchGates = gates;
@@ -89,7 +89,7 @@ internal sealed class GameCommandRegistry
             after = context.AfterDispatch;
             context.AfterDispatch = null;
         }
-        after?.Invoke();
+        if (after is not null) await after();
         if (result == CommandResult.CloseConnection) await context.Sender.DrainAsync();
         return result;
     }

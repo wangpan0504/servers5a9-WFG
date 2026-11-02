@@ -28,6 +28,19 @@ internal static partial class RaidCombatProjection
     {
         if (battle.Kind != RaidKind.Fiendwar || view.Fiendwar is not { } field) return;
         bool Guard() => current() && battle.IsCurrent(view);
+        if (view.State == AntonRaidBattleState.Fighting && !view.PhaseExpired && !view.ClockFaulted && !field.Failed && !field.Cleared)
+        {
+            // 00DE9128读取597槽0；type45经01DD1752/01DD187C按同一秒时钟读写，1522本身不设置时间。
+            // 入场、重返和战况重放共用真实deadline，排队期间流逝的时间不能重新赠送。
+            context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
+                () =>
+                {
+                    var remaining = field.Deadline - battle.FiendwarNow;
+                    return remaining > TimeSpan.Zero
+                        ? RaidCombatPackets.PhaseRemaining(checked((uint)Math.Ceiling(remaining.TotalSeconds))) : null;
+                },
+                "fiendwar_remaining", Guard);
+        }
         // 差量在FIFO真正写帧时与已写展示比较；旧快照跳过不能吞掉后续必要删除。
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.FIEND_WAR_BOARD_USER_INFO, 1 + 16 * 13,
             () => FiendwarPackets.Users(context.FiendwarUsers.Where(row => view.FiendwarPositions.GetValueOrDefault(row.Key, -1) != row.Value)

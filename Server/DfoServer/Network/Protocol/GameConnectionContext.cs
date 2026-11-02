@@ -16,7 +16,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
-    internal Action? AfterDispatch { get; set; }
+    internal Func<Task>? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
     internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }

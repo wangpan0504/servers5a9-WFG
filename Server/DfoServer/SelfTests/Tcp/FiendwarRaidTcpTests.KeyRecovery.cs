@@ -161,8 +161,11 @@ internal static partial class FiendwarRaidTcpTests
 
     static void NoOutcome(List<WirePacket>[] rows, bool returning)
     {
-        That(rows.All(frames => !frames.Any(row => row is { Kind: 0, Opcode: 31 or 34 or 35 or 37 or 38 or 596 or 597 or 600 or 601 } ||
+        That(rows.All(frames => !frames.Any(row => row is { Kind: 0, Opcode: 31 or 34 or 35 or 37 or 38 or 596 or 600 or 601 } ||
             row is { Kind: 0, Opcode: 1523, Body: [3, 0, 0] })), "对象键恢复不伪造击杀、通关、翻牌或团本胜利");
+        var timers = rows.SelectMany(frames => frames).Where(row => row is { Kind: 0, Opcode: 597 }).ToArray();
+        That(timers.All(row => row.Body is [0, > 0, ..] && row.Body.Length == 5),
+            "对象键恢复允许真实597总计时刷新，但仅接受slot0且剩余秒数为正的完整5字节通知");
         That(rows.All(frames => !frames.Any(row => row is { Kind: 0, Opcode: 27 or 28 or 29 } ||
             !returning && row is { Kind: 0, Opcode: 23 or 24 })), "SQL失败及过期取消不提前切场，新Run入场只由原框架执行");
     }
