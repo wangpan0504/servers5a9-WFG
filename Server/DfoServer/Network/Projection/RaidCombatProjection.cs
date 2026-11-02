@@ -191,6 +191,10 @@ internal static partial class RaidCombatProjection
             return;
         }
         if (view.PhaseExpired) return;
+        // 业务Completed并非原生翻牌状态。无资格成员没有牌面可恢复，有资格成员的
+        // 末张结果也必须保留原窗口，均不能借587=4重开一个不可选择的空四卡/八卡页。
+        if (view.State == AntonRaidBattleState.Completed && context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Luke)
+            return;
         // Luke的业务Completed与原生state4共用数值，但state4会重新安装翻牌组合对象。
         // 本阶段牌面已打开时，末张600后的业务终结只更新名册/次数，不重建正在播放的第二轮翻牌。
         if (view.State == AntonRaidBattleState.Completed &&
@@ -218,6 +222,8 @@ internal static partial class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } rewardLuke)
+                context.LukeResults.PostIneligible(context, actor, rewardLuke, view);
             if (view.Phase == 0 && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } lukeMovie)
                 PostLukeMovieCards(context, actor, lukeMovie, view);
             if (view.State == AntonRaidBattleState.Reward &&

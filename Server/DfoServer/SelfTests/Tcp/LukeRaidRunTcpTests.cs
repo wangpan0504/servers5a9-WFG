@@ -570,6 +570,12 @@ internal static partial class LukeRaidRunTcpTests
     }
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 588 })
+        {
+            That(packet.Body.Length is >= 6 and <= 260 && packet.Body[0] == 0 &&
+                U32(packet.Body, 1) == packet.Body.Length - 5, "588资格提示严格按原生有界CP936字节正文编码");
+            return;
+        }
         if (packet is { Kind: 0, Opcode: 31 })
         { That(packet.Body.Length == 0, "31严格空体，独立许可每场结算"); return; }
         if (packet is { Kind: 0, Opcode: 115 })

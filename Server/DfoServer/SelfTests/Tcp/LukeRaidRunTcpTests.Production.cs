@@ -16,13 +16,17 @@ namespace DfoServer.Testing;
 
 internal static partial class LukeRaidRunTcpTests
 {
-    internal static Task ProductionAsync(ServerOptions source, string root, TcpTestResources resources) => ProductionCoreAsync(source, root, resources, false);
+    internal static async Task ProductionAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await ProductionCoreAsync(source, root, resources, false);
+        await ProductionCoreAsync(source, Path.Combine(root, "ineligible"), resources, false, ineligible: true);
+    }
     internal static async Task RecoveryAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         foreach (int mode in new[] { 0, 1, 2 })
             await ProductionCoreAsync(source, Path.Combine(root, "recovery-mode-" + mode), resources, true, mode);
     }
-    static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0, bool battlePassDeath = false)
+    static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0, bool battlePassDeath = false, bool ineligible = false)
     {
         static WirePacket Until(TcpPeer peer, byte kind, ushort opcode, List<WirePacket>? observed = null)
         {
@@ -53,7 +57,7 @@ internal static partial class LukeRaidRunTcpTests
         var catalog = definition.Resources!.EntryCatalog!;
         var repository = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var port = ChannelTcpTests.Endpoints(fixture)[20];
-        foreach (int count in recovery || battlePassDeath ? new[] { 1 } : new[] { 1, 4, 8 })
+        foreach (int count in recovery || battlePassDeath || ineligible ? new[] { 1 } : new[] { 1, 4, 8 })
         {
             var peers = new List<TcpPeer>();
             try
@@ -187,6 +191,23 @@ internal static partial class LukeRaidRunTcpTests
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE account=$p0 AND raid_type=1", "lkprod1_0") is [[1L]],
                         "重返不增加账号入场计数");
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0", original) is [[1L]], "重返保留原实例账本，不重复扣票");
+                }
+                if (ineligible)
+                {
+                    // 隔离库已有两次阶段资格但未最终通关；真实新开战仍合法，领奖额度保持耗尽。
+                    int week = new RaidWeeklyCycle(DayOfWeek.Sunday, new(6, 0), TimeSpan.FromHours(8)).Key(clock.GetUtcNow());
+                    for (int previous = 0; previous < 2; previous++)
+                    {
+                        var old = Guid.NewGuid(); var first = Guid.NewGuid(); var second = Guid.NewGuid();
+                        string Receipt(int phase, Guid eventId) => System.Text.Json.JsonSerializer.Serialize(
+                            new RaidPhaseEligibility(old, RaidKind.Luke, phase, eventId, 0, leader.Id,
+                                false, true, "eligible", "fixture/previous", week, []));
+                        fixture.Sql("INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state," +
+                            "phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt) " +
+                            "VALUES($p0,$p1,$p2,1,'fixture/previous',0,1,$p3,0,$p4,$p5,0,$p6)", leader.Id,
+                            $"lkprod{count}_0", old.ToString("N"), first.ToString("N"), Receipt(0, first),
+                            second.ToString("N"), Receipt(1, second));
+                    }
                 }
                 var members = peers.Take(4).ToArray(); var others = peers.Skip(4).ToArray();
                 if (!recovery) SelectionBoundaries(members, leader, 5054);
@@ -405,7 +426,7 @@ internal static partial class LukeRaidRunTcpTests
                     if (terminal)
                     {
                         returned=phaseResults![leader];
-                        if (phase == 1)
+                        if (phase == 1 && !ineligible)
                         {
                             var frozen = members.OrderBy(peer => peer.Id).Select(peer =>
                                 System.Text.Json.JsonSerializer.Deserialize<RaidPhaseEligibility>((string)fixture.Query(
@@ -435,8 +456,12 @@ internal static partial class LukeRaidRunTcpTests
                             foreach (var peer in peers)
                             {
                                 var frames = phaseResults[peer];
-                                Bytes(frames.Single(packet => packet is { Kind: 0, Opcode: 600, Body: [3, ..] }).Body,
-                                    expectedTeam, "全团在首次选牌及state4前收到完整冻结权益，包括尚未点击的晚领奖成员");
+                                if (members.Contains(peer))
+                                    Bytes(frames.Single(packet => packet is { Kind: 0, Opcode: 600, Body: [3, ..] }).Body,
+                                        expectedTeam, "有资格成员在首次选牌及state4前收到完整冻结权益，包括尚未点击的晚领奖成员");
+                                else That(!frames.Any(packet => packet.Opcode == 600) &&
+                                    frames.Count(packet => packet is { Kind: 0, Opcode: 588 }) == 1,
+                                    "无P2参与资格的待命成员只播放演出及原因，不安装不可选择的权益页");
                                 That(!frames.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [4, ..] }),
                                     "完整团队模型先于原生组合state4计时安装，不等待15秒后补空页");
                             }
@@ -449,6 +474,13 @@ internal static partial class LukeRaidRunTcpTests
                             That(frames.FindIndex(packet=>packet is {Kind:0,Opcode:24}) is var town&&town>=0&&
                                 frames.FindIndex(packet=>packet is {Kind:0,Opcode:601})>town,
                                 "选图待命成员也先24自动回城再601，不被阶段状态先行覆盖");
+                        }
+                        if (ineligible)
+                        {
+                            foreach (var frames in phaseResults.Values)
+                                That(frames.Count(packet => packet is { Kind: 0, Opcode: 588 }) == 1 &&
+                                    !frames.Any(packet => packet.Opcode == 600 || packet is { Kind: 0, Opcode: 587, Body: [4, ..] }),
+                                    "真实阶段额度耗尽仍601及Reward演出并提示一次原因，不安装空团队页/四卡/八卡");
                         }
                         updates.AddRange(phaseResults.Values.SelectMany(frames=>frames));
                         That(phaseResults.Values.All(frames=>!frames.Any(packet=>packet is {Kind:0,Opcode:261,Body:[9]})),
@@ -528,10 +560,30 @@ internal static partial class LukeRaidRunTcpTests
                 foreach (int dungeon in new[] { 5054, 5055, 5056 }) for (int step = 0; step < 3; step++) Run(dungeon, 0);
                 That(facilityCounts.Values.All(value => value > 0),
                     "正常生产1/4/8人完整路线均实际报告三圣所设施，不以始终为零的快照冒充蓝格联通");
-                string instance = (string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0", leader.Id)[0][0]!;
+                string instance = (string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0 AND state=0", leader.Id)[0][0]!;
                 That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL", instance)
                     is [[long p1]] && p1 == count, "完整P1九次圣所签发逐人持久资格");
-                if (recovery)
+                void FinishIneligible(int phase)
+                {
+                    var peer = peers[0];
+                    string before = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
+                    peer.Send(659, [0]); var skipped = Drain(peer, true);
+                    That(skipped.Count(packet => packet is { Kind: 0, Opcode: 599 }) == 1 &&
+                        !skipped.Any(packet => packet.Opcode is 600 or 588), "无资格演出仍接受真实跳过，只通知一次且不重发原因");
+                    peer.Send(659, [1]); var completed = Drain(peer, true);
+                    That(completed.Count(packet => packet is { Kind: 1, Opcode: 659, Body: [1] }) == 1 &&
+                        !completed.Any(packet => packet.Opcode is 600 or 588 || packet is { Kind: 0, Opcode: 587, Body: [4, ..] }) &&
+                        (phase == 1 || completed.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [5, 0] })),
+                        "真实659完成后P1进入待命、P2结束，不借Completed数字重开空翻牌");
+                    peer.Send(660, [1, 2]); var rejected = Drain(peer, true);
+                    That(rejected.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [0, 0x12, 0] }) &&
+                        !rejected.Any(packet => packet.Opcode is 600 or 588), "无资格660明确拒绝，不能由演出确认恢复奖励");
+                    That(fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") == before &&
+                        fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0", instance) is [[0L]],
+                        "无资格演出和拒绝零资产变化、零领奖收据");
+                }
+                if (ineligible) FinishIneligible(0);
+                else if (recovery)
                 {
                     clock.Advance(186);
                     await WaitAsync(() => fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0", instance) is [[1L]], "P1在线超时自动领取真实奖励");
@@ -562,6 +614,12 @@ internal static partial class LukeRaidRunTcpTests
                 foreach (int dungeon in new[] { 5311, 5313, 5057, 5058, 5059, 5060, 5064, 5065, 5061, 5066, 5062 }) Run(dungeon, 1);
                 That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND state=2", instance)
                     is [[long p2]] && p2 == count, "完整P2自然前置和光暗王座才记成功通关");
+                if (ineligible)
+                {
+                    FinishIneligible(1);
+                    Console.WriteLine("PASS Luke production phase limits preserve both movies without empty cards");
+                    continue;
+                }
                 if (recovery)
                 {
                     ushort original = leader.Id;
