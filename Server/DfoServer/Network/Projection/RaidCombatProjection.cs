@@ -238,7 +238,7 @@ internal static partial class RaidCombatProjection
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "anton_movie_skip", Cards);
                 foreach (var offer in policy.Offers)
                     context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
-                        new byte[] { offer.Kind, 0 }, "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
+                        AntonRewardPackets.Choices(offer.Kind), "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
             }
             if (view.State == AntonRaidBattleState.Intermission &&
                 context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)

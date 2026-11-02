@@ -64,7 +64,9 @@ internal static partial class SinglePlayerDungeonRunTests
             "双金库请求只能选择明确个人或账号容器");
         That(HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {nonce} 99")) == new HelperRequest(nonce, 99, false) &&
             HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {nonce} 099")) is null &&
-            HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/2 {nonce} 99")) is null,
+            HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/2 {nonce} 99")) ==
+                new HelperRequest(nonce, 99, false, CapabilityVersion: 2) &&
+            HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/3 {nonce} 99")) is null,
             "静默库存同步扩展严格识别版本、nonce和规范角色号");
         foreach (string text in new[] { $"#95-helper/2 {nonce} 99 hell 1", $"#95-helper/1 {nonce} 099 hell 1",
             $"#95-helper/1 {nonce} 0 hell 1", $"#95-helper/1 {nonce} 99 hell 2", "#95-helper/1 " + new string('0', 32) + " 99 hell 1" })
