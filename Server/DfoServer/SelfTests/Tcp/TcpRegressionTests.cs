@@ -18,6 +18,8 @@ internal static class TcpRegressionTests
             await FiendwarGuideTcpTests.RunAsync(options, root, resources);
             await FiendwarGuideTcpTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
         }),
+        ("battle-pass-fiendwar-guide-death", FiendwarGuideTcpTests.RunBattlePassDeathAsync),
+        ("battle-pass-fiendwar-guide-writer", FiendwarGuideTcpTests.RunBattlePassDeathWriterAsync),
         ("fiendwar-recovery", FiendwarRecoveryTests.RunAsync),
         ("fiendwar-reward-rules", (_, _, resources) =>
         {

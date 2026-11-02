@@ -22,11 +22,49 @@ internal static class FiendwarGuideTcpTests
     internal static async Task RunBattlePassNoticeAsync(ServerOptions source, string root, TcpTestResources resources)
         => await RunFixtureAsync(source, root, resources, true);
 
-    static async Task RunFixtureAsync(ServerOptions source, string root, TcpTestResources resources, bool battlePass)
+    internal static async Task RunBattlePassDeathAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        foreach (int mission in new[] { 1, 2 })
+            await RunFixtureAsync(source, Path.Combine(root, "mission-" + mission), resources, true, mission);
+        await RunFixtureAsync(source, Path.Combine(root, "rollback"), resources, true, 1, true);
+    }
+
+    internal static async Task RunBattlePassDeathWriterAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var failures = new List<Exception>();
+        foreach (int mode in new[] { 1, 2, 3 })
+        {
+            try
+            {
+                await RunFixtureAsync(source, Path.Combine(root, "writer-mode-" + mode), resources,
+                    battlePass: mode == 1, deathMission: 1, writerDeadline: mode);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"GUIDE_WRITER_DEADLINE_CASE mode={mode} {error}");
+                failures.Add(error);
+            }
+        }
+        if (failures.Count != 0) throw new AggregateException("Guide原死亡跨writer期限回归失败", failures);
+    }
+
+    static async Task RunFixtureAsync(ServerOptions source, string root, TcpTestResources resources, bool battlePass,
+        int deathMission = 0, bool failDeath = false, int writerDeadline = 0)
     {
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-11-03T00:00:00Z"));
         var startAt = DateTimeOffset.Parse("2026-10-29T06:00:00+08:00");
+        if (deathMission != 0)
+        {
+            var policy = new BattlePassMissionPolicy("fiendwar-notice-fixture", startAt, BattlePassCatalog.Load(resources.Archive));
+            clock = new LukeRaidClockTests.Clock(Enumerable.Range(0, policy.Days)
+                .Select(day => startAt.AddDays(day).AddHours(2))
+                .First(at => policy.Active(at).Any(row => row.Key.Category == 0 && row.Key.Id == deathMission)));
+        }
         if (battlePass) source = source with { BattlePassSeasonKey = "fiendwar-notice-fixture", BattlePassSeasonStart = startAt };
+        if (writerDeadline == 2)
+            source = source with { BattlePassSeasonKey = null, BattlePassSeasonStart = null };
+        if (writerDeadline == 3)
+            source = source with { BattlePassSeasonKey = "fiendwar-notice-fixture", BattlePassSeasonStart = startAt.AddDays(70) };
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-guide"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var repository = new CharacterRepository(fixture.Database);
@@ -60,7 +98,10 @@ internal static class FiendwarGuideTcpTests
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
         var missionPackets = new List<byte[]>();
+        byte[]? originalPartyRemoval = null;
         int dynamicSpawnRooms = 0;
+        int guideDeaths = 0, guideBossDeaths = 0;
+        bool rollbackChecked = false, writerDeadlineChecked = false;
         Select();
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
@@ -92,6 +133,22 @@ internal static class FiendwarGuideTcpTests
                 if (next == 35) Move(35, 36, accepted: false);
                 if (battlePass && dungeon == 5356) missionPackets.Clear();
                 Clear(dungeon, route);
+                if (deathMission != 0)
+                {
+                    if (writerDeadline != 0)
+                        That(writerDeadlineChecked, "真实writer等待场景已完成");
+                    else if (failDeath)
+                        That(rollbackChecked, "引导真实死亡已触发战令来源晚期故障与原事务回滚");
+                    else
+                    {
+                        var persisted = ReadMissions();
+                        That(guideDeaths > 0 && guideBossDeaths > 0 &&
+                            persisted.Slots.Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == deathMission).Count ==
+                                Math.Min(deathMission == 1 ? guideDeaths : guideBossDeaths, deathMission == 1 ? 10 : 2),
+                            "原Repository重建恢复真实引导怪物与资源领主任务进度");
+                    }
+                    return;
+                }
                 peer.Send(42); Read();
                 if (battlePass && dungeon == 5356)
                 {
@@ -253,13 +310,138 @@ internal static class FiendwarGuideTcpTests
                 {
                     int offset = 19 + index * 22;
                     if (map[offset + 21] == 1 || map[offset + 13] == 9) continue;
-                    peer.Send(39, FormalDungeonTcpTests.Death(U16(map, offset + 6), peer.Id, map[offset + 12]));
+                    var deathRequest = FormalDungeonTcpTests.Death(U16(map, offset + 6), peer.Id, map[offset + 12]);
+                    var before = deathMission == 0 || writerDeadline > 1 ? null : ReadMissions();
+                    long sourcesBefore = SourceCount();
+                    var sourceMap = deathMission == 0 ? null : definition.Mazes.Single(row => row.SourceOrdinal == info[7])
+                        .MapSpecification!.Single(row => row.Position == path[step]);
+                    var actualMap = sourceMap is null ? null : sourceMap with
+                    {
+                        Id = checked((int)U32(map, 14)),
+                        Path = SelfTestCatalogs.Dungeons(resources.Archive).MapPath(checked((int)U32(map, 14)))!
+                    };
+                    var room = actualMap is null ? null : SelfTestCatalogs.Rooms(resources.Archive).Get(actualMap);
+                    var sourceMonster = room is null || map[offset + 13] >= 5 ? null : room.Monsters[checked((int)U32(map, offset + 2))];
+                    if (sourceMonster is not null)
+                        That(sourceMonster.MonsterId == U32(map, offset + 8), "原wire ordinal定位实际MAP怪物资源行");
+                    bool eligible = sourceMonster is { SpecialChild: null } && sourceMonster.MonsterId > 0;
+                    bool boss = eligible && sourceMonster!.RankKind == "[boss]" && room!.DeclaredType != "[dummy]";
+                    long growthBefore = GrowthCount();
+                    if (writerDeadline != 0 && eligible)
+                    {
+                        var originalWriterGate = (SemaphoreSlim)(typeof(SqliteWriteGate)
+                            .GetField("Gate", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                            .GetValue(null) ?? throw new InvalidOperationException("原writer gate缺失"));
+                        var waiterField = typeof(SemaphoreSlim).GetField("m_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                            ?? typeof(SemaphoreSlim).GetField("_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                            ?? throw new InvalidOperationException("原writer waiter计数不可观测");
+                        var plannedBeforeWait = clock.GetUtcNow();
+                        using (var holdDb = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                            { DataSource = fixture.Database, Pooling = false }.ToString()))
+                        {
+                            holdDb.Open();
+                            using var heldWriter = holdDb.BeginWrite("FiendwarGuideTcpTests.DeathWriterHold");
+                            using var heldTransaction = heldWriter.Transaction;
+                            That(originalWriterGate.CurrentCount == 0 && SqliteWriteGate.ActiveWriters == 1, "Guide原writer已真实持有");
+                            peer.Send(39, deathRequest);
+                            bool queued = SpinWait.SpinUntil(() => Convert.ToInt32(waiterField.GetValue(originalWriterGate)) >= 1,
+                                TimeSpan.FromSeconds(10));
+                            That(queued, "Guide真实39已冻结原死亡并在原writer闸门排队");
+                            // 只推进同一Battle时钟；不执行定时回调，以隔离writer等待跨双deadline。
+                            clock.AdvanceMillisecondsWithoutCallbacks(1810 * 1000);
+                            That(clock.GetUtcNow() == plannedBeforeWait.AddSeconds(1810), "真实排队后才跨过Guide战场和遭遇时限");
+                        }
+                        Exception? delayedDeathFailure = null;
+                        List<WirePacket> delayedDeathPackets = [];
+                        try { delayedDeathPackets = Read(); }
+                        catch (Exception error) { delayedDeathFailure = error; }
+                        long delayedGrowth = GrowthCount(), delayedSources = SourceCount();
+                        Console.WriteLine($"GUIDE_WRITER_WAIT_OBS mode={writerDeadline} growth={delayedGrowth} sources={delayedSources} failure={delayedDeathFailure?.GetType().Name}");
+                        That(delayedDeathFailure is null && delayedDeathPackets.Any(row => row is { Kind: 0, Opcode: 38 }) &&
+                            delayedGrowth == growthBefore + 1 && delayedSources == sourcesBefore + (writerDeadline == 1 ? 1 : 0),
+                            "时限内冻结的Guide死亡跨writer与双deadline后仍提交原成长");
+                        if (writerDeadline == 1)
+                            That(ReadMissions().Slots.Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1).Count == before!.Slots.Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1).Count + 1,
+                                "有效战令季跨Battle期限仍仅推进原击杀来源一次");
+                        string committedDeath = DeathSnapshot();
+                        peer.Send(39, deathRequest); Read();
+                        That(DeathSnapshot() == committedDeath, "跨writer期限后原39重报仍只读原已提交死亡");
+                        writerDeadlineChecked = true;
+                        return;
+                    }
+                    if (deathMission != 0 && failDeath && eligible)
+                    {
+                        string saved = DeathSnapshot();
+                        fixture.Sql("CREATE TRIGGER fail_guide_bp BEFORE INSERT ON account_battle_pass_source_events " +
+                            "WHEN NEW.source_kind='fiendwar_guide_monster_death' BEGIN SELECT RAISE(ABORT,'guide battle pass rollback'); END");
+                        try
+                        {
+                            That(originalPartyRemoval is not null, "故障前原自然队伍名册已绑定本场身份");
+                            peer.Send(39, deathRequest);
+                            peer.Expect(0, 9, originalPartyRemoval!);
+                            peer.Closed();
+                            That(DeathSnapshot() == saved,
+                                "战令来源晚期失败回滚原成长回执、角色、来源、任务和赛季版本且不发死亡成功");
+                            rollbackChecked = true;
+                        }
+                        finally { fixture.Sql("DROP TRIGGER fail_guide_bp"); }
+                        return;
+                    }
+                    peer.Send(39, deathRequest);
                     That(Read().Any(row => row is { Kind: 0, Opcode: 38 }), "引导原房间怪物真实死亡");
+                    if (deathMission != 0)
+                    {
+                        if (eligible)
+                            That(GrowthCount() == growthBefore + 1 && fixture.Query(
+                                "SELECT COALESCE(sum(amount),0) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[0L]],
+                                "Guide原成长事务记录真实死亡但保持禁用杀怪经验");
+                        if (eligible) guideDeaths++;
+                        if (boss) guideBossDeaths++;
+                        var after = ReadMissions();
+                        bool hasKill = before!.Slots.Any(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1);
+                        bool hasBoss = before.Slots.Any(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 2);
+                        That(SourceCount() == sourcesBefore + (eligible && (hasKill || boss && hasBoss) ? 1 : 0),
+                            "真实Guide原死亡按原EventId只记一次来源，非目标演员不借来源");
+                        foreach (var slot in before.Slots)
+                        {
+                            bool advances = eligible && slot.Instance.Key.Category == 0 &&
+                                (slot.Instance.Key.Id == 1 || boss && slot.Instance.Key.Id == 2);
+                            long expected = advances ? Math.Min(slot.Instance.Definition.RequiredCount, slot.Count + 1) : slot.Count;
+                            That(after.Slots.Single(row => row.Instance.Key == slot.Instance.Key).Count == expected,
+                                "真实死亡只推进资源击杀定义，领主取原MAP rank并排除dummy");
+                        }
+                        That(after.Season.TotalExperience == before.Season.TotalExperience,
+                            "击杀只累计任务进度，不提前领取任务经验");
+                        string saved = DeathSnapshot();
+                        peer.Send(39, deathRequest); Read();
+                        That(DeathSnapshot() == saved, "同一原39重报不重复成长、来源、进度或季版本");
+                    }
                     That(fixture.Query("SELECT count(*) FROM character_fiendwar_title_facts WHERE character_id=$p0", peer.Id) is [[0L]],
                         "官方Guide真实击杀与清图不产生团队漩涡称号事实");
                 }
             }
         }
+        BattlePassMissionState ReadMissions()
+        {
+            var observer = new CharacterRepository(fixture.Database);
+            observer.ConfigureBattlePassMissions(new BattlePassMissionPolicy("fiendwar-notice-fixture", startAt,
+                BattlePassCatalog.Load(resources.Archive)));
+            using var observerOwner = new AccountOwners().Acquire("fwguide", () => { });
+            return observer.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!;
+        }
+        long SourceCount() => deathMission == 0 ? 0 : Convert.ToInt64(fixture.Query(
+            "SELECT count(*) FROM account_battle_pass_source_events WHERE account='fwguide' AND source_kind='fiendwar_guide_monster_death'")[0][0]);
+        long GrowthCount() => deathMission == 0 ? 0 : Convert.ToInt64(fixture.Query(
+            "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id)[0][0]);
+        string DeathSnapshot() => System.Text.Json.JsonSerializer.Serialize(new object[]
+        {
+            fixture.Query("SELECT * FROM characters ORDER BY id"),
+            fixture.Query("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id"),
+            fixture.Query("SELECT * FROM account_battle_pass_source_events ORDER BY account,source_kind,source_id"),
+            fixture.Query("SELECT * FROM account_battle_pass_mission_progress ORDER BY account,season_key,category,period_key,mission_id"),
+            fixture.Query("SELECT * FROM account_battle_pass_seasons ORDER BY account,season_key")
+        });
+
         void Select(ushort slot = 0)
         {
             peer.Select(slot);
@@ -270,6 +452,22 @@ internal static class FiendwarGuideTcpTests
         List<WirePacket> Read()
         {
             var rows = AntonTcpProbe.Barrier(peer, "fiendwar guide");
+            foreach (var roster in rows.Where(row => row is { Kind: 0, Opcode: 9, Body.Length: > 11 } && row.Body[9] == 0))
+            {
+                That(U16(roster.Body) == 1 && U16(roster.Body, 2) == 9999 && U16(roster.Body, 4) != 0 &&
+                    roster.Body[6] != 0 && roster.Body[7] == 39 && roster.Body[8] == 0 && roster.Body[10] == 0,
+                    "故障前原自然队伍名册保留完整队伍、server与channel身份");
+                // 沿现有TCP名册读宽独立消费标题和成员段，绑定本连接的原角色/槽0。
+                That(roster.Body[12] == 0, "本场原自然队伍名册使用完整自定义标题段");
+                int memberAt = checked(17 + (int)U32(roster.Body, 13) + 24);
+                That(roster.Body[memberAt++] == 1 && roster.Body[memberAt] == 0 &&
+                    U16(roster.Body, memberAt + 1) == peer.Id,
+                    "故障前原名册唯一成员绑定本连接原角色及槽0");
+                memberAt += 8;
+                That(roster.Body.Length == memberAt + 10 && roster.Body[memberAt] == 0 && roster.Body[memberAt + 2] == 0,
+                    "原名册无跨频道成员且队长仍为槽0，完整消费正文");
+                originalPartyRemoval = roster.Body[..9].Concat(new byte[] { 3, 0 }).ToArray();
+            }
             if (battlePass) missionPackets.AddRange(rows.Where(row => row is { Kind: 0, Opcode: 1801 }).Select(row => row.Body));
             foreach (var row in rows.Where(row => row is { Kind: 0, Opcode: 1446 }))
                 foreach (var (type, usage) in RaidPanelTests.ReadWeeklyClears(row.Body)) clears[type] = usage;

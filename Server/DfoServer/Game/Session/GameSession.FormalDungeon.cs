@@ -1415,7 +1415,9 @@ internal sealed partial class GameSession
                 { ReportedTarget = target, ClearFact = death.ClearFact, CulledMonsterKeys = death.CulledMonsterKeys,
                     BossPositionUpdate = death.BossPositionUpdate }, dungeon, target);
         }
-        pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System);
+        // 首次冻结即携带原攻坚绑定；普通入口不能先把Guide的空来源永久冻结。
+        pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System,
+            raidCombat?.Battle,raidCombat?.Actor);
         pending.FreezeBattlePassHellCosmoCompletion(dungeon.Run, timeProvider ?? TimeProvider.System);
         // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
         if (dungeon.PendingDeathReward is null)

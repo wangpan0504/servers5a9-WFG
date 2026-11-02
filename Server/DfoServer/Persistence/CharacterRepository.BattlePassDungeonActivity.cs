@@ -9,7 +9,8 @@ internal sealed partial class CharacterRepository
     void ApplyBattlePassDungeonDeath(SqliteConnection db, SqliteTransaction tx, string account,
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared)
     {
-        if(prepared.BattlePassActivity is not {} fact) return;
+        if(prepared.BattlePassActivity is not {} fact || battlePassMissionPolicy is not {} policy ||
+            policy.Active(fact.Clock.GetUtcNow()).IsEmpty) return;
         if(!fact.MatchesDeath(run,prepared)) throw new InvalidDataException("战令死亡来源与原权威准备不一致");
         ApplyBattlePassDungeonActivity(db,tx,account,fact);
     }
