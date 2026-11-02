@@ -329,6 +329,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
             Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
+            RequestedDifficulty = selection.Parameter, ActualDifficulty = receipt?.Entry.Difficulty,
+            BypassedQuestTerrain = receipt?.Entry.BypassedQuestTerrain,
             RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
             HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
             EntryFatigueCharged = receipt?.EntryFatigueCharged, EntryCostNote = receipt?.Entry.EntryCostNote,
@@ -386,6 +388,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         }
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
+        await QuestProjection.DungeonTerrainBypassAsync(context, receipt.Entry, Guard);
         if (!receipt.HellConsumedSlots.IsDefaultOrEmpty && receipt.HellTicket is { } hellTicket)
         {
             // 实验性：深渊派对入场票已在入场提交时扣除；把背包变化投给客户端并留日志。

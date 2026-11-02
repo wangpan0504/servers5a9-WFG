@@ -13,6 +13,8 @@ internal enum QuestLifecycleAction { Accept, Giveup, Condition }
 internal enum QuestLifecycleOutcome { Rejected, Committed, Unchanged }
 internal readonly record struct QuestClientCondition(byte? Channel, byte Value, byte Reserved);
 internal sealed record QuestLifecycleCommit(Character Character, QuestLifecyclePlan Plan, bool Duplicate, bool ProjectionCurrent);
+internal sealed record QuestReportedClear(Guid AcceptanceId, ushort QuestId, byte QuestSlot, Guid EventId,
+    Guid InstanceId, long TaskAttempt, long Epoch, int DungeonId, int MapId);
 internal sealed record QuestSceneEvent(Guid OperationId, DfoServer.Game.Dungeons.DungeonRunIdentity Identity,
     int DungeonId, int MapId, int TemplateId, int SourceOrdinal, string Fingerprint)
 {
@@ -42,6 +44,42 @@ internal sealed class QuestLifecyclePlan
     public QuestSceneEvent? SceneEvent { get; }
     internal PreparedDungeonPassiveClear? SceneClear { get; private init; }
     internal SinglePlayerDungeonRun? SceneClearRun { get; private init; }
+    internal QuestReportedClear? ReportedClear { get; private init; }
+    internal SinglePlayerDungeonRun? ReportedClearRun { get; private init; }
+
+    internal static QuestLifecyclePlan ObserveClientEvent(Character expected, StoryQuest quest, SinglePlayerDungeonRun run)
+    {
+        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+        if (active is null || !QuestHuntProgress.Bound(active, run.Entry) || !QuestClientObservation.Matches(quest, run))
+            throw new InvalidDataException("客户端观察事件需要原接取及已加载正式房间上下文");
+        var after = expected.ActiveMainQuests.Select(row => row.AcceptanceId == active.AcceptanceId && row.ConditionState > 0
+            ? row with { ConditionState = row.ConditionState - 1 } : row).ToImmutableArray();
+        return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId, after,
+            new(expected.Inventory, expected.Inventory, "quest_client_observation"));
+    }
+
+    internal static QuestLifecyclePlan ObserveClientClear(Character expected, StoryQuest quest, SinglePlayerDungeonRun run)
+    {
+        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+        var entry = run.Entry;
+        var clear = run.ClearFact;
+        if (active is not { ConditionState: 1 } || !QuestHuntProgress.Bound(active, entry) ||
+            !QuestDungeonClearProgress.NeedsClientCondition(quest) || !QuestDungeonClearProgress.MatchesScope(quest, entry) ||
+            !QuestDungeonClearProgress.MatchServerCondition(quest, entry, run) ||
+            run.Phase != SinglePlayerDungeonPhase.Settlement || clear is not { PassiveSource: null, ClearMap: not null } ||
+            clear.Identity.CharacterId != expected.Id || clear.Identity.InstanceId == Guid.Empty || clear.ConfirmedDeathEvents.Count == 0 ||
+            !entry.IsTerminalMap(clear.ClearMap) || entry.HasFreeCombatConsumption || entry.IsQuestReplay)
+            throw new InvalidDataException("客户端统计报告需要原接取、真实终末清图和匹配副本难度");
+        var after = expected.ActiveMainQuests.Select(row => row.AcceptanceId == active.AcceptanceId
+            ? row with { ConditionState = row.ConditionState - 1 } : row).ToImmutableArray();
+        return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId, after,
+            new(expected.Inventory, expected.Inventory, "quest_client_clear"))
+        {
+            ReportedClearRun = run,
+            ReportedClear = new(active.AcceptanceId, active.QuestId, active.Slot, clear.ConfirmedDeathEvents[^1],
+                clear.Identity.InstanceId, clear.Identity.TaskAttempt, clear.Identity.Epoch, checked((int)entry.DungeonId), clear.ClearMap.Id)
+        };
+    }
     internal bool IsPartySceneOnly => QuestId == 0 && AcceptanceId == Guid.Empty && Action == QuestLifecycleAction.Condition &&
         SceneEvent is { } scene && SceneClearRun is { } run && AllowsSceneOnly(run.Entry, scene) &&
         scene.Identity.CharacterId == Expected.Id && !Inventory.Changed && ActiveAfter.SequenceEqual(Expected.ActiveMainQuests) &&
@@ -133,33 +171,7 @@ internal sealed class QuestLifecyclePlan
             throw new InvalidDataException("每日任务需要当前游戏日快照");
         if (expected.ActiveMainQuests.Length >= 30)
             throw new InvalidDataException("30个任务槽已满");
-        uint initial = quest.Condition switch
-        {
-            // 租赁成功事务才归零；这是本窄用例的未达成模型，不是任意custom的初值。
-            "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 1,
-            "[epic production]" when QuestEpicProductionProgress.Supports(quest) => 1,
-            "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 1,
-            "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
-            // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
-            "[meet npc]" when QuestStateProgress.Type(quest) == 4 => 0,
-            "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
-            "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
-            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) => 1,
-            "[custom multi condition]" when DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest) => DfoServer.Game.Pvp.PvpTrainingProgress.Initial(quest),
-            "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
-            "[seeking]" when SeekingSubtype(quest) && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
-            "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
-            "[clear map]" when QuestClearEligibility.IsSingleMap(quest) => 1,
-            "[condition under clear]" or "[clear a dungeon]" when QuestDungeonClearProgress.Supports(quest) => QuestDungeonClearProgress.Initial(quest),
-            "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.Initial(quest),
-            "[quest clear]" when QuestRelationProgress.SequentialParent(quest,catalog) => QuestRelationProgress.Initial(quest,catalog,expected.CompletedQuests),
-            "[clear multi quest]" when QuestRelationProgress.ThresholdParent(quest,catalog) =>
-                QuestRelationProgress.Initial(quest,catalog,QuestEligibility.Completed(expected)),
-            // Full03 ACK31的type49分支在打开故事UI前即发送归零33；真实接取事务本身已满足此目标。
-            "[play only]" when QuestStateProgress.Type(quest) == 49 => 0,
-            _ when QuestStateProgress.Type(quest) is not null => QuestStateProgress.Scalar(expected,quest,pvpGrade),
-            _ => throw new NotSupportedException("任务条件初值尚未确认: " + quest.Condition)
-        };
+        uint initial = QuestTargetRules.Initial(expected, quest, catalog, now, pvpGrade);
         var gifts = quest.Definition!.AcceptanceRewards;
         var rows = gifts.Length == 0 ? [] : QuestFixedRewardDefinition.Parse(quest with { Rewards = gifts }).ForJob(expected.Job,expected.GrowType);
         var grant = InventoryRewardGrantService.TryGrantBatch(expected,
@@ -175,8 +187,8 @@ internal sealed class QuestLifecyclePlan
         byte free = Enumerable.Range(0, 30).Select(at => (byte)at).First(slot => expected.ActiveMainQuests.All(active => active.Slot != slot));
         var activeQuest = new ActiveMainQuest(free, checked((ushort)quest.Id), initial) { AcceptanceId = Guid.NewGuid() };
         return new(expected, QuestLifecycleAction.Accept, activeQuest.QuestId, activeQuest.AcceptanceId,
-            QuestInventoryProgress.Refresh(expected.ActiveMainQuests.Append(activeQuest).OrderBy(active => active.Slot).ToArray(),
-                grant.Plan.After, catalog, now.ToUnixTimeSeconds(),QuestEligibility.Completed(expected)), new(expected.Inventory, grant.Plan.After, "quest_accept"))
+            QuestEventProgress.Accepted(QuestEventProgress.Inventory(QuestInventoryProgress.Refresh(expected.ActiveMainQuests.Append(activeQuest).OrderBy(active => active.Slot).ToArray(),
+                grant.Plan.After, catalog, now.ToUnixTimeSeconds(),QuestEligibility.Completed(expected)), catalog, grant.Plan), catalog), new(expected.Inventory, grant.Plan.After, "quest_accept"))
         {
             // 两端接取重复任务时清当前完成投影；领奖历史仍按独立接取身份保留。
             CompletedAfter = expected.CompletedQuests.Where(id => !QuestCycle.Repeat(quest) || id != quest.Id).ToImmutableArray(),
@@ -285,6 +297,7 @@ internal sealed class QuestLifecyclePlan
         bool observedHunt = quest.Condition is "[hunt enemy]" or "[hunt monster]" && scalar == active.ConditionState && QuestHuntProgress.ValidScalar(quest,scalar);
         bool seekMeet = quest.Condition == "[seek n meet npc]" && ValidSeeking(quest) && scalar <= 1023;
         bool parent = quest.Condition == "[quest clear]" && quest.SubType == 2 && scalar <= quest.IntData.Count ||
+            catalog is not null && QuestRelationProgress.ListParent(quest, catalog) && scalar == QuestRelationProgress.ListScalar(quest, QuestEligibility.Completed(expected)) ||
             QuestRelationProgress.ThresholdShape(quest) && scalar == QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected));
         bool scene = scalar <= 1 && (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
             QuestClientSceneProgress.DungeonCinematic(quest));
@@ -294,8 +307,13 @@ internal sealed class QuestLifecyclePlan
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedEpic = QuestEpicProductionProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
+        bool observedEvent = (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest)) && scalar == active.ConditionState;
+        bool holding = scalar <= 1 && catalog is not null && (quest.TargetKind == QuestTargetKind.CheckItem &&
+            scalar == MaterialState(expected.Inventory, quest, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), catalog.Items) ||
+            quest.TargetKind == QuestTargetKind.EquippedItem && catalog.Items is { } facts &&
+            scalar == (QuestItemProgress.Equipped(expected.Inventory, quest, facts, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? 0u : 1u));
         bool observedExpert = QuestExpertJobProgress.Tutorial(quest) && scalar == 0 && active.ConditionState == 0;
-        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && !observedEpic && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && !observedEpic && !observedEvent && !holding && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
         var after = expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray();
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
@@ -371,15 +389,14 @@ internal sealed class QuestLifecyclePlan
             QuestInventoryProgress.Refresh(after, inventory.After, quests, now.ToUnixTimeSeconds()), inventory);
     }
 
-    internal static int MaterialLength(StoryQuest quest) => quest.IntData.Count - (quest.Condition == "[seek n meet npc]" ? 1 : 0);
+    internal static int MaterialLength(StoryQuest quest) => QuestSeekingObjective.TryRead(quest, out var objective)
+        ? objective.MaterialLength : 0;
 
-    // #256：黑市EXP的6053/6056/6059声明`seeking / sub type 0`。服务端的寻物完全由int data物品/数量对与库存推导，
-    // 参考实现(go-server finishDefinitionSeekingRules/itemPairRulesFromInts)同样不读取sub type；资源形状与已支持的sub type -1寻物一致
-    // （单个物品/数量对+怪物掉落行只产出该物品）。因此只对这三个任务的精确形状按sub type -1处理，不放行其它sub type 0寻物。
+    // 黑市EXP保留自身资源与奖励识别；普通sub0寻物已按本版默认值接入，不再以这三个ID充当通用白名单。
     internal static readonly int[] HarlemSeekingIds = [6053, 6056, 6059];
 
-    internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 &&
-        (HarlemSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
+    internal static bool SeekingSubtype(StoryQuest quest) => quest.TargetKind == QuestTargetKind.CheckItem && ValidSeeking(quest) || quest.SubType is -1 or 0 ||
+        quest is { TargetKind: QuestTargetKind.Seeking, SubType: 20 } && QuestSeekingObjective.TryRead(quest, out _);
 
     internal static bool HarlemSeeking(StoryQuest quest) => quest is { Condition: "[seeking]", SubType: 0, Grade: "[side]", RewardType: "[item]" } &&
         HarlemSeekingIds.Contains(quest.Id) && quest.MainQuest is null && quest.IntData.Count == 2 && quest.IntData[1] == 3 && ValidSeeking(quest) &&
@@ -387,24 +404,18 @@ internal sealed class QuestLifecyclePlan
         definition.Drops.All(row => row.EnemyType == 1 && row.ItemId == quest.IntData[0] && row.DungeonId == 7322 && row.Difficulty == -1 &&
             row.Rate == 100 && row.Count > 0);
 
-    internal static bool ValidSeeking(StoryQuest quest)
-    {
-        int length = MaterialLength(quest);
-        return length > 0 && length % 2 == 0 && quest.IntData.Take(length).Where((_,at) => at % 2 == 0).All(value => value >= 0) &&
-            quest.IntData.Take(length).Where((_,at) => at % 2 != 0).All(value => value > 0) &&
-            (quest.Condition != "[seek n meet npc]" || quest.IntData[^1] > 0);
-    }
+    internal static bool ValidSeeking(StoryQuest quest) => QuestSeekingObjective.TryRead(quest, out _);
 
-    internal static bool HasMaterials(Character character, StoryQuest quest, long utcSeconds)
+    internal static bool HasMaterials(Character character, StoryQuest quest, long utcSeconds, ItemCatalog? items = null)
     {
-        return ValidSeeking(quest) && MissingMaterials(character.Inventory, quest, utcSeconds) == 0;
+        return ValidSeeking(quest) && MissingMaterials(character.Inventory, quest, utcSeconds, items) == 0;
     }
 
     // type25材料通道按完整库存谓词归零或恢复1；9位通道宽度不是材料数量上限。
-    internal static uint MaterialState(InventorySnapshot inventory, StoryQuest quest, long utcSeconds) =>
-        MissingMaterials(inventory, quest, utcSeconds) == 0 ? 0u : 1u;
+    internal static uint MaterialState(InventorySnapshot inventory, StoryQuest quest, long utcSeconds, ItemCatalog? items = null) =>
+        MissingMaterials(inventory, quest, utcSeconds, items) == 0 ? 0u : 1u;
 
-    internal static long MissingMaterials(InventorySnapshot inventory, StoryQuest quest, long utcSeconds)
+    internal static long MissingMaterials(InventorySnapshot inventory, StoryQuest quest, long utcSeconds, ItemCatalog? items = null)
     {
         if (!ValidSeeking(quest)) throw new InvalidDataException("寻物目标不是完整物品/数量对或目标NPC无效");
         var wanted = new Dictionary<int, long>();
@@ -415,8 +426,13 @@ internal sealed class QuestLifecyclePlan
             if (item.Position.List == InventoryListType.Main && !item.Core.IsExpired(utcSeconds) && wanted.ContainsKey(item.Core.ItemId))
                 counts[item.Core.ItemId] = counts.GetValueOrDefault(item.Core.ItemId) + item.Core.Count;
         foreach (int id in wanted.Keys)
+        {
             if (CurrencyWallet.RewardKind(id) is { } kind)
                 counts[id] = CurrencyWallet.Get(inventory, kind);
+            else if (id < 0)
+                counts[id] = items is null ? throw new NotSupportedException("品级持有目标需要显式物品事实目录") :
+                    QuestItemProgress.Count(inventory, quest, id, items, utcSeconds);
+        }
         return wanted.Sum(pair => Math.Max(0, pair.Value - counts.GetValueOrDefault(pair.Key)));
     }
 }

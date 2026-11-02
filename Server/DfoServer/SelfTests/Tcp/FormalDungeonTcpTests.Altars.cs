@@ -35,7 +35,7 @@ internal static partial class FormalDungeonTcpTests
             checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
         var growth = SelfTestCatalogs.Growth(resources.Archive);
         DungeonSpecialEntryTests.Run(resources.Towns,resources.Characters,resources.Learning,growth,resources.Quests);
-        foreach (uint id in new uint[] {11006,11007})
+        foreach (var (id, questId) in new[] { (11006u, (ushort)5650), (11007u, (ushort)7340), (11006u, (ushort)5651) })
         {
             Action<WirePacket>? validateSpawn = null;
             var earlySpecial = new List<WirePacket>();
@@ -43,15 +43,16 @@ internal static partial class FormalDungeonTcpTests
             uint nextRoomKey = 0;
             long trackerFirstDelay = 0;
             var runSpawnedKeys = new HashSet<ushort>();
-            ushort questId = id == 11006 ? (ushort)5650 : (ushort)7340;
             int huntNotifications = 0;
+            int materialNotifications = 0;
+            bool questTargetKilled = false;
             Character created;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
             {
                 var repo = new CharacterRepository(fixture.Database);
-                var candidate = CharacterCreation.Prepare(id==11006?"Blood466":"Ultimate466",resources.Characters.Get(0),
+                var candidate = CharacterCreation.Prepare(questId==5651?"Seek466":id==11006?"Blood466":"Ultimate466",resources.Characters.Get(0),
                     position,position,resources.Learning.Get);
-                created = repo.Create(owner,candidate with { Level=70,AcceptedStoryLevel=70,CompletedQuests=done.Append(id == 11006 ? 63 : 7339).Distinct().ToArray(),
+                created = repo.Create(owner,candidate with { Level=70,AcceptedStoryLevel=70,CompletedQuests=done.Append(questId==5651?5650:id == 11006 ? 63 : 7339).Distinct().ToArray(),
                     InitialLearning=SkillPointLedger.Synchronize(0,0,70,candidate.InitialLearning with
                         { Experience=growth.GetLevelStartExperience(70) },resources.Learning) });
                 created = repo.CommitInventory(owner,created,new(created.Inventory,created.Inventory with
@@ -236,15 +237,21 @@ internal static partial class FormalDungeonTcpTests
                             {
                                 That(actors == 1, "无尽首房末批为实际资源声明的单个尾怪");
                                 ushort tail = U16(spawned.Body,3);
+                                questTargetKilled |= U32(spawned.Body,5) == 56004;
                                 peer.Send(39,Death(tail,peer.Id,spawned.Body[10]));
                                 Bytes(ReadUntil(38).Body,[(byte)tail,(byte)(tail>>8),0,0,0,0,255,0,0],
                                     "无尽清首房尾怪39获得完整退场38后才能请求第二房");
+                                if (questId == 5651)
+                                    peer.Barrier(packet => That(ObserveQuestNotification(packet), "清房死亡尾包仅包含已提交的任务材料和进度"));
                                 break;
                             }
                             byte[] deaths = new byte[1 + actors * 2];
                             deaths[0] = checked((byte)actors);
                             for (int at = 0; at < actors; at++)
+                            {
                                 spawned.Body.AsSpan(3 + at * 17,2).CopyTo(deaths.AsSpan(1 + at * 2));
+                                questTargetKilled |= U32(spawned.Body,5 + at * 17) == 56004;
+                            }
                             peer.Send(255,deaths);
                             spawned = ReadUntil(210);
                         }
@@ -311,6 +318,15 @@ internal static partial class FormalDungeonTcpTests
                 "两祭坛次数用尽回复246，不创建第四次入场；后续非法字段仍用通用9，不复用旧拒绝原因");
             peer.Send(132); peer.Expect(1,132,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
             peer.Expect(0,23); peer.Expect(0,24); peer.Barrier();
+            if (questId == 5651)
+            {
+                int expected = questTargetKilled ? 1 : 0;
+                That(materialNotifications == expected && huntNotifications == expected &&
+                    Convert.ToInt64(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=5651", peer.Id)[0][0]) == 1 - expected &&
+                    Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_quest_drop_receipts WHERE character_id=$p0", peer.Id)[0][0]) == expected,
+                    "5651仅实际史莱姆王击杀产生一次库存材料和任务进度，不因随机房间没有目标而补发材料");
+                Console.WriteLine($"PASS 5651 TCP实际目标击杀={questTargetKilled}，库存材料通知={materialNotifications}；固定目标的掉落、回滚和交付由Session用例覆盖");
+            }
 
             int StartTracker(byte[] entryInfo,byte[] entryMap,WirePacket first)
             {
@@ -449,23 +465,38 @@ internal static partial class FormalDungeonTcpTests
                 Bytes(packet.Body,body,$"祭坛活动正文{kind}/{opcode}");
             }
 
+            bool ObserveQuestNotification(WirePacket packet)
+            {
+                if (packet is { Kind: 0, Opcode: (ushort)NotiPacketType.ACCEPTED_QUEST })
+                {
+                    That(++huntNotifications == 1 && (id == 11007 || questId == 5651),
+                        "祭坛只在已接任务真实目标条件改变时发送一次活动任务通知");
+                    var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id)
+                        .Select(row => new ActiveMainQuest(Convert.ToByte(row[0]), Convert.ToUInt16(row[1]), Convert.ToUInt32(row[2]))).ToArray();
+                    That(active.Single(row => row.QuestId == questId).ConditionState == 0,
+                        "祭坛活动任务通知对应数据库已提交目标条件");
+                    Bytes(packet.Body, Build(writer =>
+                    {
+                        writer.Write(active.Length);
+                        foreach (var row in active) { writer.Write(row.QuestId); writer.Write(row.ConditionState); }
+                    }), "祭坛任务通知使用持久归零的完整活动任务列表");
+                    return true;
+                }
+                if (questId == 5651 && packet is { Kind: 0, Opcode: 14 } && packet.Body.Length == 126 && U32(packet.Body, 5) == 4363)
+                {
+                    That(++materialNotifications == 1 && packet.Body[0] == 0 && U16(packet.Body, 1) == 1 && U32(packet.Body, 9) == 1,
+                        "祭坛材料使用原生123字节库存记录，物品4363数量1，不替换为地面生成通知");
+                    return true;
+                }
+                return false;
+            }
+
             WirePacket ReadUntil(ushort opcode)
             {
                 for(int messages=0;messages<200;messages++)
                 {
                     var packet=peer.Read();
-                    if (packet is { Kind: 0, Opcode: (ushort)NotiPacketType.ACCEPTED_QUEST })
-                    {
-                        That(++huntNotifications == 1 && id == 11007,
-                            "祭坛只在已接任务真实目标条件改变时发送一次活动任务通知");
-                        var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id)
-                            .Select(row => new ActiveMainQuest(Convert.ToByte(row[0]), Convert.ToUInt16(row[1]), Convert.ToUInt32(row[2]))).ToArray();
-                        That(active.Single(row => row.QuestId == questId).ConditionState == 0,
-                            "祭坛活动任务通知对应数据库已提交目标条件");
-                        Bytes(packet.Body, QuestPackets.ActiveList(active),
-                            "祭坛任务通知使用持久归零的完整活动任务列表");
-                        continue;
-                    }
+                    if (ObserveQuestNotification(packet)) continue;
                     if(packet.Kind == 0 && packet.Opcode is 210 or 213 or 215 or 297)
                     {
                         if(validateSpawn is not null) validateSpawn(packet);

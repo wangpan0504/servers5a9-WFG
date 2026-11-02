@@ -281,8 +281,12 @@ internal static class HellPartyEntryTests
             plan!.HellParty is { MapId: 313163, Room: { X: 2, Y: 2 }, RequiredItemCount: 30 } && plan.HellPartyMode == 1 && plan.QuestId == 0 && plan.RouteQuestId == 0 &&
             plan.Maze.HellParty == plan.HellParty && plan.Difficulty == 4,
             "已完成 6080 的角色可规划深渊派对入场：走带深渊房间的普通 maze，questId=0，难度 4 原样保留：" + reason);
-        That(!DungeonEntryPlan.TryCreate(dungeons, character, 291100308, 6114, 4, out _, out _, quests: quests, hellParty: true),
-            "深渊派对入场不接受任务号（questId 必须为 0）");
+        var activeBefore=character.ActiveMainQuests.ToArray();
+        That(DungeonEntryPlan.TryCreate(dungeons, character, 291100308, 6114, 4, out var withQuest, out _, quests: quests, hellParty: true) &&
+            withQuest is {QuestId:0,RouteQuestId:0,Difficulty:4,HellPartyMode:1} &&
+            withQuest.Maze.HellParty==plan!.HellParty && withQuest.Maze.QuestConnectionTokens.Count==0 &&
+            character.ActiveMainQuests.SequenceEqual(activeBefore) && fixture.Read().Revision==character.Revision,
+            "携带任务参数仍优先深渊普通迷宫，保持请求难度、不伪造接取或改变任务状态");
         That(!DungeonEntryPlan.TryCreate(dungeons, character, 7142, 0, 0, out _, out _, quests: quests, hellParty: true),
             "没有深渊房间声明的副本无法按深渊派对规划（已知映射才放行，未知拒绝）");
 

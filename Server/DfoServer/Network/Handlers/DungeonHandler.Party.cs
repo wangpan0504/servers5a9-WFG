@@ -282,6 +282,7 @@ internal sealed partial class DungeonHandler
                     DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "party_start_map", Current);
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } entryHell)
                     await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO,entryHell,"party_hell_monsters",Current);
+                await QuestProjection.DungeonTerrainBypassAsync(context, scene.Entry, Current);
                 if (!scene.HellConsumedSlots.IsEmpty)
                 {
                     log.Write("hell_party_entry_ticket_consumed",new { Connection = context.Id, Party = true, scene.Entry.DungeonId,

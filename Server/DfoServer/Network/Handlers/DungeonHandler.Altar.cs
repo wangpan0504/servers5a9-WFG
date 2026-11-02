@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Protocol;
 
@@ -32,6 +34,10 @@ internal sealed partial class DungeonHandler
         if (receipt?.QuestCharacter is { } character)
         {
             var quests = receipt;
+            if (!receipt.QuestDropSlots.IsEmpty)
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                    InventoryPackets.Delta(character.Inventory, InventoryListType.Main, [.. receipt.QuestDropSlots]),
+                    "formal_altar_quest_items", () => context.Session.CanPublishDungeonAltar(quests));
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests),
                 "formal_altar_quest_progress", () => context.Session.CanPublishDungeonAltar(quests));
             context.Session.MarkDungeonAltarQuestsPublished(quests);
@@ -46,7 +52,8 @@ internal sealed partial class DungeonHandler
             return CommandResult.Handled;
         }
         log.Write("formal_altar_deaths", new { Connection = context.Id, Accepted = receipt is not null,
-            Count = count, Opcode = (ushort)opcode, ObjectKey = objectKey, receipt?.InstanceId, receipt?.DisplayRound, receipt?.Completed });
+            Count = count, Opcode = (ushort)opcode, ObjectKey = objectKey, receipt?.InstanceId, receipt?.DisplayRound, receipt?.Completed,
+            QuestItems = receipt?.QuestDropSlots.Length, CharacterId = receipt?.QuestCharacter?.Id, Revision = receipt?.QuestCharacter?.Revision });
         if (receipt is not null && context.Altar is not null) await context.Altar.WakeAsync(receipt);
         return CommandResult.Handled;
     }

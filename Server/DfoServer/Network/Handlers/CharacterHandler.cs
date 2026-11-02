@@ -103,7 +103,8 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (refundedWarSeats > 0)
             log.Write("evildom_war_entry_refunded", new { Connection = context.Id, Character = context.Session.Selected!.Id, Seats = refundedWarSeats });
         var c = context.Session.Selected!;
-        log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown, NativeSwitch = nativeSwitch });
+        log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown, NativeSwitch = nativeSwitch,
+            UserMode = context.Session.Mode.ToString(), UserState = context.Session.GetState().ToString() });
         if (createdBase)
             log.Write("avatar_preset_base", new { Connection = context.Id, Character = c.Id,
                 Capacity = c.Inventory.AvatarPresets.Capacity, Presets = c.Inventory.AvatarPresets.Presets.Length,

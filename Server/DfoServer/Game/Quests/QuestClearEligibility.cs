@@ -8,7 +8,7 @@ internal static class QuestClearEligibility
 {
     // 地图号是第一项。末尾 -1 与 dungeon info 的不限难度相同，仍是这一张图。
     public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" &&
-        (quest.SubType == -1 && (quest.IntData is [> 0] or [> 0, -1]) || ProtectsActors(quest));
+        (quest.SubType is -1 or 1 && (quest.IntData is [> 0] or [> 0, -1]) || ProtectsActors(quest));
 
     // 0201C410的sub0分支进入0200F350：首项为地图，后续每个APC均须仍存活且属于友方。
     internal static bool ProtectsActors(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == 0 &&
@@ -64,7 +64,7 @@ internal static class QuestClearEligibility
         var entry = run.Entry; var death = prepared.Death; var clear = prepared.Result.RoomClearFact;
         return (run.IsPendingDeath(prepared) || run.IsConfirmedDeath(prepared)) &&
             prepared.Result.ClearFact is null && clear is not null && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsPractice &&
-            !entry.IsPractice && entry.CharacterId != 0 && entry.DungeonId > 0 && entry.BaseBossMap.Kind == "boss" &&
+            entry.CharacterId != 0 && entry.DungeonId > 0 && entry.BaseBossMap.Kind == "boss" &&
             (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty :
                 entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty) &&
             prepared.Monster.IsBlocking && entry.QuestClearMap == clear.Map && !entry.IsTerminalMap(clear.Map) &&

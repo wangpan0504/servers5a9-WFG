@@ -86,6 +86,7 @@ internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms
 
 internal sealed partial class SinglePlayerDungeonRun
 {
+    internal DungeonQuestFacts QuestFacts { get; }
     internal DfoServer.Game.Quests.QuestMarriagePartyClear? MarriagePartyClear { get; set; }
     private sealed class Room(DungeonMonsterPlan plan)
     {
@@ -273,6 +274,7 @@ internal sealed partial class SinglePlayerDungeonRun
             entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,
                 TerminalLayerQuestSlot = byte.MaxValue, TerminalLayerAcceptanceId = Guid.Empty };
         this.entry = entry;
+        QuestFacts = new(time ?? TimeProvider.System);
         LostLandClock = entry.LostLand is { } admission ? new(admission, time ?? TimeProvider.System) : null;
         this.authority = authority;
         var baseRooms = route.Rooms.Where(plan => entry.Maze.MapSpecification!.Contains(plan.Room.Map)).Select(plan => new Room(
@@ -566,6 +568,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (InitializationCounterSupported)
             initializedMapSlots.Add(slot);
         ConfirmedInitializationCount = count;
+        if (first) QuestFacts.Start();
         LastLoadingFact = new(expected, actionId, entry.DungeonId, current.Plan.Room.Map, entry.Maze.SourceOrdinal,
             first, initialized, count, MazeInitializationThreshold) { InitializationCounterSupported = InitializationCounterSupported };
         Phase = SinglePlayerDungeonPhase.Dungeon;
@@ -798,6 +801,7 @@ internal sealed partial class SinglePlayerDungeonRun
             { MapOperation = mapOperation,MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = nextBossPosition };
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
+        if (clear is not null) QuestFacts.FreezeClear();
         pendingDeath = new(confirmed, target,
             new(DungeonRunOutcome.Accepted, nextSnapshot, clear)
             {
@@ -879,6 +883,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         if (prepared is null || !ReferenceEquals(pendingDeath, prepared))
             return false;
+        if (prepared.Result.ClearFact is not null) QuestFacts.CancelClear();
         pendingDeath = null;
         return true;
     }

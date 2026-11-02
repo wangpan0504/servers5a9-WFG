@@ -52,7 +52,7 @@ internal sealed partial class GameSession
     }
 
     public SkillLearningResult LearnSkills(SkillLearningCommand request, SkillLearningCatalog catalog) => ApplySkillLearning(character =>
-        SkillLearning.Plan(character.Job, character.GrowType, character.Level, character.Learning, request, catalog,
+        SkillLearning.Plan(character.Job, character.GrowType, SkillLevel(character, catalog), character.Learning, request, catalog,
             DfoServer.Game.Quests.QuestEligibility.Completed(character).Contains(355)));
 
     public SkillLearningResult CustomizeSkills(IReadOnlyList<SkillCommandChange> changes, bool reset, SkillLearningCatalog catalog) =>
@@ -117,7 +117,7 @@ internal sealed partial class GameSession
 
     public SkillLearningResult ResetSkills(byte context, byte mode, SkillLearningCatalog catalog) => ApplySkillLearning(character =>
         mode > 1 ? new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()) :
-        SkillPointLedger.Reset(character.Job, character.GrowType, character.Level, character.Learning, context, catalog,
+            SkillPointLedger.Reset(character.Job, character.GrowType, SkillLevel(character, catalog), character.Learning, context, catalog,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
 
     private SkillLearningResult ApplySkillLearning(Func<Character, SkillLearningResult> plan) =>

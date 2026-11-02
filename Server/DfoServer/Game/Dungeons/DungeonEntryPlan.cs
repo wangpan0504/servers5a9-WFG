@@ -31,6 +31,14 @@ internal sealed record DungeonEntryPlan(
     public int? BasisLevel { get; init; }
     // 入场冻结的推荐资格不是完成事实；任务仍等待本Run终末与原接取身份。
     public bool RecommendedQuestClear { get; init; }
+    // 通关取物按本人入场等级判断，不使用任务入场无条件算推荐的冒险团口径。
+    public bool RecommendedQuestItems { get; init; }
+    public byte? RequestedDifficulty { get; init; }
+    public byte PartyMemberCount { get; init; } = 1;
+    // 自动提升选择的是请求之上的首个合法档；两值之间的请求也只能归到同一冻结档。
+    // 普通/固定模式没有RequestedDifficulty，仍须精确确认，不能借此降费或另选实例。
+    public bool AcceptsDifficultyConfirmation(byte value) => value == Difficulty ||
+        RequestedDifficulty is { } requested && value >= requested && value < Difficulty;
     // 公会公共积分按入场等级与普通推荐区间冻结，与冒险团推荐通关口径独立。
     public bool GuildMileageEligible { get; init; }
     // 物理路线为可能合格成员预留；个人推荐区间按本人的入场等级冻结。
@@ -118,6 +126,8 @@ internal sealed record DungeonEntryPlan(
     public DungeonMap? CinematicClearTerminalMap { get; init; }
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
+    // 仅供本次深渊入场提示，不参与任务条件或接取绑定。
+    public ImmutableArray<int> BypassedQuestTerrain { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
     public IReadOnlyList<int> NamedMonsters { get; init; } = Array.Empty<int>();
     // 普通副本 [champion] 后四项：难度 0–3 的每房随机精英百分比；更高难度沿用末项。
@@ -152,6 +162,7 @@ internal sealed record DungeonEntryPlan(
         DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
     {
         plan = null;
+        if (hellParty) { questId = 0; quest = null; }
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
         if (reason != "resource-request-ready")
             return false;
@@ -180,6 +191,7 @@ internal sealed record DungeonEntryPlan(
         DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
     {
         plan = null;
+        if (hellParty && !isReplay) { questId = 0; quest = null; }
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
         if (hellLegend && !hellParty) { reason = "hell-legend-requires-hell-party"; return false; }
         if (hellParty && (questId != 0 || isReplay)) { reason = "hell-party-quest-or-replay-unsupported"; return false; }
@@ -193,6 +205,11 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
+        var bypassedTerrain = hellParty ? QuestTerrainBypass.ForHell(character, definition, quests) : ImmutableArray<int>.Empty;
+        byte requestedDifficulty = difficulty;
+        if (!isReplay && !practice && !hellParty && raid is null && partyRoute is null && hope is null && grief is null &&
+            tagEvildom is null && imperialArena is null && dimension is null)
+            difficulty = QuestDungeonDifficulty.Resolve(character, definition, questId, quest, quests, difficulty);
         bool lostLand = dungeonId == 4000 || string.Equals(definition.DungeonType?.Trim(), "lost land", StringComparison.OrdinalIgnoreCase);
         if (lostLand && (dungeonId != 4000 || definition.DungeonType != "lost land" ||
             !definition.DisableFatigueConsumption || !definition.DisableGiveupPenalty ||
@@ -304,8 +321,11 @@ internal sealed record DungeonEntryPlan(
                 QuestAcceptanceId = accepted?.AcceptanceId ?? Guid.Empty,
                 QuestAcceptances = hope is null ? character.ActiveMainQuests.ToImmutableArray() :
                     character.ActiveMainQuests.ToImmutableArray().Add(hope.Acceptance), Hope = hope,
+                BypassedQuestTerrain = bypassedTerrain,
                 HopeRewardProfession = hope is null ? null : (character.Job,character.GrowType),
                 IsOrdinaryHunt = accepted is not null && shared.RouteQuestId == 0,
+                RecommendedQuestItems = !shared.IsPractice && !shared.IsTutorial && !shared.IsClassExperience && !shared.IsTrainingRoom &&
+                    !shared.IsQuestReplay && shared.LostLand is null && !definition.IsRaid && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, character.Level),
                 TerminalLayerQuestId = participantTerminal?.QuestId ?? 0, TerminalLayerQuestSlot = participantTerminal?.Slot ?? byte.MaxValue,
                 TerminalLayerAcceptanceId = participantTerminal?.AcceptanceId ?? Guid.Empty,
                 PassiveClearTerminalMap = null, CinematicClearTerminalMap = null, PartyRoute = shared
@@ -337,6 +357,12 @@ internal sealed record DungeonEntryPlan(
         {
             candidates = definition.Mazes.Where(maze => maze.SourceOrdinal == tagMaze && maze.QuestConnectionTokens.Count == 0).ToArray();
             routeQuest = 0; layoutQuest = null;
+        }
+        else if (hellParty)
+        {
+            // 深渊按自己的合同选择候选，不先解析或要求任务专用迷宫。
+            candidates = [];
+            routeQuest = 0; layoutQuest = null; quest = null;
         }
         else if (practice || finishedObjectiveRequest)
         {
@@ -415,7 +441,7 @@ internal sealed record DungeonEntryPlan(
             quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
             definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
-        // 普通任务只借用明确归属的普通迷宫；已有本任务连接或未知连接不能降级为普通路线。
+        // 收集和猎杀目标不决定地图结构；没有本任务专用连接时沿普通迷宫，目标匹配由进度和掉落规则判断。
         if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null &&
             CanUseOrdinaryQuestRoute(definition,character,quest,dungeonId,questId,difficulty))
         {
@@ -500,11 +526,7 @@ internal sealed record DungeonEntryPlan(
         // 先验证故事块本身，回放、专用模式及指定难度副本继续沿各自门禁。
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId) &&
             !(!isReplay && !practice && !hellParty && hope is null && tagEvildom is null && raid is null &&
-            !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && !definition.IsRaid &&
-            !definition.RequiresGriefEntryContract && !definition.IsInfernoDungeon && !cosmo && definition.DungeonType is null &&
-            !definition.RawSections.Any(section => section.Tag == "designate dungeon difficulty") &&
-            maze.ConnectionQuestId is { } connected && definition.AllowsDifficulty(0,true,connected) &&
-            definition.AllowsDifficulty(difficulty,false)))
+            maze.ConnectionQuestId is { } connected && definition.AllowsOrdinaryQuestDifficulty(difficulty,connected)))
         { reason = "difficulty-unsupported"; return false; }
         // 多起点、多Boss是候选集合，由资源装配选择本次实际路线；深渊沿用同一组格入口。
         if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||
@@ -621,7 +643,7 @@ internal sealed record DungeonEntryPlan(
         }
         if (quest is not null && (quest.Id != (questId == 0 ? routeQuest : questId) || quest.Definition is null ||
             quest.Definition.Dungeons.Length != 0 && !quest.Definition.Dungeons.Any(row => row.DungeonId == dungeonId) &&
-            !(ordinaryHunt && AssaultSpecialSupplyHunt(quest, difficulty))))
+            !ordinaryHunt))
         {
             reason = "quest-dungeon-mismatch";
             return false;
@@ -648,12 +670,15 @@ internal sealed record DungeonEntryPlan(
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
+            RequestedDifficulty = requestedDifficulty == difficulty ? null : requestedDifficulty,
             LostLand = lostLandAdmission,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
+            RecommendedQuestItems = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
+                !definition.IsRaid && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, character.Level),
             GuildMileageEligible = GameWorld.Guilds.GuildDungeonMileageEligibility.IsEligible(definition, character.Level),
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
             // 未实现的组队/对抗模式须提供自身阵营来源，不能沿用这个入口的单人合同。
@@ -678,6 +703,7 @@ internal sealed record DungeonEntryPlan(
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
             QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            BypassedQuestTerrain = bypassedTerrain,
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
@@ -731,67 +757,23 @@ internal sealed record DungeonEntryPlan(
         return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
     }
 
-    // 6084「[强袭模式]特殊补给」：猎杀四元组是任意副本，dungeon info 只列出强袭任务图。
-    static bool AssaultSpecialSupplyHunt(StoryQuest quest, byte difficulty) =>
-        quest is { Id: 6084, Grade: "[side]", Condition: "[hunt monster]", SubType: -1, MainQuest: null } &&
-        QuestHuntProgress.TryTargets(quest, out var targets) &&
-        targets.Any(target => target.DungeonId == -1 && target.MinimumDifficulty <= difficulty);
-
     static bool CanUseOrdinaryQuestRoute(DungeonDefinition definition, Character character, StoryQuest quest,
         uint dungeonId, uint questId, byte difficulty)
     {
-        bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
-        bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
-        // 极限支线只在猎杀四元组声明本图；不要求资源中不存在的 dungeon info。
-        bool altarHunt = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
-            quest.Condition == "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var altarTargets) &&
-            altarTargets.Any(target => target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty);
-        // 祭坛收集外传没有专用任务迷宫，沿已声明本图和掉落的普通路线进入专用波次。
-        bool altarSeeking = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
-            quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest);
-        // 客户端接取后会把 6084 带进每张图的 C2S16；未列入 dungeon info 的普通图仍沿普通迷宫。
-        bool anyDungeonHunt = AssaultSpecialSupplyHunt(quest, difficulty);
-        // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
-        bool normalMission = QuestCycle.NormalDungeonMission(quest) &&
-            (quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeonId &&
-                (row.Parameter == -1 || row.Parameter is >= 0 and <= 4 && row.Parameter <= difficulty)) ||
-             quest.Definition.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) ||
-             QuestHuntProgress.TryTargets(quest,out var missionTargets) && missionTargets.Any(target =>
-                target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty) ||
-             QuestDungeonClearProgress.TryTarget(quest,out var missionClear) && missionClear.DungeonId == dungeonId &&
-                missionClear.MinimumDifficulty <= difficulty);
-        bool dailyClear = QuestDungeonClearProgress.CountOncePerDay(quest) &&
-            quest.Grade is "[side]" or "[mission]" && QuestDungeonClearProgress.TryTarget(quest,out var target) &&
-            target.DungeonId == dungeonId && (target.MinimumDifficulty == -1 || target.MinimumDifficulty <= difficulty);
-        // 已核对的普通普雷考验仅要求本图通关一次；不旁路其它使命或每日累计的专属合同。
-        bool preyNormalClear = quest is { Id:8925, Grade:"[mission]", Condition:"[condition under clear]",
-            SubType:6, IntData:[400000046,-1] } && dungeonId == 400000046;
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear && !anyDungeonHunt || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
-            // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
-            // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。任意副本猎杀不要求本图声明。
-            quest.Grade == "[side]" && !dailyClear && !altarHunt && !anyDungeonHunt && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
-                (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
-                    listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
-            quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
-                !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
-            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear && !preyNormalClear && !anyDungeonHunt ||
-            definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
-                (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
-        if (quest.Condition == "[hunt monster]" || normalMission && quest.Condition == "[hunt enemy]")
+            quest.Definition is not { Diagnostics.Length: 0 }) return false;
+        bool objectiveOnly = quest.Condition switch
         {
-            if (!QuestHuntProgress.TryTargets(quest,out var targets)) return false;
-            if (normalMission && !targets.Any(target => target.DungeonId == dungeonId)) return false;
-            if (targets.Where(target => !normalMission || target.DungeonId == dungeonId).Any(target =>
-                target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 && !(autoDaily && target.MonsterId == -1) ||
-                target.DungeonId != -1 && target.DungeonId != dungeonId || target.MinimumDifficulty > difficulty)) return false;
-        }
-        // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
-        // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
-        else if (!(normalMission && QuestDungeonClearProgress.Supports(quest)) && !listClear && !dailyClear && !preyNormalClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
-                QuestLifecyclePlan.HarlemSeeking(quest) || altarSeeking || normalMission) ||
-            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) &&
-                !(normalMission && quest.Condition == "[seeking]" && declared.Drops.Length == 0 && QuestLifecyclePlan.ValidSeeking(quest)))) return false;
+            "[seeking]" or "[seek n meet npc]" => QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
+            "[hunt monster]" or "[hunt enemy]" => QuestHuntProgress.TryTargets(quest, out _),
+            "[condition under clear]" or "[clear a dungeon]" => QuestDungeonClearProgress.Supports(quest),
+            _ => false
+        };
+        // 已声明的本任务或父任务迷宫仍须按原难度/连接匹配，不能用普通房间代替剧情结构。
+        // 其它任务的连接不影响本次普通入场；dungeon info 和掉落目标也不是建图要求。
+        if (definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
+            (maze.ConnectionQuestId is { } connected ? connected == questId || connected == quest.MainQuest : !objectiveOnly))) return false;
+        if (!objectiveOnly) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;
@@ -893,10 +875,8 @@ internal sealed record DungeonEntryPlan(
             return "dungeon-unsupported";
         if (questId >= 30000)
             return "quest-unsupported";
-        // 普通副本保持既有五档难度范围。
-        // 这条只放行取值，仍由 SupportsDifficulty 与网关分支决定是否真的能进。
-        if (difficulty > 4 ||
-            questId == 0 && dungeonId is 3 or 5 or 6 or 7 or 8 or 9 or 1000 && difficulty != 0)
+        // 这里只检查协议五档范围；普通开放档与剧情专用范围按最终路线的资源分别验证，不按副本ID锁档。
+        if (difficulty > 4)
             return "difficulty-unsupported";
         if (character.Level is < 1 or > 95)
             return "character-level-invalid";

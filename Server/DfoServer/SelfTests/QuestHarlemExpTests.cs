@@ -150,12 +150,12 @@ internal static class QuestHarlemExpTests
             var full = QuestDropPlan.Create(three with { ActiveMainQuests = [active] },bound,loaded,Guid.NewGuid(),identity,1,107010048,1,false,_ => 0,now);
             That(full.Outcomes.Length == 0,"已持有目标数量(上限3)时不再掉落：" + id);
         }
-        // 不扩大放行：同为seeking子类型0的其它任务、改动形状的6053均不借用该合同。
+        // 黑市EXP专用识别不承担普通sub0的总门禁；其它任务仍按自己的奖励、掉落及资格处理。
         foreach (int other in new[] { 2901, 2902, 10019, 4745 })
             if (catalog.TryGet(other,out var quest))
                 That(!QuestLifecyclePlan.HarlemSeeking(quest) &&
-                    QuestLifecyclePlan.SeekingSubtype(quest) == QuestCycle.NormalDungeonMission(quest),
-                    "其它seeking子类型0任务只由各自已核对合同放行：" + other);
+                    QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
+                    "合法sub0目标不因缺少黑市或每日任务编号白名单被误拒：" + other);
         var real = catalog.Get(6053);
         foreach (var altered in new[]
         {
@@ -166,7 +166,9 @@ internal static class QuestHarlemExpTests
             real with { Definition = real.Definition! with { Drops = [real.Definition.Drops[0] with { DungeonId = 7323 }] } },
             real with { Definition = real.Definition! with { Drops = [real.Definition.Drops[0] with { Rate = 50 }] } },
         })
-            That(!QuestLifecyclePlan.HarlemSeeking(altered) && !QuestLifecyclePlan.SeekingSubtype(altered),"形状被改动的任务不借用黑市寻物合同");
+            That(!QuestLifecyclePlan.HarlemSeeking(altered) &&
+                QuestLifecyclePlan.SeekingSubtype(altered) == (altered.SubType is -1 or 0),
+                "改动资源不借用黑市专用识别，目标子型与奖励、资格和掉落独立校验");
         Console.WriteLine($"PASS {Count - checks} 黑市EXP seeking子类型0（6053/6056/6059）接取、掉落、进度与交付断言");
     }
 

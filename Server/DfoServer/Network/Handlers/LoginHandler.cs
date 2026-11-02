@@ -54,7 +54,8 @@ internal sealed class LoginHandler(ServerOptions options, AccountOwners owners, 
             }
             connection.Stop.ThrowIfCancellationRequested();
             owner.Execute(() => true);
-            log.Write("authenticated", new { Connection = connection.Id, Account = identity.AccountId, owner.Generation, Channel = channel.Entry });
+            log.Write("authenticated", new { Connection = connection.Id, Account = identity.AccountId, owner.Generation, Channel = channel.Entry,
+                UserMode = DfoServer.Game.Session.UserStatePolicy.Mode(channel.Entry.Type).ToString() });
             transferred = true;
             return new(owner, identity, sequence, channel);
         }

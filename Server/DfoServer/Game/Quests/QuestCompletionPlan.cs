@@ -44,13 +44,7 @@ internal sealed class QuestCompletionPlan
         CompletedParentId = completedParentId;
         StagePlan = stagePlan;
         AuthoritativeClear = clear;
-        ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[clear a dungeon]" => 45, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
-            "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 19,
-            "[epic production]" when QuestEpicProductionProgress.Supports(quest) => 67,
-            "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 17,
-            "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
-            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) || DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest) => 60,
-            _ => QuestStateProgress.Type(quest) ?? (byte)4 };
+        ConditionType = QuestTargetRules.CompletionType(quest, quests);
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
         if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
         RewardSelector = selector;
@@ -86,6 +80,7 @@ internal sealed class QuestCompletionPlan
                 row.AcceptanceId != completedChild?.AcceptanceId &&
                 !ClosedChildren.Any(child => child.AcceptanceId == row.AcceptanceId)).ToArray(), inventory.After, quests, now.ToUnixTimeSeconds()),
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(), quests);
+        activeAfter = QuestEventProgress.Completed(QuestEventProgress.Inventory(activeAfter, quests, inventory), quests, quest);
         ActiveAfter = QuestStateProgress.Refresh(activeAfter,expected with { Inventory = inventory.After, Level = TargetLevel,
             GrowType = TargetGrowType, CompletedQuests = CompletedAfter.ToArray(), AccountCompletedQuests = AccountCompletedAfter.ToArray() },quests);
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
@@ -265,7 +260,8 @@ internal sealed class QuestCompletionPlan
                     now,quests,null,null,null,1,[],expected.EquipmentSlotFlags,0,[],null,0,completedParent),"已完成父任务的终末子任务归档");
             }
             bool threshold = QuestRelationProgress.ThresholdParent(quest,quests);
-            bool parent = QuestRelationProgress.SequentialParent(quest,quests) || threshold;
+            bool listParent = QuestRelationProgress.ListParent(quest, quests);
+            bool parent = QuestRelationProgress.SequentialParent(quest,quests) || threshold || listParent;
             StoryQuest? terminalSeeking = null;
             ActiveMainQuest? completedChild = null;
             if (QuestRelationProgress.TerminalSeeking(quest,quests) is { } terminal &&
@@ -303,8 +299,7 @@ internal sealed class QuestCompletionPlan
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
             bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-            // 同一拒绝不能掩盖资源差异；保留原门禁，仅报告实际未支持的声明。
-            if (quest.SubType != -1 && !QuestClearEligibility.ProtectsActors(quest) && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestCycle.NormalDungeonMission(quest) && !QuestDazzlementStorage.Matches(quest))
+            if (!QuestTargetRules.Supports(quest, quests))
                 throw new NotSupportedException($"任务交付子类型未支持: condition={quest.Condition}, sub_type={quest.SubType}");
             if (quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest))
                 throw new NotSupportedException($"任务交付奖励声明未支持: reward_type={quest.RewardType ?? "<absent>"}, gold_multiple={quest.DeclaredGoldMultiple}, reward_tokens={quest.Rewards.Count}");
@@ -350,7 +345,8 @@ internal sealed class QuestCompletionPlan
             }
             else if (quest.Condition == "[quest clear]")
             {
-                if (!parent || completedChild is null && (active.ConditionState != 0 || !quest.IntData.All(expected.CompletedQuests.Contains)))
+                if (!parent || completedChild is null && (active.ConditionState != 0 ||
+                    (listParent ? QuestRelationProgress.ListScalar(quest, QuestEligibility.Completed(expected)) != 0 : !quest.IntData.All(expected.CompletedQuests.Contains))))
                     throw new InvalidDataException("父任务必须具有全部真实子任务完成记录");
             }
             else if (quest.Condition == "[clear multi quest]")
@@ -383,6 +379,20 @@ internal sealed class QuestCompletionPlan
             else if (expertTutorial)
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("副职业教程需要本次接取的已提交商店事实");
+            }
+            else if (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest) || QuestClientObservation.Supports(quest))
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("实际业务事件尚未使本次接取完成");
+            }
+            else if (quest.TargetKind == QuestTargetKind.EquippedItem)
+            {
+                if (active.ConditionState != 0 || quests.Items is not { } facts || !QuestItemProgress.Equipped(expected.Inventory, quest, facts, now.ToUnixTimeSeconds()))
+                    throw new InvalidDataException("当前穿戴没有满足任务的部位、品级、等级或克隆条件");
+            }
+            else if (quest.TargetKind == QuestTargetKind.CheckItem)
+            {
+                if (active.ConditionState != 0 || !QuestLifecyclePlan.HasMaterials(expected, quest, now.ToUnixTimeSeconds(), quests.Items))
+                    throw new InvalidDataException("持有条件没有满足，不能凭客户端归零领奖");
             }
             else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
                 throw new NotSupportedException("此交付条件尚未接入权威事件");

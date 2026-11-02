@@ -24,6 +24,7 @@ internal static class QuestDropTests
     static QuestField Field(string name, params int[] values) => new(name,values.Select(value => new QuestRewardToken(0,value,null)).ToImmutableArray(),[]);
     public static void RunCore()
     {
+        QuestTargetTests.RunCore();
         int before = Count;
         var errors = ImmutableArray.CreateBuilder<string>();
         var rows = QuestDropDefinition.Read([Field("monster reward item",1,3,-1,10165055,2,50,5),
@@ -33,10 +34,18 @@ internal static class QuestDropTests
             "三类声明按资源原序完整解析，不把类型、难度和上限互换");
         That(rows[0].Matches(3,0,1,1,false) && !rows[0].Matches(4,0,1,1,false) && !rows[0].Matches(3,0,2,1,false) &&
             !rows[0].Matches(3,0,1,3,false),"掉落精确匹配模板及事件类型，地下城-1才是通配");
-        That(rows[1].Matches(3,2,13099,3,false) && !rows[1].Matches(3,3,13099,3,false) &&
-            !rows[2].Matches(3,0,1,1,false) && rows[2].Matches(3,0,1,1,true),"掉落难度精确匹配，通关奖励只由清图事实触发");
+        That(rows[1].Matches(3,2,13099,3,false) && rows[1].Matches(3,3,13099,3,false) &&
+            !rows[2].Matches(3,0,1,1,false) && rows[2].Matches(3,0,1,1,true),"任务掉落接受更高难度，通关奖励仍只由真实清图触发");
+        foreach (int requirement in new[] { -1, 0, 2, 4 })
+        foreach (byte actual in new byte[] { 0, 1, 2, 3, 4 })
+            That((rows[0] with { Difficulty = requirement }).MatchesEntry(3, actual) == (requirement == -1 || actual >= requirement),
+                "任务取物难度按最低门槛，不按精确档匹配");
+        errors.Clear();
+        That(QuestDropDefinition.Read([Field("clear reward item",3,4,10165055,1,100,5)],errors) is [{ Difficulty: 4 }] && errors.Count == 0,
+            "任务掉落声明支持本版第五档最低难度");
         foreach (var field in new[] { Field("monster reward item",1,3,-1,10165055,2,50),
-            Field("enemy reward item",1,4,3,-1,10165055,1,100,5),Field("clear reward item",3,-1,10165055,1,101,5) })
+            Field("enemy reward item",1,4,3,-1,10165055,1,100,5),Field("clear reward item",3,-1,10165055,1,101,5),
+            Field("clear reward item",3,5,10165055,1,100,5) })
         {
             errors.Clear(); QuestDropDefinition.Read([field],errors);
             That(errors.Count > 0,"坏掉落声明明确隔离，不能补默认行或截断为普通奖励");
@@ -126,6 +135,10 @@ internal static class QuestDropTests
     {
         int before = Count;
         var original = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        That(original.All.All(quest => quest.TargetRegistration is not null), "当前注册PVF的全部任务类型都有明确注册，不等同全部业务已实现");
+        var recommended = original.All.Where(quest => quest.TargetKind == QuestTargetKind.Seeking && quest.SubType == 20).ToArray();
+        That(recommended.Length == 10 && recommended.All(quest => QuestSeekingObjective.TryRead(quest, out var target) && target.MaterialLength == 2),
+            "当前PVF十条sub20均按物品、数量、难度解析，不丢失原三列");
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf); var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
         var seeking = QuestEligibilityTests.Quest(29987) with { Condition = "[seeking]", IntData = [10165055,2],
@@ -214,33 +227,66 @@ internal static class QuestDropTests
                 ObservePassive() is null,"真实被动物件只发一次任务物品，进度和回执原子保存，无伪造死亡经验");
             DfoServer.Game.Session.QuestLifecycleReceipt? ObservePassive() => f.Session.ObserveFormalPassiveDeath(13099,true,new string('E',64),rooms);
         }
-        var clearing = seeking with { Definition = seeking.Definition! with { Drops = [new(0,0,3,-1,10165055,2,100,2)] } };
-        var clearCatalog = new QuestCatalog(original.All.Append(clearing).ToDictionary(quest => quest.Id));
-        using (var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,clearCatalog,false,1,[]))
+        foreach (bool implicitClear in new[] { false, true })
         {
-            f.Session.LeaveRoom();
-            foreach (ushort id in new ushort[] {3145,29987}) f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,clearCatalog,items.Items,items.GoldLimits,items.EpicPieces);
-            f.Session.Travel(new(38,2,1085,249,5,38,0,0));
-            var opening = f.Session.EnterFormalDungeon(3,0,0,dungeons,rooms,drops,items.Items,_ => 0,items.EpicPieces)!;
-            That(opening.Entry is { QuestId: 0, RouteQuestId: 3145, ActiveQuestSlot: byte.MaxValue } && opening.Entry.QuestAcceptanceId == Guid.Empty,
-                "普通选图入口按唯一活动剧情选择任务路线，实例仍绑定全部真实接取身份");
-            var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
-            var receipt = f.Session.CompleteFormalDungeonLoading()!;
-            foreach (var point in path)
+            var clearing = implicitClear ? seeking with { SubType = 20, IntData = [10165055, 1, 0],
+                Definition = seeking.Definition! with { Drops = [] } } :
+                seeking with { Definition = seeking.Definition! with { Drops = [new(0,0,3,-1,10165055,2,100,2)] } };
+            var clearCatalog = new QuestCatalog(original.All.Append(clearing).ToDictionary(quest => quest.Id));
+            using (var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,clearCatalog,false,1,[]))
             {
-                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                f.Session.LeaveRoom();
+                foreach (ushort id in new ushort[] {3145,29987}) f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,clearCatalog,items.Items,items.GoldLimits,items.EpicPieces);
+                f.Session.Travel(new(38,2,1085,249,5,38,0,0));
+                var opening = f.Session.EnterFormalDungeon(3,0,0,dungeons,rooms,drops,items.Items,_ => 0,items.EpicPieces)!;
+                That(opening.Entry is { QuestId: 0, RouteQuestId: 3145, ActiveQuestSlot: byte.MaxValue } && opening.Entry.QuestAcceptanceId == Guid.Empty,
+                    "普通选图入口按唯一活动剧情选择任务路线，实例仍绑定全部真实接取身份");
+                var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
+                var receipt = f.Session.CompleteFormalDungeonLoading()!;
+                foreach (var point in path)
                 {
-                    var result = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth);
-                    That(result.Outcome == DungeonRunOutcome.Accepted && f.Read().Inventory.Items.Any(item => item.Core.ItemId == 10165055) == (result.ClearFact is not null),
-                        "通关声明只在权威末次Boss死亡事务发物品，普通死亡不提前赠送");
+                    foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
+                    {
+                        var observation = FormalDungeonSessionTests.Observation(receipt,monster);
+                        bool final = implicitClear && point == opening.Entry.BossMap.Position && monster == receipt.Monsters.Monsters.Last(row => row.IsBlocking);
+                        var prior = f.Read();
+                        if (final)
+                        {
+                            f.Sql("CREATE TRIGGER subtype20_abort AFTER UPDATE OF condition_state ON character_active_main_quests WHEN NEW.quest_id=29987 BEGIN SELECT RAISE(ABORT,'sub20 rollback'); END");
+                            Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(observation,kills,growth), "sub20终末进度写入失败");
+                            That(QuestCompletionRepositoryTests.Same(prior,f.Read()), "通关取物、任务状态、经验和真实UID全部回滚");
+                            f.Sql("DROP TRIGGER subtype20_abort");
+                        }
+                        var result = f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
+                        That(result.Outcome == DungeonRunOutcome.Accepted && f.Read().Inventory.Items.Any(item => item.Core.ItemId == 10165055) == (result.ClearFact is not null),
+                            "通关声明只在权威末次Boss死亡事务发物品，普通死亡不提前赠送");
+                        if (final)
+                        {
+                            var saved = f.Read();
+                            That(saved.Inventory.Items.Single(item => item.Core.ItemId == 10165055).Core.Count == 1 &&
+                                result.QuestDropSlots is { Count: > 0 } &&
+                                f.Session.ObserveFormalDungeonDeath(observation,kills,growth).Outcome == DungeonRunOutcome.Duplicate &&
+                                QuestCompletionRepositoryTests.Same(saved,f.Read()), "sub20仅发一件真实任务物品，重复终末不重发且复用既有库存通知槽位");
+                        }
+                    }
+                    if (point == opening.Entry.BossMap.Position) break;
+                    var next = path[Array.IndexOf(path,point)+1]; f.Session.MoveFormalDungeon((byte)next.X,(byte)next.Y);
+                    receipt = f.Session.CompleteFormalDungeonLoading()!;
                 }
-                if (point == opening.Entry.BossMap.Position) break;
-                var next = path[Array.IndexOf(path,point)+1]; f.Session.MoveFormalDungeon((byte)next.X,(byte)next.Y);
-                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                That(f.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == 29987).ConditionState == 0 &&
+                    f.Session.ReadClearedQuest(3145)?.Clear is not null,"通关物品、寻物状态和清图凭据共同保存");
+                if (implicitClear)
+                {
+                    var completion = QuestCompletionPlan.Prepare(f.Read(), clearing, ushort.MaxValue, clearCatalog,
+                        global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf), items.Items, items.GoldLimits,
+                        items.EpicPieces, growth, DateTimeOffset.UtcNow);
+                    That(completion is { Outcome: QuestCompletionOutcome.Accepted, Plan.ConditionType: 0 } &&
+                        completion.Plan.Consumed is [{ ItemId: 10165055, Count: 1 }],
+                        "sub20沿类型0实际消费材料，难度尾值不进入材料或消耗列表：" + completion.Reason);
+                }
             }
-            That(f.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == 29987).ConditionState == 0 &&
-                f.Session.ReadClearedQuest(3145)?.Clear is not null,"通关物品、寻物状态和清图凭据共同保存");
         }
+        QuestReportedClearTests.Run(towns, pvf, characters, items);
         Console.WriteLine($"PASS {Count - before} 任务掉落、满包、接取隔离、死亡及物件事务回滚与恢复断言（非实机）");
     }
 }

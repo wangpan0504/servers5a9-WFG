@@ -144,6 +144,8 @@ internal static class QuestEligibility
                 return QuestRelationProgress.ThresholdParent(parent,catalog) && parent.IntData.Contains(quest.Id)
                     ? new(true, includeActive && active.Contains(quest.Id), "等待阈值父任务的真实子任务入口")
                     : Reject("阈值父任务引用或条件未确认");
+            if (QuestRelationProgress.ListParent(parent, catalog))
+                return parent.IntData.Contains(quest.Id) ? new(true, includeActive && active.Contains(quest.Id), "列表关系的真实子任务入口") : Reject("子任务不属于声明列表");
             int next = parent.IntData.FirstOrDefault(id => !completed.Contains(id));
             if (next != quest.Id)
                 return Reject("尚未到本子任务的资源顺序");

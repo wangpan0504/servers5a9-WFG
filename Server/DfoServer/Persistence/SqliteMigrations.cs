@@ -328,6 +328,7 @@ internal static class SqliteMigrations
         new(178, "漩涡原生破招流去重水位", (db, tx) => Execute(db, tx,
             FiendwarCounterSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(179, "礼遇传送独立冷却", (db, tx) => AddAuraCooldown(db, tx, "privilege_until")),
+        new(180, "本版任务目标类型与旧领奖回执兼容", UpgradeQuestTargetTypes),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -851,13 +852,34 @@ internal static class SqliteMigrations
 
     internal static string QuestCompletionSchemaV127 => QuestCompletionSchemaV62.Replace(",4,6,",",4,5,6,",StringComparison.Ordinal);
 
+    const string QuestTargetNativeList = "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,52,53,54,55,56,57,58,59,60,62,63,64,65,66,67,68,69,70,71";
+    const string QuestTargetWithoutClearList = "0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,52,53,54,55,56,57,58,59,60,62,63,64,65,66,67,68,69,70,71";
+    internal static string QuestCompletionSchemaV180 => QuestCompletionSchemaV127
+        .Replace("condition_type IN(0,1,2,3,4,5,6,12,17,19,25,31,39,40,42,44,45,49,60,64,65,67,70)", "condition_type IN(" + QuestTargetNativeList + ")", StringComparison.Ordinal)
+        .Replace("condition_type IN(0,2,4,5,6,12,17,19,25,31,39,40,42,44,49,60,64,65,67,70)", "condition_type IN(" + QuestTargetWithoutClearList + ")", StringComparison.Ordinal);
+
+    static void UpgradeQuestTargetTypes(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_completion_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts'";
+        string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("任务目标迁移缺少原领奖账本");
+        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV180, table)) return;
+        if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV127, table))
+            throw new InvalidDataException("任务目标迁移不是已确认的旧领奖结构");
+        ReplaceTableConstraint(db, tx, table, "condition_type IN(0,1,2,3,4,5,6,12,17,19,25,31,39,40,42,44,45,49,60,64,65,67,70)",
+            "condition_type IN(" + QuestTargetNativeList + ")");
+        ReplaceTableConstraint(db, tx, table, "condition_type IN(0,2,4,5,6,12,17,19,25,31,39,40,42,44,49,60,64,65,67,70)",
+            "condition_type IN(" + QuestTargetWithoutClearList + ")");
+    }
+
     static void UpgradePvpRankQuest(SqliteConnection db,SqliteTransaction tx)
     {
         const string table="character_quest_completion_receipts";
         using var query=db.CreateCommand();query.Transaction=tx;
         query.CommandText="SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts'";
         string actual=query.ExecuteScalar() as string ?? throw new InvalidDataException("段位任务迁移缺少领奖账本");
-        if(NormalizeTable(actual,table)==NormalizeTable(QuestCompletionSchemaV127,table)) return;
+        if(ReceiptShapeApplied(actual,table,QuestCompletionSchemaV127,QuestCompletionSchemaV180)) return;
         if(NormalizeTable(actual,table)!=NormalizeTable(QuestCompletionSchemaV62,table))
             throw new InvalidDataException("段位任务迁移拒绝未知领奖结构");
         ReplaceTableConstraint(db,tx,table,"condition_type IN(0,1,2,3,4,6,","condition_type IN(0,1,2,3,4,5,6,");
@@ -871,7 +893,7 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("眩惑贮藏箱领奖迁移缺少原领奖账本");
-        if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV62, QuestCompletionSchemaV127)) return;
+        if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV62, QuestCompletionSchemaV127, QuestCompletionSchemaV180)) return;
         if (!ReceiptShapeApplied(actual, table, QuestCompletionSchemaV58))
             throw new InvalidDataException("眩惑贮藏箱领奖迁移不是已确认的 v58 领奖结构");
         string updated = actual.Replace("64,65,67,70", "60,64,65,67,70", StringComparison.Ordinal);
@@ -902,7 +924,7 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副职业教程领奖迁移缺少原领奖账本");
         if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV58, QuestCompletionSchemaV62,
-                QuestCompletionSchemaV127)) return;
+                QuestCompletionSchemaV127, QuestCompletionSchemaV180)) return;
         if (!ReceiptShapeApplied(actual, table, QuestCompletionSchemaV46))
             throw new InvalidDataException("副职业教程领奖迁移不是已确认的 v46 领奖结构");
         // v53 阶段旁表已外键指向领奖账本，不能 DROP 重建；只把已确认的 IN 列表扩到原生类型 17。
@@ -934,7 +956,7 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副本列表任务迁移缺少原领奖账本");
         if (ReceiptShapeApplied(actual,table,QuestCompletionSchemaV46,QuestCompletionSchemaV58,
-                QuestCompletionSchemaV62,QuestCompletionSchemaV127)) return;
+                QuestCompletionSchemaV62,QuestCompletionSchemaV127,QuestCompletionSchemaV180)) return;
         if (!ReceiptShapeApplied(actual,table,QuestCompletionSchemaV42))
             throw new InvalidDataException("副本列表任务迁移不是已确认的v45领奖结构");
         query.CommandText = """
@@ -995,7 +1017,7 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("租赁任务迁移缺少原领奖账本");
         if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV42, QuestCompletionSchemaV46,
-                QuestCompletionSchemaV58, QuestCompletionSchemaV62, QuestCompletionSchemaV127)) return;
+                QuestCompletionSchemaV58, QuestCompletionSchemaV62, QuestCompletionSchemaV127, QuestCompletionSchemaV180)) return;
         string previous = ExperienceCapSchema.Definition(QuestCompletionSchemaV18, table);
         if (!ReceiptShapeApplied(actual, table, previous))
             throw new InvalidDataException("租赁任务迁移不是已确认的v41领奖结构");
@@ -2387,7 +2409,7 @@ internal static class SqliteMigrations
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV127),
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

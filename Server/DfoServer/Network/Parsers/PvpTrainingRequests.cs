@@ -16,7 +16,7 @@ internal static class PvpTrainingRequests
     public static byte CopyChoice(ReadOnlySpan<byte> body) => body.Length==1 && body[0] is 1 or 2 ? body[0] :
         throw new InvalidDataException("训练复制选择需要原生单字节1或2");
     // V31 015C1C12/015D94D5：u8(0)，字节长u32+CP936标题，u16，u8×3。
-    // 连招入口尾三项为0/1/0；街机为0/3/(原模式index+1)，不能把kind直接当NOTI41模式。
+    // 连招入口尾三项为0/1/0；街机为0/3/(difficulty+1)，不是教学模式80/81/82的index+1。
     public static PvpRoomRequest Create(ReadOnlySpan<byte> body)
     {
         var request = PvpArenaRequests.Create(body);

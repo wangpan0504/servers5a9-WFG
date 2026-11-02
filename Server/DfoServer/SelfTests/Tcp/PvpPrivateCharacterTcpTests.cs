@@ -69,7 +69,7 @@ internal static class PvpPrivateCharacterTcpTests
             foreach(ushort quest in new ushort[]{2676,2677,2678,2679})
             {
                 byte lo=(byte)quest,hi=(byte)(quest>>8);
-                peer.Send(31,[31,0,lo,hi]);peer.Expect(0,1233,[0]);peer.Expect(0,1234);
+                peer.Send(31,[31,0,lo,hi]);peer.Expect(0,1233,[0]);peer.Expect(0,quest==2676 ? (ushort)1234 : (ushort)1235);
                 var accepted=peer.Expect(1,31).Body;
                 That(accepted[0]==1 && U16(accepted,1)==quest,"专用后继按原前置逐条接取");
                 QuestLifecycleTcpTests.DrainNotifications(peer);
@@ -81,9 +81,9 @@ internal static class PvpPrivateCharacterTcpTests
                     peer.Send(33,[33,0,lo,hi,0x20,0,0]);That(peer.Expect(1,33).Body[0]==1,"专用连招按原通道推进");
                     peer.Send(52,[0,254]);peer.Expect(0,43);PvpArenaTcpTests.TownReturn(peer, position);
                 }
-                int mode=quest==2679 ? 2 : 80;
+                int mode=quest switch {2676=>80,2677=>81,2678=>82,_=>2};
                 var roundPlan=arcade.Resolve(0,1,mode) ?? throw new InvalidDataException("专用街机原资源缺失");
-                peer.Send(50,[0,2,0,0,0,0xD1,0xB5,0,0,0,3,checked((byte)(mode+1))]);peer.Expect(1,50,[1]);peer.Expect(0,41);
+                peer.Send(50,[0,2,0,0,0,0xD1,0xB5,0,0,0,3,checked((byte)(roundPlan.Mode.Difficulty+1))]);peer.Expect(1,50,[1]);peer.Expect(0,41);
                 var used=new HashSet<int>();
                 for(int round=1;round<=roundPlan.Mode.Rounds;round++)
                 {
@@ -101,6 +101,7 @@ internal static class PvpPrivateCharacterTcpTests
                     That(f.Query("SELECT count(*) FROM character_pvp_mission_rewards WHERE character_id=$p0 AND mission_id=$p1", created, mission) is [[1L]],
                         "专用角色完整道场胜利同样提交一次独立MSN袖珍罐，再继续原风云33流程");
                 }
+                else if(quest==2678) PvpMissionTcpChecks.Update(peer,f);
                 byte channel=solo?(byte)0x10:(byte)0x40;
                 peer.Send(33,[33,0,lo,hi,channel,0,0]);peer.Expect(1,33,[1,lo,hi,0,0,0,0]);
                 peer.Send(52,[0,254]);peer.Expect(0,43);PvpArenaTcpTests.TownReturn(peer, position);

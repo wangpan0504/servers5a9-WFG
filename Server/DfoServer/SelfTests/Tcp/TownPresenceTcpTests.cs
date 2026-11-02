@@ -30,14 +30,14 @@ internal static class TownPresenceTcpTests
                     new(Guid.NewGuid(), Guid.NewGuid(), 296, DfoServer.Game.Pvp.PvpArenaMode.Individual,
                         [new("alpha", alpha.Id, 0, 0, DfoServer.Game.Pvp.PvpArenaOutcome.Win),
                          new("beta", beta.Id, 1, 1, DfoServer.Game.Pvp.PvpArenaOutcome.Lose)], false, 0));
-            var alphaActor = alpha.Select(premiumPcRoom: true, recoveredPvpGrade: 20, recoveredPowerTitle: 9)[2].Body;
+            var alphaActor = alpha.Select(premiumPcRoom: true)[2].Body;
             var betaActor = beta.Select(premiumPcRoom: true)[2].Body;
             AssertBlackDiamondActor(alphaActor, active: false, pcRoom: true);
             AssertBlackDiamondActor(betaActor, active: false, pcRoom: true);
-            PvpGrade(alphaActor, 19, 9);
+            PvpGrade(alphaActor, 20, 9);
             PvpGrade(betaActor, 0);
             That(fixture.Query("SELECT count(*) FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL") is [[2L]],
-                "登录恢复双方真实来源，19升20补发，0不变不额外发Actor");
+                "首次Actor之前恢复双方真实来源，19升20直接投影最新值，0不变不额外发Actor");
             alpha.Barrier();
             beta.Barrier();
             string beforePcRoom = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account");

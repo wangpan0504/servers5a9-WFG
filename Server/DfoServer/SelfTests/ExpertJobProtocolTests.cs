@@ -19,8 +19,8 @@ internal static class ExpertJobProtocolTests
             "授职拒绝越界类型");
         Reject<InvalidDataException>(() => QuestPackets.Finish(2710, 0, 0, [], 0, [], growType: 1, expertJobType: 3),
             "主职业与副职业奖励不可混写同一mode");
-        That(QuestPackets.Finish(10021, 17, 0, [], 0, []) is [1, 37, 39, 17, 0, 0, 0, 0, 0, 0],
-            "分解师末步的self disjoint类型17走普通奖励头，不被writer白名单拒绝");
+        That(QuestPackets.Finish(10021, 66, 0, [], 0, []) is [1, 37, 39, 66, 0, 0, 0, 0, 0, 0],
+            "分解师末步使用本版self disjoint类型66，不与穿戴类型17混淆");
         That(ExpertJobPackets.Fail(10) is [0, 10, 0] && ExpertJobPackets.Fail(19) is [0, 19, 0],
             "ACK 239/238 失败是 success:u8 + error:u16");
         That(ExpertJobPackets.GiveUpSuccess() is [1, 0, 0, 0, 0, 0, 0],

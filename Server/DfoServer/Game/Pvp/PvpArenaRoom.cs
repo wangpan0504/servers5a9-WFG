@@ -3,7 +3,11 @@ using System.Collections.Immutable;
 namespace DfoServer.Game.Pvp;
 
 internal sealed record PvpArenaMember(Guid Token, string Account, ushort CharacterId, byte Seat,
-    byte Team, bool Spectator, bool Ready) { public byte? Job { get; init; } }
+    byte Team, bool Spectator, bool Ready)
+{
+    public byte? Job { get; init; }
+    public ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest> QuestBindings { get; init; } = [];
+}
 internal sealed record PvpArenaRoomView(Guid Instance, ushort Id, ushort Channel, string Title,
     PvpArenaMode Mode, ushort Map, byte Leader, ImmutableArray<PvpArenaMember> Members,
     ImmutableArray<byte> ClosedSeats, Guid? MatchId, PvpArenaMatchPhase? MatchPhase, long Revision)
@@ -53,14 +57,16 @@ internal sealed class PvpArenaRoom
         Map = map;
     }
 
-    public PvpArenaMember? Join(string account, ushort character, byte team, bool spectator = false, byte? job = null)
+    public PvpArenaMember? Join(string account, ushort character, byte team, bool spectator = false, byte? job = null,
+        ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest> questBindings = default)
     {
         if (Match is not null && !spectator || character is 0 or ushort.MaxValue || string.IsNullOrWhiteSpace(account) || team > 1 ||
             members.Count >= 8 || members.Values.Any(row => row.Account == account || row.CharacterId == character)) return null;
         int seat = Enumerable.Range(0, 8).FirstOrDefault(index => !closed.Contains((byte)index) &&
             members.Values.All(row => row.Seat != index), -1);
         if (seat < 0) return null;
-        var member = new PvpArenaMember(Guid.NewGuid(), account, character, (byte)seat, team, spectator, false) { Job = job };
+        var member = new PvpArenaMember(Guid.NewGuid(), account, character, (byte)seat, team, spectator, false)
+            { Job = job, QuestBindings = questBindings.IsDefault ? [] : questBindings };
         members.Add(member.Token, member);
         if (Leader == Guid.Empty) Leader = member.Token;
         Revision++;
@@ -111,7 +117,7 @@ internal sealed class PvpArenaRoom
         if (fighters.Length < 2 || Mode != PvpArenaMode.Individual && fighters.Select(row => row.Team).Distinct().Count() != 2) return null;
         if (IsMatching && (ratings is null || fighters.Any(row => !ratings.ContainsKey(row.CharacterId)))) return null;
         Match = new(Mode, fighters.Select(row => new PvpArenaFighter(row.Token, row.CharacterId, row.Seat, row.Team)
-            { Account = row.Account, Job = row.Job, Rating = ratings?.GetValueOrDefault(row.CharacterId),
+            { Account = row.Account, Job = row.Job, QuestBindings = row.QuestBindings, Rating = ratings?.GetValueOrDefault(row.CharacterId),
                 TotalTeam = MatchingLoad?.Members.Single(ticket => ticket.Actor.Character.Id == row.CharacterId).TotalRoster?.Team }).ToImmutableArray(),
             now, loadTimeout, duration);
         foreach (var row in members.Values.ToArray()) members[row.Token] = row with { Ready = false };

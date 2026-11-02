@@ -2,6 +2,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    public UserMode Mode => UserStatePolicy.Mode(ChannelEntry?.Type);
     public UserState GetState() => owner.Execute(() => ReadState(Phase));
     public bool CheckState(UserStateRequirement minimum) => owner.Execute(() => UserStatePolicy.Meets(ReadState(Phase), minimum));
     public bool CheckState(UserState expected) => owner.Execute(() => UserStatePolicy.IsImplemented(expected) && ReadState(Phase) == expected);
@@ -13,7 +14,7 @@ internal sealed partial class GameSession
             CurrentDungeonSelection is not null, dungeon?.Run.Phase,
             CurrentDungeonSelection?.IsTutorial == true || dungeon?.Entry.IsTutorial == true,
             !endingPvp && (pvpTraining is not null || pvpPractice is not null), !endingPvp && pvpArena is not null,
-            !endingPvp && pvpArena?.Room.Match?.Phase == DfoServer.Game.Pvp.PvpArenaMatchPhase.Fighting);
+            !endingPvp && pvpArena?.Room.Match?.Phase == DfoServer.Game.Pvp.PvpArenaMatchPhase.Fighting, Mode == UserMode.Pvp);
     }
 
     // 业务在原owner内完成上下文安装/提交后调用；旧连接收尾也只能清理自己的会话。

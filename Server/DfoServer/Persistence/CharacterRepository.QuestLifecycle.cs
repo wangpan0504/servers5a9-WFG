@@ -70,6 +70,7 @@ internal sealed partial class CharacterRepository
                     SameInventory(current.Inventory, new(after, after, "quest_receipt_projection"));
                 reader.Close();
                 SaveOrVerifySceneClear(db,tx,owner,plan,true);
+                SaveOrVerifyReportedClear(db, tx, owner, plan, true);
                 return new QuestLifecycleCommit(current, plan, true, projectionCurrent);
             }
         }
@@ -135,6 +136,7 @@ internal sealed partial class CharacterRepository
             """;
         command.ExecuteNonQuery();
         SaveOrVerifySceneClear(db,tx,owner,plan,false);
+        SaveOrVerifyReportedClear(db, tx, owner, plan, false);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Revision != expected.Revision + 1 || !committed.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) ||
             !committed.CompletedQuests.SequenceEqual(plan.CompletedAfter) || !committed.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter))

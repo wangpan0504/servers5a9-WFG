@@ -15,6 +15,13 @@ namespace DfoServer.Network.Projection;
 internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterCatalog? parameters = null,
     ItemCatalog? items = null, GoldLimitCatalog? goldLimits = null, EpicPieceCatalog? pieces = null, CharacterGrowthCatalog? growth = null)
 {
+    public const string HellTerrainBypassText = "已优先进入深渊模式地下城， 部分任务可能无法在本次通关中完成";
+
+    public static Task DungeonTerrainBypassAsync(GameConnectionContext context, DfoServer.Game.Dungeons.DungeonEntryPlan entry,
+        Func<bool> guard) => !entry.BypassedQuestTerrain.IsEmpty
+        ? context.NotifyNotice(ServerNoticeDisplay.Chat, HellTerrainBypassText, "hell_quest_terrain_bypassed", guard)
+        : Task.CompletedTask;
+
     public async Task PublishDeathConditionsAsync(GameConnectionContext context, Character character,
         IReadOnlyList<ActiveMainQuest> changed, Func<bool> guard)
     {

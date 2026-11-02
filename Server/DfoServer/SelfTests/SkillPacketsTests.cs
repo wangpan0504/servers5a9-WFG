@@ -54,7 +54,9 @@ internal static class SkillPacketsTests
             "成长差量复用原生ACK29布局，不新增协议模式");
         var restore = DecodeSuccess(SkillPackets.Growth(0, zero, []), allowEmpty: true);
         Bytes(SkillPackets.Success(0, 1, zero, []), [1, 0, 0, 0, 0, 0, 0, 1], "零变化自动加点保留mode1及零条计数");
-        Bytes(SkillPackets.TrainingSuccess(3, zero, []), [1, 0, 0, 0, 0, 0, 0, 3], "零变化训练确认仍走mode3任务完成回调");
+        Bytes(SkillPackets.TrainingSuccess(0, 3, zero, []), [1, 0, 0, 0, 0, 0, 0, 3], "零变化训练确认仍走mode3任务完成回调");
+        Bytes(SkillPackets.TrainingSuccess(1, 3, zero, []), [1, 1, 0, 0, 0, 0, 0, 3], "第二套训练确认保留原生context1，不混用第一套绑定和余额");
+        Bytes(SkillPackets.ResetFailure(), [0,19,0], "491拒绝以原生已确认错误尾结束等待，不伪造清空成功");
         Reject(() => SkillPackets.Success(0, 0, zero, []), "普通学习仍不接受空改变成功包");
         That(restore.Context == 0 && restore.Mode == 0 && restore.Skills.Length == 0 && restore.Sp == 0 && restore.Tp == 0,
             "原生零项更新只恢复主树及绝对点数，不伪造技能改变");

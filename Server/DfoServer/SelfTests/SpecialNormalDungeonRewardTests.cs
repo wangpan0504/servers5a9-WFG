@@ -558,16 +558,24 @@ internal static class SpecialNormalDungeonRewardTests
                 DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,0,2,out var ordinaryPlan,out _,quests:resources.Quests) &&
                 explicitPlan.BossMap == ordinaryPlan!.BossMap && explicitPlan.EntryItem == ordinaryPlan.EntryItem &&
                 explicitPlan.StartFatigue == ordinaryPlan.StartFatigue,"考验显式任务保留普通路线原终点、费用与接取身份");
-            foreach (var invalid in new[] { quest with { SubType=11 }, quest with { Grade="[auto daily mission]" },
+            foreach (var playable in new[] { quest with { Grade="[auto daily mission]" },
                 quest with { IntData=[400000016,-1] }, quest with { IntData=[400000046,4] },
                 quest with { IntData=[400000046,-1,5] } })
+                That(DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,2,out _,out _,quest:playable,quests:resources.Quests),
+                    "已确认的目标不按考验编号拒绝普通建图，资格、次数与达成条件各自校验");
+            foreach (var invalid in new[] { quest with { SubType=11 }, quest with { IntData=[400000046,-1,0] },
+                quest with { IntData=[400000046,-2] } })
                 That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,2,out _,out _,quest:invalid,quests:resources.Quests),
-                    "未知子型/专用每日、目标不符、难度不足和未确认累计次数不能借普通考验路线");
+                    "未闭合子型及非法目标参数仍不能伪装成合法考验");
+            That(!QuestDungeonClearProgress.Matches(quest with { IntData=[400000016,-1] }, explicitPlan!) &&
+                !QuestDungeonClearProgress.Matches(quest with { IntData=[400000046,4] }, explicitPlan!) &&
+                QuestEligibility.Evaluate(fixture.Read() with { ActiveMainQuests=[] }, quest with { Grade="[auto daily mission]" }, resources.Quests) is not { Eligible:true, Visible:true },
+                "物理入场不替代正确目标、最低难度或专用每日接取资格");
             That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read() with { ActiveMainQuests=[accepted with { AcceptanceId=Guid.Empty }] },
                 400000046,8925,2,out _,out _,quest:quest,quests:resources.Quests),"空接取身份不能进入考验路线");
             var foreign = quest with { Id=29999 };
-            That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read() with { ActiveMainQuests=[accepted with { QuestId=29999 }] },
-                400000046,29999,2,out _,out _,quest:foreign,quests:resources.Quests),"未知任务即使复制普雷单次考验形状也不开放路线");
+            That(DungeonEntryPlan.TryCreate(dungeons,fixture.Read() with { ActiveMainQuests=[accepted with { QuestId=29999 }] },
+                400000046,29999,2,out _,out _,quest:foreign,quests:resources.Quests),"普通规划以合法目标而非普雷考验ID白名单判断，真实请求仍须目录中存在任务");
             int preyDay = QuestCycle.Day(DateTimeOffset.UtcNow);
             foreach (int id in dungeons.PreyNormal.Route(DfoServer.GameWorld.Dungeons.PreyNormalCatalog.BranchForDay(preyDay)).Take(4))
                 Play(fixture,id);

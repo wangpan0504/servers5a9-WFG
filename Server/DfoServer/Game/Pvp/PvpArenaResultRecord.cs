@@ -11,6 +11,8 @@ internal sealed record PvpArenaResultParticipant(string Account, ushort Characte
     public uint Kills { get; init; }
     public PvpRatingSnapshot? Rating { get; init; }
     public PvpTotalTeam? TotalTeam { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest>? QuestBindings { get; init; }
 }
 internal sealed record PvpArenaResultRecord(Guid MatchId, Guid RoomInstance, ushort Channel, PvpArenaMode Mode,
     ImmutableArray<PvpArenaResultParticipant> Participants, bool Forfeit, long FinishedAt)
@@ -32,6 +34,11 @@ internal sealed record PvpArenaResultRecord(Guid MatchId, Guid RoomInstance, ush
             Participants.Any(row => row.Outcome == PvpArenaOutcome.Draw) &&
                 Participants.Any(row => row.Outcome != PvpArenaOutcome.Draw))
             throw new InvalidDataException("整局决斗回执身份或结果无效");
+        if (Participants.Any(row => row.QuestBindings is { } bindings && (bindings.IsDefault || bindings.Length > 30 ||
+            bindings.Any(binding => binding.AcceptanceId == Guid.Empty || binding.QuestId is 0 or >= 30000 || binding.Slot >= 30) ||
+            bindings.Select(binding => binding.AcceptanceId).Distinct().Count() != bindings.Length ||
+            bindings.Select(binding => binding.Slot).Distinct().Count() != bindings.Length)))
+            throw new InvalidDataException("整局任务来源的接取身份无效");
         if (RatingMode == PvpRatingMode.Matching && (Mode != PvpArenaMode.Individual || Participants.Length != 2 ||
             Participants.Any(row => row.Rating is null || row.Rating.Revision < 0)) ||
             RatingMode == PvpRatingMode.Ordinary && Participants.Any(row => row.Rating is not null))

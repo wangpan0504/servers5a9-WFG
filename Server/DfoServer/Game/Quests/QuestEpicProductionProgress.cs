@@ -7,7 +7,7 @@ namespace DfoServer.Game.Quests;
 internal static class QuestEpicProductionProgress
 {
     public static bool Supports(StoryQuest quest) => quest is
-        { Grade:"[side]",Condition:"[epic production]",SubType:-1,IntData.Count:0,MainQuest:null,
+        { Grade:"[side]",Condition:"[epic production]",SubType: -1 or 0,IntData.Count:0,MainQuest:null,
           Definition:{ Diagnostics.Length:0,AccountQuest:false } } && QuestCoverage.HasOrdinaryDeclarations(quest);
     public static ActiveMainQuest[] Refresh(ActiveMainQuest[] active,QuestCatalog quests) => active.Select(row =>
         row.ConditionState!=0 && quests.TryGet(row.QuestId,out var quest) && Supports(quest)

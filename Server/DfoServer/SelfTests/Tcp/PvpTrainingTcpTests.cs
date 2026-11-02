@@ -13,6 +13,7 @@ internal static partial class PvpTrainingTcpTests
 {
     public static async Task RunAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        SkillLearningTests.Run(resources.Archive, resources.Characters);
         await DailyAsync(source, root, resources);
         await PracticeAsync(source, root, resources);
         await using var f=new TcpTestFixture(source,Path.Combine(root,"pvp-training"),resources:resources);
@@ -30,7 +31,7 @@ internal static partial class PvpTrainingTcpTests
                 InitialLearning=SkillPointLedger.Synchronize(0,0,60,seed.InitialLearning with
                     {Experience=growth.GetLevelStartExperience(60)},resources.Learning)}).Id;
         }
-        byte[] request=[0,2,0,0,0,0xD1,0xB5,0,0,0,3,81];
+        byte[] request=[0,2,0,0,0,0xD1,0xB5,0,0,0,3,1];
         await f.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(f);
         byte pvp=ChannelTcpTests.PvpChannelNumber(f);
@@ -55,12 +56,12 @@ internal static partial class PvpTrainingTcpTests
             QuestLifecycleTcpTests.DrainNotifications(peer);
             peer.Send(34,[34,0,0x70,0x0A,255,255,1,0,255,255]);peer.Expect(1,34,[0,19,0]);peer.Barrier();
             string ordinarySkills=OrdinarySkills();
-            peer.Send(491,[0,0]);peer.Expect(1,491,[1,0,1]);peer.Expect(0,1234);
-            peer.Send(29,[1,1,5,0,0,1,3]);peer.Expect(1,29,[0,0xD9,0]);
+            peer.Send(491,[0,0]);peer.Expect(1,491,[1,0,1]);peer.Expect(0,1235);
+            peer.Send(29,[2,1,5,0,0,1,3]);peer.Expect(1,29,[0,0xD9,0]);
             peer.Send(29,[0,1,5,0,0,1,3]);
             byte[] learned=peer.Expect(1,29).Body;
             That(learned[0]==1 && learned[1]==0 && learned[^1]==3,"训练自动加点返回实际mode3，不按普通技能模式回复");
-            peer.Send(28,[0,learned[7],11,255,255,255,255,0]);peer.Expect(1,28,[1,0,learned[7],11]);
+            peer.Send(28,[0,learned[7],11,255,255,255,255,2]);peer.Expect(1,28,[1,0,learned[7],11]);
             peer.Barrier();
             That(ordinarySkills==OrdinarySkills(),"训练重置、自动学习和换槽不修改角色普通双树点数或绑定");
             That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",id) is [[262656L]],
@@ -74,9 +75,22 @@ internal static partial class PvpTrainingTcpTests
             That(unchangedTraining==f.Snapshot(),"已确认训练零变化不重复写入或推进其它任务通道");
             That(f.Query("SELECT COUNT(*) FROM character_pvp_training_skills WHERE character_id=$p0",id) is [[1L]],"训练技能独立持久化");
             peer.Send(33,[33,0,0x70,0x0A,0x10,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,4,0]);
+            peer.Travel(10,1,450,234,10,4);
+            peer.Travel(10,4,position.X,position.Y,10,1,beforeLocation:p=>
+            {
+                p.Expect(0,1233,[0]);
+                var restored=p.Expect(0,1234).Body;
+                That(Enumerable.Range(0,restored[0]).Any(i=>restored[1+i*4]==11 && U16(restored,2+i*4)==5 && restored[4+i*4]>1),
+                    "离开训练地区后重新切入仍装载缓存，保留训练等级和槽位，不改同场景后继更新规则");
+            });
             string before=f.Snapshot();
             string questsBefore = f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", id);
+            var invalidMode=request.ToArray();invalidMode[^1]=81;
+            peer.Send(50,invalidMode);peer.Expect(1,50,[0,19,0]);peer.Barrier();
+            That(before==f.Snapshot(),"教学配置index不能冒充原生难度字节，不创建备用实例或写任务进度");
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
+            peer.Send(28,[0,11,10,255,255,255,255,2]);peer.Barrier();
+            That(before==f.Snapshot(),"街机战斗不开放连招练习换槽，不污染原训练实例或存档");
             peer.Send(50,request);peer.Expect(1,50,[0,19,0]);
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
             // 缺少开始、篡改对手和重复开始均不产生正式完成事实。
@@ -124,6 +138,15 @@ internal static partial class PvpTrainingTcpTests
             peer.Send(33,[33,0,0x70,0x0A,0x20,0,0]);peer.Expect(1,33,[0,19,0]);
             peer.Send(50,combo);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false,6);
             peer.Send(50,combo);peer.Expect(1,50,[0,19,0]);
+            string trainingBeforeMove=f.Snapshot("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",id);
+            peer.Send(28,[0,11,10,255,255,255,255,2]);peer.Expect(1,28,[1,0,11,10]);
+            peer.Send(28,[0,10,11,255,255,255,255,2]);peer.Expect(1,28,[1,0,10,11]);peer.Barrier();
+            string sameSlotBefore=f.Snapshot();
+            peer.Send(28,[0,11,11,255,255,255,255,2]);peer.Expect(1,28,[1,0,11,11]);peer.Barrier();
+            That(sameSlotBefore==f.Snapshot(),"连招练习同槽确认不写库，不使当前训练实例失效");
+            That(ordinarySkills==OrdinarySkills() && trainingBeforeMove==f.Snapshot(
+                "SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",id),
+                "连招房间的原生mode2换槽只改训练布局，保留普通双树和当前任务接取、计数");
             before=f.Snapshot();
             Round(peer,0,1201,1,false);Round(peer,1,1201,1,true);
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
@@ -149,9 +172,17 @@ internal static partial class PvpTrainingTcpTests
             That(f.Query("SELECT quest_id FROM character_completed_quests WHERE quest_id=2672") is [[2672L]] &&
                 f.Query("SELECT condition_type FROM character_quest_completion_receipts WHERE quest_id=2672") is [[60L]],
                 "2672真实接取、三通道推进与原奖励同事务闭环");
-            peer.Send(31,[31,0,0x71,0x0A]);peer.Expect(0,1233,[0]);peer.Expect(0,1234);
+            peer.Send(31,[31,0,0x71,0x0A]);peer.Expect(0,1233,[0]);
+            var nextSkills=SkillPacketsTests.DecodeInitialized(peer.Expect(0,1235).Body);
+            That(nextSkills[0].Skills.Any(skill=>skill.Id==5 && skill.Level>1),
+                "同连接后继2673原位更新训练对象并保留已学技能，不重复发送销毁对象的1234");
             peer.Expect(1,31,[1,0x71,0x0A,1,0,0,0,0]);
             QuestLifecycleTcpTests.DrainNotifications(peer);
+            peer.Send(491,[0,3]);peer.Expect(1,491,[1,0,1]);peer.Expect(0,1235);
+            peer.Send(29,[0,1,5,0,0,1,3]);peer.Expect(1,29);peer.Barrier();
+            That(ordinarySkills==OrdinarySkills() &&
+                f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2673",id) is [[1L]],
+                "后继任务中清空再自动加点仍仅改训练树，不伪造压制完成或写入普通树");
             peer.Send(33,[33,0,0x71,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);peer.Barrier();
             That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE quest_id=2673") is [[1L]],
                 "后继2673可真实接取，但不能复用上个任务或退出实例的胜利事实");
@@ -168,7 +199,7 @@ internal static partial class PvpTrainingTcpTests
             That(f.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE quest_id IN(2672,2673) ORDER BY quest_id")
                 is [[2672L],[2673L]],"真实连续两项各自只有一份领奖回执");
             // 2674原客户端先1269取得秘籍，再33确认第三通道；领奖消费一个秘籍，不能额外留书。
-            peer.Send(31,[31,0,0x72,0x0A]);peer.Expect(0,1233,[0]);peer.Expect(0,1234);
+            peer.Send(31,[31,0,0x72,0x0A]);peer.Expect(0,1233,[0]);peer.Expect(0,1235);
             peer.Expect(1,31,[1,0x72,0x0A,1,2,4,0,0]);QuestLifecycleTcpTests.DrainNotifications(peer);
             before=f.Snapshot();peer.Send(1269,[]);peer.Barrier();
             That(before==f.Snapshot(),"无胜利实例的空1269不能给秘籍");
@@ -177,10 +208,12 @@ internal static partial class PvpTrainingTcpTests
             peer.Send(50,combo);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false,6);
             peer.Send(33,[33,0,0x72,0x0A,0x20,0,0]);peer.Expect(1,33,[1,0x72,0x0A,0,0,4,0]);
             peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
+            request[^1]=2;
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             before=f.Snapshot();peer.Send(1269,[]);peer.Barrier();That(before==f.Snapshot(),"末轮未胜利不能预领秘籍");
-            Round(peer,0,1201,1,false);Round(peer,1,1201,1,true);
-            Round(peer,0,1202,2,false);Round(peer,1,1202,2,true);
+            for(byte round=1;round<=4;round++)
+            {Round(peer,0,1204+round,round,false,4);Round(peer,1,1204+round,round,true,4);}
+            PvpMissionTcpChecks.Update(peer,f);
             peer.Send(33,[33,0,0x72,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
             That(ManualCount()==0,"末项不能用33跳过秘籍发放链");
             peer.Send(1269,[]);peer.Expect(0,14);peer.Barrier();
@@ -247,6 +280,129 @@ internal static partial class PvpTrainingTcpTests
             That(SkillPacketsTests.DecodeInitialized(peer.SkillInfo)[0].Skills.Single(skill=>skill.Id==5).Level==1,
                 "普通频道重登仍回放普通方案，不把决斗复制反写刷图技能");
         }
+        // #980 的魔枪士首次自动加点可没有技能增量，仍须提交该接取的完成事实。
+        const string lancerAccount = "training-lancer";
+        ushort lancerId;
+        using (var owner = new AccountOwners().Acquire(lancerAccount, () => { }))
+        {
+            const byte job = 13, growType = 3, level = 66;
+            var seed = CharacterCreation.Prepare("LancerTCP", resources.Characters.Get(job), position,
+                resources.Towns.InitialReturn, resources.Learning.Get);
+            var free = resources.Learning.FreeSkills(job, growType);
+            lancerId = repo.Create(owner, seed with { GrowType = growType, Level = level, AcceptedStoryLevel = level,
+                CompletedQuests = [2670, 2671], Skills = free.ToArray(),
+                InitialLearning = SkillPointLedger.Synchronize(job, growType, level,
+                    SkillLearning.Initialize(job, free, resources.Learning).State! with
+                    { Experience = growth.GetLevelStartExperience(level) }, resources.Learning) }).Id;
+        }
+        using (var peer = Open(f, lancerAccount, gamePort: endpoints[pvp], channelNumber: pvp))
+        {
+            peer.Select(prepared: true, resumeTown: true, room: false); peer.Barrier();
+            peer.Send(31, [31, 0, 0x70, 0x0A]);
+            peer.Expect(0, 1233, [0]); peer.Expect(0, 1234);
+            peer.Expect(1, 31, [1, 0x70, 0x0A, 1, 2, 4, 0, 0]);
+            QuestLifecycleTcpTests.DrainNotifications(peer);
+            peer.Send(29, [0, 0, 3]);
+            That(peer.Expect(1, 29).Body is [1, 0, _, _, _, _, 0, 3],
+                "魔枪士首次零增量自动加点返回完整mode3确认");
+            peer.Barrier();
+            That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672", lancerId)
+                is [[262656L]], "魔枪士首次零增量自动加点真实清除第一通道，不清连招及对练条件");
+            peer.Send(33, [33, 0, 0x70, 0x0A, 0x10, 0, 0]);
+            peer.Expect(1, 33, [1, 0x70, 0x0A, 0, 2, 4, 0]); peer.Barrier();
+        }
+        // 来自66级魔枪士实机的普通第二方案自动请求；决斗频道应按资源85级补正，普通频道仍按66级。
+        const string arenaAccount = "arena-lancer-level";
+        ushort arenaLancerId;
+        using (var owner = new AccountOwners().Acquire(arenaAccount, () => { }))
+        {
+            var free = resources.Learning.FreeSkills(13, 1);
+            var seed = CharacterCreation.Prepare("ArenaLancer", resources.Characters.Get(13), resources.Towns.Room,
+                resources.Towns.InitialReturn, resources.Learning.Get);
+            arenaLancerId = repo.Create(owner, seed with { GrowType = 1, Level = 66, AcceptedStoryLevel = 66, CompletedQuests = [2670,2671],
+                Skills = free.ToArray(), InitialLearning = SkillPointLedger.Synchronize(13,1,66,
+                    SkillLearning.Initialize(13,free,resources.Learning).State! with { SelectedTree = 1,
+                        Experience = growth.GetLevelStartExperience(66) },resources.Learning) }).Id;
+        }
+        string OrdinaryLancer() => f.Snapshot("SELECT context,slot,skill_id,level FROM character_skill_bindings WHERE character_id=" + arenaLancerId) +
+            f.Snapshot("SELECT context,sp,tp FROM character_skill_points WHERE character_id=" + arenaLancerId) +
+            f.Snapshot("SELECT selected_skill_tree FROM characters WHERE id=" + arenaLancerId);
+        string ordinaryLancer = OrdinaryLancer();
+        byte[] automaticLancer = Convert.FromHexString(SkillLearningTests.LancerAutoBody);
+        using (var peer = Open(f,arenaAccount,gamePort:endpoints[pvp],channelNumber:pvp))
+        {
+            peer.Select(prepared:true); peer.Barrier();
+            peer.Send(29,automaticLancer);
+            var ack = peer.Expect(1,29).Body;
+            That(ack[0] == 1 && ack[1] == 1 && ack[6] == 18 && ack[^1] == 1,
+                "正式决斗城镇的真实18项自动方案返回指定第二页的完整成功确认");
+            peer.Barrier();
+            That(OrdinaryLancer() == ordinaryLancer && f.Query("SELECT level,experience FROM characters WHERE id=$p0",arenaLancerId)
+                is [[66L,long experience]] && checked((ulong)experience) == growth.GetLevelStartExperience(66),
+                "决斗补正学习保留普通双树、真实66级与真实经验");
+            peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);
+            peer.Select(prepared:true);peer.Barrier();
+            peer.Send(29,[1,1,2,0,0,1,0]);peer.Expect(1,29,[0,0xD9,0]);peer.Barrier();
+            That(OrdinaryLancer() == ordinaryLancer, "重登保留决斗85级技能，超出85级的学习仍拒绝且不污染普通方案");
+            string arenaBefore = f.Snapshot("SELECT json_extract(state_json,'$.Arena') FROM character_pvp_training_skills WHERE character_id=" + arenaLancerId);
+            peer.Travel(10,1,450,234,10,0);
+            peer.Travel(10,4,position.X,position.Y,10,1);
+            peer.Send(31,[31,0,0x70,0x0A]);peer.Expect(0,1233,[0]);peer.Expect(0,1234);
+            peer.Expect(1,31,[1,0x70,0x0A,1,2,4,0,0]);QuestLifecycleTcpTests.DrainNotifications(peer);
+            peer.Send(491,[2,3]);peer.Expect(1,491,[0,19,0]);peer.Barrier();
+            peer.Send(491,[1,3]);
+            peer.Expect(1,491,[1,1,1]);byte[] resetInfo = peer.Expect(0,1235).Body;peer.Barrier();
+            That(resetInfo.Length > 6 && U32(resetInfo,0) == resetInfo.Length - 4 && resetInfo[4] == 8 && resetInfo[5] == 19,
+                "原生1235复用SN_SKILLINFO完整消息，不能用仅缓存的1234替代窗口完成通知");
+            var storedTraining = System.Text.Json.JsonSerializer.Deserialize<PvpTrainingSkills>((string)f.Query(
+                "SELECT state_json FROM character_pvp_training_skills WHERE character_id=$p0",arenaLancerId)[0][0])!;
+            byte[] resetSnapshot = DfoServer.Network.Builders.PvpTrainingPackets.Skills(storedTraining.Learning);
+            That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",arenaLancerId) is [[262657L]] &&
+                OrdinaryLancer() == ordinaryLancer && arenaBefore == f.Snapshot("SELECT json_extract(state_json,'$.Arena') FROM character_pvp_training_skills WHERE character_id=" + arenaLancerId),
+                "实机491 context1/mode3仅清训练第二页，不提前完成自动加点或改写另两域");
+            string resetBefore = f.Snapshot();
+            peer.Send(491,[1,3]);peer.Expect(1,491,[1,1,1]);peer.Expect(0,1235,resetInfo);peer.Barrier();
+            That(resetBefore == f.Snapshot(), "重复零变化训练清空仍确认完成，不重复写库或推进任务");
+            peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);
+            // 普通重新选角先回决斗大厅；真实走门返回道场时恢复训练快照，不能把预期包序当作恢复请求。
+            peer.Select(prepared:true);peer.Barrier();
+            peer.Travel(10,1,450,234,10,0);
+            peer.Travel(10,4,position.X,position.Y,10,1,beforeLocation:p=>
+            {p.Expect(0,1233,[0]);p.Expect(0,1234,resetSnapshot);});
+            peer.Send(491,[1,2]);peer.Expect(1,491,[1,1,1]);peer.Expect(0,1235,resetInfo);peer.Barrier();
+            byte[] trainingAuto = automaticLancer.ToArray();trainingAuto[^1] = 3;
+            peer.Send(29,trainingAuto);
+            var trainingAck = peer.Expect(1,29).Body;
+            That(trainingAck[0] == 1 && trainingAck[1] == 1 && trainingAck[6] == 18 && trainingAck[^1] == 3,
+                "原生mode3同样支持第二套训练方案，不能强制只接受context0");
+            peer.Barrier();
+            That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",arenaLancerId) is [[262656L]] &&
+                arenaBefore == f.Snapshot("SELECT json_extract(state_json,'$.Arena') FROM character_pvp_training_skills WHERE character_id=" + arenaLancerId) &&
+                OrdinaryLancer() == ordinaryLancer, "第二套训练方案只推进自动加点条件，不覆盖正式决斗或普通双树");
+            // 实机原文：difficultyFlag=1进入教学80，两轮真实APC分别为65121、65122。
+            peer.Send(50,[0,2,0,0,0,0xD1,0xB5,0,0,0,3,1]);peer.Expect(1,50,[1]);
+            CheckRoom(peer.Expect(0,41).Body,false,characterId:arenaLancerId);
+            peer.Send(1287,Convert.FromHexString("0061FE00000201000000000000000000000000"));
+            peer.Send(1287,Convert.FromHexString("0161FE00000201000000000001000000000000"));
+            peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
+            peer.Send(1287,Convert.FromHexString("0062FE000002026D8C01000000000000000000"));
+            peer.Send(1287,Convert.FromHexString("0162FE000002026D8C01000001000000000000"));
+            peer.Expect(0,14);PvpMissionTcpChecks.Update(peer,f);
+            peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,0,0]);peer.Barrier();
+            That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",arenaLancerId)
+                is [[512L]] && OrdinaryLancer()==ordinaryLancer,
+                "原生两轮压制报告只清胜利通道，保留未完成连招和普通双树");
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)arenaLancerId,(byte)(arenaLancerId>>8),10,1,0,0,255,255]);
+            PvpArenaTcpTests.TownReturn(peer,position);
+        }
+        using (var peer = Open(f,arenaAccount))
+        {
+            peer.Select(prepared:true);peer.Barrier();
+            peer.Send(491,[1,3]);peer.Expect(1,491,[0,19,0]);peer.Barrier();
+            peer.Send(29,automaticLancer);peer.Expect(1,29,[0,0xD9,0]);peer.Barrier();
+            That(OrdinaryLancer() == ordinaryLancer,
+                "从决斗频道返回普通频道立即恢复真实等级学习规则，不把已存决斗技能装入刷图域");
+        }
         const string cancelAccount="training-cancel";
         ushort cancelId;
         using(var owner=new AccountOwners().Acquire(cancelAccount,()=>{}))
@@ -298,15 +454,16 @@ internal static partial class PvpTrainingTcpTests
         string OrdinarySkills()=>System.Text.Json.JsonSerializer.Serialize(new[]{
             f.Query("SELECT context,sp,tp FROM character_skill_points WHERE character_id=$p0 ORDER BY context",id),
             f.Query("SELECT context,slot,skill_id,level FROM character_skill_bindings WHERE character_id=$p0 ORDER BY context,slot",id)});
-        void CheckRoom(byte[] body,bool removed,byte mode=10)
+        void CheckRoom(byte[] body,bool removed,byte mode=10,ushort? characterId=null)
         {
-            That(body.Length==43 && U16(body,0)==1 && U16(body,2)==id && body[4]==0 && U32(body,5)==0 && body[9]==0 &&
+            ushort actor=characterId ?? id;
+            That(body.Length==43 && U16(body,0)==1 && U16(body,2)==actor && body[4]==0 && U32(body,5)==0 && body[9]==0 &&
                 body[10]==(removed?255:0) && U16(body,11)==0 && body[13]==mode && body[38]==0 && U32(body,39)==0,
                 "NOTI41包含默认标题长度、固定八席、队长索引与地图序号");
-            for(int seat=0;seat<8;seat++) That(body[14+seat*3]==0 && U16(body,15+seat*3)==(!removed && seat==0?id:ushort.MaxValue),
+            for(int seat=0;seat<8;seat++) That(body[14+seat*3]==0 && U16(body,15+seat*3)==(!removed && seat==0?actor:ushort.MaxValue),
                 "仅当前角色占席；空席严格用客户端FFFF哨兵");
         }
-        static void Round(TcpPeer peer,byte action,int opponent,byte round,bool won)=>peer.Send(1287,Build(w=>
-        {w.Write(action);w.Write(opponent);w.Write((byte)2);w.Write(round);w.Write(0u);w.Write((byte)0);w.Write((byte)(won?1:0));w.Write((ushort)0);w.Write(0u);}));
+        static void Round(TcpPeer peer,byte action,int opponent,byte round,bool won,byte total=2)=>peer.Send(1287,Build(w=>
+        {w.Write(action);w.Write(opponent);w.Write(total);w.Write(round);w.Write(0u);w.Write((byte)0);w.Write((byte)(won?1:0));w.Write((ushort)0);w.Write(0u);}));
     }
 }

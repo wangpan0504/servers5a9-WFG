@@ -29,6 +29,13 @@ internal sealed record PvpTrainingSkills(CharacterLearningState Learning,ushort 
     public static CharacterLearningState Source(Character character) => character.PvpTrainingSkills?.Learning is { } stored
         ? WithSources(stored,character.Learning)
         : character.Learning;
+    public static byte Level(Character character, SkillLearningCatalog skills) => skills.PvpRevisionLevel ?? character.Level;
+    public static CharacterLearningState Source(Character character, SkillLearningCatalog skills, byte level)
+    {
+        var source = Source(character);
+        return SkillPointLedger.Synchronize(character.Job, character.GrowType, level, source, skills,
+            skills.ActiveExpertContractLevels(source.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+    }
     public static CharacterLearningState ArenaSource(Character character) => character.PvpTrainingSkills is {Arena: { } stored} profile &&
         (profile.ArenaJob is null || profile.ArenaJob==character.Job && profile.ArenaGrowType==(character.GrowType & 15))
         ? WithSources(stored.SelectedTree<0 && character.Learning.SelectedTree>=0 ? stored with {SelectedTree=0} : stored,character.Learning)
@@ -36,7 +43,7 @@ internal sealed record PvpTrainingSkills(CharacterLearningState Learning,ushort 
     public static CharacterLearningState ArenaSource(Character character,SkillLearningCatalog skills)
     {
         var source=ArenaSource(character);
-        return SkillPointLedger.Synchronize(character.Job,character.GrowType,character.Level,source,skills,
+        return SkillPointLedger.Synchronize(character.Job,character.GrowType,Level(character,skills),source,skills,
             skills.ActiveExpertContractLevels(source.ExpertContractExpiresAt,DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
     }
     static CharacterLearningState WithSources(CharacterLearningState stored,CharacterLearningState ordinary)
@@ -72,12 +79,12 @@ internal sealed record PvpTrainingSkillPlan(Character Expected,PvpTrainingSkills
         if(choice is not (1 or 2) || expected.PvpTrainingSkills is not {QuestId:2674 or 2678} profile ||
             profile.AcceptanceId==Guid.Empty || !DfoServer.Game.Quests.QuestEligibility.Completed(expected).Contains(profile.QuestId)) return null;
         if(profile.CopyChoice!=0) return null;
-        var arena=PvpTrainingSkills.ArenaSource(expected);
+        var arena=skills is null ? PvpTrainingSkills.ArenaSource(expected) : PvpTrainingSkills.ArenaSource(expected,skills);
         var training=PvpTrainingSkills.Source(expected);
         if(choice==1 && skills is not null)
         {
             int contract=skills.ActiveExpertContractLevels(expected.Learning.ExpertContractExpiresAt,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            training=SkillPointLedger.Synchronize(expected.Job,expected.GrowType,expected.Level,training,skills,contract);
+            training=SkillPointLedger.Synchronize(expected.Job,expected.GrowType,PvpTrainingSkills.Level(expected,skills),training,skills,contract);
         }
         if(choice==1)
         {
@@ -92,30 +99,33 @@ internal sealed record PvpTrainingSkillPlan(Character Expected,PvpTrainingSkills
         return new(expected,after,expected.ActiveMainQuests,new(SkillLearningFailure.None,arena,[])) {Kind=PvpSkillPlanKind.Copy};
     }
     public static PvpTrainingSkillPlan? Prepare(Character expected,SkillLearningCommand request,
-        SkillLearningCatalog skills,QuestCatalog quests) => Prepare(expected,request,quests,
-            (source,command)=>SkillLearning.Plan(expected.Job,expected.GrowType,expected.Level,source,command,skills,
-                DfoServer.Game.Quests.QuestEligibility.Completed(expected).Contains(355)));
+        SkillLearningCatalog skills,QuestCatalog quests, byte? level = null) => Prepare(expected,request,quests,
+            (source,command)=>SkillLearning.Plan(expected.Job,expected.GrowType,level ?? expected.Level,source,command,skills,
+                DfoServer.Game.Quests.QuestEligibility.Completed(expected).Contains(355)),
+            PvpTrainingSkills.Source(expected, skills, level ?? expected.Level));
 
-    public static PvpTrainingSkillPlan? Reset(Character expected,byte context,byte mode,SkillLearningCatalog skills,QuestCatalog quests) =>
-        mode>1 ? null : Prepare(expected,new(context,0,[]),quests,(source,_)=>
-            SkillPointLedger.Reset(expected.Job,expected.GrowType,expected.Level,source,context,skills,DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+    public static PvpTrainingSkillPlan? Reset(Character expected,byte context,byte mode,SkillLearningCatalog skills,QuestCatalog quests, byte? level = null) =>
+        mode>3 ? null : Prepare(expected,new(context,0,[]),quests,(source,_)=>
+            SkillPointLedger.Reset(expected.Job,expected.GrowType,level ?? expected.Level,source,context,skills,DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            PvpTrainingSkills.Source(expected, skills, level ?? expected.Level));
 
-    public static PvpTrainingSkillPlan? Move(Character expected,SkillSlotChangeCommand command,SkillLearningCatalog skills,QuestCatalog quests) =>
-        Prepare(expected,new(command.Context,0,[]),quests,(source,_)=>
+    public static PvpTrainingSkillPlan? Move(Character expected,SkillSlotChangeCommand command,SkillLearningCatalog skills,QuestCatalog quests, byte? level = null) =>
+        command.Mode is not (0 or 2) ? null : Prepare(expected,new(command.Context,0,[]),quests,(source,_)=>
         {
-            var result=SkillLayout.Move(expected.Job,source,command,skills.Get);
+            // 原生02D805F0在训练域写mode2，槽位交换算法与普通mode0相同；不能将此模式开放到普通双树。
+            var result=SkillLayout.Move(expected.Job,source,command with {Mode=0},skills.Get);
             return new(result.Failure,result.State,[]);
-        });
+        }, PvpTrainingSkills.Source(expected, skills, level ?? expected.Level));
 
     internal static PvpTrainingSkillPlan? Prepare(Character expected,SkillLearningCommand request,QuestCatalog quests,
-        Func<CharacterLearningState,SkillLearningCommand,SkillLearningResult> learning)
+        Func<CharacterLearningState,SkillLearningCommand,SkillLearningResult> learning, CharacterLearningState? sourceState = null)
     {
-        if(expected.Position is not {Town:10,Area:4} || request.Context!=0 || request.Mode is not (0 or 1 or 3) ||
+        if(expected.Position is not {Town:10,Area:4} || request.Context>1 || request.Mode is not (0 or 1 or 3) ||
             !expected.Learning.Initialized) return null;
         var active=expected.ActiveMainQuests.Where(row=>quests.TryGet(row.QuestId,out var q) &&
             PvpTrainingExposure.Allows(expected,q) && PvpTrainingProgress.Valid(q,row.ConditionState) && row.ConditionState!=0).ToArray();
         if(active is not [var accepted] || accepted.AcceptanceId==Guid.Empty || !quests.TryGet(accepted.QuestId,out var quest)) return null;
-        var source=PvpTrainingSkills.Source(expected);
+        var source=sourceState ?? PvpTrainingSkills.Source(expected);
         var result=learning(source,request with {Mode=request.Mode==3 ? (byte)1 : request.Mode});
         if(!result.Success || result.State is null) return null;
         var after=expected.ActiveMainQuests;

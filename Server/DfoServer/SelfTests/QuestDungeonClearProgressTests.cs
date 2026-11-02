@@ -61,8 +61,12 @@ internal static class QuestDungeonClearProgressTests
         That(!QuestDungeonClearProgress.Matches(recommended,entry) &&
             QuestDungeonClearProgress.Matches(recommended,entry with { RecommendedQuestClear = true }),
             "推荐任务只消费正式入场冻结的本服推荐资格，不让所有普通图默认满足");
-        foreach (var unsupported in new[] { recommended with { IntData = [-1,-1,0] }, recommended with { IntData = [-1,0,10] },
-            recommended with { Grade = "[daily random]" }, recommended with { SubType = 18 } })
+        That(QuestDungeonClearProgress.Supports(recommended with { IntData = [-1,0,10] }) &&
+            QuestDungeonClearProgress.Supports(recommended with { Grade = "[daily random]" }) &&
+            !QuestEligibility.Evaluate(new Character(1, 0, "ClearRule", 1, new(38, 2, 450, 240), null),
+                recommended with { Grade = "[daily random]" }, new QuestCatalog(new() { [100] = recommended })).Eligible,
+            "最低难度可解析不等于打开随机每日入口，目标算法和资格分别判断");
+        foreach (var unsupported in new[] { recommended with { IntData = [-1,-1,0] }, recommended with { SubType = 18 } })
             That(!QuestDungeonClearProgress.Supports(unsupported), "未知推荐形状与随机每日入口仍保持独立限制");
         Console.WriteLine($"PASS {Count-checks} 本版条件通关目标与次数断言");
     }

@@ -15,6 +15,12 @@ internal static class PvpTrainingProgressTests
             var quest = QuestEligibilityTests.Quest(id) with { Condition = "[custom multi condition]", Npc = 323, CompleteNpc = -1,
                 IntData = mode == 2 ? [1, 0, 0, 2] : [1, 1, 1, mode] };
             Check(quest);
+            int arcade=id switch {2672 or 2676=>80,2673 or 2677=>81,2674 or 2678=>82,_=>2};
+            That(PvpTrainingProgress.ArcadeIndex(quest,3)==arcade &&
+                PvpTrainingProgress.ArcadeIndex(quest,0)==-1 && PvpTrainingProgress.ArcadeIndex(quest,81)==-1,
+                "教学模式由原任务选择，请求字段只承载1至3的难度标志");
+            if(id==2679) That(PvpTrainingProgress.ArcadeIndex(quest,1)==0 && PvpTrainingProgress.ArcadeIndex(quest,2)==1,
+                "末项仍保留玩家请求难度，不把普通选择强制改成勇士或教学模式");
             That(!PvpTrainingProgress.Matches(quest with { Id = 2680 }) &&
                 !PvpTrainingProgress.Matches(quest with { IntData = [1, 1, 1, 3] }) &&
                 !PvpTrainingProgress.Matches(quest with { Npc = 324 }) &&

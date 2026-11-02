@@ -50,17 +50,22 @@ internal static class Issue262OtherverseQuestTests
             if (dungeon == 7167 && request == 12871)
             {
                 var before = f.Read();
-                foreach (var unsupported in new[]
+                foreach (var playable in new[]
                 {
                     quest with {IntData=[7170,-1]},
                     quest with {IntData=[7167,3]},
-                    quest with {IntData=[7167,-1,7170]},
                     quest with {Definition=quest.Definition! with {Dungeons=[]}},
                     quest with {Grade="[epic]"},
                     quest with {Condition="[condition under clear]",IntData=[7167,-1]}
                 })
-                    That(!DungeonEntryPlan.TryCreate(dungeons,before,7167,12871,2,out _,out _,quest:unsupported,quests:quests),
-                        "262副本目标、最低难度、声明形状、dungeon info或任务分类不符时不能借普通路线");
+                    That(DungeonEntryPlan.TryCreate(dungeons,before,7167,12871,2,out _,out _,quest:playable,quests:quests),
+                        "262目标及界面指引不是建图约束，已确认通关形状仍可借用普通路线");
+                foreach (int[] invalid in new int[][] { [7167,-1,7170], [7167,5], [0,-1] })
+                    That(!DungeonEntryPlan.TryCreate(dungeons,before,7167,12871,2,out _,out _,quest:quest with { IntData=invalid },quests:quests),
+                        "262未知或不完整目标不能伪装成已实现的通关合同");
+                That(!QuestDungeonClearProgress.MatchesAlternative(quest with {IntData=[7170,-1]},7167,2) &&
+                    !QuestDungeonClearProgress.MatchesAlternative(quest with {IntData=[7167,3]},7167,2),
+                    "进入不代表任务达成，错误目标及不足最低难度仍不能推进列表通关");
                 That(!DungeonEntryPlan.TryCreate(dungeons,before with
                     {ActiveMainQuests=[accepted with {AcceptanceId=Guid.Empty}]},7167,12871,2,out _,out _,quest:quest,quests:quests) &&
                     QuestCompletionRepositoryTests.Same(before,f.Read()),

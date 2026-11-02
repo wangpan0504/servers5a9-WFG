@@ -12,6 +12,10 @@ internal sealed record StoryQuest(
     IReadOnlyList<QuestRewardToken> Rewards, int? BossTemplate, int? ShowNpcOnClear,
     IReadOnlyList<int> MapNpcIds)
 {
+    public QuestTargetRegistration? TargetRegistration => QuestTargetTypes.Find(Condition);
+    public QuestTargetKind TargetKind => TargetRegistration?.Kind ?? QuestTargetKind.Unknown;
+    public bool HasDeclaredSubType { get; init; } = true;
+    public int? DeclaredSubType => HasDeclaredSubType ? SubType : null;
     public string? Grade { get; init; }
     public string? Difficulty { get; init; }
     public string? RewardType { get; init; }
@@ -29,11 +33,13 @@ internal sealed class QuestCatalog
     static readonly int[] VerifiedMapQuests = [3145, 4873, 3146, 3157, 3054, 3147, 3148, 4875, 3149];
     readonly Dictionary<int, StoryQuest> quests;
     public GameWorld.Creatures.CreatureCatalog? Creatures { get; }
+    public GameWorld.Items.ItemCatalog? Items { get; }
 
-    internal QuestCatalog(Dictionary<int, StoryQuest> quests, GameWorld.Creatures.CreatureCatalog? creatures = null)
-    { this.quests = quests; Creatures = creatures; }
+    internal QuestCatalog(Dictionary<int, StoryQuest> quests, GameWorld.Creatures.CreatureCatalog? creatures = null, GameWorld.Items.ItemCatalog? items = null)
+    { this.quests = quests; Creatures = creatures; Items = items; }
     public QuestCatalog WithCreatures(GameWorld.Creatures.CreatureCatalog creatures) =>
-        ReferenceEquals(Creatures, creatures) ? this : new(quests, creatures);
+        ReferenceEquals(Creatures, creatures) ? this : new(quests, creatures, Items);
+    public QuestCatalog WithItems(GameWorld.Items.ItemCatalog items) => ReferenceEquals(Items, items) ? this : new(quests, Creatures, items);
     public IReadOnlyCollection<StoryQuest> All => quests.Values;
     public bool TryGet(int id, out StoryQuest quest) => quests.TryGetValue(id, out quest!);
 

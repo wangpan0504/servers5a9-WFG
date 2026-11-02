@@ -85,8 +85,16 @@ internal static class AssaultHuntQuestTests
         var specified = quests.Get(2948);
         var specifiedActive = new ActiveMainQuest(1, 2948, QuestHuntProgress.Initial(specified)) { AcceptanceId = Guid.NewGuid() };
         var specifiedCharacter = character with { Level = 45, ActiveMainQuests = [specifiedActive] };
-        That(!DungeonEntryPlan.TryCreate(dungeons, specifiedCharacter, 41, 2948, 0, out _, out _, quest: specified, quests: quests),
-            "指定副本猎杀不能借任意副本合同进入未声明地图");
+        That(DungeonEntryPlan.TryCreate(dungeons, specifiedCharacter, 41, 2948, 0, out var unrelated, out _, quest: specified, quests: quests) &&
+            unrelated is { IsOrdinary: true, RouteQuestId: 0 } &&
+            QuestHuntProgress.MonsterDeath([specifiedActive], unrelated, quests,
+                new(0, 200, specified.IntData[2], 45, null)).Single().ConditionState == specifiedActive.ConditionState - 1,
+            "2948的真实猎杀目标为副本-1，dungeon info不阻拦其它普通地图及符合目标的击杀");
+        var restricted = specified with { IntData = [40, -1, specified.IntData[2], 2] };
+        var restrictedQuests = new QuestCatalog(quests.All.Select(row => row.Id == 2948 ? restricted : row).ToDictionary(row => row.Id));
+        That(QuestHuntProgress.MonsterDeath([specifiedActive], unrelated!, restrictedQuests,
+                new(0, 200, specified.IntData[2], 45, null)).Single().ConditionState == specifiedActive.ConditionState,
+            "对照声明明确要求副本40时，副本41的同模板击杀不推进任务");
     }
 
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,

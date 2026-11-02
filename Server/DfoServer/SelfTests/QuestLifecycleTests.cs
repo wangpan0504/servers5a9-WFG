@@ -142,10 +142,12 @@ internal static class QuestLifecycleTests
         }
         var seeking = meet with { Condition = "[seeking]", IntData = [10165055, 1] };
         var seekingGift = seeking with { Definition = seeking.Definition! with { AcceptanceRewards = [new(0,10165055,null),new(0,1,null)] } };
-        using (var f = new Fixture(towns, items, [seekingGift]))
+        foreach (var target in new[] { seekingGift, seekingGift with { SubType = 20, IntData = [10165055, 1, 2] } })
+        using (var f = new Fixture(towns, items, [target]))
             That(f.Change(100, QuestLifecycleAction.Accept)!.Character.ActiveMainQuests.Single().ConditionState == 0,
                 "接取赠品在同事务参与寻物初始达成，不等待客户端再次33");
-        using (var f = new Fixture(towns, items, [seeking], [new(0,100,1)]))
+        foreach (var target in new[] { seeking, seeking with { SubType = 20, IntData = [10165055, 1, 2] } })
+        using (var f = new Fixture(towns, items, [target], [new(0,100,1)]))
         {
             long revision = f.Read().Revision;
             var gained = f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,

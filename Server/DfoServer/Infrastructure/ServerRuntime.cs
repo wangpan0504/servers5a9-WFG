@@ -111,7 +111,7 @@ internal static class ServerRuntime
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null)
     {
-        quests = quests.WithCreatures(itemResources.Creatures);
+        quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
         itemResources.Creatures.PrepareEvolutions();
         var channels = LoadChannels();
@@ -154,7 +154,7 @@ internal static class ServerRuntime
         itemResources.Items.TryGet(Game.Pvp.PvpTotalTeamRename.CardId, out var totalRenameCard);
         var totalTeams = new Game.Pvp.PvpTotalTeamService(repository, arenaRules, totalRenameCard, clock);
         var arena = new Game.Pvp.PvpArenaService(gameCache, arenaRules, repository, ratings: pvpRatings,
-            totalTeams: totalTeams, totalRatings: totalRatings, totalSkills: learning);
+            totalTeams: totalTeams, totalRatings: totalRatings, totalSkills: learning, quests: quests);
         // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
         var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -816,7 +816,8 @@ internal static class ServerRuntime
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun, fiendwarRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
-            new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
+            new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection,
+                trainingSkills: learning),
             new ImageCommunicationHandler(imageCommunication, quests, log),
             new QuestHiddenHandler(quests,log),
             levelUpItems,

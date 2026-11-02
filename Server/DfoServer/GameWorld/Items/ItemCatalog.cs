@@ -115,6 +115,8 @@ internal sealed partial class ItemCatalog
     }
 
     public ItemTemplate Get(int id) => Get(id, null);
+    // 事务中的任务条件只查询已经在规划阶段装载的不可变事实，不触发PVF读取。
+    public bool TryGetLoaded(int id, [NotNullWhen(true)] out ItemTemplate? template) => templates.TryGetValue(id, out template);
 
     ItemTemplate Get(int id, PvfDocument? parsed)
     {

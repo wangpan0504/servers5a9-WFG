@@ -74,7 +74,7 @@ internal static partial class PvpTrainingTcpTests
                 That(before == f.Snapshot(), "酒馆及侧厅普通练习退出回到原地区，不改任务或资产");
                 if (channel == 101)
                 {
-                    byte[] arcade = (byte[])create.Clone(); arcade[^2] = 3; arcade[^1] = 81;
+                    byte[] arcade = (byte[])create.Clone(); arcade[^2] = 3; arcade[^1] = 1;
                     peer.Send(50, arcade); peer.Expect(1, 50, [1]);
                     That(peer.Expect(0, 41).Body[13] == 10, "酒馆及侧厅也能建立无风云任务的独立道场");
                     peer.Send(13); peer.Expect(0, 43, [(byte)id, (byte)(id >> 8), 10, 1, 0, 0, 255, 255]);

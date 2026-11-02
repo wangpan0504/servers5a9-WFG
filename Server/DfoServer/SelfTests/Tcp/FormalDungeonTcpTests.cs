@@ -46,6 +46,9 @@ internal static partial class FormalDungeonTcpTests
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        // 深渊与任务共用入场规划，先核对真实资源及参数合同，再覆盖网络、扣费与实例生命周期。
+        HellPartyEntryTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,
+            resources.Quests,resources.Learning);
         FormalDungeonSessionTests.VerifyLoginWearWindow(resources.Towns, resources.Archive, resources.Characters);
         FormalDungeonSessionTests.RunSpringTreasureProducer(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         var growth = SelfTestCatalogs.Growth(resources.Archive);

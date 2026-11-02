@@ -109,19 +109,32 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
     private async Task<CommandResult> ResetAsync(GameConnectionContext context, Packet packet)
     {
         var parsed = SkillRequests.ParseReset(packet.Body);
+        log.Write("skill_reset_request", new { Connection = context.Id, parsed.Context, parsed.Mode,
+            UserMode = context.Session.Mode.ToString(), Training = context.Session.InPvpTrainingSkillArea });
         if(context.Session.InPvpTrainingSkillArea)
         {
             var training=context.Session.ResetPvpTrainingSkills(parsed.Context,parsed.Mode,catalog);
-            if(!training.Success || training.Receipt is not { } committed) return CommandResult.Handled;
+            if(!training.Success || training.Receipt is not { } committed)
+            {
+                log.Write("skill_reset_rejected", new { Connection = context.Id, training.Failure, parsed.Context, parsed.Mode, Training = true });
+                await context.Reply(CmdPacketType.SKILL_INIT,SkillPackets.ResetFailure(),"training_skill_reset_rejected");
+                return CommandResult.Handled;
+            }
             bool GuardTraining()=>context.Session.CanPublishLearning(committed);
+            // 1234仅缓存训练数据；原生1235完成绑定、窗口重建与等待清理后，才会继续自动加点。
             await context.Reply(CmdPacketType.SKILL_INIT,SkillPackets.Reset(parsed.Context),"training_skill_reset",GuardTraining);
-            await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA,PvpTrainingPackets.Skills(training.State!),"training_skill_reset_snapshot",GuardTraining);
+            await context.Notify(NotiPacketType.SKILLINFO_ARCADE,
+                SkillPackets.Initialized(training.State!, id => catalog.Get(committed.Character.Job,id).DefaultCommand),
+                "training_skill_reset_info",GuardTraining);
             return CommandResult.Handled;
         }
         var result = context.Session.ResetSkills(parsed.Context, parsed.Mode, catalog);
         if (!result.Success)
         {
             log.Write("skill_reset_rejected", new { Connection = context.Id, result.Failure, parsed.Context, parsed.Mode });
+            // 训练模式脱离原场景时结束原生等待；普通临时体验等拒绝仍保留既有静默边界。
+            if(parsed.Mode is 2 or 3)
+                await context.Reply(CmdPacketType.SKILL_INIT,SkillPackets.ResetFailure(),"skill_reset_rejected");
             return CommandResult.Handled;
         }
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill reset receipt");
@@ -148,6 +161,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
             if(training.Success && training.Receipt is { } committed)
                 await context.Reply(CmdPacketType.CHANGE_SKILLSLOT,SkillPackets.SlotChanged(parsed.Context,parsed.From,parsed.To),
                     "training_skill_slot_committed",()=>context.Session.CanPublishLearning(committed));
+            else log.Write("skill_slot_change_rejected",new {Connection=context.Id,Reason=training.Failure.ToString(),
+                Training=true,parsed.Context,parsed.Mode,Phase=context.Session.Phase.ToString()});
             return CommandResult.Handled;
         }
         var result = context.Session.MoveSkillSlot(new(parsed.Context, parsed.From, parsed.To, parsed.ContextIndex, parsed.Mode), catalog);
@@ -169,7 +184,9 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         log.Write("skill_purchase_request", new
         {
             Connection = context.Id, parsed.Context, parsed.Mode, Count = parsed.Items.Count,
-            Length = packet.Body.Length, parsed.BodyChecksum, parsed.ChecksumMatches
+            Length = packet.Body.Length, parsed.BodyChecksum, parsed.ChecksumMatches,
+            UserMode = context.Session.Mode.ToString(), CharacterLevel = context.Session.Selected?.Level,
+            PvpRevisionLevel = catalog.PvpRevisionLevel
         });
         if (parsed.Items.Any(item => item.Decrease > 1))
             return CommandResult.CloseConnection;
@@ -180,7 +197,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
             var training=context.Session.LearnPvpTrainingSkills(request,catalog);
             if(!training.Success || training.Receipt is not { } committed)
                 await context.Reply(CmdPacketType.BUY_SKILL,SkillPackets.Failure(0xD9),"training_skill_rejected");
-            else await context.Reply(CmdPacketType.BUY_SKILL,SkillPackets.TrainingSuccess(parsed.Mode,training.State!,training.Changes),
+            else await context.Reply(CmdPacketType.BUY_SKILL,SkillPackets.TrainingSuccess(parsed.Context,parsed.Mode,training.State!,training.Changes),
                 "training_skill_committed",()=>context.Session.CanPublishLearning(committed));
             return CommandResult.Handled;
         }

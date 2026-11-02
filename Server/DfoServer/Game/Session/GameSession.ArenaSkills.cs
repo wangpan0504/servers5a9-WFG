@@ -7,8 +7,10 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    public bool UsesArenaSkills => ChannelEntry?.Type is 4 or 5 or 8 or 13 or 24;
+    public bool UsesArenaSkills => Mode == UserMode.Pvp;
     SkillLearningCatalog? arenaSkillCatalog;
+    byte SkillLevel(Character character, SkillLearningCatalog skills) => UsesArenaSkills
+        ? PvpTrainingSkills.Level(character, skills) : character.Level;
     public CharacterLearningState ReadSkillLearning(Character character) => UsesArenaSkills
         ? arenaSkillCatalog is { } skills ? PvpTrainingSkills.ArenaSource(character,skills) : PvpTrainingSkills.ArenaSource(character)
         : character.Learning;
@@ -17,9 +19,7 @@ internal sealed partial class GameSession
     void InitializeArenaLearning(SkillLearningCatalog catalog)
     {
         var capture=owner.Execute(()=>(Character:Selected!,SelectionEpoch,Ready,Phase));
-        var source=PvpTrainingSkills.ArenaSource(capture.Character);
-        var after=SkillPointLedger.Synchronize(capture.Character.Job,capture.Character.GrowType,capture.Character.Level,
-            source,catalog,catalog.ActiveExpertContractLevels(source.ExpertContractExpiresAt,DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var after=PvpTrainingSkills.ArenaSource(capture.Character,catalog);
         if(after==capture.Character.PvpTrainingSkills?.Arena) return;
         var plan=PvpTrainingSkillPlan.Arena(capture.Character,after);
         owner.Execute(()=>

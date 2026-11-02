@@ -271,6 +271,10 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         return rows.Length > 0 && rows.All(row => row.Tokens.Count == 0);
     }
 
+    // -1仅表示未指定；有效固定值与未确认声明都不能由任务推断覆盖。
+    public bool HasDesignatedDifficultyConstraint => RawSections.Any(row => row.Tag == "designate dungeon difficulty" &&
+        row.Tokens is not [{ Type: 0, Value: -1 }]);
+
     public bool TryGetDesignatedDifficulty(out byte difficulty)
     {
         difficulty = 0;
@@ -342,6 +346,12 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             levels.All(section => section.Tokens.SequenceEqual(levels[0].Tokens)) &&
             levels[0].Tokens[difficulty].Value != 0;
     }
+
+    // 任务连接和故事名册都不等于专用模式；普通任务保留普通开放档，固定及专用模式不得借此扩档。
+    public bool AllowsOrdinaryQuestDifficulty(byte difficulty, int connectionQuestId) =>
+        DungeonType is null && !IsTutorial && !IsClassExperience && !IsTournament && !IsRaid &&
+        !RequiresGriefEntryContract && !IsInfernoDungeon && !RequiresCosmoEntryContract && !HasDesignatedDifficultyConstraint &&
+        AllowsDifficulty(0, true, connectionQuestId) && AllowsDifficulty(difficulty, false);
 
     bool AllowsQuestStoryDifficulty(byte difficulty, int? connectionQuestId)
     {

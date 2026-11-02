@@ -71,7 +71,7 @@ internal static class QuestEligibilityTests
         That(QuestEligibility.Evaluate(origin with { AccountCompletedQuests = [103] },next,catalog).Eligible &&
             !QuestEligibility.Evaluate(origin with { AccountCompletedQuests = [103] },first with { Definition = new([]) { AccountCollisions = [103] } },catalog).Eligible,
             "账号完成位参与前置组与账号冲突判断");
-        var parent = Quest(200) with { Condition = "[quest clear]", IntData = new[] { 202, 201 } };
+        var parent = Quest(200) with { Condition = "[quest clear]", SubType = 2, IntData = new[] { 202, 201 } };
         var child1 = Quest(201) with { MainQuest = 200 };
         var child2 = Quest(202) with { MainQuest = 200 };
         catalog = new QuestCatalog(new[] { parent, child1, child2 }.ToDictionary(quest => quest.Id));
@@ -118,7 +118,7 @@ internal static class QuestEligibilityTests
             "新父任务按实际未完成子项初始化；已有完成记录不被重置或伪造");
         foreach (var unsupported in new[]
         {
-            sequential with { SubType = 1 }, sequential with { IntData = [202,202] },
+            sequential with { SubType = 0 }, sequential with { IntData = [202,202] },
             sequential with { IntData = [202,29999] }, sequential with { Grade = "[daily]" },
             sequential with { Definition = sequential.Definition! with { AccountQuest = true } },
             sequential with { Definition = sequential.Definition! with { RequiredAnswers = [new(100,1)] } },

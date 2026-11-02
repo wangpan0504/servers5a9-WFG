@@ -8,6 +8,7 @@ internal enum UserState
     CharacterSelect,
     EnteringWorld,
     Town,
+    PvpTown,
     DungeonSelect,
     Dungeon,
     TutorialDungeon,
@@ -23,10 +24,16 @@ internal enum UserState
 // 最低生命周期资格只做基础门禁；具体玩法、阶段、实例及资产资格仍由所属业务复验。
 internal enum UserStateRequirement { Owner, CharacterSelected, WorldReady, DungeonContext }
 
+internal enum UserMode { Normal, Pvp }
+
 internal static class UserStatePolicy
 {
+    // ARAD 03EF95B0 的频道分类；只决定模式，不替代各决斗玩法自己的准入表。
+    public static UserMode Mode(int? channelType) => channelType is 4 or 5 or 7 or 8 or 9 or 10 or 13 or 14 or 20 or 24 or 31 or 34 or 35 or 41
+        ? UserMode.Pvp : UserMode.Normal;
+
     public static bool IsImplemented(UserState state) => state is UserState.CharacterSelect or UserState.EnteringWorld or
-        UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle;
+        UserState.Town or UserState.PvpTown or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle;
 
     public static bool Meets(UserState state, UserStateRequirement requirement)
     {
@@ -35,14 +42,15 @@ internal static class UserStatePolicy
         {
             UserStateRequirement.Owner => true,
             UserStateRequirement.CharacterSelected => state != UserState.CharacterSelect,
-            UserStateRequirement.WorldReady => state is UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle,
+            UserStateRequirement.WorldReady => state is UserState.Town or UserState.PvpTown or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle,
             UserStateRequirement.DungeonContext => state is UserState.Dungeon or UserState.TutorialDungeon,
             _ => false
         };
     }
 
     public static UserState Read(SessionPhase phase, bool selected, bool ready, bool selectingDungeon,
-        SinglePlayerDungeonPhase? dungeon, bool tutorial, bool pvpTraining = false, bool pvpArena = false, bool pvpBattle = false)
+        SinglePlayerDungeonPhase? dungeon, bool tutorial, bool pvpTraining = false, bool pvpArena = false, bool pvpBattle = false,
+        bool pvpChannel = false)
     {
         if (pvpTraining && pvpArena || pvpBattle && !pvpArena ||
             (pvpTraining || pvpArena) != (phase == SessionPhase.PvpRoom) ||
@@ -55,7 +63,7 @@ internal static class UserStatePolicy
             SessionPhase.Unselected when !ready && !selectingDungeon && dungeon is null => selected ? UserState.EnteringWorld : UserState.CharacterSelect,
             SessionPhase.PvpRoom when ready && selected && (pvpTraining || pvpArena) && !selectingDungeon && dungeon is null =>
                 pvpBattle ? UserState.PvpBattle : UserState.PvpRoom,
-            SessionPhase.Town when !selectingDungeon && dungeon is null => UserState.Town,
+            SessionPhase.Town when !selectingDungeon && dungeon is null => pvpChannel ? UserState.PvpTown : UserState.Town,
             SessionPhase.MapSelect when selectingDungeon && dungeon is null => UserState.DungeonSelect,
             // 时限可在命令门外到达；保留原实例的退出资格，战斗与移动由TimedOut门禁冻结。
             SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement

@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Quests;
 namespace DfoServer.Game.Quests;
 
 // 第四步/分解末步只认匹配客户端硬编码的任务号与 QST 形状。
-// 11009：ACK 601 0234FECF event17；11015/11018：ACK 238 0236F904..0236F961；10021：event14→0202BE90 类型17。
+// 11009：ACK601；11015/11018：ACK238。10021为本人分解，04197D98将本版目标设为66，不能与穿戴类型17混用。
 internal static class QuestExpertJobProgress
 {
     public const ushort Enchanter = 11009, Alchemist = 11015, Doll = 11018, Disjointer = 10021;
@@ -19,7 +19,7 @@ internal static class QuestExpertJobProgress
 
     public static bool Tutorial(StoryQuest quest) => Craft(quest) || SelfDisjoint(quest);
 
-    public static byte NativeType(StoryQuest quest) => Craft(quest) ? (byte)19 : SelfDisjoint(quest) ? (byte)17 :
+    public static byte NativeType(StoryQuest quest) => Craft(quest) ? (byte)19 : SelfDisjoint(quest) ? (byte)66 :
         throw new InvalidDataException("不是已闭合的副职业教程目标");
 
     public static byte RequiredType(ushort questId) => questId switch

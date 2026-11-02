@@ -83,6 +83,8 @@ internal sealed partial class GameSession
             unfinished.Phase != capture.Phase || unfinished.Identity != capture.Identity || unfinished.Condition != condition))
             return refusal with { Reason = "前一任务事务尚待原请求恢复" };
         if (!quests.TryGet(questId, out var quest)) return refusal;
+        if (quests.Items is { } facts && (QuestItemProgress.HasSelector(quest) || quest.TargetKind == GameWorld.Quests.QuestTargetKind.EquippedItem))
+            QuestItemProgress.Prepare(expected.Inventory, facts);
         if (action == QuestLifecycleAction.Accept && !CanAcceptHiddenQuest(expected,quest,quests,capture.SelectionEpoch,capture.Phase))
             return refusal with {Reason="隐藏对话任务缺少当前场景开启许可"};
         // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
@@ -98,7 +100,7 @@ internal sealed partial class GameSession
             quests.TryGet(parentId,out var closedParent) && QuestRelationProgress.ThresholdParent(closedParent,quests) &&
             closedParent.IntData.Contains(questId))
             return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "阈值父任务已交付并关闭未完成子任务" };
-        var rank = quest.Condition == "[pvp rank]" && action != QuestLifecycleAction.Giveup
+        var rank = QuestStateProgress.Type(quest) is 5 or 27 && action != QuestLifecycleAction.Giveup
             ? pvpRatings?.Capture(owner,expected.Id) : null;
         int? grade = rank is null ? null : pvpRatings!.Grade(rank);
         QuestLifecyclePlan plan;
@@ -154,6 +156,32 @@ internal sealed partial class GameSession
         {
             if (capture.Entry?.IsPractice == true) throw new InvalidDataException("练习场景不推进任务条件");
             QuestCoverage.RequireOrdinaryDeclarations(quest);
+            if (condition is { Channel: null, Value: 0 or 1, Reserved: 0 } &&
+                quest.TargetKind == GameWorld.Quests.QuestTargetKind.CheckItem && QuestTargetRules.Supports(quest, quests))
+                return QuestLifecyclePlan.SetCondition(expected, quest, QuestLifecyclePlan.MaterialState(expected.Inventory, quest,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(), quests.Items), quests);
+            if (condition is { Channel: null, Value: 0 or 1, Reserved: 0 } &&
+                quest.TargetKind == GameWorld.Quests.QuestTargetKind.EquippedItem && quests.Items is { } equipmentFacts &&
+                QuestTargetRules.Supports(quest, quests))
+                return QuestLifecyclePlan.SetCondition(expected, quest, QuestItemProgress.Equipped(expected.Inventory, quest,
+                    equipmentFacts, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ? 0u : 1u, quests);
+            if (QuestClientObservation.Supports(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                capture.Phase == SessionPhase.Dungeon && formalDungeon?.Run is { } observedRun && capture.Identity == observedRun.Snapshot.Identity)
+                return QuestLifecyclePlan.ObserveClientEvent(expected, quest, observedRun);
+            if (QuestPvpProgress.Supports(quest) && condition is { Channel: null, Value: 0 or 1, Reserved: 0 } &&
+                expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } pvpObserved)
+                return QuestLifecyclePlan.SetCondition(expected, quest, pvpObserved.ConditionState);
+            if (QuestEventProgress.Supports(quest) && condition is { Channel: null, Value: 0 or 1, Reserved: 0 } &&
+                expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } observed)
+                return QuestLifecyclePlan.SetCondition(expected, quest, observed.ConditionState);
+            if (QuestDungeonClearProgress.NeedsClientCondition(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
+                capture.Phase == SessionPhase.Settlement && formalDungeon?.Run is { } clearRun &&
+                capture.Identity == clearRun.Snapshot.Identity)
+            {
+                var row = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+                if (row is { ConditionState: 0 }) return QuestLifecyclePlan.SetCondition(expected, quest, 0);
+                return QuestLifecyclePlan.ObserveClientClear(expected, quest, clearRun);
+            }
             if (QuestRentalProgress.Supports(quest) && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { AcceptanceId: var rentalAcceptance, ConditionState: 0 } &&
                 rentalAcceptance != Guid.Empty)
@@ -172,6 +200,8 @@ internal sealed partial class GameSession
             if (QuestRelationProgress.ThresholdParent(quest,quests) && condition is { Channel: null, Value: 0, Reserved: 0 })
                 return QuestLifecyclePlan.SetCondition(expected,quest,
                     QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)));
+            if (QuestRelationProgress.ListParent(quest, quests) && condition is { Channel: null, Value: 0 or 1, Reserved: 0 })
+                return QuestLifecyclePlan.SetCondition(expected, quest, QuestRelationProgress.ListScalar(quest, QuestEligibility.Completed(expected)), quests);
             if (QuestRelationProgress.SequentialParent(quest,quests) && condition is { Channel: null, Reserved: 0 } parentReport &&
                 parentReport.Value <= quest.IntData.Count &&
                 (capture.Phase == SessionPhase.Town || capture.Entry is { } parentEntry && parentEntry.RouteQuestId == quest.Id &&
@@ -180,7 +210,7 @@ internal sealed partial class GameSession
             // 问题请求由0202B480写入类型0和答案，尾字节不是其它条件通道的保留位。
             if (condition is { Channel: null, Value: 0 } answer && capture.Phase == SessionPhase.Town &&
                 QuestQuestionProgress.OrdinaryChoice(quest,answer.Reserved,quests) &&
-                HasDialogueNpc(quest.IntData[0]))
+                HasDialogueNpc(quest.Npc))
                 return QuestLifecyclePlan.SetCondition(expected,quest,answer.Reserved);
             if (quest.Condition is "[hunt enemy]" or "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var hunt) &&
                 condition is { Channel: 0x10 or 0x20 or 0x40, Value: 0, Reserved: 0 } report &&
@@ -190,7 +220,7 @@ internal sealed partial class GameSession
                 QuestHuntProgress.Bound(accepted,entry))
                 // 客户端只读取当前权威结果，不按它上报的Boolean减少猎杀次数。
                 return QuestLifecyclePlan.SetCondition(expected,quest,accepted.ConditionState);
-            if (quest.Condition == "[seek n meet npc]" && quest.SubType == -1 && QuestLifecyclePlan.ValidSeeking(quest) &&
+            if (quest.Condition == "[seek n meet npc]" && quest.SubType is -1 or 0 && QuestLifecyclePlan.ValidSeeking(quest) &&
                 (capture.Phase == SessionPhase.Town || HasDialogueNpc(quest.IntData[^1])) && quest.Definition is { Diagnostics.Length: 0 } &&
                 condition is { Channel: 0x10 or 0x20, Reserved: 0 } seekReport &&
                 expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id) is { } seekActive && seekActive.ConditionState <= 1023)

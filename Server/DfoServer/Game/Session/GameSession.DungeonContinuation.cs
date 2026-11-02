@@ -85,7 +85,7 @@ internal sealed partial class GameSession
         PreparedFormalDungeon? prepared = null;
         try
         {
-            if (next is { DungeonId: > 0 }) prepared = PrepareFormalDungeon(next.DungeonId,next.Quest.QuestId,next.Difficulty,
+            if (next is { DungeonId: > 0 }) prepared = PrepareFormalDungeon(next.DungeonId,next.Quest.QuestId,next.RequestedDifficulty ?? next.Difficulty,
                 dungeons,rooms,drops,items,original.Draw,pieces,character,current,original.PrepareDrops,
                 crackRewards: original.CrackRewards);
         }
@@ -188,7 +188,7 @@ internal sealed partial class GameSession
             selection.SelectionEpoch != SelectionEpoch || selection.CharacterId != Selected!.Id ||
             selection.OriginPosition != Selected.Position) return null;
         var entry = prepared.Dungeon.Entry;
-        if (entry.DungeonId != dungeonId || entry.QuestId != questId || entry.Difficulty != difficulty ||
+        if (entry.DungeonId != dungeonId || entry.QuestId != questId || !entry.AcceptsDifficultyConfirmation(difficulty) ||
             !Selected.ActiveMainQuests.Any(active => active.QuestId == entry.QuestId && active.Slot == entry.ActiveQuestSlot &&
                 active.AcceptanceId == entry.QuestAcceptanceId && active.AcceptanceId != Guid.Empty)) return null;
         var entered = InstallFormalDungeon(prepared);

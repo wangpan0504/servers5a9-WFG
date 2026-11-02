@@ -95,11 +95,12 @@ internal static class SpecialNormalDungeonEntryTests
                     (uint)id,questId,2,out _,out _,quest:quest,quests:quests),"空接取身份不借普通路线");
             }
             int wrongDungeon = questId == 13200 ? 9595 : 9607;
-            That(!DungeonEntryPlan.TryCreate(catalog,owner,(uint)wrongDungeon,questId,2,out _,out _,quest:quest,quests:quests),
-                "无关目标副本不能借用另一任务的普通路线");
+            That(DungeonEntryPlan.TryCreate(catalog,owner,(uint)wrongDungeon,questId,2,out _,out _,quest:quest,quests:quests),
+                "单纯寻物和通关目标不限制普通入场，进度仍要求真实目标路线");
             var foreign = quest with { Id=29999 };
-            That(!DungeonEntryPlan.TryCreate(catalog,character with { ActiveMainQuests = [accepted with { QuestId=29999 }] },
-                (uint)targets[0],29999,2,out _,out _,quest:foreign,quests:quests),"不把已确认任务合同扩展到未知每日或通关任务");
+            That(DungeonEntryPlan.TryCreate(catalog,character with { ActiveMainQuests = [accepted with { QuestId=29999 }] },
+                (uint)targets.First(DungeonIds.Contains),29999,2,out _,out var foreignReason,quest:foreign,quests:quests),
+                $"有效目标形状不按原任务编号限制建图：{questId}/{foreign.Condition}/{foreign.SubType} {foreignReason}");
         }
         var two = character with { ActiveMainQuests = [
             new(0,2683,1) { AcceptanceId=Guid.NewGuid() },new(1,10019,1) { AcceptanceId=Guid.NewGuid() }] };

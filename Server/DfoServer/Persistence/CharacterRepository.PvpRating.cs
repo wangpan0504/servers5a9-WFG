@@ -102,7 +102,7 @@ internal sealed partial class CharacterRepository : IPvpRatingStore
         return receipt;
     });
 
-    static PvpRatingReceipt CommitPvpRatingInTransaction(AccountOwners.Lease owner, PvpRatingPlan plan,
+    PvpRatingReceipt CommitPvpRatingInTransaction(AccountOwners.Lease owner, PvpRatingPlan plan,
         SqliteConnection db, SqliteTransaction tx)
     {
         if (plan.Claim.Mode is not (PvpRatingMode.Ordinary or PvpRatingMode.Matching or PvpRatingMode.Total) || plan.Claim.Receipt is not null ||
@@ -138,7 +138,8 @@ internal sealed partial class CharacterRepository : IPvpRatingStore
             throw new InvalidOperationException("决斗评分规划版本已失效");
         long revision = checked(plan.Before.Revision + 1);
         var receipt = new PvpRatingReceipt(claim.MatchId, claim.CharacterId, owner.Account, claim.Outcome,
-            plan.Before.Revision, revision, plan.Change, PvpRatingCalculator.RuleVersion);
+            plan.Before.Revision, revision, plan.Change, PvpRatingCalculator.RuleVersion)
+            { QuestAdvance = CommitPvpQuestProgress(db, tx, owner, claim, plan.Change.Grade) };
         command.Parameters.AddWithValue("$revision", revision);
         command.Parameters.AddWithValue("$state", JsonSerializer.Serialize(plan.Change.After));
         command.CommandText = """

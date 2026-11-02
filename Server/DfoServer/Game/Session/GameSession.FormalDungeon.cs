@@ -152,8 +152,9 @@ internal sealed partial class GameSession
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
-        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true)
+        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true, byte partyMemberCount = 1)
     {
+        if (hellParty) questId = 0;
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
@@ -388,6 +389,8 @@ internal sealed partial class GameSession
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
             bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission, dimension: dimension))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
+        difficulty = entry!.Difficulty;
+        entry = entry with { PartyMemberCount = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyMemberCount ?? partyMemberCount };
         if (marriageAdmission is not null) entry = entry! with { Marriage = marriageAdmission };
         if (dimension is not null) entry = entry! with { Dimension = dimension, DimensionRewardProfession = (expected.Job, expected.GrowType) };
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。

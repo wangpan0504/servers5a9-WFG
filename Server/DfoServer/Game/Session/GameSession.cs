@@ -180,7 +180,21 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     // 本次选角是否按原生换频道快照恢复城镇（决定入城包序）；由 SelectCharacter 设置。
     public bool TownSnapshotResumed { get; private set; }
 
-    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => SelectCharacter(slot, goldLimits, null, resumeTown);
+    public void Select(ushort slot, GoldLimitCatalog? goldLimits = null, bool resumeTown = false)
+    {
+        SelectCharacter(slot, goldLimits, null, resumeTown);
+        PrepareSelectedQuestItemFacts();
+    }
+
+    void PrepareSelectedQuestItemFacts()
+    {
+        if (questCatalog?.Items is not { } items) return;
+        var character = owner.Execute(() => Selected);
+        if (character is not null && character.ActiveMainQuests.Any(row => questCatalog.TryGet(row.QuestId, out var quest) &&
+            (quest.TargetKind == GameWorld.Quests.QuestTargetKind.EquippedItem || DfoServer.Game.Quests.QuestItemProgress.HasSelector(quest))))
+            // 首次选角在库存初始化之前、owner锁外装载；后续SQL只读共享目录中的已装载事实。
+            DfoServer.Game.Quests.QuestItemProgress.Prepare(character.Inventory, items);
+    }
 
     void SelectCharacter(ushort slot, GoldLimitCatalog? goldLimits, CharacterRosterEntry? expected, bool resumeTown = false)
     {
@@ -189,6 +203,12 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
+            // 只恢复本账号原角色的持久整局来源；来源冻结的接取UUID不匹配时不会补给后来接取的任务。
+            if (pvpRatings is not null)
+                pvpRatings.Recover(owner, character.Id, receipt =>
+                {
+                    if (receipt.QuestAdvance is { } progress) character = ApplyPvpQuestAdvance(character, progress);
+                });
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
             // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
