@@ -150,6 +150,12 @@ internal static partial class GmWebServer
             if (b.Confirm != true) return Bad("需要二次确认");
             return Run(http, data, "weekly-entry-reset", b.Account, "*", $"account {b.Account} weekly-entry-reset", null);
         });
+        app.MapPost("/api/reward-limit-reset", (HttpContext http, KickBody b) =>
+        {
+            if (!Token.IsMatch(b.Account)) return Bad("账号无效");
+            if (b.Confirm != true) return Bad("需要二次确认");
+            return Run(http, data, "reward-limit-reset", b.Account, "*", $"account {b.Account} reward-limit-reset", null);
+        });
         app.MapPost("/api/vault-gold", (HttpContext http, VaultGoldBody b) =>
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;

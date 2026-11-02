@@ -441,6 +441,8 @@ internal static class QuestCompletionRepositoryTests
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
         public DfoServer.Game.Dungeons.DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) =>
             inner.ResetDungeonEntries(owner);
+        public DfoServer.Game.Dungeons.RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) =>
+            inner.ResetRewardLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonEntry(owner, expected, nextObjectKey, weekly);
         public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);

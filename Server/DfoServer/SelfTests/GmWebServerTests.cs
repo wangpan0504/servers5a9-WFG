@@ -132,6 +132,38 @@ internal static partial class GmWebServerTests
             TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeInvalidSelection &&
                 data.Companion == "enchantress", "无效单选在调用GM前拒绝，不先清空当前项");
         }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/reward-limit-reset")
+        {
+            Content = JsonContent.Create(new { account = "acct", confirm = false })
+        })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            int beforeReset = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeReset,
+                "奖励限额刷新缺确认时在调用GM前拒绝");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/reward-limit-reset")
+        {
+            Content = JsonContent.Create(new { account = "bad account", confirm = true })
+        })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            int beforeReset = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeReset,
+                "奖励限额刷新非法账号在调用GM前拒绝");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/reward-limit-reset")
+        {
+            Content = JsonContent.Create(new { account = "acct", confirm = true })
+        })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.IsSuccessStatusCode && data.Commands.Contains("account acct reward-limit-reset"),
+                "奖励限额刷新确认后透传账号命令并返回真实回执");
+        }
         foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
             TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
         string[] embeddedPages = ["DfoServer.GmWeb.recharge.html", "DfoServer.GmWeb.client.includeImg.htm",

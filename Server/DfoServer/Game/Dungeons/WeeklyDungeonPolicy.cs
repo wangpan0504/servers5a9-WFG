@@ -62,3 +62,10 @@ internal sealed record DungeonEntryResetResult(string Account, int Week,
     int PanelRows, int CharacterDailyRows, int CharacterWeeklyRows, int AccountRows, int AssaultRows,
     int DazzlementRows, int GriefAccountRows, int GriefCharacterRows, int SpecialEntryRows, int DespairRows,
     int RaidRows, int TagClearanceRows, int TagChallengeRows);
+
+// GM 刷新账号奖励限额的结果。历史回执和已发资产永远保留；这里只迁移当前周期的资格/状态行。
+internal sealed record RewardLimitResetResult(string Account, int Day, int Week,
+    int StrongwayRewardRows, int StrongwayCompletionRows, int StrongwayMatchRows,
+    int ImperialDayRows, int ImperialRunRows, int ImperialRewardRows, int ImperialChallengeRows,
+    int TagClearanceRows, int TagChallengeRows, int GriefAccountRows, int GriefCharacterRows,
+    int SpecialEntryRows, int DespairRows, int RaidRows, int RaidReceiptRows);
