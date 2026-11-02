@@ -585,6 +585,9 @@ internal sealed partial class AntonRaidBattle
                             state = state with { Timers = state.Timers.Remove(action.Timer!), TimerAnchors = state.TimerAnchors.Remove(action.Timer!), TimerGenerations = state.TimerGenerations.Remove(action.Timer!) };
                             break;
                         case "[clear phase]":
+                            // 86阶段结束取消舰炮陨石；95不能把战斗期的置位保留到结算屏。
+                            if (Kind == RaidKind.Anton && state.Symbols.ContainsKey("[meteo passive create]"))
+                                state = state with { Symbols = state.Symbols.SetItem("[meteo passive create]", 0) };
                             state = state with { State = AntonRaidBattleState.Reward, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
                                 TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
                                 Deferred = Kind == RaidKind.Anton ? ImmutableDictionary<int, RaidClause>.Empty : state.Deferred,

@@ -112,8 +112,19 @@ internal static partial class RaidCombatProjection
             {
                 foreach (var row in published) RecordAntonDungeon(context, view.Instance, row.Id, row.State);
             });
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
-            RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
+        (int Id, int Value)[] publishedSymbols = [];
+        context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+            1 + battle.SymbolSnapshot(view).Length * 8, () =>
+            {
+                // 01BEB2F4按本次2=1直接播30205，不比较旧值；其余符号保留既有同步合同。
+                publishedSymbols = battle.SymbolSnapshot(view).Where(row => row.Id != 2 ||
+                    context.AntonMeteoDisplay != (view.Instance, row.Value)).ToArray();
+                return RaidCombatPackets.Symbols(publishedSymbols);
+            }, "raid_infection_state", Guard, allowShorter: true, written: () =>
+            {
+                foreach (var row in publishedSymbols)
+                    if (row.Id == 2) context.AntonMeteoDisplay = (view.Instance, row.Value);
+            });
         PostAntonTimers(context, battle, view, Guard);
     }
 
