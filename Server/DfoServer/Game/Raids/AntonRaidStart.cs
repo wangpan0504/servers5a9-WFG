@@ -58,7 +58,17 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
     FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null)
 {
-    public RaidChange? Leave(RaidActor actor, ushort target)
+    internal bool LeaveExpiredAnton(RaidActor actor, Guid instance)
+    {
+        // 调用方持原连接门禁；只清理该次已失败实例，不能退出随后重建的团。
+        var change = Leave(actor, actor.Character, instance);
+        if (change is null) return false;
+        // 复用已证强退ACK665关闭本人的团本窗口；名册与目录沿既有发布链更新。
+        registry.Publish(change with { Kicked = true });
+        return true;
+    }
+
+    public RaidChange? Leave(RaidActor actor, ushort target, Guid? expiredAntonInstance = null)
     {
         var result = actor.Owner.Execute(() =>
         {
@@ -67,7 +77,10 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             if (target == actor.Character && actor.CanManage && departingBattle is { Kind: RaidKind.Fiendwar } &&
                 registry.Find(actor)?.Started?.InstanceId == departingBattle.Instance)
                 actor.Session.RecordFiendwarDeparture(actor, departingBattle, disconnected: false);
-            var change = registry.Leave(actor, target);
+            var change = expiredAntonInstance is not { } expected ||
+                actor.IsCurrent && departingBattle is { Kind: RaidKind.Anton, View.PhaseExpired: true } &&
+                departingBattle.Instance == expected && registry.Find(actor)?.Started?.InstanceId == expected
+                    ? registry.Leave(actor, target) : null;
             if (change is { Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed

@@ -15,9 +15,10 @@ internal static partial class AntonRaidGapTcpTests
         AntonRaidTimerTests.Run(fixture.Database, resources);
         var catalog = Catalog(resources);
         for (int phase = 0; phase < 2; phase++)
+        foreach (string scene in new[] { "dungeon", "town", "selection" })
         {
-            string account = "timertcp" + phase;
-            Create(fixture, resources, account, "TimerTcp" + phase, 2);
+            string account = "timertcp" + phase + scene;
+            Create(fixture, resources, account, "Timer" + phase + scene[0], 2);
             using var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
             peer.Select(); AntonRaidTcpTests.Drain(peer);
             var report = AntonTcpProbe.Play(peer, catalog, phase == 0 ? "start" : "card");
@@ -34,6 +35,15 @@ internal static partial class AntonRaidGapTcpTests
                 AntonTcpProbe.Enter(peer, catalog, 218, report, clear: false, leave: false);
             }
             peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "超时测试加载完成");
+            if (scene != "dungeon")
+            {
+                peer.Send(42); AntonTcpProbe.Barrier(peer, "先回苍穹贵族号(19/2)待命区");
+                if (scene == "selection")
+                {
+                    peer.Send(15, BitConverter.GetBytes(phase == 0 ? 210u : 218u));
+                    That(AntonTcpProbe.Barrier(peer, "超时前停留选图").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "实际进入选图");
+                }
+            }
             string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2");
             string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2");
             int advanced = 0;
@@ -51,7 +61,10 @@ internal static partial class AntonRaidGapTcpTests
                 int infected = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(body.Length - 4));
                 var opened = Enumerable.Range(0, body[1]).Where(i => body[6 + 5 * i] == 0)
                     .Select(i => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2 + 5 * i)))
-                    .Where(id => id is >= 221 and <= 224).ToArray();
+                    // 586与585共用成功发送基线；先写出的586会从随后585中去重。
+                    .Concat(hatch.Where(p => p is { Kind: 0, Opcode: 586, Body.Length: 6 } && p.Body[5] == 0)
+                        .Select(p => BinaryPrimitives.ReadInt32LittleEndian(p.Body)))
+                    .Where(id => id is >= 221 and <= 224).Distinct().ToArray();
                 That(opened.Length == 3 && opened.Contains(infected), "线上自然四选三，感染尾值属于已开图");
                 var symbols = hatch.Skip(index + 1).First(packet => packet is { Kind: 0, Opcode: 583 }).Body;
                 int Value(int id) => Enumerable.Range(0, symbols[0]).Where(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + i * 8)) == id)
@@ -62,7 +75,7 @@ internal static partial class AntonRaidGapTcpTests
             }
             clock.Advance(2399 - advanced);
             var before = AntonTcpProbe.Barrier(peer, "总deadline前一秒");
-            That(before.All(packet => packet.Opcode != 24), "2400前不得退场");
+            That(before.All(packet => packet.Opcode is not (24 or 665)), "2400前不得退场");
             foreach (var packet in before.Where(packet => packet.Opcode == 597 || packet is { Opcode: 596, Body: [0, ..] }))
             {
                 That(phase is 0 or 1, "两阶段均按原deadline补发头时钟");
@@ -77,9 +90,10 @@ internal static partial class AntonRaidGapTcpTests
             {
                 // Read已校验帧长、CRC和连接序号；下面核对完整退场通知与禁止的未知wire。
                 var packet = peer.Read(); frames.Add(packet);
-                if (packet is { Kind: 0, Opcode: 24 }) break;
+                if (packet is { Kind: 1, Opcode: 665 }) break;
             }
-            That(frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) && frames.All(packet => packet.Opcode is not (587 or 597 or 600 or 601)) &&
+            That(frames.Any(packet => packet is { Kind: 1, Opcode: 665, Body: [1,1] }) &&
+                frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) == (scene != "town") && frames.All(packet => packet.Opcode is not (587 or 597 or 600 or 601)) &&
                 frames.Where(packet => packet.Opcode == 596).All(packet => packet.Body.Length == 13 &&
                     packet.Body[0] is >= 1 and <= 3 && U32(packet.Body, 9) == 1 &&
                     U32(packet.Body, 5) < DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
@@ -91,19 +105,17 @@ internal static partial class AntonRaidGapTcpTests
             string failed = fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2");
             peer.Send(660, [1, 0]);
             var rejected = AntonTcpProbe.Barrier(peer, "超时后领奖拒绝");
-            // P1无历史回执保持Unhandled；P2仍可幂等确认P1旧回执，但不能给失败阶段发奖或重开窗口。
-            // 合同复用card600-601的旧阶段回放；不借Luke失败码，不撤销已提交的原资产确认。
-            That(rejected.All(packet => packet.Opcode is not (600 or 601)) &&
-                (phase == 0 ? rejected.All(packet => packet.Opcode != 660) :
-                    rejected.Count(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) == 1),
-                "失败阶段不发奖；无历史回执不猜失败ACK，已领旧阶段仅幂等确认");
+            That(rejected.All(packet => packet.Opcode is not (600 or 601 or 660)),
+                "超时退团后不再借旧绑定发布领奖ACK或结果");
             peer.Send(660, [1, 1]);
             That(AntonTcpProbe.Barrier(peer, "超时后未配置牌位拒绝").All(packet => packet.Opcode is not (660 or 600 or 601)),
                 "失败后未配置牌位不能借历史回执生成成功或展示");
-            AntonTcpProbe.RejectClosed(peer, null, phase == 0 ? 210 : 218);
+            peer.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rebuilt")); w.Write(new byte[] { 0, 0, 0, 7 }); }));
+            That(AntonTcpProbe.Barrier(peer, "失败后重建攻坚队").Any(p => p is { Kind: 1, Opcode: 664 } && p.Body[0] == 1),
+                "超时已清原团与分队，成员可以重新建团");
             clock.Advance(600);
             var rest = AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED休息边界");
-            That(rest.All(packet => packet.Opcode is not (587 or 596 or 597)) && failed == fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2"),
+            That(rest.All(packet => packet.Opcode is not (587 or 596 or 597 or 665)) && failed == fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2"),
                 "UNIMPLEMENTED：600声明不擅自重开失败阶段、自动换phase或签发新事件");
             That(assets == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") &&
                 receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2"), "超时与重复请求不扣票、退款或发奖");

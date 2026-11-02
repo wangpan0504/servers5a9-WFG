@@ -18,7 +18,7 @@ internal sealed partial class DungeonHandler
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
-        if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle);
+        if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
     }
 
     static Task PublishPartyHostAsync(GameConnectionContext context, PartyMember[] members, Func<bool> guard)
