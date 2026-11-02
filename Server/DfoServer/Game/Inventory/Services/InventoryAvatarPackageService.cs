@@ -19,11 +19,11 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var now = utcNow ?? (clock ?? TimeProvider.System).GetUtcNow();
         var source = Source(character, request.Slot, request.Count, now);
-        if (source is null) return InventoryResult.Reject(19);
+        if (source is null) return RejectOpen("avatar_package_source");
         var definition = packages.Get(source.Core.ItemId);
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
         if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows, out var materialRows))
-            return InventoryResult.Reject(19);
+            return RejectOpen("avatar_package_selection");
         return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now, equipmentRows, materialRows);
     }
 
@@ -78,7 +78,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var selectedIds = rows.Select(row => row.ItemId).ToHashSet();
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
             choices.Any(choice => !selectedIds.Contains(choice.ItemId)))
-            return InventoryResult.Reject(19);
+            return RejectOpen("avatar_package_choices");
         var options = choices.ToDictionary(choice => choice.ItemId, choice => choice.Ability);
         var definitions = new List<(AvatarPackageRow Row, ItemTemplate Template, AvatarPackageType Type, byte Ability)>();
         var totals = new Dictionary<int, int>();
@@ -93,24 +93,25 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 var avatar = packages.GetAvatar(row.ItemId);
                 // 没有可选属性的光环、武器装扮由客户端带一项哨兵值；它不是玩家选择，统一落到0。
                 bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
-                if (ValidateRowDefinition(row, template, avatar) is not null) return InventoryResult.Reject(19);
+                if (ValidateRowDefinition(row, template, avatar) is { } rowError)
+                    return RejectOpen(rowError);
+                if (!TryResolveGiftType(row, template, avatar, out var type))
+                    return RejectOpen("avatar_row_definition");
                 if (row.ForcedAbility is byte forced && (!hasChoice || ability != forced || !avatar.Abilities.Contains(forced)))
-                    return InventoryResult.Reject(19);
+                    return RejectOpen("avatar_row_ability");
                 if (avatar.RequiresAbilityChoice)
                 {
-                    if (!hasChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
+                    if (!hasChoice || !avatar.Abilities.Contains(ability)) return RejectOpen("avatar_row_ability");
                 }
                 else
                 {
                     // 无常量属性声明的部位只接受"未选择"哨兵；其他数值说明客户端与资源不一致。
-                    if (hasChoice && ability is not (0 or byte.MaxValue)) return InventoryResult.Reject(19);
+                    if (hasChoice && ability is not (0 or byte.MaxValue)) return RejectOpen("avatar_row_ability");
                     ability = 0;
                 }
                 int amount = checked(row.Count * count);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
                 total = checked(total + amount);
-                // 未声明期限表时使用模板期限与默认孔位，不补造7天或30天类型行。
-                var type = avatar.Types.IsEmpty ? new AvatarPackageType(template.Expiration.Days, template.AvatarSockets) : avatar.Types[row.Type];
                 definitions.Add((row, template, type, ability));
             }
             foreach (var row in equipmentRows)
@@ -118,7 +119,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 var template = items.Get(row.ItemId);
                 if (row.Count == 0 || template.Kind != ItemKind.Equipment || !template.Expiration.SupportsCreation ||
                     template.IsPremiumService || template.HasAcquisitionEffect)
-                    return InventoryResult.Reject(19);
+                    return RejectOpen("avatar_equipment_row");
                 int amount = checked(row.Count * count);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
                 equipmentTotal = checked(equipmentTotal + amount);
@@ -127,7 +128,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             foreach (var row in materialRows)
             {
                 var template = items.Get(row.ItemId);
-                if (EtcRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
+                if (EtcRowDefinitionError(row, template, pieces) is { } materialError) return RejectOpen(materialError);
                 int amount = checked(row.Count * count);
                 if (amount > template.StackLimit) return InventoryResult.Reject(4);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
@@ -137,7 +138,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
-            return InventoryResult.Reject(19);
+            return RejectOpen("avatar_row_resource:" + error.Message);
         }
         if (totals.Count > BoosterReceipt.MaximumItems || total + equipmentTotal > int.MaxValue) return InventoryResult.Reject(4);
         var before = character.Inventory;
@@ -172,7 +173,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             int days = template.Expiration.Days > 0 ? template.Expiration.Days : type.Days;
             var expiration = template.Expiration with { Days = days };
             int expires = expiration.Resolve(now, shopExpiration, ignoreUsablePeriod);
-            if (expires != 0 && expires <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);
+            if (expires != 0 && expires <= now.ToUnixTimeSeconds()) return RejectOpen("avatar_row_expiration");
             var core = InventoryRewardGrantService.Create(template, utcNow: now) with { Durability = ability, ExpireTime = expires };
             var prototype = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0), core);
             var sockets = type.Sockets.WithDefaults(template.AvatarSockets);
@@ -189,7 +190,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             {
                 var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
                     ignoreUsablePeriod: ignoreUsablePeriod);
-                if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+                if (core.IsExpired(now.ToUnixTimeSeconds())) return RejectOpen("avatar_equipment_expiration");
                 prototypes.Add(InventoryRewardGrantService.CreateItem(template,
                     new(InventoryListType.Main, ItemSlotBoundService.Range(ItemKind.Equipment, paid).Start), core));
             }
@@ -198,13 +199,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         {
             var core = InventoryRewardGrantService.Create(template, amount, now, shopExpiration: shopExpiration,
                 ignoreUsablePeriod: ignoreUsablePeriod);
-            if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+            if (core.IsExpired(now.ToUnixTimeSeconds())) return RejectOpen("avatar_material_expiration");
             prototypes.Add(InventoryRewardGrantService.CreateItem(template,
                 new(InventoryListType.Main, ItemSlotBoundService.Range(template.Kind, paid).Start), core));
         }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
-        if (!grant.Accepted) return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
+        if (!grant.Accepted)
+            return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4) with
+            {
+                RejectReason = "avatar_package_grant:" + grant.Error
+            };
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
         return new(true, 0, new(before, grant.Plan!.After, "avatar_package_open",
             new(character, EarliestDeadline(source, prototypes), clock, requirePosition: true), grant.Plan.OverflowItems));
@@ -218,6 +223,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             if (reward.ExpireTime > 0 && (deadline is null || reward.ExpireTime < deadline.Value)) deadline = reward.ExpireTime;
         return deadline;
     }
+
+    static InventoryResult RejectOpen(string reason) => InventoryResult.Reject(19) with { RejectReason = reason };
 
     internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
         out AvatarPackageRow[] rows)
@@ -299,12 +306,36 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     {
         if (row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Avatar ||
             !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
-            !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length)
+            !TryResolveGiftType(row, template, avatar, out _))
             return "avatar_row_definition";
         if (avatar.RequiresAbilityChoice && avatar.Abilities.IsEmpty ||
             row.ForcedAbility is byte forced && (!avatar.Abilities.Contains(forced) ||
                 !avatar.RequiresAbilityChoice && forced is not (0 or byte.MaxValue)))
             return "avatar_row_ability";
         return null;
+    }
+
+    // 礼盒 [avatar].type 直接索引 Types。空表走模板；在范围内取该行。
+    // type=4 是商城永久档：武器装扮常只声明 7/30/永久，服务端 Types 含合成 7 天后 Length=4，type4 越界且末行永久时落到末行。
+    internal static bool TryResolveGiftType(AvatarPackageRow row, ItemTemplate template, AvatarPackageItemDefinition avatar,
+        out AvatarPackageType type)
+    {
+        if (avatar.Types.IsEmpty)
+        {
+            type = new AvatarPackageType(template.Expiration.Days, template.AvatarSockets);
+            return true;
+        }
+        if (row.Type < avatar.Types.Length)
+        {
+            type = avatar.Types[row.Type];
+            return true;
+        }
+        if (row.Type == 4 && avatar.Types[^1].Days == 0)
+        {
+            type = avatar.Types[^1];
+            return true;
+        }
+        type = null!;
+        return false;
     }
 }

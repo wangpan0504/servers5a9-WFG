@@ -17,6 +17,7 @@ internal static class AvatarPackageTests
     {
         IdenticalAbilityRows();
         ForcedOptionsParsing();
+        GiftTypeResolution();
         var full = Package("101 1 3 0 102 2 4 37", 0);
         That(full.Recognized, "装扮族身份与当前可用性分别保留");
         string firstGrow = "[usable first growtype]\n5\n[/usable first growtype]\n";
@@ -269,6 +270,35 @@ internal static class AvatarPackageTests
             "字符串伪标签仍不构成能力声明，无声明保留属性0");
     }
 
+    static void GiftTypeResolution()
+    {
+        var template = new ItemTemplate(401600001, ItemKind.Avatar, 10, 1, 0, 1, 0, 0, 0, "[account]", ushort.MaxValue, 0, "weapon");
+        var shortTable = ImmutableArray.Create(
+            new AvatarPackageType(7, default),
+            new AvatarPackageType(7, default),
+            new AvatarPackageType(30, default),
+            new AvatarPackageType(0, default));
+        var avatar = new AvatarPackageItemDefinition(shortTable, [0]) { RequiresAbilityChoice = false };
+        var row = new AvatarPackageRow(401600001, 1, 4, 0);
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row, template, avatar) is null &&
+            InventoryAvatarPackageService.TryResolveGiftType(row, template, avatar, out var resolved) && resolved.Days == 0,
+            "武器装扮短表 type4 落到末行永久");
+        That(InventoryAvatarPackageService.TryResolveGiftType(row with { Type = 3 }, template, avatar, out var last) &&
+            last.Days == 0 && InventoryAvatarPackageService.TryResolveGiftType(row with { Type = 2 }, template, avatar, out var month) &&
+            month.Days == 30,
+            "在范围内的 30 天与永久行仍按原下标读取");
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row with { Type = 5 }, template, avatar) is not null,
+            "非商城永久档越界仍拒绝");
+        var timed = avatar with { Types = shortTable.SetItem(3, new AvatarPackageType(30, default)) };
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row, template, timed) is not null,
+            "末行非永久时不把 type4 改写成有限期");
+        var empty = new AvatarPackageItemDefinition([], [0]) { RequiresAbilityChoice = false };
+        That(InventoryAvatarPackageService.ValidateRowDefinition(row, template, empty) is null &&
+            InventoryAvatarPackageService.TryResolveGiftType(row, template, empty, out var fallback) &&
+            fallback.Days == template.Expiration.Days,
+            "空期限表仍走模板，不把 type4 当成越界");
+    }
+
     static void RedundantAbilityCloseAtEof()
     {
         const string stats = "0 `[HP MAX]` `+` 280 1 `[MP MAX]` `+` 280 2 `[EQUIPMENT_PHYSICAL_DEFENSE]` `+` 660";
@@ -392,6 +422,7 @@ internal static class AvatarPackageTests
         }
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
+        SeaRageWeaponSelectionResources(towns, resources, packages);
         LegacySelections(towns, resources, packages);
     }
 
@@ -803,6 +834,51 @@ internal static class AvatarPackageTests
                 request with { Choices = [new(1, 0)] }, request with { Category = 255 } })
                 That(!service.Open(character, bad, out _, now).Accepted, "省略属性兼容不放行伪造属性、外来编号或非法分类");
         }
+    }
+
+    // #1002 怒海霸主武器装扮自选礼盒：礼盒 type=4 对短期限表越界，须落到末行永久。
+    static void SeaRageWeaponSelectionResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        const int boxId = 490704328, avatarId = 401600001;
+        var now = DateTimeOffset.UtcNow;
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
+            new() { IgnoreCashShopAbsoluteExpiration = true });
+        var definition = packages.Get(boxId);
+        var category = definition.Categories.Single(row => row.Category == 0 && row.Subcategory == 0);
+        var row = category.Rows.Single();
+        var avatar = packages.GetAvatar(avatarId);
+        That(definition.Available && definition.SelectionCount == 0 && definition.Categories.Length == 16 &&
+            row == new AvatarPackageRow(avatarId, 1, 4, 0) && !avatar.RequiresAbilityChoice &&
+            avatar.PendingRule is null && avatar.Types.Length == 4 && avatar.Types[^1].Days == 0 &&
+            row.Type >= avatar.Types.Length,
+            "#1002 490704328 的 0/0 行为 type4，401600001 Types.Length=4 越界且末行永久");
+        var source = new InventoryItem(1000, Bag(),
+            InventoryRewardGrantService.Create(resources.Items.Get(boxId), shopExpiration: true));
+        Character character = new(1, 0, "SeaRage", 0, towns.Room, towns.InitialReturn)
+            { Job = 0, Level = 95, Inventory = new([source]) };
+        var before = character.Inventory;
+        byte[] body = Convert.FromHexString("490001000000000001EEEF170000");
+        var request = AvatarPackageRequests.Read(body, 1, 1);
+        That(request.Slot == 73 && request.Category == 0 && request.Subcategory == 0 &&
+            request.ItemIds.Single() == avatarId && request.Choices.Length == 0,
+            "#1002 男鬼剑 CMD160 14B 无属性选择闭合");
+        var reward = resources.Items.Get(avatarId);
+        That(reward is { Kind: ItemKind.Avatar, Expiration.SupportsCreation: true, IsPremiumService: false, HasAcquisitionEffect: false } &&
+            avatar.PendingRule is null,
+            "#1002 401600001 可创建装扮 kind=" + reward.Kind + " premium=" + reward.IsPremiumService +
+            " acquire=" + reward.HasAcquisitionEffect + " pending=" + avatar.PendingRule);
+        var result = service.Open(character, request, out var receipt, now);
+        That(result.Accepted && result.Error == 0 && receipt is { ItemId: boxId, Slot: 73 } &&
+            receipt.Rewards.Single() is { ItemId: avatarId, Count: 1 } &&
+            result.Plan!.After.Find(Bag()) is null &&
+            result.Plan.After.Items.Single() is { Avatar: not null, Core.ItemId: avatarId, Core.Durability: 0,
+                Core.ExpireTime: 0, Avatar.ExpireTime: 0 } &&
+            character.Inventory == before,
+            "#1002 短表 type4 发放永久天帷之锚，源仅规划扣除且不直接改原背包 accepted=" +
+            result.Accepted + " err=" + result.Error + " reason=" + result.RejectReason);
+        foreach (var bad in new[] { request with { Choices = [new(avatarId, 1)] }, request with { Category = 1 } })
+            That(!service.Open(character, bad, out _, now).Accepted && character.Inventory == before,
+                "#1002 伪造属性或女鬼剑分类不消耗源");
     }
 
     static void FirstGrowResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
