@@ -234,10 +234,15 @@ internal sealed partial class TcpPeer : IDisposable
         return packet;
     }
 
-    WirePacket ReadCore(byte actorChannel)
+    WirePacket ReadCore(byte actorChannel, int? firstByte = null)
     {
         byte[] header = new byte[16];
-        stream.ReadExactly(header);
+        if (firstByte is { } first)
+        {
+            header[0] = checked((byte)first);
+            stream.ReadExactly(header.AsSpan(1));
+        }
+        else stream.ReadExactly(header);
         int length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(3));
         TestCheck.That(length is >= 16 and <= 65536, "S2C frame length");
         bool protectedFrame = header[15] == 1;
@@ -587,6 +592,26 @@ internal sealed partial class TcpPeer : IDisposable
         TestCheck.That(milliseconds is > 0 and <= 10000, "等待积压帧必须有界");
         TestCheck.That(client.Client.Poll(TimeSpan.FromMilliseconds(milliseconds), SelectMode.SelectRead) &&
             client.Client.Available > 0, note + ": 未收到数据或对端已经关闭");
+    }
+
+    public void ClosedAfterFiendwarPartyRemoval(byte[] expected)
+    {
+        int first;
+        try { first = stream.ReadByte(); }
+        catch (IOException e) when (e.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted })
+        {
+            TestCheck.That(true, "connection reset after rejection");
+            return;
+        }
+        if (first < 0)
+        {
+            Closed();
+            return;
+        }
+        var packet = ReadCore(channelNumber, first);
+        TestCheck.That(packet is { Kind: 0, Opcode: 9 }, "only the original party removal may precede the counter failure close");
+        TestCheck.Bytes(packet.Body, expected, "party removal retains this run's complete roster identity and channel");
+        Closed();
     }
 
     public void Closed()

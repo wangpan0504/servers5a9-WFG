@@ -371,6 +371,7 @@ internal sealed partial class DungeonHandler
         }
         Func<DfoServer.Game.Session.GameSession, FormalDungeonDeathResult> observe;
         Func<DfoServer.Game.Session.GameSession, bool> prepareDynamic;
+        Func<DfoServer.Game.Session.GameSession, DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility?, FormalDungeonDeathResult> observeRaidDeath;
         uint key;
         if (DungeonRequests.TryParseScriptedDeath(request.Body, out var scripted))
         {
@@ -378,6 +379,7 @@ internal sealed partial class DungeonHandler
             var observation = new NativeDungeonScriptedDeathObservation(key, scripted.RewriteFlag, scripted.ChecksumMatches,
                 Convert.ToHexString(SHA256.HashData(request.Body)));
             observe = session => session.ObserveFormalDungeonScriptedDeath(observation, rewards, growth);
+            observeRaidDeath = (session, eligibility) => session.ObserveFormalDungeonScriptedDeath(observation, rewards, growth, eligibility, true);
             prepareDynamic = session => session.PrepareFiendwarDynamicDeath(null, observation);
         }
         else
@@ -395,12 +397,14 @@ internal sealed partial class DungeonHandler
             { Participants = statistics.Participants.Select(p => new NativeDungeonDeathParticipant(p.Kind, p.ObjectKey,
                 p.CumulativeHpDecrease, p.PositiveHpDecreaseCount)).ToImmutableArray() };
             observe = session => session.ObserveFormalDungeonDeath(observation, rewards, growth);
+            observeRaidDeath = (session, eligibility) => session.ObserveFormalDungeonDeath(observation, rewards, growth, eligibility, true);
             prepareDynamic = session => session.PrepareFiendwarDynamicDeath(observation, null);
         }
         if (key > ushort.MaxValue)
             return await PublishDeathAsync(context,new(DungeonRunOutcome.Rejected),context.Session.Selected,key,new { key });
         using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members);
-        var results = instance.ObserveDeath(context.Session, (ushort)key, observe, prepareDynamic);
+        var results = instance.ObserveDeath(context.Session, (ushort)key, observe, prepareDynamic,
+            session => session.CaptureRaidDeathEligibility((ushort)key), observeRaidDeath);
         if (strongwayProjection is not null) await strongwayProjection.DeathAsync(results);
         await PartyDungeonProjection.PublishAsync(results);
         return CommandResult.Handled;

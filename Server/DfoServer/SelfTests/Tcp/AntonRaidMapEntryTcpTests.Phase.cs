@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
@@ -10,6 +11,7 @@ using DfoServer.Game.Raids;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -18,6 +20,7 @@ using DfoServer.Network.Handlers;
 using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -25,11 +28,32 @@ namespace DfoServer.Testing;
 
 internal static partial class AntonRaidMapEntryTcpTests
 {
+    internal static async Task RunBattlePassDeathAsync(ServerOptions source, string root, TcpTestResources resources, int mission, string scenario = "normal")
+    {
+        if (mission is not (1 or 2)) throw new ArgumentOutOfRangeException(nameof(mission));
+        var main = SelfTestCatalogs.Dungeons(resources.Archive);
+        var definition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main,
+            resources.ItemResources.Items, antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!;
+        await VerifyPhaseProgressAsync(source, Path.Combine(root, $"anton-bp-{mission}-{scenario}"), resources, definition, mission, scenario);
+    }
+
     // 两个开关都打开时，沿真实 117 和 585/586 核对阶段 0 里不依赖计时到期的战况。不发送 596/597，也不进阶段 1。
-    static async Task VerifyPhaseProgressAsync(ServerOptions source, string root, TcpTestResources resources, RaidDefinition definition)
+    static async Task VerifyPhaseProgressAsync(ServerOptions source, string root, TcpTestResources resources, RaidDefinition definition, int deathMission = 0, string scenario = "normal")
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-phase-progress"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
+        LukeRaidClockTests.Clock? clock = null;
+        bool deathChecked = false;
+        if (deathMission != 0)
+        {
+            var start = DateTimeOffset.Parse("2026-10-29T06:00:00+08:00");
+            var policy = new BattlePassMissionPolicy("anton-death-fixture", start, BattlePassCatalog.Load(resources.Archive));
+            var at = Enumerable.Range(0, policy.Days).Select(day => start.AddDays(day).AddHours(2))
+                .First(time => policy.Active(time).Any(row => row.Key.Category == 0 && row.Key.Id == deathMission));
+            clock = new LukeRaidClockTests.Clock(at);
+            repository.ConfigureBattlePassMissions(policy);
+        }
+        await using var raidClocks = scenario == "writer" ? new LukeRaidClocks(clock!, repository, (_, error) => throw error) : null;
         var owners = new AccountOwners();
         var raids = new RaidRegistry();
         var parties = new PartyService(repository);
@@ -76,7 +100,7 @@ internal static partial class AntonRaidMapEntryTcpTests
                 InventoryService.Commit(repository, owner, character,
                     new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces)
                         .Grant(character, [new(10096296, 1)]));
-                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"));
+                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"), timeProvider: clock);
                 session.Select(0); session.MarkReady();
                 session.CurrentParty = () => parties.Current(session);
                 session.HasMultiplePartyMembers = () => parties.HasMultipleMembers(session);
@@ -88,7 +112,10 @@ internal static partial class AntonRaidMapEntryTcpTests
             That(raids.Respond(actors[1], actors[0].Character, true).Accepted, "阶段推进夹具加入原团");
             raids.Assign(actors[0], actors[0].Character, 1);
             raids.Assign(actors[0], actors[1].Character, 1);
-            var start = new AntonRaidStart(raids, parties, repository, resources.Towns, resources.ItemResources.EpicPieces, phaseProgress: true);
+            var raidRewards = scenario == "writer" ? new AntonResourceRewards(definition.Resources!.Script,
+                resources.ItemResources.Items, resources.ItemResources.Boosters) : null;
+            var start = new AntonRaidStart(raids, parties, repository, resources.Towns, resources.ItemResources.EpicPieces,
+                clock: clock, phaseProgress: true, rewards: raidRewards, timers: raidClocks);
             That(start.Start(actors[0], raids.Find(actors[0])!, definition with { StartMinimum = 1 }).Receipt is not null &&
                 actors[0].Session.CurrentRaidBattle(actors[0]) is { PhaseProgress: true },
                 "真实脚本开战打开阶段推进，仍然没有奖励策略");
@@ -99,6 +126,13 @@ internal static partial class AntonRaidMapEntryTcpTests
                 workers.Add(ServeAsync(await accept, leases[i], sessions[i]));
             }
             listener.Stop();
+
+            if (deathMission != 0)
+            {
+                ClearDungeon(210);
+                That(deathChecked, "正式安徒恩路径必须包含符合任务条件的真实敌方怪物");
+                return;
+            }
 
             for (int remaining = 3; remaining > 0; remaining--)
             {
@@ -226,14 +260,178 @@ internal static partial class AntonRaidMapEntryTcpTests
                 {
                     if (monster.IsBoss) boss = monster;
                     var observation = FormalDungeonSessionTests.Observation(current, monster);
-                    var notices = party.ObserveDeath(sessions[0], monster.ObjectKey,
-                        member => member.ObserveFormalDungeonDeath(observation, kills, resources.Growth));
+                    bool target = deathMission != 0 && monster.MonsterId > 0 && !monster.IsSpecialChild &&
+                        monster.AiCharacter is null && (deathMission == 1 ? !monster.IsBoss : monster.IsBoss);
+                    var before = target ? leases.Select(owner => repository.ReadBattlePassMissions(owner, clock!.GetUtcNow())!
+                        .Slots.Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == deathMission).Count).ToArray() : [];
+                    var growthBefore = target ? sessions.Select(session => Convert.ToInt64(fixture.Query(
+                        "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", session.Selected!.Id)[0][0])).ToArray() : [];
+                    var memberScenes = target ? sessions.Select(session => session.CurrentFormalDungeonScene()).ToArray() : [];
+                    SinglePlayerDungeonRun? targetRun = null;
+                    Guid? rollbackEvent = null;
+                    if (target)
+                    {
+                        That(before.All(count => count < (deathMission == 1 ? 10 : 2)), "目标死亡前两账号任务均已排期且未达上限");
+                        That(memberScenes.All(scene => scene is not null), "死亡前两成员均有当前正式场景");
+                        for (int member = 0; member < sessions.Count; member++)
+                        {
+                            var own = memberScenes[member]!;
+                            That(own.Snapshot.Identity.CharacterId == sessions[member].Selected!.Id &&
+                                own.Snapshot.Identity.InstanceId == current.Snapshot.Identity.InstanceId &&
+                                own.Snapshot.CurrentMap == current.Snapshot.CurrentMap &&
+                                own.Monsters.Monsters.Any(row => row.ObjectKey == monster.ObjectKey && row.MonsterId == monster.MonsterId),
+                                "每名成员绑定自己的角色、共享Run与同一地图和已发布怪物");
+                        }
+                    }
+                    PartyDungeonNotice[] Observe(NativeDungeonDeathObservation report,
+                        Func<GameSession, AntonRaidBattle.RaidDeathEligibility?>? capture = null) =>
+                        party.ObserveDeath(sessions[0], monster.ObjectKey,
+                            member => member.ObserveFormalDungeonDeath(report, kills, resources.Growth),
+                            captureRaidEligibility: capture ?? (member => member.CaptureRaidDeathEligibility(monster.ObjectKey)),
+                            observeRaidDeath: (member, eligibility) => member.ObserveFormalDungeonDeath(report, kills, resources.Growth, eligibility, true));
+                    if (target)
+                    {
+                        var formal = typeof(GameSession).GetProperty("formalDungeon", System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.NonPublic)!.GetValue(sessions[0])!;
+                        var originalRun = (SinglePlayerDungeonRun)formal.GetType().GetProperty("Run")!.GetValue(formal)!;
+                        targetRun = originalRun;
+                        var boundBattle = actors[0].Session.CurrentRaidBattle(actors[0])!;
+                        That(boundBattle.CaptureRaidDeathEligibility(actors[0] with { Epoch = actors[0].Epoch + 1 },
+                            originalRun,monster.ObjectKey) is null, "旧选角代次不能领取死亡资格");
+                        That(boundBattle.CaptureRaidDeathEligibility(actors[1],originalRun,monster.ObjectKey) is null,
+                            "其他成员不能借用本角色Run领取死亡资格");
+                        var invalid = Observe(observation with { ChecksumMatches = false });
+                        That(!invalid.Any(notice => notice.Kind == PartyDungeonNoticeKind.Death), "非法死亡不会因预备产生成功");
+                        for (int member = 0; member < sessions.Count; member++)
+                        {
+                            That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",
+                                sessions[member].Selected!.Id)[0][0]) == growthBefore[member], "非法死亡不提交成长");
+                            var memberFormal = typeof(GameSession).GetProperty("formalDungeon", System.Reflection.BindingFlags.Instance |
+                                System.Reflection.BindingFlags.NonPublic)!.GetValue(sessions[member])!;
+                            var memberRun = (SinglePlayerDungeonRun)memberFormal.GetType().GetProperty("Run")!.GetValue(memberFormal)!;
+                            That(typeof(SinglePlayerDungeonRun).GetField("pendingDeath", System.Reflection.BindingFlags.Instance |
+                                System.Reflection.BindingFlags.NonPublic)!.GetValue(memberRun) is null,
+                                "首成员原死亡拒绝后无其他成员孤立pending");
+                        }
+                    }
+                    PartyDungeonNotice[] notices;
+                    if (target && scenario == "rollback")
+                    {
+                        fixture.Sql("CREATE TRIGGER anton_bp_fail BEFORE INSERT ON account_battle_pass_source_events " +
+                            "WHEN NEW.source_kind='anton_raid_monster_death' BEGIN SELECT RAISE(ABORT,'anton bp rollback'); END");
+                        try
+                        {
+                            Reject<SqliteException>(() => Observe(observation), "战令来源失败必须回滚该角色原死亡事务");
+                            var pending = (PreparedDungeonDeath?)typeof(SinglePlayerDungeonRun).GetField("pendingDeath",
+                                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(targetRun);
+                            That(pending is not null && pending.Death.EventId != Guid.Empty, "失败保留首成员原死亡身份");
+                            rollbackEvent = pending!.Death.EventId;
+                            for (int member = 0; member < sessions.Count; member++)
+                            {
+                                That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",
+                                    sessions[member].Selected!.Id)[0][0]) == growthBefore[member], "失败未提交任何角色成长回执");
+                                That(repository.ReadBattlePassMissions(leases[member],clock!.GetUtcNow())!.Slots
+                                    .Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == deathMission).Count == before[member],
+                                    "失败未提交任务进度");
+                            }
+                        }
+                        finally { fixture.Sql("DROP TRIGGER anton_bp_fail"); }
+                        notices = Observe(observation);
+                    }
+                    else if (target && scenario == "prepare-retry")
+                    {
+                        bool interrupted = false;
+                        Reject<InvalidOperationException>(() => Observe(observation, member =>
+                        {
+                            if (ReferenceEquals(member,sessions[1]) && !interrupted)
+                            { interrupted = true; throw new InvalidOperationException("fixture prepare interruption"); }
+                            return member.CaptureRaidDeathEligibility(monster.ObjectKey);
+                        }), "半预备异常保留原队伍pending");
+                        That(interrupted, "异常实际发生在第二成员预备前");
+                        for (int member = 0; member < sessions.Count; member++)
+                            That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",
+                                sessions[member].Selected!.Id)[0][0]) == growthBefore[member], "预备异常不提交成长");
+                        notices = Observe(observation);
+                    }
+                    else if (target && scenario == "writer")
+                    {
+                        int prepared = 0;
+                        var originalWriterGate = (SemaphoreSlim)(typeof(SqliteWriteGate)
+                            .GetField("Gate", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                            .GetValue(null) ?? throw new InvalidOperationException("原writer gate缺失"));
+                        var waiterField = typeof(SemaphoreSlim).GetField("m_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                            ?? typeof(SemaphoreSlim).GetField("_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                            ?? throw new InvalidOperationException("原writer waiter计数不可观测");
+                        Task<PartyDungeonNotice[]> queued;
+                        var activeBattle = actors[0].Session.CurrentRaidBattle(actors[0])!;
+                        using (var holdDb = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = fixture.Database, Pooling = false }.ToString()))
+                        {
+                            holdDb.Open();
+                            using var heldWriter = holdDb.BeginWrite("AntonBattlePassDeath.WriterHold");
+                            using var heldTransaction = heldWriter.Transaction;
+                            queued = Task.Run(() => Observe(observation, member =>
+                            {
+                                var eligibility = member.CaptureRaidDeathEligibility(monster.ObjectKey);
+                                That(eligibility is not null, "跨期限前每成员成功冻结原Raid资格");
+                                Interlocked.Increment(ref prepared);
+                                return eligibility;
+                            }));
+                            That(SpinWait.SpinUntil(() => Convert.ToInt32(waiterField.GetValue(originalWriterGate)) >= 1,
+                                TimeSpan.FromSeconds(10)), "首成员原成长已在writer闸门排队");
+                            That(Volatile.Read(ref prepared) == sessions.Count, "首成员写入前全员已独立冻结资格");
+                            int phaseSeconds = definition.Resources!.Script.Headers.Single(row => row.Tag == "[phase time over]").Values[0].Number;
+                            clock!.AdvanceWithoutCallbacks(phaseSeconds + 1);
+                            That(!activeBattle.AllowsAntonEntry(210), "等待期间实际跨越原阶段期限");
+                            That(activeBattle.CaptureRaidDeathEligibility(actors[0],targetRun!,monster.ObjectKey) is null,
+                                "期限已到且timer尚未执行时不可新签Raid资格");
+                        }
+                        notices = queued.GetAwaiter().GetResult();
+                    }
+                    else notices = Observe(observation);
                     That(notices.Count(notice => notice.Kind == PartyDungeonNoticeKind.Death) == 2 &&
                         notices.Where(notice => notice.Kind == PartyDungeonNoticeKind.Death)
                             .Select(notice => notice.Recipient.Actor.Character.Id).Order()
                             .SequenceEqual(sessions.Select(session => session.Selected!.Id).Order()) &&
                         notices.All(notice => notice.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.RaidBattleSync),
                         "阶段图的阻挡怪由两名队员各自提交，终图额外同步已提交团本成果");
+                    if (target)
+                    {
+                        for (int member = 0; member < sessions.Count; member++)
+                        {
+                            long growthAfter = Convert.ToInt64(fixture.Query(
+                                "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", sessions[member].Selected!.Id)[0][0]);
+                            That(growthAfter == growthBefore[member] + 1, "战令断言前先证明该角色的原成长死亡回执已提交");
+                            var own = memberScenes[member]!;
+                            var identity = own.Snapshot.Identity;
+                            var receipt = fixture.Query("SELECT event_id,account FROM character_dungeon_growth_receipts " +
+                                "WHERE character_id=$p0 AND account=$p1 AND instance_id=$p2 AND quest_id=$p3 " +
+                                "AND task_attempt=$p4 AND epoch=$p5 AND map_id=$p6 AND monster_key=$p7 AND monster_id=$p8",
+                                identity.CharacterId, leases[member].Account, identity.InstanceId.ToString("N"), identity.QuestId,
+                                identity.TaskAttempt, identity.Epoch, own.Snapshot.CurrentMap.Id, monster.ObjectKey, monster.MonsterId);
+                            That(receipt.Length == 1 && (string)receipt[0][1] == leases[member].Account &&
+                                Guid.TryParseExact((string)receipt[0][0], "N", out var eventId) && eventId != Guid.Empty,
+                                "成长回执属于本成员原身份、地图和怪物，且具有非空权威死亡事件身份");
+                            if (member == 0 && rollbackEvent is { } expectedEvent)
+                                That((string)receipt[0][0] == expectedEvent.ToString("N"), "失败重试沿用原死亡EventId");
+                        }
+                        for (int member = 0; member < sessions.Count; member++)
+                        {
+                            var slot = repository.ReadBattlePassMissions(leases[member], clock!.GetUtcNow())!.Slots
+                                .Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == deathMission);
+                            That(slot.Count == before[member] + 1, $"Anton RED: active mission {deathMission} member {member} advances once");
+                        }
+                        Observe(observation);
+                        for (int member = 0; member < sessions.Count; member++)
+                        {
+                            var slot = repository.ReadBattlePassMissions(leases[member],clock!.GetUtcNow())!.Slots
+                                .Single(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == deathMission);
+                            That(slot.Count == before[member] + 1 && Convert.ToInt64(fixture.Query(
+                                "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", sessions[member].Selected!.Id)[0][0]) == growthBefore[member] + 1,
+                                "重复死亡不重复提交任何成员成长或战令");
+                        }
+                        deathChecked = true;
+                        return [];
+                    }
                 }
                 if (index + 1 == route.Length) break;
                 var next = route[index + 1];

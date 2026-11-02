@@ -1,6 +1,12 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.BattlePass;
+using DfoServer.Game.Events;
+using DfoServer.Game.Dungeons;
+using DfoServer.Game.Session;
+using DfoServer.Game.Raids;
+using DfoServer.Network.Protocol;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
@@ -16,7 +22,7 @@ namespace DfoServer.Testing;
 internal static partial class FiendwarRaidTcpTests
 {
     static void VerifyParties(TcpTestFixture fixture, TcpTestResources resources, RaidResources raid,
-        CharacterRepository repository, LukeRaidClockTests.Clock clock, int count)
+        CharacterRepository repository, LukeRaidClockTests.Clock clock, int count, BattlePassMissionPolicy? battlePassProbe = null, int battlePassCase = 0)
     {
         var peers = new List<TcpPeer>();
         var locations = new Dictionary<ushort, int>();
@@ -26,10 +32,13 @@ internal static partial class FiendwarRaidTcpTests
         var victories = new HashSet<ushort>();
         var counterRooms = new Dictionary<ushort, byte[]>();
         var previousCounters = new Dictionary<ushort, byte[]>();
+        var partyRemovals = new Dictionary<ushort, byte[]>();
         bool titleReplayChecked = false;
+        bool battlePassProbeChecked = false;
         bool counterRollbackChecked = false;
         int dynamicSpawnRooms = 0;
         bool readingSupport = false;
+        byte server = 0;
         try
         {
             for (int index = 0; index < count; index++)
@@ -63,7 +72,17 @@ internal static partial class FiendwarRaidTcpTests
                     fixture.Sql("INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES($p0,$p1,4,1000)",
                         count == 8 && index == 5 ? 2000 + count : 1000 + count, role.Id);
                 var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
+                ConfigureBattlePassPeer(peer);
                 peers.Add(peer); peer.Select(premiumContracts: true); Drain(peer); locations.Add(peer.Id, 2);
+                if (battlePassProbe is not null)
+                {
+                    var observer = new CharacterRepository(fixture.Database);
+                    observer.ConfigureBattlePassMissions(battlePassProbe);
+                    using var observerOwner = new AccountOwners().Acquire(account, () => { });
+                    That(observer.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!.Slots
+                        .Any(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1 && row.Count == 0),
+                        "团队真实死亡前由原资源政策提供活动中的每日击杀1，初始进度零");
+                }
                 VerifyConsumable(fixture, peer, false, 10);
                 VerifyConsumable(fixture, peer, true, 20, 1114);
             }
@@ -74,7 +93,7 @@ internal static partial class FiendwarRaidTcpTests
             var created = Drain(leader);
             That(created.Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "多人创建同一完整漩涡框架");
             uint raidKey = U32(created.Single(row => row is { Kind: 1, Opcode: 664 }).Body, 1);
-            byte server = checked((byte)(raidKey >> 24));
+            server = checked((byte)(raidKey >> 24));
             if (count == 1)
             {
                 VerifyNameHistory(fixture, resources, repository, leader, server);
@@ -237,6 +256,11 @@ internal static partial class FiendwarRaidTcpTests
             {
                 foreach (var peer in first) Move(peer, camp);
                 var campEntry = Enter(first, camp); Clear(first, camp, campEntry);
+                if (battlePassProbe is not null)
+                {
+                    That(battlePassProbeChecked, "团队战令探针经过真实首次死亡与原39重放");
+                    return;
+                }
                 foreach (var peer in first) { peer.Send(42); Drain(peer); }
             }
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
@@ -391,6 +415,7 @@ internal static partial class FiendwarRaidTcpTests
             if (count == 1 && advanceToDeadline) clock.Advance(299);
             var fresh = Open(fixture, "fiend" + count + "x" + index,
                 gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
+            ConfigureBattlePassPeer(fresh);
             peers[index] = fresh;
             var selected = fresh.Select().Concat(Drain(fresh)).ToArray();
             That(selected.Any(frame => frame is { Kind: 0, Opcode: 835 } &&
@@ -467,6 +492,203 @@ internal static partial class FiendwarRaidTcpTests
             }
         }
 
+        GameSession[] TeamProbeSessions(TcpPeer[] team)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var host = typeof(TcpTestFixture).GetField("runtimeHost", flags)!.GetValue(fixture)!;
+            var protocol = host.GetType().GetFields(flags).Select(field => field.GetValue(host)).OfType<GameProtocolHandler>().Single();
+            var directory = typeof(GameProtocolHandler).GetFields(flags).Select(field => field.GetValue(protocol)).OfType<OnlineSessionDirectory>().Single();
+            var sessions = team.Select((peer, member) => directory.Find("fiend" + count + "x" + member)!).ToArray();
+            That(sessions.Length == 4 && sessions.Select((session, member) => session.Selected!.Id == team[member].Id &&
+                session.PartyDungeon is not null && ReferenceEquals(session.PartyDungeon, sessions[0].PartyDungeon)).All(value => value),
+                "只读诊断取得本场四名原连接Session及同一共享实例，不创建替身actor或直接签发死亡");
+            return sessions;
+        }
+
+        static SinglePlayerDungeonRun? TeamProbeRun(GameSession session)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var context = typeof(GameSession).GetProperty("formalDungeon", flags)!.GetValue(session);
+            if (context is null) return null;
+            return (SinglePlayerDungeonRun)context.GetType().GetProperty("Run", flags | System.Reflection.BindingFlags.Public)!.GetValue(context)!;
+        }
+
+        static PreparedDungeonDeath? TeamProbePending(GameSession session)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var run = TeamProbeRun(session);
+            if (run is null) return null;
+            return (PreparedDungeonDeath?)typeof(SinglePlayerDungeonRun).GetField("pendingDeath", flags)!.GetValue(run);
+        }
+
+        static void VerifyTeamProbeFrozen(PartyDungeonInstance instance, GameSession[] sessions, TcpPeer[] team,
+            ushort key, uint monster, DateTimeOffset planned)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+            var pending = typeof(PartyDungeonInstance).GetField("pendingDeath", flags)!.GetValue(instance)!;
+            var type = pending.GetType();
+            That((bool)type.GetProperty("RaidEligibilitiesCaptured", flags)!.GetValue(pending)!,
+                "原writer排队前全部当前成员的只读资格快照回调已完成");
+            var tickets = (System.Collections.IDictionary)type.GetProperty("RaidEligibilities", flags)!.GetValue(pending)!;
+            That(tickets.Count == 4, "本场资格字典仅包含四名原实际参与者");
+            var references = new List<object>();
+            foreach (var (peer, member) in team.Select((peer, member) => (peer, member)))
+            {
+                var ticket = tickets[peer.Id];
+                That(ticket is not null, "团队当前成员各自在本人preflight时取得合法资格，非仅首成员非空");
+                var ticketType = ticket!.GetType();
+                var identity = (DungeonRunIdentity)ticketType.GetField("identity", flags)!.GetValue(ticket)!;
+                var run = (SinglePlayerDungeonRun)ticketType.GetField("run", flags)!.GetValue(ticket)!;
+                var actor = (RaidActor)ticketType.GetField("actor", flags)!.GetValue(ticket)!;
+                var map = (DfoServer.GameWorld.Dungeons.DungeonMap)ticketType.GetField("map", flags)!.GetValue(ticket)!;
+                var at = (DateTimeOffset)ticketType.GetProperty("CapturedAt", flags)!.GetValue(ticket)!;
+                That(ReferenceEquals(run, TeamProbeRun(sessions[member])) && identity == run.Snapshot.Identity &&
+                    identity.CharacterId == peer.Id && actor.Character == peer.Id && ReferenceEquals(actor.Session, sessions[member]) &&
+                    map == run.Snapshot.CurrentMap && Convert.ToUInt16(ticketType.GetField("monsterKey", flags)!.GetValue(ticket)) == key &&
+                    Convert.ToUInt32(ticketType.GetField("monsterId", flags)!.GetValue(ticket)) == monster &&
+                    (RaidKind)ticketType.GetProperty("Kind", flags)!.GetValue(ticket)! == RaidKind.Fiendwar && at == planned,
+                    "四份资格分别绑定原actor/run/角色/地图/怪物和本人冻结时刻，恒定测试时钟尚未跨期限");
+                if (member != 0)
+                    That(TeamProbePending(sessions[member]) is null,
+                        "后续成员只取得无副作用资格快照，首成员等writer时尚未预签原死亡或EventId");
+                references.Add(ticket);
+                Console.WriteLine($"TEAM_PREFLIGHT_OBS member={member} character={peer.Id} at={at:O} kind=Fiendwar key={key} monster={monster}");
+            }
+            That(references.Distinct(ReferenceEqualityComparer.Instance).Count() == 4,
+                "四名实际参与者各持独立资格对象，不能共享首人的角色票据");
+        }
+
+        string TeamProbeSnapshot(TcpPeer peer)
+        {
+            int member = peers.FindIndex(candidate => ReferenceEquals(candidate, peer));
+            string account = "fiend" + count + "x" + member;
+            return System.Text.Json.JsonSerializer.Serialize(new object[]
+            {
+                fixture.Query("SELECT * FROM characters WHERE id=$p0", peer.Id),
+                fixture.Query("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY event_id", peer.Id),
+                fixture.Query("SELECT * FROM character_fiendwar_title_facts WHERE character_id=$p0 ORDER BY quest_id", peer.Id),
+                fixture.Query("SELECT * FROM character_title_progress WHERE character_id=$p0 ORDER BY quest_id", peer.Id),
+                fixture.Query("SELECT * FROM account_battle_pass_source_events WHERE account=$p0 ORDER BY source_kind,source_id", account),
+                fixture.Query("SELECT * FROM account_battle_pass_mission_progress WHERE account=$p0 ORDER BY season_key,category,period_key,mission_id", account),
+                fixture.Query("SELECT * FROM account_battle_pass_seasons WHERE account=$p0 ORDER BY season_key", account)
+            });
+        }
+
+        void VerifyBattlePassTeamCommitted(TcpPeer[] team, string stage, List<WirePacket>[]? packets = null)
+        {
+            foreach (var (peer, member) in team.Select((peer, member) => (peer, member)))
+            {
+                string account = "fiend" + count + "x" + member;
+                var growth = fixture.Query("SELECT event_id,amount FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id);
+                long sources = Convert.ToInt64(fixture.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE account=$p0 AND source_kind='fiendwar_team_monster_death'", account)[0][0]);
+                long progress = Convert.ToInt64(fixture.Query("SELECT coalesce(sum(current_count),0) FROM account_battle_pass_mission_progress WHERE account=$p0 AND category=0 AND mission_id=1", account)[0][0]);
+                string titles = System.Text.Json.JsonSerializer.Serialize(fixture.Query("SELECT total,applied FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7007", peer.Id));
+                Console.WriteLine($"TEAM_BOUNDARY_OBS stage={stage} member={member} character={peer.Id} growth={growth.Length} sources={sources} daily1={progress} titles={titles}");
+                That(growth.Length == 1 && Convert.ToInt64(growth[0][1]) == 0 && sources == 1 && progress == 1,
+                    "团队每名原实际参与者的真实死亡均只提交一次原成长、来源和每日击杀1");
+                if (packets is not null)
+                {
+                    var observer = new CharacterRepository(fixture.Database);
+                    observer.ConfigureBattlePassMissions(battlePassProbe!);
+                    using var observerOwner = new AccountOwners().Acquire(account, () => { });
+                    var state = observer.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!;
+                    That(packets[member].Any(row => row is { Kind: 0, Opcode: 1801 } && row.Body.SequenceEqual(state.ToPayload())),
+                        "团队各成员由原死亡投影发布提交后的完整权威1801，不依赖主动刷新");
+                }
+            }
+            That(fixture.Query("SELECT count(DISTINCT event_id) FROM character_dungeon_growth_receipts WHERE account LIKE 'fiend4x%'") is [[4L]],
+                "四名角色各持独立原EventId，不把共享怪物键当跨角色成长事件");
+        }
+
+        void VerifyBattlePassTeamBoundary(TcpPeer[] team, byte[] map, int offset)
+        {
+            var sessions = TeamProbeSessions(team);
+            ushort key = U16(map, offset + 6);
+            byte[] request = FormalDungeonTcpTests.Death(key, team[0].Id, map[offset + 12]);
+            if (battlePassCase == 1)
+            {
+                var failed = team[1];
+                string beforeFailed = TeamProbeSnapshot(failed);
+                fixture.Sql("CREATE TRIGGER fail_team_bp BEFORE INSERT ON account_battle_pass_source_events " +
+                    "WHEN NEW.account='fiend4x1' AND NEW.source_kind='fiendwar_team_monster_death' " +
+                    "BEGIN SELECT RAISE(ABORT,'team battle pass rollback'); END");
+                string committedFirst;
+                Guid retryEvent;
+                try
+                {
+                    That(partyRemovals.TryGetValue(team[0].Id, out var removal), "团队晚SQL故障前已取得原队伍完整移除身份");
+                    team[0].Send(39, request);
+                    team[0].ClosedAfterFiendwarPartyRemoval(removal!);
+                    That(SpinWait.SpinUntil(() => fixture.LukeRejoinCandidate(team[0].Id) is { OldOwnerReleased: true },
+                        TimeSpan.FromSeconds(10)), "SQL异常真实关闭原报告连接并释放其owner，存活成员保留原共享实例");
+                    That(TeamProbeSnapshot(failed) == beforeFailed,
+                        "第二成员战令来源晚SQL失败原子回滚其完整角色、原成长、称号事实/进度与战令源/任务/赛季版本");
+                    That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", team[0].Id) is [[1L]] &&
+                        fixture.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE account='fiend4x0' AND source_kind='fiendwar_team_monster_death'") is [[1L]] &&
+                        team.Skip(1).All(peer => fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id) is [[0L]]),
+                        "保留原逐角色事务：先成员已提交不回滚，失败及后续成员没有半提交");
+                    committedFirst = TeamProbeSnapshot(team[0]);
+                    var failedPending = TeamProbePending(sessions[1]);
+                    That(failedPending is { BattlePassActivity.SourceKind: "fiendwar_team_monster_death" } &&
+                        failedPending.Death.Identity.CharacterId == failed.Id && failedPending.Death.EventId != Guid.Empty,
+                        "晚SQL失败保留失败成员原权威pending和战令来源，不撤销再签新死亡");
+                    retryEvent = failedPending!.Death.EventId;
+                    Console.WriteLine("TEAM_ROLLBACK_OBS firstCommitted=1 failedGrowth=0 failedSources=0 laterGrowth=0");
+                }
+                finally { fixture.Sql("DROP TRIGGER fail_team_bp"); }
+                foreach (var peer in team.Skip(1)) Drain(peer);
+                team[1].Send(39, FormalDungeonTcpTests.Death(key, team[1].Id, map[offset + 12]));
+                var retried = team.Skip(1).Select(Drain).ToArray();
+                That(retried[0].Any(row => row is { Kind: 0, Opcode: 38 }), "存活原成员以同一真实怪物键重试原共享pending死亡并收到成功");
+                That(TeamProbeSnapshot(team[0]) == committedFirst, "共享pending重试跳过已完成首成员，不重发或重写其原事务");
+                VerifyBattlePassTeamCommitted(team, "rollback-retry");
+                That(fixture.Query("SELECT event_id FROM character_dungeon_growth_receipts WHERE character_id=$p0", failed.Id)
+                    is [[string retriedEvent]] && retriedEvent == retryEvent.ToString("N"),
+                    "存活成员共享pending重试提交晚SQL失败前的同一EventId，不重抽或重签来源");
+                string[] committed = team.Select(TeamProbeSnapshot).ToArray();
+                team[1].Send(39, FormalDungeonTcpTests.Death(key, team[1].Id, map[offset + 12]));
+                foreach (var peer in team.Skip(1)) Drain(peer);
+                That(team.Select(TeamProbeSnapshot).SequenceEqual(committed), "晚SQL重试成功后同39重放不重复任何角色成长、称号或战令状态");
+                return;
+            }
+            That(battlePassCase == 2, "团队边界探针类型明确");
+            var originalWriterGate = (SemaphoreSlim)(typeof(SqliteWriteGate)
+                .GetField("Gate", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(null) ?? throw new InvalidOperationException("原writer gate缺失"));
+            var waiterField = typeof(SemaphoreSlim).GetField("m_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? typeof(SemaphoreSlim).GetField("_waitCount", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("原writer waiter计数不可观测");
+            var planned = clock.GetUtcNow();
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                { DataSource = fixture.Database, Pooling = false }.ToString()))
+            {
+                connection.Open();
+                using var heldWriter = connection.BeginWrite("FiendwarRaidTcpTests.TeamDeathWriterHold");
+                using var transaction = heldWriter.Transaction;
+                That(originalWriterGate.CurrentCount == 0 && SqliteWriteGate.ActiveWriters == 1, "团队原writer已真实占用");
+                team[0].Send(39, request);
+                That(SpinWait.SpinUntil(() => Convert.ToInt32(waiterField.GetValue(originalWriterGate)) >= 1,
+                    TimeSpan.FromSeconds(10)), "团队真实39已到达原writer排队，未由测试直接生成死亡");
+                VerifyTeamProbeFrozen(sessions[0].PartyDungeon!, sessions, team, key, U32(map, offset + 8), planned);
+                clock.AdvanceMillisecondsWithoutCallbacks(3610 * 1000);
+                That(clock.GetUtcNow() == planned.AddSeconds(3610), "writer仍占用时跨过团队总战场和本遭遇期限，不执行回调代替原死亡");
+            }
+            var completed = team.Select(Drain).ToArray();
+            That(completed[0].Any(row => row is { Kind: 0, Opcode: 38 }), "原时限内接纳的团队死亡在writer释放后成功投影");
+            VerifyBattlePassTeamCommitted(team, "writer-deadline", completed);
+            string[] committedWriter = team.Select(TeamProbeSnapshot).ToArray();
+            team[0].Send(39, request);
+            foreach (var peer in team) Drain(peer);
+            That(team.Select(TeamProbeSnapshot).SequenceEqual(committedWriter), "全员冻结后的跨writer期限原39重放不重复任何已提交状态");
+        }
+
+        void ConfigureBattlePassPeer(TcpPeer peer)
+        {
+            if (battlePassProbe is null) return;
+            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
+            peer.ExpectedBattlePassEnd = checked((uint)battlePassProbe.End.ToUnixTimeSeconds());
+        }
+
         List<WirePacket> Drain(TcpPeer peer)
         {
             var frames = AntonTcpProbe.Barrier(peer, "fiendwar party " + count);
@@ -475,6 +697,13 @@ internal static partial class FiendwarRaidTcpTests
         }
         void Observe(TcpPeer peer, WirePacket frame)
         {
+                if ((count == 1 || battlePassCase == 1) && server != 0 && frame is { Kind: 0, Opcode: 9, Body.Length: > 11 } && frame.Body[9] == 0)
+                {
+                    That(U16(frame.Body) == 1 && U16(frame.Body, 2) == 9999 && U16(frame.Body, 4) != 0 &&
+                        frame.Body[6] == server && frame.Body[7] == 39 && frame.Body[8] == 0 && frame.Body[10] == 0,
+                        "自然队伍名册的完整移除前缀匹配本场server、channel与队伍");
+                    partyRemovals[peer.Id] = frame.Body[..9].Concat(new byte[] { 3, 0 }).ToArray();
+                }
                 if (frame is { Kind: 0, Opcode: 1554 })
                     That(readingSupport, "移动、进退图、重返及持续战况不重播已写或过期的支援提示");
                 That(frame is not { Kind: 0, Opcode: 587 }, "漩涡只走自己的1523状态合同");
@@ -629,6 +858,7 @@ internal static partial class FiendwarRaidTcpTests
                 }
                 if (!terminal && index + 1 == path.Length) break;
                 ClearMap(team, map, index + 1 == path.Length);
+                if (battlePassProbeChecked) return rows;
             }
             return rows;
         }
@@ -657,6 +887,12 @@ internal static partial class FiendwarRaidTcpTests
             {
                 int offset = 19 + index * 22;
                 if (map[offset + 21] == 1 || map[offset + 13] == 9) continue;
+                if (battlePassProbe is not null && battlePassCase != 0 && !battlePassProbeChecked)
+                {
+                    VerifyBattlePassTeamBoundary(team, map, offset);
+                    battlePassProbeChecked = true;
+                    return;
+                }
                 team[0].Send(39, FormalDungeonTcpTests.Death(U16(map, offset + 6), team[0].Id, map[offset + 12]));
                 // 统一经本测试的收包入口观察战场符号，避免公共清图探针先消费1530。
                 That(Drain(team[0]).Any(row => row is { Kind: 0, Opcode: 38 }), "正式实例接受实际怪物死亡");
@@ -673,6 +909,24 @@ internal static partial class FiendwarRaidTcpTests
                     foreach (var peer in team) Drain(peer);
                     That(team.All(peer => fixture.Query("SELECT total,applied FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7007", peer.Id) is [[1L, 1L]]),
                         "同一原死亡重放不重复累计称号事实或进度");
+                    if (battlePassProbe is not null)
+                    {
+                        bool allBattlePassDeaths = true;
+                        foreach (var (peer, member) in team.Select((peer, member) => (peer, member)))
+                        {
+                            string account = "fiend" + count + "x" + member;
+                            var growth = fixture.Query("SELECT event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,monster_id FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id);
+                            long sources = Convert.ToInt64(fixture.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE account=$p0 AND source_kind LIKE '%monster_death'", account)[0][0]);
+                            long progress = Convert.ToInt64(fixture.Query("SELECT coalesce(sum(current_count),0) FROM account_battle_pass_mission_progress WHERE account=$p0 AND category=0 AND mission_id=1", account)[0][0]);
+                            Console.WriteLine($"TEAM_DEATH_OBS member={member} character={peer.Id} growth={growth.Length} title=1 sources={sources} daily1={progress} identity={System.Text.Json.JsonSerializer.Serialize(growth)}");
+                            That(growth.Length == 1 && Convert.ToInt64(growth[0][9]) == 0,
+                                "团队原首次死亡和39重放每名实际参与者只提交一次真实Growth收据，满级经验零");
+                            allBattlePassDeaths &= sources == 1 && progress == 1;
+                        }
+                        That(allBattlePassDeaths, "团队漩涡原首次死亡和39重放为每名实际参与者只记一次战令来源与每日击杀1");
+                        battlePassProbeChecked = true;
+                        return;
+                    }
                 }
                 killed = true;
             }

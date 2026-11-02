@@ -13,6 +13,8 @@ internal static class TcpRegressionTests
         ("battle-pass-period-weekly", BattlePassOnlinePeriodTcpTests.WeeklyAsync),
         ("battle-pass-period-utc", BattlePassOnlinePeriodTcpTests.UtcAsync),
         ("fiendwar-raid-flow", FiendwarRaidTcpTests.RunAsync),
+        ("battle-pass-fiendwar-team-death", FiendwarRaidTcpTests.RunBattlePassTeamDeathAsync),
+        ("battle-pass-fiendwar-team-boundary", FiendwarRaidTcpTests.RunBattlePassTeamBoundaryAsync),
         ("fiendwar-guide", async (options, root, resources) =>
         {
             await FiendwarGuideTcpTests.RunAsync(options, root, resources);
@@ -20,6 +22,11 @@ internal static class TcpRegressionTests
         }),
         ("battle-pass-fiendwar-guide-death", FiendwarGuideTcpTests.RunBattlePassDeathAsync),
         ("battle-pass-fiendwar-guide-writer", FiendwarGuideTcpTests.RunBattlePassDeathWriterAsync),
+        ("battle-pass-anton-death-1", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1)),
+        ("battle-pass-anton-death-2", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 2)),
+        ("battle-pass-anton-death-rollback", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1, "rollback")),
+        ("battle-pass-anton-death-prepare-retry", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1, "prepare-retry")),
+        ("battle-pass-anton-death-writer", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1, "writer")),
         ("fiendwar-recovery", FiendwarRecoveryTests.RunAsync),
         ("fiendwar-reward-rules", (_, _, resources) =>
         {

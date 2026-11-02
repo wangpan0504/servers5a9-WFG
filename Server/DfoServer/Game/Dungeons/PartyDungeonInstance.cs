@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Raids;
 using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
@@ -90,10 +91,16 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     PartyMember[] members = party.Members;
     readonly HashSet<ushort> loaded = [];
     readonly HashSet<ushort> deaths = [];
-    sealed class PendingDeath(ushort key, Func<GameSession, FormalDungeonDeathResult> observe)
+    sealed class PendingDeath(ushort key, Func<GameSession, FormalDungeonDeathResult> observe,
+        Func<GameSession, AntonRaidBattle.RaidDeathEligibility?>? captureRaidEligibility,
+        Func<GameSession, AntonRaidBattle.RaidDeathEligibility?, FormalDungeonDeathResult>? observeRaidDeath)
     {
         public ushort Key { get; } = key;
         public Func<GameSession, FormalDungeonDeathResult> Observe { get; } = observe;
+        public Func<GameSession, AntonRaidBattle.RaidDeathEligibility?>? CaptureRaidEligibility { get; } = captureRaidEligibility;
+        public Func<GameSession, AntonRaidBattle.RaidDeathEligibility?, FormalDungeonDeathResult>? ObserveRaidDeath { get; } = observeRaidDeath;
+        public Dictionary<ushort, AntonRaidBattle.RaidDeathEligibility?> RaidEligibilities { get; } = [];
+        public bool RaidEligibilitiesCaptured { get; set; }
         public Dictionary<ushort, PartyDungeonNotice> Completed { get; } = [];
     }
     PendingDeath? pendingDeath;
@@ -337,7 +344,9 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     });
 
     public PartyDungeonNotice[] ObserveDeath(GameSession reporter, ushort key,
-        Func<GameSession, FormalDungeonDeathResult> observe, Func<GameSession, bool>? prepareDynamic = null) => Execute(current =>
+        Func<GameSession, FormalDungeonDeathResult> observe, Func<GameSession, bool>? prepareDynamic = null,
+        Func<GameSession, AntonRaidBattle.RaidDeathEligibility?>? captureRaidEligibility = null,
+        Func<GameSession, AntonRaidBattle.RaidDeathEligibility?, FormalDungeonDeathResult>? observeRaidDeath = null) => Execute(current =>
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session, reporter)) ||
             pendingScene is not null || current.Any(m => m.Actor.Session.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement))) return [];
@@ -365,7 +374,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             AppendBattleNotices(current, notices);
             return notices.ToArray();
         }
-        pendingDeath = new(key, observe);
+        pendingDeath = new(key, observe, captureRaidEligibility, observeRaidDeath);
         FinishPendingDeath(current, notices);
         AppendBattleNotices(current, notices);
         return notices.ToArray();
@@ -388,11 +397,19 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     void FinishPendingDeath(PartyMember[] current, List<PartyDungeonNotice> notices)
     {
         var pending = pendingDeath!;
+        if (!pending.RaidEligibilitiesCaptured && pending.CaptureRaidEligibility is { } capture)
+        {
+            foreach (var member in current)
+                if (!pending.RaidEligibilities.ContainsKey(member.Actor.Character.Id))
+                    pending.RaidEligibilities.Add(member.Actor.Character.Id, capture(member.Actor.Session));
+            pending.RaidEligibilitiesCaptured = true;
+        }
         foreach (var member in current)
         {
             if (pending.Completed.ContainsKey(member.Actor.Character.Id)) continue;
             var previous = member.Actor.Session.Selected;
-            var result = pending.Observe(member.Actor.Session);
+            var result = pending.ObserveRaidDeath is { } observeRaid && pending.RaidEligibilities.TryGetValue(member.Actor.Character.Id, out var eligibility)
+                ? observeRaid(member.Actor.Session, eligibility) : pending.Observe(member.Actor.Session);
             if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             {
                 if (pending.Completed.Count == 0) { pendingDeath = null; return; }
