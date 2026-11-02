@@ -36,6 +36,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
+    internal DfoServer.Network.Projection.AntonSymbolDisplay AntonSymbols { get; } = new();
     internal Guid AntonDungeonDisplayInstance { get; set; }
     // 符号2的重复1会重新播火山字幕；仅记录本人连接实际写出的值。
     internal (Guid Instance, int Value)? AntonMeteoDisplay { get; set; }
