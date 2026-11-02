@@ -11,6 +11,12 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
 using DfoServer.Testing;
 using DfoServer.Network.Builders;
+using DfoServer.Game.BattlePass;
+using DfoServer.GameWorld.BattlePass;
+using DfoServer.Network;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Protocol;
+using System.Net;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
@@ -19,6 +25,12 @@ namespace DfoServer;
 internal static class PreyGuideTests
 {
     internal static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
+        => await RunFixtureAsync(options, root, resources, false);
+
+    internal static async Task RunBattlePassNoticeAsync(ServerOptions options, string root, TcpTestResources resources)
+        => await RunFixtureAsync(options, root, resources, true);
+
+    static async Task RunFixtureAsync(ServerOptions options, string root, TcpTestResources resources, bool battlePass)
     {
         var definition = RaidCatalog.Load(resources.Archive).Find(3)!;
         var raid = RaidResourceLoader.Load(resources.Archive, definition,
@@ -28,17 +40,20 @@ internal static class PreyGuideTests
         That(raid.Script.EntryCost == new RaidCost(10309342, 1), "引导使用独立门票");
         That(raid.Script.Phases.Length == 2 && raid.Script.Phases[1].Dungeons.Any(row => row.Id == 291100397), "引导两阶段包含真实终图");
         That(raid.EntryCatalog is { Ready: true }, "引导正式进图目录完整");
-        DatabaseSchemaTests.PreyGuideUpgrade(Path.Combine(root, "prey-schema"));
-        await VerifyLifecycleAsync(root, resources, definition with { Resources = raid });
+        if (!battlePass) DatabaseSchemaTests.PreyGuideUpgrade(Path.Combine(root, "prey-schema"));
+        await VerifyLifecycleAsync(root, resources, definition with { Resources = raid }, battlePass);
     }
 
-    static async Task VerifyLifecycleAsync(string root, TcpTestResources resources, RaidDefinition definition)
+    static async Task VerifyLifecycleAsync(string root, TcpTestResources resources, RaidDefinition definition, bool battlePass)
     {
         string path = Path.Combine(root, "prey-domain", "game.db");
         var repo = new CharacterRepository(path);
         var owners = new AccountOwners();
         using var owner = owners.Acquire("prey-guide-domain", () => { });
-        var clock = new LukeRaidClockTests.Clock();
+        var clock = new LukeRaidClockTests.Clock(battlePass ? DateTimeOffset.Parse("2026-11-03T00:00:00Z") : null);
+        if (battlePass)
+            repo.ConfigureBattlePassMissions(new BattlePassMissionPolicy("prey-notice-fixture",
+                DateTimeOffset.Parse("2026-10-29T06:00:00+08:00"), BattlePassCatalog.Load(resources.Archive)));
         var point = new Location(59, 0, 445, 377);
         var created = repo.Create(owner, CharacterCreation.Prepare("PreyGuide", resources.Characters.Get(0), point, point, resources.Learning.Get)
             with { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = [8935] });
@@ -89,13 +104,14 @@ internal static class PreyGuideTests
             int branch = battle.View.Symbols["[single raid type]"];
             foreach (int dungeon in branch == 0 ? new[] { 291100391, 291100393 } : new[] { 291100390, 291100392 }) Clear(dungeon);
             That(battle.HasPendingTransition && battle.View.State == AntonRaidBattleState.Fighting, "圣地完成须等待退出及阶段资格SQL屏障");
-            Settle(0);
+            await Settle(0);
             That(battle.View.Phase == 1 && battle.View.State == AntonRaidBattleState.Fighting, "引导第一阶段领取后进入第二阶段");
             That(!battle.AllowsPreyEntry(291100397), "未通激战地不得进入天空巢穴");
             Clear(291100394);
             That(battle.AllowsPreyEntry(291100397), "激战地一次正式清图开放天空巢穴");
             Clear(291100397);
-            Settle(1);
+            await Settle(1);
+            if (battlePass) return;
             That(battle.View.State == AntonRaidBattleState.Completed, "引导终图一次清图完成两阶段，不扣9999次HP");
             That(repo.HasQuestDungeonClear(owner, session.Selected!, 291100397, 1), "真实引导生命周期生成6220所需的持久通关历史");
             That(!repo.HasQuestDungeonClear(owner, session.Selected!, 400000046, 1), "引导历史不能冒充普通普雷通关");
@@ -124,10 +140,42 @@ internal static class PreyGuideTests
                     "普雷通关列复用本阶段真实参与次数，重放不增计数");
                 battle.ReleaseDungeon(actor, identity.InstanceId);
             }
-            void Settle(int phase)
+            async Task Settle(int phase)
             {
                 That(session.CommitPendingLukePhase(repo), "阶段资格与真实类型3同事务提交");
                 That(battle.View.State == AntonRaidBattleState.Reward && battle.LukeEligibility(actor!.Character, phase) is { Eligible: true }, "资格提交后开放本阶段奖励");
+                if (battlePass && phase == 1)
+                {
+                    var noticeActor = actor ?? throw new InvalidOperationException("Missing raid actor");
+                    var state = repo.ReadBattlePassMissions(owner, clock.GetUtcNow())!;
+                    That(state.Slots.Single(row => row.Instance.Key.Id == 59).Count == 1 &&
+                        battle.LukeEligibility(noticeActor.Character, phase) is { CountsAsClear: true, Source: PreyGuideRewards.Source },
+                        "原普雷引导最终计次已同事务推进59，尚未领取奖励");
+                    var view = battle.View;
+                    That(session.ReadBattlePassRaidCompletionState(noticeActor with { Epoch = noticeActor.Epoch + 1 }, view) is null &&
+                        session.ReadBattlePassRaidCompletionState(noticeActor, view with { Instance = Guid.NewGuid() }) is null,
+                        "旧选角与旧实例不能读取攻坚任务投影");
+                    using var stop = new CancellationTokenSource();
+                    using var stream = new MemoryStream();
+                    byte[]? published = null;
+                    await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, body, action) =>
+                    {
+                        if (action == "battle_pass_raid_completion") published = body.ToArray();
+                    });
+                    var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), owner, session, sender);
+                    RaidCombatProjection.Notice(context, view, noticeActor);
+                    await sender.DrainAsync();
+                    That(published is not null && published.SequenceEqual(state.ToPayload()),
+                        "普雷引导终结后由原Notice发送权威1801，不依赖领奖");
+                    using var other = new AccountOwners().Acquire("different-account", () => { });
+                    That(session.ReadBattlePassRaidCompletionState(noticeActor with { Owner = other }, view) is null,
+                        "其他owner不能读取原成员攻坚投影");
+                    session.End();
+                    using var replacement = owners.Acquire("prey-guide-domain", () => { });
+                    Reject<InvalidOperationException>(() => session.ReadBattlePassRaidCompletionState(noticeActor, view),
+                        "旧owner generation不能继续读取攻坚投影");
+                    return;
+                }
                 foreach (byte kind in new byte[] { 1, 0 })
                 {
                     var receipt = session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
@@ -140,7 +188,7 @@ internal static class PreyGuideTests
                 }
             }
         }
-        finally { session.End(); }
+        finally { if (owner.IsCurrent) session.End(); }
     }
 
     static void VerifyShip(RaidScript script, RaidActor actor)
