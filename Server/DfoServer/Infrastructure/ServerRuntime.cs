@@ -715,7 +715,9 @@ internal static class ServerRuntime
         {
             if (battlePassSeason is null || battlePassCatalog is null)
                 throw new InvalidDataException("任务周期需要显式battle-pass-season");
-            repository.ConfigureBattlePassMissions(new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, battlePassStart, battlePassCatalog));
+            var battlePassMissionPolicy = new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, battlePassStart, battlePassCatalog);
+            repository.ConfigureBattlePassMissions(battlePassMissionPolicy);
+            projection.BattlePassMissions = battlePassMissionPolicy;
         }
         var battlePassRewards = battlePassCatalog is null ? null : new Game.BattlePass.BattlePassRewardService(
             battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);

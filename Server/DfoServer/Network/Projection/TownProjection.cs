@@ -26,6 +26,10 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null)
 {
     const ushort JonathanVisibleEvent = 2395;
+    internal const ushort BattlePassEventId = 2520;
+    internal DfoServer.Game.BattlePass.BattlePassMissionPolicy? BattlePassMissions { get; set; }
+    internal bool IsBattlePassEventActive(DateTimeOffset now) =>
+        BattlePassMissions is { } policy && now >= policy.Start && now < policy.End;
     internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
@@ -57,6 +61,9 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
+        long eventEpoch = context.Session.SelectionEpoch;
+        bool battlePass = IsBattlePassEventActive(timer.GetUtcNow());
+        if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
         IReadOnlyList<EventInfoDesignPage> designPages = [];
         Func<bool>? publish = canSend;
         if (promotionCatalog is not null && promotionPages is not null)
@@ -82,6 +89,12 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);
+        if (publish?.Invoke() != false && context.ServerEvents is { } eventProjection)
+        {
+            // 共享发布这里只入队；交给原worker在门禁释放后重读，不能把入队记成已写出。
+            if (context.Sender.IsPublicationQueued) eventProjection.Refresh();
+            else eventProjection.PublishedBattlePass(eventEpoch, battlePass);
+        }
         if (publish?.Invoke() == false) return;
         long? npcRevision = events?.Strongway2019DisplayRevision;
         var strongway = events?.Read(ServerEventService.Strongway2019Id);

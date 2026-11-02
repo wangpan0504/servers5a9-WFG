@@ -51,6 +51,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     }
 
     public long Epoch => Volatile.Read(ref epoch);
+    internal bool IsPublicationQueued => queuedPublication.Value is not null;
     public long PendingBytes { get { lock (queueGate) return pendingBytes; } }
 
     public int PendingMoves

@@ -2,9 +2,14 @@ using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 using System.Net;
 using System.Net.Sockets;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.BattlePass;
+using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Channels;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.Network;
 using DfoServer.Game.Events;
+using DfoServer.Network.Management;
 using DfoServer.Persistence;
 
 namespace DfoServer.Testing;
@@ -15,6 +20,8 @@ internal static class ChannelEntryTcpTests
     {
         VerifyListenerRollback();
         await VerifyConnectionAddressesAsync(source, root, resources);
+        await VerifyBattlePassEventBoundariesAsync(source, root, resources);
+        await VerifyBattlePassEventLifecycleAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "channel-entry"), resources: resources);
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         string allDay = string.Join(",", Enumerable.Range(1, 7).Select(day => $"{{\"weekday\":{day},\"start\":\"00:00\",\"end\":\"24:00\"}}"));
@@ -195,6 +202,153 @@ internal static class ChannelEntryTcpTests
                 "并发原生登录返回各自连接抵达的服务端IP和同实例Native端口，不污染其他连接");
         }
         That(fixture.Options.AdvertisedAddress == "connection", "目录与登录端点不改写共享地址策略");
+    }
+
+    static async Task VerifyBattlePassEventBoundariesAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var start = new DateTimeOffset(2026, 10, 29, 6, 0, 0, TimeSpan.FromHours(8));
+        var catalog = BattlePassCatalog.Load(resources.Archive);
+        var policy = new BattlePassMissionPolicy("event2520-boundary", start, catalog);
+        var cases = new (string Name, bool Configured, DateTimeOffset Now, bool Active)[]
+        {
+            ("unconfigured", false, start, false),
+            ("before-start", true, start.AddTicks(-1), false),
+            ("at-start", true, start, true),
+            ("before-end", true, policy.End.AddTicks(-1), true),
+            ("at-end", true, policy.End, false),
+            ("after-end", true, policy.End.AddSeconds(1), false)
+        };
+        foreach (var item in cases)
+        {
+            var options = source with
+            {
+                BattlePassSeasonKey = item.Configured ? policy.SeasonKey : null,
+                BattlePassSeasonStart = item.Configured ? policy.Start : null
+            };
+            var clock = new Inventory.DailyBoosterTestClock(item.Now.ToUniversalTime());
+            await using var fixture = new TcpTestFixture(options, Path.Combine(root, "event2520-" + item.Name),
+                gm: true, resources: resources, clock: clock, sharedResourcePath: true);
+            Directory.CreateDirectory(fixture.Options.DataDirectory);
+            string allDay = string.Join(",", Enumerable.Range(1, 7).Select(day => $"{{\"weekday\":{day},\"start\":\"00:00\",\"end\":\"24:00\"}}"));
+            File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "gm-raid-windows.json"),
+                "{" + string.Join(",", new[] { "luke", "hyperspace", "prey", "anton" }.Select(raid => $"\"{raid}\":[{allDay}]")) + "}");
+            await fixture.StartAsync();
+            using var peer = Open(fixture);
+            peer.Create("Event2520");
+            peer.ExpectedOpenEvents = item.Active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266];
+            SelectAndCheck();
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            SelectAndCheck();
+            var initialLimits = peer.MileageLimits.ToArray();
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "event off 266", out string off) && off.StartsWith("OK "),
+                "真实积分活动关闭触发后续108");
+            CheckReplacement(peer.Expect(0, 108), item.Active ? [282, 2449, 414, 181, 2532, 2520] : [282, 2449, 414, 181, 2532]);
+            peer.Barrier();
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "event on 266", out string on) && on.StartsWith("OK "),
+                "真实积分活动开启触发后续108");
+            CheckReplacement(peer.Expect(0, 108), item.Active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266]);
+            Bytes(peer.Expect(0, 706).Body, initialLimits, "事件表替换后积分限购完整恢复");
+            peer.Barrier();
+            await fixture.StopAsync();
+
+            void SelectAndCheck()
+            {
+                peer.Select();
+                CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
+                if (item.Configured)
+                {
+                    peer.Expect(0, 1800);
+                    if (item.Active) peer.Expect(0, 1801);
+                    peer.Expect(0, 1802);
+                }
+                peer.Barrier();
+            }
+        }
+
+        static void CheckReplacement(WirePacket packet, ushort[] extraEvents) =>
+            CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false, extraEvents);
+    }
+
+    static async Task VerifyBattlePassEventLifecycleAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var start = new DateTimeOffset(2026, 10, 29, 6, 0, 0, TimeSpan.FromHours(8));
+        var end = start.AddDays(100);
+        var catalog = BattlePassCatalog.Load(resources.Archive);
+        That(catalog.DailyMissionIds.Length == 400 && catalog.WeeklyMissionIds.Length == 60 && catalog.SeasonMissionIds.Length == 18,
+            "真实任务目录保持独立的100天赛季边界");
+        var options = source with { BattlePassSeasonKey = "event2520-lifecycle", BattlePassSeasonStart = start };
+        var clock = new Inventory.DailyBoosterTestClock(start.AddSeconds(-1));
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "event2520-lifecycle"),
+            resources: resources, clock: clock, sharedResourcePath: true);
+        var repository = new CharacterRepository(fixture.Database);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new NewCharacter("EventLife", resources.Towns.Room, resources.Towns.InitialReturn)
+            { Job = 0, GrowType = 33, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
+        await fixture.StartAsync();
+        using var peer = Open(fixture);
+        peer.ExpectedOpenEvents = [2532, 266];
+        peer.Select();
+        CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
+        peer.Expect(0, 1800, Build(writer => { writer.Write(0u); writer.Write(1u); writer.Write(0u); }));
+        peer.Expect(0, 1802, new byte[20]);
+        peer.Barrier();
+        ushort id = peer.Id;
+
+        await clock.WaitForOneShotTimerAsync(start);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        ReadBoundary(active: true, expectedRefreshes: 1);
+        That(peer.Id == id, "同一连接自然跨越赛季起点");
+        await clock.WaitForOneShotTimerAsync(start.AddDays(1));
+        clock.Advance(end.AddSeconds(-1) - start);
+        await clock.WaitForOneShotTimerAsync(end);
+        ReadBoundary(active: true, expectedRefreshes: 0);
+        That(clock.GetUtcNow() == end.AddSeconds(-1), "赛季结束前一秒不刷新108");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        ReadBoundary(active: false, expectedRefreshes: 1);
+        That(peer.Id == id, "同一连接自然跨越赛季终点");
+        await fixture.StopAsync();
+
+        void ReadBoundary(bool active, int expectedRefreshes)
+        {
+            byte[][] daily = peer.InitialDailyBoosterPackets;
+            That(daily.Length > 0, "在线日切已有完整礼盒名册");
+            int refreshes = 0, limits = 0, dailyChunks = 0;
+            bool acknowledged = false;
+            peer.SendBarrier();
+            for (int budget = 0; budget < 256; budget++)
+            {
+                var packet = peer.Read();
+                if (packet is { Kind: 1, Opcode: 1347 })
+                {
+                    That(!acknowledged, "边界屏障应答不重复");
+                    Bytes(packet.Body, [1], "边界屏障应答完整");
+                    acknowledged = true;
+                }
+                else if (packet is { Kind: 0, Opcode: 108 })
+                {
+                    That(++refreshes <= expectedRefreshes, "赛季边界只发布一次完整108");
+                    CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false,
+                        active ? [2532, 266, 2520] : [2532, 266]);
+                }
+                else if (packet is { Kind: 0, Opcode: 706 })
+                {
+                    That(++limits <= expectedRefreshes, "赛季108对应一次积分限购刷新");
+                    Bytes(packet.Body, peer.MileageLimits, "积分限购完整保留");
+                }
+                else if (packet is { Kind: 0, Opcode: 541 })
+                {
+                    That(dailyChunks < daily.Length, "在线日切礼盒分片不重复");
+                    Bytes(packet.Body, daily[dailyChunks++], "在线日切礼盒名册及顺序完整保留");
+                }
+                else peer.ValidateServiceDayNotice(packet);
+                if (acknowledged && refreshes == expectedRefreshes && limits == expectedRefreshes && dailyChunks == daily.Length)
+                {
+                    foreach (var extra in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(extra);
+                    return;
+                }
+            }
+            throw new InvalidOperationException("赛季边界通知超过预算");
+        }
     }
 
     static int NativePort(TcpTestFixture fixture)
