@@ -66,6 +66,8 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
     public BattlePassMissionCommit CommitBattlePassMission(AccountOwners.Lease owner, Character expected, long seasonRevision,
         DateTimeOffset sampledAt, byte action, ushort key, uint category, uint viewRow, TimeProvider clock) => owner.Execute(() =>
     {
+        if (action == 0)
+            return CommitNativeShopVisit(owner, expected, seasonRevision, sampledAt, key, category, viewRow, clock);
         if (battlePassMissionPolicy is not { } policy || action != 1 || category > 2 || key == 0)
             return BattlePassMissionCommit.Reject();
         // RowIndex仅是客户端显示行提示，不能选择权威18槽或参与唯一claim键。

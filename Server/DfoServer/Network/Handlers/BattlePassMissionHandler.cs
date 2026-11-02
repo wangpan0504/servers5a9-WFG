@@ -25,7 +25,7 @@ internal sealed class BattlePassMissionHandler(TimeProvider? clock,
             context.Owner.Execute(() => context.Session.Selected?.Id == before.Selected?.Id &&
                 context.Session.SelectionEpoch == before.SelectionEpoch && context.Session.Phase == before.Phase);
         log.Write("battle_pass_mission", new { Connection = context.Id, result.Accepted, result.Error,
-            request.RawCategoryCode, request.RowKey, request.RowIndex });
+            request.RawActionCode, request.RawCategoryCode, request.RowKey, request.RowIndex });
         byte[] ack;
         if (result.Accepted)
         {
