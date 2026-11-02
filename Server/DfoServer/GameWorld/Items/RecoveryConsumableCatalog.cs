@@ -25,6 +25,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
     public EpicDropBuffDefinition? EpicDropBuff { get; init; }
     public HellLegendEpicDropBuffDefinition? HellLegendEpicDropBuff { get; init; }
+    public VillageMoveSpeedBuffDefinition? VillageMoveSpeedBuff { get; init; }
     public EnhancementPotionDefinition? EnhancementPotion { get; init; }
     public ConsumableDisguiseDefinition? Disguise { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
@@ -44,9 +45,11 @@ internal sealed class RecoveryConsumableCatalog
     readonly Lazy<ImmutableDictionary<int, BossSelectionBuffDefinition>> bossSelection;
     readonly Lazy<ImmutableDictionary<int, EpicDropBuffDefinition>> epicDrop;
     readonly Lazy<ImmutableDictionary<int, HellLegendEpicDropBuffDefinition>> hellLegendEpicDrop;
+    readonly Lazy<ImmutableDictionary<int, VillageMoveSpeedBuffDefinition>> villageMoveSpeed;
     readonly Lazy<ImmutableDictionary<int, EnhancementPotionDefinition>> enhancementPotions;
     internal IReadOnlyDictionary<int, EpicDropBuffDefinition> EpicDropBuffs => epicDrop.Value;
     internal IReadOnlyDictionary<int, HellLegendEpicDropBuffDefinition> HellLegendEpicDropBuffs => hellLegendEpicDrop.Value;
+    internal IReadOnlyDictionary<int, VillageMoveSpeedBuffDefinition> VillageMoveSpeedBuffs => villageMoveSpeed.Value;
     internal IReadOnlyDictionary<int, EnhancementPotionDefinition> EnhancementPotions => enhancementPotions.Value;
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, ItemCatalog items)
@@ -57,6 +60,7 @@ internal sealed class RecoveryConsumableCatalog
         bossSelection = new(() => BossSelectionBuffDefinition.Load(archive));
         epicDrop = new(() => EpicDropBuffDefinition.Load(archive));
         hellLegendEpicDrop = new(() => HellLegendEpicDropBuffDefinition.Load(archive));
+        villageMoveSpeed = new(() => VillageMoveSpeedBuffDefinition.Load(archive));
         enhancementPotions = new(() => EnhancementPotionDefinition.Load(archive, stackable));
     }
 
@@ -67,6 +71,8 @@ internal sealed class RecoveryConsumableCatalog
         epicDrop = new(() => rows.Where(row => row.EpicDropBuff is not null).ToImmutableDictionary(row => row.ItemId, row => row.EpicDropBuff!));
         hellLegendEpicDrop = new(() => rows.Where(row => row.HellLegendEpicDropBuff is not null)
             .ToImmutableDictionary(row => row.ItemId, row => row.HellLegendEpicDropBuff!));
+        villageMoveSpeed = new(() => rows.Where(row => row.VillageMoveSpeedBuff is not null)
+            .ToImmutableDictionary(row => row.ItemId, row => row.VillageMoveSpeedBuff!));
         enhancementPotions = new(() => rows.Where(row => row.EnhancementPotion is not null)
             .ToImmutableDictionary(row => row.ItemId, row => row.EnhancementPotion!));
         foreach (var definition in rows)
@@ -75,20 +81,21 @@ internal sealed class RecoveryConsumableCatalog
 
     internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file, BossSelectionBuffDefinition? bossBuff = null,
         EpicDropBuffDefinition? epicBuff = null, EnhancementPotionDefinition? enhancementPotion = null,
-        HellLegendEpicDropBuffDefinition? hellLegendBuff = null)
+        HellLegendEpicDropBuffDefinition? hellLegendBuff = null, VillageMoveSpeedBuffDefinition? villageSpeedBuff = null)
     {
         var raw = file.Stackable;
         // 原生工厂优先构造普通持续属性对象；use action packet并不将它改成515动作类。
-        bool nativeStatUse = raw.TypeDeclaration?.Label is "[waste]" or "[unlimited waste]" &&
+        bool nativeStatUse = raw.TypeDeclaration?.Label is "[waste]" or "[unlimited waste]" or "[waste instant item]" &&
             file.StatChangeDuration is { Milliseconds: > 0 } && !file.StatChanges.IsEmpty &&
             file.StructureDiagnostics.IsEmpty;
         bool nativeDisguise = raw.TypeDeclaration is { Label: "[disguise]", Parameters: [0] } &&
             file.Disguise is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
             file.Diagnostics.IsEmpty;
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || raw.TypeDeclaration is null || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
-            (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } && !nativeDisguise &&
+            (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[waste instant item]" or "[throw]" or "[set]" } && !nativeDisguise &&
                 !(raw.TypeDeclaration is { Label: "[expert town potion]", Parameters: [0] } &&
-                    (bossBuff is not null || epicBuff is not null || enhancementPotion is not null || hellLegendBuff is not null)) &&
+                    (bossBuff is not null || epicBuff is not null || enhancementPotion is not null || hellLegendBuff is not null ||
+                        villageSpeedBuff is not null)) &&
                 !(enhancementPotion is not null && raw.TypeDeclaration is
                     { Label: "[item upgrad buff usual upgrade]" or "[item upgrad buff amplify upgrade]", Parameters: [> 0] })) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.DeclaredMinimumLevel is < 0 or > 255 ||
@@ -104,18 +111,26 @@ internal sealed class RecoveryConsumableCatalog
                 !(raw.DeclaredUseActionPacket == 1 && nativeStatUse) ||
             file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
-        if ((bossBuff is not null || epicBuff is not null || hellLegendBuff is not null) && (file.StructureDiagnostics.Length != 0 ||
+        if ((bossBuff is not null || epicBuff is not null || hellLegendBuff is not null || villageSpeedBuff is not null) &&
+            (file.StructureDiagnostics.Length != 0 ||
             raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
             !places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]")))) return null;
-        if (epicBuff is not null && (bossBuff is not null || hellLegendBuff is not null || epicBuff.BuffId <= 0 || epicBuff.Percent != 100 ||
+        if (epicBuff is not null && (bossBuff is not null || hellLegendBuff is not null || villageSpeedBuff is not null ||
+            epicBuff.BuffId <= 0 || epicBuff.Percent != 100 ||
             file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
             file.EffectMaintenance is null or 0)) return null;
         byte hellLegendMaintenance = file.EffectMaintenance ?? file.CooltimeMaintenance ?? 0;
         if (hellLegendBuff is not null && (bossBuff is not null || epicBuff is not null || enhancementPotion is not null ||
+            villageSpeedBuff is not null ||
             hellLegendBuff.BuffId != HellLegendEpicDropBuffDefinition.CanonicalBuffId ||
             hellLegendBuff.Param != HellLegendEpicDropBuffDefinition.CanonicalParam ||
             file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
             hellLegendMaintenance == 0)) return null;
+        byte villageSpeedMaintenance = file.EffectMaintenance ?? file.CooltimeMaintenance ?? 0;
+        if (villageSpeedBuff is not null && (bossBuff is not null || epicBuff is not null || hellLegendBuff is not null ||
+            enhancementPotion is not null || villageSpeedBuff.BuffId <= 0 || villageSpeedBuff.Percent <= 0 ||
+            file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
+            villageSpeedMaintenance == 0)) return null;
         ushort jobs = ushort.MaxValue;
         if (raw.DeclaredUsableJobs is { Count: > 0 } tags && !tags.Contains("[all]"))
         {
@@ -139,6 +154,7 @@ internal sealed class RecoveryConsumableCatalog
             BossSelectionBuff = bossBuff,
             EpicDropBuff = epicBuff,
             HellLegendEpicDropBuff = hellLegendBuff,
+            VillageMoveSpeedBuff = villageSpeedBuff,
             EnhancementPotion = enhancementPotion,
             Disguise = nativeDisguise ? new(1, file.Disguise!.FormId, file.Disguise.Seconds) : null,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
@@ -146,7 +162,8 @@ internal sealed class RecoveryConsumableCatalog
             QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,
             ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0,
             EffectMilliseconds = revival ? ConsumableSpecialItems.RevivalMilliseconds : file.StatChangeDuration?.Milliseconds ?? 0,
-            EffectMaintenance = revival ? (byte)0 : hellLegendBuff is not null ? hellLegendMaintenance : file.EffectMaintenance ?? 0,
+            EffectMaintenance = revival ? (byte)0 : hellLegendBuff is not null ? hellLegendMaintenance :
+                villageSpeedBuff is not null ? villageSpeedMaintenance : file.EffectMaintenance ?? 0,
             CooltimeMaintenance = file.CooltimeMaintenance ?? 0,
             Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]",
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
@@ -179,6 +196,8 @@ internal sealed class RecoveryConsumableCatalog
         var epic = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? epicDrop.Value.GetValueOrDefault(id) : null;
         var hellLegend = file.Stackable.TypeDeclaration?.Label == "[expert town potion]"
             ? hellLegendEpicDrop.Value.GetValueOrDefault(id) : null;
+        var villageSpeed = file.Stackable.TypeDeclaration?.Label == "[expert town potion]"
+            ? villageMoveSpeed.Value.GetValueOrDefault(id) : null;
         if (epic is not null || hellLegend is not null)
         {
             var events = new PvfTokenDocument(tokens, archive.ResolveString).Sections.Where(field => field.Name == "usable event").ToArray();
@@ -186,7 +205,7 @@ internal sealed class RecoveryConsumableCatalog
             if (events.Length != 0 && events is not [{ Children.Length: 0, Values: [{ Type: 0, Value: 2284 }] }]) return null;
         }
         var enhancement = enhancementPotions.Value.GetValueOrDefault(id);
-        var definition = Read(file, buff, epic, enhancement, hellLegend);
+        var definition = Read(file, buff, epic, enhancement, hellLegend, villageSpeed);
         if (definition is null)
             return null;
         var template = items!.Get(id);
