@@ -21,6 +21,7 @@ internal static class ConsumableUseTests
         BossSelectionMappings();
         EpicDropMappings();
         HellLegendMappings();
+        VillageMoveSpeedMappings();
         var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
             new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));
         bossBuff.Validate();
@@ -105,6 +106,18 @@ internal static class ConsumableUseTests
             That(RecoveryConsumableCatalog.Read(other) is { ItemId: 500001, MinimumLevel: 16, CoolTime: 10000 },
                 "普通waste按大类识别，不按目录、ID、分组名称或子型固定值限制");
         }
+        That(RecoveryConsumableCatalog.Read(raw with
+        {
+            TemplateId = 6516,
+            Stackable = declaration with { TemplateId = 6516, TypeDeclaration = new("[waste instant item]", [1]) }
+        }) is { ItemId: 6516, MinimumLevel: 16, CoolTime: 10000, EffectMilliseconds: 0 } &&
+            RecoveryConsumableCatalog.Read(raw with
+            {
+                TemplateId = 6516,
+                Stackable = declaration with { TemplateId = 6516, TypeDeclaration = new("[waste instant item]", [1]) },
+                DeclaredFields = raw.DeclaredFields.Add("action type")
+            }) is null,
+            "塔内即时药剂按 waste instant 大类走普通44；带 action type 的房产即时物仍拒绝");
         foreach (string category in new[] { "[etc]", "[contract]", "[booster]", "[creature]", "[material]", "[expert town potion]" })
             That(RecoveryConsumableCatalog.Read(raw with { Stackable = declaration with { TypeDeclaration = new(category, [4]) } }) is null,
                 "其他业务大类不能通过普通消耗应答伪造已实现");
@@ -188,6 +201,34 @@ internal static class ConsumableUseTests
             hellRefreshed.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == 490000413) &&
             hellInventory.ConsumableStates.Length == 3,
             "星空同族只覆盖1271效果，不删固定1136或改原快照");
+        var villageRaw = epicRaw with { CooltimeMaintenance = 7, EffectMaintenance = 7,
+            StatChangeDuration = new(300000, "myself", null) };
+        var village = new VillageMoveSpeedBuffDefinition(1244, 20) { ItemIds = ImmutableHashSet.Create(490006630, 10306776) };
+        That(RecoveryConsumableCatalog.Read(villageRaw, villageSpeedBuff: village) is
+            { VillageMoveSpeedBuff.Percent: 20, EffectMilliseconds: 300000, EffectMaintenance: 7 },
+            "已核城镇移速效果才允许城镇药剂0并沿STK时长和维护位");
+        That(RecoveryConsumableCatalog.Read(villageRaw, epicBuff: epic, villageSpeedBuff: village) is null &&
+            RecoveryConsumableCatalog.Read(villageRaw, villageSpeedBuff: village with { Percent = 0 }) is null,
+            "1136 与城镇移速不能挂在同一瓶上，零移速参数拒绝");
+        foreach (var invalid in new[] { villageRaw with { EffectMaintenance = null, CooltimeMaintenance = null },
+            villageRaw with { EffectMaintenance = 0, CooltimeMaintenance = 0 },
+            villageRaw with { StatChangeDuration = new(300000, "party", null) },
+            villageRaw with { StatChangeDuration = null },
+            villageRaw with { Diagnostics = ["invalid field"] },
+            villageRaw with { Stackable = villageRaw.Stackable with { DeclaredActionUsablePlaces = ["[dungeon]"] } } })
+            That(RecoveryConsumableCatalog.Read(invalid, villageSpeedBuff: village) is null,
+                "城镇移速药剂拒绝坏持续时间、维护位、使用场景或声明");
+        var villageInventory = InventorySnapshot.Empty with { ConsumableStates = [
+            new(ConsumableStateKind.Effect, 10306776, 9999999, 7, -10306776),
+            new(ConsumableStateKind.Cooldown, 10306776, 9999999, 7, -10306776),
+            new(ConsumableStateKind.Effect, 490000413, 9999999, 15, 251)] };
+        var villageRefreshed = ConsumableStatePolicy.Activate(villageInventory,
+            RecoveryConsumableCatalog.Read(villageRaw, villageSpeedBuff: village)! with { ItemId = 490006630 }, 1000)!;
+        That(villageRefreshed.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect && village.IsFamilyItem(row.ItemId)) is
+                { ItemId: 490006630, UntilMilliseconds: 301000 } &&
+            villageRefreshed.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == 490000413) &&
+            villageInventory.ConsumableStates.Length == 3,
+            "城镇移速同族只覆盖效果期限，不叠加走速、不删固定1136或改原快照");
         var limited = RecoveryConsumableCatalog.Read(raw with
         {
             Stackable = declaration with
@@ -313,6 +354,33 @@ internal static class ConsumableUseTests
                 peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95, 0) &&
                 (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94, 0)),
                 "全部星空1271同类真实药剂沿五分钟、组253和资格，截图490704393保留95级门槛：" + id);
+        That(resources.RecoveryConsumables.TryGet(490006630, out var villageSample) && villageSample is
+            { VillageMoveSpeedBuff: { BuffId: 1244, Percent: 20 }, EpicDropBuff: null, HellLegendEpicDropBuff: null,
+                EffectMilliseconds: 300000, CoolTime: 300000, CoolGroup: 11, EffectMaintenance: 7, CooltimeMaintenance: 7 },
+            "城镇移速药剂走已核 village_move_speed 合同，时长取STK五分钟");
+        foreach (var (id, duration, group, percent, buff) in new (int, int, int, int, int)[]
+        {
+            (490006630, 300000, 11, 20, 1244),
+            (490007529, 300000, 11, 20, 1244),
+            (490008899, 60000, 11, 20, 1244),
+            (10306776, 1200000, -10306776, 15, 291),
+            (10309246, 300000, -10309246, 20, 299)
+        })
+            That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.VillageMoveSpeedBuff is { } speed &&
+                speed.BuffId == buff && speed.Percent == percent && speed.IsFamilyItem(490006630) &&
+                peer.EffectMilliseconds == duration && peer.CoolGroup == group && peer.EffectMaintenance == 7 &&
+                !peer.RequiresDungeon && peer.Allows(1, 0),
+                "全部已核STK时长的城镇移速药剂沿各自时长、组和资格：" + id);
+        int[] villagePeers = [490006630, 490007529, 490008899, 10306776, 10309246, 490010229, 490011339, 490703721];
+        That(villageSample!.VillageMoveSpeedBuff!.ItemIds!.SetEquals(villagePeers) &&
+            resources.RecoveryConsumables.VillageMoveSpeedBuffs.Keys.Order().SequenceEqual(villagePeers.Order()),
+            "五条已核STK时长、两条缺时长1245与一条scale胶囊映射同族装配，随机0秒expire与空buff不进表");
+        That(!resources.RecoveryConsumables.TryGet(490010229, out _) &&
+            !resources.RecoveryConsumables.TryGet(490011339, out _) &&
+            !resources.RecoveryConsumables.TryGet(10008221, out _) &&
+            !resources.RecoveryConsumables.TryGet(490003403, out _) &&
+            !resources.RecoveryConsumables.TryGet(490703721, out _),
+            "缺STK时长的1245、赛丽亚随机城镇药、空buff 1231和scale胶囊不取得CMD44资格");
         That(resources.Items.Get(490705256) is { Name: "白斯追击药水", MinimumLevel: 95 } &&
             resources.RecoveryConsumables.TryGet(490705256, out var bossPotion) && bossPotion is
             { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
@@ -367,6 +435,17 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var definition) && resources.Items.Get(id).Kind == ItemKind.Consumable &&
                 resources.Items.Get(id).MinimumLevel == definition.MinimumLevel,
                 "使用目录与现有物品目录实际类别/等级一致，不能替代库存实例校验");
+        That(resources.RecoveryConsumables.TryGet(6516, out var towerHp) && towerHp is
+            { MinimumLevel: 1, CoolTime: 10000, CoolGroup: 1, EffectMilliseconds: 0, RequiresDungeon: false } &&
+            resources.RecoveryConsumables.TryGet(6517, out var towerMp) && towerMp is { CoolGroup: 2, CoolTime: 10000 },
+            "塔内特级生命/魔力即时药剂取得普通消费资格，HP/MP仍由客户端执行");
+        foreach (int id in new[] { 6518, 6519, 6520, 6521, 6522, 6523, 6524, 6525 })
+            That(resources.RecoveryConsumables.TryGet(id, out var tower) && tower.CoolTime == 10000 &&
+                resources.Items.Get(id).Kind == ItemKind.Consumable,
+                "塔内迅捷/圣护及上下级即时药剂同样可CMD44：" + id);
+        foreach (int id in new[] { 10148309, 10148310, 10148311, 10148312, 10148313, 10148314, 490001782 })
+            That(!resources.RecoveryConsumables.TryGet(id, out _),
+                "房产动作即时物仍走CMD515，不由普通44冒充：" + id);
         That(resources.RecoveryConsumables.TryGet(10087825, out var antiWeakness) && antiWeakness is
             { EffectMilliseconds: 1800000, EffectMaintenance: 7, CooltimeMaintenance: 7, ExpBonusPermille: 0 },
             "防虚弱药剂沿通用持续效果定义，时长和三种保留位来自真实PVF，不伪装经验秘药或会员资格");
@@ -507,5 +586,25 @@ internal static class ConsumableUseTests
         var conflict = HellLegendEpicDropBuffDefinition.ParseMappings([Row(490703948), Row(490703948, 1136)], definitions);
         That(!conflict.ContainsKey(490703948) && conflict.ContainsKey(490011326),
             "冲突重复拒绝该物品，不影响缺映射兼容");
+    }
+
+    static void VillageMoveSpeedMappings()
+    {
+        var speed = new VillageMoveSpeedBuffDefinition(1244, 20);
+        var definitions = new Dictionary<int, VillageMoveSpeedBuffDefinition> { [1244] = speed, [291] = new(291, 15) };
+        PvfTokenSection Probability(int item, int buff = 1244, int probability = 100) => new("index", [new(0, item)],
+            [new("probability buff list", [new(0, buff), new(0, probability)], [])]);
+        PvfTokenSection BuffList(int item, int buff) => new("index", [new(0, item)],
+            [new("buff list", [new(0, buff)], [])]);
+        var mapping = VillageMoveSpeedBuffDefinition.ParseMappings(
+            [Probability(490006630), BuffList(10306776, 291), Probability(10008221, 1100, 60),
+                new("index", [new(0, 500001)], [new("probability buff list",
+                    [new(0, 1244), new(0, 60), new(0, 291), new(0, 40)], [])])],
+            definitions);
+        That(mapping.Count == 2 && mapping[490006630].IsFamilyItem(10306776) && mapping[10306776].Percent == 15 &&
+            !mapping.ContainsKey(10008221) && !mapping.ContainsKey(500001),
+            "确定单映射加入城镇移速同族；随机多分支不冒充固定走速");
+        That(VillageMoveSpeedBuffDefinition.ParseMappings([Probability(490006630, probability: 99)], definitions).IsEmpty,
+            "非百分百概率分支不能当作确定城镇移速");
     }
 }

@@ -33,6 +33,9 @@ internal static class ConsumableStatePolicy
         if (definition.HellLegendEpicDropBuff is { } hellLegend)
             rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
                 hellLegend.IsFamilyItem(row.ItemId));
+        if (definition.VillageMoveSpeedBuff is { } villageSpeed)
+            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
+                villageSpeed.IsFamilyItem(row.ItemId));
         if (definition.EnhancementPotion is { } enhancement)
             rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
                 enhancement.IsFamilyItem(row.ItemId));

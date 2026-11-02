@@ -27,6 +27,7 @@ internal static partial class ConsumableUseTcpTests
             Create(owner, "EpicDose", 95, [(490000413,3),(490002458,2),(490004594,2),(10004688,2)]);
             var variant = Create(owner, "WeakVariant", 40, [(490003621,3)]);
             Create(owner, "StarDose", 95, [(490704393,3)]);
+            Create(owner, "VillageDose", 1, [(490006630,3),(10306776,2)]);
             repository.CommitInventory(owner, variant, new(variant.Inventory, variant.Inventory with
                 { StaminaUntil = clock.GetUtcNow().ToUnixTimeSeconds()+600 }, "variant_weakness_fixture"));
         }
@@ -87,6 +88,29 @@ internal static partial class ConsumableUseTcpTests
             That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
                 fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
                 "星空药重选恢复实际剩余时限，不再扣源或重新起算");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(5);
+            Use(peer,65,0,490006630); Accepted(peer,65,0,490006630); peer.Barrier();
+            long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 300000;
+            That(fixture.Query("SELECT kind,until_ms FROM character_consumable_states WHERE character_id=$p0 ORDER BY kind",peer.Id)
+                    .Select(row => (Convert.ToInt32(row[0]), Convert.ToInt64(row[1]))).SequenceEqual(new[] { (0,until),(1,until) }),
+                "城镇移速药剂真实44成功后同事务保存五分钟效果和冷却");
+            string snapshot = fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id);
+            Use(peer,65,1,490006630); Refused(peer,1,490006630); peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
+                "城镇移速药新token冷却拒绝不重扣、不续期");
+            Use(peer,66,2,10306776); Accepted(peer,66,2,10306776); peer.Barrier();
+            That(fixture.Query("SELECT item_id FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[10306776L]] &&
+                fixture.Query("SELECT until_ms FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[var replaced]] &&
+                Convert.ToInt64(replaced) == clock.GetUtcNow().ToUnixTimeMilliseconds() + 1200000,
+                "不同冷却组的同类城镇移速药替换旧效果，不叠加走速");
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2); peer.Select(5);
+            That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
+                peer.RestoredConsumableStates.All(packet => Enumerable.Range(0,packet.Body[0]).Any(index =>
+                    U32(packet.Body,1+index*8) == 10306776 && U32(packet.Body,5+index*8) == 1200)),
+                "城镇移速药重选沿原生172/174恢复替换后的剩余秒数");
         }
         using (var peer = Open(fixture))
         {

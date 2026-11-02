@@ -24,6 +24,7 @@ internal static class ConsumableUseSessionTests
         RunStaminaVariant(towns, characters, archive);
         RunEpicDropStates(towns, characters, archive);
         RunHellLegendEpicDropStates(towns, characters, archive);
+        RunVillageMoveSpeedStates(towns, characters, archive);
         RunRevivalTimeouts(towns, characters, archive);
         var bossDefinition = ConsumableUseTests.Hp with { ItemId = 490705256,
             BossSelectionBuff = new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]) };
@@ -362,6 +363,62 @@ internal static class ConsumableUseSessionTests
         }
     }
 
+    static void RunVillageMoveSpeedStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var speed = new VillageMoveSpeedBuffDefinition(1244, 20)
+            { ItemIds = ImmutableHashSet.Create(490006630, 10306776) };
+        var definition = new RecoveryConsumableDefinition(490006630, 1, 300000, 11)
+            { VillageMoveSpeedBuff = speed, EffectMilliseconds = 300000, EffectMaintenance = 7, CooltimeMaintenance = 7 };
+        var catalog = new RecoveryConsumableCatalog(
+        [
+            definition,
+            definition with { ItemId = 10306776, CoolTime = 1200000, CoolGroup = -10306776, EffectMilliseconds = 1200000,
+                VillageMoveSpeedBuff = speed },
+            ConsumableUseTests.Mp
+        ]);
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            var used = f.Use();
+            var saved = f.Read();
+            long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect) is
+                    { ItemId: 490006630, Maintenance: 7 } && f.Session.CanPublishConsumable(used.Guard!),
+                "城镇移速药剂在城镇正规消费后与持续状态同事务落库，走速仍由客户端启动");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Count == 2 &&
+                f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until,
+                "同角色重选仅恢复原城镇移速截止，不续期或二次消费");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                "城镇移速限制回归沿真实入口旅行");
+            f.Session.BeginDungeonSelection();
+            var before = f.Read();
+            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                "选图阶段不能消费仅城镇移速药剂");
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "城镇移速限制回归建立实际正式副本");
+            before = f.Read();
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                "副本里拒绝城镇移速药剂且不扣源、改revision或创建效果");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER fail_village_speed_potion AFTER INSERT ON character_consumable_states WHEN NEW.kind=0 BEGIN SELECT RAISE(ABORT,'village speed potion rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Use(), "城镇移速效果账本写入失败不先提交消耗");
+            That(Same(before, f.Read()) && Same(before, f.Session.Selected!) && f.Count == 3,
+                "城镇移速SQL失败回滚源、revision和药效");
+        }
+    }
+
     static void RunStaminaVariant(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
         var definition = new RecoveryConsumableDefinition(490003621, 1, 600000, -490003621)
@@ -637,6 +694,7 @@ internal static class ConsumableUseSessionTests
             consumables ??= new([hp, ConsumableUseTests.Mp]);
             _ = consumables.EpicDropBuffs;
             _ = consumables.HellLegendEpicDropBuffs;
+            _ = consumables.VillageMoveSpeedBuffs;
             Session = new(store is null ? Repository : store, towns, Owner,
                 timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables);
             Service = new(consumables, Clock);
