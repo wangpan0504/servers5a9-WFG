@@ -295,6 +295,8 @@ internal sealed partial class CharacterRepository
                 GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId, ResourceMailId = resourceMailId,
                 GainedExperience = gained, StagePlan = plan.StagePlan, OrdinaryExperience = plan.OrdinaryExperience,
                 ContractExperience = plan.ContractExperience, TotalRequestedExperience = plan.TotalRequestedExperience, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
+                ReplacedRewardSlots = plan.ConditionType is 0 or 25 ? [] : rows.Where(row => plan.Inventory.BeforeIndex.Find(row.Item.Position) is { } old &&
+                    old.Uid != row.Item.Uid).Select(row => row.Item.Position).Distinct().ToImmutableArray(),
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))
                     .Concat(plan.Consumed.Where(row => row.Uid == 0).Select(row => row.Position)).Distinct().ToImmutableArray(), PreviousQuests = expected.ActiveMainQuests,

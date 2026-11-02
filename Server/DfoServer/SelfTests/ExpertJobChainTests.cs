@@ -81,7 +81,7 @@ internal static class ExpertJobChainTests
                 "连续链补给经真实库存入口");
             void Teach()
             {
-                That(f.Session.OpenExpertJobStore(), "真实开店后执行末步教学");
+                if (type is 1 or 3) That(f.Session.OpenExpertJobStore(), "附魔/分解沿真实开店路径执行末步教学");
                 if (type is 2 or 4)
                 {
                     uint recipe = type == 2 ? 2600149u : 2600083u;
