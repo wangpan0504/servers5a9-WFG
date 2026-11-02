@@ -93,7 +93,7 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
             if (!step.Accepted) return step;
             var after = step.Plan!.After;
             // 普通穿戴克隆会借用被替换装扮的外观；预设切换只恢复已保存搭配，不能因直接互换串套。
-            // 先保留实例原详情，再由下方 RestoreCloneAppearance 回放该预设快照（含旧档兼容）。
+            // 先保留实例原详情，再由下方 RestoreCloneAppearance 在原件仍有效时回放该预设快照（含旧档兼容）。
             if (catalog.Get(item.Core.ItemId) is { CloneAvatar: true, BorrowAvatarAppearance: true })
                 after = after with { Items = after.Items.Select(moved => moved.Uid == item.Uid
                     ? moved with { Avatar = item.Avatar } : moved).ToImmutableArray() };
@@ -113,7 +113,7 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
             working = working with { Inventory = step.Plan!.After };
             Merge(step.Plan.CharacterPrecondition);
         }
-        // 应用预设按快照回写克隆外观：物品可能被旧逻辑清过，或玩家在别的预设下改过外观/染色。
+        // 应用预设可重新恢复已保存的克隆搭配，但不能复活已经失去原件的外观。
         foreach (var part in preset.Parts)
             working = working with { Inventory = RestoreCloneAppearance(working.Inventory, part) };
         // 选中后按本次实际穿戴重新采样部位（换装可能改写克隆/清空外观字段），并记录当前橱窗。
@@ -199,10 +199,9 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
                 item.Avatar.ClearAvatarSourceUid))
             .ToImmutableArray();
 
-    // 只回写快照里有外观编号的部位；快照为0表示当时没有复制外观，不能反过来清掉物品已有的外观。
-    // 来源 UID 必须仍指向装扮背包中同模板的原件，否则留0；物品自身已有的有效来源在本轮没有快照来源时保留，
-    // 让旧存档（没有 ClearAvatarSourceUid 字段）在物品已保留来源时不会因回写而丢掉来源表。
-    static InventorySnapshot RestoreCloneAppearance(InventorySnapshot inventory, AvatarPresetPart part)
+    // 预设只能给真实克隆装扮恢复仍在包裹中的原件；只保留外观编号会让已删除的原件继续生效。
+    // 旧存档缺来源UID时，仅兼容物品自身同外观的有效来源，不猜测包裹里的同模板副本。
+    InventorySnapshot RestoreCloneAppearance(InventorySnapshot inventory, AvatarPresetPart part)
     {
         if (part.ClearAvatarId == 0) return inventory;
         var clearAvatarId = (int)part.ClearAvatarId;
@@ -211,21 +210,25 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
         return inventory with
         {
             Items = inventory.Items.Select(item =>
-                item.Uid == part.ItemUid && item.Avatar is { } avatar
-                    ? item with
+            {
+                if (item.Uid != part.ItemUid || item.Avatar is not { } avatar ||
+                    catalog.Get(item.Core.ItemId) is not { CloneAvatar: true, BorrowAvatarAppearance: true })
+                    return item;
+                long source = storedSource > 0 ? storedSource : part.ClearAvatarSourceUid == 0 &&
+                    avatar.ClearAvatarId == clearAvatarId &&
+                    ValidCloneSource(inventory, part.ClearAvatarId, avatar.ClearAvatarSourceUid)
+                        ? avatar.ClearAvatarSourceUid : 0;
+                return item with
+                {
+                    Avatar = source == 0 ? InventoryCloneAppearanceService.Clear(avatar) : avatar with
                     {
-                        Avatar = avatar with
-                        {
-                            ClearAvatarId = clearAvatarId,
-                            ClearAvatarSourceUid = storedSource > 0 ? storedSource :
-                                avatar.ClearAvatarId == clearAvatarId &&
-                                ValidCloneSource(inventory, part.ClearAvatarId, avatar.ClearAvatarSourceUid)
-                                    ? avatar.ClearAvatarSourceUid : 0,
-                            Color1 = part.Color1,
-                            Color2 = part.Color2
-                        }
+                        ClearAvatarId = clearAvatarId,
+                        ClearAvatarSourceUid = source,
+                        Color1 = part.Color1,
+                        Color2 = part.Color2
                     }
-                    : item).ToImmutableArray()
+                };
+            }).ToImmutableArray()
         };
     }
 

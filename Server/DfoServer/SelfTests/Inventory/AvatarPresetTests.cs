@@ -390,7 +390,7 @@ internal static class AvatarPresetTests
             "预设与当前穿戴一致时成功但不搬动任何实例");
 
         // 稀有克隆、梦幻克隆武器与转职光环装扮走同一机制：外观编号、来源实例与染色记在物品与预设上，
-        // 切到别的橱窗再切回来必须原样恢复；来源实例只在仍是装扮背包里的同模板原件时回写。
+        // 卸下清除实例外观，显式切回预设仅在来源仍有效时重新恢复搭配。
         var lookSource = new InventoryItem(31, new(InventoryListType.Avatar, 0), new(1001, ItemKind.Avatar, 31))
             { Avatar = new() { Color1 = 2 } };
         var cloneWorn = new InventoryItem(30, new(InventoryListType.Equipment, 0), new(2001, ItemKind.Avatar, 30))
@@ -417,14 +417,15 @@ internal static class AvatarPresetTests
         var cleared = service.PlanSelect(savedCharacter, 0);
         var clearedCharacter = cloneRole with { Inventory = cleared.Plan!.After };
         That(cleared.Accepted && cleared.Plan.After.Items.All(item => item.Position.List != InventoryListType.Equipment) &&
-            cleared.Plan.After.Items.Single(item => item.Uid == 30).Avatar is { ClearAvatarId: 1001, ClearAvatarSourceUid: 31 },
-            "选走空橱窗卸下克隆时外观留在物品自身，不随穿戴栏清空");
+            cleared.Plan.After.Items.Single(item => item.Uid == 30).Avatar is
+                { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
+            "选走空橱窗卸下克隆时清除实例外观、来源及复制的染色");
         var back = service.PlanSelect(clearedCharacter, 1);
         var backPlan = back.Plan!;
         That(back.Accepted && backPlan.After.Find(new(InventoryListType.Equipment, 0)) is
                 { Avatar: { ClearAvatarId: 1001, ClearAvatarSourceUid: 31, Color1: 5, Color2: 6 } } &&
             backPlan.After.AvatarPresets.Find(1)?.Parts[0] is { ClearAvatarId: 1001, ClearAvatarSourceUid: 31 },
-            "切回克隆橱窗重新穿戴后外观、来源与染色不变，预设重新采样仍带来源");
+            "显式切回克隆橱窗且原件仍在时恢复外观、来源与染色，重新采样仍带来源");
         var stripped = backPlan.After with
         {
             Items = [.. backPlan.After.Items.Select(item => item.Uid == 30
@@ -438,10 +439,22 @@ internal static class AvatarPresetTests
         var backRow = backPlan.After.AvatarPresets.Find(1)!;
         var staleRow = backRow with { Parts = [backRow.Parts[0] with { ClearAvatarSourceUid = 999 }, backRow.Parts[1]] };
         var stale = service.PlanSelect(cloneRole with
-            { Inventory = stripped with { AvatarPresets = stripped.AvatarPresets.With(staleRow) } }, 1);
+            { Inventory = backPlan.After with { AvatarPresets = backPlan.After.AvatarPresets.With(staleRow) } }, 1);
         That(stale.Accepted && stale.Plan!.After.Find(new(InventoryListType.Equipment, 0))!.Avatar is
-                { ClearAvatarId: 1001, ClearAvatarSourceUid: 0 },
-            "预设来源UID已不在装扮背包时回写外观但清空来源，不指向错误实例");
+                { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 } &&
+            stale.Plan.After.AvatarPresets.Find(1)!.Parts[0] is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 },
+            "预设明确指定的来源UID无效时清除外观，不借用物品自身的其它来源，重新采样不复活旧外观");
+        var replacementSource = lookSource with { Uid = 33, Core = lookSource.Core with { Value = 33 } };
+        var missingSource = service.PlanSelect(cloneRole with
+        {
+            Inventory = backPlan.After with
+            {
+                Items = [.. backPlan.After.Items.Where(item => item.Uid != 31), replacementSource]
+            }
+        }, 1);
+        That(missingSource.Accepted && missingSource.Plan!.After.Find(new(InventoryListType.Equipment, 0))!.Avatar is
+                { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
+            "原件删除后预设不能借用同模板的新实例恢复克隆，即使克隆仍带历史外观");
         var legacyRow = backRow with { Parts = [backRow.Parts[0] with { ClearAvatarSourceUid = 0 }, backRow.Parts[1]] };
         var legacyCharacter = cloneRole with
             { Inventory = backPlan.After with { AvatarPresets = backPlan.After.AvatarPresets.With(legacyRow) } };

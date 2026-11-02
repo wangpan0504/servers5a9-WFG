@@ -148,6 +148,29 @@ internal static class ClearAvatarTcpTests
             peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
         }
+        // 原件仍在包裹中时，手动脱下再穿到空槽也必须解除克隆。
+        using (var peer = Open(fixture))
+        {
+            peer.Select(roles[0].Slot); peer.Barrier();
+            peer.Send(19, MoveFrom(1, cases[0].Clone, 0));
+            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 0x063F);
+            Verify(peer.Expect(0, 2).Body, peer.Expect(0, 2).Body, cases[0].Name, 3, cases[0].Clone, 0, 0);
+            peer.Barrier();
+            var detail = JsonSerializer.Deserialize<AvatarDetail>((string)fixture.Query("""
+                SELECT a.detail FROM inventory_avatar_details a JOIN character_inventory_slots s ON s.item_uid=a.item_uid
+                WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=3
+                """, roles[0].Id).Single().Single()!)!;
+            That(detail is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 } &&
+                fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=2",
+                    roles[0].Id) is [[1L]], "脱下重穿持久化初始外观，仍持有原件不会自动重新克隆");
+            peer.Send(19, Build(w =>
+            {
+                w.Write((byte)3); w.Write((short)3); w.Write(cases[0].Clone); w.Write(1);
+                w.Write((byte)1); w.Write((short)1); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
+            }));
+            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 1681); peer.Expect(0, 0x063F);
+            peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
+        }
         // 已有克隆卸下后覆盖另一真实实例，必须重采样该实例，而不是沿用旧来源UID。
         using (var peer = Open(fixture))
         {
@@ -191,6 +214,27 @@ internal static class ClearAvatarTcpTests
             Verify(packets[2].Body, packets[3].Body, cases[0].Name, 3, cases[0].Clone, cases[0].Original, 3, 4);
             Bytes(peer.CloneAvatarSources, Sources(3, 1), "零目标回显交换后重连恢复真实穿戴及原件关联");
             peer.Barrier();
+            // CMD18的protobuf：装扮包裹1、来源格1、剩余秒数0、数量1。
+            peer.Send(18, Build(w =>
+            {
+                w.Write(10u); w.Write(new byte[] { 0x10, 1, 0x1a, 6, 0x10, 1, 0x18, 0, 0x20, 1 });
+            }));
+            peer.Expect(1, 18); peer.Expect(0, 14); peer.Expect(0, 1449, Sources(3, -1)); peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            var packets = peer.Select(roles[0].Slot);
+            Verify(packets[2].Body, packets[3].Body, cases[0].Name, 3, cases[0].Clone, 0, 0);
+            Bytes(peer.CloneAvatarSources, Sources(3, -1), "删除源装扮后重选角色清除来源表");
+            peer.Barrier();
+            That(fixture.Query("""
+                SELECT json_extract(a.detail,'$.ClearAvatarId'),COALESCE(json_extract(a.detail,'$.ClearAvatarSourceUid'),0),
+                    json_extract(a.detail,'$.Color1'),json_extract(a.detail,'$.Color2')
+                FROM inventory_avatar_details a JOIN character_inventory_slots s ON s.item_uid=a.item_uid
+                WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=3
+                """, roles[0].Id) is [[0L, 0L, 0L, 0L]] &&
+                fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=2",
+                    roles[0].Id) is [[1L]], "重选清理外观与染色并落库，同模板另一实例仍保留但不能冒充来源");
         }
         using (var peer = Open(fixture))
         {
