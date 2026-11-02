@@ -11,7 +11,7 @@ internal sealed partial class CharacterRepository
         PreparedRaidReward prepared, InventoryPlan inventory, DateTimeOffset now)
     {
         if (battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
         int acquired = BattlePassUndefeatedSongSource.DirectAmount(prepared, inventory, now);
         if (acquired == 0) return;
         using var command = db.CreateCommand(); command.Transaction = tx;

@@ -14,7 +14,7 @@ namespace DfoServer.Infrastructure;
 internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt, OnlineSessionDirectory online, GmAccountDirectory accounts,
     Func<string, string> command, MailboxService mailbox, GoldLimitCatalog goldLimits, GmItemExtras items, GmAudit audit,
     RaidEntryStore? sharedRaidWindows = null, GameWorld.Events.EventResourceCatalog? eventResources = null,
-    Func<CashShopPromotionCatalog>? promotions = null) : IGmWebData
+    Func<CashShopPromotionCatalog>? promotions = null, CashShopPromotionConfiguration? promotionConfiguration = null) : IGmWebData
 {
     public GmAudit Audit => audit;
 
@@ -76,15 +76,9 @@ internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt,
 
     public object EventBusinessStatus() => new
     {
-        promotions = promotions?.Invoke().Activities.Select(activity => new
-        {
-            key = activity.Configuration.Rules.Scope.Campaign, name = "礼包累计购买奖励",
-            implemented = true, enabled = activity.Availability == PromotionAvailability.Active,
-            status = activity.Availability.ToString(), statusText = activity.Availability == PromotionAvailability.Active ? "已开启" :
-                activity.Availability == PromotionAvailability.Disabled ? "配置已关闭" : "资源或奖励校验未通过",
-            reason = activity.Availability == PromotionAvailability.Active ? "" : activity.Error ?? activity.Configuration.DisabledReason,
-            supportsControl = false, controlReason = "由礼包独立配置和真实奖励校验控制。"
-        }).ToArray() ?? [],
+        promotions = PromotionActivities(),
+        raidControl = new { name = "四个团本开放时段", purpose = "安徒恩、卢克、超时空漩涡与普雷沿已有时段表独立开放。",
+            endpoint = "/api/raid-windows", relatedTab = "Raid", supportsControl = false },
         businesses = new[]
         {
             new { key = "spring-treasure", name = "春节宝藏关联掉落", purpose = "个人八件时装、普通推荐地下城合格领主独立10%掉落。", supportsControl = false, controlReason = "随对应礼包配置启停，不是单独活动开关。" },
@@ -93,6 +87,33 @@ internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt,
             new { key = "guild-attendance", name = "公会每日出勤", purpose = "保存并查询真实公会出勤记录。", supportsControl = false, controlReason = "不是活动签到领奖，没有通用活动开关。" }
         }
     };
+
+    public object? PromotionActivities()
+    {
+        var catalog = promotions?.Invoke();
+        return catalog?.Activities.Select(activity => new
+        {
+            key = JsonSerializer.Serialize(activity.Configuration.Rules.Scope), scope = activity.Configuration.Rules.Scope,
+            name = activity.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope
+                ? "众神降世礼包累计购买与宝藏掉落" : "礼包累计购买奖励：" + activity.Configuration.Rules.Scope.Campaign,
+            purpose = "按真实礼包配置控制新购买累计奖励与对应关联掉落；已提交订单和历史累计保留。",
+            implemented = true, enabled = activity.Configuration.Enabled,
+            active = activity.Availability == PromotionAvailability.Active, revision = catalog.Revision,
+            statusText = activity.Availability == PromotionAvailability.Active ? "已开启" :
+                activity.Availability == PromotionAvailability.Disabled ? "配置已关闭" : "配置开启，资源或奖励校验未通过",
+            reason = activity.Availability == PromotionAvailability.Active ? "" : activity.Error ?? activity.Configuration.DisabledReason,
+            supportsControl = promotionConfiguration is not null, supportsSchedule = false,
+            endpoint = promotionConfiguration is null ? null : "/api/events/promotions",
+            controlReason = "启用前重新校验真实商品、奖励及消费者，不提供定时或自动换期。"
+        }).ToArray();
+    }
+
+    public object SetPromotionEnabled(PromotionScope scope, long expectedRevision, bool enabled)
+    {
+        if (promotionConfiguration is null) throw new InvalidOperationException("礼包配置控制尚未装配");
+        promotionConfiguration.SetEnabled(scope, expectedRevision, enabled);
+        return PromotionActivities()!;
+    }
 
     // 外观来源经开发 GM 只读命令 appearance 取得（在线走原 owner，离线取租约），合成在本进程内完成，不改库。
     public GmAvatarResult AvatarPortrait(string account, string name, IReadOnlyList<int> tryOn)

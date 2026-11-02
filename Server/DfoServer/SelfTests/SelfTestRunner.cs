@@ -154,6 +154,7 @@ internal static class SelfTestRunner
         PromotionConsumerValidationTests.RunCore();
         CashShopPromotionSessionTests.RunCore();
         CashShopPromotionPersistenceTests.RunCore();
+        CashShopPromotionPersistenceTests.RunControlCore();
         CashShopPromotionPersistenceTests.RunPageCore();
         Testing.PromotionPageSessionTests.RunCore();
         CashShopPromotionPersistenceTests.RunPageRoutingCore();

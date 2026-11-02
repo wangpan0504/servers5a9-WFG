@@ -42,6 +42,16 @@ internal static partial class BattlePassRewardTests
             Sql("UPDATE account_battle_pass_seasons SET total_experience=$p0,pass_type=1 WHERE account=$p1 AND season_key=$p2",
                 experience, owner.Account, season);
             var selected = session.Selected ?? throw new InvalidOperationException("persistence fixture selection missing");
+            var eventStore = new ServerEventRepository(path);
+            var eventService = new DfoServer.Game.Events.ServerEventService(eventStore, new FixedClock());
+            eventService.ConfigureBattlePass(Now.AddDays(-1), Now.AddDays(1), false);
+            eventService.InitializeDefault(2520);
+            repository.ConfigureBattlePassEvents(_ => true, false, new FixedClock());
+            var beforeOff = Snapshot();
+            eventService.Override(2520, false);
+            That(!session.ClaimBattlePassReward(fixture.Service, season, 0, 1, 4).Inventory.Accepted && Snapshot() == beforeOff,
+                "运行缓存仍为true时，同事务2520关闭仍拒绝奖励且不写资产或领取");
+            eventService.Override(2520, true);
             string before = Snapshot();
             Sql($"""
                 CREATE TRIGGER fail_core_pass_claim AFTER INSERT ON account_battle_pass_claims

@@ -9,9 +9,9 @@ namespace DfoServer.Game.Inventory.Models;
 
 internal sealed record ItemUseIntent(int ItemId, int Count);
 internal sealed record AccountItemRefillClaim(int ItemId, AccountItemRefillState? Before, AccountItemRefillState After);
-internal sealed record InventoryEventPrecondition(DfoServer.Game.Events.ServerEventSchedule Schedule, TimeProvider Clock)
+internal sealed record InventoryEventPrecondition(DfoServer.Game.Events.ServerEventSchedule Schedule, TimeProvider Clock, bool Active = true)
 {
-    public bool Matches(DfoServer.Game.Events.ServerEventSchedule actual) => actual == Schedule && actual.IsActive(Clock.GetUtcNow());
+    public bool Matches(DfoServer.Game.Events.ServerEventSchedule actual) => actual == Schedule && actual.IsActive(Clock.GetUtcNow()) == Active;
 }
 
 internal sealed class InventoryPlan
@@ -32,6 +32,7 @@ internal sealed class InventoryPlan
     public bool UnlockSkillTree { get; init; }
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
+    public long? PromotionCatalogRevision { get; init; }
     public int? AccountMaterialRaidWeek { get; init; }
     public ImmutableDictionary<int, AccountMaterialDefinition> AccountMaterialRaidDefinitions { get; init; } = ImmutableDictionary<int, AccountMaterialDefinition>.Empty;
     public EquipmentEnhancementFact? EquipmentEnhancement { get; init; }
@@ -74,7 +75,7 @@ internal sealed class InventoryPlan
     }
     // 业务在规划完成后补写同事务状态（如装扮预设实时保存）：复制全部字段，惰性索引按新快照重算。
     public InventoryPlan WithAfter(InventorySnapshot after, InventoryCharacterPrecondition? precondition = null,
-        ImmutableArray<ItemUseIntent>? usedItems = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
+        ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
     {
         PreserveMaterials = PreserveMaterials,
         UsedItems = usedItems ?? UsedItems,
@@ -85,6 +86,7 @@ internal sealed class InventoryPlan
         UnlockSkillTree = UnlockSkillTree,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
         RequiredEvent = RequiredEvent,
+        PromotionCatalogRevision = promotionCatalogRevision ?? PromotionCatalogRevision,
         AccountMaterialRaidWeek = AccountMaterialRaidWeek,
         AccountMaterialRaidDefinitions = AccountMaterialRaidDefinitions,
         EquipmentEnhancement = EquipmentEnhancement,

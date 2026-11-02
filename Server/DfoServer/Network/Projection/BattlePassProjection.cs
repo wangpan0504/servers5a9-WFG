@@ -13,7 +13,7 @@ internal sealed class BattlePassProjection(string seasonKey, BattlePassCatalog c
     {
         var selection = context.Owner.Execute(() => (CharacterId: context.Session.Selected?.Id,
             context.Session.SelectionEpoch, context.Session.Phase, context.Session.Ready));
-        if (selection.CharacterId is null) return;
+        if (selection.CharacterId is null || !context.Session.IsBattlePassAvailable()) return;
         bool SameSelectionLocked() => context.Session.Selected?.Id == selection.CharacterId &&
             context.Session.SelectionEpoch == selection.SelectionEpoch && context.Session.Phase == selection.Phase &&
             context.Session.Ready == selection.Ready;
@@ -23,6 +23,7 @@ internal sealed class BattlePassProjection(string seasonKey, BattlePassCatalog c
         while (true)
         {
             context.Stop.ThrowIfCancellationRequested();
+            if (!context.Session.IsBattlePassAvailable()) return;
             var snapshot = context.Owner.Execute(() =>
             {
                 if (!SameSelectionLocked())
@@ -40,7 +41,7 @@ internal sealed class BattlePassProjection(string seasonKey, BattlePassCatalog c
             {
                 if (snapshot.Reward is not { } state) return;
                 await context.Notify(NotiPacketType.BATTLE_PASS_INFO_PASS, PassInfo(catalog, state.State),
-                    "battle_pass_progress_state", () => context.Session.CanPublishInventory(state.Receipt));
+                    "battle_pass_progress_state", () => context.Session.IsBattlePassAvailable() && context.Session.CanPublishInventory(state.Receipt));
                 await ClaimsAsync(context, state.State, state.Receipt);
                 if (context.Session.CanPublishInventory(state.Receipt)) return;
             }
@@ -54,11 +55,12 @@ internal sealed class BattlePassProjection(string seasonKey, BattlePassCatalog c
         while (true)
         {
             context.Stop.ThrowIfCancellationRequested();
+            if (!context.Session.IsBattlePassAvailable()) return;
             await context.Notify(NotiPacketType.BATTLE_PASS_INFO_PASS, PassInfo(catalog, state.Season),
-                "battle_pass_progress_state", () => context.Session.CanPublishInventory(receipt));
+                "battle_pass_progress_state", () => context.Session.IsBattlePassAvailable() && context.Session.CanPublishInventory(receipt));
             await BattlePassMissionProjection.MissionsAsync(context, state, receipt);
             await ClaimsAsync(context, state.Season, receipt);
-            var current = context.Owner.Execute(() => context.Session.CanPublishInventory(receipt)
+            var current = context.Owner.Execute(() => context.Session.IsBattlePassAvailable() && context.Session.CanPublishInventory(receipt)
                 ? context.Session.ReadBattlePassMissionState((clock ?? TimeProvider.System).GetUtcNow()) : null);
             if (current is null) return;
             if (current.State.Season.Revision == state.Season.Revision && current.State.Active == state.Active &&
@@ -79,5 +81,5 @@ internal sealed class BattlePassProjection(string seasonKey, BattlePassCatalog c
 
     public static Task ClaimsAsync(GameConnectionContext context, BattlePassSeasonState state, InventoryCommitReceipt receipt) =>
         context.Notify(NotiPacketType.BATTLE_PASS_INFO_REWARD, state.ToClaimBytes(), "battle_pass_reward_state",
-            () => context.Session.CanPublishInventory(receipt));
+            () => context.Session.IsBattlePassAvailable() && context.Session.CanPublishInventory(receipt));
 }

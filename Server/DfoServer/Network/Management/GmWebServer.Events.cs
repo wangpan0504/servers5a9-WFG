@@ -8,9 +8,43 @@ namespace DfoServer.Network.Management;
 internal static partial class GmWebServer
 {
     sealed record EventControlState(int EventId, bool Active, string Mode, long Revision, long? StartsAt, long? EndsAt);
+    sealed record PromotionControlBody(GameWorld.Items.PromotionScope Scope, long ExpectedRevision, bool? Enabled, bool? Confirm);
+
+    internal sealed record EventDefaultBody(bool? Confirm, int? ExpectedPid, int Id);
 
     static void MapEvents(WebApplication app, IGmWebData data)
     {
+        app.MapPost("/api/events/default", (HttpContext http, EventDefaultBody b) =>
+        {
+            if (b.Confirm != true) return Bad("需要确认后才初始化默认活动");
+            if (b.ExpectedPid is { } pid && pid != data.Status().Pid) return Bad("目标服务端进程已改变，请重新连接");
+            if (b.Id is not (312 or 2520)) return Bad("该活动不支持首次默认初始化");
+            return Run(http, data, "event-initialize-default", "-", ServerEventDefinition.Find(b.Id)!.Name,
+                $"event initialize-default {b.Id}", $"event status {b.Id}");
+        });
+        app.MapGet("/api/events/promotions", () => Results.Json(new { ok = true, data = data.PromotionActivities() }));
+        app.MapPost("/api/events/promotions", (HttpContext http, PromotionControlBody body) =>
+        {
+            if (body.Confirm != true || body.Enabled is null || body.ExpectedRevision <= 0 ||
+                string.IsNullOrWhiteSpace(body.Scope.Campaign) || string.IsNullOrWhiteSpace(body.Scope.Period) ||
+                string.IsNullOrWhiteSpace(body.Scope.RulesVersion) || string.IsNullOrWhiteSpace(body.Scope.Realm) || string.IsNullOrWhiteSpace(body.Scope.Group))
+                return Bad("需要完整礼包身份、当前版本和明确开关确认");
+            string target = JsonSerializer.Serialize(body.Scope);
+            try
+            {
+                var result = data.SetPromotionEnabled(body.Scope, body.ExpectedRevision, body.Enabled.Value);
+                data.Audit.Append(new(DateTimeOffset.Now, Operator(http), "promotion-control", target,
+                    body.Enabled.Value ? "on" : "off", true, body.ExpectedRevision.ToString(), JsonSerializer.Serialize(result), "OK"));
+                return Results.Json(new { ok = true, data = result });
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or ArgumentException)
+            {
+                data.Audit.Append(new(DateTimeOffset.Now, Operator(http), "promotion-control", target,
+                    body.Enabled.Value ? "on" : "off", false, body.ExpectedRevision.ToString(), "", error.Message));
+                return Bad(error.Message);
+            }
+
+        });
         app.MapGet("/api/events/catalog", () =>
         {
             var controlled = ServerEventDefinition.Registered.Select(entry =>
@@ -23,21 +57,9 @@ internal static partial class GmWebServer
                     endpoint = (string?)"/api/events", state = state.State, stateError = state.Error
                 };
             }).ToArray();
-            var related = new[]
-            {
-                new { id = 2037, name = "赛丽亚幸运值", purpose = "开盒累计幸运阶段并按已有规则发放奖励。", conditions = "账号进度与真实开盒奖励已接通。", controlReason = "属于常驻业务，没有全服活动开关。" },
-                new { id = 2378, name = "公会红包", purpose = "按公会红包现有规则购买、发放和领取。", conditions = "费用、资格与领取记录沿原事务处理。", controlReason = "属于常驻业务，没有通用活动开关。" },
-                new { id = 2395, name = "红尾乔纳森显示", purpose = "显示乔纳森，并沿时空石商店原规则交易。", conditions = "当前城镇目录固定提供此NPC显示项。", controlReason = "当前没有单独的运营开关。" },
-                new { id = 10999, name = "众神降世礼包 多重购买有惊喜", purpose = "按真实礼包购买账本展示累计购买奖励。", conditions = "可用性取决于礼包独立配置、商品和奖励资源校验。", controlReason = "由礼包配置控制，不能使用通用活动开关。" }
-            }.Select(entry => new
-            {
-                entry.id, entry.name, entry.purpose, entry.conditions, supportsControl = false, supportsSchedule = false,
-                entry.controlReason, defaultState = "沿现有玩法规则", endpoint = (string?)null,
-                state = (EventControlState?)null, stateError = (string?)null
-            });
             return Results.Json(new { ok = true, data = new
             {
-                schemaVersion = 1, serverTimeUtc = DateTimeOffset.UtcNow, events = controlled.Concat(related),
+                schemaVersion = 1, serverTimeUtc = DateTimeOffset.UtcNow, events = controlled,
                 relatedBusiness = data.EventBusinessStatus()
             } });
         });

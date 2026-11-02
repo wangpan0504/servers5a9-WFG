@@ -76,7 +76,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
     // 进度仍从原账号季读取，不触发登录来源；只补尚未实际投影的期段。
     async Task<bool> PublishBattlePassAsync(DateTimeOffset now)
     {
-        if (town.BattlePassMissions is not { } policy || now < policy.Start || now >= policy.End) return true;
+        if (town.BattlePassMissions is not { } policy || policy.Active(now).IsEmpty) return true;
         int day = BattlePassDay(policy, now);
         if (BattlePassPublished(policy, day)) return true;
         var current = context.Session.ReadBattlePassMissionState(now);
@@ -121,7 +121,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                 {
                     var boundary = policy.Start.AddDays(BattlePassDay(policy, now) + 1);
                     // 发布采样后才跨界时立即补刷，不能直接排到下一日。
-                    if (now >= policy.Start && !BattlePassPublished(policy, BattlePassDay(policy, now))) next = now;
+                    if (!policy.Active(now).IsEmpty && !BattlePassPublished(policy, BattlePassDay(policy, now))) next = now;
                     else if (boundary < next) next = boundary;
                 }
                 var delay = retrySeconds == 0 ? next - now : TimeSpan.FromSeconds(retrySeconds);

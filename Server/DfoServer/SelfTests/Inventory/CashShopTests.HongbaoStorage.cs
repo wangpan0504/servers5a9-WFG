@@ -62,6 +62,13 @@ internal static partial class CashShopTests
             AddMember(catalog.MinimumMembers - 1);
             buyer = repo.LoadCharacter(owner, buyer.Slot)!;
             var purchase = Buy();
+            var events = new DfoServer.Game.Events.ServerEventService(new ServerEventRepository(path));
+            events.Override(2378, false);
+            Reject<GuildHongbaoPurchaseRejectedException>(() => repo.CommitInventory(owner, buyer, purchase.Plan!),
+                "购买规划完成后关闭红包，最终SQL事务仍拒绝");
+            That(Cera() == 200_000 && Number("SELECT count(*) FROM character_guild_hongbao_purchases") == 0,
+                "关闭拒绝不扣款、不发道具、不增加额度");
+            events.Override(2378, true);
             That(purchase.Accepted && purchase.Plan!.WithAfter(purchase.Plan.After).GuildHongbaoPurchase == purchase.Plan.GuildHongbaoPurchase,
                 "合并库存计划保留红包最终事务约束");
             Sql("CREATE TRIGGER hongbao_late_failure BEFORE INSERT ON currency_audit_log WHEN NEW.action_name='cash_shop_buy' BEGIN SELECT RAISE(ABORT,'late failure'); END");

@@ -26,7 +26,10 @@ internal static partial class BattlePassMissionTests
             const string sourceMarker = "BP Core source complete transaction reached";
             const string claimMarker = "BP Core task XP claim reached";
             var now = Start.AddDays(58).AddHours(1);
-            var policy = new BattlePassMissionPolicy(season, Start, Catalog());
+            var events = new DfoServer.Game.Events.ServerEventService(new ServerEventRepository(path), new MissionClock(now));
+            var policy = new BattlePassMissionPolicy(season, Start, Catalog(), events.IsBattlePassActive, false);
+            events.ConfigureBattlePass(policy.Start, policy.End, false);
+            events.InitializeDefault(2520);
             var adventure = AdventureCoreTests.SyntheticCatalog();
             var service = new AdventureExpeditionService(adventure, AdventureExpeditionTests.SyntheticCatalog());
             var repository = new CharacterRepository(path);

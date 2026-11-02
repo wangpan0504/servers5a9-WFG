@@ -6,7 +6,8 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCatalog boxes, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null, PremiumContractCatalog? contracts = null, GameDebugSettings? debugSettings = null, TimeProvider? clock = null)
+    Random? random = null, PremiumContractCatalog? contracts = null, GameDebugSettings? debugSettings = null, TimeProvider? clock = null,
+    DfoServer.Game.Events.ServerEventService? events = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
@@ -64,6 +65,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         var totals = new Dictionary<int, int>();
         var doubleTotals = new Dictionary<int, int>();
         bool seriaSource = box.Core.ItemId == 2682272;
+        var luckEvent = seriaSource ? events?.Read(DfoServer.Game.Events.ServerEventService.SeriaLuckId) : null;
+        bool luckEnabled = seriaSource && (luckEvent?.Active ?? true);
         int luckBefore = before.AccountWallet.SeriaLuck;
         int luck = luckBefore;
         try
@@ -89,7 +92,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                 }
                 foreach (var pair in drawn)
                     totals[pair.Key] = checked(totals.GetValueOrDefault(pair.Key) + pair.Value);
-                if (seriaSource && drawn.Count != 0)
+                if (luckEnabled && drawn.Count != 0)
                 {
                     // PVF 规则在第八次累计完成后触发下一次开启的双倍。
                     if (luck >= 8)
@@ -194,7 +197,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
                 (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
         var plan = new InventoryPlan(before, after, "magic_box_open",
-            new(character, deadline, Clock, requirePosition: true), overflowItems: grant.Plan.OverflowItems);
+            new(character, deadline, Clock, requirePosition: true), overflowItems: grant.Plan.OverflowItems)
+        { RequiredEvent = luckEvent is null ? null : new(luckEvent.Schedule, Clock, luckEvent.Active) };
         return new(true, 0, plan);
     }
 }

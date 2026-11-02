@@ -8,6 +8,7 @@ internal sealed record BattlePassSessionReward(InventoryResult Inventory, Battle
 
 internal sealed partial class GameSession
 {
+    public bool IsBattlePassAvailable() => repository is not IBattlePassStore store || store.IsBattlePassAvailable();
     public BattlePassSessionState? ReadBattlePass(string seasonKey) => owner.Execute<BattlePassSessionState?>(() =>
     {
         if (!Ready || Selected is null || repository is not IBattlePassStore store) return null;
@@ -18,7 +19,7 @@ internal sealed partial class GameSession
     public BattlePassSessionReward ClaimBattlePassReward(BattlePassRewardService service, string seasonKey,
         byte action, byte track, uint key)
     {
-        if (repository is not IBattlePassStore store) return new(InventoryResult.Reject(19));
+        if (repository is not IBattlePassStore store || !store.IsBattlePassAvailable()) return new(InventoryResult.Reject(19));
         var capture = CaptureInventoryPlan(requireTown: false);
         if (capture is null) return new(InventoryResult.Reject(19));
         var state = owner.Execute(() => InventoryPlanIsCurrent(capture, requireTown: false)

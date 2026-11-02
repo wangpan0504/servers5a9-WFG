@@ -12,7 +12,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy || fact is null) return;
         var at = fact.Clock.GetUtcNow();
-        if (policy.Active(at).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if (at < fact.PlannedAt || !fact.Matches(expected, target, guildId))
             throw new InvalidDataException("公会大厅入场来源与实际位置事务不一致");
         using var command = db.CreateCommand(); command.Transaction = tx;

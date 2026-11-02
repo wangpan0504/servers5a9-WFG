@@ -14,6 +14,7 @@ internal static partial class BattlePassMissionTests
         int before = Count;
         Periods();
         Persistence();
+        EventControlPersistence();
         DailyLoginPersistence();
         NativeShopVisitPersistence();
         CompletionPersistence();

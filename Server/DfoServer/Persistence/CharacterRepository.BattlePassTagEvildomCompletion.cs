@@ -11,7 +11,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy) return;
         var fact = new BattlePassTagEvildomCompletion(plan);
-        if (!policy.Active(fact.At).Any(row => BattlePassTagEvildomCompletion.MatchesMission(row.Key.Category, row.Definition))) return;
+        if (!ActiveBattlePassMissions(db, tx, policy, fact.At).Any(row => BattlePassTagEvildomCompletion.MatchesMission(row.Key.Category, row.Definition))) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);
         command.CommandText = "INSERT INTO account_battle_pass_seasons(account,season_key) VALUES($account,$season) ON CONFLICT(account,season_key) DO NOTHING";

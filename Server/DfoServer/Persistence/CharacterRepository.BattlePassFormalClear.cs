@@ -11,7 +11,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy || prepared.BattlePassFormalClear is not { } fact) return;
         var at = fact.Clock.GetUtcNow();
-        if (policy.Active(at).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if (at < fact.PlannedAt || !fact.Matches(run, prepared))
             throw new InvalidDataException("普通整场来源与原正式整场结算不一致");
         using var command = db.CreateCommand(); command.Transaction = tx;

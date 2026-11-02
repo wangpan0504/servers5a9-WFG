@@ -13,7 +13,7 @@ internal sealed partial class CharacterRepository
         if (!fact.Matches(run, prepared)) throw new InvalidDataException("原深渊完成来源与权威pending不一致");
         if (battlePassMissionPolicy is not { } policy) return;
         var at=fact.Clock.GetUtcNow();
-        if(policy.Active(at).IsEmpty) return;
+        if(ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if(at<fact.PlannedAt) throw new InvalidDataException("深渊完成时刻早于原计划");
         using var command=db.CreateCommand();command.Transaction=tx;
         command.Parameters.AddWithValue("$account",account);command.Parameters.AddWithValue("$season",policy.SeasonKey);

@@ -29,6 +29,9 @@ internal static partial class GmWebServerTests
         public string Command(string line)
         {
             Commands.Add(line);
+            if (line is "event initialize-default 312" or "event initialize-default 2520")
+                return "OK " + JsonSerializer.Serialize(new { eventId = int.Parse(line.Split(' ')[2]), active = false, mode = "off", Revision = 3,
+                    StartsAt = (long?)null, EndsAt = (long?)null, initialized = false });
             if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new { supportCompanion = Companion });
             if (line.StartsWith("support-companion ", StringComparison.Ordinal))
             {
@@ -426,6 +429,19 @@ internal static partial class GmWebServerTests
         TestCheck.That((await Post("/api/characters/delete", new { account = "acct", name = "Hero", confirmName = "Nope", confirm = true })).StatusCode == HttpStatusCode.BadRequest
             && (await Post("/api/characters/delete", new { account = "acct", name = "Hero", confirmName = "Hero", confirm = true })).IsSuccessStatusCode
             && data.Commands.Contains("account acct char-delete Hero Hero"), "删除角色须确认名一致");
+        using (var response = await Post("/api/events/default", new { id = 312, confirm = true }))
+        {
+            string body = await response.Content.ReadAsStringAsync();
+            TestCheck.That(response.IsSuccessStatusCode && body.Contains("\"initialized\":false", StringComparison.Ordinal)
+                && body.Contains("\"active\":false", StringComparison.Ordinal) && data.Commands.Contains("event initialize-default 312"),
+                "专用默认入口返回已有关闭真实状态及未初始化标记");
+        }
+        using (var response = await Post("/api/events/default", new { id = 2520, confirm = true, expectedPid = 1 }))
+            TestCheck.That(response.IsSuccessStatusCode && (await response.Content.ReadAsStringAsync()).Contains("\"eventId\":2520", StringComparison.Ordinal),
+                "同一默认入口按白名单ID初始化探险记并回读真实关闭，不替换为312");
+        int beforeDefaultReject = data.Commands.Count;
+        TestCheck.That((await Post("/api/events/default", new { id = 312, confirm = false })).StatusCode == HttpStatusCode.BadRequest
+            && data.Commands.Count == beforeDefaultReject, "未确认默认请求不执行任何活动命令");
         TestCheck.That((await http.GetAsync("/api/events")).IsSuccessStatusCode
             && (await Post("/api/events", new { id = 64, op = "on", confirm = true })).IsSuccessStatusCode && data.Commands.Contains("event on 64")
             && (await Post("/api/events", new { id = 64, op = "schedule", start = "2026-10-20T00:00:00+08:00", end = "2026-10-27T00:00:00+08:00", confirm = true })).IsSuccessStatusCode
@@ -433,6 +449,9 @@ internal static partial class GmWebServerTests
             && (await Post("/api/events", new { id = 1, op = "on", confirm = true })).StatusCode == HttpStatusCode.BadRequest
             && (await Post("/api/events", new { id = 64, op = "on" })).StatusCode == HttpStatusCode.BadRequest, "活动开关读写与校验");
         int eventReads = data.Commands.Count;
+        TestCheck.That((await Post("/api/events/default", new { id = 64, confirm = true })).StatusCode == HttpStatusCode.BadRequest &&
+            (await Post("/api/events/default", new { id = 2520, confirm = true, expectedPid = 999 })).StatusCode == HttpStatusCode.BadRequest &&
+            data.Commands.Count == eventReads, "默认白名单及目标PID不匹配均在命令前拒绝");
         TestCheck.That((await http.GetAsync("/api/events")).IsSuccessStatusCode &&
             data.Commands.Skip(eventReads).SequenceEqual(["event status 64"]), "不带编号的活动查询保留黄金牌64合同");
         eventReads = data.Commands.Count;

@@ -17,6 +17,8 @@ internal sealed partial class CharacterRepository
     static void CommitGuildHongbaoPurchase(SqliteConnection db, SqliteTransaction tx, Character current, InventoryPlan plan)
     {
         if (plan.GuildHongbaoPurchase is not { } purchase) return;
+        if (!ServerEventRepository.Read(db, tx, DfoServer.Game.Events.ServerEventService.GuildHongbaoId).IsActive(DateTimeOffset.UtcNow))
+            throw new GuildHongbaoPurchaseRejectedException("公会红包已关闭新购买");
         if (plan.Reason != "cash_shop_buy" || purchase.GuildId == 0 || purchase.Cera <= 0 || purchase.MinimumMembers <= 0 ||
             purchase.DailyLimit <= 0 || purchase.Cera > purchase.DailyLimit ||
             purchase.DayStartUnix != GuildAttendanceDay.Start(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))

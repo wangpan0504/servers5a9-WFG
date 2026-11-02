@@ -14,7 +14,8 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null,
     DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
     DfoServer.GameWorld.Characters.CharacterGrowthCatalog? growthCatalog = null, int guildDungeonMileage = 0,
-    Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, TimeProvider? promotionClock = null)
+    Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, TimeProvider? promotionClock = null,
+    Func<IDisposable>? promotionCommitLease = null)
     : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore, DfoServer.Game.Creatures.ICreatureTransportStore,
       DfoServer.Game.Inventory.Services.IEquipmentTransportStore,
       DfoServer.Game.CashShopPromotions.ICashShopPromotionStore, DfoServer.Game.BattlePass.IBattlePassStore

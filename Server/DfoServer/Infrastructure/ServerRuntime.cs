@@ -110,7 +110,7 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null)
+        Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -267,10 +267,11 @@ internal static class ServerRuntime
         repository.MarriageResources = marriageCatalog;
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, characters.DefaultAppearance, itemResources.Items, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
+        if (promotionConfiguration is not null) promotionConfiguration.Changed += events.NotifyPromotionChanged;
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
         var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);
         var promotionPageService = promotions is not null && (enablePromotionPage ||
-            promotions().Activities.Any(entry => entry.Availability == PromotionAvailability.Active))
+            promotions().Activities.Any(entry => entry.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope))
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
@@ -603,8 +604,9 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Otherverse rewards", State = "complete", Rule = dimensionRewards.ActiveRule,
                 dimensionDropRules.Mode, Configured = configuredDimensionDrops is not null });
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
-            if (promotions is not null && promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
-                activity.Configuration.Rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package")))
+            if (promotions is not null && itemResources.Items.TryGet(490705287, out _) &&
+                promotions().Activities.Any(activity => activity.Configuration.Rules.Scope ==
+                    Game.CashShopPromotions.CashShopPromotionPageService.Scope))
                 springTreasure = StartupStage.Run(log, "Spring treasure personal drops", () =>
                     new SpringTreasureDropPolicy(itemResources.SpringTreasureAvatars, itemResources.Items.Get(490705287),
                         () => promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
@@ -711,18 +713,52 @@ internal static class ServerRuntime
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
         var npcFavor = new NpcFavorCatalog(pvf);
         var battlePassSeason = options.BattlePassSeasonKey;
-        var battlePassCatalog = battlePassSeason is null ? null : GameWorld.BattlePass.BattlePassCatalog.Load(pvf);
-        var battlePassProjection = battlePassSeason is null || battlePassCatalog is null ? null : new BattlePassProjection(battlePassSeason, battlePassCatalog, clock);
-        if (options.BattlePassSeasonStart is { } battlePassStart)
+        var battlePassStart = options.BattlePassSeasonStart;
+        if (battlePassSeason is null)
         {
-            if (battlePassSeason is null || battlePassCatalog is null)
-                throw new InvalidDataException("任务周期需要显式battle-pass-season");
-            var battlePassMissionPolicy = new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, battlePassStart, battlePassCatalog);
-            repository.ConfigureBattlePassMissions(battlePassMissionPolicy);
-            projection.BattlePassMissions = battlePassMissionPolicy;
+            try
+            {
+                var defaults = Persistence.BattlePassDefaultConfiguration.Resolve(options.DataDirectory,
+                    (clock ?? TimeProvider.System).GetUtcNow());
+                battlePassSeason = defaults.SeasonKey; battlePassStart = defaults.Start;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+            {
+                log.Write("battle_pass_default_unavailable", new { Error = error.Message });
+            }
         }
+        GameWorld.BattlePass.BattlePassCatalog? battlePassCatalog = null;
+        BattlePassProjection? battlePassProjection = null;
+        try
+        {
+            battlePassCatalog = battlePassSeason is null ? null : GameWorld.BattlePass.BattlePassCatalog.Load(pvf);
+            battlePassProjection = battlePassSeason is null || battlePassCatalog is null ? null : new BattlePassProjection(battlePassSeason, battlePassCatalog, clock);
+            if (battlePassStart is { } start)
+            {
+                if (battlePassSeason is null || battlePassCatalog is null)
+                    throw new InvalidDataException("任务周期需要显式battle-pass-season");
+                var battlePassMissionPolicy = new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, start, battlePassCatalog,
+                    events.IsBattlePassActive, options.BattlePassSeasonKey is not null);
+                repository.ConfigureBattlePassMissions(battlePassMissionPolicy, clock);
+                events.ConfigureBattlePass(battlePassMissionPolicy.Start, battlePassMissionPolicy.End, options.BattlePassSeasonKey is not null);
+                projection.BattlePassMissions = battlePassMissionPolicy;
+            }
+            if (battlePassSeason is not null)
+            {
+                if (battlePassStart is null) events.ConfigureBattlePass(DateTimeOffset.MinValue, DateTimeOffset.MaxValue, true, missionsPrepared: false);
+                repository.ConfigureBattlePassEvents(events.IsBattlePassActive, options.BattlePassSeasonKey is not null, clock);
+            }
+        }
+        catch (Exception error) when (options.BattlePassSeasonKey is null &&
+            error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+        {
+            battlePassSeason = null; battlePassStart = null; battlePassCatalog = null; battlePassProjection = null;
+            log.Write("battle_pass_default_unavailable", new { Error = error.Message });
+        }
+        projection.BattlePass = battlePassProjection;
         var battlePassRewards = battlePassCatalog is null ? null : new Game.BattlePass.BattlePassRewardService(
-            battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);
+            battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock,
+            events.IsBattlePassActive);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -861,7 +897,7 @@ internal static class ServerRuntime
             new VendingHandler(new InventoryVendingService(itemResources.VendingMachines, itemResources.Items, itemResources.GoldLimits,
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
-                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
+                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock, events: events), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun, fiendwarRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
@@ -933,7 +969,7 @@ internal static class ServerRuntime
             module.Register(commands);
         if (battlePassRewards is not null && battlePassSeason is not null)
             new BattlePassHandler(battlePassRewards, battlePassSeason, inventoryProjection, log).Register(commands);
-        if (options.BattlePassSeasonStart is not null && battlePassProjection is not null)
+        if (battlePassStart is not null && battlePassProjection is not null)
             new BattlePassMissionHandler(clock, battlePassProjection.MissionStateAsync, log).Register(commands);
         if (itemResources.PcRoom is { } pcRoom)
         {
@@ -966,7 +1002,7 @@ internal static class ServerRuntime
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
                 DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows,
-                new GameWorld.Events.EventResourceCatalog(pvf), promotions), stop, capture, options,
+                new GameWorld.Events.EventResourceCatalog(pvf), promotions, promotionConfiguration), stop, capture, options,
                 available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
                 error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,
                     Reason = error.GetType().Name, error.Message, Continuing = "Game listeners remain enabled" }),

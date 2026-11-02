@@ -35,6 +35,9 @@ internal sealed record BattlePassMissionState(BattlePassSeasonState Season, Immu
 // 周期、类别映射和高级倍率是显式本服策略，不冒充原服务器隐藏周期已复原。
 internal sealed class BattlePassMissionPolicy
 {
+    public bool EventControlled { get; }
+    public bool DefaultEnabled { get; }
+    readonly Func<DateTimeOffset, bool>? available;
     public string SeasonKey { get; }
     public BattlePassCatalog Catalog { get; }
     public DateTimeOffset Start { get; }
@@ -42,8 +45,9 @@ internal sealed class BattlePassMissionPolicy
     public int Days { get; }
     public string RulesJson { get; }
 
-    public BattlePassMissionPolicy(string seasonKey, DateTimeOffset start, BattlePassCatalog catalog)
+    public BattlePassMissionPolicy(string seasonKey, DateTimeOffset start, BattlePassCatalog catalog, Func<DateTimeOffset, bool>? available = null, bool defaultEnabled = true)
     {
+        this.available = available; EventControlled = available is not null; DefaultEnabled = defaultEnabled;
         ArgumentException.ThrowIfNullOrWhiteSpace(seasonKey);
         var local = start.ToOffset(TimeSpan.FromHours(8));
         if (local.DayOfWeek != DayOfWeek.Thursday || local.TimeOfDay != TimeSpan.FromHours(6) ||
@@ -79,7 +83,7 @@ internal sealed class BattlePassMissionPolicy
 
     public ImmutableArray<BattlePassMissionInstance> Active(DateTimeOffset now)
     {
-        if (now < Start || now >= End) return [];
+        if (now < Start || now >= End || available?.Invoke(now) == false) return [];
         int day = checked((int)((now - Start).Ticks / TimeSpan.TicksPerDay));
         int week = day / 7;
         var rows = ImmutableArray.CreateBuilder<BattlePassMissionInstance>(26);
