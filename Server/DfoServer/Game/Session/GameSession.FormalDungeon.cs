@@ -572,7 +572,8 @@ internal sealed partial class GameSession
             if (entry is null) return RejectFormal("helper-hell-target-room-unavailable");
         }
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
-            training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance,entry.IsBossRush ? catalog.BossRush : null);
+            training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance,entry.IsBossRush ? catalog.BossRush : null,
+            helperRotation);
         if (prepared is not null && bossBuff is not null)
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
         if (prepared is not null && entry.Maze.IsGriefTower)
@@ -604,24 +605,30 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         Location? tutorialReturn = null, TutorialScenes? tutorialScenes = null,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
-        uint? partyFirstKey = null, Guid? partyInstance = null, BossRushCatalog? bossRush = null)
+        uint? partyFirstKey = null, Guid? partyInstance = null, BossRushCatalog? bossRush = null,
+        HelperRotationCapture? helperRotation = null)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
         // 保留 #693 的兼容游标和溢出重试；这个数值只选择新实例编号范围，不恢复旧房间或地面对象。
         // 只有完整准备超界才重试，沿用实例隔离的历史账本和单调尝试号。
-        uint first = partyFirstKey ?? state.NextObjectKey;
+        // 助手轮换保留客户端旧支援兵，所有新演员和掉落key必须避开其范围；溢出重试也沿用此下限。
+        uint minimumKey = helperRotation is { Companions.IsEmpty: false }
+            ? Math.Max(CharacterDungeonState.FirstObjectKey, (uint)helperRotation.Companions.Max(actor => actor.ObjectKey) + 1)
+            : CharacterDungeonState.FirstObjectKey;
+        uint first = helperRotation is null ? partyFirstKey ?? state.NextObjectKey :
+            Math.Max(partyFirstKey ?? state.NextObjectKey, minimumKey);
         for (int attempt = 0; attempt < 2; attempt++)
         {
             try
             {
                 return PrepareFormalDungeonKeyRange(expected, epoch, entry, rooms, drops, items, draw, pieces,
-                    first, prepareDrops, tutorialReturn, tutorialScenes, crackRewards, shared, partyInstance, bossRush);
+                    first, prepareDrops, tutorialReturn, tutorialScenes, crackRewards, shared, partyInstance, bossRush, helperRotation);
             }
             catch (DungeonObjectKeyOverflowException)
             {
-                if (first == CharacterDungeonState.FirstObjectKey) break;
-                first = CharacterDungeonState.FirstObjectKey;
+                if (first == minimumKey) break;
+                first = minimumKey;
             }
         }
         return RejectFormal("instance-object-key-capacity-exceeded");
@@ -632,7 +639,7 @@ internal sealed partial class GameSession
         uint firstObjectKey,
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Location? tutorialReturn, TutorialScenes? tutorialScenes, CrackDimensionRewardServices? crackRewards,
-        PartyDungeonPreparation? shared, Guid? partyInstance, BossRushCatalog? bossRush)
+        PartyDungeonPreparation? shared, Guid? partyInstance, BossRushCatalog? bossRush, HelperRotationCapture? helperRotation)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
@@ -697,7 +704,13 @@ internal sealed partial class GameSession
         // 只作用于正式副本流程，训练/职业体验/练习/比赛不注入；祭坛、绝望之塔与眩惑之塔按资源标记 AllowsCompanionAi 整类排除。
         // 深渊派对与宇宙裂缝也放行；地图自带原生 AI 演员的房间同样叠加。
         // 放行集合冻结进入场计划，只在起始房间发送：客户端会让该AIC跨房间跟随，逐房重发会每房多出一名并卡清房。
-        if (!entry.IsTutorial && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsPractice &&
+        if (helperRotation is not null)
+        {
+            // 现场助手连续轮换仍保留旧友方APC；只接管原演员，不重发工厂创建，也不重新抽GM模板。
+            // 此策略仅限无正常离场的助手轮换；原生27→28完整清理链仍需实机验证。
+            entry = entry with { CompanionMapRows = [], CompanionProfiles = helperRotation.Source.Entry.CompanionProfiles };
+        }
+        else if (!entry.IsTutorial && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsPractice &&
             !entry.IsTournament && entry.AllowsCompanionAi)
         {
             var support = debugSettings?.SupportConfiguration ?? SupportCompanionConfiguration.Default;
@@ -734,7 +747,7 @@ internal sealed partial class GameSession
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
-                        companionRows: map.Id == entry.StartMap.Id ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
                 if (entry.ChampionPercents.IsEnabled)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
                         entry.NamedMonsters);
@@ -832,6 +845,8 @@ internal sealed partial class GameSession
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out var runReason, timeProvider,
             battleLevels: monsterBattleLevels, monsterAi: monsterAi))
             return RejectFormal("run-create:" + runReason);
+        if (helperRotation is not null && !run!.TryCarryCompanions(helperRotation.Companions, firstObjectKey))
+            return RejectFormal("helper-companion-carry-invalid");
         if (partyInstance is { } instance) run!.BindPartyInstance(instance);
         if (entry.Hope is { } hope)
         {

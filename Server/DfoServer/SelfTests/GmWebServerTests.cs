@@ -425,7 +425,7 @@ internal static partial class GmWebServerTests
             TestCheck.That((await http.GetAsync("/api/events?id=" + id)).StatusCode == HttpStatusCode.BadRequest &&
                 data.Commands.Count == rejectedEvents, "活动查询拒绝未登记或无效编号：" + id);
         var eventAudit = (await http.GetFromJsonAsync<JsonElement>("/api/audit?limit=200")).EnumerateArray()
-            .Where(row => row.GetProperty("target").GetString() == "-/活动2532").ToArray();
+            .Where(row => row.GetProperty("target").GetString() == "-/诺兰显示").ToArray();
         TestCheck.That(eventAudit.Length == 3 && eventAudit.All(row => row.GetProperty("ok").GetBoolean()) &&
             eventAudit.Select(row => row.GetProperty("action").GetString()).ToHashSet().SetEquals(["event-on", "event-off", "event-auto"]),
             "诺兰网页三种持久开关写入原审计，不覆盖黄金牌记录");

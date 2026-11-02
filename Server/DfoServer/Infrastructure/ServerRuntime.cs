@@ -1063,7 +1063,7 @@ internal static class ServerRuntime
         {
             string result = monsterBattleLevels.Answer(line) ?? monsterAi.Answer(line) ?? dropControl.Answer(line) ?? DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
                 mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog,
-                online.FindConnection, log, noticeSender);
+                online.FindConnection, log, noticeSender, online.RefreshFatigueDisplays);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });
             return result;
         }

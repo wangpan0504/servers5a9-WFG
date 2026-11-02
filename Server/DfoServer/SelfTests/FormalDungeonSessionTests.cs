@@ -154,12 +154,20 @@ internal static partial class FormalDungeonSessionTests
             Check(f.Session.CompleteFormalDungeonLoading() is null &&
                 f.Session.CurrentFormalDungeonScene()!.Snapshot.ConsumedFatigue == 1,
                 "无限模式重复加载不重复计进度");
+            var fullDisplay = f.Session.CaptureFatigueDisplay()!;
+            Check(fullDisplay.State.Remaining == 156 && f.Session.CanPublishFatigueDisplay(fullDisplay),
+                "在线疲劳刷新捕获当前选角的完整显示快照");
             settings.InfiniteFatigue = false;
+            var realDisplay = f.Session.CaptureFatigueDisplay()!;
+            Check(!f.Session.CanPublishFatigueDisplay(fullDisplay) && realDisplay.State.Remaining == 0 &&
+                f.Session.CanPublishFatigueDisplay(realDisplay) && Same(stored, f.Read()),
+                "关闭后旧满值通知不能盖回零余额，新显示捕获不写库");
             Check(f.Session.CurrentFormalDungeonScene()!.Snapshot.ConsumedFatigue == 1 &&
                 f.Session.FatigueForClient(loaded.Character).Remaining == 0 &&
                 f.Session.ReturnFromFormalDungeon() is not null &&
                 f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is null,
                 "关闭无限模式保留当局计数，恢复真实显示与零余额准入限制");
+            Check(!f.Session.CanPublishFatigueDisplay(realDisplay), "转场后原副本疲劳显示收据失效");
             settings.InfiniteFatigue = true;
             Check(f.Session.EnterFormalDungeon(3, 0, 0, catalog, rooms) is { Snapshot.ConsumedFatigue: 0 } &&
                 f.Session.CompleteFormalDungeonLoading() is { Snapshot.ConsumedFatigue: 1 },

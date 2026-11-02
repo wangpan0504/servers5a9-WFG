@@ -4,6 +4,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
+using static DfoServer.Game.Characters.ChannelAreaLanding;
 
 namespace DfoServer.Game.Characters;
 
@@ -24,11 +25,11 @@ internal static class CharacterSelection
         if (leavingRetiredTown || leavingRaidInstance) resumeTown = false;
         // 专属中央公园的旧位置/返回地区归回正常中央公园；仍由目录核对等级、任务及房间门口。
         // 频道专属街区已有普通返回地区时，从共享房间解析该记忆，不能让当前街区覆盖它。
-        // 无返回地区的旧存档仍从原地区恢复；决斗场与五陵继续使用共享房间默认地区。
+        // 普雷/漩涡旧存档丢失普通返回地区时使用共享房间默认地区，不从团本街区重建普通出口。
         var returnSource = leavingRetiredTown
             ? new Location(ChannelAreaLanding.CentralParkTown, 1, 0, 0)
             : leavingRaidInstance || character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ||
-              preservesReturn && (character.Return is not null || character.Position.Town == 32)
+              preservesReturn && (character.Return is not null || character.Position.Town == 32 || IsRaidOnlyTown(character.Position.Town))
                 ? towns.Room : character.Position;
         if (resumeTown && towns.IsGuildHall(character.Position, completed))
         {
@@ -55,8 +56,7 @@ internal static class CharacterSelection
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
             // 旧存档可能把战舰街区记成返回地区；共享房间的 1379 与出门都取它，按初始地区修复，位置保持不变。
-            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.LegacyRetiredTown or ChannelAreaLanding.XianVillageTown } ||
-                character.Return is { } saved && ChannelAreaLanding.IsRaidInstanceArea(saved))
+            if (character.Return != OrdinaryDistrict(character.Return))
                 character = repository.Save(owner, character, character.Position,
                     towns.ResolveRoomReturn(towns.Room, OrdinaryDistrict(character.Return), character.Level, completed));
         }
@@ -107,12 +107,12 @@ internal static class CharacterSelection
             character = InventoryService.Commit(repository, owner, character, new CurrencyService(goldLimits).Initialize(character));
         return character;
 
-        // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
-        Location? OrdinaryDistrict(Location? saved) => saved is not null && ChannelAreaLanding.IsRaidInstanceArea(saved) ? null : saved?.Town switch
+        // 选角保留既有决斗/旧魔兽返回地区兼容；普通城镇切图仍使用原有的各自规则。
+        Location? OrdinaryDistrict(Location? saved) => saved?.Town switch
         {
-            ChannelAreaLanding.AntonTown or ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown => null,
+            ChannelAreaLanding.PvpTown => null,
             ChannelAreaLanding.LegacyRetiredTown => new(ChannelAreaLanding.CentralParkTown, 1, 0, 0),
-            _ => saved
+            _ => OrdinaryRoomReturn(saved)
         };
     });
 }

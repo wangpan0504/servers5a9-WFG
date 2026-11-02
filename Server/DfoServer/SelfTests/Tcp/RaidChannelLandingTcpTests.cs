@@ -70,6 +70,18 @@ internal static partial class RaidChannelLandingTcpTests
         That(fixture.Snapshot(positionSql,character.Id) == $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X+2},{ordinaryReturn.Y},5]]" &&
             fixture.Snapshot(returnSql,character.Id) == expectedReturn,
             "普通频道重连保留原位置、same-area回放及原有移动，仅当前位置按Move增加2并转向5，返回五字段不丢失");
+
+        // 旧版已经丢失或污染普通来源时，真实换频道和1379/1426仍须回普通地区，不能在普通频道继续留59街区。
+        foreach (bool missing in new[] { false, true })
+        {
+            Switch(42, land: true, town: 38, "旧存档回归：进入普雷街区", area: 1, exit: 59);
+            fixture.Sql(missing
+                ? "UPDATE characters SET return_town=NULL,return_area=NULL,return_x=NULL,return_y=NULL,return_direction=NULL WHERE id=$p0"
+                : "UPDATE characters SET return_town=59,return_area=1,return_x=1217,return_y=98,return_direction=0 WHERE id=$p0", character.Id);
+            Switch(normal, land: true, town: 38, $"普雷旧存档{(missing ? "缺失" : "污染")}返回地区切普通频道后出房恢复默认地区", area: 1, exit: 38);
+            That(fixture.Snapshot(positionSql, character.Id) == expectedReturn && fixture.Snapshot(returnSql, character.Id) == expectedReturn,
+                "旧普雷位置与返回地区同时恢复普通门口全部五字段，不再将59写回普通返回记忆");
+        }
     }
 
     // 安徒恩频道页依赖 EVENT_INFO 事件 181（0xB5）与任务 12829：时段全开时入城事件表必须带齐四张团本卡与安徒恩事件，频道目录列出 19。

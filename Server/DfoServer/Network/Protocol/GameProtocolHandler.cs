@@ -296,7 +296,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     receipt => projection.TravelAsync(context, receipt),
                     () => { if (session.Phase == SessionPhase.Town) projection.Refresh(context, marriageOnly: true); }),
                 guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,
-                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()));
+                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()),
+                refreshFatigue: () => FatigueProjection.PostCurrent(context));
             nativeRegistration = native?.Register(context);
             session.SetPeerAccount(nativeRegistration?.Token ?? 0);
             adventure?.Prepare(context);

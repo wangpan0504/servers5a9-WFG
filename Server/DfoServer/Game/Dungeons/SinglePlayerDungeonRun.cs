@@ -163,11 +163,13 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
     // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
-    internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => allRooms.Where(room => room.Loaded)
+    internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => carriedCompanions.GetValueOrDefault(key) ?? allRooms.Where(room => room.Loaded)
         .SelectMany(room => room.Plan.Monsters).SingleOrDefault(monster => monster.ObjectKey == key &&
             monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath);
 
-    internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) => allRooms.Any(room => room.Loaded &&
+    internal bool HasLivingFriendlyActor(int id, DungeonRunSnapshot snapshot) =>
+        carriedCompanions.Values.Any(monster => monster.MonsterId == id && !retiredCarriedCompanions.Contains(monster.ObjectKey)) ||
+        allRooms.Any(room => room.Loaded &&
         room.Plan.Monsters.Any(monster => monster.MonsterId == id && monster.AiCharacter is not null && monster.IsFriendly &&
             !room.Dead.Contains(monster.ObjectKey) && !room.Culled.Contains(monster.ObjectKey) &&
             (!ReferenceEquals(room,current) || snapshot.LivingMonsters.Contains(monster.ObjectKey))));
@@ -223,6 +225,11 @@ internal sealed partial class SinglePlayerDungeonRun
     internal void RetireNonCombatObject(ushort key)
     {
         if (HasPendingDeath || pendingSettlement is not null) return;
+        if (carriedCompanions.ContainsKey(key))
+        {
+            retiredCarriedCompanions.Add(key);
+            return;
+        }
         var room = current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath) ? current :
             allRooms.SingleOrDefault(candidate => candidate.Loaded && candidate.Plan.Monsters.Any(monster =>
                 monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
@@ -465,7 +472,7 @@ internal sealed partial class SinglePlayerDungeonRun
                     entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
-                    companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                    companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException or DungeonObjectKeyOverflowException)
             {
