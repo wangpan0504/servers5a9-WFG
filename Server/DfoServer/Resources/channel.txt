@@ -71,4 +71,5 @@
 48 `<chn_channel_info_049>` 39 `[tag_tournament]` 0 0 0 0 0 0 0 0 0 0 0 ``
 51 `<channel_info_cname_501>` 4 `[pvp]` 0 0 29 0 0 50 95 0 0 0 0 ``
 55 `<channel_info_cname_505>` 13 `[pvp]` 0 0 29 0 0 50 95 0 0 0 0 ``
+50 `<chn_channel_info_059>` 55 `[none]` 0 0 0 0 0 95 95 0 0 0 0 ``
 [/server]

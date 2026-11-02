@@ -546,6 +546,7 @@ internal sealed partial class ItemCatalog
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
     internal static bool ReadAuraSkinAction(PvfDocument document) =>
+        Regex.IsMatch(document.Section("stackable type").Trim(), @"^`\[etc\]`\s+1$") &&
         StackableActionDeclaration.TryRead(document, out var action) &&
         StackableActionCatalog.Arguments(action) is { Label: "[open aura skin slot]", Parameters.Count: 0 } &&
         document.TryGetString("action usable place", out string place) && place == "[village]" &&
@@ -663,11 +664,17 @@ internal sealed partial class ItemCatalog
             jobMask, checked((ushort)Int("required skill", 0)),
             name, stackableType.Replace("`", "").Trim())
         {
+            AntiEvil = isEquipment && (text.Has("anti evil") || text.Has("add anti evil"))
+                ? AntiEvilUpgradeCatalog.ReadEquipmentBase(source => AntiEvilUpgradeCatalog.ReadEquipmentBaseDocument(
+                    pvf.ReadTokens(source), pvf.ResolveString),
+                    pvf.ResolveString, "equipment/" + path) : 0,
+            UsableExpired = isEquipment && text.Has("usable expired item"),
+            PartSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [],
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
             AcquisitionAccountCargo = acquisitionCargo.GetValueOrDefault(id),
             OpensCreatureSkinSlot = !isEquipment && ReadCreatureSkinTicket(text),
-            OpensAuraSkinSlot = !isEquipment && id == 490700411 && kind == ItemKind.Material && ReadAuraSkinAction(text),
+            OpensAuraSkinSlot = !isEquipment && kind == ItemKind.Consumable && ReadAuraSkinAction(text),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,

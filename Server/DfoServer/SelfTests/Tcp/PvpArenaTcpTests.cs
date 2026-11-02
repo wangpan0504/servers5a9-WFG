@@ -58,11 +58,14 @@ internal static class PvpArenaTcpTests
         guest.Barrier();
         TownPeer(host, guest.Id);
         host.Barrier();
-        var stableColumns = f.Query("PRAGMA table_info(characters)").Select(row => (string)row[1]).Where(column => column != "revision");
+        var stableColumns = f.Query("PRAGMA table_info(characters)").Select(row => (string)row[1]).Where(column => column is not ("revision" or "inventory_items_revision"));
         string StableCharacters() => f.Snapshot("SELECT " + string.Join(',', stableColumns.Select(column => "\"" + column + "\"")) + " FROM characters ORDER BY id");
         string OtherItems() => f.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10092640 ORDER BY item_uid");
         string before = StableCharacters(), beforeItems = OtherItems();
         var revisions = f.Query("SELECT id,revision FROM characters").ToDictionary(row => (long)row[0], row => (long)row[1]);
+        var itemRevisions = f.Query("SELECT id,inventory_items_revision FROM characters")
+            .ToDictionary(row => (long)row[0], row => (long)row[1]);
+        long auditStart = (long)f.Query("SELECT COALESCE(MAX(audit_id),0) FROM inventory_audit_log")[0][0];
 
         // 预设标题3、地图0、密码pw、普通kind0/mode0。
         host.Send(50, [3, 0, 0, 1, 2, 0, 0, 0, (byte)'p', (byte)'w', 0, 0]);
@@ -219,6 +222,31 @@ internal static class PvpArenaTcpTests
             var daily = JsonSerializer.Deserialize<PvpDailyMissionDay>((string)f.Query(
                 "SELECT state_json FROM character_pvp_daily_missions WHERE character_id=$p0 ORDER BY service_day DESC LIMIT 1", peer.Id)[0][0])!;
             int expectedProof = daily.Entries.Where(row => row.Claimed).SelectMany(row => row.Mission.Rewards).Sum(row => row.Count);
+            var proofWrites = f.Query("""
+                SELECT action_name,list_type,item_uid_before,item_uid_after,item_id_before,item_id_after,
+                  count_before,count_after,count_delta FROM inventory_audit_log
+                WHERE audit_id>$p0 AND character_id=$p1 ORDER BY audit_id
+                """, auditStart, peer.Id);
+            long itemRevisionDelta = 0, proofDelta = 0;
+            foreach (var write in proofWrites)
+            {
+                bool proofCreated = write[2] is DBNull;
+                That(write[0] is "pvp_mission_reward" && write[1] is 0L &&
+                    write[3] is long uid && uid > 0 && write[5] is 10092640L &&
+                    write[6] is long beforeCount && write[7] is long afterCount &&
+                    write[8] is long delta && delta > 0 && afterCount == beforeCount + delta &&
+                    (proofCreated ? write[4] is DBNull && beforeCount == 0 :
+                        write[2] is long oldUid && oldUid == uid && write[4] is 10092640L && beforeCount > 0),
+                    "决斗库存写入仅允许正数证明奖励，新堆无旧UID，旧堆保留同一证明UID及真实前后数量");
+                // 新堆写item/slot各一次；旧堆删除旧slot、更新item并重插slot，共三次触发。
+                itemRevisionDelta += proofCreated ? 2 : 3;
+                proofDelta += (long)write[8];
+            }
+            That(proofWrites.Length >= peer.PvpMissionRewardBatches &&
+                (proofWrites.Length == 0) == (peer.PvpMissionRewardBatches == 0) && proofDelta == expectedProof &&
+                f.Query("SELECT inventory_items_revision FROM characters WHERE id=$p0", peer.Id) is [[long itemRevision]] &&
+                itemRevision == itemRevisions[peer.Id] + itemRevisionDelta,
+                "独立库存版本精确等于本段全部合法证明写入，新堆加二、旧堆加三，无奖励角色保持原版本");
             That(f.Query("""
                 SELECT COALESCE(SUM(json_extract(item_core,'$.Value')),0) FROM character_inventory_items
                 WHERE owner_character_id=$p0 AND json_extract(item_core,'$.ItemId')=10092640

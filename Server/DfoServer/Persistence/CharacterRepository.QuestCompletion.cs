@@ -137,6 +137,9 @@ internal sealed partial class CharacterRepository
                 return Result(current, granted, true, projection, checked((uint)(I("after_experience") - I("before_experience"))));
             }
         }
+        if (plan.RequiredEvent is { } required &&
+            !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
+            throw new InvalidOperationException("任务活动领奖的原时间表已变化或已停用");
         VerifyQuestPvpRating(db,tx,owner.Account,expected.Id,plan.PvpRating);
         if (current.Revision != expected.Revision || current.Level != expected.Level || current.Job != expected.Job ||
             current.GrowType != expected.GrowType || current.Position != expected.Position || current.AcceptedStoryLevel != expected.AcceptedStoryLevel ||

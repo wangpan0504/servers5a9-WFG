@@ -399,6 +399,8 @@ internal static partial class FiendwarRaidTcpTests
             That(Drain(fresh).Any(frame => frame is { Kind: 1, Opcode: 668, Body: [0, 19, 0] }), "错团重返拒绝且不消费候选");
             fresh.Send(668, BitConverter.GetBytes(candidate.Key));
             That(Drain(fresh).Any(frame => frame is { Kind: 1, Opcode: 668, Body: [1] }), "668实际恢复原Battle与战场位置");
+            // 单人第299秒成功重返后保持在线跨过原300秒，再走原668幂等及后续战场操作。
+            if (count == 1 && advanceToDeadline) clock.Advance(1);
             fresh.Send(668, BitConverter.GetBytes(candidate.Key));
             That(Drain(fresh).Any(frame => frame is { Kind: 1, Opcode: 668, Body: [1] }) &&
                 fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", id) == before &&

@@ -61,6 +61,7 @@ internal static partial class ShopTcpTests
                 peer.Expect(1, 21, [0, 0x85, 0]);
                 peer.Barrier();
                 That(State() == before, "超周限购请求不修改费用、礼盒及额度");
+                Counts(peer, at + 1); // 拒绝后重新打开商店仍恢复已提交购买计数。
             }
         }
         using (var peer = Open(fixture))
@@ -83,11 +84,11 @@ internal static partial class ShopTcpTests
             peer.Expect(1, 715, Build(writer =>
             {
                 writer.Write((byte)1);
-                writer.Write(0);
-                writer.Write(count);
+                writer.Write(0); // 第1组旧式购买。
+                writer.Write(0); // 第2组销售。
+                writer.Write(count); // 第3组周期购买，同样写062CEC30。
                 foreach (var product in products.Take(count)) { writer.Write(product.Item); writer.Write(product.Count); }
-                writer.Write(0);
-                writer.Write(0);
+                writer.Write(0); // 第4组销售。
             }));
         }
         string State() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +

@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace DfoServer.Network.Parsers.Inventory;
 
-internal sealed record ConsumableDisguiseRequest(byte Type, int Seconds, int ItemId);
+internal sealed record ConsumableDisguiseRequest(byte Type, int FormId, int ItemId);
 
 internal static class ConsumableDisguiseRequests
 {

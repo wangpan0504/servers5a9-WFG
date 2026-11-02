@@ -2,6 +2,8 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Events;
+using DfoServer.Game.Strongway2019;
 using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Services;
@@ -12,9 +14,13 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
 
-    public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null)
+    public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null,
+        InventoryEventPrecondition? requiredEvent = null)
     {
         receipt = null;
+        if (Strongway2019ShopRules.Handles(request.ShopId) &&
+            (requiredEvent is null || requiredEvent.Schedule.EventId != ServerEventService.Strongway2019Id || !requiredEvent.Matches(requiredEvent.Schedule)))
+            return InventoryResult.Reject(17);
         if (!shops.Allows(request.NpcId, request.ShopId, request.ItemId))
             return InventoryResult.Reject(17);
         // 匹配PVF普通商店不出售图鉴碎片；特殊取得回执未确认前不能伪造实体购买结果。
@@ -85,7 +91,13 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         // 其他商人、金币商品与非装备保持模板默认核心。
         bool exchangeOrigin = price.Materials.Length != 0 && template.Kind == ItemKind.Equipment &&
             shops.Shops.TryGetValue(request.ShopId, out var boughtShop) && boughtShop.NpcId == EpicExchangeCatalog.MerchantNpcId;
-        var grant = exchangeOrigin
+        bool frameOrigin = request.ItemId == 490013316 && template.Kind == ItemKind.Consumable &&
+            Strongway2019ShopRules.Handles(request.ShopId) && requiredEvent?.Schedule.EventId == ServerEventService.Strongway2019Id;
+        var grant = frameOrigin
+            ? InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid },
+                [new(0, default, InventoryRewardGrantService.Create(template, count, now) with { Strongway2019FrameOrigin = new(1) })],
+                catalog, goldLimits, pieces, now)
+            : exchangeOrigin
             ? InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid },
                 [new(0, new(InventoryListType.Main, 0),
                     InventoryRewardGrantService.Create(template, utcNow: now) with { Extension119 = 0x01 })],
@@ -131,7 +143,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 after = after with { ServerItems = itemUsage };
             }
         }
-        return new(true, 0, new(before, after, "npc_shop_buy", new(character, deadline, Clock, requirePosition: true)));
+        return new(true, 0, new(before, after, "npc_shop_buy", new(character, deadline, Clock, requirePosition: true))
+            { RequiredEvent = requiredEvent });
     }
 
     public ShopPurchaseCount[]? PurchaseCounts(Character character, int npcId, DateTimeOffset? utcNow = null)

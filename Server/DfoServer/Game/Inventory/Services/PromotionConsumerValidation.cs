@@ -343,8 +343,8 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             {
                 if (template.UseForbidden || template.Jobs == 0 || template.MinimumLevel > template.MaximumLevel ||
                     template.OpensCreatureSkinSlot && template.Kind != ItemKind.Consumable ||
-                    template.OpensAuraSkinSlot && (template.Id != InventoryCreatureSkinService.AuraTicketId ||
-                        template.Kind != ItemKind.Material || template.StackableType != "[material] 0"))
+                    template.OpensAuraSkinSlot &&
+                        (template.Kind != ItemKind.Consumable || template.StackableType != "[etc] 1"))
                     throw new InvalidDataException("skin_slot_ticket_definition");
                 return;
             }

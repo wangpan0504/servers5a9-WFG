@@ -14,7 +14,7 @@ internal static class ActionConsumableTcpTests
     {
         var clock = new ConsumableUseSessionTests.FakeClock();
         var assets = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source,root,resources:resources,clock:clock);
+        await using var fixture = new TcpTestFixture(source,Path.Combine(root,"action-consumables"),resources:resources,clock:clock);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         That(assets.Items.ActionConsumable(10002998) is { Label:"[rent point]", Parameters:[1] } &&

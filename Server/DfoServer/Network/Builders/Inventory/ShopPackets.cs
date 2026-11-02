@@ -21,16 +21,16 @@ internal static class ShopPackets
             writer.Write(row.ItemId);
             writer.Write(row.Count);
         }
-        // 旧式限购写062CEC30，新purchase limit写062CEC44；两种缓存不能混写。
+        // 02350220的第1/3组均经01FD4740写购买缓存062CEC30；第2/4组为销售缓存062CEC44。
+        // purchase limit与daily purchase limit共用购买缓存，不能按新旧声明误投到销售组。
+        writer.Write(0);
         writer.Write(periodic.Length);
         foreach (var row in periodic)
         {
             writer.Write(row.ItemId);
             writer.Write(row.Count);
         }
-        // 后两组分别合入前两组缓存，当前无需追加行。
-        writer.Write(0);
-        writer.Write(0);
+        writer.Write(0); // 当前没有销售计数查询投影。
         return stream.ToArray();
     }
     public static byte[] Bought(InventoryResult result, ShopPurchaseReceipt? receipt, InventorySnapshot? committed = null)

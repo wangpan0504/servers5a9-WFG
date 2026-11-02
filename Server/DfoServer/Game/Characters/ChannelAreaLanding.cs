@@ -14,6 +14,10 @@ internal static class ChannelAreaLanding
     internal const int FiendwarType = 0x2D;
     internal const byte FiendwarTown = 57, NormalFiendwarTown = 115;
 
+    // 强者之路type55对应城镇65；初次选角仍进共享房间，出门使用65/1主城而非65/0地区房间。
+    internal const int DplPveType = 55;
+    internal const byte DplPveTown = 65;
+
     internal static bool AllowsFiendwarTown(ChannelEntry? channel, byte town) => town switch
     {
         FiendwarTown => channel?.Type == FiendwarType,
@@ -97,13 +101,13 @@ internal static class ChannelAreaLanding
             ? outside : null;
     }
 
-    // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔界大战与再战魔界谓词比较。
+    // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔界大战、再战魔界与强者之路谓词比较。
     internal static bool SameSnapshotPredicates(int previousType, int nextType) =>
         previousType != SpecialAreaType && nextType != SpecialAreaType &&
         (previousType == FiendwarType) == (nextType == FiendwarType) && SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
     // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。除vt+0x14的PVP位外，还区分以下谓词：
-    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
+    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）、vt+0x38（type==0x35）及vt+0x48（type==0x37）。
     // 谓词都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
     // 普通(22)与团队类型互换不记快照；配套客户端额外隔离0x2D边界，其他团队类型之间仍执行原生谓词。
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
@@ -113,13 +117,14 @@ internal static class ChannelAreaLanding
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
          (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (39, "[tag_tournament]"),
-         (XianVillageType, "[xian_village]"), (4, "[pvp]"), (5, "[pvp]"), (8, "[pvp]"), (24, "[pvp]")];
+         (DplPveType, ""), (XianVillageType, "[xian_village]"), (4, "[pvp]"), (5, "[pvp]"), (8, "[pvp]"), (24, "[pvp]")];
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
-    // 01EB5790比较type39帝国竞技场，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
+    // 01EB8C02将真实虚表绑定为054946AC；01EB5790比较type39帝国竞技场，对应vt+0x34；再战53为+0x38、魔界大战54为+0x4C。
+    // 01EB5800比较type55强者之路，对应vt+0x48；01EB5DE9..5E1B双向比较此位，跨入或离开55不保留快照。
     // 五陵和漩涡类型位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
-    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool XianVillage, bool Pvp) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == XianVillageType, IsPvpType(type));
+    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type));
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -227,6 +232,8 @@ internal static class ChannelAreaLanding
     // 分组对应的是带 [dungeon gate] 的区域，或 channeluiinfo 城镇号已在目录中的特殊类型。没有这两者的分组不落点。
     static (byte Town, byte Area)? Target(int type, string group)
     {
+        if (type == DplPveType)
+            return (DplPveTown, 1);
         var name = GroupName(group);
         if (type == 40 || name.Equals("beast", StringComparison.OrdinalIgnoreCase)) return null;
         if (type == 23)

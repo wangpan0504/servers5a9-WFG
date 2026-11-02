@@ -18,6 +18,7 @@ internal sealed partial class DungeonHandler
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
+        context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
         if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
     }
 
@@ -398,6 +399,7 @@ internal sealed partial class DungeonHandler
             return await PublishDeathAsync(context,new(DungeonRunOutcome.Rejected),context.Session.Selected,key,new { key });
         using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members);
         var results = instance.ObserveDeath(context.Session, (ushort)key, observe, prepareDynamic);
+        if (strongwayProjection is not null) await strongwayProjection.DeathAsync(results);
         await PartyDungeonProjection.PublishAsync(results);
         return CommandResult.Handled;
     }

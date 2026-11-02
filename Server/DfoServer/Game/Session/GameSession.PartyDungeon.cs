@@ -83,7 +83,9 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Guid instance, uint firstKey, PartyDungeonPreparation? shared = null, uint questId = 0,
-        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true, byte memberCount = 1)
+        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true,
+        byte memberCount = 1,
+        DfoServer.Game.Strongway2019.Strongway2019Admission? strongwayAdmission = null)
     {
         LastFormalDungeonRejection = null;
         var retry = Phase == SessionPhase.Settlement ? FormalDungeonResultFocus() : null;
@@ -101,7 +103,9 @@ internal sealed partial class GameSession
         }
         var prepared = PrepareFormalDungeon(dungeonId, questId, difficulty, catalog, rooms, drops, items, null, pieces, null, retry,
             prepareDrops: prepareDrops ?? previousDrops, shared: shared, partyFirstKey: firstKey, partyInstance: instance, partyAdmission: true,
-            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden, partyMemberCount: memberCount);
+            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden,
+            partyMemberCount: memberCount,
+            strongwayAdmission: strongwayAdmission);
         if (prepared is null && shared is not null) shared.Session.LastFormalDungeonRejection = LastFormalDungeonRejection;
         return owner.Execute(() =>
         {
@@ -127,8 +131,9 @@ internal sealed partial class GameSession
         var plan = PreparedParty(token);
         if (!Ready || SelectionEpoch != plan.SelectionEpoch || !ReferenceEquals(Selected, plan.Character) ||
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
-                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
+                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan)) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
+        if (dungeon.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
             CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
@@ -184,7 +189,8 @@ internal sealed partial class GameSession
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
-                GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension }, incount)
+                GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
+                RequiredEvent = Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,

@@ -108,9 +108,38 @@ internal static class CharacterPreparationTests
         Console.WriteLine($"PASS {Count-checks} 实验角色副本owner及持久化断言");
     }
 
+    static void RunBookPreparation(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-book-preparation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var options = new ServerOptions { DataDirectory = root };
+            var database = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(database);
+            var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+            var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+            OfflineBookPreparation.Run(options, characters, towns, repository, learning, growth,
+                ["0", "5", "BookReady", Path.Combine(root, "audit"), "bookprepcheck"]);
+            using var owner = new AccountOwners().Acquire("bookprepcheck", () => { });
+            var saved = new CharacterRepository(database).List(owner).Single();
+            That(saved is { Level: 95, Job: 0, GrowType: 0x25 } && saved.Learning.Initialized &&
+                saved.Learning.Experience == growth.GetLevelStartExperience(95) && saved.Learning.Trees.Count == 2 &&
+                saved.Learning.BonusSp == 0 && saved.Learning.BonusTp == 0,
+                "真实prepare-book工具重开库得到有效95级经验及有来源双树，不能只改等级留下exp0");
+            That(CharacterGrowthPlan.AddExperience(saved, 1, growth).Success,
+                "prepare-book原角色可沿正式成长消费者处理任务经验，无需额外GM修正");
+            That(CharacterGrowthPlan.AddExperience(saved with { Learning = saved.Learning with { Experience = 0 } }, 1, growth)
+                    .Failure == CharacterGrowthFailure.InvalidSnapshot,
+                "prepare-book修复不放宽正式95级零经验快照拒绝");
+        }
+        finally { TestFiles.DeleteDirectory(root, recursive: true); }
+    }
+
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
         int count = Count;
+        RunBookPreparation(towns, pvf, characters);
 
         void Reject(Action action, string message)
         {

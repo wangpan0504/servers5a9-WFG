@@ -37,6 +37,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null,
     ImperialArenaProjection? imperialArena = null,
     DfoServer.Game.Raids.FiendwarDungeonService? fiendwarRaid = null,
+    DfoServer.Game.Strongway2019.Strongway2019RouteService? strongwayRoute = null,
+    DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
+    Strongway2019Projection? strongwayProjection = null,
+    Strongway2019RewardProjection? strongwayRewards = null,
     DfoServer.Game.Raids.AntonRaidStart? raidStart = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
@@ -448,8 +452,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         {
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
             var completed = party.CompleteLoading(context.Session);
+            foreach (var notice in completed) notice.Recipient.Actor.Session.ObserveStrongway2019RouteLoaded();
             log.Write("formal_dungeon_move", new { Connection = context.Id, Party = party.Id, LoadingReady = true, Released = completed.Length });
             await PartyDungeonProjection.PublishAsync(completed);
+            if (strongwayProjection is not null) await strongwayProjection.LoadedAsync(completed);
             return CommandResult.Handled;
         }
         var receipt = context.Session.CompleteFormalDungeonLoading();
@@ -563,6 +569,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Handled;
+        if (result.ClearFact is { } strongwayClear && context.Session.CurrentStrongway2019Match is { } match &&
+            context.Session.PartyDungeon is { } strongwayParty &&
+            context.Session.CaptureStrongway2019Run(strongwayParty) is { } strongwayRun)
+        {
+            match.Competition.ObserveClear(strongwayRun, strongwayRun.Scene.Identity, strongwayClear);
+            if (strongwayProjection is not null) await strongwayProjection.TerminalAsync(match);
+        }
+        else if (strongwayRewards?.Commit(context) is { } strongwayReward)
+            await strongwayRewards.CommittedAsync(context, strongwayReward);
         if (result.Receipt is not { } receipt)
         {
             if (result.Outcome == DungeonRunOutcome.Duplicate && context.Session.CurrentTagEvildomClear() is { } clearedTag)
@@ -753,8 +768,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         }
         if (context.Session.PartyDungeon is { } party)
         {
-            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
-            var moved = party.Move(context.Session, move.X, move.Y, move.Unknown10);
+            bool strongway = context.Session.CurrentStrongway2019Match is not null && strongwayRoute is not null;
+            // 换图服务自行取得原四个连接门；先占peer门会使其零等待复验必然失败。
+            using var peers = strongway ? null : await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            var moved = strongway
+                ? strongwayRoute!.Move(context.Session, move.X, move.Y, move.Unknown10,
+                    gate => context.DispatchGates?.Holds(context, gate) == true)
+                : party.Move(context.Session, move.X, move.Y, move.Unknown10);
             log.Write("formal_dungeon_move", new { Connection = context.Id, Party = party.Id, Accepted = moved.Length > 0, move.X, move.Y });
             if (moved.Length == 0)
             {
@@ -821,6 +841,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> ReturnAsync(GameConnectionContext context, Packet request)
     {
         if (request.Body.Length != 0) return CommandResult.Unhandled;
+        await EndStrongway2019Async(context);
         var party = context.Session.PartyDungeon;
         using var peers = party is null ? null : await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
         if (party is not null)
@@ -841,5 +862,27 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         else if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, receipt);
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "giveup", receipt.Character.Id, receipt.Character.Position });
         return CommandResult.Handled;
+    }
+
+    async Task EndStrongway2019Async(GameConnectionContext context)
+    {
+        if (strongwayProjection is not null)
+        {
+            await strongwayProjection.BeforeDepartureAsync(context);
+            return;
+        }
+        if (context.Session.CurrentStrongway2019Match is not { } match) return;
+        if (context.Session.PartyDungeon is { } party && context.Session.CaptureStrongway2019Run(party) is { } run)
+            match.Competition.Exit(run, run.Scene.Identity);
+        strongwayMatching?.Detach(context.Session);
+    }
+
+    internal async Task DepartStrongway2019Async(GameConnectionContext context, Func<SemaphoreSlim, bool>? holdsCommandGate = null)
+    {
+        await EndStrongway2019Async(context);
+        var party = context.Session.PartyDungeon;
+        using var peers = party is null ? null : await PartyDungeonProjection.AcquirePeersAsync(context, party.Members,
+            holdsCommandGate: holdsCommandGate);
+        if (party is not null) await PartyDungeonProjection.DepartAsync(context, partyDungeons, parties, () => Task.CompletedTask);
     }
 }

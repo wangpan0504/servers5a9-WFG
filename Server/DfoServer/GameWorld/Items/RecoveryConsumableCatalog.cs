@@ -16,6 +16,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public int QuestExpBonusPermille { get; init; }
     public int ExpBonusMilliseconds { get; init; }
     public int EffectMilliseconds { get; init; }
+    public ImmutableArray<ConsumableStatChange> StatChanges { get; init; } = [];
     public byte EffectMaintenance { get; init; }
     public byte CooltimeMaintenance { get; init; }
     public bool Unlimited { get; init; }
@@ -34,7 +35,13 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
         job < 16 && (Jobs & (1 << job)) != 0;
 }
 
-internal sealed record ConsumableDisguiseDefinition(byte Type, int FormId, int Seconds);
+internal sealed record ConsumableDisguiseDefinition(byte Type, int FormId, int Seconds)
+{
+    public ImmutableArray<int> Forms { get; init; } = [];
+    public ImmutableArray<ConsumableStatChange> Appendages { get; init; } = [];
+    public bool Allows(int formId) => Forms.IsEmpty ? formId == FormId : Forms.Contains(formId);
+}
+internal sealed record ConsumableStatChange(string Operation, int Amount, string Stat);
 
 internal sealed class RecoveryConsumableCatalog
 {
@@ -88,9 +95,15 @@ internal sealed class RecoveryConsumableCatalog
         bool nativeStatUse = raw.TypeDeclaration?.Label is "[waste]" or "[unlimited waste]" or "[waste instant item]" &&
             file.StatChangeDuration is { Milliseconds: > 0 } && !file.StatChanges.IsEmpty &&
             file.StructureDiagnostics.IsEmpty;
-        bool nativeDisguise = raw.TypeDeclaration is { Label: "[disguise]", Parameters: [0] } &&
-            file.Disguise is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
-            file.Diagnostics.IsEmpty;
+        bool nativeSingleDisguise = raw.TypeDeclaration is { Label: "[disguise]", Parameters: [0] } &&
+            file.Disguise is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 };
+        // 目前兑现同一截止的monster池；028的九项均300秒，不从异长候选猜持续时间。
+        bool nativeRandomDisguise = raw.TypeDeclaration is { Label: "[random disguise]", Parameters: [0] } &&
+            !file.RandomDisguises.IsEmpty && file.RandomDisguises.All(row =>
+                row is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
+                row.Seconds == file.RandomDisguises[0].Seconds);
+        bool nativeDisguise = (nativeSingleDisguise || nativeRandomDisguise) && file.Diagnostics.IsEmpty &&
+            file.UnlimitedWaste is null or 0 or 1;
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || raw.TypeDeclaration is null || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
             (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[waste instant item]" or "[throw]" or "[set]" } && !nativeDisguise &&
                 !(raw.TypeDeclaration is { Label: "[expert town potion]", Parameters: [0] } &&
@@ -156,16 +169,22 @@ internal sealed class RecoveryConsumableCatalog
             HellLegendEpicDropBuff = hellLegendBuff,
             VillageMoveSpeedBuff = villageSpeedBuff,
             EnhancementPotion = enhancementPotion,
-            Disguise = nativeDisguise ? new(1, file.Disguise!.FormId, file.Disguise.Seconds) : null,
+            Disguise = nativeDisguise ? nativeRandomDisguise
+                ? new(2, file.RandomDisguises[0].FormId, file.RandomDisguises[0].Seconds)
+                    { Forms = file.RandomDisguises.Select(row => row.FormId).ToImmutableArray(),
+                        Appendages = file.DisguiseAppendages.Select(change => new ConsumableStatChange(change.Operation, change.Amount, change.Stat)).ToImmutableArray() }
+                : new(2, file.Disguise!.FormId, file.Disguise.Seconds)
+                    { Appendages = file.DisguiseAppendages.Select(change => new ConsumableStatChange(change.Operation, change.Amount, change.Stat)).ToImmutableArray() } : null,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
             QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,
             ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0,
             EffectMilliseconds = revival ? ConsumableSpecialItems.RevivalMilliseconds : file.StatChangeDuration?.Milliseconds ?? 0,
+            StatChanges = file.StatChanges.Select(change => new ConsumableStatChange(change.Operation, change.Amount, change.Stat)).ToImmutableArray(),
             EffectMaintenance = revival ? (byte)0 : hellLegendBuff is not null ? hellLegendMaintenance :
                 villageSpeedBuff is not null ? villageSpeedMaintenance : file.EffectMaintenance ?? 0,
             CooltimeMaintenance = file.CooltimeMaintenance ?? 0,
-            Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]",
+            Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]" || nativeDisguise && file.UnlimitedWaste == 1,
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
             RevivalBlessing = revival,
             AllowedDungeons = file.ActionUsableDungeons?.Select(id => checked((uint)id)).ToImmutableHashSet(),

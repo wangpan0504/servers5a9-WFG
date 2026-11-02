@@ -28,8 +28,11 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort DoubleGoldCardId = 64;
     public const ushort NolanVisibilityId = 2532;
     public const ushort MileageShopId = 266;
+    public const ushort Strongway2019Id = 312;
     public event Action<ushort>? Changed;
     readonly TimeProvider time = clock ?? TimeProvider.System;
+    long strongway2019DisplayRevision;
+    internal long Strongway2019DisplayRevision => Volatile.Read(ref strongway2019DisplayRevision);
 
     public ServerEventState Read(ushort eventId)
     {
@@ -56,7 +59,11 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
         var desired = edit(before);
         desired.Validate();
         var committed = store.Save(before, desired);
-        if (committed != before) Changed?.Invoke(eventId);
+        if (committed != before)
+        {
+            if (eventId == Strongway2019Id) Interlocked.Increment(ref strongway2019DisplayRevision);
+            Changed?.Invoke(eventId);
+        }
         return State(committed);
     }
 
@@ -65,7 +72,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 
     public static void RequireRegistered(ushort eventId)
     {
-        if (eventId != DoubleGoldCardId && eventId != NolanVisibilityId && eventId != MileageShopId)
-            throw new InvalidDataException("尚未登记该服务端活动；黄金卡牌双倍奖励为64，积分商城为266，诺兰常驻状态为2532，公告74不是活动开关");
+        if (eventId != DoubleGoldCardId && eventId != NolanVisibilityId && eventId != MileageShopId && eventId != Strongway2019Id)
+            throw new InvalidDataException("尚未登记该服务端活动；黄金卡牌双倍奖励为64，积分商城为266，2019强者之路为312，诺兰常驻状态为2532，公告74不是活动开关");
     }
 }

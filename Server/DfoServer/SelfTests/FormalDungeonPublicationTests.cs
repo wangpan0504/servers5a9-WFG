@@ -472,6 +472,8 @@ internal static class FormalDungeonPublicationTests
                     Scene: result.Receipt, Pickup: result, Peer: picker.Actor.Character.Id));
                 await observer.Session.PartyDungeonNoticeArrived!(new(PartyDungeonNoticeKind.Pickup, viewer, members,
                     Scene: observerScene, Pickup: result, Peer: picker.Actor.Character.Id));
+                // 组队发布的 await 只保证入队；读取输出前等待双方原发送队列完成。
+                await Task.WhenAll(sender.DrainAsync(), observerSender.DrainAsync());
                 Check(observerStream.Opcodes.SequenceEqual(new ushort[] { 39 }) && Same(observerBefore, observer.Read()) &&
                     BinaryPrimitives.ReadUInt16LittleEndian(observerStream.Frames[0].AsSpan(32)) == ushort.MaxValue,
                     "组队旁观者仅移除地面对象，不接收拾取者钱包、额度、虚假实体或ACK，不修改自己的资产");

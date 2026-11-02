@@ -69,6 +69,22 @@ internal static partial class ShopPurchaseLimitTests
                 That(rows.Any(row => row.ItemId == itemId && row.Count == maximum && row.Period == ItemPurchasePeriod.Weekly),
                     "真实NPC查询包含新商品限购回显");
             }
+            int today = ShopPurchaseCount.Today(now);
+            var history = current with { Inventory = current.Inventory with { ShopPurchases =
+            [
+                .. current.Inventory.ShopPurchases.Where(row => row.ItemId != 10309042),
+                new(0, 10309042, true, false, ShopPurchaseCount.PeriodDay(today, ItemPurchasePeriod.Weekly), 12) { Period = ItemPurchasePeriod.Weekly },
+                new(0, 10309042, true, false, today, 9) { Period = ItemPurchasePeriod.Daily },
+                new(0, 10309042, true, false, ShopPurchaseCount.PeriodDay(today, ItemPurchasePeriod.Monthly), 11) { Period = ItemPurchasePeriod.Monthly },
+                new(0, 10309042, false, false, ShopPurchaseCount.PeriodDay(today, ItemPurchasePeriod.Weekly), 5) { Period = ItemPurchasePeriod.Weekly }
+            ] } };
+            var projectedHistory = shop.PurchaseCounts(history, 626, now)!;
+            That(projectedHistory.Count(row => row.ItemId == 10309042) == 1 &&
+                projectedHistory.Single(row => row.ItemId == 10309042) is { AccountWide: true, Period: ItemPurchasePeriod.Weekly, Count: 12 },
+                "同item历史不同period及错误scope可保留于账本，但查询只回当前资源声明，不能合计或泄露角色额度");
+            var nativeHistory = NativePurchaseCounts(DfoServer.Network.Builders.Inventory.ShopPackets.PurchaseCounts(projectedHistory));
+            That(nativeHistory.Purchases.GetValueOrDefault(10309042) == 12 && nativeHistory.Sales.Count == 0,
+                "真实周限购查询经四组原生消费者恢复购买缓存，不恢复历史period或销售缓存");
             using (var otherOwner = owners.Acquire("product-other", () => { }))
             {
                 var other = repo.Create(otherOwner, new("QuotaOther", towns.Room, towns.InitialReturn) { Level = 95 });

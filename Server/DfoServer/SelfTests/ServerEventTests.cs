@@ -22,6 +22,38 @@ internal static class ServerEventTests
             var now = clock.GetUtcNow();
             var store = new ServerEventRepository(path);
             var events = new ServerEventService(store, clock);
+            const ushort strongway = 312;
+            var goldBeforeStrongway = store.Read(64);
+            ServerEventState? strongwayInitial = null;
+            try { strongwayInitial = events.Read(strongway); }
+            catch (InvalidDataException) { }
+            That(strongwayInitial is { Active: false, Schedule: { EventId: strongway, Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } } &&
+                store.Read(strongway) == new ServerEventSchedule(strongway),
+                "强者之路312已登记但未配置默认关闭，只读不补写活动版本");
+            var strongwayOn = DevelopmentRequest.Parse("event on 312", "10000").Event!.Execute(events);
+            That(strongwayOn is { Active: true, Schedule: { Revision: 1, OverrideActive: true } } &&
+                DevelopmentRequest.Parse("event on 312", "10000").Event!.Execute(events) == strongwayOn,
+                "312 GM on立即生效，同值开启不增加revision");
+            var strongwayOff = DevelopmentRequest.Parse("event off 312", "10000").Event!.Execute(events);
+            That(strongwayOff is { Active: false, Schedule: { Revision: 2, OverrideActive: false } },
+                "312 GM off关闭活动并提交独立revision");
+            var strongwayAuto = DevelopmentRequest.Parse("event auto 312", "10000").Event!.Execute(events);
+            That(strongwayAuto is { Active: false, Schedule: { Revision: 3, OverrideActive: null } },
+                "312没有时间表时auto恢复默认关闭");
+            var strongwayScheduled = DevelopmentRequest.Parse($"event schedule 312 {now.AddSeconds(1):yyyy-MM-ddTHH:mm:sszzz} {now.AddSeconds(3):yyyy-MM-ddTHH:mm:sszzz}", "10000").Event!.Execute(events);
+            That(!strongwayScheduled.Active && strongwayScheduled.Schedule.Revision == 4,
+                "312未来时间表持久提交revision，开始前不激活");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            That(events.Read(strongway).Active, "312时间表开始端点有效");
+            clock.Advance(TimeSpan.FromSeconds(2));
+            That(!events.Read(strongway).Active, "312时间表结束端点关闭");
+            var strongwayReopened = new ServerEventRepository(path);
+            That(new ServerEventService(strongwayReopened, clock).Read(strongway) == strongwayScheduled &&
+                store.Read(64) == goldBeforeStrongway,
+                "312服务与仓储重建恢复时间表及revision，不修改黄金牌64");
+            Reject<InvalidOperationException>(() => strongwayReopened.Save(strongwayOn.Schedule,
+                strongwayOn.Schedule with { OverrideActive = false }), "312旧revision不能覆盖已提交时间表");
+            now = clock.GetUtcNow();
             string mileagePath = Path.Combine(root, "mileage-permanent.db");
             var mileageClock = new ConsumableUseSessionTests.FakeClock();
             var mileageStore = new ServerEventRepository(mileagePath);

@@ -7,7 +7,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class PvpMatchingHandler(PvpArenaService arena, ServerLog log, TimeProvider? clock = null) : IGameCommandModule
+internal sealed class PvpMatchingHandler(PvpArenaService arena, ServerLog log, TimeProvider? clock = null,
+    Strongway2019Handler? strongway2019 = null) : IGameCommandModule
 {
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
 
@@ -21,6 +22,8 @@ internal sealed class PvpMatchingHandler(PvpArenaService arena, ServerLog log, T
     async Task<CommandResult> QueueAsync(GameConnectionContext context, Packet packet)
     {
         var request = PvpMatchingRequests.Match(packet.Body);
+        if (Strongway2019Requests.IsMatching(request) && strongway2019 is not null)
+            return await strongway2019.QueueAsync(context, request);
         ushort error = request.Kind != 1 || request.GameType is not (0 or 7) ? (ushort)2 :
             context.Session.ChannelEntry?.Type is not (8 or 24) ? (ushort)0x13 : (ushort)0;
         PvpMatchingPreferences? preferences = null;
@@ -54,6 +57,9 @@ internal sealed class PvpMatchingHandler(PvpArenaService arena, ServerLog log, T
 
     async Task<CommandResult> CancelAsync(GameConnectionContext context, Packet packet)
     {
+        var control = Strongway2019Requests.MatchingControl(packet.Body);
+        if (control.IsMatching && strongway2019 is not null)
+            return await strongway2019.CancelAsync(context, control);
         var request = PvpMatchingRequests.Cancel(packet.Body);
         bool total = context.Session.CurrentPvpArena?.Room.IsTotal ?? context.Session.CurrentPvpMatching?.IsTotal ?? false;
         if (request.Kind != 1 || request.GameType is not (0 or 7) ||

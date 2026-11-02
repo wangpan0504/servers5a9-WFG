@@ -19,7 +19,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         var sourcePosition = new InventorySlot(InventoryListType.Main, request.MaterialSlot);
         var source = before.Find(sourcePosition);
         var target = before.Find(request.Target);
-        long now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+        var utcNow = (clock ?? TimeProvider.System).GetUtcNow();
+        long now = utcNow.ToUnixTimeSeconds();
         bool reinforce = request.Mode == EnhancementMode.Reinforce;
         if (request.Mode is not (EnhancementMode.Amplify or EnhancementMode.LuckyAmplify or EnhancementMode.Reinforce) ||
             request.Target.List is not (InventoryListType.Main or InventoryListType.Equipment) || request.Target == sourcePosition ||
@@ -55,11 +56,16 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         bool portable = use?.Kind == AmplifyUseKind.Portable;
         int failureWeight = AdjustedFailureWeight(step.FailureWeight, portable ? use!.SuccessBonusWeight : 0,
             lucky ? 0 : guildSuccessPercent);
+        EnhancementSuccessBonus successBonus = default;
         if (!lucky && consumables is not null)
+        {
+            successBonus = EnhancementPotionPolicy.ActiveBonus(before.ConsumableStates, consumables.EnhancementPotions,
+                reinforce ? EnhancementPotionMode.Reinforce : EnhancementPotionMode.Amplify, utcNow.ToUnixTimeMilliseconds());
+            if (reinforce)
+                successBonus = EnhancementSuccessBonus.Max(successBonus, DisguiseUpgradeLuckPolicy.ActiveBonus(character, consumables, utcNow.ToUnixTimeMilliseconds()));
             failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
-                EnhancementPotionPolicy.ActiveBonusWeight(before.ConsumableStates, consumables.EnhancementPotions,
-                    reinforce ? EnhancementPotionMode.Reinforce : EnhancementPotionMode.Amplify,
-                    (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()));
+                successBonus.Weight);
+        }
         if (!portable && !lucky && source.Core.ItemId != step.MaterialId)
             return InventoryResult.Reject(RejectCode);
         int count = portable || lucky ? 1 : step.MaterialCount;
@@ -135,7 +141,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true, UsesLevelProbability = !lucky,
             TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
         return new(true, 0, new(before, after, reinforce ? lucky ? "equipment_reinforcement_lucky" : "equipment_reinforcement_portable" : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
-            "equipment_amplification_npc", new(character, deadline, clock)));
+            "equipment_amplification_npc", new(character, deadline, clock,
+                qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds)));
     }
 
     internal static int AdjustedFailureWeight(int failureWeight, int successBonusWeight, int guildSuccessPercent = 0)

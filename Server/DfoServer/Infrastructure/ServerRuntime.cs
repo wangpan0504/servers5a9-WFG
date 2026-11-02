@@ -26,6 +26,7 @@ using DfoServer.Game.Settings;
 using DfoServer.Game.Dungeons;
 using System.Diagnostics;
 using DfoServer.GameWorld.Channels;
+using DfoServer.Game.Strongway2019;
 
 namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
@@ -527,6 +528,11 @@ internal static class ServerRuntime
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
         IGameCommandModule dungeon;
+        Strongway2019Catalog? strongwayCatalog = null;
+        Strongway2019MatchingService? strongwayMatching = null;
+        Strongway2019Projection? strongwayProjection = null;
+        Strongway2019Handler? strongwayHandler = null;
+        Func<Game.Characters.Character, int>? strongwayAntiEvil = null;
         Game.Dungeons.PartyDungeonService? partyDungeons = null;
         EvildomWarCatalog? warCatalog = null;
         Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null;
@@ -650,6 +656,15 @@ internal static class ServerRuntime
             var despairRewards = new DungeonDespairRewardPolicy(DungeonAltarClearItemCatalog.Load(pvf),
                 itemResources.DungeonAltarItems, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
             partyDungeons = new(parties, repository, repository, hiddenDraw: evildomHiddenDraw, guideStore: repository);
+            strongwayCatalog = new(pvf);
+            strongwayAntiEvil = new Game.Characters.CharacterAntiEvil(itemResources.Items, new(pvf),
+                itemResources.RecoveryConsumables, clock, itemResources.Contracts, sets: new(pvf)).Compute;
+            strongwayMatching = new(parties, strongwayCatalog, clock, serverEvents: events, completionRecovery: true);
+            var strongwayProfiles = new Strongway2019ProfileProjection(repository, strongwayCatalog.DungeonStartDelay, repository);
+            projection.Strongway2019Profile = strongwayProfiles;
+            var strongwayRewards = new Strongway2019RewardProjection(itemResources.Items, repository, log, strongwayProfiles, online);
+            strongwayProjection = new(strongwayRewards, strongwayMatching, clock, strongwayCatalog);
+            var strongwayRoutes = new Strongway2019RouteService(strongwayCatalog, dungeonCatalog, rooms);
             warCatalog = EvildomWarCatalog.Load(pvf,dungeonCatalog);
             warPolicy = new(warCatalog,itemResources.Items,itemResources.Boosters);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
@@ -657,7 +672,14 @@ internal static class ServerRuntime
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
-                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart);
+                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart,
+                strongwayRoute: strongwayRoutes, strongwayMatching: strongwayMatching,
+                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards);
+            strongwayProjection.Depart = (context, holds) => ((DungeonHandler)dungeon).DepartStrongway2019Async(context, holds);
+            strongwayHandler = new(strongwayMatching, strongwayProjection,
+                new Strongway2019MatchingEntryService(strongwayMatching, parties, repository, repository, clock),
+                dungeonCatalog, rooms, drops, itemResources.Items, itemResources.EpicPieces, strongwayCatalog, clock,
+                context => ((DungeonHandler)dungeon).DepartStrongway2019Async(context), PrepareDrops, online: online);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
             var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
@@ -692,12 +714,13 @@ internal static class ServerRuntime
             new KeepaliveHandler(log),
             new PvpArenaHandler(arena, new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,learning,pvpMissionBook,pvpMissions), log, clock),
             new PvpTotalTeamHandler(totalTeams, log, inventoryProjection, totalTeamProjection),
-            new PvpMatchingHandler(arena, log, clock),
+            new PvpMatchingHandler(arena, log, clock, strongwayHandler),
+            .. strongwayHandler is null ? [] : new IGameCommandModule[] { strongwayHandler },
             new PvpChannelHandler(gameChannels, log),
             new PvpRecordHandler(pvpRecords, online, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
-                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents),
+                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents, strongwayProjection),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena, tradeHandler),
             tradeHandler,
@@ -732,7 +755,7 @@ internal static class ServerRuntime
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,
                 new Game.ExpertJob.ExpertJobLearning(expertJobs, itemResources.Items, clock), expertJobs),
-            new ConsumableDisguiseHandler(projection, log, clock),
+            new ConsumableDisguiseHandler(projection, log, new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), clock),
             weaponSkinHandler,
             rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
@@ -743,7 +766,8 @@ internal static class ServerRuntime
                 cashShop,
                 inventoryProjection, log,
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
-                    itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection),
+                    itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection,
+                serverEvents: events, strongwayShops: itemResources.Shops),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
@@ -892,7 +916,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection);
         if (options.EnableHostedDungeonEligibility)
             game.AttachHostedDungeonEligibility(new HostedDungeonEligibilityCoordinator(
                 new HostedDungeonEligibilityOptions
@@ -963,6 +987,14 @@ internal static class ServerRuntime
             {
                 while (await pulse.WaitForNextTickAsync(stop))
                 {
+                    if (strongwayHandler is not null)
+                    {
+                        try { await strongwayHandler.MaintainAsync(stop); }
+                        catch (Exception error) when (error is System.Data.Common.DbException or IOException)
+                        {
+                            log.Write("strongway2019_maintenance_failed", new { Error = error.GetType().Name, error.Message });
+                        }
+                    }
                     var expired = await arena.MaintainMatchingAsync(time.GetUtcNow(), stop, (room, exception) =>
                         log.Write("pvp_maintenance_failed", new { Room = room, Error = exception.Message }));
                     if (expired.Length != 0) arena.Publish(expired);

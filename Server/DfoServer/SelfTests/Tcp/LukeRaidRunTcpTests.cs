@@ -350,6 +350,9 @@ internal static partial class LukeRaidRunTcpTests
             int movie=result.FindIndex(packet=>packet is {Kind:0,Opcode:601});
             That(movie>=0&&result.Count(packet=>packet is {Kind:0,Opcode:601})==1&&result[movie].Body[1]==phase,
                 "不发送42或72，阶段末全团各自立即收到一次真实阶段动画");
+            if(!requireRunClear)
+                That(!result.Any(packet=>packet is {Kind:0,Opcode:31 or 115 or 34 or 35}),
+                    "纯设施662终点全团不补造清图许可、Boss死亡确认或普通评分翻牌");
             if(members.Contains(peer))
             {
                 int town=result.FindIndex(packet=>packet is {Kind:0,Opcode:24});

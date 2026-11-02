@@ -92,6 +92,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var participant = parsed!.Participants.SingleOrDefault(member => member.ActorId == context.Session.Selected?.Id);
         if (participant is null) return CommandResult.Unhandled;
+        if (context.Strongway2019 is { } strongway) await strongway.BeforeSettlementAsync(context);
         // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(participant.ActorId, participant.RankPoint, parsed.MaximumRankPoint,

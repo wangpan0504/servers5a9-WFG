@@ -48,7 +48,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Events.ServerEventService? serverEvents = null,
     DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null, SettingsProjection? settingsProjection = null,
     DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null,
-    DfoServer.Game.Dungeons.SpringTreasureDropPolicy? springTreasure = null) : IConnectionProtocol
+    DfoServer.Game.Dungeons.SpringTreasureDropPolicy? springTreasure = null,
+    DfoServer.GameWorld.Dungeons.Strongway2019Catalog? strongway2019 = null,
+    Func<DfoServer.Game.Characters.Character, int>? strongway2019AntiEvil = null,
+    DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
+    Strongway2019Projection? strongwayProjection = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -93,7 +97,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
-            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure);
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
+            strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
@@ -233,6 +238,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.EvildomWarCleanupFailed = error => log.Write("evildom_war_cleanup_failed", new
             { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);
+        if (strongwayProjection is not null)
+        {
+            context.Strongway2019 = strongwayProjection;
+            session.Strongway2019NoticeArrived = notice => strongwayProjection.DeliverAsync(context, notice);
+            session.Strongway2019RecoveryArrived = character => strongwayProjection.RecoverReadyRewardsAsync(context, character);
+        }
         long partyEpoch = session.SelectionEpoch;
         DfoServer.Game.Trade.TradeParticipant? tradeParticipant = null;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
@@ -345,6 +356,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 {
                     if (tradeParticipant is { } previous && beforeTradeView is { } previousView) trade?.Release(previous, previousView);
                     tradeParticipant = null;
+                    if (strongwayMatching?.MatchFor(session) is { } previousStrongway && strongwayProjection is not null)
+                        await strongwayProjection.TerminalAsync(previousStrongway);
+                    strongwayMatching?.Detach(session, session.Ready ? session.SelectionEpoch : null);
                     await PartyDungeonProjection.DetachAsync(context);
                     // 只拆上一选角代次；Ready期间恢复的真实席位已经绑定当前代次。
                     parties?.Detach(session, session.Ready ? session.SelectionEpoch : null);
@@ -446,6 +460,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 }
             }
             online.RemoveConnection(connection.Id, session);
+            if (strongwayProjection is not null) await strongwayProjection.BeforeDepartureAsync(context);
+            strongwayMatching?.Detach(session);
             await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);
             if (arena is not null) arena.Publish(await arena.DetachAsync(session));

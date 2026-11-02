@@ -12,6 +12,7 @@ internal static partial class ShopPurchaseLimitTests
 {
     public static void RunCore()
     {
+        PurchaseCountWireContract();
         var beforeReset = new DateTimeOffset(2026, 11, 4, 21, 59, 59, TimeSpan.Zero);
         var price = Parse("`account` `weekly` 12");
         That(price.PeriodicLimit is { AccountWide: true, Count: 12, Period: ItemPurchasePeriod.Weekly } && price.Limit is null,
@@ -52,8 +53,8 @@ internal static partial class ShopPurchaseLimitTests
         byte[] packet = ShopPackets.PurchaseCounts(two.ShopPurchases.ToArray());
         int I32(int at) => BinaryPrimitives.ReadInt32LittleEndian(packet.AsSpan(at, 4));
         That(packet.Length == 33 && packet[0] == 1 && I32(1) == 1 && I32(5) == 10309042 && I32(9) == 2 &&
-            I32(13) == 1 && I32(17) == 10309042 && I32(21) == 2 && I32(25) == 0 && I32(29) == 0,
-            "715新旧限购分别写两套原生缓存并保留四组完整包体");
+            I32(13) == 0 && I32(17) == 1 && I32(21) == 10309042 && I32(25) == 2 && I32(29) == 0,
+            "715新旧购买计数经第1/3组写同一购买缓存，销售第2/4组为空");
         foreach (string declaration in new[] { "`account` `weekly` 0", "`account` `weekly` -1", "`account` `weekly` 2147483648",
             "`account` `weekly` 1 2", "`unknown` `weekly` 1", "`account` `yearly` 1", "`account` `weekly` 1 junk",
             "`account` `agitwarseason` 5", "`unknown` `agitwarseason` 5", "`character` `agitwarseason` 0",
@@ -99,6 +100,50 @@ internal static partial class ShopPurchaseLimitTests
             "合法声明后的赛季及空声明按原顺序共同保留，不能静默覆盖成可购买");
         That(ItemShopPrice.Parse(new("[price]\n10"), false, 0).PeriodicLimit is null,
             "没有周期声明的普通商品不新增限购");
+    }
+
+    static void PurchaseCountWireContract()
+    {
+        That(ShopPackets.PurchaseCounts(null).SequenceEqual(new byte[] { 0, 17, 0 }),
+            "715失败仍为原有错误应答，不伪造成功空表");
+        var empty = NativePurchaseCounts(ShopPackets.PurchaseCounts([]));
+        That(empty.Purchases.Count == 0 && empty.Sales.Count == 0,
+            "715空成功保留四组并清空原生缓存");
+        ShopPurchaseCount[] rows =
+        [
+            new(626, 1001, true, false, 0, 2),
+            new(626, 1002, false, false, 0, 3),
+            new(0, 490013019, true, false, 0, 1) { Period = ItemPurchasePeriod.Accumulate },
+            new(0, 1004, false, false, 0, 5) { Period = ItemPurchasePeriod.Daily }
+        ];
+        var decoded = NativePurchaseCounts(ShopPackets.PurchaseCounts(rows));
+        That(decoded.Purchases.Count == 4 && decoded.Purchases[1001] == 2 && decoded.Purchases[1002] == 3 &&
+            decoded.Purchases.GetValueOrDefault(490013019) == 1 && decoded.Purchases.GetValueOrDefault(1004) == 5 && decoded.Sales.Count == 0,
+            "715周期与旧式账号/角色购买次数均恢复购买缓存，不能投进销售缓存");
+        var overlap = NativePurchaseCounts(ShopPackets.PurchaseCounts(
+            [new(626, 1001, true, false, 0, 2), new(0, 1001, false, false, 0, 7) { Period = ItemPurchasePeriod.Accumulate }]));
+        That(overlap.Purchases is { Count: 1 } && overlap.Purchases[1001] == 7 && overlap.Sales.Count == 0,
+            "715第1/3组同item按原生设值覆盖，不叠加账号/角色或新旧计数");
+    }
+
+    // 02350220的四组消费：1/3调用01FD4740，2/4调用01FD4760；两者都是按item设值。
+    internal static (Dictionary<int, int> Purchases, Dictionary<int, int> Sales) NativePurchaseCounts(byte[] body)
+    {
+        using var reader = new BinaryReader(new MemoryStream(body));
+        That(reader.ReadByte() == 1, "原生计数夹具只解成功包");
+        var purchases = new Dictionary<int, int>();
+        var sales = new Dictionary<int, int>();
+        for (int group = 0; group < 4; group++)
+        {
+            int count = reader.ReadInt32();
+            for (int row = 0; row < count; row++)
+            {
+                int item = reader.ReadInt32(), purchased = reader.ReadInt32();
+                (group % 2 == 0 ? purchases : sales)[item] = purchased;
+            }
+        }
+        That(reader.BaseStream.Position == body.Length, "715四组消费到包尾");
+        return (purchases, sales);
     }
 
     static ItemShopPrice Parse(string body) => ItemShopPrice.Parse(new("[purchase limit]\n" + body + "\n[/purchase limit]"), false, 0);

@@ -2,7 +2,10 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
 using PvfLib;
@@ -21,17 +24,40 @@ internal static class AuraSkinTests
             "[account]", ushort.MaxValue, 0, "光环幻化券", "[material] 0");
         var role = new Character(1, 0, "Aura", 0, new(1, 0, 0, 0), null)
             { Level = 60, EquipmentSlotFlags = 17, Inventory = new([ticket]) };
-        const string action = "[action type]\n`[open aura skin slot]`\n[action usable place]\n`[village]`\n" +
+        const string action = "[stackable type]\n`[etc]` 1\n[action type]\n`[open aura skin slot]`\n[action usable place]\n`[village]`\n" +
             "[use action packet]\n0\n[cool time]\n1000";
         That(ItemCatalog.ReadAuraSkinAction(new(action)), "127券需要资源完整声明光环开栏动作、地点及确认发送模式");
         foreach (string invalid in new[] { action.Replace("aura", "creature"), action.Replace("village", "dungeon"),
-            action.Replace("\n0\n", "\n1\n"), action + "\n[action type]\n`[open aura skin slot]`" })
+            action.Replace("\n0\n", "\n1\n"), action + "\n[action type]\n`[open aura skin slot]`",
+            action.Replace("`[etc]` 1", "`[material]` 0"), action.Replace("`[etc]` 1", "`[etc]` 0") })
             That(!ItemCatalog.ReadAuraSkinAction(new(invalid)), "未知、缺失或重复127动作声明不能成为可使用券");
         var open = InventoryCreatureSkinService.PlanUnlock(role, 121, 11, 1000, template);
         That(!InventoryCreatureSkinService.PlanAuraAction(role, 121, 1000, template).Accepted &&
-            InventoryCreatureSkinService.PlanAuraAction(role, 121, 1000,
+            !InventoryCreatureSkinService.PlanAuraAction(role, 121, 1000,
                 template with { OpensAuraSkinSlot = true }).Accepted,
-            "旧材料券仍可走865；只有完整127资源声明才能通过515右键使用");
+            "旧材料券仍可走865；不能仅伪造动作标志把材料券当etc1动作券");
+        var eventTemplate = template with
+        { Id = 490013030, Kind = ItemKind.Consumable, StackableType = "[etc] 1", OpensAuraSkinSlot = true };
+        var eventTicket = ticket with { Position = new(InventoryListType.Main, 65),
+            Core = ticket.Core with { ItemId = eventTemplate.Id, Kind = ItemKind.Consumable } };
+        var eventRole = role with { Inventory = new([eventTicket]) };
+        var eventOpen = InventoryCreatureSkinService.PlanAuraAction(eventRole, 65, 1000, eventTemplate);
+        That(eventOpen.Accepted && eventOpen.Plan is { Changed: true, EquipmentSlotFlagsAfter: 25 } &&
+            eventOpen.Plan.After.Find(eventTicket.Position) is { Uid: 91, Core.Count: 1, Core.SortLockFlag: 1 },
+            "etc1活动动作券在消耗品页扣一张并只开光环bit3，保留UID及排序锁");
+        That(!InventoryCreatureSkinService.PlanUnlock(eventRole, 65, 11, 1000, eventTemplate).Accepted,
+            "活动动作券不借865材料入口代替原生使用合同");
+        foreach (var bad in new[] { eventTemplate with { OpensAuraSkinSlot = false },
+            eventTemplate with { StackableType = "[etc] 0" }, eventTemplate with { Kind = ItemKind.Material },
+            eventTemplate with { UseForbidden = true } })
+            That(!InventoryCreatureSkinService.PlanAuraAction(eventRole, 65, 1000, bad).Accepted,
+                "活动动作券拒绝未声明动作、错误类型及不可使用资源");
+        That(!InventoryCreatureSkinService.PlanAuraAction(eventRole with { EquipmentSlotFlags = 25 }, 65, 1000, eventTemplate).Accepted &&
+            !InventoryCreatureSkinService.PlanAuraAction(eventRole with { Inventory = new([eventTicket with
+            { Core = eventTicket.Core with { EquipmentLockId = 1 } }]) }, 65, 1000, eventTemplate).Accepted &&
+            !InventoryCreatureSkinService.PlanAuraAction(eventRole with { Inventory = new([eventTicket with
+            { Core = eventTicket.Core with { ExpireTime = 1000 } }]) }, 65, 1000, eventTemplate).Accepted,
+            "活动动作券保持已开通、安全锁及到期边界拒绝");
         That(open.Accepted && open.Plan is { Changed: true, EquipmentSlotFlagsAfter: 25 } &&
             open.Plan.After.Find(ticket.Position)?.Core.Count == 1 &&
             open.Plan.After.Find(ticket.Position)?.Uid == ticket.Uid &&
@@ -87,6 +113,51 @@ internal static class AuraSkinTests
             "11卸装不冻结不存在的霸王契约期限");
         RunRepository(ticket, template);
         RunMoveRepository(catalog, skin, nativeSkin, ticket, template);
+    }
+
+    public static void RunEventTicketResources(TownCatalog towns, ItemResources resources)
+    {
+        int before = Count;
+        var template = resources.Items.Get(490013030);
+        var material = resources.Items.Get(490700411);
+        That(template is { Kind: ItemKind.Consumable, StackableType: "[etc] 1", OpensAuraSkinSlot: true } &&
+            material is { Kind: ItemKind.Material, StackableType: "[material] 0", OpensAuraSkinSlot: false },
+            "真实活动券按etc1及完整动作声明准入，旧材料券没有动作声明");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-aura-event-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("aura-event", () => { });
+            var role = repository.Create(owner, new("AuraEvent", towns.Room, towns.InitialReturn)
+            { Level = 95, EquipmentSlotFlags = 17 });
+            var inventory = new InventoryService(resources.Items, resources.GoldLimits, resources.EpicPieces);
+            role = InventoryService.Commit(repository, owner, role, inventory.Grant(role, [new(490013030, 2)]));
+            var source = role.Inventory.Items.Single(item => item.Core.ItemId == 490013030);
+            That(source.Position.List == InventoryListType.Main && source.Position.Index is >= 65 and <= 120,
+                "真实活动券由正式Grant进入消耗品页，不伪造成材料页核心");
+            var session = new GameSession(repository, towns, owner);
+            session.Select(role.Slot, resumeTown: true); session.MarkReady();
+            var service = new InventoryCreatureSkinService(resources.Items);
+            InventoryResult Plan(Character character) => service.PlanAuraAction(character,
+                checked((ushort)source.Position.Index), (byte)InventoryListType.Main, InventoryCreatureSkinService.AuraAction,
+                service.Clock.GetUtcNow().ToUnixTimeSeconds());
+            var result = session.PlanAndCommitInventory(Plan, InventoryCreatureSkinService.Rejection);
+            That(result.Accepted && result.Receipt is not null &&
+                ReferenceEquals(result.Receipt.Character, session.Selected) &&
+                session.Selected is { EquipmentSlotFlags: 25 } &&
+                session.Selected.Inventory.Find(source.Position) is { Core.Count: 1 } remaining && remaining.Uid == source.Uid,
+                $"活动动作券沿正式Session原子提交扣一及bit3：accepted={result.Accepted}, error={result.Error}, reason={result.RejectReason}");
+            var restored = new CharacterRepository(Path.Combine(root, "game.db")).LoadCharacter(owner, role.Slot);
+            That(restored.EquipmentSlotFlags == 25 && restored.Inventory.Find(source.Position) is { Core.Count: 1 },
+                "活动券消费与光环资格由新Repository恢复");
+            string committed = JsonSerializer.Serialize(repository.List(owner));
+            That(!session.PlanAndCommitInventory(Plan, InventoryCreatureSkinService.Rejection).Accepted &&
+                committed == JsonSerializer.Serialize(repository.List(owner)),
+                "活动券已开通后重复请求不再扣券或改变存档");
+        }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
+        Console.WriteLine($"PASS {Count - before} 首期活动光环券真实资源及库存事务断言");
     }
 
     static void RunMoveRepository(ItemCatalog catalog, InventoryItem skin, InventoryItem nativeSkin,

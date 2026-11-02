@@ -120,6 +120,7 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem);
 
     public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
+        DfoServer.Game.Strongway2019.Strongway2019ShopRules.Handles(shopId) ? InventoryResult.Reject(17) :
         PlanAndCommitInventory(plan, 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
             additionalGuard: shopId switch
             {

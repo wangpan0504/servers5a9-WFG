@@ -18,6 +18,7 @@ internal sealed class SessionHandler(TownProjection projection, ServerLog log) :
     {
         byte mode = SessionRequests.Exit(request.Body);
         byte[] ack = SessionPackets.Exit();
+        if (context.Strongway2019 is not null) await context.Strongway2019.BeforeDepartureAsync(context);
         context.Session.ReturnToRoster();
         context.Activity?.Reset();
         await projection.DetachAsync(context);

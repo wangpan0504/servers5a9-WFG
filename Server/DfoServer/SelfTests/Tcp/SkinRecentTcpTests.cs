@@ -21,7 +21,7 @@ internal static class SkinRecentTcpTests
             assets.Skins.DamageFonts.Contains(3) && assets.Skins.Token(10303302) is { Type: 2, SkinId: 8 } &&
             assets.Skins.Token(490010773) is { Type: 0, SkinId: 420000001, AccountWide: true },
             "最近获得专项使用正式资源的五类皮肤和真实入库券");
-        await using var fixture = new TcpTestFixture(source, root, resources: resources, clock: clock);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "skin-recent"), resources: resources, clock: clock);
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {

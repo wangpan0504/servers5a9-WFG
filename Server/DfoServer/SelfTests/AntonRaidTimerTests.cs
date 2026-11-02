@@ -157,15 +157,13 @@ internal static class AntonRaidTimerTests
                 var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
                 using var blocked = battle.ReserveDungeon(new(battle.Instance, 1, 1), 218, [(actor, identity)]);
                 That(blocked is null, "本人仍在旧Run时不能并行安装新Run");
-                battle.ReleaseDungeon(actor, heldRun);
-                var released = battle.View;
-                // 退场会推进战况revision；应验证阶段、资源与deadline保留，不能要求View引用不变。
-                That(released.Phase == started.Phase && released.State == started.State && !released.PhaseExpired &&
-                    released.PhaseClockGeneration == started.PhaseClockGeneration &&
-                    ReferenceEquals(released.Dungeons, started.Dungeons) && ReferenceEquals(released.Symbols, started.Symbols) &&
-                    ReferenceEquals(released.TimerAnchors, started.TimerAnchors), "旧Run退场不重置P2资源或deadline");
+                var released = battle.ReleaseDungeon(actor, heldRun);
+                var afterRelease = battle.View;
+                That(released is not null && ReferenceEquals(released.Before, started) && ReferenceEquals(released.After, afterRelease) &&
+                    afterRelease.Revision == checked(started.Revision + 1) && afterRelease == (started with { Revision = afterRelease.Revision }),
+                    "旧Run合法退场仅递增一次revision，保留完整P2状态、计时锚点与目标代");
                 clock.FireQueued();
-                That(ReferenceEquals(released, battle.View), "旧回调不重置P2或释放新占用");
+                That(ReferenceEquals(afterRelease, battle.View), "旧Run退场和旧回调不重置P2或释放新占用");
                 Clear(battle, actor, 218);
                 That(battle.View.Phase == 1 && battle.View.Symbols["[218 dgn hp]"] == 0, "旧Run正常退出后保留P2合法进图能力");
             }

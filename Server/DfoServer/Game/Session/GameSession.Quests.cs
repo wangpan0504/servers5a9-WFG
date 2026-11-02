@@ -74,6 +74,11 @@ internal sealed partial class GameSession
         var rejection = new QuestRefusalReceipt(expected, owner.Generation, captured.SelectionEpoch, captured.Identity) { Phase = captured.Phase };
         if (!quests.TryGet(questId, out var quest))
             return new(QuestFinishOutcome.Unsupported, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.ResourceUnsupported };
+        bool strongwayQuest = QuestStrongway2019Entry.Supports(quest);
+        var strongwaySchedule = strongwayQuest ? CaptureStrongway2019QuestSchedule() : null;
+        if (strongwayQuest && captured.Pending is null && !IsCurrentStrongway2019QuestSchedule(strongwaySchedule))
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动未开启" };
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
@@ -136,8 +141,10 @@ internal sealed partial class GameSession
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
                 stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
-                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear);
+                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest);
             if (preparation.Plan is { } planned) planned.PvpRating = rank;
+            if (strongwayQuest && preparation.Plan is { } strongwayPlan)
+                strongwayPlan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
         }
         return owner.Execute(() =>
         {
@@ -149,6 +156,10 @@ internal sealed partial class GameSession
                     preparation.Failure == QuestCompletionFailure.InventoryCapacity
                     ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = preparation.Failure, Reason = preparation.Reason };
             var plan = preparation.Plan;
+            if (strongwayQuest && captured.Pending is null && (!IsCurrentStrongway2019QuestSchedule(strongwaySchedule) ||
+                plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
+                return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                    { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动前提已变化" };
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);
             var commit = repository.CommitQuestCompletion(owner, plan);

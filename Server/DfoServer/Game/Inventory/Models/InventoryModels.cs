@@ -138,7 +138,7 @@ internal sealed class InventoryEventRejectedException() : InvalidOperationExcept
 
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
 internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null, TimeProvider? clock = null,
-    bool requirePosition = false, bool requireMarriageState = false)
+    bool requirePosition = false, bool requireMarriageState = false, long? qualificationExpiresAtMilliseconds = null)
 {
     readonly ushort id = character.Id;
     readonly long revision = character.Revision;
@@ -156,8 +156,17 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
         value.GrowType == grow && value.Level == level && value.EquipmentSlotFlags == equipmentSlots &&
         skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position) &&
         (marriage is null || marriage.Value.Id == value.Marriage?.Id && marriage.Value.State == (value.Marriage?.State ?? 0));
-    public bool IsExpired(long? utcSeconds = null) => qualificationExpiresAt is not null &&
-        (utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) >= qualificationExpiresAt.Value;
+    public bool IsExpired(long? utcSeconds = null)
+    {
+        if (qualificationExpiresAt is null && qualificationExpiresAtMilliseconds is null) return false;
+        if (utcSeconds is { } seconds)
+            return qualificationExpiresAt is { } secondsDeadline && seconds >= secondsDeadline ||
+                qualificationExpiresAtMilliseconds is { } millisecondsDeadline && (decimal)seconds * 1000 >= millisecondsDeadline;
+        // 同一次时钟读取保留临时效果的毫秒边界，不提前取整，也不延长资格。
+        var now = (clock ?? TimeProvider.System).GetUtcNow();
+        return qualificationExpiresAt is { } deadline && now.ToUnixTimeSeconds() >= deadline ||
+            qualificationExpiresAtMilliseconds is { } deadlineMilliseconds && now.ToUnixTimeMilliseconds() >= deadlineMilliseconds;
+    }
     // 组合多个移动步骤时取最早到期；只供同一程序集内的业务规划读取。
     internal long? QualificationExpiresAt => qualificationExpiresAt;
     internal DfoServer.GameWorld.Towns.Location? RequiredPosition => position;

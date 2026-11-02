@@ -608,7 +608,30 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             for (int at = 0; at < grants.Count; at++) grants[at] = grants[at] with { CustomAbilityGrade = customGrade };
         }
         InventoryResult grant;
-        if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
+        if (source.Core is { ItemId: 490013316, Strongway2019FrameOrigin: { Version: 1 } } &&
+            grants is [{ ItemId: 490013318, Count: > 0 } frameReward])
+        {
+            var frameTemplate = catalog.Get(490013318);
+            if (frameTemplate is not { Kind: ItemKind.Consumable, StackLimit: 1 })
+                return InventoryResult.Reject(19);
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, paid.Expansion);
+            var occupied = paid.Items.Select(item => item.Position).ToHashSet();
+            var positions = Enumerable.Range(range.Start, range.End - range.Start + 1)
+                .Select(index => new InventorySlot(InventoryListType.Main, checked((short)index)))
+                .Where(position => !occupied.Contains(position)).Take(frameReward.Count).ToArray();
+            if (positions.Length != frameReward.Count)
+                return InventoryResult.Reject(4);
+            var core = InventoryRewardGrantService.Create(frameTemplate, utcNow: now,
+                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod) with
+                { Strongway2019FrameOrigin = source.Core.Strongway2019FrameOrigin };
+            // 318每张独占一格；原通用发放会先命中同来源的满堆，不能承接这条新兑换链。
+            var granted = paid with { Items = paid.Items.AddRange(positions.Select(position =>
+                InventoryRewardGrantService.CreateItem(frameTemplate, position, core)))
+                .OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
+            granted.Validate(allocating: true);
+            grant = new(true, 0, new(paid, granted, "reward_grant"));
+        }
+        else if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&

@@ -27,7 +27,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null,
     PvpTotalTeamProjection? totalTeamProjection = null, PvpMissionProjection? pvpMissions = null,
     DfoServer.Game.Pvp.PvpMissionBook? missionBook = null, ItemCatalog? renameItems = null,
-    SelectionContentsProjection? selectionContents = null) : IGameCommandModule
+    SelectionContentsProjection? selectionContents = null, Strongway2019Projection? strongway2019 = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -113,6 +113,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
+        if (strongway2019 is not null) await strongway2019.RecoverRewardsAsync(context);
         if (warRewards is not null)
         {
             var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy);

@@ -173,6 +173,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             Job = character.Job,
             GrowType = character.GrowType,
             Level = character.Level,
+            EquipmentSlotFlags = character.EquipmentSlotFlags,
             AcceptedStoryLevel = character.AcceptedStoryLevel,
             CompletedQuests = [.. character.CompletedQuests],
             AccountCompletedQuests = accountQuests.Completed,

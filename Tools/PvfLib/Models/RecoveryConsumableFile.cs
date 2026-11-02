@@ -25,6 +25,9 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public ImmutableArray<int> LimitDungeons { get; init; } = [];
     public ImmutableArray<int>? ActionUsableDungeons { get; init; }
     public DisguiseDeclaration? Disguise { get; init; }
+    public ImmutableArray<DisguiseDeclaration> RandomDisguises { get; init; } = [];
+    public ImmutableArray<StatChangeDeclaration> DisguiseAppendages { get; init; } = [];
+    public int? UnlimitedWaste { get; init; }
 
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -66,6 +69,10 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         var duration = Duration(document, resolve, errors);
         var statChanges = StatChangesFrom(document, resolve, errors);
         var disguise = stackable.TypeDeclaration?.Label == "[disguise]" ? DisguiseFrom(document, resolve, errors) : null;
+        var randomDisguises = stackable.TypeDeclaration?.Label == "[random disguise]"
+            ? RandomDisguisesFrom(document, resolve, errors) : [];
+        var disguiseAppendages = DisguiseAppendagesFrom(document, resolve, errors);
+        int? unlimitedWaste = Scalar("unlimited waste");
         byte? effects = Maintenance(document, "effect maintenance", 4, errors);
         byte? cooldowns = Maintenance(document, "cooltime maintenance", 3, errors);
         int? bonus = ExpBonus(document, "exp bonus rate", errors);
@@ -88,7 +95,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
             StatChangeDuration = duration, StatChanges = statChanges,
             EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits,
-            ActionUsableDungeons = usable, Disguise = disguise };
+            ActionUsableDungeons = usable, Disguise = disguise, RandomDisguises = randomDisguises,
+            DisguiseAppendages = disguiseAppendages, UnlimitedWaste = unlimitedWaste };
     }
 
     static DisguiseDeclaration? DisguiseFrom(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
@@ -102,6 +110,43 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         // 变身只保留完整的一组形态与时长，不从多选或随机向量挑一个默认值。
         errors.Add("变身形态及持续时间声明不完整");
         return null;
+    }
+
+    static ImmutableArray<DisguiseDeclaration> RandomDisguisesFrom(PvfTokenDocument document,
+        Func<int, string> resolve, List<string> errors)
+    {
+        var kinds = document.Sections.Where(section => section.Name == "string data").ToArray();
+        var parameters = document.Sections.Where(section => section.Name == "int data").ToArray();
+        if (kinds is [{ Children.Length: 0, Values.Length: > 0 } strings] &&
+            parameters is [{ Children.Length: 0 } integers] && integers.Values.Length == strings.Values.Length * 2 &&
+            strings.Values.All(token => token.Type == 6) && integers.Values.All(token => token.Type == 0 && token.Value > 0))
+        {
+            var entries = ImmutableArray.CreateBuilder<DisguiseDeclaration>(strings.Values.Length);
+            for (int i=0;i<strings.Values.Length;i++)
+                entries.Add(new(resolve(strings.Values[i].Value),integers.Values[2*i].Value,integers.Values[2*i+1].Value));
+            return entries.MoveToImmutable();
+        }
+        errors.Add("随机变身类型及形态时长向量不完整");
+        return [];
+    }
+
+    static ImmutableArray<StatChangeDeclaration> DisguiseAppendagesFrom(PvfTokenDocument document,
+        Func<int, string> resolve, List<string> errors)
+    {
+        var sections = document.Sections.Where(section => section.Name == "disguise appendage").ToArray();
+        if (sections.Length == 0) return [];
+        if (sections is [{ Children.Length: 0, Values.Length: > 0 } section] && section.Values.Length % 3 == 0)
+        {
+            var entries = ImmutableArray.CreateBuilder<StatChangeDeclaration>(section.Values.Length / 3);
+            for (int i=0;i<section.Values.Length;i+=3)
+            {
+                if (section.Values[i].Type != 6 || section.Values[i+1].Type != 6 || section.Values[i+2].Type != 0) break;
+                entries.Add(new(resolve(section.Values[i+1].Value),section.Values[i+2].Value,resolve(section.Values[i].Value)));
+            }
+            if (entries.Count == section.Values.Length / 3) return entries.MoveToImmutable();
+        }
+        errors.Add("变身附加属性三元组不完整");
+        return [];
     }
 
     static bool CompleteIntegerScalars(IEnumerable<PvfTokenSection> sections) =>
@@ -127,9 +172,10 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         return [];
     }
 
-    // 日次数仅兼容相同完整值的重复声明，冲突值继续保留诊断及无效状态。
+    // 日次数及恢复目录的正堆叠上限仅兼容相同完整值，冲突或坏声明继续保留诊断。
     static bool AllowsRepeatedScalar(string name, IEnumerable<PvfTokenSection> sections) =>
-        name is "cool time" or "cooltime group" || name == "total usable count" &&
+        name is "cool time" or "cooltime group" ||
+        (name == "total usable count" || name == "stack limit" && sections.All(section => section.Values[0].Value > 0)) &&
         sections.Select(section => section.Values[0].Value).Distinct().Count() == 1;
 
     static int? ExpBonus(PvfTokenDocument document, string field, List<string> errors)

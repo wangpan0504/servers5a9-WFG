@@ -224,7 +224,7 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
             var declaration = Regex.Match(body, @"\A\s*`(account|character)`\s+`(daily|weekly|monthly|accumulate)`\s+([0-9]+)\s*\z", RegexOptions.IgnoreCase);
             if (!declaration.Success || !int.TryParse(declaration.Groups[3].Value, out int maximum) || maximum <= 0)
                 throw new InvalidDataException("NPC 商品周期限购声明无效");
-            // 原生0413D9C4..0413DB06逐次重写范围、周期和数量；每条完整后采用最后一条。
+            // 原生0413DB8D..0413DD84读取purchase limit并写STK+E30/+E2C；前段+2D4属于sale limit。
             periodicLimit = new(declaration.Groups[1].Value.Equals("account", StringComparison.OrdinalIgnoreCase), maximum, false)
             {
                 Period = declaration.Groups[2].Value.ToLowerInvariant() switch

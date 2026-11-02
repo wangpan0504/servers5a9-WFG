@@ -2300,3 +2300,74 @@ CREATE TABLE character_privilege_service(
   daily_claim_day INTEGER NOT NULL CHECK(daily_claim_day BETWEEN 0 AND last_login_day),
   claimed_milestones INTEGER NOT NULL CHECK(claimed_milestones BETWEEN 0 AND 4294967295)
 );
+
+CREATE TABLE account_strongway2019_rewards(
+  account TEXT NOT NULL,
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  character_id INTEGER NOT NULL CHECK(typeof(character_id)='integer' AND character_id BETWEEN 1 AND 65535),
+  task_attempt INTEGER NOT NULL CHECK(typeof(task_attempt)='integer' AND task_attempt>0),
+  run_epoch INTEGER NOT NULL CHECK(typeof(run_epoch)='integer' AND run_epoch>=0),
+  dungeon_id INTEGER NOT NULL CHECK(typeof(dungeon_id)='integer' AND dungeon_id IN(5359,5363,5360)),
+  bucket INTEGER NOT NULL CHECK(typeof(bucket)='integer' AND bucket IN(0,1)),
+  day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+  week INTEGER NOT NULL CHECK(typeof(week)='integer' AND week>0),
+  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json) AND json_type(reward_json)='object'),
+  fact_json TEXT NOT NULL CHECK(json_valid(fact_json) AND json_type(fact_json)='object'),
+  mail_id INTEGER NOT NULL CHECK(typeof(mail_id)='integer' AND mail_id>0),
+  PRIMARY KEY(account,instance_id),
+  UNIQUE(account,bucket,day),
+  CHECK((bucket=0 AND dungeon_id IN(5359,5363)) OR (bucket=1 AND dungeon_id=5360))
+);
+CREATE INDEX account_strongway2019_rewards_week ON account_strongway2019_rewards(account,bucket,week);
+
+CREATE TABLE character_strongway2019_statistics(
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(typeof(character_id)='integer' AND character_id BETWEEN 1 AND 65535),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  task_attempt INTEGER NOT NULL CHECK(typeof(task_attempt)='integer' AND task_attempt>0),
+  run_epoch INTEGER NOT NULL CHECK(typeof(run_epoch)='integer' AND run_epoch>=0),
+  dungeon_id INTEGER NOT NULL CHECK(typeof(dungeon_id)='integer' AND dungeon_id IN(5359,5363,5360)),
+  mode INTEGER NOT NULL CHECK(typeof(mode)='integer' AND mode IN(0,2,3)),
+  elapsed_ms INTEGER CHECK(elapsed_ms IS NULL OR (typeof(elapsed_ms)='integer' AND elapsed_ms BETWEEN 0 AND 4294967295)),
+  fact_json TEXT NOT NULL CHECK(json_valid(fact_json) AND json_type(fact_json)='object'),
+  PRIMARY KEY(character_id,instance_id),
+  CHECK((dungeon_id=5359 AND mode=0 AND elapsed_ms IS NOT NULL) OR
+    (dungeon_id=5363 AND mode=2 AND elapsed_ms IS NOT NULL) OR (dungeon_id=5360 AND mode=3))
+);
+
+CREATE TABLE character_strongway2019_completions(
+  account TEXT NOT NULL,
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  character_id INTEGER NOT NULL CHECK(typeof(character_id)='integer' AND character_id BETWEEN 1 AND 65535),
+  task_attempt INTEGER NOT NULL CHECK(typeof(task_attempt)='integer' AND task_attempt>0),
+  run_epoch INTEGER NOT NULL CHECK(typeof(run_epoch)='integer' AND run_epoch>=0),
+  dungeon_id INTEGER NOT NULL CHECK(typeof(dungeon_id)='integer' AND dungeon_id IN(5359,5363,5360)),
+  bucket INTEGER NOT NULL CHECK(typeof(bucket)='integer' AND bucket IN(0,1)),
+  day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+  week INTEGER NOT NULL CHECK(typeof(week)='integer' AND week>0),
+  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json) AND json_type(reward_json)='object'),
+  fact_json TEXT NOT NULL CHECK(json_valid(fact_json) AND json_type(fact_json)='object'),
+  state INTEGER NOT NULL CHECK(typeof(state)='integer' AND state IN(0,1,2)),
+  mail_id INTEGER CHECK(mail_id IS NULL OR (typeof(mail_id)='integer' AND mail_id>0)),
+  PRIMARY KEY(account,instance_id),
+  CHECK((state=1 AND mail_id IS NOT NULL) OR (state<>1 AND mail_id IS NULL)),
+  CHECK((bucket=0 AND dungeon_id IN(5359,5363)) OR (bucket=1 AND dungeon_id=5360))
+);
+CREATE INDEX character_strongway2019_completions_pending ON character_strongway2019_completions(account,state,character_id,created_at);
+
+CREATE TABLE character_strongway2019_match_facts(
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(typeof(character_id)='integer' AND character_id BETWEEN 1 AND 65535),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  competition_id TEXT NOT NULL CHECK(length(competition_id)=32),
+  bucket INTEGER NOT NULL CHECK(bucket=1),
+  day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+  week INTEGER NOT NULL CHECK(typeof(week)='integer' AND week>0),
+  created_at INTEGER NOT NULL CHECK(typeof(created_at)='integer' AND created_at>=0),
+  state INTEGER NOT NULL CHECK(typeof(state)='integer' AND state IN(0,2)),
+  snapshot_json TEXT NOT NULL CHECK(json_valid(snapshot_json) AND json_type(snapshot_json)='object'),
+  PRIMARY KEY(account,instance_id)
+);
+CREATE INDEX character_strongway2019_match_facts_owner ON character_strongway2019_match_facts(account,character_id,created_at);

@@ -55,9 +55,9 @@ internal static partial class AntonRaidTcpTests
         var symbols = packets.Single(p => p.Opcode == 583).Body;
         int Symbol(int id) => Enumerable.Range(0, symbols[0]).Where(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * i)) == id)
             .Select(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * i))).Single();
-        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 40 && Symbol(7) == 0 && Symbol(50) == 4 &&
-            Enumerable.Range(0, symbols[0]).All(i => U32(symbols, 1 + 8 * i) != 102),
-            "开战583省略102零执行事件，其余40项完整保留：清旧感染存在位及真实HP初值4");
+        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 34 && Symbol(7) == 0 && Symbol(50) == 4 &&
+            Enumerable.Range(0, symbols[0]).All(i => U32(symbols, 1 + 8 * i) is not (102 or >= 121 and <= 125 or 128)),
+            "开战583省略102零执行及六个零值影片事件，其余34项完整保留：清旧感染存在位及真实HP初值4");
         That(packets.Any(p => p.Opcode == 9) && packets.Any(p => p.Opcode == 594) && packets.Any(p => p.Opcode == 24),
             "单人完整分队、准备和迁移链");
         VerifyCosts(packets.Single(p => p.Opcode == 598).Body, [peer.Id], 2, 1);
@@ -77,7 +77,8 @@ internal static partial class AntonRaidTcpTests
             peer.Send(15, new byte[4]);
             var selected = new List<WirePacket>();
             for (int n = 0; n < 64 && !selected.Any(p => p is { Kind: 0, Opcode: 27 }); n++) selected.Add(peer.Read());
-            VerifyMap(selected.Single(p => p.Opcode == 585).Body);
+            Bytes(selected.Single(p => p.Opcode == 585).Body, [0, 0, 0, 0, 0, 0],
+                "重复选图585仅发空变化列表和感染索引0，沿用已验初始14图状态");
             Bytes(selected.Single(p => p is { Kind: 1, Opcode: 15 }).Body, [1], "候战室正常打开选图");
             Bytes(selected.Single(p => p.Opcode == 27).Body, new byte[42], "27保留场景合同，地下城状态由585单独提供");
             That(selected.FindIndex(p => p.Opcode == 585) < selected.FindIndex(p => p.Opcode == 27) &&

@@ -403,30 +403,40 @@ internal static class OtherverseAncientTests
             var tickets = new DimensionEntryTicketService(items.Items);
             That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0),
                 "追加五次与一张券同事务保存，基础次数用尽后可继续");
-            var ticketUsed = f.Read();
-            That(!f.Session.UseDimensionEntryTicket(source, tickets).Accepted && QuestCompletionRepositoryTests.Same(ticketUsed, f.Read()),
-                "当日追加总上限五次，第二张券不消耗");
-            for (int extra = 0; extra < dimension.ExtraLimit; extra++)
+            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 10, 0) &&
+                f.ItemCount(10161066) == 0,
+                "第二张五次券继续追加五次并消耗，基础次数与隐藏周额度不变");
+            const int extraCapacity = 10;
+            for (int extra = 0; extra < extraCapacity; extra++)
             {
-                var extraOpening = f.Enter(7165 + extra % 3, 0, _ => 0);
+                int dungeonId = 7165 + extra % 3;
+                var extraOpening = f.Enter(dungeonId, checked((byte)dimension.Tiers[dungeonId]), _ => 0);
                 var remaining = f.Session.DimensionEntranceInfo();
                 That(extraOpening.Entry.Dimension is { HiddenBoss: false } && remaining is (5, var extraRemaining, 0) &&
-                    extraRemaining == (uint)(dimension.ExtraLimit - extra - 1),
+                    extraRemaining == (uint)(extraCapacity - extra - 1),
                     "额外入场逐次扣额外剩余，不重置或绕过隐藏周额度");
                 That(f.Session.ReturnFromFormalDungeon() is not null, "额外入场可正常返城");
             }
-            That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.DailyLimit &&
+            That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit + extraCapacity &&
                 f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon(7165, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null,
-                "基础五次加追加五次合计十次，之后不可再进入");
-            That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "十次用尽后815仍显示基础5/5、追加0、隐藏剩余0，不出现负数");
+                "基础五次加追加十次合计十五次，之后不可再进入");
+            That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "十五次用尽后815仍显示基础5/5、追加0、隐藏剩余0，不出现负数");
         }
         using (var f = new Fixture(pvf, towns, items, incounts, 2))
         {
             var opening = f.Enter(7177, 0, bound => bound == 10000 ? 9999 : 0);
-            var settled = Clear(f, opening);
-            var retry = f.Session.RetryFormalDungeon(settled.Receipt!, dungeons, rooms, SelfTestCatalogs.MonsterDrops(pvf), items.Items, items.EpicPieces);
-            That(retry is not null && retry.Entry.DungeonId == 7165 && retry.Entry.Dimension is { HiddenBoss: false } && retry.Entry.Dimension?.Tier == opening.Entry.Dimension?.Tier,
-                "再次挑战从当前档位登场地下城中随机抽取，而不是固定重开上一张图");
+            Clear(f, opening);
+            var current = f.Session.FormalDungeonResultFocus();
+            That(current is not null, "翻牌领取后取得当前正式结算回执再挑战");
+            var dailyBefore = f.Usage(dimension.DailyRow.CountKey);
+            var hiddenBefore = f.Usage(DimensionDungeonCatalog.Entrance);
+            var retry = f.Session.RetryFormalDungeon(current!, dungeons, rooms, SelfTestCatalogs.MonsterDrops(pvf), items.Items, items.EpicPieces);
+            That(retry is not null && retry.Entry.DungeonId == 7165 && dimension.Tiers.TryGetValue(checked((int)retry.Entry.DungeonId), out int retryTier) &&
+                retryTier == opening.Entry.Dimension!.Tier && retry.Entry.Dimension is { HiddenBoss: false } admission &&
+                admission.Tier == retryTier && retry.Entry.Difficulty == opening.Entry.Difficulty &&
+                f.Usage(dimension.DailyRow.CountKey).DailyUsed == dailyBefore.DailyUsed + 1 &&
+                f.Usage(DimensionDungeonCatalog.Entrance).WeeklyUsed == hiddenBefore.WeeklyUsed,
+                "再次挑战按固定抽样进入7165且保留原档，实际增加日次数而不再抽取隐藏路线或增加隐藏周次数");
         }
         foreach (int id in Enumerable.Range(7101, 7).Where(dungeons.ContainsDungeon))
         {
@@ -514,12 +524,23 @@ internal static class OtherverseAncientTests
                         id => new(id, "monster/synthetic.mob", null, null), items.Items.Get, dimensionRewards: rewardPolicy);
                     var middle = boss with { SourceMap = boss.SourceMap! with { Position = new(-1, -1) } };
                     var forward = drops.PrepareEntry(opening.Entry);
-                    int middleTrials = forward(middle).Trials.Length;
-                    int endTrials = forward(boss).Trials.Length;
+                    var middlePlan = forward(middle);
+                    var endPlan = forward(boss);
+                    int middleTrials = middlePlan.Trials.Length;
+                    int endTrials = endPlan.Trials.Length;
                     var reverse = drops.PrepareEntry(opening.Entry);
                     bool iflius = boss.MonsterId is 107000256 or 107000257 or 107000258;
-                    That((iflius ? endTrials == middleTrials : endTrials > middleTrials) &&
-                        reverse(boss).Trials.Length == endTrials && reverse(middle).Trials.Length == middleTrials,
+                    string terminalRule = iflius ? DimensionRewardPolicy.IfliusRule :
+                        boss.MonsterId == 107005037 && (boss.IsDummyMapBoss || boss.IsScriptedBoss)
+                            ? DimensionRewardPolicy.LotusDummyRule : DimensionRewardPolicy.BossMaterialRule;
+                    var reverseEnd = reverse(boss);
+                    var reverseMiddle = reverse(middle);
+                    // 专属规则替换基础装备/材料骰，终点骰数不一定更多；按真实奖励来源区别位置。
+                    That(endPlan.ResourceSource.Contains(terminalRule, StringComparison.Ordinal) &&
+                        middlePlan.ResourceSource.Contains(terminalRule, StringComparison.Ordinal) == iflius &&
+                        (!iflius || endTrials == middleTrials) &&
+                        reverseEnd.ResourceSource == endPlan.ResourceSource && reverseEnd.Trials.Length == endTrials &&
+                        reverseMiddle.ResourceSource == middlePlan.ResourceSource && reverseMiddle.Trials.Length == middleTrials,
                         $"同模板中途和终点Boss正反调用保留普通领主位置区别及依普利乌斯直接奖励：dungeon={opening.Entry.DungeonId},monster={boss.MonsterId},scripted={boss.IsScriptedBoss},friendly={boss.IsFriendly},apc={boss.AiCharacter is not null},trials={middleTrials}/{endTrials}");
                 }
                 foreach (var monster in loaded.Monsters.Monsters.Where(monster => monster.IsBlocking &&

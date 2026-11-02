@@ -241,7 +241,7 @@ public static class ServerApplication
             }
             if (command.Kind == ServerCommandKind.PrepareBookCharacter)
             {
-                OfflineBookPreparation.Run(options, characters, towns, repository, command.Arguments);
+                OfflineBookPreparation.Run(options, characters, towns, repository, learning, growthCatalog, command.Arguments);
                 return 0;
             }
             if (command.Kind == ServerCommandKind.ImportCharacters)

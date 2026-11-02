@@ -59,12 +59,30 @@ internal static partial class AntonRaidGapTcpTests
                 var body = hatch[index].Body;
                 That(body.Length == 6 + 5 * body[1] && body[0] == 0, "585按95的reserved/count/rows/tail读宽");
                 int infected = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(body.Length - 4));
-                var opened = Enumerable.Range(0, body[1]).Where(i => body[6 + 5 * i] == 0)
-                    .Select(i => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2 + 5 * i)))
-                    // 586与585共用成功发送基线；先写出的586会从随后585中去重。
-                    .Concat(hatch.Where(p => p is { Kind: 0, Opcode: 586, Body.Length: 6 } && p.Body[5] == 0)
-                        .Select(p => BinaryPrimitives.ReadInt32LittleEndian(p.Body)))
-                    .Where(id => id is >= 221 and <= 224).Distinct().ToArray();
+                var states = new Dictionary<int, byte>();
+                foreach (var packet in hatch.Take(index + 1))
+                {
+                    if (packet is { Kind: 0, Opcode: 585 })
+                    {
+                        That(packet.Body.Length >= 6 && packet.Body.Length == 6 + 5 * packet.Body[1], "585增量行长度正确");
+                        var ids = new HashSet<int>();
+                        for (int i = 0; i < packet.Body[1]; i++)
+                        {
+                            int at = 2 + 5 * i;
+                            int id = BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(at));
+                            byte state = packet.Body[at + 4];
+                            That(ids.Add(id) && state <= 3, "585增量行身份唯一且状态有效");
+                            states[id] = state;
+                        }
+                    }
+                    else if (packet is { Kind: 0, Opcode: 586 })
+                    {
+                        That(packet.Body.Length == 6 && packet.Body[4] == 0 && packet.Body[5] <= 3, "586状态行长度、保留字节与状态有效");
+                        states[BinaryPrimitives.ReadInt32LittleEndian(packet.Body)] = packet.Body[5];
+                    }
+                }
+                var opened = states.Where(row => row.Key is >= 221 and <= 224 && row.Value == 0)
+                    .Select(row => row.Key).ToArray();
                 That(opened.Length == 3 && opened.Contains(infected), "线上自然四选三，感染尾值属于已开图");
                 var symbols = hatch.Skip(index + 1).First(packet => packet is { Kind: 0, Opcode: 583 }).Body;
                 int Value(int id) => Enumerable.Range(0, symbols[0]).Where(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + i * 8)) == id)

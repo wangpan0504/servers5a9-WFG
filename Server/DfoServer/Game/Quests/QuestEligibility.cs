@@ -23,12 +23,14 @@ internal static class QuestEligibility
         (required is null or "[all]" || required == Jobs[job]);
 
     // 两端普通列表的分类合同；本版新增专用分类仍保留定义，等待对应入口确认。
-    public static QuestResourceAccess InspectResource(StoryQuest quest)
+    public static QuestResourceAccess InspectResource(StoryQuest quest, bool strongway2019Active = false)
     {
         if (quest.Definition is not { } definition || definition.Diagnostics.Length != 0)
             return new(QuestResourceEntry.Invalid, "资源声明存在未确认项");
         if (quest.MinimumLevel < 1 || quest.MinimumLevel > 95 || quest.MaximumLevel < quest.MinimumLevel)
             return new(QuestResourceEntry.OutsideLevels, "原始等级不属于Lv1–95普通任务；保留特殊标记");
+        if (strongway2019Active && QuestStrongway2019Entry.Supports(quest))
+            return new(QuestResourceEntry.Ordinary, "强者之路首步通过活动312启用事实；仍走原资格、接取及完成事务");
         if (definition.IsEvent)
             return new(QuestResourceEntry.Event, "活动任务需要本版活动启用与期限配置");
         if (definition.HardcoreOnly)
@@ -57,11 +59,12 @@ internal static class QuestEligibility
         "[realization]" or "[training]" or "[achievement]" or "[mission]" or "[daily]" or "[daily random]" or
         "[normaly repeat]" or "[special daily]" or "[common unique]" or "[system]";
 
-    public static ImmutableArray<int> Visible(Character character, QuestCatalog catalog)
+    public static ImmutableArray<int> Visible(Character character, QuestCatalog catalog, bool strongway2019Active = false)
     {
         var completed = Completed(character);
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
-        return catalog.All.Where(quest => Evaluate(character, quest, catalog, completed, active, includeActive: true).Visible)
+        return catalog.All.Where(quest => Evaluate(character, quest, catalog, completed, active, includeActive: true,
+                strongway2019Active: strongway2019Active).Visible)
             .Select(quest => quest.Id).ToImmutableArray();
     }
 
@@ -77,28 +80,30 @@ internal static class QuestEligibility
     }
 
     // 21同时携带可见任务与等待客户端884的合格隐藏候选；候选本身不生成822或接取槽。
-    public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog)
+    public static ImmutableArray<int> Candidates(Character character, QuestCatalog catalog, bool strongway2019Active = false)
     {
         var completed = Completed(character);
         var active = character.ActiveMainQuests.Select(quest => (int)quest.QuestId).ToHashSet();
-        return catalog.All.Where(quest => Evaluate(character,quest,catalog,completed,active,includeActive:true).Visible ||
+        return catalog.All.Where(quest => Evaluate(character,quest,catalog,completed,active,includeActive:true,
+                strongway2019Active:strongway2019Active).Visible ||
             !active.Contains(quest.Id) && QuestHiddenEntry.Direct(quest,catalog) &&
             !quest.Definition!.HideOnCompletedQuests.Any(completed.Contains) &&
-            Evaluate(character,quest,catalog,completed,active).Eligible).Select(quest => quest.Id).ToImmutableArray();
+            Evaluate(character,quest,catalog,completed,active,strongway2019Active:strongway2019Active).Eligible).Select(quest => quest.Id).ToImmutableArray();
     }
 
     public static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
-        bool allowAboveMaximum = false, QuestEligibilityMode mode = QuestEligibilityMode.Ordinary) =>
+        bool allowAboveMaximum = false, QuestEligibilityMode mode = QuestEligibilityMode.Ordinary, bool strongway2019Active = false) =>
         Evaluate(character, quest, catalog, Completed(character),
-            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum, mode: mode);
+            character.ActiveMainQuests.Select(active => (int)active.QuestId).ToHashSet(), allowAboveMaximum: allowAboveMaximum, mode: mode,
+            strongway2019Active: strongway2019Active);
 
     public static HashSet<int> Completed(Character character) => character.CompletedQuests.Concat(character.AccountCompletedQuests).ToHashSet();
 
     private static QuestEligibilityResult Evaluate(Character character, StoryQuest quest, QuestCatalog catalog,
         IReadOnlySet<int> completed, IReadOnlySet<int> active, bool includeActive = false, bool allowAboveMaximum = false,
-        QuestEligibilityMode mode = QuestEligibilityMode.Ordinary)
+        QuestEligibilityMode mode = QuestEligibilityMode.Ordinary, bool strongway2019Active = false)
     {
-        var access = InspectResource(quest);
+        var access = InspectResource(quest, strongway2019Active);
         if (access.Entry is QuestResourceEntry.Invalid or QuestResourceEntry.OutsideLevels or QuestResourceEntry.Event)
             return Reject(access.Reason);
         if (access.Entry == QuestResourceEntry.Profession && !QuestExpertJobProgress.MatchesLevel(character, quest))

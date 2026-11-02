@@ -40,7 +40,9 @@ internal static class ChannelPackets
         {
             int at = 12 + 64 * i;
             Encoding.ASCII.GetBytes("#ch." + endpoints[i].Entry.Identity.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)).CopyTo(b, at);
+            // 频道目录条目的 +0x14 是原生容量，+0x18 是当前在线人数；空入口保持 50/0，客户端显示“流畅”。
             Put(b, at + 20, 50);
+            Put(b, at + 24, 0);
             ip.CopyTo(b, at + 28);
             Put(b, at + 60, endpoints[i].Port);
         }
@@ -75,6 +77,8 @@ internal static class ChannelPackets
     const int LukeRaidType = 0x20;
     // 再战魔界：028FA250按+1010==0x35选择双角色UI和9608/400000095；该字段由ACK LOGIN类型写入。
     const int EvildomGatheringType = 0x35;
+    // CHANNEL_DPL_PVE：03EFBF5E登记0x37，moveDPLPVEChannel经016EA08B选择该类型；ACK LOGIN保留真实模式。
+    const int DplPveType = 0x37;
 
     // ACK LOGIN 正文第 0 字节是结果，之后 ARAD 0233EA10 依次读 u8 年龄 [ebp-0x34b]、u8 网吧 [ebp-0x347]、u8 频道类型 [ebp-0x336]；
     // 频道类型经 0233EF02 → 028FA920 写入频道对象 +0x1010（02330DF0 读出），RaidModeSelectWindow 打开时 014C0D40 按它选信息框下标：
@@ -90,7 +94,7 @@ internal static class ChannelPackets
     // 03EF95B0/028FA230将4纳入普通决斗准入；01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN均保留实际类型。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
+        channel.Type is 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType or DplPveType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {
