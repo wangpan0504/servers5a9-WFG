@@ -80,7 +80,7 @@ internal sealed partial class SinglePlayerDungeonRun
         }
     }
 
-    // 四人调用方必须先取得固定全员命令门/owner，再对全员调用本预验；中间不得await或解锁。
+    // 原队调用方必须先取得固定全员命令门/owner，再对全员调用本预验；中间不得await或解锁。
     // 预验不推进epoch、不换房间、不占对象key；已提交的同一原准备对象可幂等重放。
     internal bool CanApplyStrongway2019NextRoom(PreparedStrongway2019RoomReplacement prepared)
     {

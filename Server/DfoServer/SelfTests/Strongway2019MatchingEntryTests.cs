@@ -48,13 +48,44 @@ internal static class Strongway2019MatchingEntryTests
         Reject<InventoryEventRejectedException>(() => rollback.Repository.CommitStrongway2019MatchingEntry(pending, rollback.Required),
             "配对后活动revision或时段失效由同writer事务拒绝");
         That(rollback.Snapshot() == baseline, "活动失效不安装任何一侧队伍或消耗尝试号");
-        foreach (var invalid in new[] { pending[..7], pending.Select(row => row with
+        foreach (var invalid in new[] { Array.Empty<PartyDungeonReservation>(), pending[..1],
+            pending.Select((row, i) => row with { Charge = row.Charge with
+                { Identity = row.Charge.Identity with { InstanceId = i < 5 ? first : second } } }).ToArray(),
+            pending.Select((row, i) => i == 7 ? pending[0] : row).ToArray(), pending.Select(row => row with
                  { Charge = row.Charge with { Identity = row.Charge.Identity with { InstanceId = first } } }).ToArray(),
             pending.Select((row,i) => i == 7 ? row with { Charge = row.Charge with { DungeonId = 5359 } } : row).ToArray() })
             Reject<InvalidDataException>(() => rollback.Repository.CommitStrongway2019MatchingEntry(invalid, rollback.Required),
-                "双队入口拒绝非八人、非两组四人和混入普通图");
+                "双队入口拒绝空队、缺少对手、单组超过四人、重复角色和混入普通图");
+        SmallTeamEntry(1, 1);
+        SmallTeamEntry(1, 4);
+        SmallTeamEntry(4, 3);
         NormalEntryEventBoundary();
         Console.WriteLine($"PASS {Count - before} 首期强者之路双实例八人原子入场");
+    }
+
+    static void SmallTeamEntry(int firstCount, int secondCount)
+    {
+        using var f = new Fixture();
+        var first = Guid.NewGuid(); var second = Guid.NewGuid();
+        var rows = f.Characters.Take(firstCount + secondCount).Select((character, index) =>
+            new PartyDungeonReservation(f.Leases[index], character, 300,
+                new(null, 0, new(character.Id, 0, 1, index < firstCount ? first : second, 1), 400593)
+                { DungeonId = 5360 })).ToArray();
+        string baseline = f.Snapshot();
+        f.Sql($"CREATE TRIGGER fail_sw_last BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id={rows[^1].Expected.Id} BEGIN SELECT RAISE(ABORT,'sw-last'); END");
+        Reject<SqliteException>(() => f.Repository.CommitStrongway2019MatchingEntry(rows, f.Required),
+            "小队匹配最后成员SQL失败传播：" + firstCount + "v" + secondCount);
+        That(f.Snapshot() == baseline, "小队匹配晚期失败回滚两队全部存档");
+        f.Sql("DROP TRIGGER fail_sw_last");
+        var committed = f.Repository.CommitStrongway2019MatchingEntry(rows, f.Required);
+        That(committed.Length == rows.Length && committed.Select((row, index) =>
+            row.Character.Id == rows[index].Expected.Id && row.Character.Revision == rows[index].Expected.Revision + 1 &&
+            row.Character.DungeonState is { LastAttempt: 1, NextObjectKey: 300 }).All(value => value),
+            "两支真实小队按实际成员数原子预留入场与revision：" + firstCount + "v" + secondCount);
+        var reopened = new CharacterRepository(f.DatabasePath);
+        That(committed.Select((row, index) => JsonSerializer.Serialize(reopened.LoadCharacter(f.Leases[index], row.Character.Slot)) ==
+            JsonSerializer.Serialize(row.Character)).All(value => value),
+            "重建仓储后读取小队持久入场与原提交一致");
     }
 
     static void NormalEntryEventBoundary()
@@ -90,6 +121,7 @@ internal static class Strongway2019MatchingEntryTests
     {
         readonly string directory = Path.Combine(Path.GetTempPath(), "S5A9-sw-eight-" + Guid.NewGuid().ToString("N"));
         readonly string path;
+        public string DatabasePath => path;
         public CharacterRepository Repository { get; }
         public ServerEventService Events { get; }
         public AccountOwners.Lease[] Leases { get; }

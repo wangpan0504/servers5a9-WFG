@@ -401,7 +401,41 @@ internal static class Strongway2019MatchingTests
         first[1].ReturnToRoster(); service.Detach(first[1]);
         That(first.All(s => s.CurrentStrongway2019Ticket is null) && service.Queued(renewed!.Channel).Length == 0,
             "返回选角/退出清理整个原队票据，释放其他成员等待状态");
+        SmallTeamQueue(1, 1);
+        SmallTeamQueue(1, 4);
         Console.WriteLine($"PASS {Count - before} 首期4v4原队伍排队、预约、取消与命令门");
+    }
+
+    static void SmallTeamQueue(int firstCount, int secondCount)
+    {
+        using var f = new Fixture();
+        var first = f.Team(count: firstCount); var second = f.Team(count: secondCount);
+        var service = new Strongway2019MatchingService(f.Parties, Strongway2019CatalogTests.CreateCatalog(), f.Clock);
+        var plans = f.Admissions(first);
+        That(service.Queue(first[0], []) is null &&
+            service.Queue(first[0], plans.Select(row => row with { MemberCount = 0 }).ToArray()) is null &&
+            service.Queue(first[0], plans.Select(row => row with { MemberCount = 5 }).ToArray()) is null,
+            "匹配小队拒绝缺少资格及零人或超过四人的声明");
+        var mixed = plans.Select(row => row with { Mode = Strongway2019Mode.Hero, DungeonId = 5363 }).ToArray();
+        That(service.Queue(first[0], mixed) is null, "英雄资格不能冒充小队匹配准入");
+        var ticket = service.Queue(first[0], plans);
+        That(ticket is not null && ticket.IsCurrent && ticket.Party.Members.Length == firstCount &&
+            service.ReserveNext(ticket) is null, "真实小队可排队，但没有真实对手时不能产生比赛");
+        var opponent = service.Queue(second[0], f.Admissions(second));
+        var pair = service.ReserveNext(ticket!);
+        That(opponent is not null && pair is not null && pair.First.Party.Members.Length == firstCount &&
+            pair.Second.Party.Members.Length == secondCount && pair.First.Party.Id != pair.Second.Party.Id,
+            "匹配保留两支原队伍的实际人数：" + firstCount + "v" + secondCount);
+        That(service.Release(pair!) && service.Cancel(first[0], ticket!) && service.Cancel(second[0], opponent!),
+            "小队预约及取消释放精确原队伍资格");
+        first[0].ReturnToRoster(); first[0].Select(0);
+        That(service.Queue(first[0], plans) is null, "未Ready或旧选角的小队不能重放原准入");
+        first[0].MarkReady();
+        f.Parties.Detach(first[0]);
+        That(service.Queue(first[0], f.Admissions(first)) is null, "没有当前真实Party时不能匹配");
+        var stale = f.Admissions(second);
+        using var takeover = f.Takeover(second[0]);
+        That(service.Queue(second[0], stale) is null, "小队旧owner不能排队或安装新比赛");
     }
 
     public static void RunQueueRevisionResources(PvfArchive pvf, TownCatalog towns)
@@ -481,9 +515,9 @@ internal static class Strongway2019MatchingTests
                 new(0, [], []), [], new Dictionary<uint, uint[]>());
             Parties = new(repository, Clock);
         }
-        public GameSession[] Team(byte channel = 49, int reviveCoins = 0)
+        public GameSession[] Team(byte channel = 49, int reviveCoins = 0, int count = 4)
         {
-            var team = Enumerable.Range(0, 4).Select(_ =>
+            var team = Enumerable.Range(0, count).Select(_ =>
             {
                 int id = sessions.Count; var lease = owners.Acquire("strongway-match-" + id, () => { }); leases.Add(lease);
                 var created = repository.Create(lease, new("SWMatch" + id, point, point) { Level = 95,
@@ -495,6 +529,9 @@ internal static class Strongway2019MatchingTests
                     timeProvider: Clock, strongway2019Catalog: activity, strongway2019AntiEvil: _ => 5400, serverEvents: events);
                 sessions.Add(session); session.Select(0, resumeTown: activity is not null); session.MarkReady(); return session;
             }).ToArray();
+            if (count == 1)
+                That(Parties.SetInformation(team[0], 0, PartySettings.Default).Accepted,
+                    "单人通过原PartyService建立真实一人队伍");
             foreach (var member in team.Skip(1))
                 That(Parties.Invite(team[0], member, 1).Accepted && Parties.Respond(member, team[0].Selected!.Id, 2, true).Accepted,
                     "真实四个Session通过PartyService邀请加入原队伍");
@@ -508,7 +545,7 @@ internal static class Strongway2019MatchingTests
             leases.Add(lease); return lease;
         }
         public Strongway2019Admission[] Admissions(GameSession[] team) => team.Select(session =>
-            new Strongway2019Admission(session.Selected!, Strongway2019Mode.Matching, 5360, 4, 5400,
+            new Strongway2019Admission(session.Selected!, Strongway2019Mode.Matching, 5360, team.Length, 5400,
                 new(ServerEventService.Strongway2019Id, 1, OverrideActive: true))).ToArray();
         public PartyDungeonInstance Instance(GameSession[] team) => new(Guid.NewGuid(), Parties.Current(team[0])!, repository);
         public string Snapshot() => JsonSerializer.Serialize(sessions.Select((session, index) => repository.LoadCharacter(leases[index], session.Selected!.Slot)));

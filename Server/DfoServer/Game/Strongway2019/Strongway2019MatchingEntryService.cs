@@ -12,7 +12,7 @@ namespace DfoServer.Game.Strongway2019;
 internal sealed record Strongway2019MatchingEntry(Strongway2019Match Match,
     ImmutableArray<PartyDungeonNotice> Notices);
 
-// 两个原四人实例共用一次八人入场事务，资源准备仍沿每个Session的原正式副本链。
+// 两个原一至四人实例共用一次双队入场事务，资源准备仍沿每个Session的原正式副本链。
 internal sealed class Strongway2019MatchingEntryService(Strongway2019MatchingService matching, PartyService parties,
     IPartyDungeonStore partyStore, IStrongway2019MatchingStore store, TimeProvider? clock = null)
 {
@@ -57,14 +57,14 @@ internal sealed class Strongway2019MatchingEntryService(Strongway2019MatchingSer
                     var rows = reservations.Select(row => row! with { Charge = row!.Charge with { RequiredEvent = required } }).ToArray();
                     var saved = store.CommitStrongway2019MatchingEntry(rows, required);
                     committed = true;
-                    if (saved.Length != prepared.Count) throw new InvalidOperationException("首期八人入场提交回执数量不一致");
+                    if (saved.Length != prepared.Count) throw new InvalidOperationException("首期双队入场提交回执数量不一致");
                     var notices = prepared.Select((row, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry,
                         row.Member, teams[row.Side].Party.Members,
                         row.Member.Actor.Session.InstallPartyDungeon(row.Plan, saved[index], rows[index], instances[row.Side]))).ToImmutableArray();
                     bool Held(SemaphoreSlim command) => teams.Any(ticket => ReferenceEquals(ticket.Party.Commands, command) ||
                         ticket.Party.Members.Any(member => ReferenceEquals(member.Actor.Session.CommandGate, command)));
                     var match = matching.Bind(pair, instances[0], instances[1], Held) ??
-                        throw new InvalidOperationException("首期八人正式提交后原Pair或Run绑定发生变化");
+                        throw new InvalidOperationException("首期双队正式提交后原Pair或Run绑定发生变化");
                     return new Strongway2019MatchingEntry(match, notices);
                 }, null));
             }

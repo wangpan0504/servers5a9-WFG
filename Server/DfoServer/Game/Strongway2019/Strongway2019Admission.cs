@@ -14,22 +14,23 @@ internal sealed record Strongway2019Admission(Character Character, Strongway2019
 internal static class Strongway2019EntryPolicy
 {
     public static bool Contains(uint dungeonId) => dungeonId is 5359 or 5360 or 5363 or 5364;
+    public static bool AllowsMemberCount(int count) => count is >= 1 and <= 4;
 
     public static Strongway2019Admission? Prepare(Strongway2019Catalog catalog, Character character,
         ChannelEntry? channel, uint dungeonId, int memberCount, int serverAntiEvil,
         ServerEventSchedule schedule, DateTimeOffset now, bool matched = false)
     {
-        if (channel?.Type != 55 || character.Level != 95 || character.IsPvpPrivate ||
+        if (!AllowsMemberCount(memberCount) || channel?.Type != 55 || character.Level != 95 || character.IsPvpPrivate ||
             character.Position is not { Town: 65, Area: 1 } || schedule.EventId != ServerEventService.Strongway2019Id ||
             !schedule.IsActive(now)) return null;
         schedule.Validate();
         Strongway2019Mode mode;
         int key;
-        if (dungeonId == 5359 && !matched && memberCount is >= 1 and <= 4 && serverAntiEvil >= 4000)
+        if (dungeonId == 5359 && !matched && serverAntiEvil >= 4000)
             (mode, key) = (Strongway2019Mode.Simple, 0);
-        else if (dungeonId == 5363 && !matched && memberCount == 4 && serverAntiEvil >= 5400)
+        else if (dungeonId == 5363 && !matched && serverAntiEvil >= 5400)
             (mode, key) = (Strongway2019Mode.Hero, 2);
-        else if (dungeonId == 5360 && matched && memberCount == 4 && serverAntiEvil >= 5400)
+        else if (dungeonId == 5360 && matched && serverAntiEvil >= 5400)
             (mode, key) = (Strongway2019Mode.Matching, 0);
         else return null;
         var definitions = matched ? catalog.MatchingDungeons : catalog.NormalDungeons;

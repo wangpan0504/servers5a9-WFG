@@ -13,7 +13,7 @@ internal sealed partial class GameSession
         var captured = owner.Execute(() => Ready && Selected is not null &&
             Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Settlement &&
             !HasPendingTownQuestCommit && !HasPendingQuestReplay && pendingRental is null
-                ? (Character: Selected, Epoch: SelectionEpoch, Count: CurrentParty?.Invoke()?.Members.Length ?? 1)
+                ? (Character: Selected, Epoch: SelectionEpoch, Count: Strongway2019MemberCount(dungeonId))
                 : (Character: (Character?)null, Epoch: 0L, Count: 0));
         if (captured.Character is not { } character) return null;
         var schedule = serverEvents.Read(ServerEventService.Strongway2019Id).Schedule;
@@ -22,7 +22,7 @@ internal sealed partial class GameSession
         var admission = Strongway2019EntryPolicy.Prepare(strongway2019Catalog, character, ChannelEntry,
             dungeonId, captured.Count, antiEvil, schedule, (timeProvider ?? TimeProvider.System).GetUtcNow(), matched);
         return owner.Execute(() => ReferenceEquals(Selected, character) && Ready && SelectionEpoch == captured.Epoch &&
-            (CurrentParty?.Invoke()?.Members.Length ?? 1) == captured.Count ? admission : null);
+            Strongway2019MemberCount(dungeonId) == captured.Count ? admission : null);
     }
 
     bool IsCurrentStrongway2019Admission(Strongway2019Admission admission) =>
@@ -31,8 +31,11 @@ internal sealed partial class GameSession
         admission.Schedule == serverEvents.Read(ServerEventService.Strongway2019Id).Schedule &&
         admission.AntiEvil == strongway2019AntiEvil(admission.Character) &&
         Strongway2019EntryPolicy.Prepare(strongway2019Catalog, admission.Character, ChannelEntry,
-            admission.DungeonId, CurrentParty?.Invoke()?.Members.Length ?? 1, admission.AntiEvil, admission.Schedule,
+            admission.DungeonId, Strongway2019MemberCount(admission.DungeonId), admission.AntiEvil, admission.Schedule,
             (timeProvider ?? TimeProvider.System).GetUtcNow(), admission.Mode == Strongway2019Mode.Matching) == admission;
+
+    // 英雄与匹配仍需真实队伍；单人队伍不等同于未组队，简单模式保留原单角色入口。
+    int Strongway2019MemberCount(uint dungeonId) => CurrentParty?.Invoke()?.Members.Length ?? (dungeonId == 5359 ? 1 : 0);
 
     InventoryEventPrecondition? Strongway2019RequiredEvent(Strongway2019Admission? admission) =>
         admission is null ? null : new(admission.Schedule, timeProvider ?? TimeProvider.System);

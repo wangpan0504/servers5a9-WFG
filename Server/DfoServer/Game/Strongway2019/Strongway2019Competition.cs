@@ -80,8 +80,9 @@ internal sealed class Strongway2019Competition
         ArgumentNullException.ThrowIfNull(first);
         ArgumentNullException.ThrowIfNull(second);
         ArgumentNullException.ThrowIfNull(catalog);
-        if (id == Guid.Empty || first.Count != 4 || second.Count != 4 || combatBudget <= TimeSpan.Zero)
-            throw new ArgumentException("强者之路比赛必须有有效身份、两队各四人和正数战斗预算");
+        if (id == Guid.Empty || !Strongway2019EntryPolicy.AllowsMemberCount(first.Count) ||
+            !Strongway2019EntryPolicy.AllowsMemberCount(second.Count) || combatBudget <= TimeSpan.Zero)
+            throw new ArgumentException("强者之路比赛必须有有效身份、两队各一至四人和正数战斗预算");
         Id = id;
         this.catalog = catalog;
         this.time = time ?? TimeProvider.System;
@@ -91,11 +92,11 @@ internal sealed class Strongway2019Competition
             throw new ArgumentException("强者之路成员及毫秒战斗预算无效");
         Participants = first.Select(run => new Strongway2019Participant(0, run, run.Scene.Identity))
             .Concat(second.Select(run => new Strongway2019Participant(1, run, run.Scene.Identity))).ToImmutableArray();
-        if (Participants.Select(row => row.Identity.CharacterId).Distinct().Count() != 8 ||
+        if (Participants.Select(row => row.Identity.CharacterId).Distinct().Count() != Participants.Length ||
             Participants.Any(row => row.Identity.CharacterId == 0 || row.Identity.InstanceId == Guid.Empty ||
                 row.Identity.TaskAttempt <= 0 || !catalog.MatchingDungeons.Any(dungeon => dungeon.DungeonId == row.Run.Entry.DungeonId) ||
                 row.Run.Phase is not (SinglePlayerDungeonPhase.Loading or SinglePlayerDungeonPhase.Dungeon)))
-            throw new ArgumentException("强者之路必须冻结八个不同角色的有效匹配副本原实例");
+            throw new ArgumentException("强者之路必须冻结两支原队全部不同角色的有效匹配副本原实例");
         if (!catalog.Skills.Select(row => row.ButtonIndex).Order().SequenceEqual([0, 1, 2, 3, 4]) ||
             catalog.Skills.Any(row => row.NeedPoint < 0 || row.GlobalCooltime < 0 || row.LimitCount is <= 0))
             throw new ArgumentException("强者之路五技能目录无效", nameof(catalog));

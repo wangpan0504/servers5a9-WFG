@@ -13,6 +13,7 @@ internal static class Strongway2019CompetitionTests
         int before = Count;
         OpeningBarriers();
         FrozenRoster();
+        SmallTeams();
         EnergyAndSharedSkills();
         CatalogRulesAndRouteChange();
         RealClearAndReplay();
@@ -55,7 +56,9 @@ internal static class Strongway2019CompetitionTests
             "聚合冻结八个不同角色，成员仍直接引用正式Run");
         var duplicate = f.Team(1); duplicate[3] = f.Run(0);
         Reject<ArgumentException>(() => f.Create(f.Team(0), duplicate), "跨队重复角色不能创建比赛");
-        Reject<ArgumentException>(() => f.Create(f.Team(0)[..3], f.Team(1)), "任一队不足四人拒绝");
+        Reject<ArgumentException>(() => f.Create([], f.Team(1)), "空队不能创建比赛");
+        Reject<ArgumentException>(() => f.Create(f.Team(0).Append(Fixture.CreateRun(9, f.Identity(0).InstanceId, 1).Run).ToArray(),
+            f.Team(1)), "任一队超过四人不能创建比赛");
         var replacement = Fixture.CreateRun(1, Guid.NewGuid(), 2);
         That(f.Competition.ConfirmOpening(replacement.Run, replacement.Run.Snapshot.Identity, 3) == DungeonRunOutcome.Rejected &&
             f.Competition.ConfirmOpening(f.Run(0), f.Identity(0) with { InstanceId = Guid.NewGuid() }, 3) == DungeonRunOutcome.Rejected &&
@@ -63,6 +66,30 @@ internal static class Strongway2019CompetitionTests
             "同角色新Run、过期实例或错误尝试不能冒充被冻结成员");
         var supplied = f.Team(0); var isolated = f.Create(supplied, f.Team(1)); supplied[0] = replacement.Run;
         That(ReferenceEquals(isolated.Participants[0].Run, f.Run(0)), "调用方随后改队伍数组不能改变已冻结成员");
+    }
+
+    static void SmallTeams()
+    {
+        foreach (int opponents in Enumerable.Range(1, 4))
+        {
+            var f = new Fixture();
+            var first = f.Team(0)[..1]; var second = f.Team(1)[..opponents];
+            var competition = f.Create(first, second);
+            foreach (int phase in new[] { 3, 4 })
+            {
+                That(competition.ConfirmOpening(first[0], first[0].Scene.Identity, phase) == DungeonRunOutcome.Accepted &&
+                    competition.ConfirmOpening(second[0], second[0].Scene.Identity, phase) == DungeonRunOutcome.Accepted,
+                    "单人匹配仍要求两支真实队伍分别完成开场屏障");
+            }
+            That(competition.Participants.Length == opponents + 1 &&
+                competition.Snapshot.Phase == Strongway2019CompetitionPhase.Running &&
+                competition.UseSkill(first[0], first[0].Scene.Identity, 1, 0, 0).Outcome == DungeonRunOutcome.Accepted,
+                "一至四人对手比赛冻结全部实际原Run并保留技能链");
+            That(competition.Exit(first[0], first[0].Scene.Identity) == DungeonRunOutcome.Accepted &&
+                competition.Snapshot.Terminal is { Reason: Strongway2019FinishReason.Exit, WinnerSide: 1 } terminal &&
+                terminal.RewardParticipants.Length == opponents && terminal.RewardParticipants.All(row => second.Contains(row.Run)),
+                "小队退出只冻结真实原胜队的实际收件人");
+        }
     }
 
     static void EnergyAndSharedSkills()

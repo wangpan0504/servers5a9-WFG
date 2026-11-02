@@ -10,6 +10,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Dungeons;
 using PvfLib;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Projection;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
@@ -57,28 +58,60 @@ internal static class Strongway2019AdmissionSessionTests
     {
         int before = Count;
         var growth = CharacterGrowthCatalog.Load(pvf);
-        using var f = new Strongway2019MatchingTests.Fixture(towns, new(pvf), growth);
-        var team = f.Team();
         var dungeons = DungeonCatalog.Load(pvf);
-        var service = new PartyDungeonService(f.Parties, f.Repository);
-        var selected = service.BeginSelection(team[0]);
-        That(selected.Length == 4 && team.All(session => session.Phase == SessionPhase.MapSelect),
-            "首期英雄从65/1原四人队伍进入正式选图");
-        var entered = service.Enter(team[0], 5363, 2, dungeons, DungeonRoomCatalog.Load(pvf),
-            DungeonMonsterDropCatalog.Load(pvf), items.Items, items.EpicPieces, RejectDropPreparation);
-        That(entered.Length == 4 && team.All(session => session.Phase == SessionPhase.Loading) &&
-            entered.All(notice => notice.Scene is { Entry.DungeonId: 5363, Entry.DisableMonsterAndClearExperience: true }),
-            "首期英雄原四人队经正式资源准入安装四个5363原Run");
-        foreach (var notice in entered) AssertNoItemDrops(notice.Scene!, dungeons);
-        CompletePartyRoute(team, growth, DungeonKillExperienceCatalog.Load(pvf), dungeons);
-        foreach (var session in team)
+        var rooms = DungeonRoomCatalog.Load(pvf);
+        var drops = DungeonMonsterDropCatalog.Load(pvf);
+        var kills = DungeonKillExperienceCatalog.Load(pvf);
+        foreach (int members in new[] { 1, 4 })
         {
-            var pending = session.PrepareStrongway2019Reward();
-            That(pending is { Fact: not null, Admission.Mode: Strongway2019Mode.Hero } &&
-                session.CommitStrongway2019Reward(pending, items.Items, f.Repository) is { Commit.Granted: true },
-                "首期英雄四个原Run各自真终点提交736邮件");
+            using var f = new Strongway2019MatchingTests.Fixture(towns, new(pvf), growth);
+            var team = f.Team(count: members);
+            var originalParty = f.Parties.Current(team[0])!;
+            var service = new PartyDungeonService(f.Parties, f.Repository);
+            FormalDungeonReceipt[] scenes;
+            if (members == 1)
+            {
+                var selection = team[0].BeginDungeonSelection();
+                That(selection is not null && team[0].ConfirmNewDungeonSelection(selection),
+                    "一人真实队伍沿原单人选图链进入英雄选图");
+                var entered = team[0].EnterFormalDungeon(5363, 0, 2, dungeons, rooms, drops,
+                    items: items.Items, pieces: items.EpicPieces, prepareDrops: RejectDropPreparation);
+                That(entered is not null && team[0].PartyDungeon is null,
+                    "单人英雄沿原普通正式入口建立本人Run：" + team[0].LastFormalDungeonRejection);
+                scenes = [entered!];
+            }
+            else
+            {
+                var selected = service.BeginSelection(team[0]);
+                That(selected.Length == members && team.All(session => session.Phase == SessionPhase.MapSelect),
+                    "首期英雄从65/1原队伍进入正式选图");
+                var entered = service.Enter(team[0], 5363, 2, dungeons, rooms, drops,
+                    items.Items, items.EpicPieces, RejectDropPreparation);
+                That(entered.Length == members, "英雄完整原队伍经正式组队入口建立全部Run");
+                scenes = entered.Select(notice => notice.Scene!).ToArray();
+            }
+            That(team.All(session => session.Phase == SessionPhase.Loading) &&
+                scenes.All(scene => scene is { Entry.DungeonId: 5363, Entry.DisableMonsterAndClearExperience: true }) &&
+                ReferenceEquals(f.Parties.Current(team[0]), originalParty),
+                "英雄一人及四人入场保留原队伍与完整资源规则");
+            foreach (var scene in scenes) AssertNoItemDrops(scene, dungeons);
+            CompletePartyRoute(team, growth, kills, dungeons);
+            foreach (var session in team)
+            {
+                var pending = session.PrepareStrongway2019Reward();
+                That(pending is { Fact: not null, Admission.Mode: Strongway2019Mode.Hero } &&
+                    session.CommitStrongway2019Reward(pending, items.Items, f.Repository) is { Commit.Granted: true },
+                    "首期英雄每个原Run各自真终点提交736邮件");
+            }
+            if (members == 1)
+            {
+                That(team[0].ReturnFromFormalDungeon() is not null && team[0].Phase == SessionPhase.Town &&
+                    ReferenceEquals(f.Parties.Current(team[0]), originalParty) && originalParty.Members.Single().Actor.IsCurrent() &&
+                    originalParty.Members.Single().Slot == originalParty.Leader,
+                    "英雄单人通关返城仍保留原一人Party、队长和有效owner");
+            }
         }
-        Console.WriteLine($"PASS {Count - before} 首期英雄原四人选图、全部真实房间死亡与邮件");
+        Console.WriteLine($"PASS {Count - before} 首期英雄一人及四人选图、全部真实房间死亡与邮件");
     }
 
     public static void RunMatchingClear(PvfArchive pvf, TownCatalog towns, ItemResources items)
@@ -86,50 +119,83 @@ internal static class Strongway2019AdmissionSessionTests
         int before = Count;
         var activity = new Strongway2019Catalog(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf);
-        using var f = new Strongway2019MatchingTests.Fixture(towns, activity, growth);
-        var first = f.Team(); var second = f.Team();
         var dungeons = DungeonCatalog.Load(pvf);
-        var matching = new Strongway2019MatchingService(f.Parties, activity, f.Clock);
-        var ticket = matching.Queue(first[0], first.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray())!;
-        matching.Queue(second[0], second.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray());
-        var pair = matching.ReserveNext(ticket)!;
-        var entered = new Strongway2019MatchingEntryService(matching, f.Parties, f.Repository, f.Repository, f.Clock)
-            .Enter(pair, dungeons, DungeonRoomCatalog.Load(pvf), DungeonMonsterDropCatalog.Load(pvf),
-                items.Items, items.EpicPieces, RejectDropPreparation)!;
-        That(entered is not null, "匹配通关回归先沿真实八人入场安装");
-        foreach (var notice in entered!.Notices) AssertNoItemDrops(notice.Scene!, dungeons);
-        foreach (var session in second) second[0].PartyDungeon!.CompleteLoading(session);
-        // 通关路径仍由原四人加载/击杀事务推进；此处的开场事实使用同一比赛与原Run。
-        foreach (var session in first) first[0].PartyDungeon!.CompleteLoading(session);
-        var competition = entered!.Match.Competition;
-        var firstRun = first[0].CaptureStrongway2019Run(first[0].PartyDungeon!)!;
-        var secondRun = second[0].CaptureStrongway2019Run(second[0].PartyDungeon!)!;
-        foreach (int phase in new[] { 3, 4 })
+        var rooms = DungeonRoomCatalog.Load(pvf);
+        var drops = DungeonMonsterDropCatalog.Load(pvf);
+        var kills = DungeonKillExperienceCatalog.Load(pvf);
+        foreach (int members in new[] { 1, 4 })
         {
-            competition.ConfirmOpening(firstRun, firstRun.Scene.Identity, phase);
-            competition.ConfirmOpening(secondRun, secondRun.Scene.Identity, phase);
+            using var f = new Strongway2019MatchingTests.Fixture(towns, activity, growth);
+            var first = f.Team(count: members); var second = f.Team(count: members);
+            var matching = new Strongway2019MatchingService(f.Parties, activity, f.Clock);
+            var ticket = matching.Queue(first[0], first.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray())!;
+            matching.Queue(second[0], second.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray());
+            var pair = matching.ReserveNext(ticket)!;
+            var entered = new Strongway2019MatchingEntryService(matching, f.Parties, f.Repository, f.Repository, f.Clock)
+                .Enter(pair, dungeons, rooms, drops,
+                    items.Items, items.EpicPieces, RejectDropPreparation)!;
+            That(entered is not null && entered.Notices.Length == members * 2 &&
+                entered.Match.First.Id != entered.Match.Second.Id,
+                "匹配通关回归沿真实双队原子入场安装：" + members + "v" + members);
+            foreach (var notice in entered!.Notices) AssertNoItemDrops(notice.Scene!, dungeons);
+            foreach (var session in second) second[0].PartyDungeon!.CompleteLoading(session);
+            // 通关路径由原队全员加载/击杀事务推进；开场事实使用同一比赛与原Run。
+            foreach (var session in first) first[0].PartyDungeon!.CompleteLoading(session);
+            var competition = entered!.Match.Competition;
+            var firstRun = first[0].CaptureStrongway2019Run(first[0].PartyDungeon!)!;
+            var secondRun = second[0].CaptureStrongway2019Run(second[0].PartyDungeon!)!;
+            foreach (int phase in new[] { 3, 4 })
+            {
+                competition.ConfirmOpening(firstRun, firstRun.Scene.Identity, phase);
+                competition.ConfirmOpening(secondRun, secondRun.Scene.Identity, phase);
+            }
+            CompletePartyRoute(first, growth, kills, dungeons);
+            That(competition.ObserveClear(firstRun, firstRun.Scene.Identity, firstRun.ClearFact!) == DungeonRunOutcome.Accepted &&
+                competition.Snapshot.Terminal is { Reason: Strongway2019FinishReason.Clear, WinnerSide: 0 },
+                "首期匹配只由获胜原Run的真实终点裁决整队胜利");
+            if (members == 1)
+            {
+                using var log = new ServerLog(Path.Combine(Path.GetDirectoryName(f.DatabasePath)!, "recovery-log"));
+                var reward = new Strongway2019RewardProjection(items.Items, f.Repository, log);
+                That(reward.FreezeMatch(entered.Match) && entered.Match.CompletionCheckpointCommitted,
+                    "1v1真实通关把唯一胜者的终局及奖励附件原子持久冻结");
+                var actor = first[0].CaptureSocialActor()!;
+                first[0].End();
+                using var owner = f.Takeover(actor.Owner);
+                var reopened = new CharacterRepository(f.DatabasePath);
+                var restored = new GameSession(reopened, towns, owner, timeProvider: f.Clock);
+                restored.Select(actor.Character.Slot, resumeTown: true); restored.MarkReady();
+                var recovered = restored.RecoverStrongway2019Completion(reopened);
+                That(recovered is { Changed: true, MailIds.Length: 1 } && restored.CurrentStrongway2019Match is null &&
+                    restored.PartyDungeon is null && reopened.ReadStrongway2019Statistics(owner, actor.Character.Id).MatchingWins == 1 &&
+                    reopened.LoadMailbox(owner, actor.Character.Id, f.Clock.GetUtcNow().ToUnixTimeSeconds()).Entries.Length == 1,
+                    "重建仓储及新owner/Session后恢复1v1胜利，脱离原比赛引用仍仅一胜一封737邮件");
+                That(restored.RecoverStrongway2019Completion(reopened) is { Changed: false, MailIds.IsEmpty: true } &&
+                    reopened.ReadStrongway2019Statistics(owner, actor.Character.Id).MatchingWins == 1 &&
+                    reopened.LoadMailbox(owner, actor.Character.Id, f.Clock.GetUtcNow().ToUnixTimeSeconds()).Entries.Length == 1,
+                    "1v1重启恢复重复调用不增加成绩或邮件");
+                restored.End();
+            }
+            else foreach (var session in first)
+            {
+                var pending = session.PrepareStrongway2019Reward();
+                That(pending is { Terminal.WinnerSide: 0 } &&
+                    session.CommitStrongway2019Reward(pending, items.Items, f.Repository) is { Commit.Granted: true },
+                    "首期匹配胜队四个原成员提交737邮件");
+            }
+            That(second.All(session => session.PrepareStrongway2019Reward() is null), "匹配未胜对方不获得胜利邮件");
         }
-        CompletePartyRoute(first, growth, DungeonKillExperienceCatalog.Load(pvf), dungeons);
-        That(competition.ObserveClear(firstRun, firstRun.Scene.Identity, firstRun.ClearFact!) == DungeonRunOutcome.Accepted &&
-            competition.Snapshot.Terminal is { Reason: Strongway2019FinishReason.Clear, WinnerSide: 0 },
-            "首期匹配只由获胜原Run的真实终点裁决整队胜利");
-        foreach (var session in first)
-        {
-            var pending = session.PrepareStrongway2019Reward();
-            That(pending is { Terminal.WinnerSide: 0 } &&
-                session.CommitStrongway2019Reward(pending, items.Items, f.Repository) is { Commit.Granted: true },
-                "首期匹配胜队四个原成员提交737邮件");
-        }
-        That(second.All(session => session.PrepareStrongway2019Reward() is null), "匹配未胜对方不获得胜利邮件");
         Console.WriteLine($"PASS {Count - before} 首期匹配真终点、整队裁决与737邮件");
     }
 
     static void CompletePartyRoute(GameSession[] team, CharacterGrowthCatalog growth, DungeonKillExperienceCatalog kills,
         DungeonCatalog dungeons)
     {
-        var instance = team[0].PartyDungeon!;
+        var instance = team[0].PartyDungeon;
         if (team[0].Phase == SessionPhase.Loading)
-            foreach (var session in team) instance.CompleteLoading(session);
+            foreach (var session in team)
+                if (instance is not null) instance.CompleteLoading(session);
+                else That(session.CompleteFormalDungeonLoading() is not null, "单人英雄沿原Run完成加载");
         var current = team[0].CurrentFormalDungeonScene()!;
         var target = current.Entry.BossMap.Position;
         var from = new Dictionary<DungeonPoint, DungeonPoint?> { [current.Entry.StartMap.Position] = null };
@@ -141,7 +207,7 @@ internal static class Strongway2019AdmissionSessionTests
             if (next is not { } adjacent || from.ContainsKey(adjacent)) continue;
             from.Add(adjacent, point); queue.Enqueue(adjacent);
         }
-        That(from.ContainsKey(target), "首期原四人资源路线可达真实终点");
+        That(from.ContainsKey(target), "首期原队伍资源路线可达真实终点");
         var path = new Stack<DungeonPoint>();
         for (var point = target; from[point] is { } parent; point = parent) path.Push(point);
         uint actorBoundary = 0;
@@ -154,23 +220,37 @@ internal static class Strongway2019AdmissionSessionTests
                 if (!current.Snapshot.LivingMonsters.Contains(monster.ObjectKey)) continue;
                 var observation = FormalDungeonSessionTests.Observation(current, monster);
                 if (monster.SpawnType == 3) observation = observation with { RewriteFlag = 1, Unknown18 = 9000, Unknown26 = 30 };
-                var notices = instance.ObserveDeath(team[0], monster.ObjectKey,
-                    session => session.ObserveFormalDungeonDeath(observation, kills, growth));
-                That(notices.Count(notice => notice.Kind == PartyDungeonNoticeKind.Death &&
-                    notice.Death?.Outcome == DungeonRunOutcome.Accepted) == 4,
-                    "首期四人同一真实死亡报告经原权威和各角色事务提交：" + monster.MonsterId);
-                That(notices.Where(notice => notice.Kind == PartyDungeonNoticeKind.Death).All(notice =>
-                    notice.Death is { Drop: null, Drops.IsEmpty: true }), "首期每个原成员真实死亡回执不生成任何普通或显式掉落");
+                if (instance is not null)
+                {
+                    var notices = instance.ObserveDeath(team[0], monster.ObjectKey,
+                        session => session.ObserveFormalDungeonDeath(observation, kills, growth));
+                    That(notices.Count(notice => notice.Kind == PartyDungeonNoticeKind.Death &&
+                        notice.Death?.Outcome == DungeonRunOutcome.Accepted) == team.Length,
+                        "首期原队伍同一真实死亡报告经原权威和各角色事务提交：" + monster.MonsterId);
+                    That(notices.Where(notice => notice.Kind == PartyDungeonNoticeKind.Death).All(notice =>
+                        notice.Death is { Drop: null, Drops.IsEmpty: true }), "首期每个原成员真实死亡回执不生成任何普通或显式掉落");
+                }
+                else
+                {
+                    var death = team[0].ObserveFormalDungeonDeath(observation, kills, growth);
+                    That(death is { Outcome: DungeonRunOutcome.Accepted, Drop: null, Drops.IsEmpty: true },
+                        "单人英雄沿原死亡事务确认真实击杀，仍禁止普通掉落");
+                }
                 killed++;
                 current = team[0].CurrentFormalDungeonScene()!;
             }
             if (!path.TryPop(out var next)) break;
-            That(instance.Move(team[0], checked((byte)next.X), checked((byte)next.Y), 0).Length == 4,
-                "首期四人原Run在真实清房后一起过房");
-            foreach (var session in team) instance.CompleteLoading(session);
+            if (instance is not null)
+                That(instance.Move(team[0], checked((byte)next.X), checked((byte)next.Y), 0).Length == team.Length,
+                    "首期原队伍全部Run在真实清房后一起过房");
+            else That(team[0].MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
+                "单人英雄沿原正式移动链过房");
+            foreach (var session in team)
+                if (instance is not null) instance.CompleteLoading(session);
+                else That(session.CompleteFormalDungeonLoading() is not null, "单人英雄沿原加载链进入下一房间");
             current = team[0].CurrentFormalDungeonScene()!;
         }
-        That(team.All(session => session.Phase == SessionPhase.Settlement), "首期四个原Run均由真终点进入结算");
+        That(team.All(session => session.Phase == SessionPhase.Settlement), "首期原队伍全部Run均由真终点进入结算");
         That(killed > 0 && team.All(session => session.Selected!.DungeonState!.NextObjectKey == actorBoundary),
             "首期保留完整战斗演员并真实击杀，对象key尾界止于最后演员，不额外预留地面对象");
     }
@@ -334,7 +414,7 @@ internal static class Strongway2019AdmissionSessionTests
                 session.PrepareStrongway2019Admission(5360, matched: true) is null &&
                 session.PrepareStrongway2019Admission(5363) is null &&
                 session.PrepareStrongway2019Admission(5364) is null,
-                "单人无法借直接调用获得匹配、英雄或隐藏图资格");
+                "未组队角色无法借直接调用获得匹配、英雄或隐藏图资格");
             events.Override(312, false);
             That(session.PrepareStrongway2019Admission(5359) is null, "关活动后不再生成新准入");
             session.ReturnToRoster();

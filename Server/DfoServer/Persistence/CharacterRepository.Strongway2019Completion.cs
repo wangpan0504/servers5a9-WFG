@@ -18,10 +18,10 @@ internal sealed partial class CharacterRepository : IStrongway2019CompletionStor
 
     public void FreezeStrongway2019Completions(IReadOnlyList<(AccountOwners.Lease Owner, Strongway2019RewardPlan Plan)> plans)
     {
-        if (plans.Count is < 1 or > 4) throw new InvalidDataException("首期完成只接受本人或原四人胜队");
+        if (plans.Count is < 1 or > 4) throw new InvalidDataException("首期完成只接受本人或原一至四人胜队");
         var first = plans[0].Plan;
-        if (first.Competition is { } competition && (plans.Count != 4 || first.Terminal is not { } terminal ||
-            terminal.RewardParticipants.Length != 4 || plans.Any(row => !ReferenceEquals(row.Plan.Competition, competition) ||
+        if (first.Competition is { } competition && (first.Terminal is not { } terminal ||
+            terminal.RewardParticipants.Length != plans.Count || plans.Any(row => !ReferenceEquals(row.Plan.Competition, competition) ||
                 !ReferenceEquals(row.Plan.Terminal, terminal)) || terminal.RewardParticipants.Any(member =>
                 plans.Count(row => ReferenceEquals(row.Plan.Run, member.Run)) != 1)))
             throw new InvalidDataException("匹配终局必须一次冻结完整原胜队，不能逐人遗漏");

@@ -22,6 +22,8 @@ internal static partial class CharacterCopyTests
         using (var f = new Fixture())
         {
             var source = f.LoadSource();
+            f.Sql($"INSERT INTO character_epic_wishes(character_id,account,item_ids) VALUES({source.Id},'copy-account','[5000,0,7000,0,0]')");
+            source = f.LoadSource();
             string sourceJson = JsonSerializer.Serialize(source);
             var copy = f.Copy("CopyOne");
             That(copy.Id != source.Id && copy.Slot != source.Slot && copy.Name == "CopyOne", "复制分配独立角色身份与空槽");
@@ -48,6 +50,11 @@ internal static partial class CharacterCopyTests
             That(part.ItemUid == clone.Uid && part.ClearAvatarSourceUid == originalAvatar.Uid, "装扮预设双重实例引用全部重映射");
             That(copy.ActiveMainQuests.Single().AcceptanceId != source.ActiveMainQuests.Single().AcceptanceId &&
                 copy.ActiveMainQuests.Single().QuestId == source.ActiveMainQuests.Single().QuestId, "进行中任务使用新接取身份");
+            That(f.ScalarText($"SELECT account FROM character_epic_wishes WHERE character_id={copy.Id}") == "copy-account" &&
+                f.ScalarText($"SELECT item_ids FROM character_epic_wishes WHERE character_id={copy.Id}") == "[5000,0,7000,0,0]" &&
+                f.Scalar($"SELECT count(*) FROM character_epic_wishes WHERE character_id={source.Id}") == 1 &&
+                f.ScalarText($"SELECT item_ids FROM character_epic_wishes WHERE character_id={source.Id}") == "[5000,0,7000,0,0]",
+                "角色复制保留同账号五槽祈愿顺序，重写新角色外键且来源行不变");
             That(sourceJson == JsonSerializer.Serialize(f.LoadSource()), "原角色完整领域快照不变");
             var reopened = new CharacterRepository(f.Path);
             var loaded = reopened.LoadCharacter(f.Owner, copy.Slot);
@@ -263,6 +270,7 @@ internal static partial class CharacterCopyTests
         public void Sql(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         public long CountRows(string table) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = "SELECT count(*) FROM " + table; return (long)command.ExecuteScalar()!; }
         public long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return (long)command.ExecuteScalar()!; }
+        public string ScalarText(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return (string)command.ExecuteScalar()!; }
         public string Snapshot(string table)
         {
             using var db = Open(); using var command = db.CreateCommand();

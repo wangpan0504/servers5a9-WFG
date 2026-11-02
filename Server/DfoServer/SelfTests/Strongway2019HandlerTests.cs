@@ -18,36 +18,39 @@ internal static partial class Strongway2019HandlerTests
     {
         int before = Count;
         var activity = Strongway2019CatalogTests.CreateCatalog();
-        using var f = new Strongway2019MatchingTests.Fixture(activity: activity);
-        var first = f.Team();
-        var matching = new Strongway2019MatchingService(f.Parties, activity, f.Clock);
-        var handler = new Strongway2019Handler(matching, new Strongway2019Projection());
-        string directory = Path.Combine(Path.GetTempPath(), "strongway-handler-" + Guid.NewGuid().ToString("N"));
-        using var log = new ServerLog(directory);
-        using var stop = new CancellationTokenSource();
-        using var output = new MemoryStream();
-        var actor = first[0].CaptureSocialActor()!;
-        await using var sender = new GameConnectionSender(actor.Owner, output, stop, 0, (_, _, _, _, _) => { });
-        var context = new GameConnectionContext(new(1525, IPAddress.Loopback, output, stop), actor.Owner, first[0], sender);
-        var commands = new GameCommandRegistry();
-        new PvpMatchingHandler(null!, log, f.Clock, handler).Register(commands);
-        handler.Register(commands); commands.Seal();
-        That(await commands.DispatchAsync(context, new Packet(1, 520,
-            Convert.FromHexString("010E000000FFFFFFFFFFFFFFFF00F0140000"))) == CommandResult.Handled,
-            "原520唯一注册经精确18B首期形状分流到真实处理器");
-        await sender.DrainAsync();
-        That(first.All(session => ReferenceEquals(session.CurrentStrongway2019Ticket, first[0].CurrentStrongway2019Ticket)) &&
-            first[0].CurrentStrongway2019Ticket is not null &&
-            output.ToArray().SequenceEqual(GameFrame.Build(1, 520, 0, [1, 1, 14, 0, 0])),
-            "真实Context与MemoryStream发送原520五字节ACK，同时原四人票据已安装");
-        output.SetLength(0); output.Position = 0;
-        That(await commands.DispatchAsync(context, new Packet(1, 521, [1, 14, 0])) == CommandResult.Handled,
-            "原521唯一注册分流首期取消");
-        await sender.DrainAsync();
-        That(first.All(session => session.CurrentStrongway2019Ticket is null) &&
-            output.ToArray().SequenceEqual(GameFrame.Build(1, 521, 1, [1])),
-            "取消先释放本队票据，真实发送精确单字节ACK");
-        Console.WriteLine($"PASS {Count - before} 首期真实Handler/连接发送与原匹配分流");
+        foreach (int members in new[] { 1, 4 })
+        {
+            using var f = new Strongway2019MatchingTests.Fixture(activity: activity);
+            var first = f.Team(count: members);
+            var matching = new Strongway2019MatchingService(f.Parties, activity, f.Clock);
+            var handler = new Strongway2019Handler(matching, new Strongway2019Projection());
+            string directory = Path.Combine(Path.GetTempPath(), "strongway-handler-" + Guid.NewGuid().ToString("N"));
+            using var log = new ServerLog(directory);
+            using var stop = new CancellationTokenSource();
+            using var output = new MemoryStream();
+            var actor = first[0].CaptureSocialActor()!;
+            await using var sender = new GameConnectionSender(actor.Owner, output, stop, 0, (_, _, _, _, _) => { });
+            var context = new GameConnectionContext(new(1525, IPAddress.Loopback, output, stop), actor.Owner, first[0], sender);
+            var commands = new GameCommandRegistry();
+            new PvpMatchingHandler(null!, log, f.Clock, handler).Register(commands);
+            handler.Register(commands); commands.Seal();
+            That(await commands.DispatchAsync(context, new Packet(1, 520,
+                Convert.FromHexString("010E000000FFFFFFFFFFFFFFFF00F0140000"))) == CommandResult.Handled,
+                "原520唯一注册经精确18B首期形状分流到真实处理器");
+            await sender.DrainAsync();
+            That(first.All(session => ReferenceEquals(session.CurrentStrongway2019Ticket, first[0].CurrentStrongway2019Ticket)) &&
+                first[0].CurrentStrongway2019Ticket is not null &&
+                output.ToArray().SequenceEqual(GameFrame.Build(1, 520, 0, [1, 1, 14, 0, 0])),
+                "真实Context与MemoryStream发送原520五字节ACK，同时原一人或四人票据已安装");
+            output.SetLength(0); output.Position = 0;
+            That(await commands.DispatchAsync(context, new Packet(1, 521, [1, 14, 0])) == CommandResult.Handled,
+                "原521唯一注册分流首期取消");
+            await sender.DrainAsync();
+            That(first.All(session => session.CurrentStrongway2019Ticket is null) &&
+                output.ToArray().SequenceEqual(GameFrame.Build(1, 521, 1, [1])),
+                "取消先释放本队票据，真实发送精确单字节ACK");
+        }
+        Console.WriteLine($"PASS {Count - before} 首期单人及四人真实Handler/连接发送与原匹配分流");
     }
 
     public static async Task RunResourcesAsync(PvfArchive archive, TownCatalog towns, ItemResources resources)
