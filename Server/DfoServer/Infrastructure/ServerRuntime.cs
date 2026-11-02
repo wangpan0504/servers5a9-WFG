@@ -546,6 +546,7 @@ internal static class ServerRuntime
         EpicPieceShopService? epicPieceShop = null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
+        RiftNamedEpicDropPolicy? riftNamedEpics = null;
         // 结算翻牌后的希望自动交付与手工 CMD34 共用同一任务完成发布器。
         var questCompletion = new QuestCompletionHandler(quests, questParameters, itemResources.Items,
             itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs);
@@ -585,10 +586,11 @@ internal static class ServerRuntime
             var legacyHell = new LegacyHellDropPolicy(towns, itemResources.Items.Get, legacyBonusRules, dungeonCatalog.InfernoDungeons);
             string? configuredRiftMaterials = Environment.GetEnvironmentVariable("DFO_PANDEMONIUM_RIFT_MATERIAL_RULES");
             var riftMaterials = PandemoniumRiftMaterialRules.Parse(configuredRiftMaterials ?? "{}");
-            var riftEpics = new DungeonRiftEpicDropPolicy(dropCandidates,
-                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get),
+            var dawnEpicPool = hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get);
+            var riftEpics = new DungeonRiftEpicDropPolicy(dropCandidates, dawnEpicPool,
                 itemResources.EpicPieceDrops.Pool(85, 90), itemResources.Items.Get(DungeonRiftEpicDropPolicy.RefinedTerraniumId),
                 riftMaterials);
+            riftNamedEpics = new RiftNamedEpicDropPolicy(dawnEpicPool);
             log.Write("startup", new { Stage = "Pandemonium material rewards", State = "complete",
                 Rule = DungeonRiftEpicDropPolicy.MaterialRule, Rules = riftMaterials, Configured = configuredRiftMaterials is not null });
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
@@ -944,7 +946,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, riftNamedEpics: riftNamedEpics);
         if (options.EnableHostedDungeonEligibility)
             game.AttachHostedDungeonEligibility(new HostedDungeonEligibilityCoordinator(
                 new HostedDungeonEligibilityOptions

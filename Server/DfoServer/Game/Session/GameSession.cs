@@ -39,7 +39,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     RecoveryConsumableCatalog? consumables = null, SpringTreasureDropPolicy? springTreasure = null,
     GameWorld.Dungeons.Strongway2019Catalog? strongway2019Catalog = null,
     Func<Character, int>? strongway2019AntiEvil = null, Game.Events.ServerEventService? serverEvents = null,
-    GoldLimitCatalog? directPickupGoldLimits = null)
+    GoldLimitCatalog? directPickupGoldLimits = null,
+    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 

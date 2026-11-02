@@ -15,7 +15,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
     bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false,
-    DungeonItemDropPool? EpicReplacementItems = null, DungeonDropCategory Category = DungeonDropCategory.Special);
+    DungeonItemDropPool? EpicReplacementItems = null, DungeonDropCategory Category = DungeonDropCategory.Special,
+    ImmutableDictionary<int, int>? ItemStackSizes = null);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -130,8 +131,12 @@ internal sealed class DungeonDropGenerationPlan
             long objects = trial.Gold is not null ? trial.MaximumCount : sourcePools.SelectMany(pool => pool.Entries).Select(entry =>
             {
                 int count = trial.ItemCounts?.GetValueOrDefault(entry.Template.Id) ?? trial.MaximumCount;
+                int stackSize = trial.ItemStackSizes is { } sizes &&
+                    sizes.TryGetValue(entry.Template.Id, out int configured) && configured > 0
+                    ? configured : entry.Template.StackLimit;
+                if (stackSize <= 0) throw new InvalidDataException("掉落堆叠大小必须为正数");
                 return entry.Template.Kind == ItemKind.Equipment || trial.IndividualObjects ? count :
-                    ((long)count + entry.Template.StackLimit - 1) / entry.Template.StackLimit;
+                    ((long)count + stackSize - 1) / stackSize;
             }).DefaultIfEmpty(0).Max();
             if (trial.EpicReplacementItems is not null)
             {
@@ -213,7 +218,11 @@ internal sealed class DungeonDropGenerationPlan
                 int remaining = count;
                 while (remaining > 0)
                 {
-                    int quantity = Math.Min(remaining, trial.IndividualObjects ? 1 : template.StackLimit);
+                    int stackSize = trial.ItemStackSizes is { } sizes &&
+                        sizes.TryGetValue(template.Id, out int configured) && configured > 0
+                        ? configured : template.StackLimit;
+                    if (stackSize <= 0) throw new InvalidDataException("掉落堆叠大小必须为正数");
+                    int quantity = Math.Min(remaining, trial.IndividualObjects ? 1 : stackSize);
                     result.Add(new(DungeonDropCreation.Create(template, quantity, Sample, now)));
                     remaining -= quantity;
                 }

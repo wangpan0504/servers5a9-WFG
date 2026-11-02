@@ -111,6 +111,39 @@ internal static class DungeonIncountTicketTests
                 "代号希望追加券同时增加日、周入场额度");
         }
         finally { hopeSession.End(); }
+        // 黎明裂缝：基础 2 次，追加券 +1，重置券仅在耗尽后清空已用和追加额度。
+        var dawnRow = incounts.Find(530)!;
+        using var dawnOwner = owners.Acquire("dawn-incount-ticket", () => { });
+        var addSlot = new InventorySlot(InventoryListType.Main, 70);
+        var resetSlot = new InventorySlot(InventoryListType.Main, 71);
+        var dawnCandidate = CharacterCreation.Prepare("DawnTicket", resources.Characters.Get(0), resources.Towns.Room, resources.Towns.InitialReturn, null);
+        repository.Create(dawnOwner, dawnCandidate with
+        {
+            Inventory = dawnCandidate.Inventory with
+            {
+                Items = dawnCandidate.Inventory.Items
+                    .Add(new(0, addSlot, new(10306646, ItemKind.Consumable, 1) { ExpireTime = 2145852000 }))
+                    .Add(new(0, resetSlot, new(10308584, ItemKind.Consumable, 1) { ExpireTime = 2145852000 }))
+            }
+        });
+        var dawn = repository.LoadCharacter(dawnOwner, 0);
+        var addPlan = service.Prepare(dawn, addSlot);
+        var added = repository.CommitDungeonIncountTicket(dawnOwner, addPlan, clock.GetUtcNow());
+        That(added.Usage.DailyExtra == 1 && DungeonIncountPolicy.DailyRemaining(dawnRow, added.Usage) == 3,
+            "黎明裂缝追加券只增加 1 次日入场");
+        var blockedReset = service.Prepare(added.Character, resetSlot);
+        Reject<InvalidOperationException>(() => repository.CommitDungeonIncountTicket(dawnOwner, blockedReset, clock.GetUtcNow()),
+            "黎明裂缝还有剩余次数时重置券拒绝使用");
+        var currentDawn = added.Character;
+        var dawnPeriod = DungeonIncountPolicy.Period(clock.GetUtcNow(), incounts.WeeklyResetDay(dawnRow.CountKey));
+        for (int i = 0; i < 3; i++)
+            currentDawn = repository.CommitDungeonIncountEntry(dawnOwner, currentDawn, dawnRow.CountKey, dawnPeriod, dawnRow, null)!.Character;
+        var exhaustedDawn = repository.LoadCharacter(dawnOwner, 0);
+        var resetPlan = service.Prepare(exhaustedDawn, resetSlot);
+        var reset = repository.CommitDungeonIncountTicket(dawnOwner, resetPlan, clock.GetUtcNow());
+        That(reset.Usage == default && DungeonIncountPolicy.DailyRemaining(dawnRow, reset.Usage) == 2,
+            "黎明裂缝重置券耗尽后恢复初始 2 次并清空追加额度");
+
         Console.WriteLine($"PASS dungeon incount ticket {Count - before}");
 
         void Select() { session.Select(0); session.MarkReady(); }

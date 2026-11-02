@@ -23,6 +23,7 @@ internal sealed partial class GameSession
     sealed record AssaultModeAuthorization(ushort CharacterId, AssaultModeSelection Selection, EpicPieceCatalog Pieces, long IssuedTimestamp)
     {
         public AssaultModeRewardServices? Rewards { get; init; }
+        public bool Retry { get; init; }
     }
     internal static readonly TimeSpan AssaultAuthorizationLifetime = TimeSpan.FromSeconds(60);
     AssaultModeAuthorization? assaultAuthorization;
@@ -63,6 +64,7 @@ internal sealed partial class GameSession
         AssaultModeClearReward? granted = null;
         string? issue = null;
         if (!services.Catalog.ClearRewards.TryGetValue(checked((int)assault.Mission), out var reward)) issue = "no-reward-row";
+        else if (reward.Count <= 0) issue = "disabled";
         else if (reward.Rate < 10000 && RandomNumberGenerator.GetInt32(10000) >= reward.Rate) issue = "rate-miss";
         else
         {

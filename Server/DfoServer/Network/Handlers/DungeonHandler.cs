@@ -324,14 +324,24 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await PartyDungeonProjection.PublishAsync(entered);
             return CommandResult.Handled;
         }
-        var receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
-            replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
-            (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
-                drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                hellParty: true, sealDoor: true, crackRewards: crackRewards) : null) ??
-            context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
-                drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards);
+        FormalDungeonReceipt? receipt;
+        try
+        {
+            receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+                replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+                (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
+                    drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
+                    hellParty: true, sealDoor: true, crackRewards: crackRewards) : null) ??
+                context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
+                    drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
+                    classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards);
+        }
+        catch (Exception error) when (selection.DungeonIndex == 530)
+        {
+            log.Write("formal_dungeon_entry_exception", new { Connection = context.Id, Dungeon = selection.DungeonIndex,
+                Request = selection, Error = error.GetType().Name, Message = error.Message, Stack = error.StackTrace });
+            return await RejectAsync("formal-entry-exception");
+        }
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
             Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
@@ -396,6 +406,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         await QuestProjection.DungeonTerrainBypassAsync(context, receipt.Entry, Guard);
         await PublishEntryAssetsAsync(context, receipt, Guard);
+        if (receipt.Entry.DungeonId == 530)
+            await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (receipt.SpecialEntry?.Kind is DungeonSpecialEntryKind.Blood or DungeonSpecialEntryKind.Ultimate)
             await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
         else if (receipt.GriefAdmission is not null)

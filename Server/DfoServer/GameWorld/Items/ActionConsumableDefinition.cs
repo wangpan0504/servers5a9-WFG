@@ -30,6 +30,8 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[character name change]", Parameters.Count: 0 } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] } or
+                { Label: "[add crackofdaybreak dungeon enter count]", Parameters: [> 0 and <= 10000] } or
+                { Label: "[reset crackofdaybreak dungeon enter count]", Parameters.Count: 0 } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
                 { Label: "[creature transport stone]" or "[cargo transport stone]" or "[avatar transport stone]" or
                     "[flag transport stone]" or "[emblem transport stone]", Parameters: [>= 0] } or

@@ -888,6 +888,14 @@ internal sealed partial class SinglePlayerDungeonRun
     internal bool IsConfirmedDeath(PreparedDungeonDeath prepared) => prepared is not null && committedPreparations.Contains(prepared) &&
         deaths.TryGetValue(prepared.Death.EventId, out var accepted) && ReferenceEquals(accepted, prepared.Death);
 
+    // 只统计本 Run 已提交且符合规则身份的怪物，并按模板去重；同队成员各自 Run 会收到同一批死亡事实。
+    internal int ConfirmedDistinctMonsterCount(Func<DungeonPlannedMonster, bool> matches)
+    {
+        ArgumentNullException.ThrowIfNull(matches);
+        return committedPreparations.Where(IsConfirmedDeath).Select(prepared => prepared.Monster)
+            .Where(matches).Select(monster => monster.MonsterId).Distinct().Count();
+    }
+
     // 只查询本Run实际提交的普通演员；合并监控目标须所有已加载实体都死亡，未生成的分支不计存活。
     internal bool CommittedMonitorDeath(ushort key, out int template, out bool exhausted)
     {

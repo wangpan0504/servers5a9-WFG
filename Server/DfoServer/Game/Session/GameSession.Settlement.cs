@@ -225,9 +225,13 @@ internal sealed partial class GameSession
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
         bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
             dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
-        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !noClearCards ? cards?.Prepare(
-            dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
-            job:Selected!.Job,grow:Selected.GrowType,ancientBonus:ancientGate?.Bonus == true) : null);
+        DungeonCardReward? normalCard = null;
+        if (dungeon.Settlement is null && !noClearCards && cards is not null)
+            normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
+                fact.ConfirmedDeathEvents.Count, job: Selected!.Job, grow: Selected.GrowType, ancientBonus: ancientGate?.Bonus == true);
+        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
+            ? cards!.PrepareAssault(normalCard.Gold, (timeProvider ?? TimeProvider.System).GetUtcNow())
+            : normalCard);
         var options = dungeon.Settlement?.Pending.Options;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
@@ -563,6 +567,16 @@ internal sealed partial class GameSession
 
     // 强袭副本不支持原地重开（再次挑战需重新走 CMD1547 授权与扣券）；handler 据此把再次挑战按返回城镇处理，避免客户端无应答卡死。
     public bool IsFormalDungeonAssault() => owner.Execute(() => formalDungeon?.Assault is not null);
+    public bool AssaultNextHiddenExpected() => owner.Execute(() =>
+    {
+        if (formalDungeon is not { Assault: { } assault, AssaultRewards: { } rewards }) return false;
+        var localNow = (timeProvider ?? TimeProvider.System).GetLocalNow();
+        if (assault.DayKey != AssaultModeEntryPolicy.DayKey(localNow)) return false;
+        var counts = repository.LoadAssaultDaily(owner, Selected!.Id, assault.DayKey);
+        return !assault.Hidden &&
+            counts.Clears >= AssaultModeCatalog.DailyClearLimit &&
+            counts.Hidden < AssaultModeCatalog.DailyHiddenLimit;
+    });
     public DungeonSelectionReceipt? OpenFormalDungeonOtherSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
         if (!Ready || HasPendingFormalCard || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo != false ||
@@ -576,24 +590,69 @@ internal sealed partial class GameSession
     });
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null)
+        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null,
+        bool assaultNextHidden = false)
     {
         var original = owner.Execute(() => CanEnterFormalDungeon(expected) ? formalDungeon : null);
         if (original is null) return null;
-        uint? retryTarget = expected.Entry.Dimension is { } dimension
-            ? checked((uint)dimension.Catalog.RetryTarget(dimension.DungeonId, original.Draw))
-            : OrdinaryDungeonContinuation.Target(expected.Entry, dungeons);
-        if (retryTarget is not { } target) return null;
-        uint quest = target != expected.Entry.DungeonId ||
-            DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId) ? 0 : expected.Entry.QuestId;
-        // 资源规划失败保留原结算实例；新尝试持久预留成功后才替换旧实例。
-        // 复用不可变生成规则和随机源；新Run独立冻结结果，不继承旧地面对象。
-        return EnterFormalDungeon(target,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
-            draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
-            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
-            hellParty: expected.Entry.IsCosmo || expected.Entry.IsInfernoParty, allowDimensionHidden: false);
-    }
 
+        uint? retryTarget;
+        uint quest;
+        AssaultModeSelection? assaultOverride = null;
+        AssaultModeRewardServices? assaultRewards = null;
+        if (original.Assault is { } assault)
+        {
+            if (original.AssaultRewards is not { } rewards) return null;
+            var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+            var localNow = (timeProvider ?? TimeProvider.System).GetLocalNow();
+            if (assault.DayKey != AssaultModeEntryPolicy.DayKey(localNow)) return null;
+            var counts = repository.LoadAssaultDaily(owner, expected.Character.Id, assault.DayKey);
+            int normalRemaining = Math.Max(0, AssaultModeCatalog.DailyClearLimit - counts.Clears);
+            int hiddenRemaining = Math.Max(0, AssaultModeCatalog.DailyHiddenLimit - counts.Hidden);
+            var open = rewards.Catalog.DailyOpens.FirstOrDefault(row => row.Dungeons.Contains((int)assault.Parent));
+            if (open is null) return null;
+
+            if (assaultNextHidden)
+            {
+                if (assault.Hidden || normalRemaining > 0 || hiddenRemaining <= 0) return null;
+                var decision = AssaultModeEntryPolicy.Select(rewards.Catalog, expected.Character,
+                    checked((uint)rewards.Catalog.HiddenBaseDungeon), open.Day, rewards.Pieces, now,
+                    System.Security.Cryptography.RandomNumberGenerator.GetInt32, counts, assault.DayKey);
+                if (!decision.Accepted || decision.Selection is not { Hidden: true } selected) return null;
+                assaultOverride = selected;
+                retryTarget = selected.Mission;
+                quest = 0;
+            }
+            else
+            {
+                if (assault.Hidden || normalRemaining <= 0) return null;
+                var decision = AssaultModeEntryPolicy.Select(rewards.Catalog, expected.Character, assault.Parent,
+                    open.Day, rewards.Pieces, now, System.Security.Cryptography.RandomNumberGenerator.GetInt32,
+                    counts, assault.DayKey);
+                if (!decision.Accepted || decision.Selection is not { Hidden: false } selected) return null;
+                assaultOverride = selected;
+                retryTarget = selected.Mission;
+                quest = 0;
+            }
+            assaultRewards = rewards;
+        }
+        else
+        {
+            retryTarget = expected.Entry.Dimension is { } dimension
+                ? checked((uint)dimension.Catalog.RetryTarget(dimension.DungeonId, original.Draw))
+                : OrdinaryDungeonContinuation.Target(expected.Entry, dungeons);
+            quest = retryTarget is { } target && (target != expected.Entry.DungeonId ||
+                DfoServer.Game.Quests.QuestEligibility.Completed(expected.Character).Contains((int)expected.Entry.QuestId))
+                ? 0 : expected.Entry.QuestId;
+        }
+
+        if (retryTarget is not { } targetId) return null;
+        return EnterFormalDungeon(targetId, quest, expected.Entry.Difficulty, dungeons, rooms, drops, items,
+            draw: original.Draw, pieces: assaultRewards?.Pieces ?? pieces, requiredCharacter: expected.Character, retry: expected,
+            prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
+            hellParty: expected.Entry.IsCosmo || expected.Entry.IsInfernoParty, allowDimensionHidden: false,
+            assaultRetry: assaultOverride, assaultRetryRewards: assaultRewards);
+    }
     public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>
     {
         if (!Ready || !CanMutatePartyDungeon && partyAdmission || !expected.Entry.IsCosmo || !CanEnterFormalDungeon(expected,partyAdmission) ||

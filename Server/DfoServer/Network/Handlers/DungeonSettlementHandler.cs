@@ -131,6 +131,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 魔界大战小图只发结果页（34）：没有普通白图的翻牌会员刷新与 35 通关奖励，否则翻牌层压住结算阶段。
         bool war = result.EvildomWarClear;
         bool bossRush = receipt.Entry.IsBossRush;
+        if (receipt.Entry.DungeonId == 530)
+            await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (!tournament && !cosmo && !grief && !bossRush)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!, receipt.PartyActors), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
@@ -542,16 +544,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             // 无 ACK 会让结算页停住，后面的回城/选图点击也不再发出。按 1/1 无后继的同一做法，回 ACK option 2 并回城。
             if (context.Session.IsFormalDungeonAssault())
             {
-                var assaultReturn = context.Session.ReturnFromFormalDungeon();
-                if (assaultReturn is null)
-                {
-                    log.Write("formal_result_assault_retry_rejected", new { Connection = context.Id });
-                    return CommandResult.Unhandled;
-                }
-                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2), "formal_result_assault_retry_return", () => context.Session.CanPublishTravel(assaultReturn));
-                await town.ReturnFromFormalDungeonAsync(context, assaultReturn, "formal_result_town");
-                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "assault-retry", assaultReturn.Character.Id, assaultReturn.Character.Position });
-                return CommandResult.Handled;
+                var assaultRetry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items, pieces);
+                if (assaultRetry is not null)
+                    return await ContinueAssaultAsync(context, assaultRetry, state, 0);
+                var assaultNext = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items, pieces,
+                    assaultNextHidden: true);
+                if (assaultNext is not null)
+                    return await ContinueAssaultAsync(context, assaultNext, state, 0);
+                return await ReturnAssaultAsync(context, state, 0, "assault-retry");
             }
             var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
             if (retry is null)
@@ -636,6 +636,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (option == 1)
         {
+            if (context.Session.AssaultNextHiddenExpected())
+            {
+                var assaultNext = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items, pieces,
+                    assaultNextHidden: true);
+                if (assaultNext is not null)
+                    return await ContinueAssaultAsync(context, assaultNext, state, 1);
+                return await ReturnAssaultAsync(context, state, 1, "assault-next");
+            }
             if (current.Entry.IsCosmo)
             {
                 // 实机菜单只发送72{1,1}，不会续发15；在此完成原子退场和完整选图。
@@ -711,6 +719,47 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_return", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_result_town");
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "settlement", receipt.Character.Id, receipt.Character.Position });
+        return CommandResult.Handled;
+    }
+    async Task<CommandResult> ContinueAssaultAsync(GameConnectionContext context, FormalDungeonReceipt retry,
+        byte state, byte option)
+    {
+        bool Guard() => context.Session.CanPublishDungeonSettlement(retry);
+        await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+            "formal_assault_retry", Guard);
+        await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
+            DungeonPackets.SelectionNotice(0, despairLayer: context.Session.DespairSelectionLayer()),
+            "formal_assault_retry_scene", Guard);
+        await context.Notify(NotiPacketType.DUNGEON_INFO,
+            DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition),
+            "formal_assault_retry_information", Guard);
+        await MonsterAiProjection.SendAsync(context, retry, "formal_assault_retry_monster_ai", Guard);
+        await context.Notify(NotiPacketType.START_MAP,
+            DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed, passiveItems: retry.PassiveItems),
+            "formal_assault_retry_start_map", Guard);
+        if (!retry.AssaultConsumedSlots.IsDefaultOrEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                InventoryPackets.Delta(retry.Character.Inventory, InventoryListType.Main, [.. retry.AssaultConsumedSlots]),
+                "assault_mode_retry_items", Guard);
+        await QuestProjection.DungeonTerrainBypassAsync(context, retry.Entry, Guard);
+        log.Write("formal_assault_continuation", new { Connection = context.Id, Option = option,
+            Dungeon = retry.Entry.DungeonId, Identity = retry.Snapshot.Identity });
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ReturnAssaultAsync(GameConnectionContext context, byte state, byte option, string reason)
+    {
+        var returning = context.Session.ReturnFromFormalDungeon();
+        if (returning is null)
+        {
+            log.Write("formal_result_assault_retry_rejected", new { Connection = context.Id, Option = option, Reason = reason });
+            return CommandResult.Unhandled;
+        }
+        await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2),
+            "formal_result_assault_retry_return", () => context.Session.CanPublishTravel(returning));
+        await town.ReturnFromFormalDungeonAsync(context, returning, "formal_result_town");
+        log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = reason,
+            returning.Character.Id, returning.Character.Position });
         return CommandResult.Handled;
     }
 }

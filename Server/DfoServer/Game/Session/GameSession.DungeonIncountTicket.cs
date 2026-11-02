@@ -26,6 +26,12 @@ internal sealed partial class GameSession
             if (plan.Period != DungeonIncountPolicy.Period(now, plan.WeeklyResetDay) ||
                 plan.Source.IsExpired(now.ToUnixTimeSeconds()) || plan.Inventory.CharacterPrecondition!.IsExpired(now.ToUnixTimeSeconds()))
                 return Reject("source-or-period-expired");
+            if (plan.Reset)
+            {
+                var usage = repository.LoadDungeonIncount(owner, expected.Id, plan.Row.CountKey, plan.Period);
+                if (DungeonIncountPolicy.DailyRemaining(plan.Row, usage) > 0)
+                    return Reject("reset-requires-exhausted-count");
+            }
             pendingConsumableUse = plan.Inventory;
             // 提交结果不明时保留门闩，关闭连接后重选只读实际存档，不能再发成功扣券。
             var committed = store.CommitDungeonIncountTicket(owner, plan, now);
