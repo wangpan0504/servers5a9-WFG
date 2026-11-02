@@ -578,6 +578,7 @@ internal static class TcpRegressionTests
         ("luke-raid-phase-timeout", LukeRaidStartTcpTests.RunPhaseTimeoutAsync),
         ("raid-channel-type", RaidChannelTypeTcpTests.RunAsync),
         ("raid-channel-landing", RaidChannelLandingTcpTests.RunAsync),
+        ("raid-channel-relogin", RaidChannelLandingTcpTests.RunReloginAsync),
         ("raid-channel-events", RaidChannelLandingTcpTests.RunEventsAsync),
         ("special-channel-landing", RaidChannelLandingTcpTests.RunSpecialAsync),
         ("xian-village-door", RaidChannelLandingTcpTests.RunXianDoorAsync),

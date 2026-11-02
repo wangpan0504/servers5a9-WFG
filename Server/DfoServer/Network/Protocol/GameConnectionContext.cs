@@ -78,6 +78,9 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.DazzlementTowerProjection? Dazzlement { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
+    // 只记录本连接的原生握手；不改变监听端点或伪造当前频道身份。
+    public bool HasEnteredWorld { get; set; }
+    public bool ChannelSelectionRequired { get; set; }
     internal DfoServer.Network.Projection.LukeRewardResultProjection LukeResults { get; } = new();
     // 返回选角时服务端已主动推送名册；用于吞掉客户端随后重复的 C2S8，避免双重名册刷新。
     public bool SelectionRosterPushed { get; set; }

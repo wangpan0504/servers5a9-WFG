@@ -56,7 +56,9 @@ internal static partial class LukeRaidRunTcpTests
             SelfTestCatalogs.Rooms(resources.Archive), lukeResourceChoices: LukeSanctumRoute.ResourceChoices).Find(1)!;
         var catalog = definition.Resources!.EntryCatalog!;
         var repository = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
-        var port = ChannelTcpTests.Endpoints(fixture)[20];
+        var endpoints = ChannelTcpTests.Endpoints(fixture);
+        var port = endpoints[20];
+        byte ordinaryChannel = endpoints.Keys.Min();
         foreach (int count in recovery || battlePassDeath || ineligible ? new[] { 1 } : new[] { 1, 4, 8 })
         {
             var peers = new List<TcpPeer>();
@@ -636,7 +638,10 @@ internal static partial class LukeRaidRunTcpTests
                         "领奖阶段同实例P2新候选真实离线完成清理");
                     if (recoveryMode != 0)
                     {
-                        leader = Open(fixture, "lkprod1_0", gamePort: port, channelNumber: 20);
+                        // 改玩另一角色属于新登录，先选真实普通频道，不冒充直发4的团本主动换频道。
+                        leader = recoveryMode == 2
+                            ? Open(fixture, "lkprod1_0", gamePort: endpoints[ordinaryChannel], channelNumber: ordinaryChannel)
+                            : Open(fixture, "lkprod1_0", gamePort: port, channelNumber: 20);
                         peers[0] = leader;
                         if (recoveryMode == 2) { leader.Select(1); That(leader.Id != original, "同账号改玩另一角色，不恢复原Battle"); }
                     }
@@ -681,7 +686,7 @@ internal static partial class LukeRaidRunTcpTests
                         if (recoveryMode == 2)
                         {
                             leader.Dispose();
-                            leader = Open(fixture, "lkprod1_0", gamePort: port, channelNumber: 20); peers[0] = leader;
+                            leader = Open(fixture, "lkprod1_0", gamePort: endpoints[ordinaryChannel], channelNumber: ordinaryChannel); peers[0] = leader;
                             leader.Select(1);
                             That(leader.Id != original, "自动领奖后另一角色可重登且没有资产revision冲突");
                         }

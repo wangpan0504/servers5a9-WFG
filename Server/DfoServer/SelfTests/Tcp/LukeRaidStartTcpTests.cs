@@ -396,8 +396,9 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Snapshot()==beforeFailure&&fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY character_id,item_uid")==inventoryBefore&&
                 fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id")==auditBefore,"末成员SQL失败回滚全部八人角色、门票UID/数量和审计");
             fixture.Sql("DROP TRIGGER luke_start_failure");
-            // 关闭旧连接后按正常选角重连，幸存队长沿原邀请恢复八人，不直接改Registry。
-            leader.Dispose();peers[0]=Open(fixture,"lukestart4",gamePort:endpoints[20],channelNumber:20);peers[0].Select();
+            // 关闭旧连接后按主动换频道握手重连并保留同频道快照，幸存队长沿原邀请恢复八人。
+            leader.Dispose();peers[0]=Open(fixture,"lukestart4",gamePort:endpoints[20],channelNumber:20);
+            peers[0].Select(resumeTown:true,nativeSwitch:true);
             foreach(var peer in peers)Drain(peer,p=>That(p.Opcode is not (9 or 14 or 594 or 587),"失败后无任何分队安装或启动尾通知"));
             leader=peers[1];Join(leader,peers[0]);Assign(leader);
             foreach(var peer in peers)Drain(peer);

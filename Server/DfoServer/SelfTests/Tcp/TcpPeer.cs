@@ -1002,7 +1002,7 @@ internal sealed partial class TcpPeer : IDisposable
         byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
-        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
+        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool? nativeSwitch = null,
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
@@ -1012,8 +1012,9 @@ internal sealed partial class TcpPeer : IDisposable
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
         PcRoomAccelerationState = [];
-        // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
-        if (!resumeTown && !requestedRoster && !nativeSwitch)
+        // 团本玩法夹具按主动换频道直发4；fresh拒绝专项自行发8/4，显式false也可请求普通选角链。
+        bool directSwitch = nativeSwitch ?? (LoginEndpoint.Length > 3 && LoginEndpoint[3] is 23 or 32 or 45 or 50);
+        if (!resumeTown && !requestedRoster && !directSwitch)
             Send(8, [255, 255, 2]);
         long selectionStarted = UnixTime;
         Send(4, Build(w => w.Write(slot)));
