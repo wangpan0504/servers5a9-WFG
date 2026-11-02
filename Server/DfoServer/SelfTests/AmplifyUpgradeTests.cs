@@ -302,6 +302,7 @@ internal static class AmplifyUpgradeTests
         Exact433ProtectionCommit(resources, role, service, rng, request);
         PotionBoundaries(resources, role, request);
         PortableReinforcement(resources, role, request);
+        NpcReinforcement(resources, role, request);
         Console.WriteLine($"PASS {Count - before} 当前PVF普通增幅、便携、幸运、金币及完整销毁规划断言");
     }
 
@@ -368,6 +369,92 @@ internal static class AmplifyUpgradeTests
         That(!service.Plan(Actor(0),use with { Mode=EnhancementMode.Amplify },out _).Accepted &&
             !service.Plan(seed with { Inventory=Actor(0).Inventory with { Items=Actor(0).Inventory.Items.SetItem(0,target) } },use,out _).Accepted,
             "强化器不能用增幅请求或异次元装备，保留模式与目标资格");
+    }
+
+    static void NpcReinforcement(TcpTestResources resources, Character seed, EnhancementRequest request)
+    {
+        var r = resources.ItemResources;
+        var rules = r.AmplifyUpgrades.ReinforceRules;
+        var priced = r.Items.Get(31440) with { Grade = 1, Rarity = 3, EquipmentSlot = 12 };
+        That(rules.LevelCostWeights.Length == 19 && rules.LevelCostWeights[0] == 0.5f &&
+            rules.LevelCostWeights[4] == 1f && rules.LevelCostWeights[11] == 2.5f && rules.LevelCostWeights[18] == 16f &&
+            r.AmplifyUpgrades.Rules.LevelCostWeights.IsDefaultOrEmpty,
+            "强化表保留0..18等级费用倍率且a=b；增幅表没有该段");
+        That(rules.Gold(priced, 0) == 360 && rules.Gold(priced, 4) == 720 && rules.Gold(priced, 11) == 1800 &&
+            rules.Gold(priced, 18) == 11520 && rules.Gold(priced, 30) == 11520 &&
+            rules.Gold(priced with { EquipmentSlot = 25 }, 0) == 300,
+            "NPC强化金币三段各自+0.5截断，超表等级沿用末档，耳环用第12项");
+        That(r.AmplifyUpgrades.Rules.Gold(priced) == 3000 && r.AmplifyUpgrades.Rules.Gold(priced, 11) == 3000,
+            "增幅金币仍两段，不吃强化等级倍率");
+        var random = new FixedRandom(0);
+        var upgrading = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint,
+            r.GoldLimits, r.EpicPieces, resources.Towns, random);
+        var service = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, random, amplification: upgrading);
+        var target = seed.Inventory.Find(request.Target)!;
+        var gear = r.Items.Get(target.Core.ItemId);
+        That(gear.Grade > 0 && gear.Grade < rules.Costs.Length && rules.Costs[gear.Grade] > 0,
+            "31440 在强化费用表有正品级，NPC金币可计算");
+        var use = request with { Mode = EnhancementMode.Reinforce, MaterialSlot = 358 };
+        Character Actor(byte level, int cubes = 1000, uint gold = 10_000_000, byte sortLock = 0, byte lockId = 0, int guard = 0) =>
+            seed with
+            {
+                Inventory = new([
+                    target with { Core = target.Core with
+                    {
+                        Attr = (byte)(0xE0 | level), AmplifyType = 0, AmplifyValue = 0,
+                        SortLockFlag = sortLock, EquipmentLockId = lockId
+                    } },
+                    .. guard == 0 ? Array.Empty<InventoryItem>() :
+                        [new(5, MainSlot(123), InventoryRewardGrantService.Create(r.Items.Get(guard), 2) with { ExpireTime = 0 })]
+                ], Gold: gold) { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube, cubes) }
+            };
+        random.Value = 0;
+        var actor = Actor(0, sortLock: 1);
+        var result = service.Plan(actor, use, out var receipt);
+        int gold0 = rules.Gold(gear, 0), cubes0 = rules.Steps[0].MaterialCount;
+        That(result.Accepted && receipt is { Mode: EnhancementMode.Reinforce, Path: 0, MaterialSlot: 358, OutcomeCode: 0,
+                NewLevel: 1, GoldCost: var cost, TerminalSlot: -1, Refunds.IsEmpty: true } && cost == gold0 &&
+            receipt.MaterialRemaining == 1000 - cubes0 && result.Plan!.Reason == "equipment_reinforcement_npc" &&
+            result.Plan.After.Find(use.Target) == actor.Inventory.Find(use.Target)! with
+                { Core = actor.Inventory.Find(use.Target)!.Core with { Attr = 0xE1 } } &&
+            CurrencyWallet.Get(result.Plan.After, CurrencyKind.ClearCube) == 1000 - cubes0 &&
+            result.Plan.After.Gold == actor.Inventory.Gold - (uint)gold0,
+            "NPC强化Mode0/槽358扣钱包无色与三段金币，排序锁不拦，完整UID与核心保留");
+        int calls = random.Calls;
+        foreach (var invalid in new[]
+        {
+            Actor(0, cubes: cubes0 - 1),
+            Actor(0, gold: 0),
+            Actor(0, lockId: 1),
+            Actor(0) with { Inventory = Actor(0).Inventory with { Items = Actor(0).Inventory.Items.SetItem(0,
+                target with { Core = target.Core with { Attr = 0xE0, AmplifyType = 3, AmplifyValue = 6 } }) } }
+        })
+            That(!service.Plan(invalid, use, out _).Accepted && random.Calls == calls,
+                "无色不足、金币不足、安全锁、已增幅目标在抽签前拒绝，不扣钱包");
+        var ticket = new InventoryItem(6, MainSlot(65), InventoryRewardGrantService.Create(r.Items.Get(7804), 2) with { ExpireTime = 0 });
+        var asMaterial = Actor(0) with { Inventory = Actor(0).Inventory with { Items = Actor(0).Inventory.Items.Add(ticket) } };
+        That(!service.Plan(asMaterial, use with { MaterialSlot = 65 }, out _).Accepted && random.Calls == calls,
+            "保护券不能当作强化材料，仍走自动扫描而不是MaterialSlot");
+        That(!service.Plan(Actor(0), use with { MaterialSlot = 357 }, out _).Accepted && random.Calls == calls,
+            "材料槽必须是表内材料对应的虚拟晶块槽");
+        random.Value = 0;
+        var protectedRole = Actor(12, guard: 7804);
+        result = service.Plan(protectedRole, use, out receipt);
+        int gold12 = rules.Gold(gear, 12), cubes12 = rules.Steps[12].MaterialCount;
+        That(result.Accepted && receipt is { OutcomeCode: 2, NewLevel: 0, TerminalSlot: 123, TerminalRemaining: 1,
+                GoldCost: var destroyGold } && destroyGold == gold12 &&
+            receipt.MaterialRemaining == 1000 - cubes12 &&
+            result.Plan!.After.Find(use.Target)!.Uid == protectedRole.Inventory.Find(use.Target)!.Uid &&
+            result.Plan.After.Find(MainSlot(123))!.Core.Count == 1 &&
+            CurrencyWallet.Get(result.Plan.After, CurrencyKind.ClearCube) == 1000 - cubes12,
+            "NPC强化+12毁装失败消费7804归零，扣无色与金币，不发销毁补偿");
+        random.Value = 0;
+        var destroyed = service.Plan(Actor(12), use, out var destruction);
+        int cubeRefund = destruction!.Refunds.Where(row => row.ItemId == 3037).Sum(row => row.Count);
+        That(destroyed.Accepted && destruction is { OutcomeCode: 3, TerminalSlot: -1 } &&
+            destroyed.Plan!.After.Find(use.Target) is null &&
+            CurrencyWallet.Get(destroyed.Plan.After, CurrencyKind.ClearCube) == 1000 - cubes12 + cubeRefund,
+            "无保护时NPC强化销毁按原事务发放补偿，回执晶块增量不含已扣材料");
     }
 
     static void PotionBoundaries(TcpTestResources resources, Character seed, EnhancementRequest request)

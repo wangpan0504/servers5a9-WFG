@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -20,11 +21,13 @@ internal static class AmplifyUpgradeTcpTests
         var exchange = r.Items.Get(10007110);
         var range = ItemSlotBoundService.Range(exchange.Kind, 0);
         short exchangeSlot = checked((short)Enumerable.Range(range.Start, range.End - range.Start + 1)
-            .First(slot => slot is not (19 or 20 or 65 or 66 or 67 or 68 or 69 or 70 or 121)));
+            .First(slot => slot is not (19 or 20 or 21 or 65 or 66 or 67 or 68 or 69 or 70 or 121)));
         var exchangeCore = InventoryRewardGrantService.Create(exchange, 7) with { ExpireTime = 0 };
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "amplification-upgrade"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            new CharacterRepository(fixture.Database).Create(owner, new("UpgradeTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+        {
+            var created = repository.Create(owner, new("UpgradeTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Job = 2, Level = 75, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(2).Skills,
                 Inventory = new([new(0, Bag(19), core), new(0, new(InventoryListType.Equipment, 12), core),
@@ -34,10 +37,16 @@ internal static class AmplifyUpgradeTcpTests
                     new(0, Bag(67), InventoryRewardGrantService.Create(r.Items.Get(10007133), 2) with { ExpireTime = 0 }),
                     new(0, Bag(68), InventoryRewardGrantService.Create(r.Items.Get(10007839), 2) with { ExpireTime = 0 }),
                     new(0, Bag(20), core with { AmplifyType=0, AmplifyValue=0 }),
+                    new(0, Bag(21), core with { AmplifyType=0, AmplifyValue=0 }),
                     new(0, Bag(69), InventoryRewardGrantService.Create(r.Items.Get(10005312), 2) with { ExpireTime=0 }),
                     new(0, Bag(70), InventoryRewardGrantService.Create(r.Items.Get(10007838), 1) with { ExpireTime=0 }),
                     new(0, Bag(exchangeSlot), exchangeCore)], Gold: 10_000_000)
             });
+            repository.CommitInventory(owner, created, new(created.Inventory, created.Inventory with
+            {
+                AccountWallet = created.Inventory.AccountWallet.Set(CurrencyKind.ClearCube, 100)
+            }, "test_seed"));
+        }
         string uid = fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid");
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -127,13 +136,46 @@ internal static class AmplifyUpgradeTcpTests
             var full = selected.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             int at = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(index => U16(full, index) == 19);
             That(full[at + 10] == 0xEA && full[at + 19] == 3 && U16(full, at + 20) == 6 && Core(exchangeSlot,0) == exchangeCore &&
-                Core(12,3) == core with { Attr = 0xE3 } && Core(20,0)==core with { Attr=0xE2,AmplifyType=0,AmplifyValue=0 },
+                Core(12,3) == core with { Attr = 0xE3 } && Core(20,0)==core with { Attr=0xE2,AmplifyType=0,AmplifyValue=0 } &&
+                Core(21,0)==core with { Attr=0xE0,AmplifyType=0,AmplifyValue=0 },
                 "重新选角恢复增幅券和成功之兆的等级、完整属性，商店兑换材料数量不变");
         }
-        That(fixture.Query("SELECT gold FROM characters") is [[long savedGold]] && savedGold == 10_000_000 - r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440)) &&
+        int npcCubes = r.AmplifyUpgrades.ReinforceRules.Steps[0].MaterialCount;
+        int npcGold = r.AmplifyUpgrades.ReinforceRules.Gold(r.Items.Get(31440), 0);
+        int amplifyGold = r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440));
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            string before = Snapshot() + fixture.Snapshot("SELECT currency_kind,balance FROM account_currency_balances ORDER BY currency_kind");
+            fixture.Sql("CREATE TRIGGER fail_reinforce_npc_late BEFORE INSERT ON inventory_audit_log " +
+                "WHEN NEW.action_name='equipment_reinforcement_npc' BEGIN SELECT RAISE(ABORT,'npc reinforcement rollback'); END");
+            peer.Send(80, EnhancementTests.Request(0, 0, 21, 31440, 358, [])); peer.Closed();
+            That(Snapshot() + fixture.Snapshot("SELECT currency_kind,balance FROM account_currency_balances ORDER BY currency_kind") == before,
+                "真实NPC强化写入后SQL故障整笔回滚装备、无色、金币和审计");
+            fixture.Sql("DROP TRIGGER fail_reinforce_npc_late");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            string before = Snapshot();
+            peer.Send(80, EnhancementTests.Request(0, 0, 19, 31440, 358, []));
+            peer.Expect(1, 80, [0, 23, 0]); peer.Barrier();
+            That(Snapshot() == before, "已增幅装备的NPC强化拒绝，不扣无色或金币");
+            peer.Send(80, EnhancementTests.Request(0, 0, 21, 31440, 358, []));
+            Check(peer.Expect(1, 80).Body, 358, 100 - npcCubes, 0, 1, 0, 21, 0, mode: 0);
+            var gold = peer.Expect(0, 14).Body;
+            uint remainingGold = checked((uint)(10_000_000 - amplifyGold - npcGold));
+            That(gold.Length == 126 && U16(gold, 3) == 0 && U32(gold, 9) == remainingGold,
+                "NPC强化ACK已回填358绝对余量，只补金币差量");
+            peer.Barrier();
+            That(Core(21, 0) == core with { Attr = 0xE1, AmplifyType = 0, AmplifyValue = 0 } &&
+                fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=7") is [[long left]] && left == 100 - npcCubes,
+                "真实NPC强化保存完整目标并扣账号无色，不复制UID");
+        }
+        That(fixture.Query("SELECT gold FROM characters") is [[long savedGold]] && savedGold == 10_000_000 - amplifyGold - npcGold &&
             uid == fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid") &&
             fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
-            "只收NPC一次金币，便携及幸运免费；UID、数据库及外键一致");
+            "NPC增幅与NPC强化各收一次金币，便携及幸运免费；UID、数据库及外键一致");
 
         ItemCore Core(short slot, byte list) => JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
             "SELECT item_core FROM character_inventory_items JOIN character_inventory_slots USING(item_uid) WHERE list_type=$p0 AND slot_index=$p1", list, slot).Single().Single())!;
