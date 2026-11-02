@@ -124,5 +124,14 @@ internal static class DungeonDropGenerationPlanTests
                 .WithEpicDropBonus(100).Trials[0].RarityPools[0], rarity[1]),
             "零加成复用原计划，直接史诗、金币、碎片和非完整七池不受药剂改变");
         Reject<InvalidDataException>(() => original.WithEpicDropBonus(-1), "负史诗加成不静默改成零或反向扣减");
+        Reject<InvalidDataException>(() => original.WithEpicDropBonus(6520, 0), "零加成分母拒绝");
+        Reject<InvalidDataException>(() => original.WithEpicDropBonus(6520, -10000), "负加成分母拒绝");
+        var permyriad = original.WithEpicDropBonus(6520, 10000);
+        That(permyriad.Trials[0].RarityPools[4].Threshold - permyriad.Trials[0].RarityPools[3].Threshold == 165200 &&
+            permyriad.Trials[0].RarityPools[^1].Threshold == 1000000 &&
+            original.Trials[0].RarityPools[4].Threshold - original.Trials[0].RarityPools[3].Threshold == 100000,
+            "星空1271万分比6520将史诗绝对区间扩大为1.652倍，不改原计划");
+        That(ReferenceEquals(original.WithEpicDropBonus(0, 10000), original),
+            "零万分比加成复用原计划");
     }
 }

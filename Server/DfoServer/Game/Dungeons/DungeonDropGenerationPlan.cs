@@ -28,10 +28,12 @@ internal sealed class DungeonDropGenerationPlan
     public int? OrdinaryLukeDailySource { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
-    public DungeonDropGenerationPlan WithEpicDropBonus(int percent)
+    // added/scale：1136 为百分数（100/100）；星空 1271 为万分比（6520/10000）。
+    public DungeonDropGenerationPlan WithEpicDropBonus(int added, int scale = 100)
     {
-        if (percent < 0) throw new InvalidDataException("史诗掉落加成不能为负");
-        if (percent == 0) return this;
+        if (added < 0) throw new InvalidDataException("史诗掉落加成不能为负");
+        if (scale <= 0) throw new InvalidDataException("史诗掉落加成分母必须为正");
+        if (added == 0) return this;
         bool changed = false;
         var trials = Trials.Select(trial =>
         {
@@ -42,7 +44,7 @@ internal sealed class DungeonDropGenerationPlan
                     row.Template is not { Kind: ItemKind.Equipment, Rarity: 4 })) return trial;
             int denominator = DungeonDropRatePlan.RarityDenominator;
             int original = pools[4].Threshold - pools[3].Threshold;
-            int enhanced = (int)Math.Min(denominator, (long)original * (100L + percent) / 100);
+            int enhanced = (int)Math.Min(denominator, (long)original * ((long)scale + added) / scale);
             if (enhanced == original) return trial;
             var adjusted = ImmutableArray.CreateBuilder<DungeonDropRarityPool>(7);
             long nonEpic = 0;

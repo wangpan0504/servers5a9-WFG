@@ -20,6 +20,7 @@ internal static class ConsumableUseTests
     {
         BossSelectionMappings();
         EpicDropMappings();
+        HellLegendMappings();
         var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
             new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));
         bossBuff.Validate();
@@ -162,6 +163,31 @@ internal static class ConsumableUseTests
             refreshed.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == 7440) &&
             effectInventory.ConsumableStates.Length == 3,
             "固定史诗同族只覆盖效果期限，不叠加倍率、不删原冷却或无关效果、不改原快照");
+        var hellRaw = epicRaw with { CooltimeMaintenance = 7, EffectMaintenance = null,
+            StatChangeDuration = new(300000, "myself", null) };
+        var hell = new HellLegendEpicDropBuffDefinition(1271, 6520) { ItemIds = ImmutableHashSet.Create(490704393, 490703675) };
+        That(RecoveryConsumableCatalog.Read(hellRaw, hellLegendBuff: hell) is
+            { HellLegendEpicDropBuff.Param: 6520, EffectMilliseconds: 300000, EffectMaintenance: 7 },
+            "星空1271城镇药剂缺 effect maintenance 时沿 cooltime maintenance 7 保留死亡/回城/重选");
+        That(RecoveryConsumableCatalog.Read(hellRaw with { EffectMaintenance = 7 }, hellLegendBuff: hell) is { EffectMaintenance: 7 } &&
+            RecoveryConsumableCatalog.Read(hellRaw, epicBuff: epic, hellLegendBuff: hell) is null &&
+            RecoveryConsumableCatalog.Read(hellRaw, hellLegendBuff: hell with { Param = 100 }) is null,
+            "显式维护位沿用资源值；1136 与 1271 不能挂在同一瓶上，错误参数拒绝");
+        foreach (var invalid in new[] { hellRaw with { CooltimeMaintenance = null }, hellRaw with { EffectMaintenance = 0 },
+            hellRaw with { StatChangeDuration = new(300000, "party", null) }, hellRaw with { Diagnostics = ["invalid field"] } })
+            That(RecoveryConsumableCatalog.Read(invalid, hellLegendBuff: hell) is null, "星空药剂拒绝坏持续时间、维护位或声明");
+        var hellInventory = InventorySnapshot.Empty with { ConsumableStates = [
+            new(ConsumableStateKind.Effect, 490703675, 9999999, 7, 253),
+            new(ConsumableStateKind.Cooldown, 490703675, 9999999, 7, 253),
+            new(ConsumableStateKind.Effect, 490000413, 9999999, 15, 251)] };
+        var hellRefreshed = ConsumableStatePolicy.Activate(hellInventory,
+            RecoveryConsumableCatalog.Read(hellRaw with { Stackable = hellRaw.Stackable }, hellLegendBuff: hell)! with
+            { ItemId = 490704393 }, 1000)!;
+        That(hellRefreshed.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect && hell.IsFamilyItem(row.ItemId)) is
+                { ItemId: 490704393, UntilMilliseconds: 301000 } &&
+            hellRefreshed.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Effect && row.ItemId == 490000413) &&
+            hellInventory.ConsumableStates.Length == 3,
+            "星空同族只覆盖1271效果，不删固定1136或改原快照");
         var limited = RecoveryConsumableCatalog.Read(raw with
         {
             Stackable = declaration with
@@ -270,8 +296,23 @@ internal static class ConsumableUseTests
                 peer.EpicDropBuff.IsFamilyItem(490000413) && peer.EffectMilliseconds == (id == 490005778 ? 1800000 : 600000) &&
                 peer.EffectMaintenance > 0 && !peer.RequiresDungeon && peer.Allows(95, 0),
                 "全部固定1136同类真实药剂沿各自时长与资格，旧版不强求可选事件标签：" + id);
-        That(!resources.RecoveryConsumables.TryGet(10008219, out _) && !resources.RecoveryConsumables.TryGet(490703675, out _),
-            "随机药剂与星空效果不借两条明确缺尾修复冒充固定1136药剂");
+        That(!resources.RecoveryConsumables.TryGet(10008219, out _),
+            "随机倍率药剂不借固定1136或缺尾修复取得使用资格");
+        That(resources.RecoveryConsumables.TryGet(490703675, out var starrySample) && starrySample is
+            { HellLegendEpicDropBuff: { BuffId: 1271, Param: 6520 }, EpicDropBuff: null, EffectMilliseconds: 300000,
+                CoolTime: 300000, CoolGroup: 253, EffectMaintenance: 7, CooltimeMaintenance: 7 },
+            "星空裂缝史诗Buff药剂走已核1271合同，不冒充固定1136");
+        int[] starryPeers = [490703675, 490703918, 490703948, 490011680, 490011769, 490011665, 490012202, 490704393, 490011326];
+        That(starrySample!.HellLegendEpicDropBuff!.ItemIds!.SetEquals(starryPeers) &&
+            resources.RecoveryConsumables.HellLegendEpicDropBuffs.Keys.Order().SequenceEqual(starryPeers.Order()),
+            "八条闭合1271映射（含两份相同的490703948）和唯一缺映射兼容完整装配");
+        foreach (int id in starryPeers)
+            That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.HellLegendEpicDropBuff is { BuffId: 1271, Param: 6520 } &&
+                peer.HellLegendEpicDropBuff.IsFamilyItem(490704393) && peer.EpicDropBuff is null &&
+                peer.EffectMilliseconds == 300000 && peer.EffectMaintenance == 7 && peer.CooltimeMaintenance == 7 &&
+                peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95, 0) &&
+                (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94, 0)),
+                "全部星空1271同类真实药剂沿五分钟、组253和资格，截图490704393保留95级门槛：" + id);
         That(resources.Items.Get(490705256) is { Name: "白斯追击药水", MinimumLevel: 95 } &&
             resources.RecoveryConsumables.TryGet(490705256, out var bossPotion) && bossPotion is
             { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
@@ -434,5 +475,37 @@ internal static class ConsumableUseTests
         var isolated = EpicDropBuffDefinition.ParseMappings(EpicDropBuffDefinition.ReadIndices(tokens, id => strings[id]), definitions);
         That(!isolated.ContainsKey(490000413) && isolated.ContainsKey(500001),
             "未闭合index保留无效身份且不吞下一条合法固定映射");
+    }
+
+    static void HellLegendMappings()
+    {
+        var canonical = new HellLegendEpicDropBuffDefinition(1271, 6520);
+        var definitions = new Dictionary<int, HellLegendEpicDropBuffDefinition> { [1271] = canonical };
+        PvfTokenSection Row(int item, int buff = 1271) => new("index", [new(0, item)],
+            [new("buff list", [new(0, buff)], [])]);
+        var absent = HellLegendEpicDropBuffDefinition.ParseMappings([], definitions);
+        That(absent.Count == 1 && absent[490011326] is { BuffId: 1271, Param: 6520 } &&
+            HellLegendEpicDropBuffDefinition.ParseMappings([], new Dictionary<int, HellLegendEpicDropBuffDefinition>()).IsEmpty &&
+            HellLegendEpicDropBuffDefinition.ParseMappings([], new Dictionary<int, HellLegendEpicDropBuffDefinition>
+                { [1271] = new(1271, 1) }).IsEmpty,
+            "只有缺失490011326映射且规范1271参数6520通过才创建本服兼容");
+        foreach (var rows in new ImmutableArray<PvfTokenSection>[]
+        {
+            [Row(490011326, 1136)], [Row(490011326), Row(490011326, 1136)],
+            [new("index", [new(0, 490011326)], [])],
+            [new("index", [new(0, 490011326), new(0, 7)], [])]
+        })
+            That(!HellLegendEpicDropBuffDefinition.ParseMappings(rows, definitions).ContainsKey(490011326),
+                "已声明的未知、冲突或畸形映射不被缺省兼容覆盖");
+        var mapping = HellLegendEpicDropBuffDefinition.ParseMappings(
+            [Row(490703948), Row(490703948), Row(500001), new("index", [new(0, 10008219)],
+                [new("probability buff list", [new(0, 1136), new(0, 60), new(0, 1271), new(0, 40)], [])])],
+            definitions);
+        That(mapping.Count == 3 && mapping[490703948].IsFamilyItem(500001) && mapping[500001].IsFamilyItem(490011326) &&
+            !mapping.ContainsKey(10008219),
+            "两份相同1271映射按一份装配；随机多分支不冒充星空效果");
+        var conflict = HellLegendEpicDropBuffDefinition.ParseMappings([Row(490703948), Row(490703948, 1136)], definitions);
+        That(!conflict.ContainsKey(490703948) && conflict.ContainsKey(490011326),
+            "冲突重复拒绝该物品，不影响缺映射兼容");
     }
 }
