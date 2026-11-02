@@ -101,7 +101,8 @@ internal static class QuestRelationProgress
         if (!SequentialParent(parent,quests)) throw new NotSupportedException("父任务不是已确认的完整顺序关系");
         var done = completed.ToHashSet();
         uint remaining = checked((uint)parent.IntData.Count(id => !done.Contains(id)));
-        if (remaining == 1 && TerminalSeeking(parent,quests) is { } terminal && !done.Contains(terminal.Id) &&
+        // 原生末子交付会转向父任务并再次检查scalar；条件达成不等于已交付，清图凭据和翻牌时机仍由领奖规划验证。
+        if (remaining == 1 && (TerminalSeeking(parent,quests) ?? TerminalClearDialogue(parent,quests)) is { } terminal && !done.Contains(terminal.Id) &&
             active?.Any(row => row.QuestId == terminal.Id && row.AcceptanceId != Guid.Empty && row.ConditionState == 0) == true)
             return 0;
         return remaining;

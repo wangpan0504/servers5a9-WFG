@@ -125,8 +125,11 @@ internal static class QuestRoomClearTcpTests
             peer.Send(39,lastDeath); Drain();
             That(State() == cleared && enabled == 0 && bossChecks == 0,"RoomClear确认后的重复39仅忽略，不重发进度、奖励或结算");
             peer.Send(33,QuestRequest(33,3525,[0,0]));
-            peer.Expect(1,33,[1,197,13,1,0,0,0]); Drain();
-            That(State() == cleared,"父33保留尚待NPC交付的末子，不提前归零");
+            peer.Expect(1,33,[1,197,13,0,0,0,0]); Drain();
+            That(daily!.OtherRows("quest_id,condition_state") is [[3525L,0L],[3560L,0L]] &&
+                fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id).Length == 0,
+                "父33同步条件就绪，但不归档尚待NPC交付的末子或发奖");
+            cleared = State();
             peer.Send(34,QuestRequest(34,3560,[255,255,1,0,255,255]));
             peer.Expect(1,34,[0,19,0]); Drain();
             That(State() == cleared,"结算前子34不关闭NPC任务或发奖");
@@ -606,9 +609,11 @@ internal static class QuestRoomClearTcpTests
             }
             else
             {
-                string flipped = State();
                 peer.Send(33,QuestRequest(33,checked((ushort)parent),[0,0]));
-                peer.Expect(1,33,[1,(byte)parent,(byte)(parent >> 8),dialogueChild ? (byte)1 : (byte)0,0,0,0]); Drain();
+                peer.Expect(1,33,[1,(byte)parent,(byte)(parent >> 8),0,0,0,0]); Drain();
+                That(!dialogueChild || fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child).Length == 0,
+                    "父条件就绪不代替城镇NPC交付，末清图子仍保留");
+                string flipped = State();
                 peer.Send(34,QuestRequest(34,checked((ushort)parent),[255,255,1,0,255,255]));
                 peer.Expect(1,34,[0,19,0]); Drain();
                 That(State() == flipped,"翻牌后仍保留真实父交付NPC限制，不能在缺NPC的结算房归档末子或领奖");

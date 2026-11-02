@@ -697,8 +697,13 @@ internal static class QuestLifecycleTcpTests
                         extra.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=2 AND quest_id=3054").Length == 0,
                         "真实清图只达成3054条件，保留NPC子任务及父剩余1，不提前触发父领奖");
                     string beforeEarly = extra.Snapshot();
-                    peer.Send(33,[33,0,74,12,0,0]); peer.Expect(1,33,[1,74,12,1,0,0,0]); Drain();
-                    That(extra.Snapshot() == beforeEarly,"父33保留末子对话及实际条件，不单独归档末清图任务");
+                    peer.Send(33,[33,0,74,12,0,0]); peer.Expect(1,33,[1,74,12,0,0,0,0]); Drain();
+                    That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2 ORDER BY quest_id") is [[3054L,0L],[3146L,0L]] &&
+                        extra.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=2 AND quest_id IN(3054,3146)").Length == 0,
+                        "原生末子触发父33后同步父条件0，但保留父子活动槽，不提前交付");
+                    beforeEarly = extra.Snapshot();
+                    peer.Send(33,[33,0,74,12,0,0]); peer.Expect(1,33,[1,74,12,0,0,0,0]); Drain();
+                    That(extra.Snapshot() == beforeEarly,"父条件重复同步不重复写库或归档末清图任务");
                     peer.Send(34,[34,0,74,12,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                     That(extra.Snapshot() == beforeEarly, "末杀后提前父34拒绝且无任务或资产改写");
                     peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();

@@ -93,6 +93,19 @@ internal static class QuestSceneTests
             if (mode == "normal")
             {
                 var beforeDialogue = f.Read();
+                var sequentialParent = quests.Get(3146);
+                That(QuestRelationProgress.Initial(sequentialParent,quests,beforeDialogue.CompletedQuests,beforeDialogue.ActiveMainQuests) == 0,
+                    "顺序末清图子已达成时父条件就绪，不等待客户端不可能发出的独立子34");
+                foreach (var active in new[]
+                {
+                    beforeDialogue.ActiveMainQuests.Where(row => row.QuestId != 3054).ToArray(),
+                    beforeDialogue.ActiveMainQuests.Select(row => row.QuestId == 3054 ? row with { ConditionState = 1 } : row).ToArray(),
+                    beforeDialogue.ActiveMainQuests.Select(row => row.QuestId == 3054 ? row with { AcceptanceId = Guid.Empty } : row).ToArray()
+                })
+                    That(QuestRelationProgress.Initial(sequentialParent,quests,beforeDialogue.CompletedQuests,active) == 1,
+                        "末子缺失、未达成或没有接取身份不能使父任务就绪");
+                That(QuestRelationProgress.Initial(sequentialParent,quests,beforeDialogue.CompletedQuests.Where(id => id != 3157).ToArray(),
+                    beforeDialogue.ActiveMainQuests) == 2,"前序子任务未完成不能只凭末子条件放行父任务");
                 That(f.Session.FinishReadyQuestChildren(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth) is null &&
                     Finish(3146).Outcome == QuestFinishOutcome.Rejected && Finish(3054).Outcome == QuestFinishOutcome.Rejected &&
                     Same(beforeDialogue,f.Read()), "末杀只达成清图条件，自动收尾或提前34不发父奖励、不关闭NPC子任务");
