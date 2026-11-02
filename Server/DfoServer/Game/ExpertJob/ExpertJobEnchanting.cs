@@ -15,7 +15,8 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
 
     public ExpertJobActionPlan? Plan(Character character, int recipeId, InventorySlot targetSlot, InventorySlot sourceSlot)
     {
-        long now = time.GetUtcNow().ToUnixTimeSeconds();
+        var at = time.GetUtcNow();
+        long now = at.ToUnixTimeSeconds();
         var source = character.Inventory.Find(sourceSlot);
         var target = character.Inventory.Find(targetSlot);
         if (character.ExpertJobType != 1 || sourceSlot.List != InventoryListType.Main || targetSlot.List != InventoryListType.Main ||
@@ -70,6 +71,7 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
             }
             if (gold > inventory.Gold) return null;
             inventory = inventory with { Gold = inventory.Gold - checked((uint)gold) };
+            var paidInventory = inventory;
             int chance = rules.EnchantSuccessPercent ?? scripts.CardSuccessPercent(scripts.Level(1, character.ExpertJobExperience), recipe.Rarity);
             bool success = next(100) < chance;
             int experience = character.ExpertJobExperience;
@@ -81,8 +83,12 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
                 experience = checked(experience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
             }
             inventory.Validate();
-            return new(character, new(character.Inventory, inventory, "expert_job_card_enchant", new(character, deadline, time)),
-                experience, character.ExpertMachineEndurance - rules.EnchantEnduranceCost, success, EnchantRarity: recipe.Rarity);
+            var plan = new InventoryPlan(character.Inventory, inventory, "expert_job_card_enchant", new(character, deadline, time))
+            {
+                EquipmentEnchant = success ? EquipmentEnchantFact.Capture(character.Inventory, paidInventory, inventory, source, target,
+                    EquipmentEnchantMode.ExpertCard, "expert_job_card_enchant", at, time) : null
+            };
+            return new(character, plan, experience, character.ExpertMachineEndurance - rules.EnchantEnduranceCost, success, EnchantRarity: recipe.Rarity);
         }
         catch (OverflowException) { return null; }
         catch (InvalidDataException) { return null; }

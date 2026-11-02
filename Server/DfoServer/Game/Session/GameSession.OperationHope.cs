@@ -126,6 +126,7 @@ internal sealed partial class GameSession
         var plan = capture.Pending ?? OperationHopeRewardPlan.Prepare(expected,catalog,binding,dungeon.Run,
             quests,parameters,itemCatalog,goldLimits,pieces,growth,(timeProvider ?? TimeProvider.System).GetUtcNow()).Plan;
         if (plan is null) return null;
+        plan.BattlePassCompletion ??= DfoServer.Game.BattlePass.BattlePassOperationHopeCompletion.Prepare(plan, catalog, dungeon.Run, timeProvider ?? TimeProvider.System);
         return owner.Execute(() =>
         {
             if (!Ready || SelectionEpoch != capture.Epoch || !ReferenceEquals(Selected,expected) ||
@@ -143,10 +144,12 @@ internal sealed partial class GameSession
                 dungeon.PendingHopeReward = plan;
             }
             var committed = repository.CommitOperationHopeReward(owner,plan);
-            if (!committed.ProjectionCurrent) return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed);
+            if (!committed.ProjectionCurrent) return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed)
+                { BattlePassMissionAt = plan.BattlePassCompletion?.Clock.GetUtcNow() };
             dungeon.HopeRewardConfirmed = true;
             Selected = committed.Character;
-            return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed);
+            return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed)
+                { BattlePassMissionAt = plan.BattlePassCompletion?.Clock.GetUtcNow() };
         });
     }
 
@@ -171,4 +174,7 @@ internal sealed partial class GameSession
 }
 
 internal sealed record OperationHopeFinishReceipt(long SelectionEpoch, DungeonRunIdentity Identity,
-    ushort QuestId, OperationHopeRewardCommit Commit);
+    ushort QuestId, OperationHopeRewardCommit Commit)
+{
+    public DateTimeOffset? BattlePassMissionAt { get; init; }
+}

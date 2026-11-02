@@ -57,7 +57,12 @@ internal sealed class MailboxHandler(MailboxService service, MailboxProjection p
         await context.Reply(CmdPacketType.MAILBOX_EXTRACT_ITEM, result.Accepted ? MailboxPackets.Extract(result.Claimed) : MailboxPackets.Result(result, extracting: true),
             "mail_claim_result", () => MailboxProjection.CanPublish(context, result));
         if (result.Inventory is { } change)
+        {
             await inventory.RefreshAsync(context, change);
+            if (change.Plan is { } plan && MailboxProjection.CanPublish(context, result) &&
+                DfoServer.Game.BattlePass.BattlePassUndefeatedSongMailSource.AcquiredAmount(plan) > 0)
+                await BattlePassMissionProjection.RefreshAsync(context, DateTimeOffset.UtcNow);
+        }
         // ACK95由原生消费者更新当前邮件的附件及逐项错误；清空式97会使打开的窗口失去原对象。
         return CommandResult.Handled;
     }

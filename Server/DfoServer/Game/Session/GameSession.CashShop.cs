@@ -1,3 +1,4 @@
+using DfoServer.Game.BattlePass;
 using DfoServer.Game.CashShopPromotions;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -9,10 +10,18 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     public InventoryResult BuyCashShop(CashShopPurchaseRequest request, InventoryCashShopService cashShop,
-        CashShopPromotionService? promotions, out CashShopPurchaseReceipt? receipt, out PromotionPurchaseCommit? committed)
+        CashShopPromotionService? promotions, out CashShopPurchaseReceipt? receipt, out PromotionPurchaseCommit? committed) =>
+        BuyCashShop(request, cashShop, promotions, out receipt, out committed, out _);
+
+    public InventoryResult BuyCashShop(CashShopPurchaseRequest request, InventoryCashShopService cashShop,
+        CashShopPromotionService? promotions, out CashShopPurchaseReceipt? receipt, out PromotionPurchaseCommit? committed,
+        out BattlePassCertificateCommit? certificate)
     {
         receipt = null;
         committed = null;
+        certificate = null;
+        if (BattlePassCertificatePurchase.Contains(request))
+            return BuyBattlePassCertificate(request, cashShop, out receipt, out certificate);
         CashShopPurchaseReceipt? purchase = null;
         var catalog = promotions?.Current;
         PromotionCatalogEntry? entry;

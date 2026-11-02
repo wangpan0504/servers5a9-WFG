@@ -89,6 +89,8 @@ internal sealed partial class CharacterRepository : IGuildContributionStore
         if (command.ExecuteNonQuery() != 1) return new(3);
         if (state is null) return new(0);
         long revision = TouchManagement(db, tx, state.Guild.Id);
+        // 登录、聊天、大厅等待及正式通关只沿此真实正积分writer推进，保持同一业务事务。
+        ApplyBattlePassGuildContribution(db, tx, account, amount, now);
         return new(0, state.Guild.Id, revision, amount, Members: state.Members);
     }
 

@@ -53,6 +53,36 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     internal int DummyStageIndex { get; } = dummyStageIndex;
     internal DfoServer.Game.TagEvildom.TagEvildomClearFact? TagEvildomClear { get; init; }
     internal int? ImperialArenaRound { get; init; }
+    internal DfoServer.Game.BattlePass.BattlePassDungeonActivity? BattlePassActivity { get; private set; }
+    internal DfoServer.Game.BattlePass.BattlePassHellCosmoCompletion? BattlePassHellCosmoCompletion { get; private set; }
+    bool battlePassHellCosmoCompletionFrozen;
+    internal void FreezeBattlePassHellCosmoCompletion(SinglePlayerDungeonRun run, TimeProvider clock)
+    {
+        if (battlePassHellCosmoCompletionFrozen) return;
+        BattlePassHellCosmoCompletion = DfoServer.Game.BattlePass.BattlePassHellCosmoCompletion.Prepare(run, this, clock);
+        battlePassHellCosmoCompletionFrozen = true;
+    }
+    internal void FreezeBattlePassAltarQuestTarget(SinglePlayerDungeonRun run,
+        DfoServer.Game.Characters.Character expected, DfoServer.GameWorld.Quests.QuestCatalog quests, TimeProvider clock)
+    {
+        if(battlePassActivityFrozen)return;
+        BattlePassActivity=DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareAltarQuestTarget(run,this,expected,quests,clock);
+        battlePassActivityFrozen=true;
+    }
+    internal void FreezeBattlePassAltarNonTarget(SinglePlayerDungeonRun run,
+        DfoServer.Game.Characters.Character expected, DfoServer.GameWorld.Quests.QuestCatalog quests, TimeProvider clock)
+    {
+        if(battlePassActivityFrozen)return;
+        BattlePassActivity=DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareAltarNonTarget(run,this,expected,quests,clock);
+        battlePassActivityFrozen=true;
+    }
+    bool battlePassActivityFrozen;
+    internal void FreezeBattlePassActivity(SinglePlayerDungeonRun run, TimeProvider clock)
+    {
+        if(battlePassActivityFrozen)return;
+        BattlePassActivity=DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareDeath(run,this,clock);
+        battlePassActivityFrozen=true;
+    }
 
 }
 

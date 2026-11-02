@@ -41,6 +41,7 @@ internal sealed partial class GameSession
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
         public int ReviveCount { get; set; }
+        public int ReviveCoinsSpent { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
         public long StartedTimestamp { get; } = System.Diagnostics.Stopwatch.GetTimestamp();
         public long AltarStartedTimestamp { get; init; }
@@ -1095,7 +1096,7 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
+                        prepared.Weekly,installing.GriefAdmission) { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
                 RequiredEvent = Strongway2019RequiredEvent(installing.Strongway2019Admission) });
             }
@@ -1149,7 +1150,8 @@ internal sealed partial class GameSession
         if (training is not null)
             entrySlots = [.. entrySlots.Concat(training.Inventory.ChangedSlots.Except(hellSlots).Except(channelSlots).Except(assaultSlots)).Distinct()];
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
-            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
+            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue,
+            BattlePassMissionClock = entryFatigue > 0 ? timeProvider ?? TimeProvider.System : null, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
             EntryChangedCurrencies = entryItems?.ChangedCurrencies ?? [],
             GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
     }
@@ -1201,13 +1203,13 @@ internal sealed partial class GameSession
             if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run);
+                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System);
                 dungeon.HasPendingFatigue = false;
             }
             if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run);
+                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System);
                 dungeon.HasPendingFatigue = false;
             }
             var result = dungeon.Run.CompleteLoading(identity,Guid.NewGuid(),hasMatchingQuest);
@@ -1218,7 +1220,8 @@ internal sealed partial class GameSession
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
-            return FormalReceipt() with { LostLandStarted = lostLandStarted };
+            return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                BattlePassMissionClock = expected.Fatigue is {} oldFatigue && Selected?.Fatigue is {} newFatigue && newFatigue.Remaining < oldFatigue.Remaining ? timeProvider ?? TimeProvider.System : null };
         });
         ScheduleHostedDungeonEligibility(receipt);
         return receipt;
@@ -1391,8 +1394,11 @@ internal sealed partial class GameSession
             return new FormalDungeonDeathResult(preparation.Outcome) { ReportedTarget = target };
         var pending = preparation.Pending!;
         if (pending.ImperialArenaRound is not null)
+        {
+            pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System);
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, MonsterKey: pending.Death.MonsterKey)
                 { PendingImperialArenaDeath = PrepareImperialArenaDeath(dungeon, pending), ReportedTarget = target };
+        }
         if (pending.TagEvildomClear is not null)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, MonsterKey: pending.Death.MonsterKey)
                 { PendingTagEvildomClear = PrepareTagEvildomClear(dungeon, pending), ReportedTarget = target };
@@ -1409,6 +1415,8 @@ internal sealed partial class GameSession
                 { ReportedTarget = target, ClearFact = death.ClearFact, CulledMonsterKeys = death.CulledMonsterKeys,
                     BossPositionUpdate = death.BossPositionUpdate }, dungeon, target);
         }
+        pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System);
+        pending.FreezeBattlePassHellCosmoCompletion(dungeon.Run, timeProvider ?? TimeProvider.System);
         // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
         if (dungeon.PendingDeathReward is null)
         {
@@ -1524,6 +1532,7 @@ internal sealed partial class GameSession
             ProficiencyGained = committed.Commit.ProficiencyGained,
             ReportedTarget = target,
             PreviousQuests = previousQuests,
+            BattlePassMissionClock = pending.BattlePassHellCosmoCompletion?.Clock ?? pending.BattlePassActivity?.Clock,
             QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [],
             RoomClearFact = committed.Death.RoomClearFact,
             BossPositionUpdate = committed.Death.BossPositionUpdate,

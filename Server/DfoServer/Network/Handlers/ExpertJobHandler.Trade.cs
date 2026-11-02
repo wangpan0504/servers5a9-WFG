@@ -44,9 +44,13 @@ internal sealed partial class ExpertJobHandler
             if (fee > 100000000 || action.Inventory.After.Gold < fee ||
                 (long)owner.Inventory.Gold + fee > owner.Inventory.GoldCarryLimit) return await Reject();
             long netGold = (long)action.Inventory.After.Gold - customer.Inventory.Gold;
+            var customerAfter = action.Inventory.After with { Gold = action.Inventory.After.Gold - fee };
             var customerInventory = new InventoryPlan(customer.Inventory,
-                action.Inventory.After with { Gold = action.Inventory.After.Gold - fee }, "expert_job_trade_customer",
-                action.Inventory.CharacterPrecondition);
+                customerAfter, "expert_job_trade_customer", action.Inventory.CharacterPrecondition)
+            {
+                EquipmentDisjoint = action.Inventory.EquipmentDisjoint?.ForTrade(action.Inventory, customer.Inventory, customerAfter, fee),
+                EquipmentEnchant = action.Inventory.EquipmentEnchant?.ForTrade(action.Inventory, customer.Inventory, customerAfter, fee)
+            };
             var ownerInventory = new InventoryPlan(owner.Inventory,
                 owner.Inventory with { Gold = checked(owner.Inventory.Gold + fee) }, "expert_job_trade_owner", new(owner));
             var trade = new ExpertJobTradePlan(customer, owner, customerInventory, ownerInventory, action.Experience,
@@ -86,6 +90,10 @@ internal sealed partial class ExpertJobHandler
                     (uint)scripts.Level(1, ownerReceipt.Character.ExpertJobExperience),
                     action.EnchantRarity ?? throw new InvalidDataException("附魔交易回执缺少已用稀有度"), action.Succeeded), "expert_job_trade_enchant", Current);
             }
+            if (customerInventory.EquipmentDisjoint is { } fact && Current())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+            else if (customerInventory.EquipmentEnchant is { } enchantFact && Current())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, enchantFact.Clock.GetUtcNow());
             }
             log.Write("expert_job_trade", new { Customer = customer.Id, Owner = owner.Id, Job = job, Fee = fee,
                 Succeeded = action.Succeeded, OwnerEndurance = ownerReceipt.Character.ExpertMachineEndurance,

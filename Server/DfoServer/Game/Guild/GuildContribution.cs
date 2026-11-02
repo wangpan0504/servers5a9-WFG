@@ -75,15 +75,16 @@ internal interface IGuildContributionStore
 internal sealed class GuildContributionService(IGuildContributionStore store, ItemCatalog items, GoldLimitCatalog gold,
     EpicPieceCatalog pieces, GuildManagementService management, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     public GuildContributionCommit Observe(GameSession session, GuildContributionSource source)
     {
         var actor = session.CaptureGuildManagement(requireTown: false);
         return actor is null ? new(3) : store.ObserveGuildContribution(actor, source,
-            (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
+            Clock.GetUtcNow().ToUnixTimeSeconds());
     }
     public GuildContributionCommit Settle(GuildManagementIdentity actor, Character expected)
     {
-        long now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+        long now = Clock.GetUtcNow().ToUnixTimeSeconds();
         return store.SettleGuildContribution(actor, expected, now, (character, amount) =>
         {
             var grant = InventoryRewardGrantService.TryGrantBatch(character, [new(GuildContributionRules.CoinItemId, amount)],

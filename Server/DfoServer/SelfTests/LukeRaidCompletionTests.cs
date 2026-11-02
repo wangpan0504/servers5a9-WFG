@@ -78,6 +78,7 @@ internal static class LukeRaidCompletionTests
                 var sealedPhase=emptyBattle.PendingLukeSettlement()!;
                 var denied=Receipt(sealedPhase) with {Members=Receipt(sealedPhase).Members.Select((row,index)=>row with
                     {Eligible=!none&&index==0,CountsAsClear=phase==1}).ToImmutableArray()};
+                BattlePassRaidCompletionTests.Run(sealedPhase,denied);
                 long revision=emptyBattle.View.Revision;
                 var ready=emptyBattle.AcceptLukeSettlement(sealedPhase,denied);
                 That(ready is not null&&ready.After.Revision==revision+1&&

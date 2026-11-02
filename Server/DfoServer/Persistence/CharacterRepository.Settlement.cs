@@ -223,11 +223,15 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson,$proficiencyGained)
             """;
         command.ExecuteNonQuery();
+        ApplyBattlePassTayberrsClear(db, tx, owner.Account, run, prepared);
+        ApplyBattlePassFormalClear(db, tx, owner.Account, run, prepared);
+        ApplyBattlePassDazzlementClear(db, tx, owner.Account, run, prepared);
         ClearOrdinaryLuke(db, tx, owner, run);
         ClearPreyNormal(db, tx, owner, run);
         ClearAntonNormal(db, tx, owner, run);
         uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
         uint? bossRushMail = CommitBossRushClear(db,tx,owner,expected,prepared);
+        ApplyBattlePassBossRushReward(db,tx,owner.Account,run,prepared,bossRushMail);
         long guildNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var guildReward = CommitGuildDungeonReward(db, tx, owner, expected, prepared, guildNow);
         uint guildMileageGuildId = CommitGuildDungeonMileage(db, tx, owner, run, prepared);

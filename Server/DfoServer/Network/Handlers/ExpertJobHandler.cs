@@ -181,6 +181,11 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
                 ? current.ExpertJobExperience : craftedReceipt.Character.ExpertJobExperience),
             action?.EnchantRarity ?? priorRarities.FirstOrDefault(), action?.Succeeded != false), "expert_job_enchant_crafted",
             Crafted);
+        if (committed.Plan?.EquipmentEnchant is { } enchantFact && Crafted())
+        {
+            try { await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, enchantFact.Clock.GetUtcNow()); }
+            catch (System.Data.Common.DbException publicationError) { throw new IOException("Committed expert enchantment publication failed", publicationError); }
+        }
         return CommandResult.Handled;
     }
 
@@ -273,6 +278,11 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         foreach (var kind in plan.Inventory.ChangedCurrencies)
             if (ItemSlotBoundService.CurrencySlot(kind) is { } slot) acknowledged.Add(new(InventoryListType.Main, slot));
         await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
+        if (plan.Inventory.EquipmentDisjoint is { } fact && Current())
+        {
+            try { await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow()); }
+            catch (System.Data.Common.DbException error) { throw new IOException("Committed machine disjoint publication failed", error); }
+        }
         RefreshOpenStore(context, receipt.Character);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);

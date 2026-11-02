@@ -78,7 +78,11 @@ internal sealed partial class GameSession
             ? fiendwar.Battle.ReserveFiendwarMovement(fiendwar.Actor, target.Area) : null;
         if (fiendwar is not null && movement is null)
         { TravelReason = "fiendwar-area-unavailable"; return null; }
-        var saved = SaveTownPosition(Selected!, plan.Position!, plan.Return);
+        var hallEntry = towns.IsGuildHall(plan.Position!, completed) && !towns.IsGuildHall(Selected!.Position, completed)
+            ? new DfoServer.Game.BattlePass.GuildHallEntryFact(Guid.NewGuid(),
+                (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider ?? TimeProvider.System,
+                Selected!.Id, Selected.Guild?.Id ?? 0, Selected.Position, plan.Position!) : null;
+        var saved = SaveTownPosition(Selected!, plan.Position!, plan.Return, hallEntry);
         if (saved is null) { TravelReason = "guild-membership-required"; return null; }
         Selected = saved;
         movement?.Install();
@@ -86,13 +90,14 @@ internal sealed partial class GameSession
         npcTownVisit = plan.NpcVisit is { } visit ? (visit, SelectionEpoch) : null;
         InvalidateImageCommunication();
         InvalidateExpertJobStore();
-        return new(Selected, owner.Generation, SelectionEpoch);
+        return new(Selected, owner.Generation, SelectionEpoch) { BattlePassMissionAt = hallEntry?.Clock.GetUtcNow() };
     }
 
     Game.Characters.Character? SaveTownPosition(Game.Characters.Character character,
-        GameWorld.Towns.Location position, GameWorld.Towns.Location? returnPoint) =>
+        GameWorld.Towns.Location position, GameWorld.Towns.Location? returnPoint,
+        DfoServer.Game.BattlePass.GuildHallEntryFact? hallEntry = null) =>
         towns.IsGuildHall(position, completed)
-            ? repository is Game.Guild.IGuildHallStore hall ? hall.SaveGuildHallPosition(owner, character, position, returnPoint) : null
+            ? repository is Game.Guild.IGuildHallStore hall ? hall.SaveGuildHallPosition(owner, character, position, returnPoint, hallEntry) : null
             : repository.Save(owner, character, position, returnPoint);
 
     public bool CanPublishTravel(TownTravelReceipt receipt) => owner.Execute(() =>

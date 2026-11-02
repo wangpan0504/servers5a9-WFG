@@ -25,7 +25,10 @@ internal enum AdventureCreditSource
 
 internal sealed record AdventureCreditPlan(AdventureState Before, AdventureState After,
     ulong PositionBefore, ulong PositionAfter, ulong BaselineBefore, ulong BaselineAfter,
-    decimal Credit, ulong RawOverflow, decimal Reconciliation);
+    decimal Credit, ulong RawOverflow, decimal Reconciliation)
+{
+    public DateTimeOffset? OccurredAt { get; init; }
+}
 
 internal static class AdventureCredit
 {

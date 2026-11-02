@@ -116,7 +116,7 @@ internal sealed partial class CharacterRepository
         return committed;
     });
 
-    public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) => owner.Execute(() =>
+    public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => owner.Execute(() =>
     {
         var snapshot = run.Snapshot;
         var identity = snapshot.Identity;
@@ -162,6 +162,8 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("首次房间扣点缺少原疲劳owner");
+        ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
+            identity,"room",snapshot.CurrentMap.Id,state,target,battlePassClock ?? TimeProvider.System));
         var committed = Require(db, tx, owner.Account, expected.Name);
         var cached = new DungeonTransientFatigue(rule, expected.Revision, state, target);
         receipts.Fatigue[snapshot.CurrentMap.Id] = cached;

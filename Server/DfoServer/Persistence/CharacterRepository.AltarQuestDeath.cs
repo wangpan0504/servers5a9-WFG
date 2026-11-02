@@ -17,6 +17,10 @@ internal sealed partial class CharacterRepository
             prepared.Death.Identity.CharacterId != expected.Id ||
             reward != DungeonKillExperiencePolicy.PlanAltarQuestDeath(run, prepared))
             throw new InvalidDataException("祭坛任务提交需要原角色死亡和明确的专用零奖励规则");
+        if (prepared.BattlePassActivity is { } fact &&
+            !fact.MatchesAltarQuestTarget(run,prepared,expected,quests) &&
+            !(questDrops?.Outcomes.Length > 0 && fact.MatchesAltarNonTarget(run,prepared,expected,quests)))
+            throw new InvalidDataException("祭坛战令来源不是原角色、接取目录与真实死亡的冻结事实");
         var death = prepared.Death;
         var identity = death.Identity;
         if (questDrops is not null && (!ReferenceEquals(questDrops.Expected, expected) || questDrops.EventId != death.EventId ||
@@ -74,6 +78,7 @@ internal sealed partial class CharacterRepository
         WriteQuestConditions(db, tx, expected.Id, inventoryCharacter.ActiveMainQuests, active);
         WriteDungeonGrowthReceipt(db, tx, owner, current, prepared, reward, plan.Plan!, 0);
         if (questDrops is not null) SaveQuestDrops(db, tx, owner.Account, questDrops, inventoryCharacter.Inventory);
+        ApplyBattlePassDungeonDeath(db,tx,owner.Account,run,prepared);
         var committed = inventoryCharacter with { Revision = checked(current.Revision + 1), ActiveMainQuests = ReadActiveMainQuests(db, expected.Id, tx) };
         tx.Commit();
         return new(committed, false);

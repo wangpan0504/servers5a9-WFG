@@ -82,7 +82,8 @@ internal sealed partial class GameSession
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), expected.Death.Death.MonsterKey)
             {
                 ImperialArenaDeath = commit, CulledMonsterKeys = result.CulledMonsterKeys,
-                BossPositionUpdate = result.BossPositionUpdate, RoomClearFact = result.RoomClearFact
+                BossPositionUpdate = result.BossPositionUpdate, RoomClearFact = result.RoomClearFact,
+                BattlePassMissionClock = expected.Death.BattlePassActivity?.Clock
             };
         });
     }

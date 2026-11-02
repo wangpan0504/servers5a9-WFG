@@ -82,7 +82,17 @@ internal sealed class AvatarCompoundHandler(InventoryAvatarCompoundService compo
 
         await context.Reply(CmdPacketType.COMPOUND_AVATAR,
             AvatarCompoundPackets.Success(request, outputs), "avatar_compound_committed", CanSend);
-        await projection.RefreshAsync(context, result, result.Plan!.ChangedSlots.ToHashSet());
+        try
+        {
+            await projection.RefreshAsync(context, result, result.Plan!.ChangedSlots.ToHashSet());
+            if (result.Plan.AvatarCompound is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.AvatarCompound is not null)
+        {
+            // 原两件装扮、材料和随机产物已提交，发布失败不能重抽或重扣。
+            throw new IOException("Committed avatar compound publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

@@ -117,6 +117,9 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         // 先提交资产，再刷新实际UID/邮件，随后发布同份冻结展示，最后确认660；成功ACK不携带物品。
         await inventory.RefreshAsync(context, receipt.Inventory);
         if (!receipt.Commit.MailIds.IsEmpty) context.Session.NotifyMailbox(receipt.Prepared.Character);
+        // LukeResults成功会提前return，任务快照必须沿原已提交资产发布点刷新。
+        if (DfoServer.Game.BattlePass.BattlePassUndefeatedSongSource.DeclaresSong(receipt.Prepared) && Guard())
+            await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, (clock ?? TimeProvider.System).GetUtcNow());
         // 只有完整显式原箱结果才使用Luke16B；无配置保留原领取能力，不补未知列。
         if (receipt.Prepared.RaidType == RaidKind.Luke &&
             LukeRewardResults.Bind(receipt, items, (clock ?? TimeProvider.System).GetUtcNow()) is { } result &&

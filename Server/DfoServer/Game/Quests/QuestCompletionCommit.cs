@@ -42,6 +42,7 @@ internal sealed record QuestCompletionReceipt(QuestCompletionCommit Commit, long
     DungeonRunIdentity? DungeonIdentity)
 {
     public SessionPhase Phase { get; init; } = DungeonIdentity is null ? SessionPhase.Town : SessionPhase.Settlement;
+    public DateTimeOffset? BattlePassMissionAt { get; init; }
 }
 
 internal enum QuestFinishOutcome { Committed, Rejected, InsufficientSpace, AlreadyCompleted, Unsupported }

@@ -6,17 +6,19 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAvatarCompoundService(ItemCatalog items, AvatarCompoundCatalog compounds,
-    AvatarPackageCatalog avatarPackages, Func<long, long>? random = null)
+    AvatarPackageCatalog avatarPackages, Func<long, long>? random = null, TimeProvider? clock = null)
 {
     const ushort Rejection = 22;
     readonly Func<long, long> draw = random ?? Random.Shared.NextInt64;
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
     public InventoryResult Apply(Character character, AvatarCompoundRequest request,
         out AvatarCompoundReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
     {
         receipt = null;
         rejection = null;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         long seconds = now.ToUnixTimeSeconds();
         var before = character.Inventory;
         if (request.MaterialSlot < 0 || request.SourceSlot0 < 0 || request.SourceSlot1 < 0 ||
@@ -149,8 +151,12 @@ internal sealed class InventoryAvatarCompoundService(ItemCatalog items, AvatarCo
         long? deadline = EarliestDeadline([source0, source1, material, .. outputs]);
         receipt = new(material.Core.ItemId, request.MaterialType, part, combinedRate, rareRoll, hitRare,
             outputs.Select(output => new AvatarCompoundOutput(output.Position, output.Core.ItemId)).ToImmutableArray());
-        return new(true, 0, new(before, after, "avatar_compound",
-            new InventoryCharacterPrecondition(character, deadline)));
+        return new(true, 0, new InventoryPlan(before, after, "avatar_compound",
+            new InventoryCharacterPrecondition(character, deadline))
+        {
+            AvatarCompound = new(Guid.NewGuid(), plannedAt, Clock, request, receipt, source0, source1,
+                material, before, paid, after)
+        });
     }
 
     static bool SourceEligible(InventoryItem source, long seconds) =>

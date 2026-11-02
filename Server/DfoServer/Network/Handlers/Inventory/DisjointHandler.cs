@@ -34,6 +34,11 @@ internal sealed class DisjointHandler(InventoryDisjointService disjoint, Invento
                 [rejectedSource.Source.Position], canSend: CanRestore);
         }
         await projection.RefreshAsync(context, result);
+        if (result.Plan?.EquipmentDisjoint is { } fact && CanSend())
+        {
+            try { await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow()); }
+            catch (System.Data.Common.DbException error) { throw new IOException("Committed equipment disjoint publication failed", error); }
+        }
         return CommandResult.Handled;
     }
 }

@@ -6,5 +6,5 @@ namespace DfoServer.Game.Guild;
 
 internal interface IGuildHallStore
 {
-    Character? SaveGuildHallPosition(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint);
+    Character? SaveGuildHallPosition(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, DfoServer.Game.BattlePass.GuildHallEntryFact? entry = null);
 }

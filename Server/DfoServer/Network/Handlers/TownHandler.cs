@@ -45,6 +45,15 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         {
             await projection.TravelAsync(context, receipt!);
             fiendwar?.Travelled(session);
+            if (receipt!.BattlePassMissionAt is { } at)
+            {
+                try { await BattlePassMissionProjection.RefreshAsync(context, at); }
+                catch (System.Data.Common.DbException error)
+                {
+                    // 已提交切图的后置读取失败，不能把原入场再次当成未提交命令重试。
+                    throw new IOException("Committed guild hall entry publication failed", error);
+                }
+            }
         }
         else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required")
         {

@@ -53,11 +53,23 @@ internal static partial class AntonRaidTcpTests
         Bytes(packets.Single(p => p.Opcode == 587).Body, [2, 0], "单人收到真实阶段通知");
         VerifyMap(packets.Single(p => p.Opcode == 585).Body);
         var symbols = packets.Single(p => p.Opcode == 583).Body;
-        int Symbol(int id) => Enumerable.Range(0, symbols[0]).Where(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * i)) == id)
-            .Select(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * i))).Single();
-        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 34 && Symbol(7) == 0 && Symbol(50) == 4 &&
-            Enumerable.Range(0, symbols[0]).All(i => U32(symbols, 1 + 8 * i) is not (102 or >= 121 and <= 125 or 128)),
-            "开战583省略102零执行及六个零值影片事件，其余34项完整保留：清旧感染存在位及真实HP初值4");
+        That(symbols.Length == 1 + symbols[0] * 8, "开战583长度与实际条目数严格对应");
+        // 初始非事件全集：领域先将符号归零，再写入首阶段七图原始HP；影片事件不属于状态快照。
+        (int Id, int Value)[] expectedSymbols =
+        [
+            (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0),
+            (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0),
+            (50, 4), (51, 1), (52, 1), (53, 2), (54, 1), (55, 2), (56, 1),
+            (57, 0), (58, 0), (59, 0), (60, 0), (61, 0), (62, 0), (63, 0),
+            (103, 0), (104, 0), (105, 0), (106, 0), (110, 0), (120, 0), (126, 0), (127, 0)
+        ];
+        var actualSymbols = Enumerable.Range(0, symbols[0]).Select(i =>
+            (Id: System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * i)),
+             Value: System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * i)))).ToArray();
+        That(actualSymbols.SequenceEqual(expectedSymbols) &&
+            actualSymbols.All(row => row.Id is not (102 or >= 121 and <= 125 or 128)),
+            "开战583逐项保留完整非事件ID、顺序和初值：感染位7=0、首图HP50=4，排除102与六个零影片事件：" +
+            string.Join(',', actualSymbols.Select(row => $"{row.Id}={row.Value}")));
         That(packets.Any(p => p.Opcode == 9) && packets.Any(p => p.Opcode == 594) && packets.Any(p => p.Opcode == 24),
             "单人完整分队、准备和迁移链");
         VerifyCosts(packets.Single(p => p.Opcode == 598).Body, [peer.Id], 2, 1);

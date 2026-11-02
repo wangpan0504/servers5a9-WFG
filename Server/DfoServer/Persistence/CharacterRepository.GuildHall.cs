@@ -7,7 +7,7 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository : IGuildHallStore
 {
-    public Character? SaveGuildHallPosition(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint) =>
+    public Character? SaveGuildHallPosition(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, DfoServer.Game.BattlePass.GuildHallEntryFact? entry = null) =>
         owner.Execute(() =>
         {
             using var db = database.Open();
@@ -17,6 +17,7 @@ internal sealed partial class CharacterRepository : IGuildHallStore
             var guild = ReadGuildMembership(db, expected.Id, transaction);
             if (guild is null || expected.Guild?.Id != guild.Id) return null;
             var character = SaveInTransaction(db, transaction, owner, expected, position, returnPoint, null) with { Guild = guild };
+            ApplyBattlePassGuildHallEntry(db, transaction, owner.Account, expected, position, guild.Id, entry);
             transaction.Commit();
             return character;
         });

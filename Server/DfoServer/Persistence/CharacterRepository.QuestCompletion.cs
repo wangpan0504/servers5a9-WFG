@@ -289,6 +289,7 @@ internal sealed partial class CharacterRepository
             if (error != MailboxError.None) throw new InvalidOperationException("任务声明邮件提交失败：" + error);
             resourceMailId = mailId;
         }
+        ApplyBattlePassQuestCompletion(db, tx, owner.Account, plan);
         tx.Commit();
         return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));
 

@@ -2301,6 +2301,102 @@ CREATE TABLE character_privilege_service(
   claimed_milestones INTEGER NOT NULL CHECK(claimed_milestones BETWEEN 0 AND 4294967295)
 );
 
+CREATE TABLE account_battle_pass_seasons(
+  account TEXT NOT NULL,
+  season_key TEXT NOT NULL CHECK(length(trim(season_key))>0),
+  total_experience INTEGER NOT NULL DEFAULT 0 CHECK(typeof(total_experience)='integer' AND total_experience>=0),
+  pass_type INTEGER NOT NULL DEFAULT 0 CHECK(typeof(pass_type)='integer' AND pass_type BETWEEN 0 AND 255),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revision)='integer' AND revision>=0),
+  PRIMARY KEY(account,season_key)
+);
+
+CREATE TABLE account_battle_pass_claims(
+  account TEXT NOT NULL,
+  season_key TEXT NOT NULL,
+  level INTEGER NOT NULL CHECK(typeof(level)='integer' AND level BETWEEN 1 AND 80),
+  track INTEGER NOT NULL CHECK(typeof(track)='integer' AND track BETWEEN 0 AND 1),
+  recipient_character_id INTEGER NOT NULL,
+  PRIMARY KEY(account,season_key,level,track),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+CREATE TABLE battle_pass_season_rules(
+  season_key TEXT PRIMARY KEY NOT NULL CHECK(length(trim(season_key))>0),
+  start_utc INTEGER NOT NULL CHECK(typeof(start_utc)='integer' AND start_utc>=0),
+  end_utc INTEGER NOT NULL CHECK(typeof(end_utc)='integer' AND end_utc>start_utc),
+  rules_json TEXT NOT NULL
+);
+
+CREATE TABLE account_battle_pass_mission_progress(
+  account TEXT NOT NULL, season_key TEXT NOT NULL,
+  category INTEGER NOT NULL CHECK(typeof(category)='integer' AND category BETWEEN 0 AND 2),
+  period_key INTEGER NOT NULL CHECK(typeof(period_key)='integer' AND period_key>=0),
+  mission_id INTEGER NOT NULL CHECK(typeof(mission_id)='integer' AND mission_id BETWEEN 1 AND 65535),
+  current_count INTEGER NOT NULL CHECK(typeof(current_count)='integer' AND current_count>=0),
+  PRIMARY KEY(account,season_key,category,period_key,mission_id),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+CREATE TABLE account_battle_pass_mission_claims(
+  account TEXT NOT NULL, season_key TEXT NOT NULL,
+  category INTEGER NOT NULL CHECK(typeof(category)='integer' AND category BETWEEN 0 AND 2),
+  period_key INTEGER NOT NULL CHECK(typeof(period_key)='integer' AND period_key>=0),
+  mission_id INTEGER NOT NULL CHECK(typeof(mission_id)='integer' AND mission_id BETWEEN 1 AND 65535),
+  experience INTEGER NOT NULL CHECK(typeof(experience)='integer' AND experience>0),
+  claimed_at INTEGER NOT NULL CHECK(typeof(claimed_at)='integer' AND claimed_at>=0),
+  resulting_season_revision INTEGER NOT NULL CHECK(typeof(resulting_season_revision)='integer' AND resulting_season_revision>0),
+  PRIMARY KEY(account,season_key,category,period_key,mission_id),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+CREATE TABLE account_battle_pass_source_events(
+  account TEXT NOT NULL, source_kind TEXT NOT NULL, source_id TEXT NOT NULL CHECK(length(source_id)=32),
+  season_key TEXT NOT NULL, occurred_at INTEGER NOT NULL CHECK(typeof(occurred_at)='integer' AND occurred_at>=0),
+  PRIMARY KEY(account,source_kind,source_id),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+CREATE TABLE account_battle_pass_certificate_orders(
+  account TEXT NOT NULL, season_key TEXT NOT NULL,
+  order_id TEXT NOT NULL UNIQUE CHECK(length(order_id)=32),
+  commodity_id INTEGER NOT NULL CHECK(commodity_id=105659),
+  item_id INTEGER NOT NULL CHECK(item_id=490705043),
+  cera INTEGER NOT NULL CHECK(cera=4900),
+  recipient_character_id INTEGER NOT NULL,
+  before_season_revision INTEGER NOT NULL CHECK(typeof(before_season_revision)='integer' AND before_season_revision>=0),
+  resulting_season_revision INTEGER NOT NULL CHECK(typeof(resulting_season_revision)='integer' AND resulting_season_revision>before_season_revision),
+  business_snapshot TEXT NOT NULL CHECK(json_valid(business_snapshot)),
+  committed_at INTEGER NOT NULL CHECK(typeof(committed_at)='integer' AND committed_at>=0),
+  PRIMARY KEY(account,season_key),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+
+CREATE TABLE account_battle_pass_cera_consumption(
+  account TEXT NOT NULL, season_key TEXT NOT NULL,
+  total_cera INTEGER NOT NULL DEFAULT 0 CHECK(typeof(total_cera)='integer' AND total_cera>=0),
+  numerator_remainder INTEGER NOT NULL DEFAULT 0 CHECK(typeof(numerator_remainder)='integer' AND numerator_remainder BETWEEN 0 AND 99),
+  PRIMARY KEY(account,season_key),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
+CREATE TABLE account_battle_pass_cera_orders(
+  account TEXT NOT NULL, season_key TEXT NOT NULL, order_id TEXT NOT NULL CHECK(length(order_id)=32),
+  recipient_character_id INTEGER NOT NULL,
+  cera INTEGER NOT NULL CHECK(typeof(cera)='integer' AND cera>0),
+  eligible_cera INTEGER NOT NULL CHECK(typeof(eligible_cera)='integer' AND eligible_cera BETWEEN 1 AND cera),
+  experience INTEGER NOT NULL CHECK(typeof(experience)='integer' AND experience>=0),
+  percentage INTEGER NOT NULL CHECK(percentage BETWEEN 0 AND 65535),
+  before_remainder INTEGER NOT NULL CHECK(before_remainder BETWEEN 0 AND 99),
+  resulting_remainder INTEGER NOT NULL CHECK(resulting_remainder BETWEEN 0 AND 99),
+  before_season_revision INTEGER NOT NULL CHECK(typeof(before_season_revision)='integer' AND before_season_revision>=0),
+  resulting_season_revision INTEGER NOT NULL CHECK(typeof(resulting_season_revision)='integer' AND resulting_season_revision>before_season_revision),
+  business_snapshot TEXT NOT NULL CHECK(json_valid(business_snapshot)),
+  committed_at INTEGER NOT NULL CHECK(typeof(committed_at)='integer' AND committed_at>=0),
+  PRIMARY KEY(account,season_key,order_id),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
+
 CREATE TABLE account_strongway2019_rewards(
   account TEXT NOT NULL,
   instance_id TEXT NOT NULL CHECK(length(instance_id)=32),

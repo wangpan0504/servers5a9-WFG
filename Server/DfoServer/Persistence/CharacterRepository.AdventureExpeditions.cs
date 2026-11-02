@@ -58,6 +58,10 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$amount", plan.Action == "expedition_claim" ? changed.Reward : 0);
         command.Parameters.AddWithValue("$before", current.State.Revision); command.Parameters.AddWithValue("$revision", current.State.Revision + 1);
         command.ExecuteNonQuery();
+        if (plan.Action == "expedition_start")
+            ApplyBattlePassExpeditionStart(db, tx, owner.Account, changed.Id, changed.Started);
+        else if (plan.Action == "expedition_claim")
+            ApplyBattlePassGloryCrystalAcquisition(db, tx, owner.Account, plan, changed, catalog, now);
         var committed = ReadAdventure(db, tx, owner.Account, catalog, now);
         tx.Commit(); return committed;
     });

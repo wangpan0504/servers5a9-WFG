@@ -46,6 +46,9 @@ internal sealed record ServerOptions
     // 普通副本加载后只读独立宿主资格探测；默认 Off，不改变入场、权威或结算。
     public bool EnableHostedDungeonEligibility { get; init; }
     public string? HostedDungeonEligibilityHost { get; init; }
+    // 显式稳定季标识；未配置时不装配等级奖励模块。
+    public string? BattlePassSeasonKey { get; init; }
+    public DateTimeOffset? BattlePassSeasonStart { get; init; }
     public string ProtocolVersion => "matched-client";
 
     public static ServerOptions Load(IReadOnlyDictionary<string, string>? arguments = null)
@@ -76,6 +79,9 @@ internal sealed record ServerOptions
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
+                    "--battle-pass-start" => value with { BattlePassSeasonStart = BattlePassStart(argument, name) },
+                    "--battle-pass-season" => value with { BattlePassSeasonKey = !string.IsNullOrWhiteSpace(argument) && argument == argument.Trim()
+                        ? argument : throw new InvalidDataException(name + " 必须为非空且无首尾空白的稳定赛季标识") },
                     "--promotion-page" => value with { EnablePromotionPage = argument switch
                     {
                         "Off" => false,
@@ -130,8 +136,17 @@ internal sealed record ServerOptions
         {
             throw new InvalidDataException("Invalid authentication configuration", error);
         }
+        if (value.BattlePassSeasonStart is not null && value.BattlePassSeasonKey is null)
+            throw new InvalidDataException("--battle-pass-start 需要显式 --battle-pass-season");
         return value;
     }
+
+    static DateTimeOffset BattlePassStart(string argument, string name) =>
+        DateTimeOffset.TryParseExact(argument,
+            ["yyyy-MM-dd'T'HH:mm:sszzz", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz",
+             "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"],
+            CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var result)
+            ? result : throw new InvalidDataException(name + " 必须为含时区的ISO8601时刻");
 
     static int Number(string argument, string name) => int.TryParse(argument, NumberStyles.None, CultureInfo.InvariantCulture, out int result)
         ? result : throw new InvalidDataException(name + " 必须为非负整数");

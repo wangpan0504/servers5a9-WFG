@@ -35,6 +35,7 @@ internal sealed class OperationHopeRewardPlan
             TargetLevel, TargetLearning, Proficiency, FrozenAt });
     }
 
+    internal DfoServer.Game.BattlePass.BattlePassOperationHopeCompletion? BattlePassCompletion { get; set; }
     public Character Expected { get; }
     public OperationHopeMissionBinding Binding { get; }
     public DungeonRunIdentity Identity { get; }

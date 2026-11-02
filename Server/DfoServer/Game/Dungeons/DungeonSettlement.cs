@@ -51,6 +51,29 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
             throw new InvalidOperationException("同一大会不能替换原冻结牌面");
         Tournament = reward;
     }
+    public DfoServer.Game.BattlePass.BattlePassTayberrsClear? BattlePassTayberrsClear { get; private set; }
+    public void FreezeBattlePassTayberrsClear(DungeonDefinition definition, DungeonEntryPlan entry, TimeProvider clock)
+    {
+        BattlePassTayberrsClear ??= DfoServer.Game.BattlePass.BattlePassTayberrsClear.Prepare(definition, entry, Fact, clock);
+    }
+    public DfoServer.Game.BattlePass.BattlePassFormalClear? BattlePassFormalClear { get; private set; }
+    public void FreezeBattlePassFormalClear(DungeonDefinition definition, DungeonEntryPlan entry, int reviveCoinsSpent, TimeProvider clock,
+        byte? finalRankGrade = null, byte minimumSRankGrade = 0)
+    {
+        BattlePassFormalClear ??= DfoServer.Game.BattlePass.BattlePassFormalClear.Prepare(definition, entry, Fact, reviveCoinsSpent, clock, finalRankGrade, minimumSRankGrade);
+    }
+    public DfoServer.Game.BattlePass.BattlePassDazzlementClear? BattlePassDazzlementClear { get; private set; }
+    public void FreezeBattlePassDazzlementClear(DungeonDefinition definition, DungeonEntryPlan entry,
+        DazzlementTowerAdmission? admission, TimeProvider clock)
+    {
+        BattlePassDazzlementClear ??= DfoServer.Game.BattlePass.BattlePassDazzlementClear.Prepare(definition,entry,Fact,admission,clock);
+    }
+    public DfoServer.Game.BattlePass.BattlePassBossRushReward? BattlePassBossRushReward { get; private set; }
+    public void FreezeBattlePassBossRushReward(DungeonDefinition definition, DungeonEntryPlan entry,
+        BossRushRunState? rush, TimeProvider clock)
+    {
+        BattlePassBossRushReward ??= DfoServer.Game.BattlePass.BattlePassBossRushReward.Prepare(definition,entry,Fact,rush,BossRush,clock);
+    }
     public int? EkernDay { get; private set; }
     public void FreezeEkernDay(int day) => EkernDay ??= day;
     public AncientGateClear? AncientGate { get; private set; }

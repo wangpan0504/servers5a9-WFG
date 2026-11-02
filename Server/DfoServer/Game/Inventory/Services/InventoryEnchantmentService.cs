@@ -81,6 +81,12 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
         after.Validate();
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
-        return new(true, 0, new(before, after, "enchant_by_bead", new(character, deadline, clock: clock, requirePosition: definition.VillageOnly)));
+        var time = clock ?? TimeProvider.System;
+        return new(true, 0, new InventoryPlan(before, after, "enchant_by_bead", new(character, deadline, clock: clock, requirePosition: definition.VillageOnly))
+        {
+            EquipmentEnchant = EquipmentEnchantFact.Capture(before, consumed.Plan.After, after, source, target,
+                definition.RandomTitle is null ? EquipmentEnchantMode.BeadCard : EquipmentEnchantMode.BeadTitle,
+                "enchant_by_bead", time.GetUtcNow(), time)
+        });
     }
 }

@@ -51,7 +51,17 @@ internal sealed class NpcFavorHandler(NpcFavorService service, InventoryProjecti
         }
         await context.Reply(CmdPacketType.REQUEST_NPC_FAVOR_OPERATION, body, "npc_favor_committed", Guard);
         // ACK814不消费源物品：按已提交库存回报钱包或物品数量，不产生获得播报。
-        await inventory.RefreshAsync(context, result, refreshEquipment: false, suppressMainNotice: true);
+        try
+        {
+            await inventory.RefreshAsync(context, result, refreshEquipment: false, suppressMainNotice: true);
+            if (result.Plan?.NpcGift is { } fact && Guard())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.NpcGift is not null)
+        {
+            // 原赠礼已提交，发布失败不能再次扣礼物或重新掷骰。
+            throw new IOException("Committed NPC gift publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

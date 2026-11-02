@@ -24,6 +24,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
     // 训练费独立于副本门票表达，付款仍在原入场事务中合并为一次背包提交。
+    public TimeProvider BattlePassMissionClock { get; init; } = TimeProvider.System;
     public InventoryPlan? GuildTraining { get; init; }
     public InventoryPlan? InventoryPayment
     {

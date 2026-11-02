@@ -59,8 +59,18 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
             if (receipt.OutcomeCode != 3 || result.Plan!.After.Find(receipt.Target) is null) acknowledged.Add(receipt.Target);
             if (receipt.TerminalSlot >= 0) acknowledged.Add(new(InventoryListType.Main, receipt.TerminalSlot));
         }
-        await projection.RefreshAsync(context, result, acknowledged);
-        if (result.Accepted && receipt is not null) announcements?.Enhancement(context, result, receipt);
+        try
+        {
+            await projection.RefreshAsync(context, result, acknowledged);
+            if (result.Accepted && receipt is not null) announcements?.Enhancement(context, result, receipt);
+            if (result.Accepted && result.Plan?.EquipmentEnhancement is { } fact && Guard())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Accepted && result.Plan?.EquipmentEnhancement is not null)
+        {
+            // 库存和任务已提交，发布读取失败不能让外层重新抽签并重放扣费。
+            throw new IOException("Committed equipment enhancement publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

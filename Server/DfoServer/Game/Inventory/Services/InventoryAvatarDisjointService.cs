@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
@@ -5,9 +6,10 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAvatarDisjointService(ItemCatalog items, AvatarDisjointCatalog disjoint,
-    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null)
+    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null, TimeProvider? clock = null)
 {
     const int RequiredFreeEmblemSlots = 5;
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
     public InventoryResult Disjoint(Character character, AvatarDisjointRequest request,
         out AvatarDisjointReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
@@ -16,7 +18,8 @@ internal sealed class InventoryAvatarDisjointService(ItemCatalog items, AvatarDi
         rejection = "slot-or-instance";
         var before = character.Inventory;
         var source = before.Find(request.Position);
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         long nowUnix = now.ToUnixTimeSeconds();
         if (request.ExpectedItemId <= 0 || source is not { Core.Kind: ItemKind.Avatar, Avatar: not null } ||
             source.Core.ItemId != request.ExpectedItemId || source.Core.Count != 1 || source.Core.EquipmentLockId != 0 ||
@@ -89,7 +92,11 @@ internal sealed class InventoryAvatarDisjointService(ItemCatalog items, AvatarDi
             long? expires = source.ExpireTime > 0 ? source.ExpireTime : null;
             receipt = new(request, received.ToArray());
             rejection = null;
-            return new(true, 0, new(before, after, "avatar_disjoint", new(character, expires)));
+            return new(true, 0, new InventoryPlan(before, after, "avatar_disjoint", new(character, expires))
+            {
+                AvatarDisjoint = new(Guid.NewGuid(), plannedAt, Clock, request, receipt,
+                    receipt.Rewards.ToImmutableArray(), source, before, paid, after)
+            });
         }
         catch (Exception error) when (error is InvalidDataException or OverflowException or KeyNotFoundException)
         {

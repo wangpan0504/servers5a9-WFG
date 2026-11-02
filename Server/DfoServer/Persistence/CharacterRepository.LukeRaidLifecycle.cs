@@ -88,6 +88,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 AddFiendwarTitleFact(db, tx, member.Character, member.Account, 7005);
             if (counts && eligible && candidate.FiendwarNoBaseThreat)
                 AddFiendwarTitleFact(db, tx, member.Character, member.Account, 7004);
+            ApplyBattlePassRaidCompletion(db,tx,candidate,receipt);
         }
         if (candidate.FinalPhase)
             CommitRaidGuildContribution(db, tx, candidate.Instance, candidate.RaidType, result,

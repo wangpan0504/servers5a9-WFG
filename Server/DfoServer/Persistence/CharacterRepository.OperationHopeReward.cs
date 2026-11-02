@@ -111,6 +111,7 @@ internal sealed partial class CharacterRepository
         var committed = Require(db,tx,owner.Account,expected.Name);
         if (committed.Revision != expected.Revision+1 || !MatchesHopeCharacter(committed,expected,plan,inventory.Inventory,afterCommit: true))
             throw new InvalidOperationException("希望持久奖励与冻结结果不同");
+        ApplyBattlePassOperationHopeCompletion(db, tx, owner.Account, plan);
         tx.Commit();
         return Result(committed,granted,false,true);
 

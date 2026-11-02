@@ -245,6 +245,12 @@ internal sealed partial class GameSession
         if (dungeon.Entry.DungeonId is 5097 or 5098 && !dungeon.Entry.IsPractice && dungeon.Entry.IsOrdinary)
             prepared.Pending.FreezeEkernDay(ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()));
         var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
+        prepared.Pending.FreezeBattlePassTayberrsClear(contributionDefinition, dungeon.Entry, timeProvider ?? TimeProvider.System);
+        byte finalRankGrade = dungeon.Settlement?.Presentation.RankGrade ?? rewards.GradeForPoint(rankPoint);
+        prepared.Pending.FreezeBattlePassFormalClear(contributionDefinition, dungeon.Entry, dungeon.ReviveCoinsSpent, timeProvider ?? TimeProvider.System,
+            finalRankGrade, rewards.MinimumSRankGrade);
+        prepared.Pending.FreezeBattlePassDazzlementClear(contributionDefinition, dungeon.Entry, dungeon.Dazzlement, timeProvider ?? TimeProvider.System);
+        prepared.Pending.FreezeBattlePassBossRushReward(contributionDefinition, dungeon.Entry, dungeon.BossRush, timeProvider ?? TimeProvider.System);
         GuildContributionSource? contributionSource = null;
         if (dungeon.Entry.IsOrdinary && !dungeon.Entry.IsPractice && !dungeon.Entry.DisableClearReward)
         {
@@ -258,7 +264,7 @@ internal sealed partial class GameSession
         }
         prepared.Pending.FreezeGuildContribution(dungeon.GuildMemberships, contributionSource, guildDungeons, guildReward);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
-            new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal)
+            new(dungeon.ClearTimeMilliseconds, rankPoint, finalRankGrade, dungeon.KillExperienceTotal)
             {
                 MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience,
                 MonsterEquipmentExperience = dungeon.KillEquipmentExperience,
@@ -366,7 +372,8 @@ internal sealed partial class GameSession
                 GuildDungeon = settlement.GuildDungeon,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond,GriefReward = settlement.GriefReward,
                 BossRushReward = settlement.BossRushReward ?? settlement.Pending.BossRush,
-                EvildomWarClear = dungeon.EvildomWarEntry is not null };
+                EvildomWarClear = dungeon.EvildomWarEntry is not null,
+                BattlePassMissionClock = settlement.Pending.BattlePassBossRushReward?.Clock ?? settlement.Pending.BattlePassDazzlementClear?.Clock ?? settlement.Pending.BattlePassFormalClear?.Clock ?? settlement.Pending.BattlePassTayberrsClear?.Clock };
         });
     }
 
@@ -485,9 +492,9 @@ internal sealed partial class GameSession
             options.PaidDisabled || choice >= DungeonCardView.ChoiceCount ||
             settlement.Claim is { } pending && (pending.Side != 1 || pending.Choice != choice))
             return null;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? (timeProvider ?? TimeProvider.System).GetUtcNow();
         if (settlement.Paid is not null) return settlement.PaidCard == choice
-            ? new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true) : null;
+            ? new FormalPaidCardResult(FormalReceipt() with { BattlePassMissionClock = timeProvider ?? TimeProvider.System },settlement.Paid,null,null,true) : null;
         if (Selected.Inventory.Gold < options.Price) return null;
         var claim = settlement.Claim ??= new(Selected, 1, cards.PlanDelivery(Selected,[options.Paid],Selected.Level,options.Price,now), now)
             { Choice = choice };
@@ -513,7 +520,7 @@ internal sealed partial class GameSession
                     PreviousSkillSwitchInventory = before.SkillSwitchInventory
                 }
         } : null;
-        return new(FormalReceipt(),committed.Reward,inventory,committed.MailId,committed.Duplicate);
+        return new(FormalReceipt() with { BattlePassMissionClock = timeProvider ?? TimeProvider.System },committed.Reward,inventory,committed.MailId,committed.Duplicate);
     });
 
     long cardMembershipPublication;

@@ -155,6 +155,7 @@ internal sealed partial class CharacterRepository : IImperialArenaRunStore
             command.CommandText = "UPDATE account_imperial_arena_runs SET events_json=json_set(events_json,'$[#-1].Mail',$completedMail) WHERE account=$account AND instance_id=$instance";
             command.ExecuteNonQuery();
         }
+        ApplyBattlePassDungeonDeath(db,tx,owner.Account,plan.Run,plan.Death);
         tx.Commit();
         return new ImperialArenaDeathCommit(plan, delivered, false);
     });

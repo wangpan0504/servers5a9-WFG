@@ -30,18 +30,7 @@ internal sealed partial class DungeonHandler
     async Task<CommandResult> PublishAltarDeathsAsync(GameConnectionContext context, DungeonAltarReceipt? receipt,
         int count, CmdPacketType opcode, uint? objectKey = null)
     {
-        // 最后一击可能立即进入结算并替换角色快照，先发布原死亡事务的实际任务条件。
-        if (receipt?.QuestCharacter is { } character)
-        {
-            var quests = receipt;
-            if (!receipt.QuestDropSlots.IsEmpty)
-                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
-                    InventoryPackets.Delta(character.Inventory, InventoryListType.Main, [.. receipt.QuestDropSlots]),
-                    "formal_altar_quest_items", () => context.Session.CanPublishDungeonAltar(quests));
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests),
-                "formal_altar_quest_progress", () => context.Session.CanPublishDungeonAltar(quests));
-            context.Session.MarkDungeonAltarQuestsPublished(quests);
-        }
+        await PublishAltarProgressAsync(context,receipt,altarProjectionBusy);
         // 重发39/255时也尝试恢复原SQL结果；已经冻结的奖励不会再次抽取。
         if (altarRewards is not null && context.Session.BeginDungeonAltarSettlement(altarRewards, growth) is { } settlement)
             receipt = settlement;
@@ -56,6 +45,51 @@ internal sealed partial class DungeonHandler
             QuestItems = receipt?.QuestDropSlots.Length, CharacterId = receipt?.QuestCharacter?.Id, Revision = receipt?.QuestCharacter?.Revision });
         if (receipt is not null && context.Altar is not null) await context.Altar.WakeAsync(receipt);
         return CommandResult.Handled;
+    }
+
+    internal static async Task PublishAltarProgressAsync(GameConnectionContext context, DungeonAltarReceipt? receipt,
+        Func<Exception,bool>? isBusy = null)
+    {
+        // 最后一击可能立即结算；原任务通知与独立战令投影均在替换快照之前发布。
+        if (receipt is null) return;
+        if (receipt.QuestCharacter is {} character)
+        {
+            if (!receipt.QuestDropSlots.IsEmpty)
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                    InventoryPackets.Delta(character.Inventory, InventoryListType.Main, [.. receipt.QuestDropSlots]),
+                    "formal_altar_quest_items", () => context.Session.CanPublishDungeonAltar(receipt));
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),
+                "formal_altar_quest_progress",()=>context.Session.CanPublishDungeonAltar(receipt));
+        }
+        if (receipt.BattlePassCharacter is not null && receipt.BattlePassMissionClock is {} clock)
+        {
+            // BP只重读当前权威任务页；同角色资产替换不沿用旧Character，也不放宽原任务/结算守卫。
+            while (context.Session.CanPublishDungeonAltarBattlePass(receipt))
+            {
+                context.Stop.ThrowIfCancellationRequested();
+                DfoServer.Game.Session.BattlePassMissionSessionState? current;
+                try
+                {
+                    current=context.Owner.Execute(()=>context.Session.CanPublishDungeonAltarBattlePass(receipt)
+                        ? context.Session.ReadBattlePassMissionState(clock.GetUtcNow()) : null);
+                }
+                catch (Exception error) when (isBusy?.Invoke(error) == true)
+                {
+                    // 保留原已提交死亡的待发布回执，恢复读取后同一请求继续祭坛结算。
+                    await Task.Delay(200, context.Stop);
+                    continue;
+                }
+                if (current is null) { context.Session.MarkDungeonAltarBattlePassPublished(receipt); break; }
+                await DfoServer.Network.Projection.BattlePassMissionProjection.MissionsAsync(context,current.State,current.Receipt);
+                if (context.Session.CanPublishInventory(current.Receipt))
+                {
+                    context.Session.MarkDungeonAltarBattlePassPublished(receipt);
+                    break;
+                }
+                await Task.Yield();
+            }
+        }
+        if (receipt.QuestCharacter is not null) context.Session.MarkDungeonAltarQuestsPublished(receipt);
     }
 
     async Task<CommandResult> AltarPreparedAsync(GameConnectionContext context, Packet request)

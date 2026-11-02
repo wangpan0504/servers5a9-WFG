@@ -17,6 +17,7 @@ internal sealed record TownTravelPlan(Location? Position, Location? Return, stri
 internal sealed record TownTravelReceipt(Character Character, long Generation, long SelectionEpoch)
 {
     public DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange { get; init; }
+    public DateTimeOffset? BattlePassMissionAt { get; init; }
 }
 
 internal static class TownTravel

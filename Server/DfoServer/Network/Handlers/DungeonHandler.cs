@@ -41,7 +41,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
     Strongway2019Projection? strongwayProjection = null,
     Strongway2019RewardProjection? strongwayRewards = null,
-    DfoServer.Game.Raids.AntonRaidStart? raidStart = null) : IGameCommandModule
+    DfoServer.Game.Raids.AntonRaidStart? raidStart = null,
+    Func<Exception,bool>? altarProjectionBusy = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -403,6 +404,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await DungeonEnterCountProjection.RefreshDespairAsync(context, dungeons, Guard);
         await BossSelectionBuffProjection.PostAsync(context, canSend: Guard);
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
+        if(receipt.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync(string? entryReason = null, byte? memberSlot = null, bool party = false)
@@ -487,6 +489,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
             await EnableSettlementAsync(context);
         await PublishEpicPieceShopAsync(context, prepare: false);
+        if(receipt.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
         return CommandResult.Handled;
     }
 
@@ -633,6 +636,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             {
                 if (imperialArena is null) throw new InvalidOperationException("帝国竞技场已提交奖励缺少投影服务");
                 await imperialArena.DeathAsync(context, imperialDeath, Guard);
+                if(result.BattlePassMissionClock is {} imperialClock && Guard())
+                    await BattlePassMissionProjection.RefreshAsync(context,imperialClock.GetUtcNow());
             }
             else if (result.TagEvildomClear is { } clearedTag)
             {
@@ -725,6 +730,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (result.ClearFact is not null && !potionClear)
             await EnableSettlementAsync(context, result.MonsterKey);
         await PublishEpicPieceShopAsync(context, prepare: true);
+        if(result.BattlePassMissionClock is {} deathClock) await BattlePassMissionProjection.RefreshAsync(context,deathClock.GetUtcNow());
         return CommandResult.Handled;
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
@@ -5,11 +6,12 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCompoundCatalog compounds,
-    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<long, long>? random = null)
+    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<long, long>? random = null, TimeProvider? clock = null)
 {
     const ushort Rejection = 22;
     const ushort InventoryFull = 23;
     readonly Func<long, long> draw = random ?? Random.Shared.NextInt64;
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
     public InventoryResult Apply(Character character, EmblemCompoundRequest request,
         out EmblemCompoundReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null, int guildLevel = 0)
@@ -19,7 +21,8 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
         if (request.Inputs.Length is < 2 or > 5)
             return Reject("invalid-count", out rejection);
 
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         long seconds = now.ToUnixTimeSeconds();
         var before = character.Inventory;
         var requirements = new List<(InventoryItem Item, int Quantity, ItemTemplate Template)>();
@@ -73,9 +76,10 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
         {
             return Reject("reward-roll", out rejection);
         }
+        ItemTemplate selectedTemplate;
         try
         {
-            var selectedTemplate = items.Get(selected.ItemId);
+            selectedTemplate = items.Get(selected.ItemId);
             if (selectedTemplate.Kind != ItemKind.Emblem || selectedTemplate.Rarity != selected.Rarity)
                 return Reject("reward-template", out rejection);
         }
@@ -109,7 +113,12 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
         receipt = new(pool.BoosterItemId, minimumGrade, request.Inputs.Length,
             selected.ItemId, selected.Count, platinumReroll);
         return new(true, 0, new InventoryPlan(before, after, "emblem_compound",
-            new InventoryCharacterPrecondition(character, deadline)));
+            new InventoryCharacterPrecondition(character, deadline))
+        {
+            EmblemCompound = new(Guid.NewGuid(), plannedAt, Clock, request, receipt,
+                requirements.Select(row => new EmblemCompoundMaterial(row.Item, row.Quantity, row.Template.Grade)).ToImmutableArray(),
+                new(selectedTemplate.Id, selectedTemplate.Grade, selectedTemplate.Rarity), before, paid, after)
+        });
     }
 
     public bool UsesGuildPool(EmblemCompoundReceipt receipt, int level) =>

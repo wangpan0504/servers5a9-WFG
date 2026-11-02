@@ -49,6 +49,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --hosted-dungeon-eligibility <Off|On>  普通副本加载后只读资格探测，默认 Off；不切换战斗权威
           --hosted-dungeon-eligibility-host <文件>  可选独立宿主可执行文件；未配置时 On 仅进程内拒绝缺失 CombatProfile
           --hosted-eligibility-fake-host <scenario>  测试用假宿主：读 stdin JSON 写 stdout，不加载资源
+          --battle-pass-season <标识>  启用指定稳定赛季的等级奖励领取；不配置则关闭该模块
+          --battle-pass-start <时刻>  显式含时区的任务赛季起点，须为周四06:00(+08:00)
           --recharge-web-port <端口>  充值网页监听端口，默认80，不受GM网页开关控制
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
           --auction-probe <参数>     拍卖行应答记录布局探针，默认关闭（关闭时走真实挂牌数据）
@@ -89,7 +91,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
             "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or
-            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
+            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--battle-pass-season" or "--battle-pass-start" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

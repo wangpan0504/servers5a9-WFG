@@ -310,6 +310,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
                 if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
                 RaidCombatProjection.AntonTimersForScene(context, Current);
+                if(scene.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
                 break;
             case PartyDungeonNoticeKind.Loaded:
                 if (scene.NavigationReplay) break;
@@ -338,6 +339,7 @@ internal sealed partial class DungeonHandler
                 await PublishEpicPieceShopAsync(context, prepare: false);
                 // 首次场景安装在30之后才完整可用；重放真实参与表和HP，不沿用加载前已写帧的去重缓存。
                 RaidCombatProjection.RestoreStatusForScene(context, Current);
+                if(scene.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
                 break;
             case PartyDungeonNoticeKind.Move:
                 if (scene.NavigationReplay) break;

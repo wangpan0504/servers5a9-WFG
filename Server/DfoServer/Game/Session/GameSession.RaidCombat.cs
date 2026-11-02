@@ -337,7 +337,7 @@ internal sealed partial class GameSession
             utcNow: now, allowOverflowMail: true, raidReward: true);
         if (!granted.Accepted || granted.Plan is not { } plan) return null;
         var inventory = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(capture.Character), plan.OverflowItems)
-            { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek };
+            { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek, AccountMaterialRaidDefinitions = plan.AccountMaterialRaidDefinitions };
         return owner.Execute(() =>
         {
             if (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(raidCombat, capture.Binding) ||

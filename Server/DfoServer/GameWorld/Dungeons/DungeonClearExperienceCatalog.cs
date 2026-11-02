@@ -65,6 +65,9 @@ internal sealed class DungeonClearExperienceCatalog
         pvf.ReadTokens(QuestParameterPath), pvf.ReadTokens(ServerParameterPath),
         pvf.ReadTokens(RankSystemPath), pvf.ResolveString);
 
+    // 九档评分按降序排列；八项阈值之后的默认零档为最低档。
+    public byte MinimumSRankGrade => checked((byte)rankThresholds[2]);
+
     public byte GradeForPoint(byte rankPoint)
     {
         foreach (int threshold in rankThresholds)

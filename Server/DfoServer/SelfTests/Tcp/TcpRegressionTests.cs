@@ -392,6 +392,25 @@ internal static class TcpRegressionTests
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
+        ("battle-pass", async (_, _, resources) =>
+        {
+            await global::DfoServer.BattlePassRewardTests.RunRewardSuccessPublicationAsync(resources);
+            await global::DfoServer.BattlePassRewardTests.RunMissionSuccessPublicationAsync(resources);
+            await global::DfoServer.BattlePassRewardTests.RunMissionPublicationBusyAsync(resources);
+            await global::DfoServer.BattlePassRaidRecipientFailureTests.RunAsync(resources);
+            await global::DfoServer.BattlePassNpcMaterialBusyBoundary.RunAsync(resources);
+            await global::DfoServer.BattlePassMailBusyBoundary.RunAsync(resources);
+            global::DfoServer.BattlePassUndefeatedSongMailResourceTests.Run(resources);
+            global::DfoServer.BattlePassUndefeatedSongRaidResourceTests.Run(resources);
+            global::DfoServer.BattlePassUndefeatedSongBoosterResourceTests.Run(resources);
+            global::DfoServer.BattlePassSongRaidRecoveryTransactionTests.Run(resources);
+            await global::DfoServer.BattlePassMissionGuildPublicationRace.RunCandidateAsync(resources);
+            await global::DfoServer.BattlePassMissionGuildPublicationRace.RunReadyCandidateAsync(resources);
+            await global::DfoServer.BattlePassMissionGuildPublicationRace.RunCertificateCandidateAsync(resources);
+            await global::DfoServer.BattlePassMissionGuildPublicationRace.RunRewardCandidateAsync(resources);
+            await global::DfoServer.BattlePassGuildPostOrderingRace.RunCandidateAsync(resources);
+            await global::DfoServer.BattlePassGuildPostOrderingRace.RunNextDayCandidateAsync(resources);
+        }),
         ("cash-shop-promotions", CashShopTcpTests.PromotionsAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),

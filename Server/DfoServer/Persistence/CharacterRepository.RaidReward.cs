@@ -105,6 +105,8 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
         command.Parameters.AddWithValue("$card", prepared.Card); command.Parameters.AddWithValue("$final", prepared.FinalPhase ? 1 : 0);
         command.Parameters.AddWithValue("$plan", plan); command.Parameters.AddWithValue("$mails", JsonSerializer.Serialize(mailIds.ToImmutable()));
         command.Parameters.AddWithValue("$now", now.ToUnixTimeSeconds()); command.ExecuteNonQuery();
+        // 原资格、库存与奖励回执同事务内，只按本笔真实入包材料推进任务。
+        ApplyBattlePassUndefeatedSong(db, tx, owner.Account, prepared, inventory, now);
         tx.Commit(); return new RaidRewardCommit(current, false, mailIds.ToImmutable());
     });
     static bool RaidRewardPlanMatches(string stored, string expected, RaidKind kind)

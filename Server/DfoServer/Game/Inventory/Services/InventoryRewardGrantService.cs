@@ -94,6 +94,7 @@ internal static class InventoryRewardGrantService
         var now = utcNow ?? DateTimeOffset.UtcNow;
         bool acquiredCargo = false;
         int? accountMaterialWeek = null;
+        var raidMaterialDefinitions = ImmutableDictionary.CreateBuilder<int, AccountMaterialDefinition>();
         long? acquisitionDeadline = null;
         if (rentalDeadline is { } until && until <= now.ToUnixTimeSeconds())
             return InventoryResult.Reject(19);
@@ -143,6 +144,7 @@ internal static class InventoryRewardGrantService
             if (template.AccountMaterial is { } material)
             {
                 if (rentalDeadline is not null) return InventoryResult.Reject(19);
+                if (raidReward) raidMaterialDefinitions[reward.ItemId] = material;
                 if (reward.Upgrade != 0 || reward.Refinement != 0 || reward.EnchantUpgrade != 0 ||
                     reward.CustomAbilityGrade is not null || reward.Quality is not null ||
                     !template.Expiration.SupportsCreation ||
@@ -227,7 +229,7 @@ internal static class InventoryRewardGrantService
         after.Validate(allocating: true);
         return new(true, 0, new(inventory, after, "reward_grant",
             acquiredCargo ? new(character, acquisitionDeadline) : null, overflowItems: overflow)
-            { AccountMaterialRaidWeek = accountMaterialWeek });
+            { AccountMaterialRaidWeek = accountMaterialWeek, AccountMaterialRaidDefinitions = raidMaterialDefinitions.ToImmutable() });
     }
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。

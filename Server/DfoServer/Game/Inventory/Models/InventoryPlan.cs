@@ -3,6 +3,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Models;
 
@@ -32,6 +33,20 @@ internal sealed class InventoryPlan
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
     public int? AccountMaterialRaidWeek { get; init; }
+    public ImmutableDictionary<int, AccountMaterialDefinition> AccountMaterialRaidDefinitions { get; init; } = ImmutableDictionary<int, AccountMaterialDefinition>.Empty;
+    public EquipmentEnhancementFact? EquipmentEnhancement { get; init; }
+    public EquipmentRepairFact? EquipmentRepair { get; init; }
+    public EmblemCompoundFact? EmblemCompound { get; init; }
+    public MonsterCardBindFact? MonsterCardBind { get; init; }
+    public AvatarDisjointFact? AvatarDisjoint { get; init; }
+    public NpcGiftFact? NpcGift { get; init; }
+    public EquipmentEnchantFact? EquipmentEnchant { get; init; }
+    public AvatarCompoundFact? AvatarCompound { get; init; }
+    public MonsterCardUpgradeFact? MonsterCardUpgrade { get; init; }
+    public EquipmentDisjointFact? EquipmentDisjoint { get; init; }
+    public NpcMaterialConsumeFact? NpcMaterialConsume { get; init; }
+    public BoosterSongAcquisition? BoosterSongAcquisition { get; init; }
+    public CashShopPaymentFact? CashShopPayment { get; init; }
     public DfoServer.Game.PcRoom.PcRoomDailyClaim? PcRoomClaim { get; set; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
@@ -71,6 +86,20 @@ internal sealed class InventoryPlan
         GuildHongbaoPurchase = GuildHongbaoPurchase,
         RequiredEvent = RequiredEvent,
         AccountMaterialRaidWeek = AccountMaterialRaidWeek,
+        AccountMaterialRaidDefinitions = AccountMaterialRaidDefinitions,
+        EquipmentEnhancement = EquipmentEnhancement,
+        EquipmentRepair = EquipmentRepair,
+        EmblemCompound = EmblemCompound,
+        MonsterCardBind = MonsterCardBind,
+        AvatarDisjoint = AvatarDisjoint,
+        NpcGift = NpcGift,
+        EquipmentEnchant = EquipmentEnchant,
+        AvatarCompound = AvatarCompound,
+        MonsterCardUpgrade = MonsterCardUpgrade,
+        EquipmentDisjoint = EquipmentDisjoint,
+        NpcMaterialConsume = NpcMaterialConsume,
+        BoosterSongAcquisition = BoosterSongAcquisition,
+        CashShopPayment = CashShopPayment,
         PcRoomClaim = PcRoomClaim,
         ExpBonus = ExpBonus
     };

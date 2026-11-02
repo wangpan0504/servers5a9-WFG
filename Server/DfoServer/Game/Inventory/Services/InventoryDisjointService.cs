@@ -15,7 +15,8 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
     {
         receipt = null;
         var before = character.Inventory;
-        var now = utcNow ?? Clock.GetUtcNow();
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         var source = before.Find(request.Position);
         if (!Enum.IsDefined(mode)) return InventoryResult.Reject(19);
         bool playerMachine = mode is DisjointMode.OwnMachine or DisjointMode.OtherMachine;
@@ -94,6 +95,10 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         foreach (var item in after.Items)
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
                 (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
-        return new(true, 0, new(before, after, "equipment_disjoint", new(character, deadline, Clock, requirePosition: true)));
+        return new(true, 0, new(before, after, "equipment_disjoint", new(character, deadline, Clock, requirePosition: true))
+        {
+            EquipmentDisjoint = EquipmentDisjointFact.Capture(before, paid, after, request, receipt, mode,
+                "equipment_disjoint", source, tool, plannedAt, Clock)
+        });
     }
 }

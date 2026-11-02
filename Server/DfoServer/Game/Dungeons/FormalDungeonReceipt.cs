@@ -8,6 +8,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
+    public TimeProvider? BattlePassMissionClock { get; init; }
     public bool LostLandStarted { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
     public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
@@ -64,6 +65,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public DungeonRoomClearFact? RoomClearFact { get; init; }
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
     public BossRushHud? BossRushHud { get; init; }
+    public TimeProvider? BattlePassMissionClock { get; init; }
 }
 internal sealed record EpicPiecePickup(int Index, int PieceId, int Amount, int Balance, long BookRevision);
 internal sealed record AccountMaterialPickup(int ItemId, int Amount, int Balance, long WalletRevision);
@@ -113,6 +115,7 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public DfoServer.Game.Session.CrackClearResult? CrackClear { get; init; }
     // 魔界大战小图：发结果页（34）但不发普通白图的通关翻牌（35），发布端据此收窄。
     public bool EvildomWarClear { get; init; }
+    public TimeProvider? BattlePassMissionClock { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }

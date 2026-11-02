@@ -140,6 +140,8 @@ internal sealed class DungeonAltarProjection(GameConnectionContext context, Serv
                 });
             if (levels is not null)
                 await levels.RefreshAsync(context, character, expected.Level, "formal_altar_level", guard, previousLearning: expected.Learning);
+            if (pending.Reward.Experience > 0 && guard())
+                await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
         }
         log.Write("formal_altar_result", new { Connection = context.Id, receipt.InstanceId, result.Stage, fact.CompletedRounds,
             fact.MaximumRounds, fact.Cleared, commit.Duplicate, commit.GainedExperience, commit.ProficiencyGained });
