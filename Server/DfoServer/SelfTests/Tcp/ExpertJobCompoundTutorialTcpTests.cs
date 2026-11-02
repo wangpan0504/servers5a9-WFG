@@ -47,12 +47,10 @@ internal static class ExpertJobCompoundTutorialTcpTests
                 string before = Snapshot();
                 Craft(peer, 0); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
                 That(Snapshot() == before, "未开店未知配方拒绝且不消耗材料或推进教程");
-                Craft(peer, row.Recipe); Success(peer, row.Type, row.Product, row.ProductCount, tutorial: false);
-                That(Condition(row.Id) == 1, "未开店真实制作发放产物但不冒充店铺教学");
-                OpenStore(peer, row.Type);
-                before = Snapshot();
-                Craft(peer, 0); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
-                That(Snapshot() == before, "已开店未知配方不再空产物假成功或观察教程");
+                Report(peer, row.Quest); peer.Expect(1, 33, [0, 19, 0]); peer.Barrier();
+                That(Snapshot() == before, "没有真实制作时客户端完成报告不能推进教程");
+                Craft(peer, row.Recipe, 100); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+                That(Snapshot() == before && Condition(row.Id) == 1, "未开店材料不足不消耗资产或提前完成个人制作教程");
                 fixture.Sql("CREATE TRIGGER fail_compound_tutorial BEFORE UPDATE OF condition_state ON character_active_main_quests BEGIN SELECT RAISE(ABORT,'tutorial transaction failure'); END");
                 Craft(peer, row.Recipe); peer.Closed();
                 That(Snapshot() == before, "教程写入失败时材料、产物、钱包、经验、revision和任务整体回滚");
@@ -60,17 +58,29 @@ internal static class ExpertJobCompoundTutorialTcpTests
             }
             using (var peer = Open(fixture))
             {
-                peer.Select(slot, expertJobInfo: Info(row.Type)); peer.Barrier(); OpenStore(peer, row.Type);
+                peer.Select(slot, expertJobInfo: Info(row.Type)); peer.Barrier();
                 long revision = Revision(row.Id);
                 Craft(peer, row.Recipe); Success(peer, row.Type, row.Product, row.ProductCount, tutorial: true);
                 That(Condition(row.Id) == 0 && Revision(row.Id) == revision + 1,
-                    "真实产物、教学条件和经验同一次revision提交且完整ACK不会被过期回执吞掉");
+                    "未开店个人制作的真实产物、教学条件和经验同一次revision提交且完整ACK不会被过期回执吞掉");
+                string reported = Snapshot();
+                Report(peer, row.Quest);
+                peer.Expect(1, 33, Build(writer => { writer.Write((byte)1); writer.Write(row.Quest); writer.Write(0u); }));
+                peer.Barrier();
+                That(Snapshot() == reported, "制作ACK后的原生33读回已提交条件，不重复扣料、发产物或写任务");
                 revision = Revision(row.Id);
                 Craft(peer, row.Recipe); Success(peer, row.Type, row.Product, row.ProductCount, tutorial: false);
                 That(Condition(row.Id) == 0 && Revision(row.Id) == revision + 1, "教程已归零仍正常制作但不重复写教程状态");
                 string before = Snapshot();
                 Craft(peer, row.Recipe, 100); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
                 That(Snapshot() == before, "材料不足不能冒充教学成功或额外修改已完成条件");
+                OpenStore(peer, row.Type);
+                before = Snapshot();
+                Craft(peer, 0); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+                That(Snapshot() == before, "已开店未知配方仍拒绝，不因个人制作修复放宽配方校验");
+                revision = Revision(row.Id);
+                Craft(peer, row.Recipe); Success(peer, row.Type, row.Product, row.ProductCount, tutorial: false);
+                That(Condition(row.Id) == 0 && Revision(row.Id) == revision + 1, "已有开店制作路径保持，已归零教程不重复推进");
             }
             using (var peer = Open(fixture))
             {
@@ -106,6 +116,8 @@ internal static class ExpertJobCompoundTutorialTcpTests
     }
     static void Craft(TcpPeer peer, int recipe, ushort count = 1) => peer.Send(238, Build(writer =>
     { writer.Write(recipe); writer.Write(count); writer.Write(ushort.MaxValue); }));
+    static void Report(TcpPeer peer, ushort quest) => peer.Send(33, Build(writer =>
+    { writer.Write((ushort)33); writer.Write(quest); writer.Write((byte)0); writer.Write((byte)0); }));
     static void OpenStore(TcpPeer peer, byte type)
     {
         peer.Send(598, Build(writer =>

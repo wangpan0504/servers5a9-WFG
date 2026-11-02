@@ -21,7 +21,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-internal static class QuestCompletionPublicationTests
+internal static partial class QuestCompletionPublicationTests
 {
     public static async Task RunStageAsync(TcpTestResources r)
     {
@@ -241,6 +241,7 @@ internal static class QuestCompletionPublicationTests
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
     {
+        await RunRewardSlotsAsync(towns, pvf, characters, items);
         int before = TestCheck.Count;
         var computer = new CharacterStatComputer(characters);
         var resources = new QuestCompletionRepositoryTests.Resources(pvf, items);

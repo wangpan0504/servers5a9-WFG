@@ -30,6 +30,7 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public ImmutableArray<QuestConsumedItem> Consumed { get; init; } = [];
     public ImmutableArray<QuestCurrencyReward> Currencies { get; init; } = [];
     public ImmutableArray<InventorySlot> ChangedSlots { get; init; } = [];
+    public ImmutableArray<InventorySlot> ReplacedRewardSlots { get; init; } = [];
     public IReadOnlyList<ActiveMainQuest> PreviousQuests { get; init; } = [];
     public byte PreviousGrowType { get; init; }
     public byte? ProfessionGrowType { get; init; }

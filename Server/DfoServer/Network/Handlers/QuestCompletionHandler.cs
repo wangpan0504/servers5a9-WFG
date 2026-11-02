@@ -77,6 +77,11 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         if (commit.Rewards.Any(row => row.Item.Creature is not null))
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(character.Inventory),
                 "quest_reward_creature_details", Guard);
+        // 0237761D..0237762F不会替换异物旧槽，却仍将旧对象交给奖励窗口。
+        // 原生0/25已自行扣料；这里只清除没有该消费段、且被新UID奖励复用的旧实体槽，不能提前同步奖励总量。
+        foreach (var list in commit.ReplacedRewardSlots.Select(slot => slot.List).Distinct())
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(InventorySnapshot.Empty, list,
+                commit.ReplacedRewardSlots.Where(slot => slot.List == list).ToArray()), "quest_reward_replaced_slots", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
         if (creatures is not null && previous is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
             await creatures.ChangedAsync(context, previous.Inventory, character, receipt.Phase, Guard);

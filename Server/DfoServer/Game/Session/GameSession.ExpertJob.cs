@@ -108,7 +108,8 @@ internal sealed partial class GameSession
             return InventoryResult.Reject(19);
         Character committed;
         QuestLifecyclePlan? tutorial = null;
-        if (tutorialQuests is not null && expertJobStoreOpen && (current.ExpertJobType is 2 or 4 || enchanting && current.ExpertJobType == 1) &&
+        // 炼金/控偶教程使用个人制作台，不要求摆摊；附魔商店路径仍保留自己的开店资格。
+        if (tutorialQuests is not null && (current.ExpertJobType is 2 or 4 || enchanting && current.ExpertJobType == 1 && expertJobStoreOpen) &&
             QuestExpertJobProgress.TutorialQuest(current.ExpertJobType) is { } questId)
             tutorial = QuestLifecyclePlan.ObserveExpertJobTutorial(current, tutorialQuests, questId);
         try { committed = repository.CommitExpertJobCraft(owner, current, inventory, experience, tutorial); }
