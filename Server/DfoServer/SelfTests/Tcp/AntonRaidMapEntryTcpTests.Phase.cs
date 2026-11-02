@@ -127,7 +127,16 @@ internal static partial class AntonRaidMapEntryTcpTests
             That(ReadPhase(peers[0]).Any(packet => packet is { Kind: 1, Opcode: 16 }) && sessions[0].DungeonSnapshot is null,
                 "211 仍是 close，16 拒绝且没有 Run");
 
+            var meteoBattle = sessions[0].CurrentRaidBattle(actors[0])!;
+            meteoBattle.SetMechanism(meteoBattle.Instance, meteoBattle.View.Revision, "[meteo passive create]", 1);
+            meteoBattle.Publish(meteoBattle.View);
+            That(MeteoValues(ReadPhase(peers[0])).SequenceEqual([1]), "陨石首次置位只发布一次2=1");
+            ReadPhase(peers[1]);
+            meteoBattle.Publish(meteoBattle.View);
+            That(!MeteoValues(ReadPhase(peers[0])).Any(), "同revision快照重放不重播火山字幕");
+            ReadPhase(peers[1]);
             var afterBlue = ClearDungeon(212);
+            That(!MeteoValues(afterBlue).Any(), "其它地下城清图快照不重播仍为1的陨石字幕");
             That(StateOf(212) == 1 && StateOf(213) == 0, "212 clear 的实际线上状态为 close");
             LeaveBoth();
             var afterRed = ClearDungeon(214);
@@ -145,6 +154,8 @@ internal static partial class AntonRaidMapEntryTcpTests
                 [210] = 2, [211] = 2, [212] = 2, [213] = 2, [214] = 2, [215] = 2, [216] = 2
             }, fighting: false);
             var done = actors[0].Session.CurrentRaidBattle(actors[0])!;
+            That(done.View.Symbols["[meteo passive create]"] == 0 && MeteoValues(afterSuccess).SequenceEqual([0]) &&
+                done.View.Timers.IsEmpty, "阶段结束清陨石状态并发布2=0，旧计时器不留到结算屏");
             That(done.View is { State: AntonRaidBattleState.Reward, Phase: 0 } && done.View.Symbols["[1phase success]"] == 1 &&
                 done.AdvanceAfterRewards(done.Instance, done.View.Revision) is null && done.View.Phase == 0,
                 "双腿 clear 后 587 进入 Reward，没有奖励策略就不能进阶段 1");
@@ -157,6 +168,12 @@ internal static partial class AntonRaidMapEntryTcpTests
             foreach (var session in sessions) session.End();
             foreach (var owner in leases) owner.Dispose();
         }
+
+        static IEnumerable<int> MeteoValues(IEnumerable<WirePacket> packets) => packets
+            .Where(packet => packet is { Kind: 0, Opcode: 583 })
+            .SelectMany(packet => Enumerable.Range(0, packet.Body[0]).Where(index =>
+                BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(1 + 8 * index)) == 2)
+                .Select(index => BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(5 + 8 * index))));
 
         List<WirePacket> ClearDungeon(int dungeon)
         {
