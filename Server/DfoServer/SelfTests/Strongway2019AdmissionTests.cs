@@ -27,13 +27,15 @@ internal static class Strongway2019AdmissionTests
         That(simple is { Mode: Strongway2019Mode.Simple, DungeonId: 5359, MemberCount: 1, AntiEvil: 4000 } &&
             ReferenceEquals(simple.Character, character) && simple.Schedule == schedule,
             "首期简单模式在真实频道城镇、95级和4000抗魔边界冻结原角色及完整活动版本");
-        That(Plan(count: 4) is not null && Plan(5363, 4, 5400) is { Mode: Strongway2019Mode.Hero } &&
-            Plan(5360, 4, 5400, matched: true) is { Mode: Strongway2019Mode.Matching },
-            "简单1至4人、英雄4人与匹配授权4人分别使用已证目录行");
+        foreach (int members in Enumerable.Range(1, 4))
+            That(Plan(count: members) is not null && Plan(5363, members, 5400) is { Mode: Strongway2019Mode.Hero } &&
+                Plan(5360, members, 5400, matched: true) is { Mode: Strongway2019Mode.Matching },
+                "简单、英雄与匹配授权支持原队伍一至四人：" + members);
         foreach (var invalid in new[]
         {
-            Plan(count: 0), Plan(count: 5), Plan(antiEvil: 3999), Plan(5363, 3, 5400), Plan(5363, 4, 5399),
-            Plan(5360, 4, 5400), Plan(5360, 3, 5400, matched: true), Plan(5364, 4, 9999), Plan(5362, 4, 9999),
+            Plan(count: 0), Plan(count: 5), Plan(antiEvil: 3999), Plan(5363, 0, 5400), Plan(5363, 5, 5400), Plan(5363, 1, 5399),
+            Plan(5360, 4, 5400), Plan(5360, 0, 5400, matched: true), Plan(5360, 5, 5400, matched: true),
+            Plan(5360, 1, 5399, matched: true), Plan(5364, 4, 9999), Plan(5362, 4, 9999),
             Plan(actor: character with { Level = 94 }), Plan(actor: character with { Position = new(65, 0, 0, 0) }),
             Plan(entry: channel with { Type = 22 }), Plan(active: schedule with { OverrideActive = false }),
             Plan(active: schedule with { EventId = 64 }), Plan(at: now.AddSeconds(-1)), Plan(at: now.AddHours(1)),

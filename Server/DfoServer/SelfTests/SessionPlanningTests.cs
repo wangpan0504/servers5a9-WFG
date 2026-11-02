@@ -786,7 +786,9 @@ internal static partial class SessionPlanningTests
                   capsule_experience,proficiency_level,proficiency_experience) VALUES({{id}},'planning',256,1,0,0,0);
                 INSERT INTO character_adventure_credits VALUES({{id}},'planning',10,20);
                 INSERT INTO character_fatigue VALUES({{id}},'planning',0,156,0,156,0,0);
+                INSERT INTO character_fatigue_acceleration VALUES({{id}},'planning',1);
                 INSERT INTO character_fatigue_reset_days VALUES({{id}},739916);
+                INSERT INTO character_pcroom_claims VALUES({{id}},'planning',20261031);
                 INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until) VALUES({{id}},'planning',2000000000000,2000000420000);
                 INSERT INTO character_exp_bonus VALUES({{id}},'planning',2000007200,1000);
                 INSERT INTO character_consumable_states VALUES({{id}},'planning',0,10087825,2000000000000,7,5);
@@ -882,6 +884,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_title_progress VALUES({{id}},'planning',6501,1,2,3,0);
                 INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
                 INSERT INTO character_epic_production VALUES({{id}},101000747,1000,1,2,1,0,0,0,0);
+                INSERT INTO character_epic_wishes VALUES({{id}},'planning','[5000,0,7000,0,0]');
                 INSERT INTO character_pvp_training_skills VALUES({{id}},'{{training}}','1234567890abcdef1234567890abcdef',0);
                 INSERT INTO character_pvp_mission_facts VALUES({{id}},'planning',0,0,0,'1234567890abcdef1234567890abcdef');
                 INSERT INTO character_pvp_mission_rewards VALUES({{id}},'planning',1,'[]');

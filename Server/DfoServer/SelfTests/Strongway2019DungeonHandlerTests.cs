@@ -64,10 +64,17 @@ internal static class Strongway2019DungeonHandlerTests
     public static async Task RunProgressResourcesAsync(PvfArchive pvf, TownCatalog towns, ItemResources items)
     {
         int before = Count;
+        foreach (int members in new[] { 1, 4 })
+            await RunProgressTeamAsync(pvf, towns, items, members);
+        Console.WriteLine($"PASS {Count - before} 首期一人及四人真实Loaded进度、配置目标CMD39血条与完整终点");
+    }
+
+    static async Task RunProgressTeamAsync(PvfArchive pvf, TownCatalog towns, ItemResources items, int members)
+    {
         var activity = new Strongway2019Catalog(pvf);
         var growth = CharacterGrowthCatalog.Load(pvf);
         using var f = new Strongway2019MatchingTests.Fixture(towns, activity, growth);
-        var first = f.Team(); var second = f.Team(); var sessions = first.Concat(second).ToArray();
+        var first = f.Team(count: members); var second = f.Team(count: members); var sessions = first.Concat(second).ToArray();
         var matching = new Strongway2019MatchingService(f.Parties, activity, f.Clock);
         var ticket = matching.Queue(first[0], first.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray())!;
         matching.Queue(second[0], second.Select(session => session.PrepareStrongway2019Admission(5360, true)!).ToArray());
@@ -107,24 +114,24 @@ internal static class Strongway2019DungeonHandlerTests
             await Drain();
             That(frames.All(rows => rows.Single(row => row.Kind == 0 && row.Opcode == 28).Body is { Length: 36 } body &&
                 BinaryPrimitives.ReadUInt32LittleEndian(body) == 5360 && body[4] == 2),
-                "真实八连接NOTI28安装匹配5360与指定难度2，不能沿普通/英雄目标");
+                "两支原队全部连接NOTI28安装匹配5360与指定难度2，不能沿普通/英雄目标");
             var mapSequence = first[0].CurrentFormalDungeonScene()!.Entry.Maze.MapSpecification!.ToArray();
             That(mapSequence.Length == 9 && mapSequence[0].Position == new DungeonPoint(0, 0) &&
                 mapSequence[^1].Position == first[0].CurrentFormalDungeonScene()!.Entry.BossMap.Position,
                 "匹配资源明确为开场0加八段战斗，末段8为真终点");
-            for (int i = 0; i < 3; i++) await Load(i);
+            for (int i = 0; i < members - 1; i++) await Load(i);
             await Drain();
-            That(frames.All(rows => Progress(rows, 0, 5).Length == 0), "原四人加载屏障未齐不发布current");
-            await Load(3); await Drain();
+            That(frames.All(rows => Progress(rows, 0, 5).Length == 0), "原队伍加载屏障未齐不发布current");
+            await Load(members - 1); await Drain();
             That(frames.All(rows => Progress(rows, 0, 5).SequenceEqual(new uint[] { 0 })),
-                "真实Loaded向八连接发布source0 current0，使用map-spec索引而非maze序号");
-            await Load(3); await Drain();
+                "真实Loaded向比赛全部连接发布source0 current0，使用map-spec索引而非maze序号");
+            await Load(members - 1); await Drain();
             That(frames.All(rows => Progress(rows, 0, 5).Length == 1), "重复FINISH_LOADING不重复发布开场current");
-            for (int i = 4; i < 8; i++) await Load(i);
+            for (int i = members; i < sessions.Length; i++) await Load(i);
             foreach (int phase in new[] { 3, 4 })
-                foreach (int source in new[] { 0, 4 })
+                foreach (int source in new[] { 0, members })
                     await registry.DispatchAsync(contexts[source], new Packet(1, 1525,
-                        Network.Builders.Strongway2019Packets.Symbol((uint)(source / 4), 7, (uint)phase)[1..]));
+                        Network.Builders.Strongway2019Packets.Symbol((uint)(source / members), 7, (uint)phase)[1..]));
             await Drain();
             That(frames.All(rows => Progress(rows, 1, 5).SequenceEqual(new uint[] { 0 })),
                 "另一原队加载只发布source1 current0，不借前一队进度");
@@ -138,10 +145,10 @@ internal static class Strongway2019DungeonHandlerTests
                     var move = new byte[100]; move[0] = checked((byte)mapSequence[ordinal].Position.X);
                     move[1] = checked((byte)mapSequence[ordinal].Position.Y);
                     await registry.DispatchAsync(contexts[0], new Packet(1, (ushort)CmdPacketType.MOVE_MAP, move));
-                    for (int i = 0; i < 3; i++) await Load(i);
+                    for (int i = 0; i < members - 1; i++) await Load(i);
                     await Drain();
                     That(frames.All(rows => Progress(rows, 0, 5).Length == beforeLoad), "过房请求和未齐加载不提前增加current");
-                    await Load(3); await Load(3); await Drain();
+                    await Load(members - 1); await Load(members - 1); await Drain();
                     current = first[0].CurrentFormalDungeonScene()!;
                     That(frames.All(rows => Progress(rows, 0, 5).SequenceEqual(Enumerable.Range(0, ordinal + 1).Select(value => (uint)value))),
                         "真实过房Loaded只增至map-spec序列索引：" + ordinal);
@@ -153,10 +160,11 @@ internal static class Strongway2019DungeonHandlerTests
                     int hpBefore = Progress(frames[0], 0, 6).Length;
                     await Symbol(0, 0, 37); await Drain();
                     That(frames.All(rows => Progress(rows, 0, 6).Length == hpBefore + 1 && Progress(rows, 0, 6).Last() == 37),
-                        "配置目标在原四Run存活时，队长37合法遥测仍向八连接投影");
-                    await Symbol(1, 0, 38); await Symbol(0, 1, 39); await Symbol(0, 0, 0); await Symbol(0, 0, 101); await Drain();
+                        "配置目标在原队全部Run存活时，队长37合法遥测向比赛全员投影");
+                    await Symbol(members == 1 ? members : 1, 0, 38);
+                    await Symbol(0, 1, 39); await Symbol(0, 0, 0); await Symbol(0, 0, 101); await Drain();
                     That(frames.All(rows => Progress(rows, 0, 6).Length == hpBefore + 1),
-                        "目标存活也拒绝队员、假side、客户端死亡零及越界百分比");
+                        "目标存活也拒绝非本队队长、假side、客户端死亡零及越界百分比");
                 }
                 foreach (var monster in current.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.SpawnType == 3).ToArray())
                 {
@@ -196,7 +204,7 @@ internal static class Strongway2019DungeonHandlerTests
                 entered.Match.Competition.Snapshot.Terminal is { WinnerSide: 0, Reason: Strongway2019FinishReason.Clear } &&
                 frames.All(rows => rows.Single(row => row.Opcode == 1494).Body.SequenceEqual(new byte[] { 0, 0 })) &&
                 first.All(session => MailCount(session) == 1) && second.All(session => MailCount(session) == 0),
-                "八段配置目标经真实CMD39/过房完成，原四Run真终点奖励与八人同winnerSide结果闭合");
+                "八段配置目标经真实CMD39/过房完成，原队全部Run真终点奖励与全场同winnerSide结果闭合");
         }
         finally
         {
@@ -205,7 +213,6 @@ internal static class Strongway2019DungeonHandlerTests
             foreach (var output in outputs) output.Dispose();
             foreach (var stop in stops) stop.Dispose();
         }
-        Console.WriteLine($"PASS {Count - before} 首期真实Loaded进度、配置目标CMD39血条与完整终点");
         Task<CommandResult> Load(int index) => registry.DispatchAsync(contexts[index],
             new Packet(1, (ushort)CmdPacketType.FINISH_LOADING, new byte[8]));
         Task Drain() => Task.WhenAll(senders.Select(sender => sender.DrainAsync()));

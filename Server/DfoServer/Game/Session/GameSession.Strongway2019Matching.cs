@@ -21,10 +21,11 @@ internal sealed partial class GameSession
 
     internal bool CanPrepareStrongway2019Matching(Strongway2019Admission admission) =>
         CanQueueStrongway2019 && owner.IsCurrent && strongway2019SelectionEpoch == SelectionEpoch &&
-        admission is { Mode: Strongway2019Mode.Matching, DungeonId: 5360, MemberCount: 4 } &&
+        admission is { Mode: Strongway2019Mode.Matching, DungeonId: 5360 } &&
+        Strongway2019EntryPolicy.AllowsMemberCount(admission.MemberCount) &&
         ReferenceEquals(admission.Character, Selected) && CurrentStrongway2019Ticket is { Pair: { Active: true } pair } ticket &&
         (ReferenceEquals(pair.First, ticket) || ReferenceEquals(pair.Second, ticket)) && ticket.IsCurrent &&
-        ReferenceEquals(CurrentParty?.Invoke(), ticket.Party) &&
+        ReferenceEquals(CurrentParty?.Invoke(), ticket.Party) && admission.MemberCount == ticket.Party.Members.Length &&
         ticket.Admissions.Any(original => ReferenceEquals(original, admission));
 
     bool CanReserveStrongway2019Matching(PreparedFormalDungeon plan) =>

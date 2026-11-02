@@ -31,7 +31,7 @@ internal sealed class Strongway2019Handler(Strongway2019MatchingService matching
         var actor = context.Session.CaptureSocialActor();
         bool Held(SemaphoreSlim gate) => context.DispatchGates?.Holds(context, gate) == true;
         var admissions = party?.Members.Select(member => member.Actor.Session.PrepareStrongway2019Admission(5360, matched: true)).ToArray();
-        var ticket = Strongway2019Requests.IsMatching(request) && actor is not null && admissions is { Length: 4 } &&
+        var ticket = Strongway2019Requests.IsMatching(request) && actor is not null && admissions is { Length: >= 1 and <= 4 } &&
             admissions.All(row => row is not null) ? matching.Queue(context.Session, admissions.Select(row => row!).ToArray(),
                 context.Activity?.BlocksTownActions == true, Held) : null;
         if (ticket is null)

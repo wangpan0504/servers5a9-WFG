@@ -17,10 +17,12 @@ internal sealed partial class CharacterRepository
     {
         var terminal = competition.Snapshot.Terminal;
         if (terminal is not { Reason: Strongway2019FinishReason.Clear or Strongway2019FinishReason.Exit, WinnerSide: not null } ||
-            terminal.Created < 0 || terminal.FrozenRewardParticipants.Length != 4 || members.Count != 8 ||
-            members.Select(row => row.Account).Distinct(StringComparer.Ordinal).Count() != 8 ||
-            members.Select(row => row.Character).Distinct().Count() != 8 ||
-            !members.Any(row => row.Account == reporter.Account) || competition.Participants.Length != 8 ||
+            terminal.Created < 0 || !Strongway2019EntryPolicy.AllowsMemberCount(terminal.FrozenRewardParticipants.Length) ||
+            terminal.FrozenRewardParticipants.Length != competition.Participants.Count(row => row.Side == terminal.WinnerSide) ||
+            members.Count != competition.Participants.Length ||
+            members.Select(row => row.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
+            members.Select(row => row.Character).Distinct().Count() != members.Count ||
+            !members.Any(row => row.Account == reporter.Account) ||
             competition.Participants.Any(member => members.Count(row => row.Character == member.Identity.CharacterId) != 1) ||
             item.Uid != 0 || item.Core.ItemId != 490012737 || !item.Core.IsStackable || item.Core.Count != 1 || item.IsExpired(terminal.Created))
             throw new InvalidDataException("匹配共享检查点缺少原完整终局、成员或附件");
@@ -36,7 +38,7 @@ internal sealed partial class CharacterRepository
                 participant.Side != terminal.WinnerSide || !SameStrongway2019Attempt(participant.Identity, identity))
                 throw new InvalidDataException("匹配检查点收件事实不是原终局签发成员");
             string account = members.Single(row => row.Character == identity.CharacterId).Account;
-            // 败方可在重试前删角；原比赛已签发的四胜者事实不再依赖败方角色行。
+            // 败方可在重试前删角；原比赛已签发的全部胜者事实不再依赖败方角色行。
             RequireStrongway2019StatisticsOwner(db, tx, account, identity.CharacterId);
             string factJson = JsonSerializer.Serialize(new { Identity = identity, Fact = fact, Competition = (Guid?)competition.Id,
                 Reason = (Strongway2019FinishReason?)terminal.Reason, WinnerSide = terminal.WinnerSide,

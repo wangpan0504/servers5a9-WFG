@@ -19,7 +19,7 @@ internal sealed class Strongway2019MatchingTicket(Guid token, PartySnapshot part
     public long Order { get; } = order;
     Strongway2019MatchingPair? pair;
     internal Strongway2019MatchingPair? Pair { get => Volatile.Read(ref pair); set => Volatile.Write(ref pair, value); }
-    public bool IsCurrent => Party.Members.Length == 4 && Party.Members.All(member => member.IsCurrent() &&
+    public bool IsCurrent => Strongway2019EntryPolicy.AllowsMemberCount(Party.Members.Length) && Party.Members.All(member => member.IsCurrent() &&
         (Pair is not null || member.Actor.Session.Phase == SessionPhase.Town) &&
         ReferenceEquals(member.Actor.Session.CurrentStrongway2019Ticket, this));
 }
@@ -39,7 +39,7 @@ internal sealed record Strongway2019Match(Strongway2019MatchingPair Pair, PartyD
     internal bool ReadyCompletionRecoveryNotified { get; set; }
 }
 
-// 队列只协调两支原四人队，不创建八人普通Party，不复制Session角色状态。
+// 队列协调两支原一至四人队，不创建跨队普通Party，不复制Session角色状态。
 internal sealed class Strongway2019MatchingService(PartyService parties, Strongway2019Catalog catalog,
     TimeProvider? clock = null, int capacity = 256, ServerEventService? serverEvents = null, bool completionRecovery = false)
 {
@@ -73,8 +73,8 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
     {
         var schedule = CurrentSchedule();
         var party = parties.Current(leader);
-        if (blocked || party is null || party.Members.Length != 4 || admissions.Count != 4 ||
-            admissions.Select(row => row.Character.Id).Distinct().Count() != 4 ||
+        if (blocked || party is null || !Strongway2019EntryPolicy.AllowsMemberCount(party.Members.Length) || admissions.Count != party.Members.Length ||
+            admissions.Select(row => row.Character.Id).Distinct().Count() != party.Members.Length ||
             !party.Members.Any(member => member.Slot == party.Leader && ReferenceEquals(member.Actor.Session, leader))) return null;
         return WithCommands<Strongway2019MatchingTicket?>([party], () =>
         {
@@ -83,15 +83,15 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
             var plans = party.Members.Select(member => admissions.SingleOrDefault(row =>
                 ReferenceEquals(row.Character, member.Actor.Session.Selected))).ToArray();
             if (channel is null || plans.Any(row => row is null) ||
-                plans.Select(row => row!.Character.Id).Distinct().Count() != 4 ||
-                plans.Any(row => row!.Mode != Strongway2019Mode.Matching || row.DungeonId != 5360 || row.MemberCount != 4 ||
+                plans.Select(row => row!.Character.Id).Distinct().Count() != party.Members.Length ||
+                plans.Any(row => row!.Mode != Strongway2019Mode.Matching || row.DungeonId != 5360 || row.MemberCount != party.Members.Length ||
                     !row.Schedule.IsActive(time.GetUtcNow()) || !CurrentSchedule(row.Schedule, schedule) ||
                     row.Schedule != plans[0]!.Schedule) ||
                 party.Members.Any(member => member.Actor.Session.ChannelEntry?.Identity != channel ||
                     member.Actor.Session.CurrentStrongway2019Match is not null)) return null;
             // 入场资格由原策略复核；队列不接受客户端或第二份角色状态替代服务端穿戴结果。
             if (party.Members.Select((member, index) => Strongway2019EntryPolicy.Prepare(catalog, plans[index]!.Character,
-                member.Actor.Session.ChannelEntry, 5360, 4, plans[index]!.AntiEvil, plans[index]!.Schedule,
+                member.Actor.Session.ChannelEntry, 5360, party.Members.Length, plans[index]!.AntiEvil, plans[index]!.Schedule,
                 time.GetUtcNow(), matched: true)).Any(row => row is null)) return null;
             lock (gate)
             {
@@ -171,8 +171,8 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
         }
     }
 
-    // 调用方安装两支四人正式副本后仍持八人原owner及门禁；证明谓词只跳过当前确实已持的门。
-    // 不在八人owner内调用PartyDungeonInstance.Execute，后者只接受原四人组合。
+    // 调用方安装两支原队正式副本后仍持全员原owner及门禁；证明谓词只跳过当前确实已持的门。
+    // 不在双队owner内调用PartyDungeonInstance.Execute，后者只接受原单队组合。
     public Strongway2019Match? Bind(Strongway2019MatchingPair pair, PartyDungeonInstance first,
         PartyDungeonInstance second, Func<SemaphoreSlim, bool>? holdsCommandGate = null) =>
         WithCommands<Strongway2019Match?>([pair.First.Party, pair.Second.Party], () =>
@@ -221,7 +221,7 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
         }
     }
 
-    // 全部原命令门保护资源准备；此时尚未固定八人owner，不将PVF解析放进组合锁。
+    // 全部原命令门保护资源准备；此时尚未固定全员owner，不将PVF解析放进组合锁。
     internal T WithReservedCommands<T>(Strongway2019MatchingPair pair, Func<T> action, T rejected,
         Func<SemaphoreSlim, bool>? holds) => WithCommands([pair.First.Party, pair.Second.Party], () =>
     {
@@ -237,7 +237,7 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
     }
 
     bool MatchesInstance(Strongway2019MatchingTicket ticket, PartyDungeonInstance instance) => parties.IsCurrent(ticket.Party) &&
-        instance.Members.Length == 4 && instance.Members.All(member => ticket.Party.Members.Any(expected =>
+        instance.Members.Length == ticket.Party.Members.Length && instance.Members.All(member => ticket.Party.Members.Any(expected =>
             ReferenceEquals(expected.Actor.Session, member.Actor.Session) && ReferenceEquals(expected.Actor.Owner, member.Actor.Owner) &&
             expected.Actor.Epoch == member.Actor.Epoch)) && ticket.Party.Members.All(member => member.Actor.IsCurrent() &&
             ReferenceEquals(member.Actor.Session.CurrentStrongway2019Ticket, ticket));
@@ -247,7 +247,7 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
         observed is null || admission.Revision > observed.Revision || admission == observed;
     bool Waiting(Strongway2019MatchingTicket ticket, ServerEventSchedule? schedule) => waiting.TryGetValue(ticket.Token, out var stored) &&
         ReferenceEquals(stored, ticket) && ticket.Pair is null && Valid(ticket, schedule);
-    // 预约后的最终活动门归八人同writer事务；不能在提交与安装之间因时钟跨界清掉原Pair。
+    // 预约后的最终活动门归双队同writer事务；不能在提交与安装之间因时钟跨界清掉原Pair。
     bool Valid(Strongway2019MatchingTicket ticket, ServerEventSchedule? schedule = null) => ticket.IsCurrent && parties.IsCurrent(ticket.Party) &&
         (ticket.Pair is not null || ticket.Admissions.All(row => CurrentSchedule(row.Schedule, schedule) && row.Schedule.IsActive(time.GetUtcNow()) &&
             ticket.Party.Members.Any(member => ReferenceEquals(member.Actor.Session.Selected, row.Character))));
@@ -271,12 +271,13 @@ internal sealed class Strongway2019MatchingService(PartyService parties, Strongw
         foreach (var ticket in waiting.Values.Where(row => !Valid(row, schedule)).ToArray()) Remove(ticket);
     }
 
-    // 先原队伍门、再账号排序的连接门，最后固定四/八个owner；忙时零等待，不扩锁阻塞队友。
+    // 先原队伍门、再账号排序的连接门，最后固定实际全员owner；忙时零等待，不扩锁阻塞队友。
     T WithCommands<T>(PartySnapshot[] snapshots, Func<T> action, T rejected, Func<SemaphoreSlim, bool>? holds,
         bool fixOwners = true)
     {
         var members = snapshots.SelectMany(party => party.Members).OrderBy(member => member.Actor.Owner.Account, StringComparer.Ordinal).ToArray();
-        if (members.Length is not (4 or 8) || members.Select(member => member.Actor.Character.Id).Distinct().Count() != members.Length ||
+        if (snapshots.Length is < 1 or > 2 || snapshots.Any(party => !Strongway2019EntryPolicy.AllowsMemberCount(party.Members.Length)) ||
+            members.Select(member => member.Actor.Character.Id).Distinct().Count() != members.Length ||
             members.Select(member => member.Actor.Owner.Account).Distinct(StringComparer.Ordinal).Count() != members.Length) return rejected;
         var gates = snapshots.OrderBy(party => party.Id).Select(party => party.Commands)
             .Concat(members.Select(member => member.Actor.Session.CommandGate)).Distinct().ToArray();

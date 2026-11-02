@@ -17,7 +17,8 @@ internal sealed class Strongway2019RouteService
     {
         if (kind > 1 || reporter.CurrentStrongway2019Match is not { } match || reporter.PartyDungeon is not { } instance) return [];
         var ticket = ReferenceEquals(instance, match.First) ? match.Pair.First : ReferenceEquals(instance, match.Second) ? match.Pair.Second : null;
-        if (ticket is null || instance.Members.Length != 4) return [];
+        if (ticket is null || !Strongway2019EntryPolicy.AllowsMemberCount(instance.Members.Length) ||
+            instance.Members.Length != ticket.Party.Members.Length) return [];
         var members = ticket.Party.Members;
         var gates = new[] { ticket.Party.Commands }.Concat(members.OrderBy(member => member.Actor.Owner.Account, StringComparer.Ordinal)
             .Select(member => member.Actor.Session.CommandGate)).Distinct().ToArray();
@@ -45,7 +46,7 @@ internal sealed class Strongway2019RouteService
                 return instance.Move(reporter, x, y, kind);
             if (runs.Any(run => !run!.IsStrongway2019ReplacementTarget(target)) ||
                 !activity.RandomMapIds.Contains(pending.MapId) || dungeons.MapPath(pending.MapId) is not { } path) return [];
-            // 资源读取在四个owner之外；坐标保持原迷宫目标，候选只提供真实MAP及生成行。
+            // 资源读取在原队全员owner之外；坐标保持原迷宫目标，候选只提供真实MAP及生成行。
             var resource = rooms.Get(new DungeonMap("map", target, pending.MapId, path));
             uint first = members.Max(member => member.Actor.Session.Strongway2019NextObjectKey);
             if (first > ushort.MaxValue) return [];
@@ -54,12 +55,12 @@ internal sealed class Strongway2019RouteService
             if (prepared.Any(row => row is null)) return [];
             return instance.Execute(current =>
             {
-                if (current.Length != 4 || current.Any(member => !members.Contains(member)) ||
+                if (current.Length != members.Length || current.Any(member => !members.Contains(member)) ||
                     match.Competition.Snapshot.PendingRouteChanges.All(change => !ReferenceEquals(change, pending)) ||
                     members.Select((member, index) => member.Actor.Session.CanApplyStrongway2019NextRoom(prepared[index]!)).Any(valid => !valid)) return [];
                 foreach (var (member, index) in members.Select((member, index) => (member, index)))
                     if (member.Actor.Session.ApplyStrongway2019NextRoom(prepared[index]!) is null)
-                        throw new InvalidOperationException("强者之路四人换图预验后原Run应用发生变化");
+                        throw new InvalidOperationException("强者之路原队换图预验后原Run应用发生变化");
                 return instance.Move(reporter, x, y, kind);
             });
         }

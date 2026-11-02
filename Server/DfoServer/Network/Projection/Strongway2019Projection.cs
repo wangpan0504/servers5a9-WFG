@@ -264,10 +264,11 @@ internal sealed class Strongway2019Projection(Strongway2019RewardProjection? rew
 
     static bool CompleteOriginalTeam(OriginalNotice[] rows)
     {
-        if (rows.Length != 4) return false;
+        if (rows.Length == 0) return false;
         var first = rows[0]; var scene = first.Notice.Scene!;
         var party = first.Member.Side == 0 ? first.Match.Pair.First.Party : first.Match.Pair.Second.Party;
-        return party.Members.All(member => rows.Count(row => ReferenceEquals(row.Notice.Recipient.Actor.Session, member.Actor.Session)) == 1) &&
+        return Strongway2019EntryPolicy.AllowsMemberCount(party.Members.Length) && rows.Length == party.Members.Length &&
+            party.Members.All(member => rows.Count(row => ReferenceEquals(row.Notice.Recipient.Actor.Session, member.Actor.Session)) == 1) &&
             rows.All(row => row.Notice.Scene!.Snapshot.CurrentMap.Id == scene.Snapshot.CurrentMap.Id &&
                 row.Notice.Scene.Snapshot.CurrentMap.Position == scene.Snapshot.CurrentMap.Position);
     }

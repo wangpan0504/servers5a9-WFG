@@ -31,6 +31,7 @@ internal sealed partial class CharacterRepository
         new("character_dungeon_state", "character_id", "character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears"),
         new("character_ekern_cycle", "character_id", "character_id,account,service_day,normal_clears,trial_clears"),
         new("character_epic_production", "character_id", "character_id,weapon_id,charge,service_week,weekly_uses,since_big_chance,special_uses,additional_weekly_uses,intermediate_material_remainder,ordinary_material_remainder"),
+        new("character_epic_wishes", "character_id", "character_id,account,item_ids"),
         new("character_exp_bonus", "character_id", "character_id,account,until_unix,permille"),
         new("character_expert_job", "character_id", "character_id,account,job_type,expertness,learned_recipes"),
         new("character_expert_meta", "character_id", "character_id,account,giveup_state,machine_grade,machine_endurance"),
