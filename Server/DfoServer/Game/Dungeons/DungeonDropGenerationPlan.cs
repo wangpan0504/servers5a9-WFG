@@ -26,6 +26,8 @@ internal sealed class DungeonDropGenerationPlan
     public int MaximumObjects { get; }
     public bool ReferenceQuality { get; }
     public int? OrdinaryLukeDailySource { get; init; }
+    public bool ExcludeLowEquipment { get; init; }
+    public bool ExcludeLowMaterials { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
     // added/scale：1136 为百分数（100/100）；星空 1271 为万分比（6520/10000）。
@@ -61,7 +63,7 @@ internal sealed class DungeonDropGenerationPlan
             changed = true;
             return trial with { RarityPools = adjusted.ToImmutable() };
         }).ToImmutableArray();
-        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource } : this;
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials } : this;
     }
 
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
@@ -69,7 +71,7 @@ internal sealed class DungeonDropGenerationPlan
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
         return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial : trial with
-        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource };
+        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials };
     }
 
     public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false,
@@ -184,6 +186,10 @@ internal sealed class DungeonDropGenerationPlan
             if (pool!.TotalWeight == 0)
                 continue;
             var template = pool.Select(Sample(pool.TotalWeight));
+            // 禁用的品质只冻结为空；不重抽、不把垃圾转为史诗，也不改变其它候选的中奖概率。
+            if (ExcludeLowEquipment && template is { Kind: ItemKind.Equipment, Rarity: >= 0 and <= 3 } ||
+                ExcludeLowMaterials && template is { Kind: ItemKind.Material, Rarity: 0 or 1 })
+                continue;
             // 保留原池权重：过期活动物品命中只冻结为空，不重抽、不续期，也不阻断其它奖励及死亡提交。
             int expiresAt = template.Expiration.Resolve(now);
             if (expiresAt > 0 && expiresAt <= now.ToUnixTimeSeconds())

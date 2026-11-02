@@ -13,7 +13,8 @@ namespace DfoServer.Infrastructure;
 // 写命令经服务进程内的开发 GM 执行器（command），小退走在线目录，金币邮件走 MailboxService.Deliver。
 internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt, OnlineSessionDirectory online, GmAccountDirectory accounts,
     Func<string, string> command, MailboxService mailbox, GoldLimitCatalog goldLimits, GmItemExtras items, GmAudit audit,
-    RaidEntryStore? sharedRaidWindows = null) : IGmWebData
+    RaidEntryStore? sharedRaidWindows = null, GameWorld.Events.EventResourceCatalog? eventResources = null,
+    Func<CashShopPromotionCatalog>? promotions = null) : IGmWebData
 {
     public GmAudit Audit => audit;
 
@@ -70,6 +71,28 @@ internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt,
 
     public byte[]? ItemIcon(int id) => items.Icon(id);
     public object? ItemPreview(int id) => items.Preview(id);
+
+    public object? EventResources(int offset, int limit, string? query, string kind) => eventResources?.Page(offset, limit, query, kind);
+
+    public object EventBusinessStatus() => new
+    {
+        promotions = promotions?.Invoke().Activities.Select(activity => new
+        {
+            key = activity.Configuration.Rules.Scope.Campaign, name = "礼包累计购买奖励",
+            implemented = true, enabled = activity.Availability == PromotionAvailability.Active,
+            status = activity.Availability.ToString(), statusText = activity.Availability == PromotionAvailability.Active ? "已开启" :
+                activity.Availability == PromotionAvailability.Disabled ? "配置已关闭" : "资源或奖励校验未通过",
+            reason = activity.Availability == PromotionAvailability.Active ? "" : activity.Error ?? activity.Configuration.DisabledReason,
+            supportsControl = false, controlReason = "由礼包独立配置和真实奖励校验控制。"
+        }).ToArray() ?? [],
+        businesses = new[]
+        {
+            new { key = "spring-treasure", name = "春节宝藏关联掉落", purpose = "个人八件时装、普通推荐地下城合格领主独立10%掉落。", supportsControl = false, controlReason = "随对应礼包配置启停，不是单独活动开关。" },
+            new { key = "vending", name = "投币售货机", purpose = "机器1与3沿真实投币、奖品选择和库存事务工作。", supportsControl = false, controlReason = "属于常驻业务，不等同于活动增益售货机资源。" },
+            new { key = "rental", name = "装备租赁与幸运星", purpose = "沿真实租赁等级、价格、租赁点与幸运星规则工作。", supportsControl = false, controlReason = "属于常驻业务，没有通用活动开关。" },
+            new { key = "guild-attendance", name = "公会每日出勤", purpose = "保存并查询真实公会出勤记录。", supportsControl = false, controlReason = "不是活动签到领奖，没有通用活动开关。" }
+        }
+    };
 
     // 外观来源经开发 GM 只读命令 appearance 取得（在线走原 owner，离线取租约），合成在本进程内完成，不改库。
     public GmAvatarResult AvatarPortrait(string account, string name, IReadOnlyList<int> tryOn)

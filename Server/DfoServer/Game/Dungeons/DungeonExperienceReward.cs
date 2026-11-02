@@ -19,6 +19,7 @@ internal sealed record DungeonExperienceReward(string RuleId, string ResourceSou
 internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0, uint ProficiencyGained = 0)
 {
     public ExperienceBonuses? CommittedBonuses { get; init; }
+    public DungeonDirectPickupCommit DirectPickup { get; init; } = DungeonDirectPickupCommit.Empty;
     public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Services.EquipmentGrowthChange> EquipmentChanges { get; init; } = [];
 }
 

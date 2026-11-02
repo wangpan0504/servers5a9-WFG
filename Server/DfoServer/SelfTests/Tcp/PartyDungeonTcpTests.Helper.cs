@@ -24,11 +24,36 @@ internal static partial class PartyDungeonTcpTests
         var position = new Location(area.Town, area.Area, (ushort)(bounds.X + bounds.Width / 2), (ushort)(bounds.Y + bounds.Height / 2));
         using var group = new Coop(fixture, resources, "helperhell", position, done.ToArray(), 95, 1, tickets: 90);
         var peer = group.Peers[0]; group.Join();
+        peer.Send(870, Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {new string('d', 32)} {peer.Id}"));
+        var caps = Drain(peer);
+        That(caps.Length == 1 && caps[0] is { Kind: 0, Opcode: 1709 } &&
+            Notice(caps[0].Body).Title == "95_HELPER_CAPS/1" &&
+            Notice(caps[0].Body).Text.Split('|') is ["1", var capNonce, var capCharacter, _, "hell,cargo"] &&
+            capNonce == new string('d', 32) && capCharacter == peer.Id.ToString(),
+            "只有主动870精确探测收到能力回执，不进入聊天或加载资产");
+        peer.Send(870, Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {new string('d', 32)} {peer.Id + 1}"));
+        That(Drain(peer).Length == 0, "错误角色能力探测静默拒绝");
         Set(true, 'a');
         peer.Send(17, Chat($"#95-helper/1 {new string('b', 32)} {peer.Id + 1} hell 0"));
         That(!Drain(peer).Any(p => p.Opcode is 12 or 1709), "错误角色命令不改设置、不广播或伪造回执");
         group.Open(); peer.Send(16, Coop.Selection(initial, 0, 4, true)); group.ReadEntry(group.All()); group.Load();
         That(Tickets() == 60, "首次正常入场只扣一份30张门票");
+        string cargoNonce = new('e', 32);
+        long ticketsBeforeCargo = Tickets();
+        peer.Send(17, Chat($"#95-helper/1 {cargoNonce} {peer.Id} cargo 1"));
+        var cargoPackets = Drain(peer);
+        int listIndex = Array.FindIndex(cargoPackets, p => p is { Kind: 0, Opcode: 13, Body: [2, ..] });
+        int receiptIndex = Array.FindIndex(cargoPackets, p => p is { Kind: 0, Opcode: 1709 });
+        That(listIndex >= 0 && receiptIndex > listIndex && U16(cargoPackets[listIndex].Body, 1) > 0 &&
+            Notice(cargoPackets[receiptIndex].Body) is { Title: "95_HELPER_CARGO/1" } cargoNotice &&
+            cargoNotice.Text.Split('|') is ["1", var cargoId, var cargoCharacter, _, "ok", "1"] &&
+            cargoId == cargoNonce && cargoCharacter == peer.Id.ToString() && Tickets() == ticketsBeforeCargo && !cargoPackets.Any(p => p.Opcode == 12),
+            "副本助手个人金库先完整真实容量清单再成功回执，门票不动且机器消息不广播");
+        peer.Send(17, Chat($"#95-helper/1 {new string('f', 32)} {peer.Id} cargo 2"));
+        var missingAccount = Drain(peer);
+        That(!missingAccount.Any(p => p.Opcode == 13) && missingAccount.Single(p => p.Opcode == 1709) is { } missingReceipt &&
+            Notice(missingReceipt.Body).Text.Split('|') is ["1", _, _, _, "rejected", "2"],
+            "未购买账号仓库不伪造容量或成功");
         var catalog = SelfTestCatalogs.Dungeons(resources.Archive);
         var maze = catalog.Get((int)initial).Mazes.Single(row => row.SourceOrdinal == group.Information[7]);
         var path = QuestStoryRouteTests.Path(maze.StaticTopology, new(group.Map[0], group.Map[1]), maze.HellParty!.Room);
@@ -103,6 +128,12 @@ internal static partial class PartyDungeonTcpTests
         {
             byte[] bytes = Encoding.ASCII.GetBytes(text); byte[] body = new byte[11 + bytes.Length]; body[0] = 3;
             BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), (uint)bytes.Length); bytes.CopyTo(body, 11); return body;
+        }
+        static (string Title, string Text) Notice(byte[] body)
+        {
+            int length = checked((int)U32(body));
+            return (Encoding.UTF8.GetString(body, 4, length),
+                Encoding.UTF8.GetString(body, 8 + length, checked((int)U32(body, 4 + length))));
         }
     }
 }

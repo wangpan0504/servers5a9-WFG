@@ -38,7 +38,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null,
     RecoveryConsumableCatalog? consumables = null, SpringTreasureDropPolicy? springTreasure = null,
     GameWorld.Dungeons.Strongway2019Catalog? strongway2019Catalog = null,
-    Func<Character, int>? strongway2019AntiEvil = null, Game.Events.ServerEventService? serverEvents = null)
+    Func<Character, int>? strongway2019AntiEvil = null, Game.Events.ServerEventService? serverEvents = null,
+    GoldLimitCatalog? directPickupGoldLimits = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
@@ -59,6 +60,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         {
             if (phase != value)
             {
+                InvalidateHelperAssetSafety();
                 guildHallWait = null;
                 hiddenAreaEnteredAt = value == SessionPhase.Town ? HiddenQuestTimestamp() : null;
             }

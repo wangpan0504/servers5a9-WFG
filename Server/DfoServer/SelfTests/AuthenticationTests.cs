@@ -32,6 +32,7 @@ internal static class AuthenticationTests
         checks = 0;
         AccountOwnerTests.Run();
         ExpertJobTradeRepositoryTests.Run();
+        CharacterCopyTests.Run();
         var settings = new AuthenticationSettings(DuplicateLoginPolicy.Reject, 300, "matched-client");
         settings.Validate();
         Reject(() => new AuthenticationSettings(DuplicateLoginPolicy.Reject, 0, "matched-client").Validate(), "zero TTL");

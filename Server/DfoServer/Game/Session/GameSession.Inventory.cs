@@ -53,10 +53,18 @@ internal sealed partial class GameSession
         character => inventory.Delete(character,request,preserveMaterials: PreservesDungeonConsumables),
         requireTown: request.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo);
     public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory) => owner.Execute(() =>
-        MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen),
+    {
+        var safety = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.AccountCargo
+            ? FindHelperAssetSafety(request.Source, 1) : null;
+        if (safety is not null && (Selected is not { } selected || !CanUseHelperAssetSafety(safety, selected, request.Source, 1)))
+            return InventoryResult.Reject(1);
+        var result = MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen),
             requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
                 request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
-                !CanAccessPortableCargo()));
+                !(CanAccessPortableCargo(request.Source.List) && CanAccessPortableCargo(request.Destination.List)));
+        if (result is { Accepted: true, Plan.Changed: true } && safety is not null) ConsumeHelperAssetSafety(safety, request.Source);
+        return result;
+    });
 
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
@@ -130,8 +138,29 @@ internal sealed partial class GameSession
                 _ => null
             });
 
-    public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) =>
-        PlanAndCommitInventory(character => shop.Sell(character, request), requireTown: false);
+    public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop)
+    {
+        var capture = CaptureInventoryPlan(requireTown: false);
+        if (capture is null) return InventoryResult.Reject(1);
+        var authorization = owner.Execute(() =>
+        {
+            var currentSafety = FindHelperAssetSafety(request.Position, 2);
+            return (Allowed: InventoryPlanIsCurrent(capture, requireTown: false) &&
+                (currentSafety is null || CanUseHelperAssetSafety(currentSafety, capture.Character, request.Position, 2)), Safety: currentSafety);
+        });
+        if (!authorization.Allowed) return InventoryResult.Reject(1);
+        var planned = shop.Sell(capture.Character, request);
+        return owner.Execute(() =>
+        {
+            if (!InventoryPlanIsCurrent(capture, requireTown: false) || authorization.Safety is { } safety &&
+                !CanUseHelperAssetSafety(safety, capture.Character, request.Position, 2))
+                return InventoryResult.Reject(1);
+            var committed = CommitInventory(capture.Character, planned);
+            if (committed is { Accepted: true, Plan.Changed: true } && authorization.Safety is { } consumed)
+                ConsumeHelperAssetSafety(consumed, request.Position);
+            return committed;
+        });
+    }
 
     public ShopPurchaseCount[]? ReadShopPurchaseCounts(int npcId, InventoryShopService shop, out InventoryCommitReceipt? snapshot)
     {
@@ -172,9 +201,31 @@ internal sealed partial class GameSession
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)
     {
-        DisjointReceipt? plannedReceipt = null;
-        var result = PlanAndCommitInventory(character => disjoint.Disjoint(character, request, out plannedReceipt), 19,
-            requireTown: true, allowSettlement: true);
+        receipt = null;
+        var capture = CaptureInventoryPlan(requireTown: true, allowSettlement: true);
+        if (capture is null) return InventoryResult.Reject(19);
+        var authorization = owner.Execute(() =>
+        {
+            var currentSafety = FindHelperAssetSafety(request.Position, 2);
+            return (Allowed: InventoryPlanIsCurrent(capture, requireTown: true, allowSettlement: true) &&
+                (currentSafety is null || request.ToolSlot == -1 && CanUseHelperAssetSafety(currentSafety, capture.Character, request.Position, 2)), Safety: currentSafety);
+        });
+        if (!authorization.Allowed) return InventoryResult.Reject(19);
+        var safety = authorization.Safety;
+        // 助手只放宽已授权实例的气息限制；仍使用普通NPC的产物规则，不借用玩家分解机资格。
+        var planned = disjoint.Disjoint(capture.Character, request, out var plannedReceipt,
+            mode: safety is null ? DisjointMode.Ordinary : DisjointMode.HelperAuthorized);
+        var result = owner.Execute(() =>
+        {
+            if (!InventoryPlanIsCurrent(capture, requireTown: true, allowSettlement: true) ||
+                safety is not null && !CanUseHelperAssetSafety(safety, capture.Character, request.Position, 2))
+                return InventoryResult.Reject(19);
+            var committed = CommitInventory(capture.Character, planned, 19);
+            // 提交失败、空间不足或过期均不消费；同槽替换物品不会匹配原UID及完整Core。
+            if (committed is { Accepted: true, Plan.Changed: true } && safety is not null)
+                ConsumeHelperAssetSafety(safety, request.Position);
+            return committed;
+        });
         receipt = result.Accepted ? plannedReceipt : null;
         return result;
     }

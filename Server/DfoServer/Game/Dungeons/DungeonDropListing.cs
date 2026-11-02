@@ -4,10 +4,22 @@ namespace DfoServer.Game.Dungeons;
 
 // 展示每次独立抽样的边际概率，不把多次抽样误写成至少一次命中的概率。
 internal sealed record DungeonDropListingRow(int Channel, string Category, int ItemId, string Name, int Rarity,
-    decimal Probability, int MinimumCount, int MaximumCount, int Attempts, int Weight, int TotalWeight);
+    decimal Probability, int MinimumCount, int MaximumCount, int Attempts, int Weight, int TotalWeight,
+    decimal? OriginalProbability = null, decimal? Multiplier = null);
 
 internal static class DungeonDropListing
 {
+    // Apply 只改各通道的触发阈值，保留通道、分支及候选顺序；原概率不能从封顶后的结果倒推。
+    public static IEnumerable<DungeonDropListingRow> ComparisonRows(DungeonDropGenerationPlan original, DungeonDropMultipliers? rates)
+    {
+        var adjusted = DungeonDropControlSnapshot.Apply(original, rates);
+        return Rows(original).Zip(Rows(adjusted), (before, after) => after with
+        {
+            OriginalProbability = before.Probability,
+            Multiplier = rates?.For(original.Trials[before.Channel - 1].Category) ?? 1,
+        });
+    }
+
     public static IEnumerable<DungeonDropListingRow> Rows(DungeonDropGenerationPlan plan)
     {
         for (int channel = 0; channel < plan.Trials.Length; channel++)

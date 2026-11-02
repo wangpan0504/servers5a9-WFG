@@ -16,7 +16,8 @@ internal sealed partial class CharacterRepository
     public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
         FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
-        DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null) => owner.Execute(() =>
+        DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null,
+        DungeonDirectPickupPlan? directPickup = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -89,13 +90,14 @@ internal sealed partial class CharacterRepository
             current = ObserveMarriageClearInTransaction(db, tx, owner, run, prepared, current, MarriageResources, verifyOnly: true);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             var replayBonuses = ReadCommittedGuildExperience(db, tx, expected.Id, death.EventId, reward.Bonuses);
+            var replayDirectPickup = ReadDirectPickupCommit(db, tx, owner, current, loot, directPickup);
             tx.Commit();
             // 提交返回丢失时Session仍持有旧装备；仅回放与已落库结果完全一致的成长投影，不再次写资产。
             CacheDungeonLoot(owner, expected, prepared, loot);
             var replayEquipment = equipmentGrowth?.Changes.Where(change =>
                 current.Inventory.Find(change.After.Position) == change.After).ToImmutableArray() ?? [];
             return new DungeonGrowthCommit(current, true, gained, proficiencyGained)
-                { CommittedBonuses = replayBonuses, EquipmentChanges = replayEquipment };
+                { CommittedBonuses = replayBonuses, EquipmentChanges = replayEquipment, DirectPickup = replayDirectPickup };
         }
         var committedBonuses = RevalidateGuildExperience(db, tx, owner.Account, expected.Id, reward.Bonuses,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -130,6 +132,20 @@ internal sealed partial class CharacterRepository
                 after = after with { Items = after.Items.Replace(change.Before, change.After) };
             }
             inventoryPlan = new(expected.Inventory, after, "dungeon_equipment_growth", equipmentGrowth.Inventory.CharacterPrecondition);
+        }
+        var appliedDirectPickup = directPickup is { IsExpired: false } ? directPickup : null;
+        if (appliedDirectPickup is not null)
+        {
+            if (!ReferenceEquals(appliedDirectPickup.Expected, expected) || !ReferenceEquals(appliedDirectPickup.Death, prepared) ||
+                !ReferenceEquals(appliedDirectPickup.Loot, loot) ||
+                !SameInventory(appliedDirectPickup.Before,
+                    new DfoServer.Game.Inventory.Models.InventoryPlan(inventoryPlan?.After ?? expected.Inventory,
+                        inventoryPlan?.After ?? expected.Inventory, "direct_pickup_before")))
+                throw new InvalidDataException("直入包规划必须属于原死亡及同笔任务材料、装备成长之后的库存");
+            if (!appliedDirectPickup.Entries.IsEmpty)
+                inventoryPlan = inventoryPlan is null
+                    ? new(expected.Inventory, appliedDirectPickup.After, "dungeon_direct_pickup", new(expected))
+                    : inventoryPlan.WithAfter(appliedDirectPickup.After);
         }
         var inventoryCharacter = inventoryPlan is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,inventoryPlan);
         command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
@@ -215,11 +231,12 @@ internal sealed partial class CharacterRepository
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
         var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, committed.Id, current.Inventory, committed.Inventory);
+        var directPickupCommit = SaveDirectPickupCommit(db, tx, owner, committed, appliedDirectPickup);
         tx.Commit();
         RememberInventoryItems(committed.Inventory, itemRead);
         CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
-            { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [] };
+            { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [], DirectPickup = directPickupCommit };
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,

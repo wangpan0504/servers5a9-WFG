@@ -3,6 +3,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Projection;
@@ -58,6 +59,70 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             if (!context.Session.AllowChatSend() || IsChatBlocked(context.Session)) return CommandResult.Handled;
             var helper = HelperRequests.Parse(packet.Body);
             if (helper is null) return CommandResult.Handled;
+            if (helper.DirectPickup is { } pickupEnabled)
+            {
+                var pickup = context.Session.SetHelperDirectPickup(helper.CharacterId, pickupEnabled);
+                if (pickup is null) return CommandResult.Handled;
+                string pickupText = string.Join('|', "1", helper.Nonce, pickup.CharacterId, pickup.Epoch,
+                    pickup.Accepted ? "ok" : "rejected", pickup.Enabled ? "1" : "0");
+                var pickupBody = ServerNoticePackets.Build("95_HELPER_PICKUP/1", pickupText, out bool pickupTruncated);
+                if (pickupTruncated) throw new InvalidDataException("助手直入包回执不得截断");
+                await context.Notify(NotiPacketType.AAS_TIPS, pickupBody, "helper_direct_pickup",
+                    () => context.Session.CanPublishHelperPickup(pickup));
+                log.Write("helper_settings", new { Connection = context.Id, pickup.Accepted, DirectPickup = pickup.Enabled });
+                return CommandResult.Handled;
+            }
+            if (helper.Safety)
+            {
+                var safety = context.Session.ReadHelperSafety(helper.CharacterId);
+                if (safety is null) return CommandResult.Handled;
+                bool CanPublish() => context.Session.CanPublishHelperSafety(safety);
+                // 同一快照的完整背包/账号仓库先于资格回执投递，避免换频道沿用旧仓库格。
+                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(safety.Character.Inventory), "helper_safety_inventory", CanPublish);
+                await InventoryProjection.RestoreLocksAsync(context, safety.Character.Inventory,
+                    safety.Character.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main).Select(item => item.Position), canSend: CanPublish);
+                await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(safety.Character.Inventory, InventoryListType.AccountCargo), "helper_safety_cargo", CanPublish);
+                await InventoryProjection.RestoreLocksAsync(context, safety.Character.Inventory,
+                    safety.Character.Inventory.Items.Where(item => item.Position.List == InventoryListType.AccountCargo).Select(item => item.Position), canSend: CanPublish);
+                var entries = safety.Candidates.Select(HelperSafetyPackets.Entry).ToArray();
+                int total = Math.Max(1, (entries.Length + 11) / 12);
+                for (int index = 0; index < total; index++)
+                {
+                    string safetyText = string.Join('|', "1", helper.Nonce, safety.Character.Id, safety.Epoch, index, total,
+                        string.Join(',', entries.Skip(index * 12).Take(12)));
+                    var response = ServerNoticePackets.Build("95_HELPER_SAFE/1", safetyText, out bool safetyTruncated);
+                    if (safetyTruncated) throw new InvalidDataException("助手资格回执不得截断");
+                    await context.Notify(NotiPacketType.AAS_TIPS, response, "helper_safety", CanPublish);
+                }
+                return CommandResult.Handled;
+            }
+            if (helper.Cargo != 0)
+            {
+                var cargo = context.Session.SetHelperPortableCargo(helper.CharacterId,
+                    helper.Cargo == 1 ? InventoryListType.PersonalCargo : InventoryListType.AccountCargo);
+                if (cargo is null) return CommandResult.Handled;
+                bool CanPublish() => context.Session.CanPublishHelperCargo(cargo);
+                if (cargo.Accepted)
+                {
+                    // 完整清单携真实容量，在成功回执和客户端开窗前先建立原生仓库快照。
+                    await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(cargo.Character.Inventory, cargo.List),
+                        "helper_cargo_list", CanPublish);
+                    if (cargo.List == InventoryListType.PersonalCargo)
+                        await context.Notify(NotiPacketType.CERA_SPECIALITEM, CargoPackets.PersonalCapacity(cargo.Character.Inventory.CargoCapacity),
+                            "helper_cargo_capacity", CanPublish);
+                    await InventoryProjection.RestoreLocksAsync(context, cargo.Character.Inventory,
+                        cargo.Character.Inventory.Items.Where(item => item.Position.List == cargo.List).Select(item => item.Position), canSend: CanPublish);
+                }
+                string cargoText = string.Join('|', "1", helper.Nonce,
+                    cargo.Character.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    cargo.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), cargo.Accepted ? "ok" : "rejected",
+                    helper.Cargo.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var cargoBody = ServerNoticePackets.Build("95_HELPER_CARGO/1", cargoText, out bool cargoTruncated);
+                if (cargoTruncated) throw new InvalidDataException("助手仓库回执不得截断");
+                await context.Notify(NotiPacketType.AAS_TIPS, cargoBody, "helper_cargo", CanPublish);
+                log.Write("helper_cargo", new { Connection = context.Id, cargo.Accepted, List = (byte)cargo.List });
+                return CommandResult.Handled;
+            }
             var result = context.Session.SetHelperHellRotation(helper.CharacterId, helper.HellRotation);
             if (result is null) return CommandResult.Handled;
             string helperText = string.Join('|', "1", helper.Nonce,

@@ -50,6 +50,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public Game.ImperialArena.ImperialArenaDeathCommit? ImperialArenaDeath { get; init; }
     public Game.Session.TagEvildomClearReceipt? TagEvildomClear { get; init; }
     public ImmutableArray<DungeonGroundObject> Drops { get; init; } = [];
+    public DungeonDirectPickupCommit DirectPickup { get; init; } = DungeonDirectPickupCommit.Empty;
     public uint GainedExperience { get; init; }
     // 同一笔击杀经验里记入熟练度的额度；与 GainedExperience 相加才是本次有效经验。
     public uint ProficiencyGained { get; init; }

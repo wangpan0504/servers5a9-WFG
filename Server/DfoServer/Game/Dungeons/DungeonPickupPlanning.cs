@@ -18,7 +18,7 @@ internal static class DungeonPickupPlanning
     }
 
     public static InventoryResult Item(Character character, DungeonGroundContent content, ItemTemplate template,
-        GoldLimitCatalog limits, EpicPieceCatalog pieces, DateTimeOffset now)
+        GoldLimitCatalog? limits, EpicPieceCatalog pieces, DateTimeOffset now)
     {
         content.Validate();
         if (content.Item is not { } core || core.ItemId != template.Id || core.Kind != template.Kind)
@@ -38,7 +38,7 @@ internal static class DungeonPickupPlanning
         }
         if (CurrencyWallet.RewardKind(core.ItemId) is { } kind)
         {
-            if (core.IsExpired(now.ToUnixTimeSeconds()) || core.Count > template.StackLimit)
+            if (limits is null || core.IsExpired(now.ToUnixTimeSeconds()) || core.Count > template.StackLimit)
                 return InventoryResult.Reject();
             return Currency(character, kind, core.Count, limits);
         }

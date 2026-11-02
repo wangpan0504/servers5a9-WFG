@@ -458,7 +458,7 @@ internal sealed partial class SinglePlayerDungeonRun
                     entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
-                    companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
+                    companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException or DungeonObjectKeyOverflowException)
             {

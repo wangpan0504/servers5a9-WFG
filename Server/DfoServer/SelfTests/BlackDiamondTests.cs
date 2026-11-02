@@ -130,7 +130,7 @@ internal static class BlackDiamondTests
             That(DevelopmentGm.Answer("summon-wangfugui on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().SummonWangFugui,
                 "离线入口拒绝伴侣设置，新实例恢复关闭");
-            // 光兵（28号，5409）与王富贵各自独立、可同时开启；只读查询同样不写角色状态。
+            // 四类支援兵共享原子单选，兼容开关查询不写角色状态。
             That(!settings.SummonGuangbing &&
                 Switch("summon-guangbing") == "OK {\"summonGuangbing\":false}" &&
                 !DevelopmentRequest.Parse("summon-guangbing", "black").Writes, "光兵开关默认关闭，只读查询不写玩家状态");
@@ -138,7 +138,7 @@ internal static class BlackDiamondTests
                 Switch("summon-guangbing off") == "OK {\"summonGuangbing\":false}" && !settings.SummonGuangbing &&
                 !settings.SummonWangFugui &&
                 DevelopmentRequest.Parse("summon-guangbing on", "black").Writes,
-                "光兵开关 on/off 幂等切换，且不影响王富贵开关");
+                "光兵开关 on/off 幂等切换");
             That(Switch("summon-guangbing auto").StartsWith("ERR ", StringComparison.Ordinal) &&
                 Switch("summon-guangbing 5409").StartsWith("ERR ", StringComparison.Ordinal) &&
                 Switch("summon-guangbing on extra").StartsWith("ERR ", StringComparison.Ordinal) &&
@@ -147,6 +147,26 @@ internal static class BlackDiamondTests
             That(DevelopmentGm.Answer("summon-guangbing on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().SummonGuangbing,
                 "离线入口拒绝光兵设置，新实例恢复关闭");
+            foreach (var value in new[] { "wangfugui", "guangbing", "female-crusader", "enchantress", "off" })
+            {
+                string result = Switch("support-companion " + value);
+                using var state = System.Text.Json.JsonDocument.Parse(result[3..]);
+                var json = state.RootElement;
+                That(result.StartsWith("OK ", StringComparison.Ordinal) && json.GetProperty("supportCompanion").GetString() == value &&
+                    new[] { "summonWangFugui", "summonGuangbing", "summonFemaleCrusader", "summonEnchantress" }
+                        .Count(key => json.GetProperty(key).GetBoolean()) == (value == "off" ? 0 : 1),
+                    "原子选择一次回读完整且最多一名");
+            }
+            _ = Switch("support-companion enchantress");
+            That(Switch("support-companion invalid").StartsWith("ERR ", StringComparison.Ordinal) && settings.SummonEnchantress &&
+                Switch("summon-wangfugui off") == "OK {\"summonWangFugui\":false}" && settings.SummonEnchantress,
+                "无效选择及关闭非当前兼容项都不清空当前选择");
+            _ = Switch("summon-female-crusader on");
+            That(settings.SummonFemaleCrusader && !settings.SummonEnchantress &&
+                DevelopmentRequest.Parse("support-companion off", "black").Writes &&
+                !DevelopmentRequest.Parse("support-companion", "black").Writes,
+                "旧入口开启同样互斥，单选查询与写入权限分离");
+            _ = Switch("support-companion off");
             Character Create(AccountOwners.Lease lease, string name) => repo.Create(lease,
                 new(name, new(1, 0, 1, 1), null) { DungeonState = CharacterDungeonState.NewOrdinary });
             var first = Create(owner, "BlackFirst");

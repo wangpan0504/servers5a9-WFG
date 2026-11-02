@@ -37,7 +37,24 @@ internal sealed partial class GameSession
                 items, (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider);
             var fiendwar = raidCombat is { Battle.Kind: Raids.RaidKind.Fiendwar } raid
                 ? raid.Battle.CaptureFiendwarTitleDeath(raid.Actor, run, prepared) : null;
-            committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwar);
+            DungeonDirectPickupPlan? directPickup = null;
+            if (loot is not null && items is not null && pieces is not null)
+            {
+                // 与仓储既有组合次序相同：任务材料、装备成长、最后才放置本次普通掉落。
+                var before = questDrops?.Inventory.After ?? expected.Inventory;
+                if (equipmentGrowth is not null)
+                    foreach (var change in equipmentGrowth.Changes)
+                    {
+                        if (before.Find(change.Before.Position) != change.Before)
+                            throw new InvalidOperationException("直入包的装备成长前提与任务材料规划冲突");
+                        before = before with { Items = before.Items.Replace(change.Before, change.After) };
+                    }
+                var clock = timeProvider ?? TimeProvider.System;
+                directPickup = DungeonDirectPickupPlan.Create(expected, prepared, loot, before, items, pieces,
+                    HelperDirectPickupEnabled, clock.GetUtcNow(), clock, directPickupGoldLimits);
+            }
+            committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth,
+                fiendwar, directPickup);
         }
         if (committed.Character.Id != expected.Id || committed.Character.Revision < expected.Revision)
             throw new InvalidOperationException("副本成长提交结果不属于原角色或revision回退");

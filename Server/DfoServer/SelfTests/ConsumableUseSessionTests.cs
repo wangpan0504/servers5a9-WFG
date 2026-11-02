@@ -666,6 +666,29 @@ internal static partial class ConsumableUseSessionTests
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "猫头鹰测试进入真实副本入口");
             Enter();
             That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "未使用猫头鹰仍拒绝副本仓库移动");
+            ushort characterId = f.Session.Selected!.Id;
+            var capabilities = f.Session.ReadHelperCapabilities(characterId);
+            That(capabilities is not null && f.Session.CanPublishHelperCapabilities(capabilities) &&
+                f.Session.ReadHelperCapabilities((ushort)(characterId + 1)) is null,
+                "助手能力仅绑定当前就绪角色和选角epoch");
+            That(f.Session.SetHelperPortableCargo((ushort)(characterId + 1), InventoryListType.PersonalCargo) is null &&
+                f.Session.SetHelperPortableCargo(characterId, InventoryListType.Main) is { Accepted: false },
+                "错误角色和非仓库容器不建立助手资格");
+            var helperCargo = f.Session.SetHelperPortableCargo(characterId, InventoryListType.PersonalCargo);
+            That(helperCargo is { Accepted: true } && f.Session.CanPublishHelperCargo(helperCargo) &&
+                f.Session.MoveInventory(deposit, inventory).Accepted &&
+                !f.Session.CanPublishHelperCargo(helperCargo) && f.Session.MoveInventory(withdraw, inventory).Accepted,
+                "助手授权不消耗道具且支持个人仓库双向提交，过期资产快照不发布");
+            var helperAccountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
+            var helperAccountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
+            That(!f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted &&
+                f.Session.SetHelperPortableCargo(characterId, InventoryListType.AccountCargo) is { Accepted: true } &&
+                f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted && f.Session.MoveInventory(helperAccountWithdraw, inventory).Accepted,
+                "个人授权不越权账号仓库，账号单独授权后支持双向提交");
+            That(f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
+                { CargoCapacity = 24 }, "helper_cargo_upgrade_boundary")), requireTown: false).Accepted &&
+                !f.Session.MoveInventory(deposit, inventory).Accepted && !f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted,
+                "任一仓库实际容量变化同时废止本实例助手旧资格");
             That(f.Use().Outcome == ConsumableUseOutcome.Committed, "猫头鹰经原消耗品提交成功 " + id);
             That(f.Session.MoveInventory(deposit, inventory).Accepted &&
                 f.Session.MoveInventory(withdraw, inventory).Accepted, "副本使用猫头鹰后支持双向真实库存提交 " + id);
@@ -682,12 +705,15 @@ internal static partial class ConsumableUseSessionTests
             That(f.Session.ReturnFromFormalDungeon() is not null, "猫头鹰测试经正式回城");
             Enter();
             That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "新副本不继承回城前猫头鹰资格");
+            That(f.Session.SetHelperPortableCargo(characterId, InventoryListType.PersonalCargo) is { Accepted: true },
+                "新实例只能重新建立本实例助手授权");
             f.Clock.Advance(TimeSpan.FromSeconds(4));
             That(f.Use(1).Outcome == ConsumableUseOutcome.Committed, "新副本可重新使用猫头鹰");
             f.Session.ReturnToRoster(); f.Select();
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "重新选角进入入口");
             Enter();
             That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "同角色重选不继承旧资格");
+            That(capabilities is not null && !f.Session.CanPublishHelperCapabilities(capabilities), "同角色重选后旧能力回执也失效");
 
             void Enter()
             {

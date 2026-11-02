@@ -14,10 +14,14 @@ internal sealed partial class GameSession
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
     sealed record PortableCargoAccess(long Generation, long SelectionEpoch,
-        Guid DungeonInstance, ushort PersonalCapacity, ushort AccountCapacity);
+        Guid DungeonInstance, ushort PersonalCapacity, ushort AccountCapacity,
+        bool Personal = true, bool Account = true);
     PortableCargoAccess? portableCargo;
 
-    bool CanAccessPortableCargo() => portableCargo is { } access && Ready && Selected is { } character &&
+    bool CanAccessPortableCargo(InventoryListType list) =>
+        list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
+        portableCargo is { } access && Ready && Selected is { } character &&
+        (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
         access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&

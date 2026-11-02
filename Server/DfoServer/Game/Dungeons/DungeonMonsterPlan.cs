@@ -48,7 +48,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         // 祭坛不放行AI：部署侧伴侣补丁会把20900行写进祭坛图，伴侣行一律丢弃；
         // 其余AI演员仍按祭坛独立波次合同拒绝，避免静默混入普通演员。
         if (room.AltarWaves is null || room.Monsters.Count != 0 ||
-            room.AiCharacters.Any(row => !DungeonCompanion.IsCompanionRow(row.Id)) || room.SpecialObjects.Count != 0)
+            room.AiCharacters.Where((_, ordinal) => !DungeonCompanion.IsCompanionRow(room, ordinal)).Any() || room.SpecialObjects.Count != 0)
             throw new InvalidDataException("祭坛房间必须使用独立波次且不混入普通演员");
         var altar = DungeonAltarPlan.Create(DungeonAltarDefinition.Read(room.AltarWaves), characterId, firstObjectKey,
             level, room.Map.Kind == "boss", draw);
@@ -141,7 +141,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, playerTeam: playerTeam);
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
-        bool includeSpecial = true, int? playerTeam = null, IReadOnlyList<int>? companionRows = null)
+        bool includeSpecial = true, int? playerTeam = null, IReadOnlyList<int>? companionRows = null,
+        IReadOnlyList<SupportCompanionProfile>? companionProfiles = null)
     {
         if (room.AltarWaves is not null)
             throw new NotSupportedException("unsupported: 祭坛波次需要专用调度，不能作为普通怪物房间生成");
@@ -214,21 +215,32 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         // Map 91548 excludes companions; other maps may retain both native and companion actors.
         // 伴侣行只在放行集合内发送，其余原生演员保持原合同。
         bool companionsAllowed = companionRows is not null && room.Map.Id != 91548;
+        var sentCompanions = new HashSet<int>();
         for (int index = 0; index < room.AiCharacters.Count; index++)
         {
             var source = room.AiCharacters[index];
-            // 伴侣行（20900/5409）只在当前放行集合内发送；集合由入场计划冻结，只有起始房间传入集合。
+            // 专用伴侣只在当前放行集合内发送；集合由入场计划冻结，只有起始房间传入集合。
+            // 来源明确的旧5409不再放行，等资源差量原位迁到9986；未知5409保持原生演员合同。
             // 丢弃时不占用对象key，其余行号保持原索引。
             // 未放行的行不参与资源校验：部署侧地图补丁写坏的行不能影响开关关闭时的正常入场。
-            if (DungeonCompanion.IsCompanionRow(source.Id) && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
+            bool companion = DungeonCompanion.IsCompanionRow(room, index);
+            if (companion && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
+            // 同种专用模板只发原序中的首行；保留SourceOrdinal，不拼出额外演员或占用被丢弃行的key。
+            if (companion && !sentCompanions.Add(source.Id)) continue;
             if (source.RawValues.Count != 6 || source.RawValues[0] != source.Id || source.Id <= 0 ||
                 source.Level is < 1 or > 255 || source.Faction is not ("[monster]" or "[character]" or "[neutral]") ||
                 source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]"))
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的APC资源行 {index} 尚未支持");
+            if (companion && (source.Faction != "[character]" || source.RankKind != "[normal]"))
+                throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的支援兵资源行 {index} 不是友方普通演员");
             if (nextKey == characterId) nextKey++;
             if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
+            // 原生 02A0B720 使用通知中的模板编号创建演员，MAP原序号仅取坐标和阵营。
+            // 档次/套装只替换已放行的基础支援兵，模板已经资源目录核验，不能借此生成额外MAP行。
+            var profile = companion ? companionProfiles?.SingleOrDefault(candidate => candidate.BaseId == source.Id) : null;
             // Full03 03FA9810确认类型5..8走APC构造器；APC索引属于独立MAP数组。
-            result.Add(new(index,(ushort)nextKey++,source.Id,source.Level,null)
+            // AiCharacter保留原MAP来源，实际通知编号/等级取冻结模板，复验不能用新数组替换原来源身份。
+            result.Add(new(index,(ushort)nextKey++,profile?.TemplateId ?? source.Id,profile?.Level ?? source.Level,null)
             {
                 AiCharacter = source,
                 SpawnType = source.RankKind switch { "[champion]" => 6, "[super champion]" => 7, "[boss]" => 8, _ => (byte)5 },
