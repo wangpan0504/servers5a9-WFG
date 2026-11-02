@@ -123,9 +123,15 @@ internal static class HostedDungeonEligibilityTests
 
     static (string FileName, string[] Prefix) CurrentHost()
     {
-        string location = typeof(ServerApplication).Assembly.Location;
-        if (!string.IsNullOrEmpty(location))
-            return (Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", [location]);
-        return (Environment.ProcessPath ?? throw new InvalidOperationException("缺少当前宿主路径"), []);
+        string processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("缺少当前宿主路径");
+        if (Path.GetFileNameWithoutExtension(processPath)
+            .Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            string dll = Path.Combine(AppContext.BaseDirectory, "DfoServer.dll");
+            if (File.Exists(dll))
+                return (processPath, [dll]);
+        }
+        return (processPath, []);
     }
 }
