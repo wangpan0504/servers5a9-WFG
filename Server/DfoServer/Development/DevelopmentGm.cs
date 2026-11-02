@@ -113,6 +113,17 @@ internal static partial class DevelopmentGm
                     " 已清零该账号所有副本的入场次数（日/周次数、账号次数、冒险团面板、强袭、魔界塔、悲叹塔、" +
                     "祭坛/绝望、卢克团本周通关、再战魔界周次数）。在线角色回到选角并再次进入后刷新；正在进行中的副本需退出重进。";
             }
+            if (request.Action == DevelopmentAction.RewardLimitReset)
+            {
+                var session = find(request.Account);
+                if (session is { Phase: SessionPhase.Dungeon or SessionPhase.Settlement })
+                    throw new InvalidOperationException("角色正在副本或结算中，请退出副本后再刷新奖励上限");
+                var reset = session is not null
+                    ? session.ResetRewardLimits()
+                    : WithLease(owners, request.Account, repository.ResetRewardLimits);
+                return "OK " + JsonSerializer.Serialize(reset) +
+                    " 已迁移当前周期奖励资格；历史奖励回执、通关事实及已发邮件保留。";
+            }
             if (request.Action == DevelopmentAction.CharacterScoreNotice)
                 return SendCharacterScoreNotice(request, noticeSender, catalog?.Resources, log);
             if (request.Action is DevelopmentAction.LukeRewardList or DevelopmentAction.LukeRewardInspect or DevelopmentAction.LukeRewardClaim)

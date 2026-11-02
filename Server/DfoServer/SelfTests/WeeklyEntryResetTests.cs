@@ -2,7 +2,9 @@ using System.Text.Json;
 using DfoServer.Development;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.ImperialArena;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Strongway2019;
 using DfoServer.Game.TagEvildom;
 using DfoServer.Testing;
 using static DfoServer.Testing.TestCheck;
@@ -183,6 +185,91 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT count(*) FROM character_weekly_dungeon WHERE account='other' AND week=20180215") is 1L &&
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000018") is 3L,
             "再刷一次仍然成功，旧周期行还在");
+        RunRewardLimitCore();
         Console.WriteLine($"PASS {Count - before} 地下城入场次数刷新核心断言");
+    }
+
+    static void RunRewardLimitCore()
+    {
+        using var f = new MailboxPersistenceTests.Fixture();
+        f.OtherOwner.Dispose();
+        f.ReceiverOwner.Dispose();
+        int day = ShopPurchaseCount.Today(DateTimeOffset.UtcNow);
+        int week = WeeklyDungeonPolicy.WeekKey(DateTimeOffset.UtcNow);
+        var strongway = Strongway2019RewardPeriod.At(DateTimeOffset.UtcNow);
+        var imperial = ImperialArenaPeriod.At(DateTimeOffset.UtcNow);
+        var tag = TagEvildomPeriod.At(DateTimeOffset.UtcNow);
+        int griefDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+        long id = f.Other.Id;
+        f.Execute($"""
+            INSERT INTO account_strongway2019_rewards(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,mail_id)
+              VALUES('other','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',{id},1,1,5359,0,{strongway.Day},{strongway.Week},1,json_object(),json_object(),1);
+            INSERT INTO character_strongway2019_completions(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,state,mail_id)
+              VALUES('other','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',{id},2,1,5359,0,{strongway.Day},{strongway.Week},1,json_object(),json_object(),1,2);
+            INSERT INTO character_strongway2019_match_facts(account,character_id,instance_id,competition_id,bucket,day,week,created_at,state,snapshot_json)
+              VALUES('other',{id},'cccccccccccccccccccccccccccccccc','dddddddddddddddddddddddddddddddd',1,{strongway.Day},{strongway.Week},1,2,json_object());
+            INSERT INTO account_imperial_arena_days(account,day,mode,hard_round) VALUES('other',{imperial.Day},1,0);
+            INSERT INTO account_imperial_arena_runs(account,instance_id,day,week,mode,first,second,configuration_revision,task_attempt,admitted_at,minimum_clear_ms,team_json,route_json,cleared_round,events_json,elapsed_ms,closed,ranked_week)
+              VALUES('other','12121212121212121212121212121212',{imperial.Day},{imperial.Week},1,{id},2,1,1,1,1000,'[1,2,3,4]',json_object(),1,'[]',1000,1,{imperial.Week});
+            INSERT INTO account_imperial_arena_rewards(account,day,monster,instance_id,event_id,reward_json,mail_id)
+              VALUES('other',{imperial.Day},1,'12121212121212121212121212121212','13131313131313131313131313131313',json_object(),0);
+            INSERT INTO account_imperial_arena_challenge_claims(account,week,instance_id,mail_id,reward_json)
+              VALUES('other',{imperial.Week},'12121212121212121212121212121212',1,json_object());
+            INSERT INTO account_grief_tower(account,game_day,used) VALUES('other',{griefDay},2);
+            INSERT INTO character_grief_tower(character_id,account,game_day,cleared,layer,instance_id,task_attempt)
+              VALUES({id},'other',{griefDay},1,5,'14141414141414141414141414141414',4);
+            INSERT INTO dungeon_despair_progress(character_id,account,next_layer,last_clear_day,clear_count)
+              VALUES({id},'other',7,{day},2);
+            INSERT INTO account_tag_evildom_clearances(receipt,account,day,week,first,second) VALUES('reward-tag','other',{tag.Day},{tag.Week},1,2);
+            INSERT INTO account_tag_evildom_challenges(account,day,week,team_index,maze_ordinal,dungeon_id,instance_id,first,second,admitted_at,sequence,state)
+              VALUES('other',{tag.Day},{tag.Week},0,0,9608,'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',1,2,1,1,1);
+            INSERT INTO dungeon_special_entry_receipts(character_id,account,instance_id,task_attempt,service_day,kind,dungeon_id,layer,gold,revision)
+              VALUES({id},'other','ffffffffffffffffffffffffffffffff',3,{day},1,11006,0,0,1);
+            INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,phase1_event,phase1_anchor,phase1_receipt,clear_week)
+              VALUES({id},'other','11111111111111111111111111111111',1,'fixture',0,2,'11111111111111111111111111111112',0,json_object(),{week});
+            INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
+              VALUES({id},'other','11111111111111111111111111111111',1,1,0,{week},1,json_object(),json_array(),1);
+            """);
+        string answer = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
+        That(answer.StartsWith("OK ", StringComparison.Ordinal), "奖励限额刷新命令成功: " + answer);
+        int end = answer.IndexOf(" 已迁移", StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(answer[3..end]);
+        var result = document.RootElement;
+        That(result.GetProperty("StrongwayRewardRows").GetInt32() == 1 &&
+            result.GetProperty("StrongwayCompletionRows").GetInt32() == 1 &&
+            result.GetProperty("StrongwayMatchRows").GetInt32() == 1 &&
+            result.GetProperty("ImperialDayRows").GetInt32() == 1 &&
+            result.GetProperty("ImperialRunRows").GetInt32() == 1 &&
+            result.GetProperty("ImperialRewardRows").GetInt32() == 1 &&
+            result.GetProperty("ImperialChallengeRows").GetInt32() == 1 &&
+            result.GetProperty("TagClearanceRows").GetInt32() == 1 &&
+            result.GetProperty("TagChallengeRows").GetInt32() == 1 &&
+            result.GetProperty("GriefAccountRows").GetInt32() == 1 &&
+            result.GetProperty("GriefCharacterRows").GetInt32() == 1 &&
+            result.GetProperty("SpecialEntryRows").GetInt32() == 1 &&
+            result.GetProperty("DespairRows").GetInt32() == 1 &&
+            result.GetProperty("RaidRows").GetInt32() == 1 &&
+            result.GetProperty("RaidReceiptRows").GetInt32() == 1,
+            "奖励刷新按玩法返回当前周期迁移行数");
+        That(f.Query($"SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L &&
+            f.Query($"SELECT count(*) FROM character_strongway2019_completions WHERE account='other'") is 1L &&
+            f.Query($"SELECT count(*) FROM character_strongway2019_match_facts WHERE account='other'") is 1L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_days WHERE account='other' AND day={day}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_runs WHERE account='other' AND day={day}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_rewards WHERE account='other' AND day={day}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_challenge_claims WHERE account='other' AND week={week}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_tag_evildom_clearances WHERE account='other' AND day={day}") is 0L &&
+            f.Query($"SELECT used FROM account_grief_tower WHERE account='other'") is 0L &&
+            f.Query($"SELECT cleared FROM character_grief_tower WHERE character_id={id}") is 0L &&
+            f.Query($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='other' AND service_day={day}") is 0L &&
+            f.Query($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={id}") is 0L &&
+            f.Query($"SELECT count(*) FROM character_raid_runs WHERE account='other' AND clear_week={week}") is 0L,
+            "奖励刷新保留历史回执与通关事实但移出当前资格周期");
+        That(f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other'") is 1L &&
+            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 0L,
+            "团本奖励回执保留但当前周资格键迁移");
+        string again = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
+        That(again.StartsWith("OK ", StringComparison.Ordinal) && f.Query("SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L,
+            "奖励限额刷新可重复执行且不删除历史账本");
     }
 }

@@ -86,6 +86,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public Character[] QueryCharacters() => repository.List(owner);
 
     public DungeonEntryResetResult ResetDungeonEntries() => repository.ResetDungeonEntries(owner);
+    public RewardLimitResetResult ResetRewardLimits() => repository.ResetRewardLimits(owner);
 
     internal OnlineCharacterSnapshot? OnlineCharacter()
     {
