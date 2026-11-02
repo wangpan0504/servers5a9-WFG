@@ -237,6 +237,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await AccountMaterialsAsync(context, c);
         await context.Notify(NotiPacketType.MILEAGE_DATA, MileagePackets.State(c.Inventory.AccountWallet), "account_mileage_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
+        await context.Notify(NotiPacketType.WISH_ITEM_INFO, EpicWishPackets.Info(c.EpicWishes), "epic_wish_initialize");
         if (epicProduction is not null)
             await epicProduction.InitializeAsync(context);
         if (collectBoxes is not null)

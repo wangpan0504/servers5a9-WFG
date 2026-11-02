@@ -448,6 +448,8 @@ internal static class TcpRegressionTests
         }),
         ("database-schema", (_, _, _) => { DatabaseSchemaTests.Run(); return Task.CompletedTask; }),
         ("settings-storage", (_, _, _) => { ClientSettingsStoreTests.Run(); return Task.CompletedTask; }),
+        ("epic-wish-storage", (_, _, _) => { EpicWishTests.RunCore(); return Task.CompletedTask; }),
+        ("epic-wish", EpicWishTcpTests.RunAsync),
         ("cera-package", CeraPackageTcpTests.RunAsync),
         ("premium-contract", PremiumContractTcpTests.RunAsync),
         ("growth-cube-contract", GrowthCubeContractTcpTests.RunAsync),

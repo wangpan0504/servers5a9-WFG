@@ -758,6 +758,8 @@ internal static class ServerRuntime
                 options.TeleportPotionGates, guildParameters.TeleportCost, privilege: itemResources.PrivilegeServices), projection, inventoryProjection, presence, log, guildTeleportHandler),
             guildTeleportHandler,
             new SettingsHandler(settings, log, projection, chatEmoticons),
+            new EpicWishHandler(new Game.EpicWish.EpicWishService(repository,
+                new EpicWishCatalog(itemResources.EpicPieces, itemResources.Items).Contains)),
             avatarPresetHandler,
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online, settings, log),
