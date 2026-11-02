@@ -213,6 +213,7 @@ internal static class TcpRegressionTests
         ("retired-dungeon-entry", (_, _, resources) => DungeonRetiredEntryTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources)),
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("experience-bonuses", FormalDungeonTcpTests.RunExperienceBonusesAsync),
+        ("hosted-dungeon-eligibility", HostedDungeonEligibilityTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
         ("dungeon-growth", async (_, _, resources) =>
         {
@@ -539,7 +540,7 @@ internal static class TcpRegressionTests
         "experience-consumable-rules",
         "legacy-status-rules",
         "stackable-actions",
-        "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "dungeon-entry-plan", "assault-hunt-quest", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
+        "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"

@@ -10,6 +10,7 @@ internal static class CommandLineTests
     {
         int checks = Count;
         RunPromotionPageOptions();
+        RunHostedDungeonEligibilityOptions();
         void Reject(string[] arguments)
         {
             bool rejected = false;
@@ -203,5 +204,38 @@ internal static class CommandLineTests
             DfoServer.Testing.TestCheck.Reject<InvalidDataException>(
                 () => ServerOptions.Load(ServerCommand.Parse(arguments).Options), "页面运行参数拒绝非法值、缺值、重复或旧命令禁用组合");
         Console.WriteLine($"Promotion page command line: {Count - checks} checks passed.");
+    }
+
+    internal static void RunHostedDungeonEligibilityOptions()
+    {
+        int checks = Count;
+        That(!ServerOptions.Load().EnableHostedDungeonEligibility, "资格探测未配置时默认关闭");
+        That(!ServerOptions.Load(ServerCommand.Parse(["--hosted-dungeon-eligibility", "Off"]).Options).EnableHostedDungeonEligibility,
+            "资格探测可显式关闭");
+        That(ServerOptions.Load(ServerCommand.Parse(["--hosted-dungeon-eligibility", "On"]).Options).EnableHostedDungeonEligibility,
+            "资格探测可通过正式运行参数独立开启");
+        var command = ServerCommand.Parse(["--hosted-dungeon-eligibility", "On", "--selftest-tcp", "hosted-dungeon-eligibility"]);
+        That(command.Kind == ServerCommandKind.TcpTest && command.Arguments.SequenceEqual(["hosted-dungeon-eligibility"]) &&
+            command.Options["--hosted-dungeon-eligibility"] == "On", "资格探测参数保留既有业务命令分派和参数");
+        var enabled = ServerOptions.Load(ServerCommand.Parse(["--hosted-dungeon-eligibility", "On", "--game-port", "25001"]).Options);
+        That(enabled.EnableHostedDungeonEligibility && enabled.GamePort == 25001 && enabled.HostedDungeonEligibilityHost is null,
+            "资格探测开关与既有运行参数共存，默认不配置宿主路径");
+        var fake = ServerCommand.Parse(["--hosted-eligibility-fake-host", "missing-profile"]);
+        That(fake.Kind == ServerCommandKind.HostedEligibilityFakeHost && fake.Arguments.SequenceEqual(["missing-profile"]),
+            "假宿主命令不经过运行参数与资源加载");
+        foreach (string[] arguments in new string[][]
+        {
+            ["--hosted-dungeon-eligibility"], ["--hosted-dungeon-eligibility", "--selftest-core"],
+            ["--hosted-dungeon-eligibility", "On", "--hosted-dungeon-eligibility", "Off"],
+            ["--hosted-dungeon-eligibility", ""], ["--hosted-dungeon-eligibility", " "],
+            ["--hosted-dungeon-eligibility", "on"], ["--hosted-dungeon-eligibility", "off"],
+            ["--hosted-dungeon-eligibility", "true"], ["--hosted-dungeon-eligibility", "1"],
+            ["--hosted-dungeon-eligibility", "Unknown"], ["--hosted-dungeon-eligibility", "On", "--help"],
+            ["--hosted-eligibility-fake-host"], ["--hosted-eligibility-fake-host", ""],
+            ["--hosted-eligibility-fake-host", "missing-profile", "extra"]
+        })
+            DfoServer.Testing.TestCheck.Reject<InvalidDataException>(
+                () => ServerOptions.Load(ServerCommand.Parse(arguments).Options), "资格探测运行参数拒绝非法值、缺值、重复或命令混用");
+        Console.WriteLine($"Hosted dungeon eligibility command line: {Count - checks} checks passed.");
     }
 }

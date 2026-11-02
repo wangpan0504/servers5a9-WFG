@@ -372,6 +372,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         GuildManagementClosing?.Invoke();
         ObserveGuildPresence();
         InvalidateRaids(notices, reason == "session-ended");
+        CancelHostedDungeonEligibility();
         mailboxRestore = null;
         npcTownVisit = null;
         hopeSelection = null;

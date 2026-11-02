@@ -92,6 +92,7 @@ internal static class SelfTestRunner
         CreatureTransportTests.RunCore();
         EquipmentTransferSealTests.RunCore();
         CommandLineTests.Run();
+        HostedDungeonEligibilityTests.RunCore();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
         StartupStageTests.Run();
@@ -636,6 +637,7 @@ internal static class SelfTestRunner
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
         DungeonDropCollectionRepositoryTests.RunDurableReceipts(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);
+        HostedDungeonEligibilitySessionTests.Run(towns, pvf, characters);
         FiendwarChannelTests.Run(towns, pvf, characters, itemResources);
         RaidRosterFlagTests.RunResources(towns, pvf);
         RequiredItemConsumeTests.Run(towns, pvf, characters, itemResources);

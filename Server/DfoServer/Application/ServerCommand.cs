@@ -22,7 +22,8 @@ internal enum ServerCommandKind
     PrepareCharacter,
     PrepareBookCharacter,
     ImportCharacters,
-    AntonProbe
+    AntonProbe,
+    HostedEligibilityFakeHost
 }
 
 internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments, bool PacketCapture = false)
@@ -45,6 +46,9 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
           --session-ttl <秒>         认证元数据有效期，默认 300
           --promotion-page <Off|On>  自制累计赠礼页面协议，默认 Off；独立于活动购买开关
+          --hosted-dungeon-eligibility <Off|On>  普通副本加载后只读资格探测，默认 Off；不切换战斗权威
+          --hosted-dungeon-eligibility-host <文件>  可选独立宿主可执行文件；未配置时 On 仅进程内拒绝缺失 CombatProfile
+          --hosted-eligibility-fake-host <scenario>  测试用假宿主：读 stdin JSON 写 stdout，不加载资源
           --recharge-web-port <端口>  充值网页监听端口，默认80，不受GM网页开关控制
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
           --auction-probe <参数>     拍卖行应答记录布局探针，默认关闭（关闭时走真实挂牌数据）
@@ -74,12 +78,18 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
                 throw new InvalidDataException("用法：DfoServer --pvf-list/--pvf-text <PVF文件> <路径或关键词>");
             return new(args[0] == "--pvf-list" ? ServerCommandKind.PvfList : ServerCommandKind.PvfText, args[1..]);
         }
+        if (args.Length != 0 && args[0] == "--hosted-eligibility-fake-host")
+        {
+            if (args.Length != 2 || string.IsNullOrWhiteSpace(args[1]))
+                throw new InvalidDataException("用法：DfoServer --hosted-eligibility-fake-host <scenario>");
+            return new(ServerCommandKind.HostedEligibilityFakeHost, args[1..]);
+        }
 
         int index = 0;
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
             "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or
-            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
+            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

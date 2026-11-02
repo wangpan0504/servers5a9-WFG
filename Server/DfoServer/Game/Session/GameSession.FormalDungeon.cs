@@ -1116,7 +1116,11 @@ internal sealed partial class GameSession
                 NavigationReplay = result == DungeonRunOutcome.Duplicate
             });
         });
-        if (presentation.Handled) return presentation.Receipt;
+        if (presentation.Handled)
+        {
+            CancelHostedDungeonEligibility();
+            return presentation.Receipt;
+        }
         var (expected,dungeon,epoch,identity,entry) = owner.Execute(() =>
             (Ready && Phase == SessionPhase.Loading ? Selected : null, formalDungeon, SelectionEpoch,
                 formalDungeon?.Run.Snapshot.Identity,formalDungeon?.Run.Entry));
@@ -1124,7 +1128,7 @@ internal sealed partial class GameSession
         bool hasMatchingQuest = !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && expected.ActiveMainQuests.Any(active =>
             QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
             QuestDungeonClearProgress.CountsInitializations(quest,entry));
-        return owner.Execute(() =>
+        var receipt = owner.Execute(() =>
         {
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading || !IsCurrentRaidDungeon(dungeon.Entry) ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
@@ -1150,9 +1154,10 @@ internal sealed partial class GameSession
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
-            var receipt = FormalReceipt() with { LostLandStarted = lostLandStarted };
-            return receipt;
+            return FormalReceipt() with { LostLandStarted = lostLandStarted };
         });
+        ScheduleHostedDungeonEligibility(receipt);
+        return receipt;
     }
 
     public bool ConfirmFormalDungeonLayerBase(byte x, byte y) => owner.Execute(() =>
@@ -1242,6 +1247,7 @@ internal sealed partial class GameSession
             ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1,settlementLayer)
             : dungeon.Run.Move(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target);
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
+        CancelHostedDungeonEligibility();
         SetState(SessionPhase.Loading);
         return FormalReceipt();
     });
