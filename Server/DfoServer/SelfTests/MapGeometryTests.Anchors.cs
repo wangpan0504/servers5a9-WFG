@@ -9,6 +9,7 @@ internal static partial class MapGeometryTests
 {
     private static void RunAnchorCore()
     {
+        RunMetadataRectangleCore();
         foreach (var (kind,tag,source) in new[]
         {
             ("dungeon_animation5","[animation]","[[6,\"a.ani\"],[6,\"[normal]\"],[0,672],[0,44],[0,0]]"),
@@ -46,5 +47,26 @@ internal static partial class MapGeometryTests
             Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,671]","[0,895]",StringComparison.Ordinal))), "插列左侧X必须保持");
             Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,896]","[0,897]",StringComparison.Ordinal))), "插列映射必须精确224");
         }
+    }
+    private static void RunMetadataRectangleCore()
+    {
+        const string path = "map/rect.map", tag = "[dungeon movable area]";
+        int[] before = [0,10,672,50,700,20,30,60,377,123,300,200];
+        int[] after = [0,10,672,50,924,20,30,60,377,123,524,200];
+        string Document(int[] target) => GeometryDocument([GeometryRule("metadata",path,"dungeon_movable_xywh3",tag,GeometryAtoms(before),GeometryAtoms(target))]);
+        var config = MapGeometryConfig.Parse(Document(after));
+        string Resolve(int id) => id == 1 ? tag : "[/dungeon movable area]";
+        PvfToken[] raw = [new(3,1),..before.Select(value => new PvfToken(0,value)),new(3,2)];
+        var expected = raw.ToArray(); for (int index = 0; index < after.Length; ++index) expected[index + 1] = new(0,after[index]);
+        var output = config.Apply(path,raw,Resolve);
+        That(output.SequenceEqual(expected) && config.Apply(path,output,Resolve).SequenceEqual(expected), "三XYWH完整映射跨缝、右侧及右界恰触缝，Y/H保持且幂等");
+        That(config.SignatureKind(path) == "DCG2" && !MapGeometrySignature.ComputeDungeon(path,raw,Resolve).SequenceEqual(MapGeometrySignature.ComputeDungeon(path,output,Resolve)), "metadata只用既有DCG2字段，不冒充virtual行走矩形");
+        foreach (int index in new[] { 0,1,2,3,4,10,11 })
+        {
+            int[] bad = after.ToArray(); bad[index]++;
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(bad)), "metadata不得改变保持字段或偏离精确插列映射");
+        }
+        Reject<InvalidDataException>(() => config.Apply(path,raw[..^1],Resolve), "metadata段必须完整闭合");
+        Reject<InvalidDataException>(() => config.Apply(path,[..raw,..raw],Resolve), "metadata段必须唯一");
     }
 }
