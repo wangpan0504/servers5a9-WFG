@@ -12,13 +12,27 @@ internal sealed class LukeRewardResultProjection
     RaidCombatDisplayIdentity? teamIdentity;
     byte[]? teamBody;
     bool personalEmptyWritten;
+    RaidCombatDisplayIdentity? ineligibleIdentity;
+
+    internal void PostIneligible(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view)
+    {
+        if (view.State != AntonRaidBattleState.Reward ||
+            battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: false } eligibility) return;
+        var expected = RaidCombatDisplayIdentity.Capture(actor, view);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MESSAGE, LukeRewardPackets.Ineligible(eligibility.Reason),
+            "luke_reward_ineligible", () => context.Session.CanPublishRaidBattle(actor, view) &&
+                context.RaidDisplay == expected && ineligibleIdentity != expected,
+            () => ineligibleIdentity = expected);
+    }
 
     internal void PostTeam(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
         AntonRaidBattleView view, bool afterPersonal = false)
     {
         context.Owner.Execute(() =>
         {
-            if (!context.Session.CanPublishRaidBattle(actor, view)) return false;
+            if (!context.Session.CanPublishRaidBattle(actor, view) ||
+                battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true }) return false;
             if (view.State is not (AntonRaidBattleState.Reward or AntonRaidBattleState.Completed) ||
                 view.Phase == 0 && !afterPersonal) return false;
             var results = battle.LukeTeamEntitlements(view);

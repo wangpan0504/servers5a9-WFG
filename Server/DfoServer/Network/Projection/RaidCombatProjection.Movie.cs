@@ -28,7 +28,7 @@ internal static partial class RaidCombatProjection
             if (battle.CompleteAntonMovie(actor, view)) battle.Publish(battle.View);
             return true;
         }
-        if (view.Phase == 0)
+        if (view.Phase == 0 || battle.LukeEligibility(actor.Character, view.Phase) is { Eligible: false })
         {
             bool changed = battle.CompleteLukeFirstMovie(actor, view);
             if (changed && (battle.LukeMovieCardsReady(view) || !battle.IsCurrent(view))) battle.Publish(battle.View);

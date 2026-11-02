@@ -25,6 +25,7 @@ internal static class LukeRaidIntermissionTests
         {
             foreach (int count in new[] { 1, 4, 8 })
             foreach (bool automatic in new[] { false, true })
+            foreach (bool denied in count == 4 ? new[] { false, true } : new[] { false })
             {
                 var owners = new AccountOwners();
                 var leases = new List<AccountOwners.Lease>();
@@ -39,11 +40,15 @@ internal static class LukeRaidIntermissionTests
                 Reject<InvalidDataException>(() => new AntonRaidBattle(script, kind: RaidKind.Luke, clock: clock,
                     flow: LukeRaidFlowPolicy.Shared95), "缺少演出时长在开团前拒绝，不能领奖阶段才故障");
                 script = script with { Headers = script.Headers.Add(new("[movie end time]", 3, [new(0, 65, null)])) };
-                // 本夹具只验证休息时钟，未装配阶段资格/Present集合，不具有客户端演出屏障。
-                var battle = new AntonRaidBattle(script, kind: RaidKind.Luke, clock: clock, flow: LukeRaidFlowPolicy.Shared95);
                 var policies = Enumerable.Range(0, 2).Select(phase => new RaidPhaseRewardPolicy("fixture/flow",
                     [new(0, 0, [new(100, 1)], [])], new(0, (byte)phase, 0, 0, 0, 0))).ToImmutableArray();
-                var repository = new CharacterRepository(Path.Combine(root, $"flow-{count}-{automatic}.db"));
+                var completion = denied ? new LukeRaidCompletionPolicy("fixture/flow", 2,
+                    new(DayOfWeek.Sunday, new TimeOnly(6, 0), TimeSpan.FromHours(8)),
+                    policies.Select(policy => new LukePhaseCompletionPolicy(0, 2, policy)).ToImmutableArray(),
+                    LukeParticipationCutoff.TerminalCommittedFacts) : null;
+                var battle = new AntonRaidBattle(script, kind: RaidKind.Luke, clock: clock,
+                    flow: LukeRaidFlowPolicy.Shared95, completion: completion);
+                var repository = new CharacterRepository(Path.Combine(root, $"flow-{count}-{automatic}-{denied}.db"));
                 var registry = new RaidRegistry();
                 var actors = new List<RaidActor>();
                 var errors = new List<string>();
@@ -57,7 +62,13 @@ internal static class LukeRaidIntermissionTests
                         var session = new GameSession(repository, towns, owner, entry: new(new(2, 20), 32, "[raid]"));
                         sessions.Add(session); session.Select(0); session.MarkReady();
                         var actor = session.CaptureRaidActor(registry)!; actors.Add(actor);
-                        That(session.AttachRaidCombat(actor, battle, policies), "休息夹具绑定真实当前会话");
+                        if (denied)
+                        {
+                            var binding = session.PrepareRaidCombatStart(actor, battle);
+                            That(binding is not null, "演出夹具沿真实Start登记原始Present成员");
+                            binding!.Install();
+                        }
+                        else That(session.AttachRaidCombat(actor, battle, policies), "休息夹具绑定真实当前会话");
                     }
                     using var timer = clocks.Reserve(battle)!; timer.Activate();
                     var id = Guid.NewGuid();
@@ -65,13 +76,23 @@ internal static class LukeRaidIntermissionTests
                     using (var reservation = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), 10, rows)!) reservation.Install();
                     battle.CompleteLukeDungeon(rows.Select(row => (row.Actor, new DungeonClearFact(row.Identity, 10, [Guid.NewGuid()])
                         { ClearMap = new DungeonMap("boss", new(0, 0), 77, "fixture/boss.map") })).ToArray());
+                    if (denied) DenyPending();
                     foreach (var row in rows) battle.ReleaseDungeon(row.Actor, id);
                     That(battle.View.State == AntonRaidBattleState.Reward && battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision) is null,
                         "未完成领奖义务不能进入休息或提前开P2");
-                    foreach (var actor in actors) battle.ConfirmReward(actor, new(battle.Instance, 0, 0, 0, actor.Character,
-                        "fixture/flow", [new(100, 1)], false, 1) { RaidType = RaidKind.Luke });
-                    That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision)?.After is { Phase: 0, State: AntonRaidBattleState.Intermission },
-                        "领奖齐进入原P1待命，不直接跳P2");
+                    if (denied)
+                    {
+                        foreach (var actor in actors) That(battle.CompleteLukeFirstMovie(actor, battle.View),
+                            "无资格P1仍接收各成员真实演出完成");
+                        That(battle.View.State == AntonRaidBattleState.Intermission, "无资格P1演出齐才进入原待命");
+                    }
+                    else
+                    {
+                        foreach (var actor in actors) battle.ConfirmReward(actor, new(battle.Instance, 0, 0, 0, actor.Character,
+                            "fixture/flow", [new(100, 1)], false, 1) { RaidType = RaidKind.Luke });
+                        That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision)?.After is { Phase: 0, State: AntonRaidBattleState.Intermission },
+                            "领奖齐进入原P1待命，不直接跳P2");
+                    }
                     That(battle.LukeWaitSeconds(battle.View) == 600, "待命最大600秒且只建立一次锚点");
                     if (automatic)
                     {
@@ -99,6 +120,46 @@ internal static class LukeRaidIntermissionTests
                     clock.Advance(1);
                     That(battle.View is { Phase: 1, State: AntonRaidBattleState.Fighting, LukePreparing: false } && errors.Count == 0,
                         "同一框架按期初始化P2，不写费用或改变成员身份");
+                    if (denied)
+                    {
+                        var second = Guid.NewGuid();
+                        var secondRows = actors.Select(actor => (Actor: actor,
+                            Identity: new DungeonRunIdentity(actor.Character, 1, 2, second, 1))).ToArray();
+                        using (var reservation = battle.ReserveDungeon(new(battle.Instance, 1, 2, RaidKind.Luke), 20, secondRows)!) reservation.Install();
+                        battle.CompleteLukeDungeon(secondRows.Select(row => (row.Actor,
+                            new DungeonClearFact(row.Identity, 20, [Guid.NewGuid()])
+                            { ClearMap = new DungeonMap("boss", new(0, 0), 77, "fixture/boss.map") })).ToArray());
+                        DenyPending();
+                        foreach (var row in secondRows) battle.ReleaseDungeon(row.Actor, second);
+                        That(battle.View is { Phase: 1, State: AntonRaidBattleState.Reward } &&
+                            battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision) is null,
+                            "P1确认不替代P2；全无资格P2仍先进入真实成功演出而非Completed空翻牌");
+                        if (automatic)
+                        {
+                            _ = battle.DueLukeRewards();
+                            clock.Advance(186);
+                            _ = battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision);
+                        }
+                        else
+                        {
+                            foreach (var actor in actors.Take(actors.Count - 1))
+                                That(battle.CompleteLukeFirstMovie(actor, battle.View) && battle.View.State == AntonRaidBattleState.Reward,
+                                    "无资格P2逐人确认，末人之前保持演出义务");
+                            That(battle.DetachStart(actors[^1]), "P2最后未确认成员主动离团释放真实演出义务");
+                        }
+                        That(battle.View.State == AntonRaidBattleState.Completed && actors.All(actor =>
+                            battle.LukeEligibility(actor.Character, 1) is { Eligible: false }),
+                            "P2真实演出或原185秒超时后完成，不恢复资格或产生空奖");
+                    }
+                    void DenyPending()
+                    {
+                        var pending = battle.PendingLukeSettlement()!;
+                        battle.AcceptLukeSettlement(pending, new(pending.Members.Select(member =>
+                            new RaidPhaseEligibility(battle.Instance, RaidKind.Luke, pending.Phase, pending.Event,
+                                pending.Anchor.ToUnixTimeSeconds(), member.Character, pending.FinalPhase, false,
+                                "phase-eligibility-limit", policies[pending.Phase].Source, pending.Week,
+                                policies[pending.Phase].Offers)).ToImmutableArray()));
+                    }
                 }
                 finally
                 {

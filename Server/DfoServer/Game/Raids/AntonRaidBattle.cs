@@ -472,7 +472,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
                 HasAntonRewards && !current.AntonCardsReady ||
-                HasLukeFirstMovieLocked() && current.Phase == 0 && !LukeFirstMovieReadyLocked() && LukeRewardRemainingLocked() != TimeSpan.Zero ||
+                HasLukeMovieBarrierLocked() && !LukeMovieBarrierReadyLocked() && LukeRewardRemainingLocked() != TimeSpan.Zero ||
                 members.Any(member => member.Value.Length != PhaseCount) ||
                 Kind is RaidKind.Luke or RaidKind.Prey && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;

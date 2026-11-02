@@ -5,6 +5,20 @@ namespace DfoServer.Network.Builders;
 
 internal static class LukeRewardPackets
 {
+    // 0237F390：保留u8、CP936字节长度u32、正文；原生容量256，正文须小于该容量。
+    internal static byte[] Ineligible(string reason)
+    {
+        string message = reason == "phase-eligibility-limit"
+            ? "本阶段奖励次数已达到本周上限，本次没有翻牌奖励。"
+            : "本次未满足本阶段领奖条件，没有翻牌奖励。";
+        var text = Game.Characters.CharacterName.Encoding.GetBytes(message);
+        if (text.Length is < 1 or > 255) throw new InvalidDataException("卢克资格提示超出客户端容量");
+        byte[] body = new byte[5 + text.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), checked((uint)text.Length));
+        text.CopyTo(body, 5);
+        return body;
+    }
+
     // 023CA1B0普通布局：2+4+16*N；owner来自已提交receipt，不是party slot。
     internal static byte[] Result(LukeRewardResult result)
     {
