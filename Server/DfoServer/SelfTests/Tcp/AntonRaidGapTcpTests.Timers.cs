@@ -31,7 +31,9 @@ internal static partial class AntonRaidGapTcpTests
             {
                 peer.Send(666); AntonTcpProbe.Barrier(peer, "超时夹具团长提前准备");
                 clock.Advance(3);
-                That(AntonTcpProbe.Barrier(peer, "超时夹具P2开始").Any(p => p is { Opcode: 587, Body: [2,1] }), "P2超时从准备完成起算");
+                var phaseStart = AntonTcpProbe.Barrier(peer, "超时夹具P2开始");
+                report.Symbols.AddRange(phaseStart.Where(p => p is { Kind: 0, Opcode: 583 }).Select(p => p.Body));
+                That(phaseStart.Any(p => p is { Opcode: 587, Body: [2,1] }), "P2超时从准备完成起算");
                 AntonTcpProbe.Enter(peer, catalog, 218, report, clear: false, leave: false);
             }
             peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "超时测试加载完成");
@@ -66,11 +68,11 @@ internal static partial class AntonRaidGapTcpTests
                         .Select(p => BinaryPrimitives.ReadInt32LittleEndian(p.Body)))
                     .Where(id => id is >= 221 and <= 224).Distinct().ToArray();
                 That(opened.Length == 3 && opened.Contains(infected), "线上自然四选三，感染尾值属于已开图");
-                var symbols = hatch.Skip(index + 1).First(packet => packet is { Kind: 0, Opcode: 583 }).Body;
-                int Value(int id) => Enumerable.Range(0, symbols[0]).Where(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + i * 8)) == id)
-                    .Select(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + i * 8))).Single();
+                int Value(int id) => report.Symbols.Concat(hatch.Where(packet => packet is { Kind: 0, Opcode: 583 }).Select(packet => packet.Body))
+                    .SelectMany(body => Enumerable.Range(0, body[0]).Where(i => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(1 + i * 8)) == id)
+                        .Select(i => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(5 + i * 8)))).Last();
                 That(Value(7) == 1 && Value(8) == infected && Value(50) == 0,
-                    "585后583同步感染状态与P1剩余HP0，不改成累计次数");
+                    "累计583增量与场景恢复后，感染状态和P1剩余HP0正确");
                 advanced = 180;
             }
             clock.Advance(2399 - advanced);

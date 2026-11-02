@@ -96,13 +96,15 @@ internal static partial class RaidCombatProjection
     }
 
     internal static void PostAntonSnapshot(GameConnectionContext context, AntonRaidBattle battle,
-        AntonRaidBattleView view, Func<bool> current)
+        AntonRaidBattleView view, Func<bool> current, bool restore = false)
     {
         if (battle.Kind != RaidKind.Anton || view.Instance != battle.Instance ||
             !view.Symbols.TryGetValue("[is exist infection dungeon]", out int infected) ||
             !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
         bool Guard() => current() && battle.IsCurrent(view);
         // 585尾值保留感染身份；01DCF210会对非零身份置symbol7=1，随后583恢复本次真实开闭值及剩余HP。
+        var key = new AntonSymbolDisplayKey(view.Instance, view.Phase, context.Session.SelectionEpoch, context.Sender.Epoch);
+        bool Full() => restore || context.AntonSymbols.Key != key;
         IReadOnlyList<(int Id, GameWorld.Raids.RaidDungeonState State)> published = [];
         // 585与586共用01DD9DD0，重复Clear也会弹横幅；在FIFO实际写帧时过滤。
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
@@ -111,10 +113,12 @@ internal static partial class RaidCombatProjection
             {
                 published = battle.DungeonSnapshot(view).Where(row =>
                     DungeonChanged(context, view.Instance, row.Id, row.State)).ToArray();
+                if (!Full() && published.Count == 0 && context.AntonSymbols.Infection == infectionDungeon) return null;
                 return RaidCombatPackets.Dungeons(0, published, infectionDungeon);
             }, "raid_dungeon_snapshot", Guard, allowShorter: true, written: () =>
             {
                 foreach (var row in published) RecordAntonDungeon(context, view.Instance, row.Id, row.State);
+                context.AntonSymbols.RecordInfection(key, infectionDungeon);
             });
         (int Id, int Value)[] publishedSymbols = [];
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
@@ -126,10 +130,12 @@ internal static partial class RaidCombatProjection
                     ? row.Value != 0 && view.AntonMovieEvents.TryGetValue(row.Id, out long movieEvent) &&
                         (context.AntonMovieDisplayInstance != view.Instance ||
                         context.AntonMovieDisplays.GetValueOrDefault(row.Id) != movieEvent)
-                    : row.Id != 2 || context.AntonMeteoDisplay != (view.Instance, row.Value)).ToArray();
-                return RaidCombatPackets.Symbols(publishedSymbols);
+                    : (row.Id != 2 || context.AntonMeteoDisplay != (view.Instance, row.Value)) &&
+                        (Full() || context.AntonSymbols.Changed(key, row.Id, row.Value))).ToArray();
+                return publishedSymbols.Length == 0 ? null : RaidCombatPackets.Symbols(publishedSymbols);
             }, "raid_infection_state", Guard, allowShorter: true, written: () =>
             {
+                context.AntonSymbols.Record(key, publishedSymbols);
                 foreach (var row in publishedSymbols)
                     if (row.Id == 2) context.AntonMeteoDisplay = (view.Instance, row.Value);
                 // 只在当前快照成功写帧后确认。以规则事件代去重，保留未归零的再次SET 1。
@@ -165,7 +171,7 @@ internal static partial class RaidCombatProjection
         if (context.Session.AntonRaidMap() is not { } map) return;
         var view = map.Battle.View;
         PostAntonSnapshot(context, map.Battle, view, () => current() &&
-            context.Session.StartedRaid?.InstanceId == view.Instance && context.Session.CanPublishRaidBattle(map.Actor, view));
+            context.Session.StartedRaid?.InstanceId == view.Instance && context.Session.CanPublishRaidBattle(map.Actor, view), restore: true);
         if (view.State == AntonRaidBattleState.Fighting && map.Battle.HasAntonRewards)
             PostState(context, view, map.Actor, () => current() && context.Session.CanPublishRaidBattle(map.Actor, view), "anton_selection_phase_state");
     }

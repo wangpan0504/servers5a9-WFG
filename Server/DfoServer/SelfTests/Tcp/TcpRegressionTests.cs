@@ -18,6 +18,7 @@ internal static class TcpRegressionTests
         }),
         ("prey-guide", PreyGuideTests.RunAsync),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
+        ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
         ("anton-raid-reward-formal", (_, _, resources) =>
         {
