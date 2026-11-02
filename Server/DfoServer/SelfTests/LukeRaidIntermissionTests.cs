@@ -39,6 +39,7 @@ internal static class LukeRaidIntermissionTests
                 Reject<InvalidDataException>(() => new AntonRaidBattle(script, kind: RaidKind.Luke, clock: clock,
                     flow: LukeRaidFlowPolicy.Shared95), "缺少演出时长在开团前拒绝，不能领奖阶段才故障");
                 script = script with { Headers = script.Headers.Add(new("[movie end time]", 3, [new(0, 65, null)])) };
+                // 本夹具只验证休息时钟，未装配阶段资格/Present集合，不具有客户端演出屏障。
                 var battle = new AntonRaidBattle(script, kind: RaidKind.Luke, clock: clock, flow: LukeRaidFlowPolicy.Shared95);
                 var policies = Enumerable.Range(0, 2).Select(phase => new RaidPhaseRewardPolicy("fixture/flow",
                     [new(0, 0, [new(100, 1)], [])], new(0, (byte)phase, 0, 0, 0, 0))).ToImmutableArray();

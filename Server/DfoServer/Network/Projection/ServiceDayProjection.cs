@@ -51,6 +51,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                 Day = committed.Character.Inventory.ServerItems.RefillDay, committed.Character.Revision, MailCount = plan.DailyItemMails.Length });
         }
         await BossSelectionBuffProjection.PostAsync(context);
+        town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;
         int localDay = FatigueDailyReset.Day(now, clock.LocalTimeZone);

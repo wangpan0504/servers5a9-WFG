@@ -6,6 +6,9 @@ internal sealed partial class AntonRaidBattle
     readonly HashSet<ushort> lukeFirstMovieCompleted = [];
     readonly HashSet<ushort> lukeFirstMovieDeparted = [];
 
+    // 完整卢克流程且已有密封Present集合才具有演出屏障；领域诊断不创建不可能完成的UI义务。
+    bool HasLukeFirstMovieLocked() => Kind == RaidKind.Luke && lukeFlow is not null && lukeSettlements.ContainsKey(0);
+
     bool LukeFirstMovieReadyLocked() => lukeSettlements.TryGetValue(0, out var settlement) &&
         settlement.Members.Where(member => member.Present).All(member =>
             lukeFirstMovieCompleted.Contains(member.Character) || lukeFirstMovieDeparted.Contains(member.Character));
@@ -27,7 +30,10 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (view.Phase != 0 || !CanConfirmLukeMovie(actor, view)) return false;
-            return lukeFirstMovieCompleted.Add(actor.Character);
+            if (!lukeFirstMovieCompleted.Add(actor.Character)) return false;
+            // 无领奖资格也须完成成功演出；全员确认后沿原奖励屏障推进，不重造资格或发空奖。
+            if (LukeFirstMovieReadyLocked()) _ = AdvanceAfterRewards(Instance, current.Revision);
+            return true;
         }
     }
 
@@ -42,7 +48,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || phase != 0) return true;
+            if (!HasLukeFirstMovieLocked() || phase != 0) return true;
             if (!actor.IsCurrent || !members.ContainsKey(actor) || current.Phase != phase ||
                 current.State != AntonRaidBattleState.Reward || current.ClockFaulted || current.PhaseExpired) return false;
             // 自动资产收尾仅由既有185秒权威到期放行；不伪造动画完成或牌面就绪。
@@ -58,6 +64,10 @@ internal sealed partial class AntonRaidBattle
         bool before = LukeFirstMovieReadyLocked();
         lukeFirstMovieDeparted.Add(actor.Character);
         // 原主动离团发布链按view变更广播；断线不会走此分支，也不会删除已有确认。
-        if (!before && LukeFirstMovieReadyLocked()) current = current with { Revision = checked(current.Revision + 1) };
+        if (!before && LukeFirstMovieReadyLocked())
+        {
+            current = current with { Revision = checked(current.Revision + 1) };
+            _ = AdvanceAfterRewards(Instance, current.Revision);
+        }
     }
 }

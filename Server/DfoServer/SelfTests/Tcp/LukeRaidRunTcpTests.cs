@@ -303,6 +303,15 @@ internal static partial class LukeRaidRunTcpTests
             var frames = phaseResults is not null ? phaseResults[peer] : clearFrames[peer];
             That(CompletedEvents(frames) == 1,
                 "每场含P1第九Run与P2末图，全团每人严格一次584真实通关事件，死亡重放不重播横幅");
+            int completedState = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 586, Body.Length: 6 } &&
+                U32(packet.Body) == U32(information) && packet.Body[5] == (byte)RaidDungeonState.Clear);
+            That(completedState >= 0 && frames.Count(packet => packet is { Kind: 0, Opcode: 586, Body.Length: 6 } &&
+                U32(packet.Body) == U32(information) && packet.Body[5] == (byte)RaidDungeonState.Clear) == 1,
+                "每个正式Run含首两次圣所及二阶段逐图，全团每人只收到一次原生586通关横幅");
+            if (expectedStates?.TryGetValue(checked((int)U32(information)), out var finalState) == true && finalState != RaidDungeonState.Clear)
+                That(frames.FindLastIndex(packet => packet is { Kind: 0, Opcode: 586, Body.Length: 6 } &&
+                    U32(packet.Body) == U32(information) && packet.Body[5] == (byte)finalState) > completedState,
+                    "瞬态通关横幅之后恢复已提交的Hide/Close，不以Clear覆盖资源最终门禁");
             int clear = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 31 });
             bool participant = members.Contains(peer);
             That(frames.Count(packet => packet is { Kind: 0, Opcode: 31 }) == (participant ? 1 : 0),
@@ -328,7 +337,7 @@ internal static partial class LukeRaidRunTcpTests
     static Dictionary<TcpPeer,List<WirePacket>> PhasePackets(IEnumerable<TcpPeer> peers) =>
         peers.ToDictionary(peer=>peer,_=>new List<WirePacket>());
 
-    static void AwaitPhaseResults(TcpPeer[] members,TcpPeer[] others,Dictionary<TcpPeer,List<WirePacket>> frames,byte phase)
+    static void AwaitPhaseResults(TcpPeer[] members,TcpPeer[] others,Dictionary<TcpPeer,List<WirePacket>> frames,byte phase,bool requireRunClear=true)
     {
         foreach(var peer in members.Concat(others))
         {
@@ -345,7 +354,12 @@ internal static partial class LukeRaidRunTcpTests
             {
                 int town=result.FindIndex(packet=>packet is {Kind:0,Opcode:24});
                 int clear=result.FindIndex(packet=>packet is {Kind:0,Opcode:31});
-                That(clear>=0&&town>clear&&movie>town,"阶段末参与成员先31清图许可，再24自动退场，最后601阶段动画");
+                That(town>=0&&movie>town&&(requireRunClear ? clear>=0&&town>clear : clear<0),
+                    (requireRunClear ? "阶段末参与成员先31清图许可，再24自动退场，最后601阶段动画: " :
+                        "仅设施合成终结的未清怪Run不造31，仍先24自动退场再601阶段动画: ") +
+                    System.Text.Json.JsonSerializer.Serialize(new { Character = peer.Id, Phase = phase, Clear = clear, Town = town, Movie = movie,
+                        Frames = result.Select((packet,index) => new { Index = index, packet.Kind, packet.Opcode,
+                            Body = packet.Opcode is 24 or 31 or 587 or 601 or 662 ? Convert.ToHexString(packet.Body) : null }) }));
                 That(!result.Any(packet=>packet.Kind==1&&packet.Opcode is 42 or 72),"自动退场不伪造玩家返回或选择按钮应答");
             }
         }
@@ -519,7 +533,7 @@ internal static partial class LukeRaidRunTcpTests
             else if(phaseResults&&packet is {Kind:0,Opcode:601})
                 That(packet.Body.Length==10&&packet.Body[0] is 0 or 2,"显式两阶段策略只接已证10B成功结果，不接600未知展示");
             else if(phaseResults&&packet is {Kind:0,Opcode:600})
-                That(packet.Body is [0 or 1,0] || packet.Body.Length>=22&&packet.Body[1]==1&&packet.Body[5] is >=1 and <=32&&packet.Body.Length==6+16*packet.Body[5],"Luke未选列表为空，已提交结果按实际物品数保留完整16B布局");
+                ValidateLukeReward(packet.Body);
             else if(phaseResults&&packet is {Kind:1,Opcode:659})
                 Bytes(packet.Body,[1],"659合法演出请求清除原等待");
             else if(phaseResults&&packet is {Kind:0,Opcode:599})
@@ -529,6 +543,19 @@ internal static partial class LukeRaidRunTcpTests
             else if(packet is {Kind:0,Opcode:592})
                 That(packet.Body.Length==2+3*U16(packet.Body),"候战成员列表保留完整数量及条目");
             else Validate(packet);
+    }
+    static void ValidateLukeReward(byte[] body)
+    {
+        That(body.Length >= 2 && body[0] is 0 or 1 or 3 && body[1] <= 8 &&
+            (body[0] == 3 || body[1] <= 1), "Luke600只接本人结果或最多八人团队权益页");
+        int at = 2;
+        for (int row = 0; row < body[1]; row++)
+        {
+            That(at + 4 <= body.Length && body[at + 3] is >= 1 and <= 32, "Luke600每行保留owner/card及有界物品数");
+            at += 4 + 16 * body[at + 3];
+            That(at <= body.Length, "Luke600全部物品保持16B字段，无截断尾列");
+        }
+        That(at == body.Length, "Luke600行数及变长物品消耗全部包体，无未知尾字节");
     }
     static void Validate(WirePacket packet)
     {
@@ -586,7 +613,8 @@ internal static partial class LukeRaidRunTcpTests
                 That(dungeon==5054+index&&pattern<(dungeon==5055?4:2)&&cards is >0 and <=7,"牌组图号、布局和真实七牌预算");
                 for(int card=0;card<cards;card++,at+=5)That(U32(body,at)>0&&body[at+4]==0,"模板标识不使用图集帧号，保留列为0");
             }
-            That(at==body.Length-1&&body[at]==(body[0]==0?1:0),"完整消费1184，自动展示仅初始三圣所"); return;
+            That(at==body.Length-1&&body[at]<=1&&(body[0]==0||body[at]==0),
+                "完整消费1184；频道预览与开团恢复各自校验自动展示，二阶段必须关闭"); return;
         }
         if (packet is { Kind: 0, Opcode: 584 or 634 })
         {

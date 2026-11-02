@@ -11,7 +11,10 @@ internal static partial class RaidCombatProjection
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
         bool Guard() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity;
         if (!Guard()) return true;
-        if (!context.Sender.TryPost(1, (ushort)CmdPacketType.RAID_MOVIE_SKIP, [1], "raid_movie_ack", Guard)) return false;
+        // 最后一名无资格成员确认可同步进入等待；已接受的659仍需ACK，但不能投到新actor或新阶段。
+        bool Acknowledge() => actor.IsCurrent && context.Session.CurrentRaidBattle(actor) == battle &&
+            battle.View.Phase == view.Phase && context.RaidDisplay == identity;
+        if (!context.Sender.TryPost(1, (ushort)CmdPacketType.RAID_MOVIE_SKIP, [1], "raid_movie_ack", Acknowledge)) return false;
         if (!completed)
         {
             // 01C63430发送0仅请求跳过；599通知原电影控件，不能提前领取或结束阶段。
@@ -21,8 +24,8 @@ internal static partial class RaidCombatProjection
         }
         if (view.Phase == 0)
         {
-            _ = battle.CompleteLukeFirstMovie(actor, view);
-            if (battle.LukeMovieCardsReady(view)) battle.Publish(view);
+            bool changed = battle.CompleteLukeFirstMovie(actor, view);
+            if (changed && (battle.LukeMovieCardsReady(view) || !battle.IsCurrent(view))) battle.Publish(battle.View);
             return true;
         }
         return PostLukeMovieCards(context, actor, battle, view);
@@ -37,9 +40,10 @@ internal static partial class RaidCombatProjection
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
         bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
             battle.LukeMovieCardsReady(view) && context.RaidMovieCards != identity;
-        // 02396DE0 state4→036D2770→01C99AA0显示翻牌组合对象；第二字节是选项，不是阶段。
+        context.LukeResults.PostTeam(context, actor, battle, view);
+        // 02396DE0 state4→036D2770→01C99AA0显示翻牌组合对象；第二字节写入真实阶段。
         // 这是演出显示推进，Battle仍在Reward，只有实际资产提交确认才能转阶段。
-        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, 0], "raid_movie_cards", Cards)) return false;
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, checked((byte)view.Phase)], "raid_movie_cards", Cards)) return false;
         var offers = policy.Offers;
         for (int index = 0; index < offers.Length; index++)
         {

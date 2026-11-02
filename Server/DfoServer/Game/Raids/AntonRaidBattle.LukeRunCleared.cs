@@ -71,4 +71,11 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate) return dungeonRuns.GetValueOrDefault(run)?.LukeClear;
     }
+
+    // 原Run事件拥有通关瞬态；怪物/名册等较早快照不能抢先重播相同Clear横幅。
+    internal bool HasPendingLukeRunClear(AntonRaidBattleView view, int dungeon)
+    {
+        lock (gate) return ReferenceEquals(current, view) && dungeonRuns.Values.Any(run =>
+            run.Dungeon == dungeon && run.LukeClear is { Published: false });
+    }
 }

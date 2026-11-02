@@ -53,6 +53,10 @@ internal static partial class RaidCombatProjection
             return;
         }
         PostState(context, view, actor, Guard, "raid_phase_state");
+        if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } resultsBattle)
+        {
+            context.LukeResults.PostTeam(context, actor, resultsBattle, view);
+        }
         PostRoster(context, view, actor, Guard);
         if (view.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed)
             RaidClearProjection.Refresh(context, Guard);
@@ -162,6 +166,14 @@ internal static partial class RaidCombatProjection
             return;
         }
         if (view.PhaseExpired) return;
+        // Luke的业务Completed与原生state4共用数值，但state4会重新安装翻牌组合对象。
+        // 本阶段牌面已打开时，末张600后的业务终结只更新名册/次数，不重建正在播放的第二轮翻牌。
+        if (view.State == AntonRaidBattleState.Completed &&
+            context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } &&
+            context.RaidMovieCards is { State: AntonRaidBattleState.Reward } cards &&
+            cards.Session == actor.Session && cards.Owner == actor.Owner && cards.SelectionEpoch == actor.Epoch &&
+            cards.Character == actor.Character && cards.Instance == view.Instance && cards.Phase == view.Phase)
+            return;
         context.Owner.Execute(() =>
         {
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);
@@ -262,13 +274,14 @@ internal static partial class RaidCombatProjection
         // 586缺键会创建记录；不用585未知尾字段改变共享symbol7/8。
         foreach (var row in battle.DungeonSnapshot(view))
         {
+            bool EventPending() => row.State == GameWorld.Raids.RaidDungeonState.Clear && battle.HasPendingLukeRunClear(view, row.Id);
             // 已显示的不变状态不占发送队列；仍在写出时复核，显式恢复继续补全非Clear记录。
-            if (!context.Owner.Execute(() => guard() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
+            if (!context.Owner.Execute(() => guard() && !EventPending() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
                 DungeonChanged(context, view.Instance, row.Id, row.State)))) continue;
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                 RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_snapshot",
                 // 显式开团恢复补齐非通关记录；Clear仍去重，避免重播横幅。
-                () => guard() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
+                () => guard() && !EventPending() && (restore && row.State != GameWorld.Raids.RaidDungeonState.Clear ||
                     DungeonChanged(context, view.Instance, row.Id, row.State)),
                 () => RecordAntonDungeon(context, view.Instance, row.Id, row.State));
         }

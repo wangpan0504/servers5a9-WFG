@@ -9,6 +9,36 @@ internal sealed class LukeRewardResultProjection
 {
     RaidCombatDisplayIdentity? identity;
     readonly HashSet<PreparedRaidReward> written = new(ReferenceEqualityComparer.Instance);
+    RaidCombatDisplayIdentity? teamIdentity;
+    byte[]? teamBody;
+    bool personalEmptyWritten;
+
+    internal void PostTeam(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view, bool afterPersonal = false)
+    {
+        context.Owner.Execute(() =>
+        {
+            if (!context.Session.CanPublishRaidBattle(actor, view)) return false;
+            if (view.State is not (AntonRaidBattleState.Reward or AntonRaidBattleState.Completed) ||
+                view.Phase == 0 && !afterPersonal) return false;
+            var results = battle.LukeTeamEntitlements(view);
+            if (results.IsDefault) return false;
+            var expected = RaidCombatDisplayIdentity.Capture(actor, view) with { State = AntonRaidBattleState.Reward };
+            if (teamIdentity != expected) { teamIdentity = expected; teamBody = null; personalEmptyWritten = false; }
+            var body = LukeRewardPackets.TeamResults(results);
+            bool Ready() => teamIdentity == expected && actor.IsCurrent && context.Session.CurrentRaidBattle(actor) == battle &&
+                battle.View is { } latest && latest.Phase == view.Phase &&
+                (latest.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed ||
+                    view.Phase == 0 && latest.State == AntonRaidBattleState.Intermission) &&
+                !latest.ClockFaulted && !latest.PhaseExpired && context.RaidDisplay == expected &&
+                (!afterPersonal || identity == expected && written.Any(reward => reward.Phase == view.Phase && reward.Kind == 1));
+            // 第二页一次性装配，P2须在state4前预填完整权益；P1本人结果后发空页设置跳页标志。
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST, body, "luke_team_reward_entitlements",
+                () => Ready() && (teamBody is null || !body.AsSpan().SequenceEqual(teamBody) || afterPersonal && !personalEmptyWritten),
+                () => { teamBody = body; if (afterPersonal) personalEmptyWritten = true; });
+            return true;
+        });
+    }
 
     internal bool Post(GameConnectionContext context, RaidRewardReceipt receipt, LukeRewardResult result)
     {
@@ -23,14 +53,15 @@ internal sealed class LukeRewardResultProjection
             bool Current() => identity == expected && context.Session.LukeResultView(receipt) is { } current &&
                 RaidCombatDisplayIdentity.Capture(current.Actor, current.View) == expected;
             bool DisplayReady() => Current() && context.RaidDisplay == expected;
-            // 排在587后，泵才检验written；不在party命令门禁里等待慢socket。
             if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST, body, "luke_reward_result",
                 () => DisplayReady() && !written.Contains(receipt.Prepared),
                 () => { if (DisplayReady()) written.Add(receipt.Prepared); })) return true;
+            if (result.Kind == 1 && captured.View.Phase == 0 &&
+                captured.Actor.Session.CurrentRaidBattle(captured.Actor) is { } battle)
+                PostTeam(context, captured.Actor, battle, captured.View, afterPersonal: true);
             context.Sender.TryPost(1, (ushort)CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "luke_reward_selected",
                 () => DisplayReady() && written.Contains(receipt.Prepared), afterWritten: () =>
                 {
-                    // 泵已退出owner；Confirm会锁外发布其它成员，不能塞进Written回调。
                     if (context.Owner.Execute(() => DisplayReady() && written.Contains(receipt.Prepared)))
                         context.Session.ConfirmRaidRewardPublished(receipt);
                 });

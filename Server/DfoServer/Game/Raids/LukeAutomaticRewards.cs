@@ -23,12 +23,15 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                 foreach (var offer in eligibility.Offers.GroupBy(row => row.Kind).Select(group => group.OrderBy(row => row.Card).First()))
                 {
                     if (battle.HasConfirmedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind)) continue;
+                    // 原660已提交但ACK丢失时直接确认精确原回执，不能改用最低Card0重放而卡住非零牌。
+                    if (battle.SubmittedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind) is { } submitted)
+                    { battle.ConfirmAutomaticLukeReward(eligibility, submitted); continue; }
                     var session = online.Find(account);
                     if (session is not null)
                     {
                         if (!session.CommandGate.Wait(0)) continue;
                         RaidRewardReceipt? receipt;
-                        (bool Claimed, DfoServer.Game.Inventory.Models.InventoryResult? Refresh) recovered = default;
+                        (bool Claimed, DfoServer.Game.Inventory.Models.InventoryResult? Refresh, PreparedRaidReward? Prepared) recovered = default;
                         try
                         {
                             if (session.Selected?.Id == eligibility.Character && session.RaidCombatView()?.Instance == battle.Instance)
@@ -48,14 +51,14 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                                     await publishRecovery(refresh);
                             }
                             catch (Exception error) { publicationErrors.Add(error); }
-                            finally { battle.ConfirmAutomaticLukeReward(eligibility, offer.Kind); }
+                            finally { battle.ConfirmAutomaticLukeReward(eligibility, recovered.Prepared!); }
                             continue;
                         }
                         if (receipt is null) continue;
                         // 资产已提交即满足自动结算义务；网络展示失败不重发资产，也不永久锁住全团。
                         try { if (session.AutomaticRaidRewardArrived is { } publish) await publish(receipt); }
                         catch (Exception error) { publicationErrors.Add(error); }
-                        finally { battle.ConfirmAutomaticLukeReward(eligibility, offer.Kind); }
+                        finally { battle.ConfirmAutomaticLukeReward(eligibility, receipt.Prepared); }
                         continue;
                     }
                     if (!owners.TryAcquire(account, static () => { }, DuplicateLoginPolicy.Reject, out var lease, out _)) continue;
@@ -64,9 +67,10 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                         var character = load(lease!, eligibility.Character);
                         if (character is null) continue;
                         var target = new LukeRewardRecoveryTarget(character.Id, eligibility.Instance, eligibility.Phase, offer.Kind, offer.Card);
-                        _ = LukeRewardRecovery.Claim(lease!, character, target, eligibility.Event, eligibility.Anchor, store,
+                        var commit = LukeRewardRecovery.Claim(lease!, character, target, eligibility.Event, eligibility.Anchor, store,
                             () => (items, gold, pieces), clock.GetUtcNow());
-                        battle.ConfirmAutomaticLukeReward(eligibility, offer.Kind);
+                        var prepared = store.ReadLukeRewardRecovery(lease!, commit.Character, target).Prepared;
+                        battle.ConfirmAutomaticLukeReward(eligibility, prepared);
                     }
                 }
             var view = battle.View;

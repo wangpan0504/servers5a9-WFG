@@ -65,6 +65,8 @@ internal static partial class LukeRaidRunTcpTests
                         }
                     }
                     var peer = Open(fixture, account, gamePort: port, channelNumber: 20); peer.Select(); peers.Add(peer);
+                    That(peer.LukeChannelCardsInfo is [.., 1], "尚未建团或开战，进入卢克频道已收到自动展示塔罗牌组");
+                    Bytes(peer.LukeChannelCardsInfo, peers[0].LukeChannelCardsInfo, "同频道同一日成员进入时使用完全相同塔罗布局与真实怪物表");
                 }
                 var leader = peers[0];
                 leader.Send(664, Build(writer => { writer.Write((byte)1); writer.Write(Name("LukeFull")); writer.Write(new byte[] { 0, 0, 0, 5 }); }));
@@ -123,6 +125,11 @@ internal static partial class LukeRaidRunTcpTests
                     That(started.Count(packet => packet is { Kind: 0, Opcode: 1184 }) == 1,
                         "正式Runtime开战向每名成员发送三圣所塔罗牌，资源装配不能遗漏");
                     Validate(started.Single(packet => packet is { Kind: 0, Opcode: 1184 }));
+                    var openingCards = started.Single(packet => packet is { Kind: 0, Opcode: 1184 }).Body;
+                    That(openingCards[^1] == 0, "开战恢复牌组不重复触发入频道自动弹窗");
+                    Bytes(openingCards.AsSpan(0, openingCards.Length - 1).ToArray(),
+                        peer.LukeChannelCardsInfo.AsSpan(0, peer.LukeChannelCardsInfo.Length - 1).ToArray(),
+                        "开战真实路线及塔罗逐字节继承入频道当天牌组，不重新抽取");
                     That(started.Any(packet => packet is { Kind: 0, Opcode: 776 }),
                         "正式Runtime开战同步牌组怪物存活状态，不能只验证收到时的包体");
                     That(started.Any(packet => packet is { Kind: 0, Opcode: 583 }), "生产开团确实收到符号快照");
@@ -135,6 +142,7 @@ internal static partial class LukeRaidRunTcpTests
                             "正式开团只开放诞生，蔓延和湮灭保留真实未开放状态");
                 }
                 LukeRaidDisconnectCandidate? p1RejoinCandidate = null;
+                var frozenTeamRows = new Dictionary<ushort, byte[]>();
                 if (recovery)
                 {
                     Enter([leader], leader, 5054); Load([leader]);
@@ -168,7 +176,7 @@ internal static partial class LukeRaidRunTcpTests
                     peer.Send(659,[0]); var repeated=Drain(peer,true);
                     That(!repeated.Any(packet=>packet.Opcode is 599 or 600),"重复跳过不重播通知或发奖");
                     peer.Send(659,[1]); var cards=Drain(peer,true);
-                    That(cards.Any(packet=>packet is {Kind:0,Opcode:587,Body:[4,0]}) &&
+                    That(cards.Any(packet=>packet is {Kind:0,Opcode:587,Body:[4,1]}) &&
                         cards.Any(packet=>packet is {Kind:0,Opcode:600,Body:[0 or 1,0]}),
                         "演出完成推进原生翻牌显示，尚未选择时没有本人奖励结果");
                     peer.Send(659,[1]);
@@ -371,6 +379,44 @@ internal static partial class LukeRaidRunTcpTests
                     if (terminal)
                     {
                         returned=phaseResults![leader];
+                        if (phase == 1)
+                        {
+                            var frozen = members.OrderBy(peer => peer.Id).Select(peer =>
+                                System.Text.Json.JsonSerializer.Deserialize<RaidPhaseEligibility>((string)fixture.Query(
+                                    "SELECT phase1_receipt FROM character_raid_runs WHERE character_id=$p0", peer.Id)[0][0]!)!).ToArray();
+                            var expectedTeam = Build(writer =>
+                            {
+                                writer.Write((byte)3); writer.Write(checked((byte)frozen.Length));
+                                foreach (var row in frozen)
+                                {
+                                    That(row.Eligible, "二阶段权益页只取阶段事务真实签发的成员资格");
+                                    var offer = row.Offers.Single(offer => offer.Kind == 0);
+                                    var items = offer.LukeAdditionalResults.Insert(0, offer.LukeResult!);
+                                    var itemBody = Build(itemsWriter =>
+                                    {
+                                        itemsWriter.Write(checked((byte)items.Length));
+                                        foreach (var item in items)
+                                        {
+                                            itemsWriter.Write(item.RawCode!.Value); itemsWriter.Write(item.ItemId!.Value);
+                                            itemsWriter.Write(item.DisplayNumber!.Value); itemsWriter.Write(item.RawFlag!.Value);
+                                            itemsWriter.Write(item.RawTail1!.Value); itemsWriter.Write(item.EnchantUpgrade!.Value);
+                                        }
+                                    });
+                                    frozenTeamRows.Add(row.Character, itemBody);
+                                    writer.Write(row.Character); writer.Write(offer.Card); writer.Write(itemBody);
+                                }
+                            });
+                            foreach (var peer in peers)
+                            {
+                                var frames = phaseResults[peer];
+                                Bytes(frames.Single(packet => packet is { Kind: 0, Opcode: 600, Body: [3, ..] }).Body,
+                                    expectedTeam, "全团在首次选牌及state4前收到完整冻结权益，包括尚未点击的晚领奖成员");
+                                That(!frames.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [4, ..] }),
+                                    "完整团队模型先于原生组合state4计时安装，不等待15秒后补空页");
+                            }
+                            That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0 AND phase=1", frozen[0].Instance.ToString("N")) is [[0L]],
+                                "团队页只展示事务已密封权益，首次点击前未强发任何二阶段资产");
+                        }
                         foreach(var peer in others)
                         {
                             var frames=phaseResults[peer];
@@ -478,6 +524,10 @@ internal static partial class LukeRaidRunTcpTests
                         peer.Send(660, [1, 2]); var claimed = Drain(peer, true);
                         That(claimed.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) && claimed.Any(packet => packet.Opcode == 600),
                             "P1全员演出完成后个人实际不渝结果与领取回执写出");
+                        int personal = claimed.FindIndex(packet => packet is { Kind: 0, Opcode: 600, Body: [1, 1, ..] });
+                        int skipped = claimed.FindIndex(packet => packet is { Kind: 0, Opcode: 600, Body: [3, 0] });
+                        That(personal >= 0 && skipped > personal && skipped < claimed.FindIndex(packet => packet is { Kind: 1, Opcode: 660 }),
+                            "P1实际本人结果后发送空wire3再ACK，原生跳过不存在的第二页，不新发奖励");
                         foreach (var other in peers.Where(other => other != peer)) Drain(other, true);
                     }
                 }
@@ -558,8 +608,14 @@ internal static partial class LukeRaidRunTcpTests
                     foreach (byte kind in new byte[] { 1, 0 })
                     {
                         peer.Send(660, [kind, 3]); var claimed = Drain(peer, true);
-                        That(claimed.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) && claimed.Any(packet => packet.Opcode == 600),
+                        That(claimed.Count(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) == 1 &&
+                            claimed.Count(packet => packet is { Kind: 0, Opcode: 600 }) == 1 &&
+                            !claimed.Any(packet => packet is { Kind: 0, Opcode: 600, Body: [3, ..] }) &&
+                            !claimed.Any(packet => packet is { Kind: 0, Opcode: 587 }),
                             "P2个人/团队实际产物各自提交与展示");
+                        if (kind == 0)
+                            Bytes(claimed.Single(packet => packet is { Kind: 0, Opcode: 600 }).Body.AsSpan(5).ToArray(),
+                                frozenTeamRows[peer.Id], "晚领取成员最终实际产物逐字节等于预先密封的团队权益，未重抽或新增第三奖项");
                         foreach (var other in peers.Where(other => other != peer)) Drain(other, true);
                     }
                 }

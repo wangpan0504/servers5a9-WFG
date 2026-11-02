@@ -9,6 +9,7 @@ internal sealed partial class AntonRaidBattle
     readonly LukeSanctumRoute? lukeCardRoute;
     readonly Random lukeRouteRandom;
     int? lukeCardGroup;
+    readonly LukeChannelCardSelection? lukeChannelCards;
     internal bool UsesLukeRoute(int phase) => phase == 0 && (lukeFixedRoute is not null || lukeCardRoute is not null);
 
     internal LukeRouteLease? CaptureLukeRoute(int phase, int dungeon, LukeFixedCardRoute? policy, LukeSanctumRoute? cards = null)
