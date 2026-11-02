@@ -50,6 +50,16 @@ public static class ServerApplication
             Console.WriteLine(ServerCommand.Usage);
             return 0;
         }
+        if (command.Kind == ServerCommandKind.MapGeometryGolden)
+        {
+            MapGeometryTests.RunDungeonGolden(command.Arguments[0], command.Arguments[1], command.Arguments[2]);
+            return 0;
+        }
+        if (command.Kind == ServerCommandKind.MapGeometryInterop)
+        {
+            await MapGeometryHttpTests.RunInteropAsync(command.Arguments[0], command.Arguments[1], command.Arguments[2], command.Arguments[3]);
+            return 0;
+        }
         if (command.Kind == ServerCommandKind.HostedEligibilityFakeHost)
             return DfoServer.Game.Dungeons.HostedDungeonEligibilityFakeHost.Run(command.Arguments[0]);
         // 注册清单不经过ServerOptions、PVF、SQL或监听装配，不表示执行通过。

@@ -7,7 +7,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class MapGeometryTests
+internal static partial class MapGeometryTests
 {
     public static void RunCore()
     {
@@ -44,6 +44,7 @@ internal static class MapGeometryTests
         var different = JsonNode.Parse(Doc(row))!;
         different["rules"]![0]!["to"]!["960"]![0]![1] = 111;
         Reject<InvalidDataException>(() => MapGeometryConfig.Parse(different.ToJsonString()), "玩法目标不能随比例变化");
+        RunDungeonCore();
         Console.WriteLine($"PASS common map geometry core {Count - checks}");
     }
 
