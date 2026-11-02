@@ -13,7 +13,7 @@ namespace DfoServer.GameWorld.Dungeons;
 //   [special weekly reset day] 成对“副本 星期”。[single dungeon]、[event link enterable dungeon]、[send dungeon info account login] 只保留原样，未实现。
 internal sealed record DungeonIncountRow(int ResetType, ImmutableArray<int> Dungeons, int Limit, bool Flag, int Second)
 {
-    // 专用玩法复用账本，不代表已证明其客户端次数通知。
+    // 黎明裂缝复用角色日账本，并通过 1545 + 550 投影真实剩余。
     public bool HasCountNotification { get; init; } = true;
     public int WeeklyLimit => Second;
     // 次数存储键：同行共用一份次数，取该行第一个副本编号（结构推断：客户端只为 n>1 的行建组，未见读者）。
@@ -28,6 +28,8 @@ internal sealed class DungeonIncountCatalog
     public const string Path = "etc/dungeonetc/dungeonincountinfo.etc";
     // 默认每周重置星期（0=周日……6=周六，假设）：客户端文本 68076/68109/30466“每周四凌晨6点初始化/重置”，与 [reset info] 1→4 一致。
     public const int DefaultWeeklyResetDay = 4;
+    // 黎明裂缝固定两次数，不跟随外部 crackofdaybreak.etc 的旧 3 次值。
+    public const int DaybreakDailyLimit = 2;
 
     public ImmutableArray<DungeonIncountRow> Rows { get; }
     public ImmutableArray<AccountIncountRow> AccountRows { get; }
@@ -83,7 +85,7 @@ internal sealed class DungeonIncountCatalog
         if (limit is not (> 0 and <= byte.MaxValue) || ids.Length == 0 || ids.Any(id => id <= 0) || ids.Distinct().Count() != ids.Length)
             throw new InvalidDataException("黎明每日次数或副本名册无效");
         // 专表没有共享组声明，每个副本独立记次；当前匹配PVF仅530。
-        return [.. ids.Select(id => new DungeonIncountRow(0, [id], limit.Value, false, 0) { HasCountNotification = false })];
+        return [.. ids.Select(id => new DungeonIncountRow(0, [id], DaybreakDailyLimit, false, 0) { HasCountNotification = true })];
     }
 
     internal static DungeonIncountCatalog Parse(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)

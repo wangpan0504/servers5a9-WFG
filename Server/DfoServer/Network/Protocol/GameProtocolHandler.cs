@@ -53,7 +53,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     Func<DfoServer.Game.Characters.Character, int>? strongway2019AntiEvil = null,
     DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
     Strongway2019Projection? strongwayProjection = null,
-    DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null) : IConnectionProtocol
+    DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null,
+    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -131,7 +132,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
-            directPickupGoldLimits: goldLimits);
+            directPickupGoldLimits: goldLimits, riftNamedEpics: riftNamedEpics);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };

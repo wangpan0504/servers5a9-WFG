@@ -3,6 +3,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 
@@ -13,7 +14,7 @@ internal sealed class DungeonIncountTicketHandler(DungeonIncountTicketService se
 {
     public async Task<CommandResult> UseAsync(GameConnectionContext context, StackableActionUseRequest request)
     {
-        bool valid = request.Action == DungeonIncountTicketService.Action && request.List == 0 && request.Slot <= short.MaxValue &&
+        bool valid = DungeonIncountTicketService.Handles(request.Action) && request.List == 0 && request.Slot <= short.MaxValue &&
             request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0;
         var result = context.Session.UseDungeonIncountTicket(new(InventoryListType.Main, unchecked((short)request.Slot)), service, store,
             !valid || context.BlocksTownActions);
@@ -27,8 +28,10 @@ internal sealed class DungeonIncountTicketHandler(DungeonIncountTicketService se
             accepted ? "dungeon_incount_ticket_used" : "dungeon_incount_ticket_rejected", Guard);
         if (accepted)
         {
-            foreach (var count in result.Counts)
+            foreach (var count in result.Counts.Where(count => count.Dungeon != 530))
                 await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_incount_ticket_balance", Guard);
+            if (result.Counts.Any(count => count.Dungeon == 530))
+                await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
             await inventory.RefreshAsync(context, result.Inventory!, new HashSet<InventorySlot> { new(InventoryListType.Main, (short)request.Slot) });
         }
         return CommandResult.Handled;

@@ -79,6 +79,19 @@ internal sealed partial class GameSession
             return new DungeonEnterCountReceipt(owner.Generation, SelectionEpoch, character, day, counts.ToImmutable());
         });
 
+    // 黎明裂缝使用独立 crackofdaybreak.etc 次数行；只投影 530 的日剩余。
+    public DungeonEnterCount? DaybreakEnterCount() => owner.Execute(() =>
+    {
+        if (incounts is null || Selected is not { } character || incounts.Find(530) is not { Limit: > 0 } row)
+            return (DungeonEnterCount?)null;
+        var usage = repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey));
+        return new DungeonEnterCount(530, checked((byte)Math.Min(DungeonIncountPolicy.DailyRemaining(row, usage), DungeonIncountCatalog.DaybreakDailyLimit)), 0);
+    });
+
+    public bool InDaybreakArea() => owner.Execute(() => Selected is { } character &&
+        towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) &&
+        area.DungeonWorldMap is { } world && towns.DungeonMaps.TryGetValue(world, out var map) &&
+        map.Options.Any(option => option.DungeonId == 530));
     public bool CanPublishDungeonEnterCounts(DungeonEnterCountReceipt receipt) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch && ReferenceEquals(Selected, receipt.Character) &&
         ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()) == receipt.Day);

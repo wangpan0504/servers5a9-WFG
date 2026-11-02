@@ -132,6 +132,18 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         return reward;
     }
 
+    // 强袭普通/隐藏免费牌统一为固定55个黑夜穿行之证，不参与普通牌随机池。
+    public DungeonCardReward PrepareAssault(int gold, DateTimeOffset now)
+    {
+        if (gold < 0) throw new InvalidDataException("强袭免费牌金币不能为负");
+        var core = DungeonDropCreation.Create(items.Get(AssaultMaterialDropPolicy.CertificateId),
+            AssaultMaterialDropPolicy.FreeCardCertificateCount, _ => 0, now);
+        var reward = new DungeonCardReward(gold, core, "assault-free-card-local-v1",
+            AssaultModeCatalog.ClearRewardPath, now.ToUnixTimeSeconds());
+        reward.Validate();
+        return reward;
+    }
+
     long GoldAmount(int level, byte difficulty, int kills, Func<int, int> draw)
     {
         if (difficulty >= DifficultyRates.Length || kills < 0)

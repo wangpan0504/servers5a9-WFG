@@ -136,11 +136,13 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
         bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
-        CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
+        CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true,
+        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
-            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards, allowDimensionHidden: allowDimensionHidden);
+            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards, allowDimensionHidden: allowDimensionHidden,
+            assaultRetry: assaultRetry, assaultRetryRewards: assaultRetryRewards);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection ??= "state-changed-before-install";
@@ -161,7 +163,8 @@ internal sealed partial class GameSession
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true,
         byte partyMemberCount = 1, HelperRotationCapture? helperRotation = null,
-        DfoServer.Game.Strongway2019.Strongway2019Admission? strongwayAdmission = null)
+        DfoServer.Game.Strongway2019.Strongway2019Admission? strongwayAdmission = null,
+        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null)
     {
         if (hellParty) questId = 0;
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
@@ -264,10 +267,19 @@ internal sealed partial class GameSession
             }
         }
         // #233 强袭：只有 ACK1547 授权过的任务副本可绕过选图地图选项，改以主副本(7300)在当前选图中核对。
-        var assault = practice ? null : owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId));
+        var assault = practice ? null : owner.Execute(() =>
+        {
+            if (assaultRetry is not null && assaultRetryRewards is not null)
+            {
+                assaultAuthorization = new(expected.Id, assaultRetry, assaultRetryRewards.Pieces,
+                    System.Diagnostics.Stopwatch.GetTimestamp()) { Rewards = assaultRetryRewards, Retry = true };
+                return assaultAuthorization;
+            }
+            return CurrentAssaultAuthorization(expected, dungeonId);
+        });
         if (assault is not null)
         {
-            if (retry is not null || classExperience) return RejectFormal("assault-retry-or-class-experience");
+            if (classExperience || retry is not null && !assault.Retry) return RejectFormal("assault-retry-or-class-experience");
             DungeonDefinition assaultDefinition;
             try { assaultDefinition = catalog.Get(checked((int)dungeonId)); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("assault-dungeon-definition-missing"); }
@@ -1453,6 +1465,9 @@ internal sealed partial class GameSession
             {
                 if (dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
                     dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey)) generation = rewardPlan;
+                if (riftNamedEpics is { } namedEpics && namedEpics.Applies(dungeon.Entry, pending.Monster))
+                    generation = namedEpics.Rewrite(generation, dungeon.Entry, pending.Monster,
+                        dungeon.Run.ConfirmedDistinctMonsterCount(monster => namedEpics.IsNamedKill(dungeon.Entry, monster)));
                 OrdinaryLukeDropClaim? daily = null;
                 if (generation.OrdinaryLukeDailySource is { } source && dungeon.Entry.OrdinaryLukeDay is { } day)
                 {
