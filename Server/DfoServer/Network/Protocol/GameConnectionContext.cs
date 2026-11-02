@@ -12,6 +12,8 @@ internal sealed record PartyCardTemplate(DfoServer.Game.Dungeons.PartyDungeonIns
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
+    // 仅记录本连接已写出的任务期段；账号任务状态仍由原Session和仓储持有。
+    internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
     internal Action? AfterDispatch { get; set; }

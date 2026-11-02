@@ -308,6 +308,7 @@ internal static class ChannelEntryTcpTests
         var catalog = BattlePassCatalog.Load(resources.Archive);
         That(catalog.DailyMissionIds.Length == 400 && catalog.WeeklyMissionIds.Length == 60 && catalog.SeasonMissionIds.Length == 18,
             "真实任务目录保持独立的100天赛季边界");
+        var policy = new BattlePassMissionPolicy("event2520-lifecycle", start, catalog);
         var options = source with { BattlePassSeasonKey = "event2520-lifecycle", BattlePassSeasonStart = start };
         var clock = new Inventory.DailyBoosterTestClock(start.AddSeconds(-1));
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "event2520-lifecycle"),
@@ -317,6 +318,9 @@ internal static class ChannelEntryTcpTests
             repository.Create(owner, new NewCharacter("EventLife", resources.Towns.Room, resources.Towns.InitialReturn)
             { Job = 0, GrowType = 33, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
         await fixture.StartAsync();
+        repository.ConfigureBattlePassMissions(policy);
+        using var observerOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+        byte[] ReadMissions() => repository.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!.ToPayload();
         using var peer = Open(fixture);
         peer.ExpectedOpenEvents = [2532, 266];
         peer.Select();
@@ -328,23 +332,23 @@ internal static class ChannelEntryTcpTests
 
         await clock.WaitForOneShotTimerAsync(start);
         clock.Advance(TimeSpan.FromSeconds(1));
-        ReadBoundary(active: true, expectedRefreshes: 1);
+        ReadBoundary(active: true, expectedRefreshes: 1, expectedMissions: ReadMissions());
         That(peer.Id == id, "同一连接自然跨越赛季起点");
         await clock.WaitForOneShotTimerAsync(start.AddDays(1));
         clock.Advance(end.AddSeconds(-1) - start);
         await clock.WaitForOneShotTimerAsync(end);
-        ReadBoundary(active: true, expectedRefreshes: 0);
+        ReadBoundary(active: true, expectedRefreshes: 0, expectedMissions: ReadMissions());
         That(clock.GetUtcNow() == end.AddSeconds(-1), "赛季结束前一秒不刷新108");
         clock.Advance(TimeSpan.FromSeconds(1));
         ReadBoundary(active: false, expectedRefreshes: 1);
         That(peer.Id == id, "同一连接自然跨越赛季终点");
         await fixture.StopAsync();
 
-        void ReadBoundary(bool active, int expectedRefreshes)
+        void ReadBoundary(bool active, int expectedRefreshes, byte[]? expectedMissions = null)
         {
             byte[][] daily = peer.InitialDailyBoosterPackets;
             That(daily.Length > 0, "在线日切已有完整礼盒名册");
-            int refreshes = 0, limits = 0, dailyChunks = 0;
+            int refreshes = 0, limits = 0, dailyChunks = 0, missionCount = 0;
             bool acknowledged = false;
             peer.SendBarrier();
             for (int budget = 0; budget < 256; budget++)
@@ -373,8 +377,14 @@ internal static class ChannelEntryTcpTests
                     That(dailyChunks < daily.Length, "在线日切礼盒分片不重复");
                     Bytes(packet.Body, daily[dailyChunks++], "在线日切礼盒名册及顺序完整保留");
                 }
+                else if (packet is { Kind: 0, Opcode: 1801 } && expectedMissions is not null)
+                {
+                    That(++missionCount == 1, "赛季起点或跨多个日周期只发布一份当前任务快照");
+                    Bytes(packet.Body, expectedMissions, "1801完整对应当前权威任务状态");
+                }
                 else peer.ValidateServiceDayNotice(packet);
-                if (acknowledged && refreshes == expectedRefreshes && limits == expectedRefreshes && dailyChunks == daily.Length)
+                if (acknowledged && refreshes == expectedRefreshes && limits == expectedRefreshes && dailyChunks == daily.Length &&
+                    missionCount == (expectedMissions is null ? 0 : 1))
                 {
                     foreach (var extra in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(extra);
                     return;

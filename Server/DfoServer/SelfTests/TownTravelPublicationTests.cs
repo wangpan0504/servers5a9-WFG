@@ -231,7 +231,7 @@ internal static class TownTravelPublicationTests
                     await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
                     var written = frames.Where(row => row.Kind == 0 && row.Opcode == 108).ToArray();
                     TestCheck.That(written.Length == 1, "原worker在同选角守卫失效后补发且只补发一份当前108");
-                    Validate108(written[0].Body, true);
+                    Validate108(written[0].Body, true, checked((uint)policy.End.ToUnixTimeSeconds()));
                     TestCheck.That(!stop.IsCancellationRequested && session.Selected!.Id == initial.Id,
                         "同一角色保持在线并收到恢复快照");
                 }
@@ -240,7 +240,7 @@ internal static class TownTravelPublicationTests
                     await town.ServerEventsAsync(context);
                     var first = frames.Where(row => row.Opcode == 108).ToArray();
                     TestCheck.That(first.Length == 1, "旧角色先收到未开始期的完整初始化108");
-                    Validate108(first[0].Body, false);
+                    Validate108(first[0].Body, false, checked((uint)policy.End.ToUnixTimeSeconds()));
                     await clock.WaitForOneShotTimerAsync(start);
                     await context.CommandGate.WaitAsync(); gateHeld = true;
                     clock.Advance(TimeSpan.FromSeconds(1));
@@ -255,7 +255,7 @@ internal static class TownTravelPublicationTests
                     var written = frames.Where(row => row.Kind == 0 && row.Opcode == 108).ToArray();
                     TestCheck.That(written.Length == 2 && session.Selected!.Id == selected.Id && !stop.IsCancellationRequested,
                         "新角色仅收到自己的当前初始化108，旧边界唤醒不追加过期刷新");
-                    Validate108(written[1].Body, true);
+                    Validate108(written[1].Body, true, checked((uint)policy.End.ToUnixTimeSeconds()));
                 }
             }
             finally
@@ -265,7 +265,7 @@ internal static class TownTravelPublicationTests
             }
         }
 
-        static void Validate108(byte[] compressed, bool active)
+        static void Validate108(byte[] compressed, bool active, uint battlePassEnd)
         {
             using var input = new MemoryStream(compressed);
             using var zlib = new ZLibStream(input, CompressionMode.Decompress);
@@ -282,15 +282,16 @@ internal static class TownTravelPublicationTests
                 ushort[] ids = active ? [2037, 2378, 2395, 2532, 266, 2520] : [2037, 2378, 2395, 2532, 266];
                 writer.Write(checked((ushort)ids.Length));
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(1u); writer.Write(0u); writer.Write(0u); writer.Write((byte)0); }
-                writer.Write((byte)2);
-                foreach (ushort id in new ushort[] { 2037, 2395 })
+                writer.Write((byte)(active ? 3 : 2));
+                foreach (ushort id in active ? new ushort[] { 2037, 2395, 2520 } : new ushort[] { 2037, 2395 })
                 {
                     writer.Write(id);
-                    for (int index = 0; index < 12; index++) writer.Write(id == 2037 && index == 0 ? 8u : 0u);
+                    uint first = id == 2037 ? 8u : id == 2520 ? battlePassEnd : 0u;
+                    for (int index = 0; index < 12; index++) writer.Write(index == 0 ? first : 0u);
                 }
             }
             TestCheck.That(zlib.ReadByte() == -1 && bounded.AsSpan(0, size).SequenceEqual(expected.ToArray()),
-                "独立完整108逐字节保留原目录及24个active数值，仅变更2520目录项");
+                "独立完整108逐字节保留原目录及原24个active数值，活动期另含2520季末时间及11个零值");
         }
     }
 
