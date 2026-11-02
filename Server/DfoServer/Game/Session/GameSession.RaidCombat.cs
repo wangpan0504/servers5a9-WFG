@@ -223,10 +223,11 @@ internal sealed partial class GameSession
     internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View)? RaidMovieSnapshot() =>
         owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView)?>(() =>
         {
-            if (!Ready || raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke } raid ||
+            if (!Ready || raidCombat is not { Actor.IsCurrent: true } raid ||
                 raid.Battle.View is not { State: AntonRaidBattleState.Reward, PhaseExpired: false, ClockFaulted: false } view ||
                 raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
-                !raid.Battle.CanConfirmLukeMovie(raid.Actor, view)) return null;
+                !(raid.Battle.HasAntonRewards ? raid.Battle.CanConfirmAntonMovie(raid.Actor, view) :
+                    raid.Battle.CanConfirmLukeMovie(raid.Actor, view))) return null;
             return (raid.Actor, raid.Battle, view);
         });
 

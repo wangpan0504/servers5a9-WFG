@@ -29,6 +29,35 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
+    readonly HashSet<ushort> antonMovieCompleted = [];
+    long? antonCardAnchor;
+
+    internal bool CanConfirmAntonMovie(RaidActor actor, AntonRaidBattleView view)
+    {
+        lock (gate) return HasAntonRewards && actor.IsCurrent && members.ContainsKey(actor) &&
+            ReferenceEquals(current, view) && view.State == AntonRaidBattleState.Reward &&
+            !view.ClockFaulted && !view.PhaseExpired && antonPhaseCommits.ContainsKey(view.Phase);
+    }
+
+    internal bool CompleteAntonMovie(RaidActor actor, AntonRaidBattleView view)
+    {
+        lock (gate)
+        {
+            if (!CanConfirmAntonMovie(actor, view) || current.AntonCardsReady || !antonMovieCompleted.Add(actor.Character)) return false;
+            // 资格提交时的成员集合是屏障；断线不冒充完成，重连沿用原期限。
+            if (antonSettlements[current.Phase].Members.All(row => antonMovieCompleted.Contains(row.Character)))
+                OpenAntonCardsLocked();
+            return true;
+        }
+    }
+
+    void OpenAntonCardsLocked()
+    {
+        antonCardAnchor = lukeClock.GetTimestamp();
+        current = current with { AntonCardsReady = true, Revision = current.Revision + 1 };
+        ScheduleLukeClockLocked();
+    }
+
     readonly Dictionary<int, ushort> antonDeaths = [];
     readonly Dictionary<int, RaidResultDisplay> antonResults = [];
 
@@ -45,19 +74,22 @@ internal sealed partial class AntonRaidBattle
     { lock (gate) return antonResults.GetValueOrDefault(phase); }
 
     TimeSpan? AntonMovieRemainingLocked() => !current.AntonCardsReady && antonRewardAnchor is { } anchor
-        ? TimeSpan.FromTicks(Math.Max(0, (TimeSpan.FromSeconds(2) - lukeClock.GetElapsedTime(anchor)).Ticks)) : null;
+        ? TimeSpan.FromTicks(Math.Max(0, (TimeSpan.FromSeconds(120) - lukeClock.GetElapsedTime(anchor)).Ticks)) : null;
 
     long? antonRewardAnchor;
     int antonRewardPhase = -1;
     bool antonRewardsAbandoned;
 
-    // 本服政策：沿PVF当前阶段MOVIE END TIME秒数限制等待，到期在线成员由原领取链提交。
+    // 本服政策：影片最多等待120秒（客户端90秒保护加标题/传输余量），不是原厂时长。
+    // 选牌期限另从屏障结束起算，沿PVF MOVIE END TIME，到期在线成员走原领取链。
     // 只在阶段资格事务提交后锚定，重放、回城和重连均不能续期。
     void AnchorAntonRewardWaitLocked()
     {
         if (!HasAntonRewards || current.State != AntonRaidBattleState.Reward || current.PhaseExpired) return;
         antonRewardPhase = current.Phase;
         antonRewardAnchor = lukeClock.GetTimestamp();
+        antonCardAnchor = null;
+        antonMovieCompleted.Clear();
         antonRewardsAbandoned = false;
     }
 
@@ -73,21 +105,23 @@ internal sealed partial class AntonRaidBattle
     TimeSpan? AntonRewardWaitRemainingLocked()
     {
         if (!HasAntonRewards || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
-            antonRewardPhase != current.Phase || antonRewardAnchor is not { } anchor) return null;
+            antonRewardPhase != current.Phase || antonRewardAnchor is null) return null;
+        if (!current.AntonCardsReady) return AntonMovieRemainingLocked();
+        if (antonCardAnchor is not { } anchor) return null;
         int seconds = script.Headers.Single(row => row.Tag == "[movie end time]").Values[current.Phase].Number;
         var remaining = TimeSpan.FromSeconds(seconds) - lukeClock.GetElapsedTime(anchor);
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     internal bool AntonAutoRewardDue
-    { get { lock (gate) return AntonRewardWaitRemainingLocked() == TimeSpan.Zero; } }
+    { get { lock (gate) return current.AntonCardsReady && AntonRewardWaitRemainingLocked() == TimeSpan.Zero; } }
 
     internal RaidActor[] AntonAutoRewardActors()
     { lock (gate) return members.Keys.ToArray(); }
 
     bool ExpireAntonRewardWaitLocked()
     {
-        if (AntonRewardWaitRemainingLocked() is not { } remaining || remaining > TimeSpan.Zero) return false;
+        if (!current.AntonCardsReady || AntonRewardWaitRemainingLocked() is not { } remaining || remaining > TimeSpan.Zero) return false;
         // 放弃集合与真实领取确认分离：不写奖励回执，不标记资产已发放。
         antonRewardsAbandoned = true;
         return AdvanceAfterRewards(Instance, current.Revision) is not null;

@@ -21,15 +21,21 @@ internal static partial class AntonRaidGapTcpTests
         var report = AntonTcpProbe.Play(peer, Catalog(resources), "reward");
         That(report.Reward && report.Opcode601 == 1,
             "真实Reward发布一次完整601，重复117不重开");
-        clock.Advance(1);
-        That(AntonTcpProbe.Barrier(peer, "演出未满2秒").All(p => p.Opcode is not (599 or 600)), "演出1秒不发牌");
-        clock.Advance(1);
-        var opened = AntonTcpProbe.Barrier(peer, "演出2秒首开翻牌");
-        That(opened.Count(p => p.Opcode == 599) == 1 && opened.Count(p => p.Opcode == 600) == 2 &&
-            opened.FindIndex(p => p.Opcode == 599) < opened.FindIndex(p => p.Opcode == 600), "601后2秒按599→600首开");
+        clock.Advance(25);
+        That(AntonTcpProbe.Barrier(peer, "资格提交25秒").All(p => p.Opcode is not (599 or 600 or 24)), "标题影片期间不发牌、不自动回城");
+        Denied([1, 1], "影片期间660不授奖");
+        peer.Send(659, [0]);
+        var skip = AntonTcpProbe.Barrier(peer, "659请求跳过");
+        That(skip.Any(p => p is { Kind: 1, Opcode: 659, Body: [1] }) && skip.Count(p => p.Opcode == 599) == 1 &&
+            skip.All(p => p.Opcode != 600), "00只确认并提示跳过，不冒充影片结束");
+        peer.Send(659, [1]);
+        var opened = AntonTcpProbe.Barrier(peer, "659影片结束");
+        That(opened.Any(p => p is { Kind: 1, Opcode: 659, Body: [1] }) && opened.Count(p => p.Opcode == 600) == 2 &&
+            opened.FindIndex(p => p is { Opcode: 587, Body: [4,0] }) < opened.FindIndex(p => p.Opcode == 600), "01后state4再发布空选择列表");
         foreach (var packet in opened.Where(p => p.Opcode == 600))
-            That(packet.Body.Length >= 14 && packet.Body[1] == 1 && packet.Body[4] == 0 &&
-                packet.Body.Length == 6 + 8 * packet.Body[5], "600成员行与8B物品计数闭合");
+            That(packet.Body.Length == 2 && packet.Body[1] == 0, "选择列表严格2B，不预填本人结果或猜测物品尾");
+        peer.Send(659, [1]);
+        That(AntonTcpProbe.Barrier(peer, "重复影片完成").All(p => p.Opcode is not (600 or 601 or 587)), "重复确认不重建牌组、不续期");
         // 不重新抽奖；直接读资格事务已经冻结的原计划，随机结果以数据库为准。
         string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
         That(frozen.Contains("10304529") && frozen.Contains("10093974") && !frozen.Contains("10304474") &&
@@ -44,8 +50,8 @@ internal static partial class AntonRaidGapTcpTests
         var first = Claim(1, advances: false);
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "首牌提交真实资产回执");
         That(first.FindIndex(p => p.Opcode == 14) >= 0 &&
-            first.FindIndex(p => p.Opcode == 14) < first.FindIndex(p => p.Opcode == 600),
-            "库存真实UID投影先于600展示和ACK660");
+            first.FindIndex(p => p.Opcode == 14) < first.FindIndex(p => p is { Kind: 1, Opcode: 660 }),
+            "库存真实UID投影先于ACK660，结果展示仍未实现");
         string assets = State();
         Claim(1, advances: false);
         That(assets == State(), "同阶段同牌只回放原回执，不增发或重抽");
@@ -96,11 +102,9 @@ internal static partial class AntonRaidGapTcpTests
         {
             peer.Send(660, [kind, 3]);
             var packets = AntonTcpProbe.Barrier(peer, "正式660领奖kind" + kind);
-            var display = packets.Single(p => p is { Kind: 0, Opcode: 600 });
-            That(display.Body[0] == kind && display.Body[1] == 1 && display.Body[4] == 3 && display.Body.Length == 6 + 8 * display.Body[5], "600展示正式冻结奖励");
-            That(packets.Count(p => p is { Kind: 1, Opcode: 660, Body: [1] }) == 1 && packets.All(p => p.Opcode != 601) &&
-                packets.IndexOf(display) < packets.FindIndex(p => p is { Kind: 1, Opcode: 660 }),
-                "合法660资产提交后先600再ACK01，不补601业务列");
+            That(packets.All(p => p.Opcode is not (600 or 601)) &&
+                packets.Count(p => p is { Kind: 1, Opcode: 660, Body: [1] }) == 1,
+                "正式资产提交后ACK01，不发送已知错误的8B结果");
             That(packets.Any(p => p is { Kind: 0, Opcode: 587, Body: [5, 0] }) == advances,
                 "全部规定牌种确认后才发送休息态587");
             return packets;

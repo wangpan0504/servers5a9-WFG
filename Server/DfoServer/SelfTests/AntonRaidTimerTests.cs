@@ -106,11 +106,15 @@ internal static class AntonRaidTimerTests
                 Settle(battle, store);
                 clock.Advance(10);
                 var settled = battle.View;
-                That(settled.AntonCardsReady, "2秒演出事件与20秒截止分别处理");
+                That(!settled.AntonCardsReady && !battle.AntonAutoRewardDue, "影片10秒尚未确认不得发牌或自动领取");
                 // 同候选重放不得续期；最后一人离团后仍保留原Reward兜底时钟。
                 SettleReplay();
                 That(battle.DetachStart(actor), "结算中移除最后成员");
-                clock.Advance(9);
+                clock.Advance(109);
+                That(!battle.View.AntonCardsReady, "最后成员离开也不得提前完成影片");
+                clock.Advance(1);
+                That(battle.View.AntonCardsReady && !battle.AntonAutoRewardDue, "120秒有界影片兜底后才启动选牌期");
+                clock.Advance(19);
                 That(battle.View.State == AntonRaidBattleState.Reward, "离团不能提前放弃全部奖励");
                 clock.Advance(1);
                 That(battle.View is { State: AntonRaidBattleState.Intermission, Phase: 0, AntonWaitSeconds: 595 },
@@ -142,6 +146,7 @@ internal static class AntonRaidTimerTests
                 Clear(battle, actor, 210); Clear(battle, actor, 213);
                 // 保留已安装原擎天Run，核对86不强制退场及95旧Run隔离。
                 var heldRun = Clear(battle, actor, 215, releaseLast: false); Settle(battle, store);
+                battle.CompleteAntonMovie(actor, battle.View);
                 var reward = battle.View; var policy = battle.RewardPolicy(actor, 0)!;
                 foreach (var offer in policy.Offers)
                     battle.ConfirmReward(actor, new(battle.Instance, 0, offer.Kind, offer.Card, actor.Character,
@@ -357,6 +362,7 @@ internal static class AntonRaidTimerTests
         }
         void Rewards(AntonRaidBattle battle, LukeRaidClockTests.Clock clock)
         {
+            battle.CompleteAntonMovie(actor, battle.View);
             var view = battle.View; var policy = battle.RewardPolicy(actor, view.Phase)!;
             foreach (var offer in policy.Offers)
                 battle.ConfirmReward(actor, new(battle.Instance, view.Phase, offer.Kind, offer.Card, actor.Character,

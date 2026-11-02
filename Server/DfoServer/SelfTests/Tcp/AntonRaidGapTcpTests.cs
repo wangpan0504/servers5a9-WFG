@@ -273,10 +273,14 @@ internal static partial class AntonRaidGapTcpTests
             fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]], "选图不代领、重抽或清除未领奖成员资格");
         leader.Send(72, [1, 0]);
         That(AntonTcpProbe.Barrier(leader, "选图后的旧菜单").All(p => p.Opcode != 72), "旧结果菜单不能退出新的选图状态");
+        leader.Send(659, [1]);
+        That(AntonTcpProbe.Barrier(leader, "首成员完成").All(p => p.Opcode != 600), "全员屏障未齐不发选择列表");
+        member.Send(659, [1]);
+        AntonTcpProbe.Barrier(leader, "全员完成队长"); AntonTcpProbe.Barrier(member, "全员完成队员");
         leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
         var leadCards = AntonTcpProbe.Barrier(leader, "同队竞争第四张");
         var mateCards = AntonTcpProbe.Barrier(member, "同队竞争第四张队员");
-        var picked = new[] { leadCards, mateCards }.Select(packets => packets.Single(p => p is { Kind: 0, Opcode: 600 }).Body[4]).Order().ToArray();
+        var picked = fixture.Query("SELECT card FROM character_raid_reward_receipts ORDER BY card").Select(row => Convert.ToByte(row[0])).ToArray();
         That(picked.SequenceEqual(new byte[] { 0, 3 }) &&
             fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]], "两成员同时选同牌只占不同位置，逐人提交原资产");
         leader.Send(660, [1, 3]); member.Send(660, [1, 3]);

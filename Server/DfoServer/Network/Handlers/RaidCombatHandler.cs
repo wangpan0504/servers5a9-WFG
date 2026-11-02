@@ -125,9 +125,14 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         // 同阶段保护沿B线c0070b73；01DC8B70消费者及Docs/协议/副本.md翻牌章节。
         bool DisplayGuard() => Guard() && context.Session.RaidCombatView() is { State: AntonRaidBattleState.Reward } view &&
             view.Phase == receipt.Prepared.Phase;
-        if (receipt.Prepared.RaidType == RaidKind.Anton && DisplayGuard())
+        if (receipt.Prepared.RaidType == RaidKind.Anton && DisplayGuard() &&
+            context.Session.AntonRaidTimerSnapshot() is null)
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display),
                 "raid_reward_display", DisplayGuard);
+        if (receipt.Prepared.RaidType == RaidKind.Anton && !receipt.Commit.Duplicate &&
+            context.Session.AntonRaidTimerSnapshot() is not null)
+            log.Write("raid_reward_display_unimplemented", new { Connection = context.Id, receipt.Prepared.Phase,
+                receipt.Prepared.Kind, Reason = "anton-general600-tail1-unverified" });
         if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer),
                 "prey_reward_display", DisplayGuard);

@@ -48,6 +48,8 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
+            if (HasAntonRewards) return actor.IsCurrent && members.ContainsKey(actor) && current.Phase == phase &&
+                current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired && current.AntonCardsReady;
             if (!HasLukeFirstMovieLocked() || phase != 0) return true;
             if (!actor.IsCurrent || !members.ContainsKey(actor) || current.Phase != phase ||
                 current.State != AntonRaidBattleState.Reward || current.ClockFaulted || current.PhaseExpired) return false;

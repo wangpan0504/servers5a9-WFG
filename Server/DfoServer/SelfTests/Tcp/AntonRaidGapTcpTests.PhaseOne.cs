@@ -144,8 +144,10 @@ internal static partial class AntonRaidGapTcpTests
         string phase0 = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
         peer.Send(117, report.LastClearCheck!); AntonTcpProbe.Barrier(peer, "重复阶段0清图");
         That(phase0 == fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs"), "重复清图不重签阶段事件或重抽奖励");
+        peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "阶段一影片完成");
         Claim(1, 0, false);
         string afterFirst = Assets();
+        peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "阶段一影片完成");
         Claim(1, 0, false);
         That(afterFirst == Assets() && fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "同牌回放不重复发放");
         clock.Advance(19);
@@ -213,6 +215,7 @@ internal static partial class AntonRaidGapTcpTests
         string completed = fixture.Snapshot("SELECT * FROM character_raid_runs");
         peer.Send(117, report.LastClearCheck!); AntonTcpProbe.Barrier(peer, "重复最终clear");
         That(completed == fixture.Snapshot("SELECT * FROM character_raid_runs"), "重复最终通关不增加次数或改奖励");
+        peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "阶段二影片完成");
         Claim(1, 1, false); Claim(0, 1, true);
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]], "两阶段两独立牌种完整实际提交四笔");
         string finalAssets = Assets();
@@ -270,8 +273,8 @@ internal static partial class AntonRaidGapTcpTests
                 report.Symbols.Add(packet.Body.ToArray());
             That(packets.Any(p => p is { Kind: 1, Opcode: 660, Body: [1] }), "正式660在资产提交后成功");
             That(packets.All(p => p.Opcode != 601), "未猜601业务列");
-            if (advances) That(packets.Any(p => p is { Kind: 0, Opcode: 587 } && p.Body.AsSpan().SequenceEqual(phase == 0 ? new byte[] {5,0} : new byte[] {4,1})),
-                "两种奖励都确认后才进入休息或Completed");
+            if (advances && phase == 0) That(packets.Any(p => p is { Kind: 0, Opcode: 587, Body: [5,0] }), "全部奖励确认后进入休息");
+            if (advances && phase == 1) That(packets.All(p => p is not { Kind: 0, Opcode: 587, Body: [4,1] }), "完成后不重建已打开的翻牌组合对象");
             if (advances && phase == 0)
             {
                 int stateAt = packets.FindIndex(p => p is { Opcode: 587, Body: [5,0] });

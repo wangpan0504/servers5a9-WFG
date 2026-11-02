@@ -117,10 +117,10 @@ internal sealed partial class AntonRaidBattle
                 pendingTransition is not null) return false;
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Reward)
             {
-                if (AntonRewardWaitRemainingLocked() is { } remaining && remaining <= TimeSpan.Zero)
+                if (current.AntonCardsReady && AntonRewardWaitRemainingLocked() is { } remaining && remaining <= TimeSpan.Zero)
                     return ExpireAntonRewardWaitLocked();
                 if (AntonMovieRemainingLocked() == TimeSpan.Zero)
-                { current = current with { AntonCardsReady = true, Revision = current.Revision + 1 }; return true; }
+                { OpenAntonCardsLocked(); return true; }
                 return false;
             }
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();

@@ -221,6 +221,7 @@ internal static partial class AntonTcpProbe
         }
         if (stopAfter == "card")
         {
+            peer.Send(659, [1]); Note(report, Flush(peer, "影片完成"));
             // 已证601为完整10B；D/E/F取值来源未闭合，不能用Luke夹具或零补全。
             // 未配置的牌种/槽位仅作负例，不给它们推定原厂语义。
             foreach (byte[] rejected in new byte[][] { [byte.MaxValue, 0], [1, byte.MaxValue] })
