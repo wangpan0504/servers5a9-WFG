@@ -2037,6 +2037,12 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        if (current >= 189 && LegacyBattlePassNumbering(db, tx, version) is var legacy && legacy != 0)
+        {
+            if (legacy == 1) AddAuraCooldown(db, tx, "privilege_until");
+            if (legacy != 3) UpgradeQuestTargetTypes(db, tx);
+            version = 180;
+        }
         RejectPreviousPromotionSchema(db, tx, version);
         if (version == 160 && current >= 162) RestorePreyForFrozenLootV160(db, tx);
         // 网吧验证库曾将领取与燃烧选择记为v145，尚未执行正式v145的攻坚约束迁移。
@@ -2124,6 +2130,66 @@ internal static class SqliteMigrations
         }
         ValidateSchema(db, tx);
         tx.Commit();
+    }
+
+    // 三类旧战令编号只接管已证完整结构，在同一事务补齐正式迁移且保留原账本。
+    static int LegacyBattlePassNumbering(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        if (version is < 179 or > 184) return 0;
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name GLOB 'account_battle_pass_*' OR name GLOB 'battle_pass_*')";
+        long count = (long)query.ExecuteScalar()!;
+        if (count == 0) return 0;
+        const string quest = "character_quest_completion_receipts";
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts'";
+        string? questSql = query.ExecuteScalar() as string;
+        bool currentQuest = questSql is not null &&
+            NormalizeTable(questSql, quest) == NormalizeTable(QuestCompletionSchemaV180, quest);
+        if (!currentQuest && (questSql is null || NormalizeTable(questSql, quest) != NormalizeTable(QuestCompletionSchemaV127, quest)))
+            throw new InvalidDataException("旧战令编号库任务回执结构不兼容");
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_teleport_cooldowns') WHERE name='privilege_until'";
+        bool hasPrivilege = query.ExecuteScalar() is 1L;
+        int legacy = currentQuest ? hasPrivilege && version is >= 181 and <= 184 ? 3 : 0 :
+            !hasPrivilege && version is >= 179 and <= 182 ? 1 :
+            hasPrivilege && version is >= 180 and <= 183 ? 2 : 0;
+        if (legacy == 0) throw new InvalidDataException("旧战令编号库冷却或版本不兼容");
+        // 已有正式181–185结构与低编号战令账本并存不属于已知预览，不能静默跳过正式步骤。
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('account_strongway2019_rewards','character_strongway2019_statistics','character_strongway2019_completions','character_strongway2019_match_facts','account_pcroom_claims','character_pcroom_claims','character_fatigue_acceleration')";
+        if (query.ExecuteScalar() is not 0L)
+            throw new InvalidDataException("旧战令编号库混入后续正式结构");
+        long oldVersion = version - (legacy == 3 ? 2 : legacy == 2 ? 1 : 0);
+        (int Version, string Table, string Definition)[] tables =
+        [
+            (179, "account_battle_pass_seasons", BattlePassSchema.SeasonDefinition),
+            (179, "account_battle_pass_claims", BattlePassSchema.ClaimDefinition),
+            (180, "battle_pass_season_rules", BattlePassMissionSchema.Rules),
+            (180, "account_battle_pass_mission_progress", BattlePassMissionSchema.Progress),
+            (180, "account_battle_pass_mission_claims", BattlePassMissionSchema.Claims),
+            (180, "account_battle_pass_source_events", BattlePassMissionSchema.Sources),
+            (181, "account_battle_pass_certificate_orders", BattlePassCertificateSchema.Definition),
+            (182, "account_battle_pass_cera_consumption", BattlePassCeraConsumptionSchema.StateDefinition),
+            (182, "account_battle_pass_cera_orders", BattlePassCeraConsumptionSchema.OrderDefinition)
+        ];
+        if (count != tables.Count(row => row.Version <= oldVersion) ||
+            tables.Where(row => row.Version <= oldVersion).Any(row => !KnownTable(db, tx, row.Table, row.Definition)))
+            throw new InvalidDataException("旧战令编号库结构不兼容");
+        const string teleport = """
+            CREATE TABLE character_teleport_cooldowns(
+              character_id INTEGER PRIMARY KEY,
+              account TEXT NOT NULL,
+              potion_until INTEGER NOT NULL CHECK(potion_until>=0),
+              aura_until INTEGER NOT NULL CHECK(aura_until>=0),
+              upgrade_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(upgrade_aura_until>=0),
+              party_aura_until INTEGER NOT NULL DEFAULT 0 CHECK(party_aura_until>=0),
+              FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+            );
+            """;
+        const string privilege = "privilege_until INTEGER NOT NULL DEFAULT 0 CHECK(privilege_until>=0)";
+        string fullTeleport = teleport.Replace("FOREIGN KEY", privilege + ", FOREIGN KEY", StringComparison.Ordinal);
+        if (!(legacy == 1 ? KnownTable(db, tx, "character_teleport_cooldowns", teleport) :
+            KnownTable(db, tx, "character_teleport_cooldowns", fullTeleport)))
+            throw new InvalidDataException("旧战令编号库传送冷却结构不兼容");
+        return legacy;
     }
 
     // 旧网吧构建占用162；三张专用表与原掉落定义均精确匹配时补跑正式162，保留原有行。

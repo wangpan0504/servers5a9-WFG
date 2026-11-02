@@ -244,6 +244,7 @@ internal static partial class DatabaseSchemaTests
             PrivilegeServiceUpgrade(root);
             FiendwarCounterUpgrade(root);
             BattlePass175Upgrade(root);
+            BattlePassLegacy179Upgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);
@@ -2595,6 +2596,30 @@ internal static partial class DatabaseSchemaTests
                 "验收v47强袭库补跑角色栏/装扮/魔王迁移并保留强袭次数");
     }
 
+    static void RewindReleasedBattlePassTables(SqliteConnection db, int oldVersion)
+    {
+        // 正式战令186..189才追加这些表；按子表先行移除旧版本尚未发布的空结构。
+        (int Version, string Table)[] tables =
+        [
+            (189, "account_battle_pass_cera_orders"),
+            (189, "account_battle_pass_cera_consumption"),
+            (188, "account_battle_pass_certificate_orders"),
+            (187, "account_battle_pass_source_events"),
+            (187, "account_battle_pass_mission_claims"),
+            (187, "account_battle_pass_mission_progress"),
+            (187, "battle_pass_season_rules"),
+            (186, "account_battle_pass_claims"),
+            (186, "account_battle_pass_seasons")
+        ];
+        string[] futureTables = [.. tables.Where(row => oldVersion < row.Version).Select(row => row.Table)];
+        foreach (string table in futureTables)
+        {
+            Check(Query(db, "SELECT count(*) FROM " + table) is 0L,
+                "已发布旧库夹具只移除未来空战令表，不丢弃订单、领取或任务事实：" + table);
+        }
+        foreach (string table in futureTables) Execute(db, "DROP TABLE " + table);
+    }
+
     private static void VerifyReleasedMigrations(string root)
     {
         // 默认 fresh；显式开启仅复用本轮空库准备，版本范围和全部迁移断言不变。
@@ -2615,6 +2640,7 @@ internal static partial class DatabaseSchemaTests
             phaseStarted = Stopwatch.GetTimestamp();
             using (var db = Open(path))
             {
+                RewindReleasedBattlePassTables(db, oldVersion);
                 if (oldVersion < 162) RewindFrozenLootSchema(db);
                 if (oldVersion < 160) Execute(db, "DROP TABLE character_prey_normal_progress");
                 if (oldVersion < 161) Execute(db, "DROP TABLE character_name_history");
@@ -2731,6 +2757,10 @@ internal static partial class DatabaseSchemaTests
                 RemoveAdventureWeekly(db);
                 if (oldVersion < 70) RemoveAdventureLedger(db);
                 RewindRaidLifecycle(db);
+                // 通用旧夹具helper会删改任务类型；正式179保留V127，180起必须保留完整V180。
+                if (oldVersion >= 179)
+                    ChangeReceiptDefinition(db, "character_quest_completion_receipts", _ => oldVersion < 180
+                        ? SqliteMigrations.QuestCompletionSchemaV127 : SqliteMigrations.QuestCompletionSchemaV180);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);

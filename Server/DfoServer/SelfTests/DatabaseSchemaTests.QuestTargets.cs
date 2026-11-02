@@ -32,6 +32,19 @@ internal static partial class DatabaseSchemaTests
                 _ = new CharacterRepository(path);
                 using (var db = Open(path))
                 {
+                    Check(Query(db, "SELECT (SELECT count(*) FROM account_battle_pass_seasons)+(SELECT count(*) FROM account_battle_pass_claims)+(SELECT count(*) FROM battle_pass_season_rules)+(SELECT count(*) FROM account_battle_pass_mission_progress)+(SELECT count(*) FROM account_battle_pass_mission_claims)+(SELECT count(*) FROM account_battle_pass_source_events)+(SELECT count(*) FROM account_battle_pass_certificate_orders)+(SELECT count(*) FROM account_battle_pass_cera_consumption)+(SELECT count(*) FROM account_battle_pass_cera_orders)") is 0L,
+                        "只从九张战令表均为空的隔离库构造正式179夹具");
+                    Execute(db, """
+                        DROP TABLE account_battle_pass_cera_orders;
+                        DROP TABLE account_battle_pass_cera_consumption;
+                        DROP TABLE account_battle_pass_certificate_orders;
+                        DROP TABLE account_battle_pass_source_events;
+                        DROP TABLE account_battle_pass_mission_claims;
+                        DROP TABLE account_battle_pass_mission_progress;
+                        DROP TABLE battle_pass_season_rules;
+                        DROP TABLE account_battle_pass_claims;
+                        DROP TABLE account_battle_pass_seasons;
+                        """);
                     Execute(db, "INSERT INTO characters(account,slot,name,town,area,x,y,direction) VALUES('target-schema',0,'TargetSchema',1,0,10,10,0)");
                     RewindQuestTargetTypes(db);
                     Execute(db, """
