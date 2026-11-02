@@ -17,10 +17,16 @@ internal static partial class RaidCombatProjection
         if (!context.Sender.TryPost(1, (ushort)CmdPacketType.RAID_MOVIE_SKIP, [1], "raid_movie_ack", Acknowledge)) return false;
         if (!completed)
         {
+            if (battle.HasAntonRewards && view.AntonCardsReady) return true;
             // 01C63430发送0仅请求跳过；599通知原电影控件，不能提前领取或结束阶段。
             return context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "raid_movie_skip_prompt",
                 () => Guard() && context.RaidMoviePrompt != identity && context.RaidMovieCards != identity,
                 () => context.RaidMoviePrompt = identity);
+        }
+        if (battle.HasAntonRewards)
+        {
+            if (battle.CompleteAntonMovie(actor, view)) battle.Publish(battle.View);
+            return true;
         }
         if (view.Phase == 0)
         {

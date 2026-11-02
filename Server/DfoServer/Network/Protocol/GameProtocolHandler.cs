@@ -218,10 +218,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             try { inventory.RefreshAsync(context, receipt.Inventory).GetAwaiter().GetResult(); }
             catch (IOException) { context.Disconnect(); return; }
             if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
-            sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
-                RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display), "anton_auto_card_committed",
-                () => session.CanPublishRaidReward(receipt) && session.RaidCombatView() is { } view &&
-                    view.Phase == receipt.Prepared.Phase && view.State == DfoServer.Game.Raids.AntonRaidBattleState.Reward);
+            // 普通团非空600第一尾尚未闭合；保留真实资产与回执，不发8B错误结果。
+            log.Write("raid_reward_display_unimplemented", new { Connection = context.Id, receipt.Prepared.Phase,
+                receipt.Prepared.Kind, Reason = "anton-general600-tail1-unverified" });
             log.Write("raid_reward_committed", new { Connection = context.Id, receipt.Prepared.Instance,
                 receipt.Prepared.Phase, receipt.Prepared.Kind, receipt.Prepared.Card, receipt.Commit.Duplicate, Automatic = true });
         };

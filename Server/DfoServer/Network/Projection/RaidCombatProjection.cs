@@ -188,8 +188,9 @@ internal static partial class RaidCombatProjection
         // Luke的业务Completed与原生state4共用数值，但state4会重新安装翻牌组合对象。
         // 本阶段牌面已打开时，末张600后的业务终结只更新名册/次数，不重建正在播放的第二轮翻牌。
         if (view.State == AntonRaidBattleState.Completed &&
-            context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } &&
-            context.RaidMovieCards is { State: AntonRaidBattleState.Reward } cards &&
+            context.Session.CurrentRaidBattle(actor) is { } completedBattle &&
+            (completedBattle.HasAntonRewards ? context.AntonCardsDisplay : context.RaidMovieCards) is { State: AntonRaidBattleState.Reward } cards &&
+            (completedBattle.Kind == RaidKind.Luke || completedBattle.HasAntonRewards) &&
             cards.Session == actor.Session && cards.Owner == actor.Owner && cards.SelectionEpoch == actor.Epoch &&
             cards.Character == actor.Character && cards.Instance == view.Instance && cards.Phase == view.Phase)
             return;
@@ -231,11 +232,13 @@ internal static partial class RaidCombatProjection
                 rewardBattle.AntonEligibility(actor.Character, view.Phase) is { Eligible: true })
             {
                 bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity;
-                // 023A7220不读包体；599仅切换演出。沿同一FIFO先599再两类600。
+                // 只在影片屏障结束后开放共同翻牌组合对象。初始列表不预填本人已选结果。
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, [4, checked((byte)view.Phase)], "anton_movie_cards", Cards);
+                // 非空600第一尾仍UNIMPLEMENTED；空选择列表无物品尾字段，不冒充奖励结果。
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "anton_movie_skip", Cards);
                 foreach (var offer in policy.Offers)
                     context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
-                        RaidCombatPackets.Reward(offer.Kind, offer.Display), "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
+                        new byte[] { offer.Kind, 0 }, "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
             }
             if (view.State == AntonRaidBattleState.Intermission &&
                 context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)

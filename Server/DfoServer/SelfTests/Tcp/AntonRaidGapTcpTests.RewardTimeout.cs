@@ -18,6 +18,9 @@ internal static partial class AntonRaidGapTcpTests
             peer.Select(); AntonRaidTcpTests.Drain(peer);
             var report = AntonTcpProbe.Play(peer, Catalog(resources), "reward");
             That(report.Reward, "正式阶段一成功进入Reward");
+            clock.Advance(25);
+            That(AntonTcpProbe.Barrier(peer, "影片尚未结束").All(p => p.Opcode is not (600 or 24)), "原20秒截止不再提前发奖或回城");
+            peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "影片完成后开始20秒选牌");
             if (partial)
             {
                 peer.Send(660, [1, 0]);
