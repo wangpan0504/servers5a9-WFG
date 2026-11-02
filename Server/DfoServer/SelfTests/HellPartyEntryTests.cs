@@ -707,7 +707,7 @@ internal static class HellPartyEntryTests
     }
 
     // 从起点沿真实连接走到终点的房间序列（不含起点，末项是终点房）。
-    static IReadOnlyList<DungeonPoint> RiftPath(DungeonMaze maze, DungeonPoint start, DungeonPoint boss)
+    internal static IReadOnlyList<DungeonPoint> RiftPath(DungeonMaze maze, DungeonPoint start, DungeonPoint boss)
     {
         var previous = new Dictionary<DungeonPoint, DungeonPoint?> { [start] = null };
         var queue = new Queue<DungeonPoint>();

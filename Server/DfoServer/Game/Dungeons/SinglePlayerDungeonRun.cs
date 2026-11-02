@@ -534,7 +534,8 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         current.MonsterAi = MonsterAiRooms.Freeze(entry.DungeonId, current.Plan.Room.Map);
         if (current.BattleLevelsFrozen) return;
-        current.Plan = DungeonBattleLevels.Freeze(current.Plan, BattleLevels.Freeze(entry.DungeonId, current.Plan.Room.Map));
+        current.Plan = DungeonBattleLevels.Freeze(current.Plan, entry.HelperRotation is { } rotation
+            ? rotation.BattleRule : BattleLevels.Freeze(entry.DungeonId, current.Plan.Room.Map));
         if (current.Plan.Altar is { } altar) current.Altar = new(altar);
         current.BattleLevelsFrozen = true;
     }
@@ -581,14 +582,9 @@ internal sealed partial class SinglePlayerDungeonRun
         if (scriptedReturn is not null) return Result(DungeonRunOutcome.Rejected);
         if (Replay(expected, actionId, "move", target) is { } replay)
             return replay;
-        if (HasPendingDeath)
+        if (actionId == Guid.Empty || !CanMove(expected, target))
             return Result(DungeonRunOutcome.Rejected);
-        // 遗忘之地允许带怪穿过已核验的普通门，清房事实仍由原死亡集合维护。
-        if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            current.Elevator is { Completed: false } || (entry.LostLand is null && !current.Cleared) || HasPendingLayer() ||
-            !CanMoveHopeOrOrdinary(target) ||
-            !rooms.TryGetValue(target, out Room? next))
-            return Result(DungeonRunOutcome.Rejected);
+        var next = rooms[target];
         acceptedActions.Add(actionId, new(expected, "move", target));
         bool replaceVisited = false;
         if (activeDummyStage < dummyRooms.Length && dummyRooms[activeDummyStage].Plan.Room.Map.Position == target)
@@ -618,6 +614,13 @@ internal sealed partial class SinglePlayerDungeonRun
         Advance();
         return Result(DungeonRunOutcome.Accepted);
     }
+
+    // 轮换入场先准备完整新实例；检查真实门时不能提前移动或改变旧房间身份。
+    internal bool CanMove(DungeonRunIdentity expected, DungeonPoint target) =>
+        scriptedReturn is null && !HasPendingDeath && Matches(expected) &&
+        Phase == SinglePlayerDungeonPhase.Dungeon && CanAdvance() &&
+        current.Elevator is not { Completed: false } && (entry.LostLand is not null || current.Cleared) &&
+        !HasPendingLayer() && CanMoveHopeOrOrdinary(target) && rooms.ContainsKey(target);
 
     // 亡命杀镇普通迷宫的出口直接上报kind0有向目标；不能借此放行条件Boss替换或任务骑乘。
     private bool CanBorderTownWarp(DungeonPoint target) => entry.DungeonId == 291100268 && entry.IsOrdinary &&

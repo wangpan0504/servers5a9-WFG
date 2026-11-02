@@ -111,6 +111,7 @@ internal sealed record DungeonEntryPlan(
     public string? EntryCostNote { get; init; }
     public string ExperienceEquipmentModule { get; init; } = "dungeon";
     public int? MonsterBasisLevel { get; init; }
+    public HelperHellRotation? HelperRotation { get; init; }
     public DungeonMap BaseBossMap { get; init; } = BossMap;
     public bool HasExplicitClearMap { get; init; }
     // 中途任务目标独立冻结，不改变Boss坐标或终末资格。
