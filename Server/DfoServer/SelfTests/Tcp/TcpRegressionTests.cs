@@ -394,6 +394,7 @@ internal static class TcpRegressionTests
         ("cash-shop", CashShopTcpTests.RunAsync),
         ("battle-pass", async (_, _, resources) =>
         {
+            await global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunRewardSuccessPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionSuccessPublicationAsync(resources);
             await global::DfoServer.BattlePassRewardTests.RunMissionPublicationBusyAsync(resources);

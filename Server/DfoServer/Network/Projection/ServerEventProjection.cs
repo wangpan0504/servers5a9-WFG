@@ -22,6 +22,8 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     bool queuedMileage;
     bool queuedStrongway;
     bool queuedNolan;
+    long battlePassEpoch = -1;
+    bool battlePassActive;
 
     public ServerEventProjection(GameConnectionContext context, ServerEventService events, TownProjection town, ServerLog log, TimeProvider time)
     {
@@ -47,6 +49,14 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         queuedNolan = nolanVisible;
         pending.Writer.TryWrite(true);
     }
+    public void Refresh() => pending.Writer.TryWrite(true);
+    public void PublishedBattlePass(long selectionEpoch, bool value)
+    {
+        if (context.Session.SelectionEpoch != selectionEpoch) return;
+        battlePassEpoch = selectionEpoch;
+        battlePassActive = value;
+        pending.Writer.TryWrite(true);
+    }
     async Task RunAsync()
     {
         try
@@ -56,13 +66,17 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 var state = events.Read(ServerEventService.MileageShopId);
                 bool nolanVisible = events.Read(ServerEventService.NolanVisibilityId).Active;
                 var strongway = events.Read(ServerEventService.Strongway2019Id);
+                var now = time.GetUtcNow();
                 if (queuedEpoch >= 0 && context.Session.Ready &&
                     (queuedMileage != (state.Active && town.MileageAvailable) ||
-                     queuedNolan != nolanVisible || NeedsStrongwayDisplay(strongway.Active))) pending.Writer.TryWrite(true);
-                var now = time.GetUtcNow();
+                     queuedNolan != nolanVisible || NeedsStrongwayDisplay(strongway.Active) ||
+                     battlePassEpoch != context.Session.SelectionEpoch || battlePassActive != town.IsBattlePassEventActive(now))) pending.Writer.TryWrite(true);
                 long? next = new[] { state.Schedule, strongway.Schedule }.Where(schedule => schedule.OverrideActive is null)
                     .SelectMany(schedule => new[] { schedule.StartsAt, schedule.EndsAt })
                     .Where(value => value > now.ToUnixTimeSeconds()).Min();
+                if (town.BattlePassMissions is { } policy)
+                    foreach (long boundary in new[] { policy.Start.ToUnixTimeSeconds(), policy.End.ToUnixTimeSeconds() })
+                        if (boundary > now.ToUnixTimeSeconds() && (next is null || boundary < next.Value)) next = boundary;
                 using (var wait = CancellationTokenSource.CreateLinkedTokenSource(stop.Token))
                 {
                     var request = pending.Reader.ReadAsync(wait.Token).AsTask();
@@ -79,10 +93,12 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 {
                     var selection = context.Owner.Execute(() => (context.Session.Ready, context.Session.Selected, context.Session.SelectionEpoch));
                     bool current = events.Read(ServerEventService.MileageShopId).Active && town.MileageAvailable;
+                    bool currentBattlePass = town.IsBattlePassEventActive(time.GetUtcNow());
                     bool currentNolan = events.Read(ServerEventService.NolanVisibilityId).Active;
                     bool strongwayCurrent = events.Read(ServerEventService.Strongway2019Id).Active;
                     if (!selection.Ready || selection.Selected is null || queuedEpoch == selection.SelectionEpoch &&
-                        current == queuedMileage && currentNolan == queuedNolan && !NeedsStrongwayDisplay(strongwayCurrent)) continue;
+                        current == queuedMileage && currentNolan == queuedNolan && !NeedsStrongwayDisplay(strongwayCurrent) &&
+                        battlePassEpoch == selection.SelectionEpoch && currentBattlePass == battlePassActive) continue;
                     bool CanSend() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == selection.SelectionEpoch);
                     await town.ServerEventsAsync(context, CanSend);
                 }
