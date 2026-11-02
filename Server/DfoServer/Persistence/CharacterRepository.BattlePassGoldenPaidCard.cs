@@ -9,7 +9,7 @@ internal sealed partial class CharacterRepository
     void ApplyBattlePassGoldenPaidCard(SqliteConnection db, SqliteTransaction tx, string account,
         PreparedDungeonSettlement prepared, ushort actor, DateTimeOffset at)
     {
-        if (battlePassMissionPolicy is not { } policy || policy.Active(at).IsEmpty ||
+        if (battlePassMissionPolicy is not { } policy || ActiveBattlePassMissions(db, tx, policy, at).IsEmpty ||
             BattlePassGoldenPaidCard.Prepare(prepared,actor,at) is not { } fact) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

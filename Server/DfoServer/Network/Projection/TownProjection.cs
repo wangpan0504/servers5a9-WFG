@@ -28,8 +28,9 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     const ushort JonathanVisibleEvent = 2395;
     internal const ushort BattlePassEventId = 2520;
     internal DfoServer.Game.BattlePass.BattlePassMissionPolicy? BattlePassMissions { get; set; }
+    internal BattlePassProjection? BattlePass { get; set; }
     internal bool IsBattlePassEventActive(DateTimeOffset now) =>
-        BattlePassMissions is { } policy && now >= policy.Start && now < policy.End;
+        BattlePassMissions is { } policy && !policy.Active(now).IsEmpty;
     internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
@@ -55,8 +56,14 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var now = timer.GetUtcNow();
+        long promotionRevision = events?.PromotionRevision ?? 0;
         var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now);
-        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, .. openEvents];
+        bool seriaLuck = events?.Read(ServerEventService.SeriaLuckId).Active ?? true;
+        bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
+        bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
+        // 关闭只阻止新购买和新发放；保留原入口供已付费红包领取、退款和查询。
+        openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
+        if (jonathan) openEvents = [JonathanVisibleEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
@@ -81,11 +88,15 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             designPages = PromotionNativeDesignPage.Create(snapshot) is { } page ? [page] : [];
             publish = Current;
         }
+        List<ushort> activeEvents = [];
+        if (jonathan) activeEvents.Add(JonathanVisibleEvent);
+        if (battlePass) activeEvents.Add(BattlePassEventId);
         byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents,
-            activeEvents: battlePass ? [JonathanVisibleEvent, BattlePassEventId] : [JonathanVisibleEvent],
+            activeEvents: activeEvents,
             designPages: designPages,
             firstValues: battlePass ? new Dictionary<ushort, uint>
-                { [BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds()) } : null);
+                { [BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds()) } : null,
+            includeSeriaLuck: seriaLuck);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
             await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);
@@ -116,7 +127,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 Strongway2019NpcPackets.Display(strongway?.Active == true), "strongway_npc_display", NpcCurrent))
                 throw new IOException("Strongway NPC send queue unavailable");
         }
-        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0, nolanVisible);
+        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
+            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }

@@ -23,6 +23,19 @@ internal static class ServerEventTests
             var store = new ServerEventRepository(path);
             var events = new ServerEventService(store, clock);
             const ushort strongway = 312;
+            VerifyStrongwayDefault(root);
+            VerifyBattlePassDefault(root);
+            foreach (ushort id in new ushort[] { 2037, 2378, 2395 })
+            {
+                var defaultState = events.Read(id);
+                That(defaultState.Active, "新增独立开关沿用原默认开启状态");
+                var off = events.Override(id, false);
+                That(!off.Active && !new DfoServer.Game.Inventory.Models.InventoryEventPrecondition(defaultState.Schedule, clock).Matches(off.Schedule),
+                    "关闭使原库存规划失效");
+                That(new ServerEventService(new ServerEventRepository(path), clock).Read(id) == off,
+                    "独立关闭在重开仓储后保持");
+                That(events.Override(id, null).Active, "自动模式恢复原默认开启");
+            }
             var goldBeforeStrongway = store.Read(64);
             ServerEventState? strongwayInitial = null;
             try { strongwayInitial = events.Read(strongway); }
@@ -194,5 +207,136 @@ internal static class ServerEventTests
             TestFiles.DeleteDirectory(root, true);
         }
         Console.WriteLine($"PASS {Count - before} 活动时间表、GM覆盖、CAS、SQL回滚和无写查询断言");
+    }
+
+    static void VerifyStrongwayDefault(string root)
+    {
+        string path = Path.Combine(root, "default.db");
+        var store = new ServerEventRepository(path);
+        var events = new ServerEventService(store);
+        int changes = 0;
+        events.Changed += _ => changes++;
+        var request = DevelopmentRequest.Parse("event initialize-default 312", "10000").Event!;
+        var first = request.Execute(events, out var initialized);
+        That(initialized == true && first is { Active: true, Schedule.Revision: 1, Schedule.OverrideActive: true }
+            && changes == 1, "首次初始化312仅提交一次真实开启并发布变更");
+        That(request.Execute(events, out initialized) == first && initialized == false && changes == 1,
+            "默认初始化重试返回已有配置，不重复增加版本或通知");
+        var off = events.Override(312, false);
+        var reopened = new ServerEventService(new ServerEventRepository(path));
+        That(reopened.InitializeStrongwayDefault() == new ServerEventInitialization(off, false),
+            "初始化后手动关闭，仓储重开及后续初始化均保留关闭");
+        var auto = events.Override(312, null);
+        That(events.InitializeStrongwayDefault() == new ServerEventInitialization(auto, false), "已有auto配置原样保留");
+        var scheduled = events.Schedule(312, DateTimeOffset.UtcNow.AddDays(1), DateTimeOffset.UtcNow.AddDays(2));
+        That(events.InitializeStrongwayDefault() == new ServerEventInitialization(scheduled, false), "已有未来时间表不被默认开启覆盖");
+        That(store.Read(64).Revision == 0 && store.Read(266).Revision == 0 && store.Read(2532).Revision == 0,
+            "312初始化不修改其它活动");
+        Reject<InvalidDataException>(() => DevelopmentRequest.Parse("event initialize-default 64", "10000"), "默认初始化仅允许312");
+
+        var raced = new ServerEventRepository(Path.Combine(root, "default-race.db"));
+        var manual = new ServerEventService(raced);
+        var racing = new ServerEventService(new CompetingEventStore(raced, () => manual.Override(312, false)));
+        That(racing.InitializeStrongwayDefault() is { Initialized: false, State.Active: false, State.Schedule.Revision: 1 }
+            && raced.Read(312).OverrideActive == false, "初始化读后人工关闭抢先提交，条件INSERT不得重新打开");
+
+        var concurrentStore = new ServerEventRepository(Path.Combine(root, "default-parallel.db"));
+        int inserts = 0;
+        var concurrentResults = new ServerEventInitialization[6];
+        Parallel.For(0, concurrentResults.Length, index =>
+        {
+            var result = new ServerEventService(concurrentStore).InitializeStrongwayDefault();
+            if (result.Initialized) Interlocked.Increment(ref inserts);
+            concurrentResults[index] = result;
+        });
+        That(concurrentResults.All(result => result.State is { Active: true, Schedule.Revision: 1 }), "并发初始化均返回同一真实提交");
+        That(inserts == 1 && concurrentStore.Read(312).Revision == 1, "多启动器并发只有一次默认写入");
+
+        var failingStore = new ServerEventRepository(Path.Combine(root, "default-fail.db"));
+        using var db = new SqliteGameDatabase(Path.Combine(root, "default-fail.db")).Open();
+        using var sql = db.CreateCommand();
+        sql.CommandText = "CREATE TRIGGER default_fail AFTER INSERT ON server_events BEGIN SELECT RAISE(ABORT,'default rollback'); END";
+        sql.ExecuteNonQuery();
+        var failing = new ServerEventService(failingStore);
+        Reject<SqliteException>(() => failing.InitializeStrongwayDefault(), "默认活动晚期写失败不得返回成功");
+        That(failingStore.Read(312).Revision == 0, "初始化失败不留下半行或已处理标记");
+        sql.CommandText = "DROP TRIGGER default_fail"; sql.ExecuteNonQuery();
+        That(failing.InitializeStrongwayDefault().Initialized, "失败后能够重新初始化");
+    }
+
+    static void VerifyBattlePassDefault(string root)
+    {
+        string directory = Path.Combine(root, "pass-default"); Directory.CreateDirectory(directory);
+        var now = new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.FromHours(8));
+        var store = new ServerEventRepository(Path.Combine(directory, "game.db"));
+        _ = store.Read(2520);
+        var first = DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(directory, now);
+        That(first.Start == new DateTimeOffset(2026, 10, 29, 6, 0, 0, TimeSpan.FromHours(8)) &&
+            first.SeasonKey.StartsWith("local-", StringComparison.Ordinal), "无历史仅首次选最近合法周四起点和稳定技术季标识");
+        That(DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(directory, now.AddDays(100)) == first,
+            "跨重启和过期仍沿原稳定季，不重新取本周或自动换季");
+        string concurrent = Path.Combine(root, "pass-concurrent"); Directory.CreateDirectory(concurrent);
+        _ = new ServerEventRepository(Path.Combine(concurrent, "game.db")).Read(2520);
+        var results = new DfoServer.Persistence.BattlePassDefaultConfiguration[4];
+        Parallel.For(0, results.Length, index => results[index] = DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(concurrent, now));
+        That(results.All(value => value == results[0]), "并发首次配置只保留一个稳定季和起点");
+        string blocked = Path.Combine(root, "pass-blocked"); Directory.CreateDirectory(blocked);
+        _ = new ServerEventRepository(Path.Combine(blocked, "game.db")).Read(2520);
+        Directory.CreateDirectory(Path.Combine(blocked, "battle-pass-default.json"));
+        Reject<IOException>(() => DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(blocked, now), "默认配置写失败不得伪报已保存");
+        Directory.Delete(Path.Combine(blocked, "battle-pass-default.json"));
+        var retried = DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(blocked, now);
+        That(retried == DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(blocked, now.AddDays(1)) &&
+            !Directory.EnumerateFiles(blocked, "*.tmp").Any(), "写失败清理临时文件后可重试并保持稳定");
+        var events = new ServerEventService(store);
+        Reject<InvalidOperationException>(() => events.InitializeDefault(2520), "未装配赛季的旧进程拒绝默认开启并说明需重启");
+        events.ConfigureBattlePass(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1), false);
+        That(!events.Read(2520).Active && store.Read(2520).Revision == 0, "普通服务启动准备赛季但不创建开关");
+        That(events.InitializeDefault(2520) is { Initialized: true, State.Active: true }, "新启动器首次初始化才真正开启2520");
+        var off = events.Override(2520, false);
+        var restarted = new ServerEventService(store);
+        restarted.ConfigureBattlePass(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1), true);
+        That(restarted.InitializeDefault(2520) == new ServerEventInitialization(off, false), "显式CLI及后续初始化均保留已有关闭");
+        var auto = restarted.Override(2520, null);
+        That(restarted.InitializeDefault(2520) == new ServerEventInitialization(auto, false), "2520已有auto不被默认初始化覆盖");
+        var scheduled = restarted.Schedule(2520, DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow.AddHours(2));
+        var scheduledRestart = new ServerEventService(store);
+        scheduledRestart.ConfigureBattlePass(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1), true);
+        That(scheduledRestart.InitializeDefault(2520) == new ServerEventInitialization(scheduled, false), "2520已有时间表重启和默认API均保留");
+        restarted.ConfigureBattlePass(DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddDays(-1), true);
+        Reject<InvalidOperationException>(() => restarted.InitializeDefault(2520), "冻结季过期不虚报已开启或默开新季");
+        string history = Path.Combine(root, "pass-history"); Directory.CreateDirectory(history);
+        using (var db = new SqliteGameDatabase(Path.Combine(history, "game.db")).Open())
+        {
+            using var sql = db.CreateCommand();
+            sql.CommandText = "INSERT INTO battle_pass_season_rules VALUES('frozen',$start,$end,'{}')";
+            sql.Parameters.AddWithValue("$start", first.Start.ToUnixTimeSeconds());
+            sql.Parameters.AddWithValue("$end", now.AddDays(1).ToUnixTimeSeconds()); sql.ExecuteNonQuery();
+        }
+        That(DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(history, now) == first with { SeasonKey = "frozen" },
+            "唯一现有有效冻结季优先，不猜玩家历史或新建赛季");
+        File.Delete(Path.Combine(history, "battle-pass-default.json"));
+        using (var db = new SqliteGameDatabase(Path.Combine(history, "game.db")).Open())
+        {
+            using var sql = db.CreateCommand();
+            sql.CommandText = "INSERT INTO battle_pass_season_rules SELECT 'ambiguous',start_utc,end_utc,rules_json FROM battle_pass_season_rules WHERE season_key='frozen'";
+            sql.ExecuteNonQuery();
+        }
+        Reject<InvalidDataException>(() => DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(history, now),
+            "多份有效冻结季不自动猜选或覆盖任何历史");
+        Reject<InvalidDataException>(() => DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(history, now.AddDays(2)),
+            "只有过期历史时保留历史并要求显式选择");
+        File.WriteAllText(Path.Combine(history, "battle-pass-default.json"), "{}");
+        Reject<InvalidDataException>(() => DfoServer.Persistence.BattlePassDefaultConfiguration.Resolve(history, now), "坏配置不能静默覆盖或重建季");
+    }
+
+    sealed class CompetingEventStore(IServerEventStore inner, Action competingWrite) : IServerEventStore
+    {
+        public ServerEventSchedule Read(ushort id) => inner.Read(id);
+        public ServerEventSchedule Save(ServerEventSchedule expected, ServerEventSchedule desired)
+        {
+            competingWrite();
+            return inner.Save(expected, desired);
+        }
     }
 }

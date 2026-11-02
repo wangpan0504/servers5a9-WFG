@@ -10,7 +10,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy || plan.NpcMaterialConsume is not { } fact) return;
         var at = fact.Clock.GetUtcNow();
-        if (policy.Active(at).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if (at < fact.PlannedAt || !fact.Matches(plan, inventory)) throw new InvalidDataException("指定商人材料消费来源与实际库存事务不一致");
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

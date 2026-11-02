@@ -12,7 +12,7 @@ internal sealed partial class CharacterRepository
         if (plan.BoosterSongAcquisition is not { } acquisition) return;
         var now = acquisition.At;
         if (battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
         if (BattlePassUndefeatedSongBoosterSource.Prepare(character, revision, plan) is not { } fact) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

@@ -12,7 +12,8 @@ internal static class ServerLifetime
     public static async Task RunAsync(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, DfoServer.GameWorld.Quests.QuestCatalog quests, ServerLog log,
         DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
-        CharacterGrowthCatalog? growthCatalog = null, Func<CashShopPromotionCatalog>? promotions = null)
+        CharacterGrowthCatalog? growthCatalog = null, Func<CashShopPromotionCatalog>? promotions = null,
+        CashShopPromotionConfiguration? promotionConfiguration = null)
     {
         using var stop = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, args) =>
@@ -35,6 +36,7 @@ internal static class ServerLifetime
                 throw new InvalidDataException("Remove prior stop.request before starting a new run");
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests,
                 adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions,
+                promotionConfiguration: promotionConfiguration,
                 enablePromotionPage: options.EnablePromotionPage).RunAsync(stop.Token);
         }
         finally

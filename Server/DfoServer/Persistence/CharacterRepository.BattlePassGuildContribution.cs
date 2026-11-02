@@ -9,7 +9,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy) return;
         var at = DateTimeOffset.FromUnixTimeSeconds(unix);
-        if (policy.Active(at).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if (points <= 0) throw new InvalidDataException("仅原贡献事务的真实正积分可以推进战令");
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

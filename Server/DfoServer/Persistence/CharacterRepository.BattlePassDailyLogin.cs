@@ -21,7 +21,7 @@ internal sealed partial class CharacterRepository
         int previousDay, int day, DateTimeOffset now)
     {
         if (day < previousDay || battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassMissionPolicy.IsDailyLogin(row.Definition))) return false;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassMissionPolicy.IsDailyLogin(row.Definition))) return false;
         using var query = db.CreateCommand(); query.Transaction = tx;
         query.CommandText = "SELECT 1 FROM account_battle_pass_source_events WHERE account=$account AND source_kind='daily_login' AND source_id=$source";
         query.Parameters.AddWithValue("$account", account);
@@ -33,7 +33,7 @@ internal sealed partial class CharacterRepository
     void ApplyBattlePassDailyLogin(SqliteConnection db, SqliteTransaction tx, string account, int day, DateTimeOffset now)
     {
         if (battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassMissionPolicy.IsDailyLogin(row.Definition))) return;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassMissionPolicy.IsDailyLogin(row.Definition))) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);
         command.CommandText = "INSERT INTO account_battle_pass_seasons(account,season_key) VALUES($account,$season) ON CONFLICT(account,season_key) DO NOTHING";

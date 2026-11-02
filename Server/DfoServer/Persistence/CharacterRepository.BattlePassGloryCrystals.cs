@@ -11,7 +11,7 @@ internal sealed partial class CharacterRepository
         AdventureExpeditionPlan plan, AdventureExpedition run, AdventureCatalog catalog, DateTimeOffset now)
     {
         if (battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassGloryCrystalSource.Matches(row.Key.Category, row.Definition))) return;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassGloryCrystalSource.Matches(row.Key.Category, row.Definition))) return;
         int acquired = BattlePassGloryCrystalSource.Acquired(plan, run, catalog, now);
         if (acquired == 0) return;
         using var command = db.CreateCommand(); command.Transaction = tx;

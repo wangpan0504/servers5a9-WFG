@@ -22,6 +22,10 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     bool queuedMileage;
     bool queuedStrongway;
     bool queuedNolan;
+    bool queuedSeriaLuck = true;
+    bool queuedHongbao = true;
+    bool queuedJonathan = true;
+    long queuedPromotionRevision;
     long battlePassEpoch = -1;
     bool battlePassActive;
 
@@ -34,19 +38,27 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     }
     void Changed(ushort id)
     {
-        if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId)
+        if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId or
+            ServerEventService.BattlePassId or ServerEventService.SeriaLuckId or ServerEventService.GuildHongbaoId or
+            ServerEventService.JonathanVisibilityId or 10999)
+
             pending.Writer.TryWrite(true);
     }
     internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||
         queuedStrongway != value || queuedStrongwayRevision != events.Strongway2019DisplayRevision;
     // 这里只去重已接受的快照，不表示客户端已显示；版本变化仍须重发被发送守卫丢弃的旧包。
-    public void Queued(bool value, bool strongway, long selectionEpoch, long revision, bool nolanVisible = true)
+    public void Queued(bool value, bool strongway, long selectionEpoch, long revision, bool nolanVisible = true,
+        bool seriaLuck = true, bool hongbao = true, bool jonathan = true, long promotionRevision = 0)
     {
         queuedEpoch = selectionEpoch;
         queuedMileage = value;
         queuedStrongway = strongway;
         queuedStrongwayRevision = revision;
         queuedNolan = nolanVisible;
+        queuedSeriaLuck = seriaLuck;
+        queuedHongbao = hongbao;
+        queuedJonathan = jonathan;
+        queuedPromotionRevision = promotionRevision;
         pending.Writer.TryWrite(true);
     }
     public void Refresh() => pending.Writer.TryWrite(true);
@@ -65,13 +77,20 @@ internal sealed class ServerEventProjection : IAsyncDisposable
             {
                 var state = events.Read(ServerEventService.MileageShopId);
                 bool nolanVisible = events.Read(ServerEventService.NolanVisibilityId).Active;
+                var seriaLuck = events.Read(ServerEventService.SeriaLuckId);
+                var hongbao = events.Read(ServerEventService.GuildHongbaoId);
+                var jonathan = events.Read(ServerEventService.JonathanVisibilityId);
                 var strongway = events.Read(ServerEventService.Strongway2019Id);
                 var now = time.GetUtcNow();
                 if (queuedEpoch >= 0 && context.Session.Ready &&
                     (queuedMileage != (state.Active && town.MileageAvailable) ||
-                     queuedNolan != nolanVisible || NeedsStrongwayDisplay(strongway.Active) ||
+                     queuedNolan != nolanVisible || queuedSeriaLuck != seriaLuck.Active ||
+                     queuedHongbao != hongbao.Active || queuedJonathan != jonathan.Active || queuedPromotionRevision != events.PromotionRevision ||
+                     NeedsStrongwayDisplay(strongway.Active) ||
                      battlePassEpoch != context.Session.SelectionEpoch || battlePassActive != town.IsBattlePassEventActive(now))) pending.Writer.TryWrite(true);
-                long? next = new[] { state.Schedule, strongway.Schedule }.Where(schedule => schedule.OverrideActive is null)
+                long? next = new[] { state.Schedule, strongway.Schedule, seriaLuck.Schedule, hongbao.Schedule,
+                    events.Read(ServerEventService.BattlePassId).Schedule }.Where(schedule => schedule.OverrideActive is null)
+
                     .SelectMany(schedule => new[] { schedule.StartsAt, schedule.EndsAt })
                     .Where(value => value > now.ToUnixTimeSeconds()).Min();
                 if (town.BattlePassMissions is { } policy)
@@ -95,12 +114,20 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                     bool current = events.Read(ServerEventService.MileageShopId).Active && town.MileageAvailable;
                     bool currentBattlePass = town.IsBattlePassEventActive(time.GetUtcNow());
                     bool currentNolan = events.Read(ServerEventService.NolanVisibilityId).Active;
+                    bool currentSeriaLuck = events.Read(ServerEventService.SeriaLuckId).Active;
+                    bool currentHongbao = events.Read(ServerEventService.GuildHongbaoId).Active;
+                    bool currentJonathan = events.Read(ServerEventService.JonathanVisibilityId).Active;
                     bool strongwayCurrent = events.Read(ServerEventService.Strongway2019Id).Active;
                     if (!selection.Ready || selection.Selected is null || queuedEpoch == selection.SelectionEpoch &&
-                        current == queuedMileage && currentNolan == queuedNolan && !NeedsStrongwayDisplay(strongwayCurrent) &&
+                        current == queuedMileage && currentNolan == queuedNolan && currentSeriaLuck == queuedSeriaLuck &&
+                        currentHongbao == queuedHongbao && currentJonathan == queuedJonathan && queuedPromotionRevision == events.PromotionRevision &&
+                        !NeedsStrongwayDisplay(strongwayCurrent) &&
                         battlePassEpoch == selection.SelectionEpoch && currentBattlePass == battlePassActive) continue;
+                    bool newlyOpenedBattlePass = currentBattlePass && (battlePassEpoch != selection.SelectionEpoch || !battlePassActive);
                     bool CanSend() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == selection.SelectionEpoch);
                     await town.ServerEventsAsync(context, CanSend);
+                    if (newlyOpenedBattlePass && CanSend() && town.BattlePass is { } battlePass)
+                        await battlePass.ReadyAsync(context);
                 }
                 finally { context.CommandGate.Release(); }
             }

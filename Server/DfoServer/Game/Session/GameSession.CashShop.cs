@@ -30,7 +30,14 @@ internal sealed partial class GameSession
         bool CatalogIsCurrent() => catalog is null || promotions!.Current.Revision == catalog.Revision;
         if (entry is null)
         {
-            var ordinary = PlanAndCommitInventory(character => cashShop.Buy(character, request, out purchase), 17,
+            var ordinary = PlanAndCommitInventory(character =>
+            {
+                var planned = cashShop.Buy(character, request, out purchase);
+                if (planned.Plan is { } inventory && catalog is not null &&
+                    request.Items.Any(row => catalog.Product(row.CommodityId) is not null))
+                    planned = planned with { Plan = inventory.WithAfter(inventory.After, promotionCatalogRevision: catalog.Revision) };
+                return planned;
+            }, 17,
                 requireTown: false, allowSettlement: false, additionalGuard: CatalogIsCurrent);
             receipt = ordinary.Accepted ? purchase : null;
             return ordinary;

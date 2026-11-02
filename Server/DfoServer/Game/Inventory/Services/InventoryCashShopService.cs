@@ -166,6 +166,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
                 if (template is not null && catalog.StackableAction(product.ItemId) is { Label: "[guild hongbao]" })
                 {
+                    if (events?.Read(DfoServer.Game.Events.ServerEventService.GuildHongbaoId).Active == false)
+                        return InventoryResult.Reject(17);
                     if (hongbao is null || !hongbao.ByCommodity.TryGetValue(product.CommodityId, out var definition) ||
                         definition.ItemId != product.ItemId || definition.Cera != product.CeraPrice || product.Count != 1 || character.Guild is not { Id: > 0 })
                         return InventoryResult.Reject(17);

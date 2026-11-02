@@ -14,7 +14,7 @@ internal sealed partial class CharacterRepository
         uint acquired = BattlePassBraveCrystalSource.Acquired(plan, source, catalog);
         if (acquired == 0) return;
         var now = BattlePassBraveCrystalSource.OccurredAt(plan);
-        if (!policy.Active(now).Any(row => BattlePassBraveCrystalSource.Matches(row.Key.Category, row.Definition))) return;
+        if (!ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassBraveCrystalSource.Matches(row.Key.Category, row.Definition))) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);
         command.CommandText = "INSERT INTO account_battle_pass_seasons(account,season_key) VALUES($account,$season) ON CONFLICT(account,season_key) DO NOTHING";

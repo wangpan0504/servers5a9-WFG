@@ -56,6 +56,12 @@ internal sealed partial class CharacterRepository
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitBattlePassReward");
             using var tx = write.Transaction;
+            if (battlePassAvailable is not null && (!IsBattlePassAvailable() ||
+                !DfoServer.Game.Events.ServerEventService.BattlePassScheduleActive(
+                    ServerEventRepository.Read(db, tx, DfoServer.Game.Events.ServerEventService.BattlePassId),
+                    battlePassClock.GetUtcNow(), battlePassDefaultEnabled))) throw new BattlePassRewardChangedException();
+            if (battlePassMissionPolicy is { } policy && (policy.SeasonKey != plan.Before.SeasonKey ||
+                ActiveBattlePassMissions(db, tx, policy, battlePassClock.GetUtcNow()).IsEmpty)) throw new BattlePassRewardChangedException();
             var current = ReadBattlePassState(db, tx, owner.Account, plan.Before.SeasonKey);
             if (current.Revision != plan.Before.Revision || current.TotalExperience != plan.Before.TotalExperience ||
                 current.PassType != plan.Before.PassType || !current.Claims.SetEquals(plan.Before.Claims))

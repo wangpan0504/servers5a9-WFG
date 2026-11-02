@@ -10,7 +10,7 @@ internal sealed partial class CharacterRepository
         AntonRaidBattle.LukePhaseSettlement candidate,RaidPhaseEligibility receipt)
     {
         if(battlePassMissionPolicy is not {} policy || BattlePassRaidCompletion.Prepare(candidate,receipt) is not {} fact ||
-            !policy.Active(fact.At).Any(row=>BattlePassRaidCompletion.MatchesMission(fact.RaidType,row.Key.Category,row.Definition)))return;
+            !ActiveBattlePassMissions(db, tx, policy, fact.At).Any(row=>BattlePassRaidCompletion.MatchesMission(fact.RaidType,row.Key.Category,row.Definition)))return;
         using var command=db.CreateCommand();command.Transaction=tx;
         command.Parameters.AddWithValue("$account",fact.Account);command.Parameters.AddWithValue("$season",policy.SeasonKey);
         command.CommandText="INSERT INTO account_battle_pass_seasons(account,season_key) VALUES($account,$season) ON CONFLICT(account,season_key) DO NOTHING";

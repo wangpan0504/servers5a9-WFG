@@ -60,6 +60,8 @@ internal sealed partial class CharacterRepository : IGuildHongbaoStore
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.IssueGuildHongbao");
         using var tx = write.Transaction;
+        if (!ServerEventRepository.Read(db, tx, DfoServer.Game.Events.ServerEventService.GuildHongbaoId).IsActive(DateTimeOffset.FromUnixTimeSeconds(now)))
+            return new GuildHongbaoCommit(7);
         var state = ReadManagement(db, tx, actor.Owner.Account, actor.CharacterId);
         if (state is null) return new(34);
         using var command = ManagementCommand(db, tx, """

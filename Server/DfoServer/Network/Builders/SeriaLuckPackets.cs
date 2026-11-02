@@ -20,7 +20,7 @@ internal static class SeriaLuckPackets
     // 额外事件沿用 2037 的已验证记录形状（u32 1、两空串、标志 0）；需要活动状态的事件另附数值块。
     public static byte[] EventInfoCompressed(IReadOnlyList<ushort>? extraEvents = null,
         IReadOnlyList<ushort>? activeEvents = null, IReadOnlyList<EventInfoDesignPage>? designPages = null,
-        IReadOnlyDictionary<ushort, uint>? firstValues = null)
+        IReadOnlyDictionary<ushort, uint>? firstValues = null, bool includeSeriaLuck = true)
     {
         extraEvents ??= [];
         activeEvents ??= [];
@@ -39,12 +39,15 @@ internal static class SeriaLuckPackets
         using var plain = new MemoryStream();
         using (var writer = new BinaryWriter(plain, System.Text.Encoding.UTF8, leaveOpen: true))
         {
-            writer.Write(checked((ushort)(1 + extraEvents.Count + designPages.Count)));
+            writer.Write(checked((ushort)((includeSeriaLuck ? 1 : 0) + extraEvents.Count + designPages.Count)));
+            if (includeSeriaLuck)
+            {
             writer.Write(SeriaLuckEventId);
             writer.Write(1u);
             writer.Write(0);
             writer.Write(0);
             writer.Write((byte)0);
+            }
             foreach (ushort id in extraEvents)
             {
                 writer.Write(id);
@@ -71,11 +74,14 @@ internal static class SeriaLuckPackets
                 PacketEncoding.WriteString(writer, page.Content);
                 writer.Write((byte)(page.Visible ? 1 : 0));
             }
-            writer.Write((byte)(1 + activeEvents.Count));
+            writer.Write((byte)((includeSeriaLuck ? 1 : 0) + activeEvents.Count));
+            if (includeSeriaLuck)
+            {
             writer.Write(SeriaLuckEventId);
             writer.Write((uint)SeriaLuckValueMax);
             for (int index = 1; index < 12; index++)
                 writer.Write(0u);
+            }
             foreach (ushort id in activeEvents)
             {
                 writer.Write(id);

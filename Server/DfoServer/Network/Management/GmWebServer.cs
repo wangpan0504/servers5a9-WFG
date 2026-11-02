@@ -43,6 +43,9 @@ internal interface IGmWebData
     void WriteRaidWindows(string json);
     object? EventResources(int offset, int limit, string? query, string kind) => null;
     object? EventBusinessStatus() => null;
+    object? PromotionActivities() => null;
+    object SetPromotionEnabled(GameWorld.Items.PromotionScope scope, long expectedRevision, bool enabled) =>
+        throw new InvalidOperationException("礼包配置控制尚未装配");
     byte[]? ItemIcon(int id);
     object? ItemPreview(int id);
     // 纸娃娃（只读）：按角色当前外观合成站立帧；tryOn 为只在内存中替换的物品编号。

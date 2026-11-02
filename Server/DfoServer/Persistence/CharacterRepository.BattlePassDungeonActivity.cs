@@ -19,7 +19,7 @@ internal sealed partial class CharacterRepository
     {
         if(battlePassMissionPolicy is not {} policy || fact is null) return;
         var at=fact.Clock.GetUtcNow();
-        if(policy.Active(at).IsEmpty) return;
+        if(ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         if(at<fact.PlannedAt || fact.Amount<=0) throw new InvalidDataException("战令副本来源时刻或实际增量无效");
         using var command=db.CreateCommand();command.Transaction=tx;
         command.Parameters.AddWithValue("$account",account);command.Parameters.AddWithValue("$season",policy.SeasonKey);

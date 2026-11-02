@@ -9,9 +9,24 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository : IBattlePassMissionStore
 {
     BattlePassMissionPolicy? battlePassMissionPolicy;
+    Func<DateTimeOffset, bool>? battlePassAvailable;
+    bool battlePassDefaultEnabled;
+    public bool IsBattlePassAvailable() => battlePassAvailable?.Invoke(battlePassClock.GetUtcNow()) ?? true;
+    TimeProvider battlePassClock = TimeProvider.System;
+    public void ConfigureBattlePassEvents(Func<DateTimeOffset, bool> available, bool defaultEnabled, TimeProvider? clock = null)
+    {
+        battlePassAvailable = available; battlePassDefaultEnabled = defaultEnabled; battlePassClock = clock ?? TimeProvider.System;
+    }
+    static ImmutableArray<BattlePassMissionInstance> ActiveBattlePassMissions(SqliteConnection db, SqliteTransaction? tx,
+        BattlePassMissionPolicy policy, DateTimeOffset now)
+    {
+        if (policy.EventControlled && !DfoServer.Game.Events.ServerEventService.BattlePassScheduleActive(
+            ServerEventRepository.Read(db, tx, DfoServer.Game.Events.ServerEventService.BattlePassId), now, policy.DefaultEnabled)) return [];
+        return policy.Active(now);
+    }
 
     // 仅在Runtime开始接受连接之前装配一次；同season规则一经写入不能静默更改。
-    public void ConfigureBattlePassMissions(BattlePassMissionPolicy policy)
+    public void ConfigureBattlePassMissions(BattlePassMissionPolicy policy, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
         if (battlePassMissionPolicy is { } previous)
@@ -34,6 +49,7 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
         if (command.ExecuteScalar() is not string actual || actual != policy.RulesJson)
             throw new InvalidDataException("已冻结的战令赛季规则与当前配置不同");
         tx.Commit();
+        battlePassClock = clock ?? TimeProvider.System;
         battlePassMissionPolicy = policy;
     }
 
@@ -48,9 +64,11 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
             exists.Parameters.AddWithValue("$account", owner.Account); exists.Parameters.AddWithValue("$season", policy.SeasonKey);
             if (exists.ExecuteScalar() is not null)
                 return ReadBattlePassMissionState(db, read, owner.Account, policy, now);
+            if (ActiveBattlePassMissions(db, read, policy, now).IsEmpty) return null;
         }
         // 仅缺失账号季才幂等初始化；已有季的一次只读快照同时提供season与missions。
         using var write = db.BeginWrite("CharacterRepository.ReadBattlePassMissions"); using var tx = write.Transaction;
+        if (ActiveBattlePassMissions(db, tx, policy, now).IsEmpty) return null;
         using (var create = db.CreateCommand())
         {
             create.Transaction = tx;
@@ -77,7 +95,7 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
         // 请求采样只确定原任务期段；等待writer后统一重采，旧期段不能挪到新日/周领取。
         var now = clock.GetUtcNow();
         if (now < sampledAt) return BattlePassMissionCommit.Reject();
-        var requested = policy.Active(sampledAt).SingleOrDefault(row => row.Key.Category == category && row.Key.Id == key);
+        var requested = ActiveBattlePassMissions(db, tx, policy, sampledAt).SingleOrDefault(row => row.Key.Category == category && row.Key.Id == key);
         if (requested is null) return BattlePassMissionCommit.Reject();
         var character = Require(db, tx, owner.Account, expected.Name);
         if (character.Id != expected.Id || character.Slot != expected.Slot || character.Revision != expected.Revision)
@@ -120,7 +138,7 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
         BattlePassMissionPolicy policy, DateTimeOffset now)
     {
         var season = ReadBattlePassState(db, tx, account, policy.SeasonKey);
-        var active = policy.Active(now);
+        var active = ActiveBattlePassMissions(db, tx, policy, now);
         if (active.IsEmpty) return new(season, []);
         var counts = new Dictionary<BattlePassMissionKey, long>();
         var claims = new HashSet<BattlePassMissionKey>();
@@ -150,7 +168,7 @@ internal sealed partial class CharacterRepository : IBattlePassMissionStore
     {
         if (battlePassMissionPolicy is not { } policy || runId == Guid.Empty || started < 0) return;
         var at = DateTimeOffset.FromUnixTimeSeconds(started);
-        if (policy.Active(at).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, at).IsEmpty) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);
         command.CommandText = "INSERT INTO account_battle_pass_seasons(account,season_key) VALUES($account,$season) ON CONFLICT(account,season_key) DO NOTHING";

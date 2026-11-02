@@ -10,7 +10,7 @@ internal sealed partial class CharacterRepository
         ushort character, MailboxClaimPlan plan, DateTimeOffset now)
     {
         if (battlePassMissionPolicy is not { } policy ||
-            !policy.Active(now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
+            !ActiveBattlePassMissions(db, tx, policy, now).Any(row => BattlePassUndefeatedSongSource.Matches(row.Key.Category, row.Definition))) return;
         if (BattlePassUndefeatedSongMailSource.Prepare(character, plan) is not { } fact) return;
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", account); command.Parameters.AddWithValue("$season", policy.SeasonKey);

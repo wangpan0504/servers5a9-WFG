@@ -252,7 +252,15 @@ internal sealed partial class CharacterRepository
         using var transaction = write.Transaction;
         var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
         var itemRead = ReadInventoryItemRevision(db, transaction, owner.Account, character.Id);
-        transaction.Commit();
+        if (plan.PromotionCatalogRevision is { } catalogRevision)
+        {
+            using (promotionCommitLease?.Invoke())
+            {
+                if (promotions?.Invoke().Revision != catalogRevision) throw new InventoryEventRejectedException();
+                transaction.Commit();
+            }
+        }
+        else transaction.Commit();
         RememberInventoryItems(character.Inventory, itemRead);
         return character;
     });

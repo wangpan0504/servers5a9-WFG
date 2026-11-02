@@ -158,12 +158,12 @@ internal static partial class DevelopmentGm
                     catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));
             if (request.Action == DevelopmentAction.Event)
             {
-                var state = request.Event!.Execute(events ?? throw new InvalidOperationException("活动服务未装配"));
+                var state = request.Event!.Execute(events ?? throw new InvalidOperationException("活动服务未装配"), out var initialized);
                 return "OK " + JsonSerializer.Serialize(new
                 {
                     eventId = state.Schedule.EventId, active = state.Active,
                     mode = state.Schedule.OverrideActive is { } active ? active ? "on" : "off" : "auto",
-                    state.Schedule.Revision, state.Schedule.StartsAt, state.Schedule.EndsAt
+                    state.Schedule.Revision, state.Schedule.StartsAt, state.Schedule.EndsAt, initialized
                 });
             }
             if (request.Action == DevelopmentAction.InfiniteFatigue)

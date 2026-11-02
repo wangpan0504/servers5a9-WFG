@@ -46,10 +46,12 @@ internal sealed record BattlePassRewardResult(bool Accepted, ushort Error, Battl
 }
 
 internal sealed class BattlePassRewardService(BattlePassCatalog catalog, ItemCatalog items,
-    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null)
+    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null, Func<DateTimeOffset, bool>? available = null)
 {
     public BattlePassRewardResult Plan(Character character, BattlePassSeasonState state, byte action, byte track, uint key)
     {
+        if (available?.Invoke((clock ?? TimeProvider.System).GetUtcNow()) == false)
+            return BattlePassRewardResult.Reject(reason: "battle_pass_disabled");
         // 先验证无符号请求键，再窄化整数或计算领取位。
         if (action > 1 || action == 0 && track > 1 || key is < 1 or > 80)
             return BattlePassRewardResult.Reject(reason: "battle_pass_reward_target");

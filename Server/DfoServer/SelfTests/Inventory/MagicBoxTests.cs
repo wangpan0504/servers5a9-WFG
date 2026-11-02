@@ -166,6 +166,26 @@ internal static class MagicBoxTests
                 }
             };
             var luckyOpened = service.Open(luckyCharacter, noMaterial with { BoxItemId = 2682272, Count = 2 }, out var luckyReceipt);
+            string eventPath = Path.Combine(Path.GetTempPath(), "seria-event-" + Guid.NewGuid().ToString("N") + ".db");
+            try
+            {
+                var events = new DfoServer.Game.Events.ServerEventService(new DfoServer.Persistence.ServerEventRepository(eventPath));
+                events.Override(2037, false);
+                var controlled = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits,
+                    resources.EpicPieces, new FirstRandom(), contracts: resources.Contracts, events: events);
+                var ordinary = controlled.Open(luckyCharacter, noMaterial with { BoxItemId = 2682272, Count = 2 }, out var ordinaryReceipt);
+                Check(ordinary.Accepted && ordinaryReceipt is { SeriaLuckBefore: 8, SeriaLuckAfter: 8 } &&
+                    ordinaryReceipt.DoubledRewards.Count == 0 && ordinary.Plan!.After.Find(new(InventoryListType.Main, 70)) is null,
+                    "关闭幸运仍普通开盒，保留原幸运值且不发双倍");
+                var guard = ordinary.Plan!.RequiredEvent!;
+                Check(guard.Matches(events.Read(2037).Schedule), "关闭快照可以正常提交普通开盒");
+                events.Override(2037, true);
+                Check(!guard.Matches(events.Read(2037).Schedule), "开盒规划后切换开关使旧幸运规划失效");
+                var resumed = controlled.Open(luckyCharacter, noMaterial with { BoxItemId = 2682272, Count = 2 }, out var resumedReceipt);
+                Check(resumed.Accepted && resumedReceipt is { SeriaLuckBefore: 8, SeriaLuckAfter: 1 } &&
+                    resumedReceipt.DoubledRewards.Count > 0, "重开后从保留幸运值继续双倍");
+            }
+            finally { TestFiles.DeleteFile(eventPath); }
             Check(luckyOpened.Accepted && luckyReceipt is { SeriaLuckBefore: 8, SeriaLuckAfter: 1 } && (luckyReceipt.DoubleRewards?.Count ?? 0) != 0,
                 "Seria lucky threshold doubles one draw and persists the post-open gauge");
             var luckyAck = MagicBoxPackets.OpenedSeriaExpand(luckyReceipt!);

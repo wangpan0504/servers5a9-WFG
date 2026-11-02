@@ -31,7 +31,7 @@ internal sealed partial class CharacterRepository : IBattlePassCertificateStore
         using var tx = write.Transaction;
         // 等待原SQLite writer期间可能跨季结束；获取writer后重新采样同一服务端时钟。
         now = plan.Clock.GetUtcNow();
-        if (now < plan.PlannedAt || policy.Active(now).IsEmpty) throw new BattlePassCertificateChangedException();
+        if (now < plan.PlannedAt || ActiveBattlePassMissions(db, tx, policy, now).IsEmpty) throw new BattlePassCertificateChangedException();
         using var command = db.CreateCommand(); command.Transaction = tx;
         command.Parameters.AddWithValue("$account", owner.Account); command.Parameters.AddWithValue("$season", policy.SeasonKey);
         command.CommandText = "SELECT rules_json FROM battle_pass_season_rules WHERE season_key=$season";

@@ -12,7 +12,7 @@ internal sealed partial class CharacterRepository
     {
         if (battlePassMissionPolicy is not { } policy || plan.CashShopPayment is not { } fact) return;
         var now = fact.Clock.GetUtcNow();
-        if (policy.Active(fact.PlannedAt).IsEmpty || policy.Active(now).IsEmpty) return;
+        if (ActiveBattlePassMissions(db, tx, policy, fact.PlannedAt).IsEmpty || ActiveBattlePassMissions(db, tx, policy, now).IsEmpty) return;
         if (now < fact.PlannedAt || !fact.Matches(plan, inventory))
             throw new InvalidDataException("商城实际点券事实与库存提交不一致");
         long eligible = fact.EligibleCera;

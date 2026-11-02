@@ -7,6 +7,7 @@ internal sealed record BattlePassRewardCommit(Character Character, BattlePassSea
 
 internal interface IBattlePassStore
 {
+    bool IsBattlePassAvailable() => true;
     BattlePassSeasonState ReadBattlePass(AccountOwners.Lease owner, string seasonKey);
     BattlePassRewardCommit CommitBattlePassReward(AccountOwners.Lease owner, Character expected, BattlePassRewardPlan plan);
 }

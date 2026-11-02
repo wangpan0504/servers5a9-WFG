@@ -129,7 +129,13 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE cash_shop_promotion_orders SET mail_ids=$mails WHERE order_id=$order";
         command.Parameters.AddWithValue("$mails", JsonSerializer.Serialize(mailIds.ToImmutable()));
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("累计赠礼订单回执丢失");
-        tx.Commit();
+        // 已取得writer且SQL写入完成后才进入配置短门禁，不持门禁等待SQLite或执行资产规划。
+        using (promotionCommitLease?.Invoke())
+        {
+            if (promotions?.Invoke().IsCurrent(plan.CatalogRevision, plan.Order.Scope) != true)
+                throw new InvalidOperationException("礼包开关或目录版本已改变，本次购买未提交");
+            tx.Commit();
+        }
         return new(character, order.Id, progress, mailIds.ToImmutable());
     });
 

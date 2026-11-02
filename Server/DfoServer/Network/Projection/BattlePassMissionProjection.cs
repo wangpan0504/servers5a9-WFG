@@ -20,12 +20,12 @@ internal static class BattlePassMissionProjection
                 BinaryPrimitives.ReadUInt16LittleEndian(all.AsSpan(offset + 2)), all[offset + 4], all[offset + 5]);
         }).ToArray();
         await context.Notify(NotiPacketType.BATTLE_PASS_INFO_MISSION, BattlePassPackets.Missions(firstEight, all.AsSpan(48)),
-            "battle_pass_mission_state", () => context.Session.CanPublishInventory(receipt));
+            "battle_pass_mission_state", () => context.Session.IsBattlePassAvailable() && context.Session.CanPublishInventory(receipt));
         // 共享发布仅入队时不能记作已写出；Ready使用实际快照的期段，避免初始化时跨日漏刷。
         if (!context.Sender.IsPublicationQueued)
             context.Owner.Execute(() =>
             {
-                if (!context.Session.CanPublishInventory(receipt)) return false;
+                if (!context.Session.IsBattlePassAvailable() || !context.Session.CanPublishInventory(receipt)) return false;
                 long period = state.Slots[0].Instance.Key.Period;
                 if (context.BattlePassMissionDisplay is not { } previous || previous.Epoch != receipt.SelectionEpoch ||
                     previous.Period <= period)
@@ -50,7 +50,7 @@ internal static class BattlePassMissionProjection
                 var snapshot = state;
                 byte[] payload = snapshot.State.ToPayload();
                 if (!post((ushort)NotiPacketType.BATTLE_PASS_INFO_MISSION, payload,
-                    "battle_pass_guild_contribution", () => session.CanPublishInventory(snapshot.Receipt))) return;
+                    "battle_pass_guild_contribution", () => session.IsBattlePassAvailable() && session.CanPublishInventory(snapshot.Receipt))) return;
                 if (!session.CanPublishInventory(origin)) return;
                 var current = session.ReadBattlePassMissionState();
                 if (current is null || !current.State.Active || !session.CanPublishInventory(origin)) return;

@@ -88,6 +88,11 @@ internal static class GuildHongbaoTests
                 var issued = service.Issue(Actor(0), Current(0), 101, 6);
                 That(issued is { Success: true, Id: > 0, Character: not null } && Current(0).Inventory.Items.Single().Core.Count == 2 &&
                     service.Read(leases[1], characters[1].Id) is { Rows.Length: 1 }, "发行一件真实红包与六份账本同事务生效，列表可重读");
+                var eventService = new DfoServer.Game.Events.ServerEventService(new ServerEventRepository(path));
+                eventService.Override(2378, false);
+                That(!service.Issue(Actor(0), Current(0), 101, 6).Success &&
+                    Current(0).Inventory.Items.Single().Core.Count == 2 && service.Read(leases[1], characters[1].Id) is { Rows.Length: 1 },
+                    "红包关闭阻止新发放，不扣道具，原红包仍可查询");
                 Sql("CREATE TRIGGER hongbao_take_abort BEFORE INSERT ON guild_hongbao_claims BEGIN SELECT RAISE(ABORT,'take rollback'); END");
                 Reject<SqliteException>(() => service.Take(Actor(1), Current(1), issued.Id), "领取回执故障真实抛出");
                 That(Current(1).Inventory.AccountWallet.Get(CurrencyKind.HappyTokenCera) == 0 &&
@@ -100,6 +105,7 @@ internal static class GuildHongbaoTests
                     !service.Take(Actor(1), Current(1), issued.Id).Success && Number("SELECT taken FROM guild_hongbao_records") == 1,
                     "首次领取真实入账号欢乐代币券，同账号重放不重复领，不增加次数");
                 var alternate = repository.Create(leases[1], new("HongAlt", room, room));
+                eventService.Override(2378, true);
                 var alternateActor = Actor(1) with { CharacterId = alternate.Id, Name = alternate.Name };
                 Sql($"INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(1,{alternate.Id},4,1000)");
                 That(!service.Take(alternateActor, repository.LoadCharacter(leases[1], alternate.Slot), issued.Id).Success,
