@@ -88,7 +88,8 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
             {
                 // ACK44已按原生使用路径扣源；这里只发布同事务提交的账号期限，不再次发送源行删除。
                 if (context.Premiums is { } premiums) await premiums.ContractsAsync(committed.Character, guard: Guard);
-                else await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(committed.Character.Inventory.AccountWallet),
+                else await context.Notify(NotiPacketType.PREMIUM_INFO_LIST,
+                    PremiumPackets.SelectEntries(committed.Character.Inventory.AccountWallet, premiumPcRoom: context.Session.PremiumPcRoom),
                     "premium_info_committed", Guard);
                 if (context.Premiums is null && premium.Plan!.Before.AccountWallet.ContractExpiry(27) != committed.Character.Inventory.AccountWallet.ContractExpiry(27))
                     await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(

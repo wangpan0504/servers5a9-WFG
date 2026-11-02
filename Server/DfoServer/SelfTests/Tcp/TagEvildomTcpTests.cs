@@ -190,7 +190,7 @@ internal static partial class TagEvildomTcpTests
         peer.Send(1426);
         peer.Barrier();
     }
-    // trailer 是25B16的末位u32：普通副本固定0，再战魔界/帝国竞技场实机发0xFFFFFFFF，两者都必须能入场。
+    // trailer 是25B16的末位u32：已确认0和FFFFFFFF，特殊入口仍须验证自身的正式准入。
     static byte[] Selection(uint dungeon, uint trailer = 0) => Build(w =>
     {
         w.Write(dungeon); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0);

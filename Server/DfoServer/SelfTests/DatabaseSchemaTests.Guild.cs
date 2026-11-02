@@ -15,6 +15,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemovePcRoomSchema(db);
                 Execute(db, """
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold,selected_skill_tree)
                     VALUES('guild-upgrade',0,'GuildOld',7,38,1,450,234,0,123,1);

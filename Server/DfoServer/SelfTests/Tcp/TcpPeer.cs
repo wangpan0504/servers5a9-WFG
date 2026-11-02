@@ -134,6 +134,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte OwnGuildGrade { get; private set; } = 100;
     public byte[] GuildNpcs { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
+    public byte[] PcRoomAccelerationState { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
     public byte[] DungeonPermission { get; private set; } = [];
@@ -484,7 +485,7 @@ internal sealed partial class TcpPeer : IDisposable
         }
         if (initialization)
             TestCheck.That(updates.SequenceEqual(PremiumServices.Where(pair => pair.Key is 84 or 97 && pair.Value > 0)
-                .Select(pair => pair.Key).Order()), "每次选角恢复成长/晶体横幅，既不提前触发空选择提醒，也不漏发原生显示刷新");
+                .Select(pair => pair.Key).Order()), "每次选角恢复成长/晶体横幅，128只通过完整1760初始化，不能进入有符号66类型字段");
         TestCheck.That(PremiumServices.ContainsKey(56) && PremiumServices.ContainsKey(58),
             "统一契约列表包含56/58的有效期限或显式清除值，不覆盖22/27");
         TestCheck.That(DevilService0.Length == 77 && DevilService0[0] == 1 && U16(DevilService0, 1) == 1 &&
@@ -734,22 +735,74 @@ internal sealed partial class TcpPeer : IDisposable
     }
     public void CheckPcRoomRefresh(bool enabled, bool blackDiamond, bool dungeon = false, bool appearanceChanged = true)
     {
+        bool returning = !enabled && !dungeon && appearanceChanged;
         Send(63);
-        var first = Read();
-        bool ceraFirst = first is { Kind: 0, Opcode: 53 };
-        if (appearanceChanged)
+        // 完整重选后1347不属于Unselected入口；ACK7和名册本身就是完成条件。
+        if (!returning) SendBarrier();
+        var notices = new List<WirePacket>();
+        for (int count = 0; ; count++)
         {
-            var actor = ceraFirst ? Expect(0, 2) : first;
-            TestCheck.That(actor is { Kind: 0, Opcode: 2 }, "网吧身份变化只刷新Actor，不捏造账号契约通知");
-            AssertBlackDiamondActor(actor.Body, blackDiamond, dungeon, enabled);
-            TestCheck.That(Expect(0, 2).Body is [1, ..], "网吧身份刷新后恢复完整本人Player");
-            // 身份切换同时同步网吧特权buff：开启补发487，关闭沿488移除。
-            TestCheck.That(Expect(0, enabled ? (ushort)487 : (ushort)488).Body[0] == 1,
-                "网吧身份切换后同步特权buff，不与身份刷新包序混用");
-            if (!ceraFirst) Expect(0, 53);
+            if (returning && notices.Count == 3) break;
+            TestCheck.That(count < 16, "网吧资格刷新通知数量有界");
+            var packet = Read();
+            if (packet is { Kind: 1, Opcode: 1347 })
+            {
+                TestCheck.Bytes(packet.Body, [1], "网吧资格刷新后的正常请求屏障");
+                break;
+            }
+            TestCheck.That(packet.Kind == 0 && packet.Opcode is 2 or 53 or 487 or 488 or 490 or 1517 or 1639 or 1760 ||
+                packet is { Kind: 1, Opcode: 7 } && returning,
+                "网吧资格刷新只允许已确认通知和城镇失效重选，不得发送66的有符号128类型");
+            notices.Add(packet);
         }
-        else TestCheck.That(ceraFirst, "同值开关或Loading不重复刷新Actor");
-        Barrier();
+        TestCheck.That(notices.Count(packet => packet.Opcode == 53) == 1, "身份刷新保留原CERA查询应答");
+        if (returning)
+        {
+            var returned = notices.Single(packet => packet is { Kind: 1, Opcode: 7 });
+            var roster = notices.Single(packet => packet is { Kind: 0, Opcode: 2 });
+            TestCheck.Bytes(returned.Body, [1], "网吧失效在安全城镇边界发送真实ACK7");
+            TestCheck.Bytes(roster.Body, Roster, "ACK7后完整名册保持原角色和预览，不用1760零期限冒充撤销128");
+            TestCheck.That(notices.Count == 3 && notices.IndexOf(returned) < notices.IndexOf(roster),
+                "网吧失效完整退回选角，不夹入旧角色Actor、Buff或面板通知");
+            requestedRoster = true;
+        }
+        else if (!appearanceChanged && !enabled)
+            TestCheck.That(notices.Count == 1, "同值关闭不重复刷新会员、Actor或面板");
+        else
+        {
+            var premium = notices.Single(packet => packet.Opcode == 1760).Body;
+            TestCheck.That(premium.Length == 1 + premium[0] * 9, "网吧资格更新保留完整u8/u8/i64会员表");
+            var entries = Enumerable.Range(0, premium[0]).ToDictionary(index => premium[1 + index * 9],
+                index => BinaryPrimitives.ReadInt64LittleEndian(premium.AsSpan(2 + index * 9)));
+            TestCheck.That(entries.TryGetValue(128, out long seconds) && (enabled ? seconds > 0 : seconds == 0),
+                "开启经1760初始化128，副本内关闭只同步期限且等待安全返城重选");
+            if (appearanceChanged)
+            {
+                var actors = notices.Where(packet => packet.Opcode == 2).ToArray();
+                TestCheck.That(actors is [{ Body: [0, ..] }, { Body: [1, ..] }], "网吧资格变化按Actor再完整Player恢复，不中断当前Run");
+                AssertBlackDiamondActor(actors[0].Body, blackDiamond, dungeon, enabled);
+                var buff = notices.Single(packet => packet.Opcode == (enabled ? (ushort)487 : (ushort)488));
+                TestCheck.That(buff.Body[0] == 1 && U32(buff.Body, 1) == 1249 &&
+                    notices.IndexOf(actors[1]) < notices.IndexOf(buff), "网吧Buff在本人Player恢复之后添加或移除");
+            }
+            else TestCheck.That(notices.All(packet => packet.Opcode is 53 or 1760 or 1517 or 1639 or 490),
+                "Loading期间先恢复会员与面板，Actor及Buff延后到实际加载完成");
+            TestCheck.That(notices.Single(packet => packet.Opcode == 1517).Body is [0, 0, 0, 0, 0 or 1] &&
+                notices.Single(packet => packet.Opcode == 1639).Body is [0 or 1] &&
+                notices.Single(packet => packet.Opcode == 490).Body is [0, 0, 0 or 1], "同次资格变化完整刷新两种领奖状态与燃烧选择");
+            TestCheck.That(notices.FindIndex(packet => packet.Opcode == 1760) < notices.FindIndex(packet => packet.Opcode == 1517) &&
+                notices.FindIndex(packet => packet.Opcode == 1517) < notices.FindIndex(packet => packet.Opcode == 1639) &&
+                notices.FindIndex(packet => packet.Opcode == 1639) < notices.FindIndex(packet => packet.Opcode == 490),
+                "资格切换先同步1760，再按1517、1639、490刷新面板，state0核资格时128已经到达");
+            PcRoomAccelerationState = notices.Single(packet => packet.Opcode == 490).Body;
+        }
+        lastBarrierCompleted = UnixTime;
+    }
+    public void ExpectPcRoomReselection()
+    {
+        Expect(1, 7, [1]);
+        TestCheck.Bytes(Expect(0, 2).Body, Roster, "副本关闭网吧资格后，安全回城才按完整ACK7和名册退回选角");
+        requestedRoster = true;
     }
     public static string DecodeName(byte[] body, int at, int width) => names.GetString(body, at, width);
     public static string DecodeActorAdventureName(byte[] body)
@@ -931,6 +984,7 @@ internal sealed partial class TcpPeer : IDisposable
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
+        PcRoomAccelerationState = [];
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
             Send(8, [255, 255, 2]);
@@ -1275,6 +1329,18 @@ internal sealed partial class TcpPeer : IDisposable
         }
         TagEvildomInfo = (tagEvildom ?? []).Select(opcode => Expect(0, opcode)).ToArray();
         ReadWeeklyDungeon();
+        if (premiumPcRoom)
+        {
+            TestCheck.That(PremiumServices.TryGetValue(128, out long seconds) && seconds > 0,
+                "首次、重选及重连均已接收本次1760的有效128，随后490才能按实际选择核验网吧菜单资格");
+            var login = Expect(0, 1517).Body;
+            var rental = Expect(0, 1639).Body;
+            TestCheck.That(login is [0, 0, 0, 0, 0 or 1] && rental is [0 or 1],
+                "网吧请求尾部按1517登录、1639租赁状态恢复完整领奖面板");
+            PcRoomAccelerationState = Expect(0, 490).Body;
+            TestCheck.That(PcRoomAccelerationState is [0, 0, 0 or 1],
+                "有效128初始化后完整恢复490的WORD保留0及实际选择BYTE，未勾选也必须收到state0");
+        }
         // 新增的空历史356已逐包校验，并由CompletedQuestHistory暴露；
         // 普通角色的返回数组保留既有仓库等索引，避免无关业务用例随初始化包插入而迁移。
         return prepared ? packets : [.. packets.Where(packet => packet is not { Kind: 0, Opcode: 356 })];

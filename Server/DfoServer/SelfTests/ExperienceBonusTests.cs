@@ -69,6 +69,23 @@ internal static class ExperienceBonusTests
             clear.Amount(ExperienceBonusSource.InternetCafe) == 20 && clear.Amount(ExperienceBonusSource.Avatar) == 2 &&
             clear.Amount(ExperienceBonusSource.Creature) == 5 && clear.Amount(ExperienceBonusSource.Potion) == 120,
             "通关按基础分别计算会员、时装、宠物与契约，保留本版秘药含评分的计算基数");
+        var cafeCharacter = character with
+        {
+            Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty.SetContractExpiry(84, 2000) },
+            ExpBonusUntil = 0, ExpBonusPermille = 0
+        };
+        var cafeClear = service.Plan(new(cafeCharacter, ExperienceEvent.Clear, 3, 1000, true),
+            3123, 624, growth);
+        var burningClear = Game.PcRoom.FatigueAccelerationRules.Apply(cafeClear, 3123, 100);
+        var shownClear = new GameWorld.Dungeons.DungeonClearExperienceReward(3123, 624,
+            checked(burningClear.Total + 312), 4, "pcroom-basis", "fixture")
+        { AdventureExperience = 312, GrowthContractExperience = 624, BonusParts = burningClear.Parts };
+        var shownBonuses = ExperienceBonuses.FromClearReward(shownClear)!;
+        var shownDisplay = shownBonuses.Display(shownClear.TotalExperience);
+        That(shownClear.TotalExperience == 8430 && shownBonuses.Ordinary == 4059 &&
+            shownDisplay.InternetCafeExperience == 624 && shownDisplay.FatigueBurningExperience == 3123 &&
+            shownDisplay.GrowthContractExperience == 624,
+            "原始基础3123与冒险团312独立，网吧20%为624、燃烧100%为3123，不将冒险团复乘");
         var quest = service.Plan(Request(ExperienceEvent.Quest),100,0,growth);
         That(quest.Total == 220 && quest.Amount(ExperienceBonusSource.QuestPotion) == 100 &&
             quest.Amount(ExperienceBonusSource.Potion) == 0, "任务药与普通秘药独立，同族取有效最大值，任务不吃通关会员权益");

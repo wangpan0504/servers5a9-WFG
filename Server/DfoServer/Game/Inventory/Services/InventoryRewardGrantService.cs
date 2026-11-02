@@ -74,8 +74,8 @@ internal static class InventoryRewardGrantService
 
     public static InventoryResult TryGrantBatch(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
         DateTimeOffset? utcNow = null, bool shopExpiration = false, PremiumContractCatalog? contracts = null, bool allowOverflowMail = false,
-        bool ignoreUsablePeriod = false, bool raidReward = false)
-        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail, ignoreUsablePeriod, raidReward);
+        bool ignoreUsablePeriod = false, bool raidReward = false, int? rentalDeadline = null)
+        => Grant(character, rewards, null, catalog, goldLimits, pieces, utcNow, shopExpiration, contracts, allowOverflowMail, ignoreUsablePeriod, raidReward, rentalDeadline);
 
     public static InventoryResult TryGrantItems(Character character, IReadOnlyList<InventoryItem> instances, ItemCatalog catalog,
         GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow = null, bool allowOverflowMail = false)
@@ -84,7 +84,7 @@ internal static class InventoryRewardGrantService
 
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
-        PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false)
+        PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false, int? rentalDeadline = null)
     {
         var inventory = character.Inventory;
         var wallet = inventory;
@@ -95,6 +95,8 @@ internal static class InventoryRewardGrantService
         bool acquiredCargo = false;
         int? accountMaterialWeek = null;
         long? acquisitionDeadline = null;
+        if (rentalDeadline is { } until && until <= now.ToUnixTimeSeconds())
+            return InventoryResult.Reject(19);
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
             var reward = rewards[rewardIndex];
@@ -103,6 +105,7 @@ internal static class InventoryRewardGrantService
                 return InventoryResult.Reject();
             if (pieces.ByPiece.TryGetValue(reward.ItemId, out var piece))
             {
+                if (rentalDeadline is not null) return InventoryResult.Reject(19);
                 if (reward.Upgrade != 0 || reward.Refinement != 0)
                     return InventoryResult.Reject();
                 wallet.EpicPieces.Validate(pieces);
@@ -114,6 +117,7 @@ internal static class InventoryRewardGrantService
             }
             if (CurrencyWallet.RewardKind(reward.ItemId) is { } currency)
             {
+                if (rentalDeadline is not null) return InventoryResult.Reject(19);
                 if (reward.Upgrade != 0 || reward.Refinement != 0)
                     return InventoryResult.Reject();
                 // 代币券是足额兑换，不沿普通奖励的饱和加法吞掉超额面额。
@@ -125,6 +129,7 @@ internal static class InventoryRewardGrantService
             }
             if (contracts?.Recognizes(reward.ItemId) == true)
             {
+                if (rentalDeadline is not null) return InventoryResult.Reject(19);
                 if (!contracts.TryAcquisitionContract(reward.ItemId, out var contract) || reward.Upgrade != 0 || reward.Refinement != 0)
                     return InventoryResult.Reject(19);
                 try
@@ -137,6 +142,7 @@ internal static class InventoryRewardGrantService
             var template = catalog.Get(reward.ItemId);
             if (template.AccountMaterial is { } material)
             {
+                if (rentalDeadline is not null) return InventoryResult.Reject(19);
                 if (reward.Upgrade != 0 || reward.Refinement != 0 || reward.EnchantUpgrade != 0 ||
                     reward.CustomAbilityGrade is not null || reward.Quality is not null ||
                     !template.Expiration.SupportsCreation ||
@@ -152,6 +158,7 @@ internal static class InventoryRewardGrantService
             }
             if (template.HasAcquisitionEffect)
             {
+                if (rentalDeadline is not null) return InventoryResult.Reject(19);
                 if (reward.Upgrade != 0 || reward.Refinement != 0) return InventoryResult.Reject(19);
                 long expires = 0;
                 if (instances is not null)
@@ -192,9 +199,10 @@ internal static class InventoryRewardGrantService
                 incomingInstance = incomingInstance with { Core = InventoryKindCompatibility.Normalize(incomingInstance.Core, template) };
             }
             var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
-                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
+                shopExpiration: shopExpiration, ignoreUsablePeriod: rentalDeadline is not null || ignoreUsablePeriod,
                 echonGrade: template.Echon is not null && reward.CustomAbilityGrade is { } grade ? (byte)grade : null,
                 quality: reward.Quality) with { EnchantUpgrade = reward.EnchantUpgrade } : incomingInstance.Core;
+            if (rentalDeadline.HasValue) prototype = prototype with { IsRental = true, ExpireTime = rentalDeadline.Value };
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))
@@ -205,8 +213,9 @@ internal static class InventoryRewardGrantService
                 for (int at = 0; at < reward.Count; at++)
                 {
                     var core = at == 0 ? prototype : Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
-                        shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
+                        shopExpiration: shopExpiration, ignoreUsablePeriod: rentalDeadline is not null || ignoreUsablePeriod,
                         echonGrade: reward.CustomAbilityGrade is { } fixedGrade ? (byte)fixedGrade : null, quality: reward.Quality);
+                    if (rentalDeadline is { } rentalExpires) core = core with { IsRental = true, ExpireTime = rentalExpires };
                     if (!placement.TryAdd(template, core, 1)) return InventoryResult.Reject(17);
                 }
             }

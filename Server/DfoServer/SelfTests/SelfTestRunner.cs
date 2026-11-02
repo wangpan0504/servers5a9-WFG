@@ -30,6 +30,10 @@ internal static class SelfTestRunner
         LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
         NativeMonsterSpawnsTests.RunCore();
+        Testing.PcRoomTests.RunCore();
+        PcRoomRewardTests.RunCore();
+        PcRoomQualificationTests.RunCore();
+        FatigueAccelerationTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();

@@ -58,7 +58,7 @@ internal static class BoosterEquipmentTests
             "[booster equipment upgrade]\n255\n[random probability]\n32 1\n[/random probability]",
             "[booster equipment upgrade]\n255\n[random probability]\n7 -1\n[/random probability]",
             "[booster equipment upgrade]\n255\n[random probability]\n7 1 8\n[/random probability]",
-            "[booster equipment upgrade]\n255\n[random probability]\n7 1", "[booster equipment grade]\n6" })
+            "[booster equipment upgrade]\n255\n[random probability]\n7 1", "[booster equipment grade]\n7" })
             That(Parse(rule + "\n[equipment]\n16000 1\n[/equipment]").PendingRule is not null,
                 "unknown grade or malformed equipment modifier keeps the whole category pending");
 

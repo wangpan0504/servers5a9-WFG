@@ -69,7 +69,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     }
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";
-    public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true;
+    public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true ||
+        (Selected?.Inventory.AccountWallet.ContractExpiry(128) ?? 0) >
+            (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
     public CharacterFatigueState FatigueForClient(Character character)
     {
         var state = (character.Fatigue ?? CharacterFatigueState.NewOrdinary)

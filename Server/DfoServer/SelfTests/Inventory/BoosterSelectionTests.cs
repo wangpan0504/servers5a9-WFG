@@ -32,6 +32,18 @@ internal static class BoosterSelectionTests
         RunRepeatedDisjointDeclarations();
         RunCustomAbilityGradeDeclarations();
         RunServerTypeDeclarations();
+        var graded = BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n[booster selection num]\n0\n" +
+            "[booster select category]\n0 0\n[equipment]\n16000 1\n[/equipment]\n[booster equipment grade]\n6\n" +
+            "[booster equipment upgrade]\n10\n[booster equipment separate]\n3\n[equipment]\n16400 1\n[/equipment]\n" +
+            "[stackable]\n1106 2\n[/stackable]\n[equipment]\n16401 1\n[/equipment]\n[/booster select category]\n" +
+            "[booster select category]\n1 0\n[equipment]\n16402 1\n[/equipment]\n[/booster select category]\n");
+        That(graded.Available && graded.Selection is { Categories.Length: 2 } gradedSelection &&
+            gradedSelection.Categories.All(category => category.PendingRule is null) &&
+            gradedSelection.Categories[0].Rewards.SequenceEqual(new BoosterChoice[] { new(16000, 1),
+                new(16400, 1, 10, 3) { Quality = 999_999_998 }, new(1106, 2),
+                new(16401, 1, 10, 3) { Quality = 999_999_998 } }) &&
+            gradedSelection.Categories[1].Rewards.Single() == new BoosterChoice(16402, 1),
+            "品级6沿最高品质策略只冻结后续装备行，不回填前行、不污染消耗品或下一分类");
         const string empty = "[default select]\n0\n[booster equipment upgrade]\n10\n[stackable]\n[/stackable]";
         const string reward = "[etc]\n1106 1\n[/etc]";
         string Text(string first, string second, string dimensions = "[booster category num]\n2 2 2\n", int count = 1,
@@ -309,7 +321,7 @@ internal static class BoosterSelectionTests
             "0 0\n[recommend]\n1 1106 1112\n[etc]\n1106 2\n[/etc]", "0 0\n[default select]\n-1\n[etc]\n1106 2\n[/etc]",
             "0 0\n[recommend]\n1 x\n[etc]\n1106 2\n[/etc]", "0 0\n[default select]\n1 1106\n[/default select]",
             "0 0\n[stackable]\n1106 2\n[etc]\n1112 1\n[/etc]", "0 0\n[etc]\n1106 2\n[/stackable]",
-            "0 0\n[default select]\n1 1106\n[booster equipment grade]\n6\n[equipment]\n16400 1\n[/equipment]" })
+            "0 0\n[default select]\n1 1106\n[booster equipment grade]\n7\n[equipment]\n16400 1\n[/equipment]" })
             That(Parse(bad).Selection!.Categories[0].PendingRule is not null, "unknown or malformed category never grants a truncated subset");
         That(!Parse("256 0\n[etc]\n1106 1\n[/etc]").Available && !Parse("0 0", -1).Available,
             "invalid category key and selection count reject definition");

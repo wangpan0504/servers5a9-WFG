@@ -111,7 +111,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var reward = result.Reward ?? throw new InvalidOperationException("已提交结算缺少经验奖励");
         var auxiliary = new CharacterGrowthAuxiliaryState(checked((uint)receipt.Character.Inventory.WinPoints),
             state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
-        // 本版协议没有独立的冒险团加成字段：它属于基础通关经验，和基础项一起作为普通经验展示。
+        // NOTI37普通余项包含冒险团到账；NOTI35另用41槽单列，不能将其并入结果页基础或倍率基数。
         // 满级入口线后角色经验到账为0，结算面板、大会奖励与掉落卡都按「角色到账 + 熟练度到账」的有效经验展示。
         uint effective = checked(result.GainedExperience + result.ProficiencyGained);
         uint plainClear = reward.TotalExperience - reward.GrowthContractExperience - reward.PotionExperience - reward.AdventureExperience;
@@ -175,7 +175,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             var cardBody = ExclusiveDropPackets.ClearCard(reward.Applied(effective),
                 result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
                 result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
-                result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot);
+                result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot,
+                result.Presentation.MonsterFatigueBurningExperience);
             if (context.Session.PartyDungeon is { } instance)
             {
                 instance.StartCards(context.Session);

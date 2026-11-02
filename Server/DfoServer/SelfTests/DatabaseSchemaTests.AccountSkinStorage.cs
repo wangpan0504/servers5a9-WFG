@@ -14,6 +14,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemovePcRoomSchema(db);
                 Execute(db, """
                     INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                     VALUES(1,'skin-old',0,'SkinOld',7,38,1,450,234,0,123);

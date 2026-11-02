@@ -25,7 +25,19 @@ internal static class TcpRegressionTests
             AntonResourceRewardTests.Run(resources);
             return Task.CompletedTask;
         }),
-        ("character-copy", (_, _, resources) => { CharacterCopyTests.RunResources(resources); return Task.CompletedTask; }),
+        ("character-copy", (_, _, resources) => { CharacterCopyTests.Run(); CharacterCopyTests.RunResources(resources); return Task.CompletedTask; }),
+        ("pcroom-rules", async (options, root, resources) =>
+        {
+            PcRoomTests.RunCore();
+            PcRoomRewardTests.RunCore();
+            PcRoomQualificationTests.RunCore();
+            FatigueAccelerationTests.RunCore();
+            PcRoomRewardTests.RunResources(resources.Archive, resources.ItemResources);
+            PcRoomQualificationTests.RunResources(resources.ItemResources.Items);
+            await PcRoomTests.RunResourcesAsync(options, root, resources);
+        }),
+        ("pcroom", PcRoomTcpTests.RunAsync),
+        ("fatigue-experience", FormalDungeonTcpTests.RunFatigueAccelerationExperienceAsync),
         ("quest-stage-growth", async (options, root, resources) =>
         {
             QuestStagePolicyTests.RunResources(resources);
@@ -474,6 +486,12 @@ internal static class TcpRegressionTests
         ("vending", VendingTcpTests.RunAsync),
         ("rune-box", RuneBoxTcpTests.RunAsync),
         ("limit-cube", LimitCubeTcpTests.RunAsync),
+        // 无资源解析规则独立检查；完整礼包资源用例仍由gift-selection-resources负责。
+        ("booster-selection-rules", (_, _, _) =>
+        {
+            Inventory.BoosterSelectionTests.RunCore();
+            return Task.CompletedTask;
+        }),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
         ("booster-equipment", BoosterEquipmentTcpTests.RunAsync),
         ("authentication", AuthenticationTcpTests.RunAsync),

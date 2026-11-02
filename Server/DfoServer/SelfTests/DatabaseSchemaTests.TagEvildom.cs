@@ -60,6 +60,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemovePcRoomSchema(db);
                 // 回退点 113 高于团本生命周期 109，该步不会重跑，团本表须保持当前结构。
                 Execute(db, """
                     DROP TABLE account_tag_evildom_challenges;

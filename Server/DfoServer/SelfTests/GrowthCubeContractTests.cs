@@ -100,15 +100,20 @@ internal static class GrowthCubeContractTests
         var split = new DungeonClearExperienceReward(100, 25, 155, 0, "test", "test")
             { GrowthContractExperience = 20, AdventureExperience = 10 };
         var partlyPaid = split.Applied(137);
+        var partlyPaidPacket = DungeonSettlementPackets.EmptyCardReward(partlyPaid, 0);
         That(partlyPaid is { BaseExperience: 100, AdventureExperience: 10, RankExperience: 25, GrowthContractExperience: 2,
                 PotionExperience: 0, TotalExperience: 137 } &&
-            BinaryPrimitives.ReadUInt32LittleEndian(DungeonSettlementPackets.EmptyCardReward(partlyPaid, 0)) == 110,
-            "冒险团加成紧随基础经验拆分并合并进35基础字段，实际到账不足时按拆分顺序截断");
+            BinaryPrimitives.ReadUInt32LittleEndian(partlyPaidPacket) == 100 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(partlyPaidPacket.AsSpan(41)) == 10,
+            "冒险团加成按实际到账分摊后单列35的41槽，不混入基础字段");
         var baseOnly = split.Applied(50);
         var adventureEdge = split.Applied(105);
+        var adventureEdgePacket = DungeonSettlementPackets.EmptyCardReward(adventureEdge, 0);
         That(baseOnly is { BaseExperience: 50, AdventureExperience: 0, RankExperience: 0, GrowthContractExperience: 0, PotionExperience: 0 } &&
-            adventureEdge is { BaseExperience: 100, AdventureExperience: 5, RankExperience: 0 },
-            "基础经验先足额再计入冒险团，未超过基础时其余分项为零");
+            adventureEdge is { BaseExperience: 100, AdventureExperience: 5, RankExperience: 0 } &&
+            BinaryPrimitives.ReadUInt32LittleEndian(adventureEdgePacket) == 100 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(adventureEdgePacket.AsSpan(41)) == 5,
+            "基础经验先足额再分摊冒险团，独立栏只显示实际得到的5点，不能写原额度10");
         var parsed = PremiumContractCatalog.Parse("""
             [type] 84 [target item] 1 [term] 1
             [item] 3 [term] 3 [bonus exp] 99 [/item]

@@ -14,7 +14,14 @@ internal sealed partial class GameSession
             return new(ConsumableUseOutcome.CloseConnection, "commit-unknown", Guard: capture.Guard);
         if (blocked || capture.Character is not { } expected) return Reject("invalid-state");
         FatigueConsumablePlan plan;
-        try { plan = service.Prepare(expected, slot, capture.Guard.Phase is SessionPhase.Dungeon or SessionPhase.Settlement, capture.InAssault); }
+        bool requiresPcRoom;
+        try
+        {
+            var source = expected.Inventory.Find(slot);
+            requiresPcRoom = source is not null && items?.Get(source.Core.ItemId).RequiresPcRoom == true;
+            if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom)) return Reject("pcroom-required");
+            plan = service.Prepare(expected, slot, capture.Guard.Phase is SessionPhase.Dungeon or SessionPhase.Settlement, capture.InAssault);
+        }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
         { return Reject("invalid-source-fatigue-or-cooldown"); }
         return owner.Execute(() =>
@@ -23,6 +30,7 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "commit-unknown", Guard: capture.Guard);
             if (!CanUseConsumable() || !CanPublishConsumable(capture.Guard))
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed", Guard: capture.Guard);
+            if (requiresPcRoom && !PremiumPcRoom) return Reject("pcroom-required");
             if (!CanUseDungeonItem(plan.Source.Core.ItemId)) return Reject("grief-item-not-allowed-or-exhausted");
             var now = service.Clock.GetUtcNow();
             if (usedConsumables.TryGetValue(plan.Definition.CoolGroup, out var previous) && previous.EnforceCooldown &&
@@ -36,8 +44,15 @@ internal sealed partial class GameSession
                 if (!limited.Accepted) return Reject("server-item-usage-limit");
                 plan = plan with { Inventory = limited.Plan! };
             }
+            if (requiresPcRoom) plan = plan with { Inventory = WithPcRoomQualification(expected, plan.Inventory) };
             pendingConsumableUse = plan.Inventory;
-            var committed = repository.CommitFatigueConsumable(owner, plan, now);
+            Character committed;
+            try { committed = repository.CommitFatigueConsumable(owner, plan, now); }
+            catch (InventoryQualificationExpiredException)
+            {
+                pendingConsumableUse = null;
+                return Reject("source-or-qualification-expired");
+            }
             pendingConsumableUse = null;
             Selected = committed;
             CommitDungeonItemUse(plan.Source.Core.ItemId);

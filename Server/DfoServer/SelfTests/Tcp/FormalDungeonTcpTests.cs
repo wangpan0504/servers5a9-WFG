@@ -911,7 +911,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(35, Move(1085, 249));
                 peer.Barrier();
             }
-            byte[] map = Enter(peer);
+            byte[] map = job == 9 ? EnterNativeSelectionTail(fixture, peer) : Enter(peer);
             Load(peer);
             That(fixture.Query("SELECT job,last_attempt FROM characters JOIN character_dungeon_state ON character_id=id WHERE id=$p0", peer.Id)
                 is [[var actualJob, 1L]] && Convert.ToByte(actualJob) == job,
@@ -928,7 +928,12 @@ internal static partial class FormalDungeonTcpTests
             }
             peer.Send(42);
             peer.Expect(1, 42, [1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0, 24);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            var returned = peer.Expect(0, 24).Body;
+            if (job == 9)
+                That(returned[0] == 38 && returned[1] == 2 &&
+                    fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3145", peer.Id) is [[3145L]],
+                    "女鬼剑普通任务原帧尾FFFFFFFF经37加载成功后，沿42和完整24返回原区域并保持实际接取任务");
             RefreshedQuests(peer);
             peer.Barrier();
         }
@@ -1332,8 +1337,8 @@ internal static partial class FormalDungeonTcpTests
         byte[] clear = peer.Expect(0, 35).Body;
         ReadChangedChatEmoticons(fixture, peer);
         ReadCommittedCard(fixture,peer,clear);
-        // 35包没有独立冒险团字段，加成按基础通关经验合并展示（见 DungeonSettlementPackets.EmptyCardReward）。
-        That(U32(clear, 0) == checked(clearReward.BaseExperience + adventureBonus) && U32(clear, 4) == clearReward.RankExperience &&
+        // 35包41槽为独立冒险团奖励，基础与评分保持各自原值。
+        That(U32(clear, 0) == clearReward.BaseExperience && U32(clear, 41) == adventureBonus && U32(clear, 4) == clearReward.RankExperience &&
             fixture.Query("SELECT quest_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND quest_id=0", peer.Id) is [[0L]],
             "普通生产结算使用本路线经验与零任务账本，不复用任务结算资格");
         peer.Send(69);

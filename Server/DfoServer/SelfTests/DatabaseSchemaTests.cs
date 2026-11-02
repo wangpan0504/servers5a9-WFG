@@ -226,6 +226,7 @@ internal static partial class DatabaseSchemaTests
             AntonNormalUpgrade(Path.Combine(root, "anton-normal"));
             PreyNormalUpgrade(root);
             FrozenLootVersionCollisionUpgrade(root);
+            PcRoomVersionCollisionUpgrade(root);
             PreyGuideUpgrade(Path.Combine(root, "prey-guide"));
             FiendwarUpgrade(Path.Combine(root, "fiendwar"));
             OrdinaryLukeDropUpgrade(root);

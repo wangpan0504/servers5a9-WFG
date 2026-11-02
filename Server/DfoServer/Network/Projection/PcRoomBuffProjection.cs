@@ -11,30 +11,30 @@ internal static class PcRoomBuffProjection
 
     // NOTI487正文：count:u8 + {buffId:u32, dynamic0:u32, dynamic1:u32, dynamic2:u32}×count。
     // 1249是永久模板，三项动态整数全为0；编码只服务这一个buff，不引入公会福利的第二套状态模型。
-    internal static byte[] AddedBody()
+    internal static byte[] AddedBody(uint buffId = BuffId)
     {
         using var stream = new MemoryStream(17); using var writer = new BinaryWriter(stream);
-        writer.Write((byte)1); writer.Write(BuffId); writer.Write(0u); writer.Write(0u); writer.Write(0u);
+        writer.Write((byte)1); writer.Write(buffId); writer.Write(0u); writer.Write(0u); writer.Write(0u);
         return stream.ToArray();
     }
 
     // NOTI488正文：count:u8 + buffId:u32×count。
-    internal static byte[] RemovedBody()
+    internal static byte[] RemovedBody(uint buffId = BuffId)
     {
         using var stream = new MemoryStream(5); using var writer = new BinaryWriter(stream);
-        writer.Write((byte)1); writer.Write(BuffId);
+        writer.Write((byte)1); writer.Write(buffId);
         return stream.ToArray();
     }
 
     // 重建Actor后补发；身份未开启时不发送。
     public static Task PostAsync(GameConnectionContext context, Func<bool>? canSend = null) =>
         context.Session.PremiumPcRoom
-            ? context.Notify(NotiPacketType.CHARACTER_ADD_BUFF, AddedBody(), "pc_room_buff", canSend)
+            ? context.Notify(NotiPacketType.CHARACTER_ADD_BUFF, AddedBody(context.Session.PcRoomBuffId), "pc_room_buff", canSend)
             : Task.CompletedTask;
 
     // 在线切换身份时同步：开启补发NOTI487，关闭沿NOTI488移除，不留残留buff。
     public static Task SetAsync(GameConnectionContext context, bool enabled, Func<bool>? canSend = null) =>
         enabled
             ? PostAsync(context, canSend)
-            : context.Notify(NotiPacketType.CHARACTER_DEL_BUFF, RemovedBody(), "pc_room_buff_removed", canSend);
+            : context.Notify(NotiPacketType.CHARACTER_DEL_BUFF, RemovedBody(context.Session.PcRoomBuffId), "pc_room_buff_removed", canSend);
 }

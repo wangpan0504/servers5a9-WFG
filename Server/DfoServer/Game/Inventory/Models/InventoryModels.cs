@@ -138,7 +138,7 @@ internal sealed class InventoryEventRejectedException() : InvalidOperationExcept
 
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
 internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null, TimeProvider? clock = null,
-    bool requirePosition = false, bool requireMarriageState = false, long? qualificationExpiresAtMilliseconds = null)
+    bool requirePosition = false, bool requireMarriageState = false, long? qualificationExpiresAtMilliseconds = null, Func<bool>? currentQualification = null)
 {
     readonly ushort id = character.Id;
     readonly long revision = character.Revision;
@@ -158,6 +158,7 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
         (marriage is null || marriage.Value.Id == value.Marriage?.Id && marriage.Value.State == (value.Marriage?.State ?? 0));
     public bool IsExpired(long? utcSeconds = null)
     {
+        if (currentQualification?.Invoke() == false) return true;
         if (qualificationExpiresAt is null && qualificationExpiresAtMilliseconds is null) return false;
         if (utcSeconds is { } seconds)
             return qualificationExpiresAt is { } secondsDeadline && seconds >= secondsDeadline ||
@@ -171,6 +172,16 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
     internal long? QualificationExpiresAt => qualificationExpiresAt;
     internal DfoServer.GameWorld.Towns.Location? RequiredPosition => position;
     public bool Matches(Character value, long? utcSeconds = null) => MatchesIdentity(value) && !IsExpired(utcSeconds);
+
+    internal InventoryCharacterPrecondition WithQualification(Character expected, long? expiresAt, Func<bool> qualified)
+    {
+        if (!MatchesIdentity(expected)) throw new InvalidOperationException("不能给旧库存资格重新绑定角色");
+        long? deadline = qualificationExpiresAt is null ? expiresAt : expiresAt is null
+            ? qualificationExpiresAt : Math.Min(qualificationExpiresAt.Value, expiresAt.Value);
+        return new(expected, deadline, clock, requirePosition: position is not null, requireMarriageState: marriage is not null,
+            qualificationExpiresAtMilliseconds: qualificationExpiresAtMilliseconds,
+            currentQualification: () => currentQualification?.Invoke() != false && qualified());
+    }
 }
 
 internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPlan? Plan = null, int MoveCount = 0,

@@ -361,6 +361,10 @@ internal static class DevilContractTcpTests
             That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]],
                 "只有全局网吧资格时真实42退图免虚弱，不需要黑钻期限");
             SetPcRoom(false, blackDiamond: false);
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: false);
+            That(!peer.PremiumServices.TryGetValue(128, out long pcRoomRemaining) || pcRoomRemaining == 0,
+                "城镇网吧关闭已退回选角，显式重选后完整初始化不恢复128");
+            FormalDungeonTcpTests.EntryTown(peer);
             SetPcRoom(false, blackDiamond: false, appearanceChanged: false);
             SetBlackDiamond(30, active: true);
             FormalDungeonTcpTests.Enter(peer);
@@ -382,7 +386,10 @@ internal static class DevilContractTcpTests
             That(peer.Expect(0, 487).Body is [1, ..], "延后的网吧身份刷新同时补发487特权buff");
             peer.Barrier();
             SetPcRoom(false, blackDiamond: true, dungeon: true);
-            Return(peer); peer.Barrier();
+            Return(peer);
+            peer.ExpectPcRoomReselection();
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: true);
+            peer.Barrier();
             long expiry = (long)fixture.Query("SELECT json_extract(premium_contracts,'$.56') FROM account_wallets")[0][0];
             string contractsBeforeReselect = fixture.Snapshot("SELECT premium_contracts FROM account_wallets");
             // 隔离跨30天日切与最后一秒的权益到期；跨日在线推送由fatigue-daily单独核验。
