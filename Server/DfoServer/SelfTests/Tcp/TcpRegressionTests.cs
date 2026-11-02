@@ -402,6 +402,8 @@ internal static class TcpRegressionTests
         // 此专项也由avatar-package调用；独立工作目录避免同次全组选中时重用角色/数据库。
         ("gift-selection-tcp", (options, root, resources) =>
             AvatarPackageTcpTests.RunObservedSelectionsAsync(options, Path.Combine(root, "gift-selection-tcp"), resources)),
+        ("sea-rage-weapon-gift", (options, root, resources) =>
+            AvatarPackageTcpTests.RunSeaRageWeaponSelectionAsync(options, Path.Combine(root, "sea-rage-weapon-gift"), resources)),
         ("gift-selection-resources", (options, root, resources) =>
         {
             Inventory.AvatarPackageTests.RunResources(resources.Towns, resources.ItemResources, resources.ItemResources.AvatarPackages);
@@ -536,7 +538,7 @@ internal static class TcpRegressionTests
         "experience-consumable-rules",
         "legacy-status-rules",
         "stackable-actions",
-        "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "assault-hunt-quest", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
+        "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "dungeon-entry-plan", "assault-hunt-quest", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"

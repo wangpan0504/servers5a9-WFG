@@ -1,9 +1,12 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Items;
+using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -250,6 +253,7 @@ internal static class AvatarPackageTcpTests
 
     public static async Task RunObservedSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await RunSeaRageWeaponSelectionAsync(source, Path.Combine(root, "sea-rage-weapon-nested"), resources);
         await GiftCompatibilityTcpTests.RunAsync(source, root, resources);
         await MixedAvatarPackageTcpTests.RunAsync(source, root, resources);
         await RunOmittedDimensionsAsync(source, root, resources);
@@ -359,6 +363,73 @@ internal static class AvatarPackageTcpTests
         await RunOrdinaryWeaponLifecycleAsync(source, root, resources);
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
         string State() => Snapshot(fixture) + JsonSerializer.Serialize(fixture.Query("SELECT item_uid,detail FROM inventory_creature_details ORDER BY item_uid"));
+    }
+
+    // #1002：真实 PVF 490704328 选 401600001，CMD160 14B 无属性。红时 ACK [0,19,0]。
+    public static async Task RunSeaRageWeaponSelectionAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        const int boxId = 490704328, avatarId = 401600001;
+        const short sourceSlot = 73;
+        byte[] body = Convert.FromHexString("490001000000000001EEEF170000");
+        var items = resources.ItemResources.Items;
+        var packages = resources.ItemResources.AvatarPackages;
+        var avatar = packages.GetAvatar(avatarId);
+        var row = packages.Get(boxId).Categories.Single(entry => entry.Category == 0 && entry.Subcategory == 0).Rows.Single();
+        var reward = items.Get(avatarId);
+        That(row.Type == 4 && avatar.Types.Length == 4 && avatar.Types[^1].Days == 0 && row.Type >= avatar.Types.Length,
+            "#1002 礼盒 type4 对 401600001 短表越界，末行永久");
+        That(reward is { Kind: ItemKind.Avatar, Expiration.SupportsCreation: true, IsPremiumService: false, HasAcquisitionEffect: false } &&
+            avatar.PendingRule is null,
+            "#1002 401600001 可创建装扮 kind=" + reward.Kind + " premium=" + reward.IsPremiumService +
+            " acquire=" + reward.HasAcquisitionEffect + " pending=" + avatar.PendingRule);
+        var planned = new InventoryAvatarPackageService(items, packages, resources.ItemResources.GoldLimits,
+            resources.ItemResources.EpicPieces, new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true })
+            .Open(new Character(1, 0, "SeaRageBox", 0, resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 95,
+                Inventory = new([new(1000, Bag(sourceSlot), InventoryRewardGrantService.Create(items.Get(boxId), shopExpiration: true))])
+            }, AvatarPackageRequests.Read(body, 1, 1), out _, DateTimeOffset.UtcNow);
+        That(planned.Accepted,
+            "#1002 进程内 Open 应发放永久天帷之锚 accepted=" + planned.Accepted + " err=" + planned.Error +
+            " reason=" + planned.RejectReason);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "sea-rage-weapon"), gm: true, resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new("SeaRageBox", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(sourceSlot), InventoryRewardGrantService.Create(items.Get(boxId), shopExpiration: true))])
+            });
+        await fixture.StartAsync();
+        BoosterTcpTests.SetExpirationDebug(fixture, true);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            peer.Send(160, body);
+            BoosterTcpTests.ExpectAck(peer, boxId, sourceSlot, [(avatarId, 1)]);
+            BoosterTcpTests.Entry(peer.Expect(0, 14).Body, sourceSlot, -1, 0);
+            CheckAvatarRows(peer.Expect(0, 14).Body, [new(avatarId, 0)]);
+            peer.Barrier();
+            string before = Snapshot(fixture);
+            peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(before == Snapshot(fixture), "#1002 耗尽后重放不重复发放、不改详情或审计");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            CheckAvatarRows(peer.SpecialContainers[1].Body, [new(avatarId, 0)], full: true);
+        }
+        await fixture.StopAsync();
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var granted = repository.List(owner).Single().Inventory.Items.Single();
+            That(granted is { Uid: > 0, Position.List: InventoryListType.Avatar, Core.ItemId: avatarId,
+                    Core.Durability: 0, Core.ExpireTime: 0, Avatar.ExpireTime: 0 },
+                "#1002 永久武器装扮落库，源盒已扣尽");
+        }
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[1L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[1L, 1L]],
+            "#1002 只保留一件装扮核心与详情");
     }
 
     // 保留原Job15跨职业领取；另用合法Job14真实开413，不手造或复制奖励UID。
