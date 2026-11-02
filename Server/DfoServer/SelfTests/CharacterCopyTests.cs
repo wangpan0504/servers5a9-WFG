@@ -73,6 +73,53 @@ internal static partial class CharacterCopyTests
         }
         using (var f = new Fixture())
         {
+            ushort sourceId = f.Source.Id;
+            f.Sql($"INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until) " +
+                $"VALUES({sourceId},'copy-account',101,102,103,104,105);" +
+                $"INSERT INTO character_quest_notify(character_id,account,entries) VALUES({sourceId},'copy-account',X'000102030405060708090A0B0C0D0E0F');" +
+                $"INSERT INTO character_privilege_service VALUES({sourceId},1000,2000,1,1,10,2,10,1);" +
+                $"INSERT INTO character_fiendwar_counter_stream VALUES({sourceId},'copy-account','copy-stream',9);" +
+                $"INSERT INTO character_strongway2019_statistics VALUES('copy-account',{sourceId},'11111111111111111111111111111111',1,0,5359,0,123,'{{}}');" +
+                $"INSERT INTO account_strongway2019_rewards VALUES('copy-account','22222222222222222222222222222222',{sourceId},1,0,5359,0,1,1,1,'{{}}','{{}}',1);" +
+                $"INSERT INTO character_strongway2019_completions VALUES('copy-account','33333333333333333333333333333333',{sourceId},1,0,5359,0,1,1,1,'{{}}','{{}}',0,NULL);" +
+                $"INSERT INTO character_strongway2019_match_facts VALUES('copy-account',{sourceId},'44444444444444444444444444444444','55555555555555555555555555555555',1,1,1,1,0,'{{}}');");
+            string[] originalOnlyTables =
+            [
+                "character_privilege_service", "character_fiendwar_counter_stream", "account_strongway2019_rewards",
+                "character_strongway2019_statistics", "character_strongway2019_completions", "character_strongway2019_match_facts"
+            ];
+            var originalRows = originalOnlyTables.ToDictionary(table => table, f.Snapshot);
+            string sourceJson = JsonSerializer.Serialize(f.LoadSource());
+            That(f.LoadSource().Inventory.PrivilegeService.ExpiresAt == 2000, "来源确实持有独立付费资格账本");
+            var copy = f.Copy("CopySchema");
+            That(copy.Inventory.PrivilegeService.ExpiresAt == 0, "复制后完整加载也不继承原角色付费资格");
+            That(f.Scalar($"SELECT count(*) FROM character_teleport_cooldowns WHERE character_id={copy.Id} AND account='copy-account' " +
+                "AND potion_until=101 AND aura_until=102 AND upgrade_aura_until=103 AND party_aura_until=104 AND privilege_until=105") == 1,
+                "五种角色传送冷却完整保留，不借复制重置礼遇冷却");
+            That(f.Scalar($"SELECT count(*) FROM character_quest_notify WHERE character_id={copy.Id} AND account='copy-account' " +
+                "AND entries=X'000102030405060708090A0B0C0D0E0F'") == 1, "任务提示原始十六字节归属新角色");
+            foreach (string table in originalOnlyTables)
+            {
+                That(f.Scalar($"SELECT count(*) FROM {table} WHERE character_id={copy.Id}") == 0,
+                    "不复制付费资格、去重流或强者之路原运行账本：" + table);
+                That(f.Snapshot(table) == originalRows[table], "来源资格、账号奖励额度和恢复事实完全不变：" + table);
+            }
+            That(sourceJson == JsonSerializer.Serialize(f.LoadSource()), "当前结构复制不改变原角色快照");
+        }
+        using (var f = new Fixture())
+        {
+            f.Sql("ALTER TABLE character_teleport_cooldowns ADD COLUMN future_state INTEGER NOT NULL DEFAULT 0;");
+            var before = f.CountRows("character_inventory_items");
+            bool schemaRejected = false;
+            try { f.Copy("UnknownCol"); }
+            catch (InvalidDataException error) when (error.Message.EndsWith("character_teleport_cooldowns", StringComparison.Ordinal))
+            { schemaRejected = true; }
+            That(schemaRejected, "已核对角色表增加未知字段仍由结构守卫整体拒绝");
+            That(f.Repository.ListRoster(f.Owner).Length == 1 && f.CountRows("character_inventory_items") == before,
+                "未知字段拒绝不产生半成品角色或物品");
+        }
+        using (var f = new Fixture())
+        {
             int accepted = 0;
             Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(() =>
             {
@@ -212,6 +259,15 @@ internal static partial class CharacterCopyTests
         public void Sql(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         public long CountRows(string table) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = "SELECT count(*) FROM " + table; return (long)command.ExecuteScalar()!; }
         public long Scalar(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return (long)command.ExecuteScalar()!; }
+        public string Snapshot(string table)
+        {
+            using var db = Open(); using var command = db.CreateCommand();
+            command.CommandText = "SELECT * FROM " + table + " ORDER BY rowid";
+            using var reader = command.ExecuteReader();
+            var rows = new List<object?[]>();
+            while (reader.Read()) rows.Add(Enumerable.Range(0, reader.FieldCount).Select(index => reader.IsDBNull(index) ? null : reader.GetValue(index)).ToArray());
+            return JsonSerializer.Serialize(rows);
+        }
         public void Dispose() { Owner.Dispose(); TestFiles.DeleteDirectory(root, true); }
     }
 }

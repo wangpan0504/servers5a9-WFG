@@ -54,6 +54,7 @@ internal sealed partial class CharacterRepository
         new("character_quest_completion_receipts", "character_id", "character_id,account,acceptance_id,quest_id,event_id,instance_id,task_attempt,epoch,generation,rule_id,resource_source,quest_source,native_index,base_experience,raw_additional_percent,difficulty_key,difficulty_weight,experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id,condition_type,selector,multiplier,consumed,changed_items,plan_snapshot"),
         new("character_quest_daily_clear", "character_id", "character_id,account,quest_id,day,event_id,revision"),
         new("character_quest_effect_receipts", "character_id", "character_id,operation_id,before_revision,revision,claimed_quests,changed_items"),
+        new("character_quest_notify", "character_id", "character_id,account,entries"),
         new("character_quest_special_reward_claims", "character_id", "character_id,quest_id,operation_id"),
         new("character_quest_stage_claims", "character_id", "character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision"),
         new("character_quest_stage_witnesses", "character_id", "character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof"),
@@ -66,7 +67,7 @@ internal sealed partial class CharacterRepository
         new("character_skill_switch_inventory", "character_id", "character_id,account,skill_id"),
         new("character_skill_switch_inventory_items", "character_id", "character_id,equipment_part,item_uid,item_id"),
         new("character_skills", "character_id", "character_id,skill_id,level"),
-        new("character_teleport_cooldowns", "character_id", "character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until"),
+        new("character_teleport_cooldowns", "character_id", "character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until"),
         new("character_title_progress", "character_id", "character_id,account,quest_id,remaining1,remaining2,remaining3,completed_revision"),
         new("character_title_sections", "character_id", "character_id,account,section_key,revision"),
         new("character_tp_sources", "character_id", "character_id,bonus_tp"),
@@ -83,7 +84,7 @@ internal sealed partial class CharacterRepository
         new("character_dungeon_scene_clear_receipts", "character_id", "character_id,account,operation_id,source_type,instance_id,quest_id,task_attempt,before_epoch,epoch,dungeon_id,map_id,template_id,source_ordinal,fingerprint,death_events,generation,revision"),
         new("character_quest_lifecycle_receipts", "character_id", "character_id,account,operation_id,action,quest_id,acceptance_id,before_revision,revision,before_active,after_active,changed_items,scene_event,before_completed,after_completed"),
     ];
-    // 社会关系、账号共享表、邮件/拍卖托管、战斗运行身份和历史投递收据只属于原角色。
+    // 社会关系、账号共享表、付费资格与领取账本、战斗运行身份和历史投递收据只属于原角色。
     static readonly HashSet<string> UncopiedCharacterTables = new(StringComparer.Ordinal)
     {
         "account_adventure_expedition_members",
@@ -97,6 +98,7 @@ internal sealed partial class CharacterRepository
         "account_pvp_private_characters",
         "account_pvp_total_teams",
         "account_server_item_refills",
+        "account_strongway2019_rewards",
         "auction_listings",
         "cargo_audit_log",
         "cash_shop_promotion_orders",
@@ -117,6 +119,7 @@ internal sealed partial class CharacterRepository
         "character_evildom_war_hidden_rewards",
         "character_evildom_war_rewards",
         "character_evildom_war_seats",
+        "character_fiendwar_counter_stream",
         "character_fiendwar_recovery",
         "character_grief_tower_clears",
         "character_grief_tower_entries",
@@ -126,6 +129,7 @@ internal sealed partial class CharacterRepository
         "character_inventory_slots",
         "character_name_history",
         "character_operation_hope_reward_receipts",
+        "character_privilege_service",
         "character_pvp_rating_claims",
         "character_quest_drop_receipts",
         "character_quest_skip_receipts",
@@ -133,6 +137,9 @@ internal sealed partial class CharacterRepository
         "character_raid_runs",
         "character_rename_pending",
         "character_social_links",
+        "character_strongway2019_completions",
+        "character_strongway2019_match_facts",
+        "character_strongway2019_statistics",
         "character_title_book_slots",
         "character_tutorial_receipts",
         "characters",
