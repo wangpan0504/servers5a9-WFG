@@ -70,6 +70,8 @@ internal static partial class AntonRaidTcpTests
         That(fixture.Query("SELECT town, area FROM characters WHERE name='AntProbe'") is [[19L, 2L]] &&
             fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],
             "开战扣一张门票并留在 19/2，进图不再扣票");
+        peer.Dispose();
+        await fixture.StopAsync();
         var events = fixture.Events();
         var started = events.Where(row => row.GetProperty("Kind").GetString() == "raid_start_request")
             .Select(row => row.GetProperty("Detail")).Where(row => row.GetProperty("Accepted").GetBoolean()).ToArray();
@@ -132,12 +134,8 @@ internal static partial class AntonRaidTcpTests
             }
             previousSendAt = sentAt;
         }
-        int wait596Frames = stateAndTimers.Count(row => row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 596);
-        int wait597Frames = stateAndTimers.Count(row => row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 597);
-        That(timer is null && pairs > 0 && pairs == wait596Frames && pairs == wait597Frames,
-            $"休息计时完整配对，休息596/597真实收包数和日志一致，不允许漏收：pairs={pairs}, wire596={wait596Frames}, wire597={wait597Frames}");
-        peer.Dispose();
-        await fixture.StopAsync();
+        That(timer is null && pairs > 0 && pairs == report.Wait596 && pairs == report.Wait597,
+            $"休息计时完整配对，休息596/597真实收包数和日志一致，不允许漏收：pairs={pairs}, wire596={report.Wait596}, wire597={report.Wait597}");
         await fixture.StartAsync("reopened");
         using var reopened = Open(fixture, "antonprobe", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
         reopened.Select();

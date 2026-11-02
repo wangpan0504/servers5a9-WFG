@@ -160,7 +160,7 @@ internal static class LukeRaidStartTcpTests
             That(resolved.Completion.Phases.Select(row=>row.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[]{10308804,10304817}),
                 "当前真实party_card映射到两只原booster箱，不把RawB100当100个箱");
         }
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,disconnectCandidates?"luke-raid-disconnect-candidates":facilities?"luke-raid-facilities":fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":energyObjects?"luke-raid-energy-objects":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,energyObjects?"luke-raid-energy-objects":disconnectCandidates?"luke-raid-disconnect-candidates":facilities?"luke-raid-facilities":fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         if(fixedRoute)
         {

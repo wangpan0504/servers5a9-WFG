@@ -26,12 +26,22 @@ internal static partial class AntonRaidGapTcpTests
             That(ack >= 0 && scene > ack && info > scene && entered.FindIndex(packet => packet.Opcode == 29) > info &&
                 !entered.Any(packet => packet.Opcode == 24), "安徒恩全分队真实新Run按ACK72/27/28/29衔接，不伪造重试或中间回城");
             peer.Send(37, new byte[8]);
+            if (!ReferenceEquals(peer, members[^1]))
+            {
+                var waiting = AntonTcpProbe.Barrier(peer, "再次挑战未全员加载");
+                That(waiting.All(packet => packet.Opcode is not (30 or 37)),
+                    "再次挑战新Run尚有成员未加载时不提前释放ACK37或NOTI30");
+            }
         }
-        // 先排空每条连接的37，再检查全队释放；单连接栅栏不保证另一连接已经完成加载。
-        var loaded = members.Select(peer => AntonTcpProbe.Barrier(peer, "再次挑战成员加载完成")).ToArray();
-        for (int index = 0; index < members.Length; index++)
-            That(loaded[index].Concat(AntonTcpProbe.Barrier(members[index], "再次挑战全员加载")).Any(packet => packet is { Kind: 1, Opcode: 37, Body: [1] }),
+        // 先处理最后加载者，再排空每条连接；单连接栅栏不保证其它连接已完成加载。
+        var loaded = members.Reverse().Select(peer => (Peer: peer, Packets: AntonTcpProbe.Barrier(peer, "再次挑战成员加载完成"))).ToArray();
+        foreach (var (peer, packets) in loaded)
+        {
+            var observed = packets.Concat(AntonTcpProbe.Barrier(peer, "再次挑战全员加载")).ToArray();
+            That(observed.Any(packet => packet is { Kind: 1, Opcode: 37, Body: [1] }) &&
+                observed.Any(packet => packet is { Kind: 0, Opcode: 30 }),
                 "再次挑战新Run仍经过全员加载屏障");
+        }
         foreach (var peer in members)
         {
             peer.Send(42);
