@@ -434,7 +434,7 @@ internal static class SkillSwitchInventoryTcpTests
                 That(equipmentCount == 1, "每次宠物装备操作只发布一次穿戴差量 " + part);
             }
         }
-        // 克隆在已穿原件上覆盖，来源UID/颜色由本次事务决定；再卸下并穿回空槽保持同一关联。
+        // 克隆在已穿原件上覆盖，来源UID/颜色由本次事务决定；卸下再穿空槽解除外观。
         foreach (var move in new[] { (Bag: (short)2, Id: aura.Core.ItemId, Target: 0),
             (Bag: (short)1, Id: clone.Core.ItemId, Target: aura.Core.ItemId),
             (Bag: (short)1, Id: aura.Core.ItemId, Target: clone.Core.ItemId),
@@ -455,9 +455,10 @@ internal static class SkillSwitchInventoryTcpTests
                     if (cloneWorn)
                     {
                         int at = 134 + NameWidth("BuffWindow");
+                        int appearance = move.Target == aura.Core.ItemId ? aura.Core.ItemId : 0;
                         That(packet.Body[at] == 9 && U32(packet.Body, at + 1) == clone.Core.ItemId &&
-                            U32(packet.Body, at + 16) == aura.Core.ItemId && U16(packet.Body, at + 9) == 7,
-                            "Actor仍投影真实克隆模板、本次原件关联与借用颜色");
+                            U32(packet.Body, at + 16) == appearance && U16(packet.Body, at + 9) == (appearance == 0 ? 0 : 7),
+                            "Actor投影真实克隆模板：覆盖原件借用外观染色，脱下重穿空槽清零");
                     }
                 }
                 if (packet.Opcode == 14 && packet.Body[0] == 3)

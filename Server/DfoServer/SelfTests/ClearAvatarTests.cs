@@ -94,21 +94,19 @@ internal static class ClearAvatarTests
             result = Move(role, next.Position, original.Position);
             worn = result.Plan!.After.Find(original.Position)!;
             That(worn.Avatar!.ClearAvatarId == original.Core.ItemId && worn.Avatar.ClearAvatarSourceUid == original.Uid && worn.Avatar.Color1 == 12 &&
-                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: var keptId, ClearAvatarSourceUid: var keptSource, Color1: 12 } &&
-                keptId == original.Core.ItemId && keptSource == original.Uid,
-                "连续克隆继承原始外观和染色，被退回包裹的克隆保留已复制的外观与来源");
+                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
+                "连续克隆从原快照继承外观和染色，被退回包裹的克隆解除外观");
             role = role with { Inventory = result.Plan.After };
             result = Move(role, original.Position, new(InventoryListType.Avatar, 2));
             That(result.Plan!.After.Find(new(InventoryListType.Avatar, 2)) is { } unequipped &&
-                unequipped.Avatar is { ClearAvatarId: var unequippedId, ClearAvatarSourceUid: var unequippedSource, Color1: 12 } &&
-                unequippedId == original.Core.ItemId && unequippedSource == original.Uid &&
+                unequipped.Avatar == InventoryCloneAppearanceService.Clear(worn.Avatar!) &&
+                unequipped.Uid == worn.Uid && unequipped.Core == worn.Core &&
                 result.Plan.After.Find(original.Position) is null,
-                "卸装保留物品已复制的外观、来源与染色，不留下假穿戴物品");
+                "卸装解除外观来源和借用染色，保留完整核心、期限、徽章与UID");
             role = role with { Inventory = result.Plan.After };
             result = Move(role, new(InventoryListType.Avatar, 2), original.Position);
-            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: var reusedId, ClearAvatarSourceUid: var reusedSource, Color1: 12 } &&
-                reusedId == original.Core.ItemId && reusedSource == original.Uid,
-                "卸下再穿回空槽仍保留已复制的外观与来源，国服外观记在克隆物品本身");
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
+                "原件仍在包裹时脱下重穿空槽也保持初始外观，不自动重新克隆");
             role = Role([bag with { Avatar = details with { ClearAvatarId = 300, ClearAvatarSourceUid = 99, Color1 = 12 } }]);
             result = Move(role, bag.Position, original.Position);
             That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99, Color1: 12, Color2: 8 },
@@ -116,8 +114,8 @@ internal static class ClearAvatarTests
             role = role with { Inventory = result.Plan.After with { Items = result.Plan.After.Items.Add(next) } };
             result = Move(role, next.Position, original.Position);
             That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99 } &&
-                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99 },
-                "无外观克隆替换有外观克隆时继承其关联，被替换的克隆保留自身外观");
+                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 },
+                "无外观克隆替换有外观克隆时继承其关联，被替换的克隆解除外观");
             var emptyWorn = Avatar(14, new(InventoryListType.Equipment, 3), Template(3, true).Id, details with { ClearAvatarId = 0 });
             var emptyBag = Avatar(15, new(InventoryListType.Avatar, 0), Template(3, true).Id, details with { ClearAvatarId = 0 });
             result = Move(Role([emptyBag, emptyWorn]), emptyBag.Position, emptyWorn.Position);
@@ -190,6 +188,27 @@ internal static class ClearAvatarTests
             That(BitConverter.ToUInt16(ClearAvatarPackets.Sources(new([duplicate, linked, invalid])), 11) == 0,
                 "原件不在装扮包裹、UID或模板不匹配时清除客户端来源，不回退到同模板副本");
         }
+        foreach (var sources in new ImmutableArray<InventoryItem>[]
+        {
+            [duplicate], [duplicate, originalSource with { Position = new(InventoryListType.PersonalCargo, 0) }],
+            [duplicate, originalSource with { Core = originalSource.Core with { ItemId = 104 } }]
+        })
+        {
+            var orphan = Role(sources.Add(linked));
+            var cleaned = InventoryCloneAppearanceService.PlanCleanup(orphan, catalog);
+            That(cleaned.Plan is { Changed: true } cleanup && cleanup.After.Find(linked.Position) is { } cleared &&
+                cleared.Uid == linked.Uid && cleared.Core == linked.Core &&
+                cleared.Avatar == InventoryCloneAppearanceService.Clear(linked.Avatar!) &&
+                cleanup.After.Items.Length == orphan.Inventory.Items.Length,
+                "重选清理丢失或失配来源的克隆详情，不以同模板副本替代、不更改其它资产");
+            That(InventoryCloneAppearanceService.PlanCleanup(orphan with { Inventory = cleaned.Plan!.After }, catalog).Plan is { Changed: false },
+                "克隆来源清理幂等，无变化不写库");
+        }
+        That(InventoryCloneAppearanceService.PlanCleanup(Role([originalSource, duplicate, linked]), catalog).Plan is { Changed: false },
+            "重选时原件仍存在则保留克隆效果与全部详情");
+        var legacy = linked with { Avatar = linked.Avatar! with { ClearAvatarSourceUid = 0 } };
+        That(InventoryCloneAppearanceService.PlanCleanup(Role([originalSource, legacy]), catalog).Plan!.After.Find(linked.Position)!.Avatar!.ClearAvatarId == 0,
+            "历史无来源UID的克隆清理外观，不猜测同模板原件");
         Reject<InvalidDataException>(() => (details with { ClearAvatarSourceUid = -1 }).Validate(), "克隆来源UID不得为负");
         var allSources = Enumerable.Range(0, 11).SelectMany(slot => new[]
         {
@@ -309,6 +328,31 @@ internal static class ClearAvatarTests
             That(loaded.Inventory.Items.SequenceEqual(role.Inventory.Items) && loaded.Inventory.Find(to)!.Avatar!.ClearAvatarId == 103 &&
                 loaded.Inventory.Find(to)!.Avatar!.ClearAvatarSourceUid == loaded.Inventory.Find(from)!.Uid,
                 "外观编号、原件UID及完整时装详情一起持久化，重开仓储恢复");
+            role = InventoryService.Commit(repository, owner, role,
+                InventoryDeleteService.Plan(role.Inventory, from, 103, 1));
+            var cleanup = InventoryCloneAppearanceService.PlanCleanup(role, catalog);
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+            {
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = "CREATE TRIGGER fail_clone_cleanup AFTER UPDATE ON inventory_avatar_details BEGIN SELECT RAISE(ABORT,'clone cleanup rollback'); END";
+                command.ExecuteNonQuery();
+                Reject<SqliteException>(() => InventoryService.Commit(repository, owner, role, cleanup),
+                    "来源清理写入失败时外观、详情和revision整笔回滚");
+                loaded = new CharacterRepository(path).LoadCharacter(owner, role.Slot);
+                That(loaded.Revision == role.Revision && loaded.Inventory.Items.SequenceEqual(role.Inventory.Items),
+                    "清理失败不留下半份外观，也不复活已删除的源装扮");
+                command.CommandText = "DROP TRIGGER fail_clone_cleanup";
+                command.ExecuteNonQuery();
+            }
+            role = InventoryService.Commit(repository, owner, role, cleanup);
+            loaded = new CharacterRepository(path).LoadCharacter(owner, role.Slot);
+            That(loaded.Inventory.Find(from) is null && loaded.Inventory.Find(to) is { } clear &&
+                clear.Core == role.Inventory.Find(to)!.Core && clear.Avatar == InventoryCloneAppearanceService.Clear(details),
+                "源装扮删除后清理持久化，重开仓储恢复透明初始外观且保留实例详情");
+            var repeated = InventoryService.Commit(repository, owner, loaded,
+                InventoryCloneAppearanceService.PlanCleanup(loaded, catalog));
+            That(repeated.Revision == loaded.Revision, "重复重选来源清理不产生无变化写入");
         }
         finally { TestFiles.DeleteDirectory(root, true); }
     }

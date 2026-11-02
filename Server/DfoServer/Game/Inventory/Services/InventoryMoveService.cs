@@ -339,11 +339,14 @@ internal static class InventoryMoveService
             core.SealFlag != 0 && catalog.Get(core.ItemId).AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))
             core = core with { SealFlag = 0 };
         var avatar = item.Avatar;
-        // 穿到已有真实装扮的槽位时重新采样；卸下、移格及穿回空槽保留已复制的外观。
+        // 离开穿戴槽即解除克隆；替换时先从原穿戴快照取来源，再清理被退回的实例。
         if (avatar is not null)
         {
             var template = catalog.Get(core.ItemId);
             if (template.CloneAvatar && template.BorrowAvatarAppearance &&
+                source.List == InventoryListType.Equipment && source != destination)
+                avatar = InventoryCloneAppearanceService.Clear(avatar);
+            else if (template.CloneAvatar && template.BorrowAvatarAppearance &&
                 destination.List == InventoryListType.Equipment && previous?.Avatar is { } prior &&
                 (avatar.ClearAvatarId == 0 || !catalog.Get(previous.Core.ItemId).CloneAvatar))
             {
