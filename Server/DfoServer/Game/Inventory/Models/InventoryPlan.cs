@@ -32,6 +32,7 @@ internal sealed class InventoryPlan
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
     public int? AccountMaterialRaidWeek { get; init; }
+    public DfoServer.Game.PcRoom.PcRoomDailyClaim? PcRoomClaim { get; set; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -70,6 +71,7 @@ internal sealed class InventoryPlan
         GuildHongbaoPurchase = GuildHongbaoPurchase,
         RequiredEvent = RequiredEvent,
         AccountMaterialRaidWeek = AccountMaterialRaidWeek,
+        PcRoomClaim = PcRoomClaim,
         ExpBonus = ExpBonus
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;

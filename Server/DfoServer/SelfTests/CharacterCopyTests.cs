@@ -77,6 +77,8 @@ internal static partial class CharacterCopyTests
             f.Sql($"INSERT INTO character_teleport_cooldowns(character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until) " +
                 $"VALUES({sourceId},'copy-account',101,102,103,104,105);" +
                 $"INSERT INTO character_quest_notify(character_id,account,entries) VALUES({sourceId},'copy-account',X'000102030405060708090A0B0C0D0E0F');" +
+                $"INSERT INTO character_fatigue_acceleration VALUES({sourceId},'copy-account',1);" +
+                $"INSERT INTO character_pcroom_claims VALUES({sourceId},'copy-account',20261102);" +
                 $"INSERT INTO character_privilege_service VALUES({sourceId},1000,2000,1,1,10,2,10,1);" +
                 $"INSERT INTO character_fiendwar_counter_stream VALUES({sourceId},'copy-account','copy-stream',9);" +
                 $"INSERT INTO character_strongway2019_statistics VALUES('copy-account',{sourceId},'11111111111111111111111111111111',1,0,5359,0,123,'{{}}');" +
@@ -85,7 +87,7 @@ internal static partial class CharacterCopyTests
                 $"INSERT INTO character_strongway2019_match_facts VALUES('copy-account',{sourceId},'44444444444444444444444444444444','55555555555555555555555555555555',1,1,1,1,0,'{{}}');");
             string[] originalOnlyTables =
             [
-                "character_privilege_service", "character_fiendwar_counter_stream", "account_strongway2019_rewards",
+                "character_privilege_service", "character_pcroom_claims", "character_fiendwar_counter_stream", "account_strongway2019_rewards",
                 "character_strongway2019_statistics", "character_strongway2019_completions", "character_strongway2019_match_facts"
             ];
             var originalRows = originalOnlyTables.ToDictionary(table => table, f.Snapshot);
@@ -93,6 +95,8 @@ internal static partial class CharacterCopyTests
             That(f.LoadSource().Inventory.PrivilegeService.ExpiresAt == 2000, "来源确实持有独立付费资格账本");
             var copy = f.Copy("CopySchema");
             That(copy.Inventory.PrivilegeService.ExpiresAt == 0, "复制后完整加载也不继承原角色付费资格");
+            That(f.Scalar($"SELECT count(*) FROM character_fatigue_acceleration WHERE character_id={copy.Id} AND account='copy-account' AND enabled=1") == 1,
+                "复制保留角色疲劳燃烧选择，领取事实仍归原角色");
             That(f.Scalar($"SELECT count(*) FROM character_teleport_cooldowns WHERE character_id={copy.Id} AND account='copy-account' " +
                 "AND potion_until=101 AND aura_until=102 AND upgrade_aura_until=103 AND party_aura_until=104 AND privilege_until=105") == 1,
                 "五种角色传送冷却完整保留，不借复制重置礼遇冷却");

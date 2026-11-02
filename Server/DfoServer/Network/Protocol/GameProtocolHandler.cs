@@ -52,7 +52,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Dungeons.Strongway2019Catalog? strongway2019 = null,
     Func<DfoServer.Game.Characters.Character, int>? strongway2019AntiEvil = null,
     DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
-    Strongway2019Projection? strongwayProjection = null) : IConnectionProtocol
+    Strongway2019Projection? strongwayProjection = null,
+    DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -104,6 +105,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
         context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);
+        if (pcRoom is not null)
+        {
+            session.ConfigurePcRoom(pcRoom);
+            context.PcRoom = new(context, time);
+        }
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
         if (boosters is not null) context.BoosterUses = new(context, boosters, log, time,
@@ -411,6 +417,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                         await context.Dazzlement.RefreshAsync();
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
+                        // 490的未勾选状态也会检查会员资格，必须在1760初始化网吧128之后发送。
+                        if (context.PcRoom is { } pcRoom) await pcRoom.RefreshAsync();
                         if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
                         if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
                         if (skins is not null) await skins.RefreshAsync(context);

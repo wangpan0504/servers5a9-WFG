@@ -51,7 +51,7 @@ internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<Experienc
         };
     }
 
-    // 冻结通关奖励的唯一显示投影：本版协议没有冒险团加成字段，它属于基础通关经验，与基础、评分项一起并入普通项。
+    // NOTI37的普通余项保留冒险团与评分，确保绝对经验通知完整分摊；NOTI35按独立字段展示冒险团。
     // 未冻结分项的历史结算返回 null，由调用方按旧口径展示。
     public static ExperienceBonuses? FromClearReward(DungeonClearExperienceReward reward) =>
         reward.BonusParts.IsDefault ? null : new(

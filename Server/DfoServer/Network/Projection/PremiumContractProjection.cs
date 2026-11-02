@@ -23,6 +23,7 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
     long effectsEpoch = -1;
     (long Epoch, byte Percent)? announcedStamina;
     (long Epoch, bool BlackDiamond, bool PcRoom)? announcedAppearance;
+    long pcRoomReselectionEpoch = -1;
 
     public void RecordPremiumAppearance(Character character, long utcSeconds, bool premiumPcRoom) => context.Owner.Execute(() =>
     {
@@ -36,12 +37,15 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
     {
         var now = frozenAt ?? clock.GetUtcNow();
         var active = DevilContractPolicy.ClientContracts(character.Inventory.AccountWallet).Where(row => row.Value > now.ToUnixTimeSeconds()).ToImmutableSortedDictionary();
+        long pcRoomExpiry = PremiumPackets.PcRoomExpiry(character.Inventory.AccountWallet, now.ToUnixTimeSeconds(), context.Session.PremiumPcRoom);
+        if (pcRoomExpiry > 0) active = active.SetItem(128, pcRoomExpiry);
         var previous = announced;
         long currentEpoch = context.Session.SelectionEpoch;
         bool selectionChanged = contractsEpoch != currentEpoch;
+        if (selectionChanged) pcRoomReselectionEpoch = -1;
         var clear = (resetTypes ?? []).Concat(previous?.Keys.Where(type => !active.ContainsKey(type)) ?? []).Distinct().ToArray();
         bool sent = false;
-        await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(character.Inventory.AccountWallet, now, clear),
+        await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(character.Inventory.AccountWallet, now, clear, context.Session.PremiumPcRoom),
             "premium_info_committed", () => sent = guard?.Invoke() ?? true);
         if (!sent) return;
         announced = active;
@@ -51,6 +55,7 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
                 now.ToUnixTimeSeconds()), "expert_contract_committed", guard);
         await SelectionAsync(character, now.ToUnixTimeSeconds(), guard);
         // 66重置横幅管理时钟；97更新会检查选择集，必须在901及本人效果恢复之后发送。
+        // 66/type2的类型由原生movsx读取，128不能经此窄字段更新。
         foreach (int type in new[] { 84, 97 })
             if (selectionChanged && active.ContainsKey(type) ||
                 (previous?.GetValueOrDefault(type) ?? 0) != active.GetValueOrDefault(type))
@@ -73,11 +78,24 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
             ReferenceEquals(context.Session.Selected, character));
         var instant = clock.GetUtcNow();
         long now = instant.ToUnixTimeSeconds();
+        if (context.Session.PremiumPcRoom) pcRoomReselectionEpoch = -1;
+        else if (announced?.ContainsKey(128) == true) pcRoomReselectionEpoch = captured.SelectionEpoch;
+        // 1760只会置有效位，不能撤销128；安全城镇边界走原生完整重选。
+        // 正在运行的副本不因实例开关变化而中断，其道具资格仍按当前环境立即拒绝。
+        if (pcRoomReselectionEpoch == captured.SelectionEpoch && town is not null && context.Session.Phase == SessionPhase.Town)
+        {
+            await town.ReturnToSelectionAsync(context, Guard);
+            announced = null;
+            contractsEpoch = -1;
+            pcRoomReselectionEpoch = -1;
+            return;
+        }
         await StaminaAsync(character, Guard);
         // 请求完成后检查黑钻到期/撤销；不在业务ACK之前插入会员刷新，也不把魔王子服务扩展为逐请求重发。
-        bool changed = announced is null || new[] { 56, 84, 88, 92, 97 }.Any(type =>
-            announced.GetValueOrDefault(type) != (character.Inventory.AccountWallet.ContractExpiry(type) > now ?
-                character.Inventory.AccountWallet.ContractExpiry(type) : 0));
+        bool changed = announced is null || new[] { 56, 84, 88, 92, 97, 128 }.Any(type =>
+            announced.GetValueOrDefault(type) != (type == 128
+                ? PremiumPackets.PcRoomExpiry(character.Inventory.AccountWallet, now, context.Session.PremiumPcRoom)
+                : character.Inventory.AccountWallet.ContractExpiry(type) > now ? character.Inventory.AccountWallet.ContractExpiry(type) : 0));
         if (changed)
             await ContractsAsync(character, instant, Guard);
         else await SelectionAsync(character, now, Guard);

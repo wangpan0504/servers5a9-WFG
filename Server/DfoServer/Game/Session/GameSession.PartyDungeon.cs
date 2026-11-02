@@ -190,6 +190,7 @@ internal sealed partial class GameSession
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
+                FatigueAccelerationPercent = CaptureFatigueAcceleration(dungeon.Entry),
                 RequiredEvent = Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
@@ -225,6 +226,7 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("已提交组队再挑战不能结束原结算实例");
             previous.Ground.ExpireRun();
         }
+        installing.Run.FreezeFatigueAcceleration(PremiumPcRoom ? reservation.Charge.FatigueAccelerationPercent : 0);
         installing.Ground.PublishPassiveEntry();
         Selected = committed;
         if (installing.EvildomWarEntry is { } war)

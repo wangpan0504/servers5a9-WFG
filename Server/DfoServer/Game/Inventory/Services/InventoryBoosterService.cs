@@ -305,6 +305,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (source is null || !source.Core.IsStackable || request.Count <= 0 || request.Count > source.Core.Count ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
+        if (source.Core.IsRental && source.ExpireTime <= now.ToUnixTimeSeconds())
+            return InventoryResult.Reject(19);
         var sourceTemplate = catalog.Get(source.Core.ItemId);
         if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "booster_source_ineligible" };
@@ -431,11 +433,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     return InventoryResult.Reject(19);
                 var template = catalog.Get(id);
                 if (template.IsPremiumService) return InventoryResult.Reject(19);
-                if (InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
-                    ignoreUsablePeriod: ignoreUsablePeriod).IsExpired(now.ToUnixTimeSeconds()))
+                var preview = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                    ignoreUsablePeriod: ignoreUsablePeriod);
+                if (!source.Core.IsRental && preview.IsExpired(now.ToUnixTimeSeconds()))
                     return InventoryResult.Reject(19);
             }
-            if (choices is not null && choices.Any(row => (row.Upgrade != 0 || row.Refinement != 0) &&
+            if (choices is not null && choices.Any(row => (row.Upgrade != 0 || row.Refinement != 0 || row.Quality is not null) &&
                 (CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId) ||
                     catalog.Get(row.ItemId).Kind != ItemKind.Equipment)))
                 return InventoryResult.Reject(19);
@@ -580,7 +583,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 int count = checked(choice.Count * request.Count);
                 if (choice.Upgrade != 255)
                 {
-                    grants.Add(new(choice.ItemId, count, choice.Upgrade, choice.Refinement));
+                    grants.Add(new(choice.ItemId, count, choice.Upgrade, choice.Refinement, Quality: choice.Quality));
                     continue;
                 }
                 long weight = choice.UpgradeChances.Sum(row => (long)row.Weight);
@@ -591,7 +594,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     {
                         if (value < chance.Weight)
                         {
-                            grants.Add(new(choice.ItemId, 1, chance.Level, choice.Refinement));
+                            grants.Add(new(choice.ItemId, 1, chance.Level, choice.Refinement, Quality: choice.Quality));
                             break;
                         }
                         value -= chance.Weight;
@@ -646,6 +649,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     {
                         var core = InventoryRewardGrantService.Create(catalog.Get(reward.ItemId), utcNow: now,
                             upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration,
+                            quality: reward.Quality,
                             ignoreUsablePeriod: ignoreUsablePeriod, echonGrade: catalog.Get(reward.ItemId).Echon is not null &&
                                 reward.CustomAbilityGrade is { } grade ? checked((byte)grade) : null);
                         // 同ID多件仍逐件创建，保留强化、锻造、封装、耐久及期限。
@@ -655,6 +659,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         if (definition.GrantsEpicExchangeOrigin && core.Kind == ItemKind.Equipment)
                             // 客户端物品核心 +0xC1（123B 偏移 119）的 bit0 才是交换资格位；只记服务端来源不够。
                             core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId), Extension119 = 0x01 };
+                        if (source.Core.IsRental)
+                        {
+                            if (source.ExpireTime <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);
+                            core = core with { IsRental = true, ExpireTime = source.ExpireTime };
+                        }
                         instances.Add(new(0, default, core));
                     }
             }
@@ -665,7 +674,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
                 shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty,
-                ignoreUsablePeriod: ignoreUsablePeriod,
+                ignoreUsablePeriod: ignoreUsablePeriod, rentalDeadline: source.Core.IsRental ? source.ExpireTime : null,
                 raidReward: grants.Any(row => catalog.TryGet(row.ItemId, out var template) && template.AccountMaterial is
                     { WeeklyAccountLimit: > 0 } or { WeeklyCharacterLimit: > 0 }));
         if (!grant.Accepted)
@@ -752,7 +761,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             var entries = category.Rewards.Where(row => row.ItemId == id).ToArray();
             if (entries.Length == 0 || entries.Any(row => row.Count != entries[0].Count || row.Upgrade != entries[0].Upgrade ||
-                row.Refinement != entries[0].Refinement || row.RequiredKind != entries[0].RequiredKind ||
+                row.Refinement != entries[0].Refinement || row.Quality != entries[0].Quality || row.RequiredKind != entries[0].RequiredKind ||
                 row.NativeCreatureSelectionRow != entries[0].NativeCreatureSelectionRow ||
                 !row.UpgradeChances.SequenceEqual(entries[0].UpgradeChances)))
                 return false;

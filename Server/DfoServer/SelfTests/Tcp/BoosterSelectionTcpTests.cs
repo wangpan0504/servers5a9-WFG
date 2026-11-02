@@ -268,7 +268,8 @@ internal static class BoosterSelectionTcpTests
         }
         RunProgressiveCategories(fixture, resources, 2);
         RunRookieBoxes();
-        RunTayberrsBoxes();
+        try { RunTayberrsBoxes(); }
+        finally { SetExpirationDebug(fixture, false); }
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -369,6 +370,9 @@ internal static class BoosterSelectionTcpTests
         {
             const int parentId = 490011785;
             int[] children = [490011783, 490011826, 490011827, 490011828];
+            // 本场景验证完整开盒链与事务，明确准备未过期父盒，并用现有调试策略处理各级历史绝对截止。
+            SetExpirationDebug(fixture, true);
+            var parentCore = InventoryRewardGrantService.Create(itemResources.Items.Get(parentId), shopExpiration: true);
             var entries = new Dictionary<short, byte[]>();
             DfoServer.Game.Characters.Character role, fullRole;
             var range = ItemSlotBoundService.Range(ItemKind.Consumable, InventorySnapshot.Empty);
@@ -377,13 +381,13 @@ internal static class BoosterSelectionTcpTests
                 role = repo.Create(owner, new("TayberrsBox", towns.Room, towns.InitialReturn)
                 {
                     Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
-                    Inventory = new([new(0, Bag(3), Core(parentId)), new(0, Bag(4), Core(parentId)),
-                        new(0, Bag(5), Core(parentId)), new(0, Bag(6), Core(parentId)), new(0, Bag(120), Core(1106))], Gold: 12345)
+                    Inventory = new([new(0, Bag(3), parentCore), new(0, Bag(4), parentCore),
+                        new(0, Bag(5), parentCore), new(0, Bag(6), parentCore), new(0, Bag(120), Core(1106))], Gold: 12345)
                 });
                 fullRole = repo.Create(owner, new("TayberrsFull", towns.Room, towns.InitialReturn)
                 {
                     Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
-                    Inventory = new([new(0, Bag(3), Core(parentId)), .. Enumerable.Range(range.Start, range.End - range.Start + 1)
+                    Inventory = new([new(0, Bag(3), parentCore), .. Enumerable.Range(range.Start, range.End - range.Start + 1)
                         .Select(slot => new InventoryItem(0, Bag((short)slot), Core(1106)))], Gold: 12345)
                 });
             }
@@ -467,8 +471,8 @@ internal static class BoosterSelectionTcpTests
                 var saved = ReadRole();
                 var reward = saved.Inventory.Items.Single(item => item.Core.ItemId == rewardId);
                 var rewardTemplate = itemResources.Items.Get(rewardId);
-                var first = InventoryRewardGrantService.Create(rewardTemplate, utcNow: earliest);
-                var last = InventoryRewardGrantService.Create(rewardTemplate, utcNow: DateTimeOffset.UtcNow);
+                var first = InventoryRewardGrantService.Create(rewardTemplate, utcNow: earliest, shopExpiration: true);
+                var last = InventoryRewardGrantService.Create(rewardTemplate, utcNow: DateTimeOffset.UtcNow, shopExpiration: true);
                 var nestedExpectedCore = first with { ExpireTime = reward.Core.ExpireTime };
                 if (equipment)
                     nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0x01, DisjointForbidden = sourceId is 490011783 or 490011888 or 490011893 or 490011895 };
@@ -536,9 +540,11 @@ internal static class BoosterSelectionTcpTests
         ushort guardSlot = checked((ushort)(selectedSlot + 1));
         var items = resources.ItemResources.Items; var repo = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var now = DateTimeOffset.UtcNow;
-        That(items.Get(sourceId).StackLimit == 1 && items.Get(sourceId).Expiration.Resolve(now) == 0 && items.Get(3242).StackLimit >= 37,
-            "逐项扩展礼盒真实堆叠上限为1，哨兵数量37在真实模板上限内");
-        InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot), InventoryRewardGrantService.Create(items.Get(id), count, now));
+        int sourceExpiry = items.Get(sourceId).Expiration.Resolve(now, ignoreAbsoluteExpiration: true);
+        That(items.Get(sourceId).StackLimit == 1 && sourceExpiry > now.ToUnixTimeSeconds() && items.Get(3242).StackLimit >= 37,
+            "逐项扩展礼盒保持真实堆叠上限1并显式准备未过期源，哨兵数量37在真实模板上限内");
+        InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot),
+            InventoryRewardGrantService.Create(items.Get(id), count, now, shopExpiration: id == sourceId));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             repo.Create(owner, new("ProgSelTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -593,7 +599,7 @@ internal static class BoosterSelectionTcpTests
             peer.Select(selectedSlot); var beforeCharacter = Read(selectedSlot);
             sourceUids = new short[] { 65, 66 }.ToDictionary(slot => slot, slot => beforeCharacter.Inventory.Find(Bag(slot))!.Uid);
             That(sourceUids.Values.All(uid => uid > 0) && sourceUids.Values.Distinct().Count() == 2 && sourceUids.Keys.All(slot =>
-                beforeCharacter.Inventory.Find(Bag(slot))!.Core is { ItemId: sourceId, Value: 1, ExpireTime: 0 }),
+                beforeCharacter.Inventory.Find(Bag(slot))!.Core is { ItemId: sourceId, Value: 1 } core && core.ExpireTime == sourceExpiry),
                 "逐项扩展TCP源为两份不同正UID、各一只的真实未过期礼盒");
             string before = Snapshot();
             foreach (var (category, subcategory, ids) in new (byte, byte, int[])[] {

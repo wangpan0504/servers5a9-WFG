@@ -34,6 +34,7 @@ internal static partial class DatabaseSchemaTests
             _=new CharacterRepository(path);
             using(var db=Open(path))
             {
+                RemovePcRoomSchema(db);
                 RewindPvpRankCompletion(db);
                 Execute(db,"CREATE INDEX rank_fixture_index ON character_quest_completion_receipts(quest_id)");
                 Execute(db,"CREATE TRIGGER rank_fixture_trigger AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT 1; END");

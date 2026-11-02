@@ -245,7 +245,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             if (context.Premiums is { } premiums) await premiums.ContractsAsync(current, guard: CanSend);
             else
             {
-                await context.Notify(NotiPacketType.PREMIUM_INFO_LIST, PremiumPackets.SelectEntries(current.Inventory.AccountWallet), "premium_info_committed", CanSend);
+                await context.Notify(NotiPacketType.PREMIUM_INFO_LIST,
+                    PremiumPackets.SelectEntries(current.Inventory.AccountWallet, premiumPcRoom: context.Session.PremiumPcRoom), "premium_info_committed", CanSend);
                 if (plan.Before.AccountWallet.ContractExpiry(27) != current.Inventory.AccountWallet.ContractExpiry(27))
                     await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(current.Learning.ExpertContractExpiresAt,
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_committed", CanSend);

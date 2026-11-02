@@ -211,12 +211,14 @@ internal static partial class DungeonSettlementTests
                 Number("SELECT clear_count FROM guild_dungeon_progress") == historical + 1 &&
                 Number("SELECT decay_anchor_unix FROM guild_dungeon_effective_progress") >= now,
                 "新真实实例先物化衰减再加一次并重置周期，历史只增，奖励和进度仍同事务");
+            using (var rewind = Open()) DatabaseSchemaTests.RemovePcRoomSchema(rewind);
             Sql("DROP TABLE guild_dungeon_effective_progress; PRAGMA user_version=142");
             _ = new CharacterRepository(path);
             That(Number("SELECT effective_clear_units FROM guild_dungeon_effective_progress") == historical + 1 &&
                 Number("SELECT decay_anchor_unix FROM guild_dungeon_effective_progress") >= now &&
                 Number("PRAGMA user_version") == SqliteMigrations.CurrentVersion,
                 "真实142旧库升级复制历史并从启用时开始计时，不按旧last_clear追溯衰减，领域另夹资源上限");
+            using (var rewind = Open()) DatabaseSchemaTests.RemovePcRoomSchema(rewind);
             Sql("DELETE FROM guild_dungeon_effective_progress; CREATE TRIGGER effective_upgrade_abort BEFORE INSERT ON guild_dungeon_effective_progress BEGIN SELECT RAISE(ABORT,'effective upgrade rollback'); END; PRAGMA user_version=142");
             Reject<SqliteException>(() => new CharacterRepository(path), "有效净化升级迁移故障注入");
             That(Number("PRAGMA user_version") == 142 && Number("SELECT count(*) FROM guild_dungeon_effective_progress") == 0 &&

@@ -410,7 +410,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             // 每一条被拒的选图都留原始请求体，实机排错不用再靠猜标志位。
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = false, Replay = replay, Continuation = continuation,
                 Training = training, ClassExperience = experience, Practice = practice, Request = selection,
-                RejectReason = entryReason ?? "selection-rejected", MemberSlot = memberSlot, CharacterId = character.Id });
+                RejectReason = entryReason ?? context.Session.LastFormalDungeonRejection ?? "selection-rejected", MemberSlot = memberSlot, CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
             // 结束本次入场等待，保留原选图和回城锚点；不发送成功或自动回城通知。

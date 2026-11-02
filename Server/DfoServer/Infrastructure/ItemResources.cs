@@ -35,6 +35,7 @@ internal sealed class ItemResources
     public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
+    public GameWorld.PcRoom.PcRoomCatalog? PcRoom { get; }
     public CashShopCatalog CashShop { get; }
     public PrivilegeServiceCatalog PrivilegeServices { get; }
     public DevilContractCatalog DevilContracts { get; }
@@ -84,6 +85,8 @@ internal sealed class ItemResources
     internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics)
     {
         vendingMachines = new(() => new(archive));
+        if (archive.Contains(GameWorld.PcRoom.PcRoomCatalog.PremiumPath) && archive.Contains(GameWorld.PcRoom.PcRoomCatalog.RentalPath))
+            PcRoom = new(archive);
         GoldLimits = new(archive);
         Cargo = new(archive);
         Shops = new(archive);

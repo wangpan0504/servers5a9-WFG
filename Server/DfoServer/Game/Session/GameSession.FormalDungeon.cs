@@ -47,6 +47,7 @@ internal sealed partial class GameSession
         public uint KillExperienceTotal { get; set; }
         public uint KillGrowthContractExperience { get; set; }
         public uint KillEquipmentExperience { get; set; }
+        public uint KillFatigueBurningExperience { get; set; }
         // 结果页“领主”行只读评分quartet的147槽；按本实例实际到账的领主基础经验累计（不含加成）。
         public uint KillBossExperience { get; set; }
         // 结果页特殊怪物明细：每只实际到账的怪一条（对象键、基础经验），客户端按类型归并。
@@ -1069,6 +1070,7 @@ internal sealed partial class GameSession
         {
             installing = installing with { GuildTraining = training.Snapshot };
         }
+        int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
         Character committed;
         if (installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
@@ -1119,6 +1121,7 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("已提交再挑战不能结束已复验的原结算实例");
             previous.Ground.ExpireRun();
         }
+        installing.Run.FreezeFatigueAcceleration(PremiumPcRoom ? accelerationPercent : 0);
         Selected = committed;
         formalDungeon = installing;
         tagEvildomSelection = null;
@@ -1482,6 +1485,8 @@ internal sealed partial class GameSession
         // 结果页杀怪侧装备加成行按每只怪实际到账的分项累计；未冻结分项的历史奖励没有该口径，保持 0。
         dungeon.KillEquipmentExperience = checked(dungeon.KillEquipmentExperience +
             (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.Equipment) ?? 0));
+        dungeon.KillFatigueBurningExperience = checked(dungeon.KillFatigueBurningExperience +
+            (reward.Bonuses?.Applied(effective).Amount(ExperienceBonusSource.FatigueBurning) ?? 0));
         dungeon.KillObjectExperience.Add(new(pending.Death.MonsterKey, reward.BaseAmount));
         // 领主行独立于明细列表：客户端用评分段147槽显示，不取该对象在151/155里的条目。
         if (pending.Monster.IsBoss)

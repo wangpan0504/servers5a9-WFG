@@ -234,11 +234,19 @@ internal sealed partial class GameSession
         bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
         int? consumableItemId = null, InventorySlot? usedItem = null)
     {
-        var capture = CaptureInventoryPlan(requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem);
+        bool requiresPcRoom = false;
+        bool Qualified() => additionalGuard?.Invoke() != false && (!requiresPcRoom || PremiumPcRoom);
+        var capture = CaptureInventoryPlan(requireTown, allowSettlement, requiredPhase, Qualified, consumableItemId, usedItem);
         if (capture is null)
             return InventoryResult.Reject(invalidStateError);
 
         Character character = capture.Character;
+        // 按实际使用源解析资源，保持锁外；规划和最终提交两次复核同一网吧环境。
+        if (UsedItemId(character) is > 0 and var pcRoomItemId)
+            requiresPcRoom = items?.Get(pcRoomItemId).RequiresPcRoom == true;
+        if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom))
+            return InventoryResult.Reject(invalidStateError);
+
         // 只读资源解析和批量规划不占用所属账号锁；此回调不能写库或修改在线状态。
         var result = plan(character);
         if (result is { Accepted: true, Plan: { } planned } && UsedItemId(character) is > 0 and var usedId &&
@@ -256,10 +264,12 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
-            if (!InventoryPlanIsCurrent(capture, requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem))
+            if (!InventoryPlanIsCurrent(capture, requireTown, allowSettlement, requiredPhase, Qualified, consumableItemId, usedItem))
                 return InventoryResult.Reject(invalidStateError);
             if (result.Plan?.UnlockSkillTree == true && (HasClassExperienceContext || Selected?.Position is { Town: 10, Area: 4 }))
                 return InventoryResult.Reject(invalidStateError);
+            if (requiresPcRoom && result.Plan is { } pcRoomPlan)
+                result = result with { Plan = WithPcRoomQualification(character, pcRoomPlan) };
             var committed = CommitInventory(character, result, invalidStateError);
             if (committed.Accepted && UsedItemId(character) is { } itemId) CommitDungeonItemUse(itemId);
             return committed;
@@ -299,4 +309,11 @@ internal sealed partial class GameSession
                 formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
     }
 
+    // 持久化在取得writer后仍复验当前环境；保留源物品、场景和原有最早截止。
+    InventoryPlan WithPcRoomQualification(Character character, InventoryPlan plan)
+    {
+        long? until = debugSettings?.PremiumPcRoom == true ? null : character.Inventory.AccountWallet.ContractExpiry(128);
+        var precondition = plan.CharacterPrecondition ?? new(character, clock: timeProvider);
+        return plan.WithAfter(plan.After, precondition.WithQualification(character, until, () => PremiumPcRoom));
+    }
 }

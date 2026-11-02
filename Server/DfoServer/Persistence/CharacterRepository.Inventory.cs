@@ -332,6 +332,7 @@ internal sealed partial class CharacterRepository
         if (!plan.Changed)
             return current;
         CommitGuildHongbaoPurchase(db, transaction, current, plan);
+        WritePcRoomClaim(db, transaction, owner.Account, current.Id, plan);
         WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

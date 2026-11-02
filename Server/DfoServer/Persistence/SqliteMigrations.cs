@@ -344,6 +344,7 @@ internal static class SqliteMigrations
             Execute(db, tx, (Strongway2019MatchingCheckpointSchema.Definition + Strongway2019MatchingCheckpointSchema.Index)
                 .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal)
                 .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(185, "网吧领取与燃烧选择", PcRoomSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2034,6 +2035,23 @@ internal static class SqliteMigrations
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
         RejectPreviousPromotionSchema(db, tx, version);
         if (version == 160 && current >= 162) RestorePreyForFrozenLootV160(db, tx);
+        // 网吧验证库曾将领取与燃烧选择记为v145，尚未执行正式v145的攻坚约束迁移。
+        if (version == 145 && current >= 185)
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('account_pcroom_claims','character_pcroom_claims','character_fatigue_acceleration')";
+            bool pcRoomPreview = query.ExecuteScalar() is 3L;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_raid_runs'";
+            if (pcRoomPreview && query.ExecuteScalar() is string raid &&
+                NormalizeTable(raid, "character_raid_runs") == NormalizeTable(RaidLifecycleSchema.Definition, "character_raid_runs"))
+                version = 144;
+        }
+        if (version == 162 && current >= 185 && IsPcRoomV162(db, tx)) version = 161;
+        // 旧网吧181尚无正式181–184的四张表；仅接管已知三表且新表全缺失的结构。
+        if (version == 181 && current >= 185 && HasKnownPcRoomSchema(db, tx))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('account_strongway2019_rewards','character_strongway2019_statistics','character_strongway2019_completions','character_strongway2019_match_facts')";
+            if (query.ExecuteScalar() is 0L) version = 180;
+        }
         // 仅接管结构精确匹配的兼容库，保留聊天配置并补齐当前正式结构。
         if (version == 154 && current >= 157 && IsChatEmoticonPreview(db, tx, version)) version = 153;
         else if (version is 156 or 157 && current >= 158 && IsChatEmoticonPreview(db, tx, version)) version = 155;
@@ -2103,6 +2121,23 @@ internal static class SqliteMigrations
         ValidateSchema(db, tx);
         tx.Commit();
     }
+
+    // 旧网吧构建占用162；三张专用表与原掉落定义均精确匹配时补跑正式162，保留原有行。
+    static bool IsPcRoomV162(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (!HasKnownPcRoomSchema(db, tx)) return false;
+        string batches = DungeonDropCollectionSchema.Definition.Split(';')
+            .Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal));
+        return KnownTable(db, tx, DungeonFrozenLootSchema.Batches,
+                DungeonObjectKeySchema.Definition(batches, DungeonFrozenLootSchema.Batches)) &&
+            KnownTable(db, tx, DungeonFrozenLootSchema.Pickups,
+                DungeonObjectKeySchema.Definition(DungeonDropCollectionSchema.PickupDefinition, DungeonFrozenLootSchema.Pickups));
+    }
+
+    static bool HasKnownPcRoomSchema(SqliteConnection db, SqliteTransaction tx) =>
+        KnownTable(db, tx, "account_pcroom_claims", PcRoomSchema.Definition.Split(';')[0]) &&
+        KnownTable(db, tx, "character_pcroom_claims", PcRoomSchema.Definition.Split(';')[1]) &&
+        KnownTable(db, tx, "character_fatigue_acceleration", FatigueAccelerationSchema.Definition);
 
     // 修复构建曾以160保存完整冻结结构，公开160随后用于普通普雷；只接管该已知完整形态。
     static void RestorePreyForFrozenLootV160(SqliteConnection db, SqliteTransaction tx)
@@ -2517,7 +2552,10 @@ internal static class SqliteMigrations
             ("character_guild_npc_benefits",GuildNpcBenefitSchema.Sql.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_npc_training_receipts",GuildNpcBenefitSchema.Sql.Split(';')[2].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_npc_item_crafts",GuildNpcItemCraftSchema.Sql.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
-            ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) })
+            ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_pcroom_claims",PcRoomSchema.Definition.Split(';')[0]),
+            ("character_pcroom_claims",PcRoomSchema.Definition.Split(';')[1]),
+            ("character_fatigue_acceleration",FatigueAccelerationSchema.Definition) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -2608,6 +2646,9 @@ internal static class SqliteMigrations
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT account,bank,quick_chat FROM account_quick_chat LIMIT 0",
         "SELECT account,emoticon_id,macro FROM account_chat_emoticons LIMIT 0",
+        "SELECT account,claim_day FROM account_pcroom_claims LIMIT 0",
+        "SELECT character_id,account,claim_day FROM character_pcroom_claims LIMIT 0",
+        "SELECT character_id,account,enabled FROM character_fatigue_acceleration LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",

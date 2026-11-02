@@ -205,11 +205,11 @@ internal sealed partial class GameSession
         if (dungeon.Settlement is null)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var bonuses = PlanExperience(Selected!, ExperienceEvent.Clear, reward.BaseExperience, reward.RankExperience, now,
-                dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
-            // 冒险团「通关经验值增加」按账号当前等级计入基础经验；新手教程不是正式通关，不参与加成。
+            // 冒险团独立计算，不进入网吧、燃烧等其它加成的基数；新手教程不参与。
             uint adventureBonus = adventure is null || dungeon.Entry.IsTutorial ? 0 :
                 AdventureBenefitPolicy.ClearExperienceBonus(reward.BaseExperience, repository.ReadAdventureLevel(owner), adventure);
+            var bonuses = PlanExperience(Selected!, ExperienceEvent.Clear, reward.BaseExperience, reward.RankExperience, now,
+                dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
             // 没有分项时保留 default，避免“空数组”和“未记录分项”在 record 相等比较中被当成两份不同奖励。
             reward = reward with { TotalExperience = checked(bonuses.Total + adventureBonus),
                 BonusParts = bonuses.Parts.IsDefaultOrEmpty ? default : bonuses.Parts,
@@ -262,6 +262,7 @@ internal sealed partial class GameSession
             {
                 MonsterGrowthContractExperience = dungeon.KillGrowthContractExperience,
                 MonsterEquipmentExperience = dungeon.KillEquipmentExperience,
+                MonsterFatigueBurningExperience = dungeon.KillFatigueBurningExperience,
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)

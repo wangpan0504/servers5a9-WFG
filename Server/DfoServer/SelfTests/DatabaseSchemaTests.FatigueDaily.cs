@@ -14,6 +14,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemovePcRoomSchema(db);
                 // 物品周期两步在本线为 110/111，夹具基线取 110（疲劳日戳），升级时重跑这两步。
                 Execute(db,"DROP TABLE account_server_item_refills; DROP TABLE character_server_item_usage; PRAGMA user_version=110");
                 if (scenario == "conflict") Execute(db,"CREATE TABLE account_server_item_refills(incompatible INTEGER)");
@@ -46,6 +47,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemovePcRoomSchema(db);
                 Execute(db, """
                     INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                     VALUES(1,'fatigue-old',0,'FatigueOld',7,38,1,450,234,0,123);

@@ -2371,3 +2371,20 @@ CREATE TABLE character_strongway2019_match_facts(
   PRIMARY KEY(account,instance_id)
 );
 CREATE INDEX character_strongway2019_match_facts_owner ON character_strongway2019_match_facts(account,character_id,created_at);
+
+CREATE TABLE account_pcroom_claims(
+    account TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+    claim_day INTEGER NOT NULL CHECK(typeof(claim_day)='integer' AND claim_day>=0)
+);
+CREATE TABLE character_pcroom_claims(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    claim_day INTEGER NOT NULL CHECK(typeof(claim_day)='integer' AND claim_day>=0),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE character_fatigue_acceleration(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN(0,1)),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);

@@ -103,13 +103,14 @@ internal static class DungeonSettlementPackets
         return [.. body];
     }
 
-    // 结果页加成分项按实机哨兵探针（2026-10-22）逐行投影：基础块+8为通关组队、+12为扮装；
-    // 22个加成槽中1秘药、2黑钻、3网吧、5宠物、8通关成长契约、9通关疲劳燃烧、11通关公会、
+    // 结果页加成分项按实机哨兵探针及匹配原码逐行投影：基础块+8为通关组队、+12为扮装；
+    // 22个加成槽中1秘药、2黑钻、3网吧、5宠物、6冒险团、8通关成长契约、9通关疲劳燃烧、11通关公会、
     // 15杀怪疲劳燃烧、16疲劳Buff、17杀怪成长契约、19装备、20杀怪公会；槽7与14由客户端合并成
-    // “归来的勇士”，槽0/4/6/10/12/13/18/21当前无对应到账来源。显示值只取本次已到账的同一份分项。
+    // “归来的勇士”，槽0/4/10/12/13/18/21当前无对应到账来源。显示值只取本次已到账的同一份分项。
     public static byte[] EmptyCardReward(DungeonClearExperienceReward reward, uint monsterExperience,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
-        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0)
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0,
+        uint monsterFatigueBurningExperience = 0)
     {
         // 所有翻牌奖励为空。固定经验字段和杀怪明细来自已经提交的同一次结算。
         // 本版固定尾部含八个独立bool，不能套用其他版本的210B正文。
@@ -117,8 +118,7 @@ internal static class DungeonSettlementPackets
         var entries = objectExperience ?? [];
         int shift = checked(entries.Count * 8);
         byte[] body = new byte[218 + shift];
-        // 冒险团加成没有独立字段，按基础通关经验合并；拆分顺序保证两项之和不超过已到账经验。
-        BinaryPrimitives.WriteUInt32LittleEndian(body, checked(reward.BaseExperience + reward.AdventureExperience));
+        BinaryPrimitives.WriteUInt32LittleEndian(body, reward.BaseExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), reward.RankExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), Part(reward, ExperienceBonusSource.Party));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(12), Part(reward, ExperienceBonusSource.Avatar));
@@ -127,10 +127,13 @@ internal static class DungeonSettlementPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(25), Part(reward, ExperienceBonusSource.BlackDiamond));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(29), Part(reward, ExperienceBonusSource.InternetCafe));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(37), Part(reward, ExperienceBonusSource.Creature));
+        // 023944C9将独立槽6交039DF580，039E4E18以C007“冒险团奖励”命名该行。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(41), reward.AdventureExperience);
         // 02393C80分别投影到结果页两组“成长之契约”栏；不是组队或评分经验。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), Part(reward, ExperienceBonusSource.GrowthContract));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(53), Part(reward, ExperienceBonusSource.FatigueBurning));
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(61), Part(reward, ExperienceBonusSource.Guild));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(77), monsterFatigueBurningExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(85), monsterGrowthContractExperience);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(93), monsterEquipmentExperience);
         // 杀怪经验明细：u32 条数 + 每条（对象键、基础经验），客户端按对象键归并到怪物类型后显示各自经验。
@@ -173,11 +176,12 @@ internal static class DungeonSettlementPackets
     public static byte[] CardReward(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,
         DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
-        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0, byte slot = 0)
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0, byte slot = 0,
+        uint monsterFatigueBurningExperience = 0)
     {
         if (slot >= 8) throw new ArgumentOutOfRangeException(nameof(slot));
         var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience, monsterEquipmentExperience,
-            objectExperience, monsterBossExperience);
+            objectExperience, monsterBossExperience, monsterFatigueBurningExperience);
         if (card is null) return empty;
         card.Validate();
         var free = Display(card);

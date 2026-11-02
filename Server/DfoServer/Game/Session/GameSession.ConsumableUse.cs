@@ -57,6 +57,8 @@ internal sealed partial class GameSession
         ConsumableUseResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, Guard: captured.Guard);
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
+        bool requiresPcRoom = items?.Get(request.ItemId).RequiresPcRoom == true;
+        if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom)) return Reject("pcroom-required");
         if (definition.BossSelectionBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("boss-potion-requires-town");
         if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
@@ -79,6 +81,7 @@ internal sealed partial class GameSession
             if (ClosedUse(service, request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
+            if (requiresPcRoom && !PremiumPcRoom) return Reject("pcroom-required");
             if (!CanUseDungeonItem(request.ItemId, definition.AllowedDungeons))
                 return Reject("grief-item-not-allowed-or-exhausted");
             if (definition.AllowedDungeons is { } allowed &&
@@ -131,6 +134,8 @@ internal sealed partial class GameSession
             if (!preserve && definition.ExpBonusPermille > 0 && actual.Plan is { } bonusPlan)
                 bonusPlan.ExpBonus = (checked(service.Clock.GetUtcNow().ToUnixTimeSeconds() + definition.ExpBonusMilliseconds / 1000),
                     definition.ExpBonusPermille);
+            if (requiresPcRoom && actual.Plan is { } pcRoomPlan)
+                actual = actual with { Plan = WithPcRoomQualification(character, pcRoomPlan) };
             pendingConsumableUse = actual.Plan;
             var result = CommitInventory(character, actual, 123);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。

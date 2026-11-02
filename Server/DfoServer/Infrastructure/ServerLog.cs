@@ -92,6 +92,10 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "auth_rejected" => "Authentication rejected", "owner_rejected" => "Account owner rejected",
             "closed" => "Connection closed", "db_busy" => "Database busy", "db_slow" => "Database slow",
             "channel" => "Channel handshake completed",
+            "pcroom_reward" => "PC room reward committed", "pcroom_reward_rejected" => "PC room reward rejected",
+            "pcroom_weapon" => "PC room weapon rented", "pcroom_weapon_rejected" => "PC room rental rejected",
+            "fatigue_acceleration" => "Fatigue acceleration selection",
+            "fatigue_acceleration_rejected" => "Fatigue acceleration selection rejected",
             "resource_warning" => "Resource warning", "exit" => "Exit request", "travel" => "Town travel",
             "room_exit" => "Room exit", "dungeon_entry" => "Dungeon selection",
             "formal_dungeon_entry" => "Dungeon entry", "formal_dungeon_settlement" => "Dungeon settlement",
@@ -163,7 +167,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
     static bool ShowsOnConsole(string kind) => kind is
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
         "connected" or "disconnected" or "closed" or "db_busy" or "db_slow" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
-        "selected" or "fatigue_daily_reset" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
+        "selected" or "fatigue_daily_reset" or "pcroom_reward" or "pcroom_weapon" or "fatigue_acceleration" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_tournament_reward_selected" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "consumable_disguise" or "class_change" or "growup_change" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or

@@ -8,6 +8,7 @@ internal static partial class DatabaseSchemaTests
     // 只用于把当前空团本夹具还原为真实v108及更早结构；禁止丢弃业务事实。
     internal static void RewindRaidLifecycle(SqliteConnection db)
     {
+        RemovePcRoomSchema(db);
         if (Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_raid_runs'") is 1L)
         {
             if (Query(db, "SELECT count(*) FROM character_raid_runs") is not 0L)

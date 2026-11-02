@@ -14,7 +14,7 @@ internal static class DungeonCardMembershipProjection
         var now = frozenAt ?? DateTimeOffset.UtcNow;
         if (includeOverview && context.Premiums is { } premiums) await premiums.ContractsAsync(receipt.Character, now, CanSend, [56, 58]);
         else if (includeOverview) await context.Notify(NotiPacketType.PREMIUM_INFO_LIST,
-            PremiumPackets.SelectEntries(receipt.Character.Inventory.AccountWallet, now, [56, 58]), "premium_info_committed", CanSend);
+            PremiumPackets.SelectEntries(receipt.Character.Inventory.AccountWallet, now, [56, 58], context.Session.PremiumPcRoom), "premium_info_committed", CanSend);
         await context.Reply(CmdPacketType.PREMIUM_SERVICE,
             DungeonCardMembershipPackets.DevilService0(receipt.Membership, now.ToUnixTimeSeconds()), "card_devil_service0_state", CanSend);
     }

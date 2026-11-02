@@ -154,6 +154,13 @@ internal sealed partial class SinglePlayerDungeonRun
     public bool InitializationCounterSupported { get; }
     public DungeonLoadingFact? LastLoadingFact { get; private set; }
     internal DungeonEntryPlan Entry => entry;
+    internal int FatigueAccelerationPercent { get; private set; }
+    internal void FreezeFatigueAcceleration(int percent)
+    {
+        if (percent < 0 || Phase != SinglePlayerDungeonPhase.Loading || acceptedActions.Count != 0)
+            throw new InvalidOperationException("疲劳燃烧只能在正式入场提交后冻结");
+        FatigueAccelerationPercent = percent;
+    }
     internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
     // 友方APC在原客户端跨房随行；只读取本实例真正加载过的资源演员，不把未来房间算作存活。
     internal DungeonPlannedMonster? PublishedFriendlyActor(ushort key) => allRooms.Where(room => room.Loaded)

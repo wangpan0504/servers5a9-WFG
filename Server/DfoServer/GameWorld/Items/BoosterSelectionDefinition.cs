@@ -10,6 +10,7 @@ internal sealed record BoosterChoice(int ItemId, int Count, byte Upgrade = 0, by
     public ImmutableArray<BoosterUpgradeChance> UpgradeChances { get; init; } = [];
     public ItemKind? RequiredKind { get; init; }
     public bool NativeCreatureSelectionRow { get; init; }
+    public int? Quality { get; init; }
 }
 internal sealed record BoosterSelectionCategory(byte Category, byte Subcategory, ImmutableArray<BoosterChoice> Rewards,
     string? PendingRule = null)
@@ -116,6 +117,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
         var defaults = ImmutableArray.CreateBuilder<int>();
         var recommended = ImmutableArray.CreateBuilder<int>();
         byte upgrade = 0, refinement = 0;
+        int? quality = null;
         var chances = ImmutableArray.CreateBuilder<BoosterUpgradeChance>();
         int at = 0;
         foreach (Match match in Regex.Matches(body, @"\[(?<kind>[^/\]\r\n]+)\](?<data>[^\[]*)"))
@@ -148,6 +150,14 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                     upgrade = value;
                 else
                     refinement = value;
+                continue;
+            }
+            if (kind == "booster equipment grade")
+            {
+                // 本版租赁盒的6要求最上级，沿既有固定最高品质策略；不推断其它档位或随机范围。
+                if (tokens.Length != 1 || !byte.TryParse(tokens[0], out byte grade) || grade != 6)
+                    return new(category, subcategory, [], "尚未支持的装备品级声明");
+                quality = EquipmentQualityBox.SeedForPercent(100);
                 continue;
             }
             if (kind == "random probability")
@@ -185,6 +195,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                     // 修饰只作用于本分类后续的装备行；每行冻结当时的等级与概率，不追溯修改前面的产物。
                     rewards.Add(new(id, amount, upgrade, refinement)
                     {
+                        Quality = quality,
                         UpgradeChances = upgrade == 255 ? chances.ToImmutable() : []
                     });
                 }
