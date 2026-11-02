@@ -20,7 +20,7 @@ internal static class RaidCombatPackets
             foreach (int monster in row.Monsters) { writer.Write(checked((uint)monster)); writer.Write((byte)0); }
         }
         // 03B94791..C6仅在卢克城镇自动展示未读牌组；读取后客户端自行清除此标记。
-        writer.Write(display.Phase == 0 ? (byte)1 : (byte)0);
+        writer.Write(display.AutoDisplay ? (byte)1 : (byte)0);
         return stream.ToArray();
     }
 

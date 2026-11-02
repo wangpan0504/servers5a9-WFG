@@ -27,6 +27,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal byte[]? RaidHpBody { get; set; }
     internal (Guid Run, bool Available)? RaidRetryDisplay { get; set; }
     internal (Guid Instance, byte[] Body)? LukeCardsDisplay { get; set; }
+    internal (long Epoch, int Day)? LukeChannelCardsDisplay { get; set; }
     internal Guid LukeNamedInstance { get; set; }
     internal Dictionary<int, bool> LukeNamedDisplays { get; } = [];
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMoviePrompt { get; set; }

@@ -195,7 +195,7 @@ internal sealed partial class AntonRaidBattle
         Random? preyRandom = null, FiendwarScript? fiendwar = null, FiendwarPacing? fiendwarPacing = null,
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
         LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default,
-        Random? fiendwarMazeRandom = null)
+        Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -253,7 +253,14 @@ internal sealed partial class AntonRaidBattle
         this.lukeRouteRandom = lukeRouteRandom ?? Random.Shared;
         this.lukeCards = lukeCards;
         this.lukeMazes = lukeMazes.IsDefault ? [] : lukeMazes;
-        if (cardRoute is not null) lukeCardGroup = this.lukeRouteRandom.Next(cardRoute.GroupCount);
+        if (lukeChannelCards is not null && (kind != RaidKind.Luke || cardRoute is null ||
+            lukeChannelCards.Group < 0 || lukeChannelCards.Group >= cardRoute.GroupCount ||
+            lukeCards is not { Ready: true } || lukeChannelCards.Patterns.Count != 3 ||
+            new[] { 5054, 5055, 5056 }.Any(dungeon => !lukeChannelCards.Patterns.TryGetValue(dungeon, out byte pattern) ||
+                !lukeCards.Patterns(dungeon).Contains(pattern))))
+            throw new InvalidDataException("卢克开战日牌组不属于当前可执行路线");
+        this.lukeChannelCards = lukeChannelCards;
+        if (cardRoute is not null) lukeCardGroup = lukeChannelCards?.Group ?? this.lukeRouteRandom.Next(cardRoute.GroupCount);
         lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
@@ -299,7 +306,7 @@ internal sealed partial class AntonRaidBattle
             {
                 var patterns = lukeCards.Patterns(dungeon);
                 if (patterns.Length != 0 && symbols.ContainsKey(symbol))
-                    symbols = symbols.SetItem(symbol, patterns[lukeRouteRandom.Next(patterns.Length)]);
+                    symbols = symbols.SetItem(symbol, lukeChannelCards?.Patterns[dungeon] ?? patterns[lukeRouteRandom.Next(patterns.Length)]);
             }
         foreach (var dungeon in definition.Dungeons) symbols = symbols.SetItem(dungeon.HpSymbol, dungeon.HpRaw);
         return Evaluate(new(Instance, revision, phase, AntonRaidBattleState.Fighting, symbols,
@@ -454,6 +461,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
+                HasLukeFirstMovieLocked() && current.Phase == 0 && !LukeFirstMovieReadyLocked() && LukeRewardRemainingLocked() != TimeSpan.Zero ||
                 members.Any(member => member.Value.Length != PhaseCount) ||
                 Kind is RaidKind.Luke or RaidKind.Prey && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;

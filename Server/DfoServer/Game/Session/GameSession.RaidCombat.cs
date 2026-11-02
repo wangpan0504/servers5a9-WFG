@@ -353,6 +353,7 @@ internal sealed partial class GameSession
             var receipt = new RaidRewardReceipt(capture.Prepared, capture.Offer, commit, result, owner.Generation, SelectionEpoch);
             capture.Binding.Receipts[(capture.Prepared.Phase, kind)] = receipt;
             capture.Binding.Pending.Remove((capture.Prepared.Phase, kind));
+            capture.Binding.Battle.RecordLukeRewardReceipt(capture.Binding.Actor, receipt);
             return receipt;
         });
     }

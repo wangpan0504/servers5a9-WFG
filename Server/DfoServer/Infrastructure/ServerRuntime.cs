@@ -398,9 +398,12 @@ internal static class ServerRuntime
                 Mazes = Game.Raids.LukeFixedCardRoute.InspectResources(diagnosticOptions, diagnosticCatalog, raidCatalog.Find(1)!.Resources!.LukeObjects) });
         lukeStartPolicy = Game.Raids.LukeFixedCardRoute.Resolve(lukeStartPolicy, raidCatalog.Find(1));
         lukeStartPolicy = Game.Raids.LukeSanctumRoute.Resolve(lukeStartPolicy, raidCatalog.Find(1));
+        var lukeChannelCards = lukeStartPolicy?.Run?.CardRoute is { } dailyRoute && lukeStartPolicy.Cards is { Ready: true } dailyCards
+            ? new Game.Raids.LukeChannelCards(dailyRoute, dailyCards, clock) : null;
+        projection.LukeChannelCards = lukeChannelCards;
         if (lukeStartPolicy?.Run?.CardRoute is { } cardRoute)
             log.Write("startup", new { Stage = "Luke resource triplet route", State = "complete", cardRoute.GroupCount,
-                Selection = "server-uniform-group-frozen-per-battle", Progress = "accepted-shared-run-clear" });
+                Selection = "daily-resource-order-utc8-0600-global-frozen-per-battle", Progress = "accepted-shared-run-clear" });
         if (lukeStartPolicy?.Run?.FixedRoute is { } fixedRoute)
             log.Write("startup", new { Stage = "Luke explicit fixed compatibility route", State = "complete",
                 fixedRoute.Options.Version, fixedRoute.Options.ResourceFingerprint, fixedRoute.Options.Group,
@@ -462,7 +465,7 @@ internal static class ServerRuntime
             ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items, itemResources.Boosters) : null;
         // 启动时解析全部奖励模板，避免开战持owner锁时首次读取PVF。
         if (antonRewards is not null) _ = antonRewards.Create(false);
-        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);
+        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers, lukeChannelCards);
         if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
         {
             log.Write("resource_warning", new { Source = "Luke raid start policy", Reason = unavailable });

@@ -76,7 +76,8 @@ internal static partial class LukeRaidRunTcpTests
                     That(retry.Count(packet=>packet is {Kind:1,Opcode:662,Body:[1]})==1,"幸存同Run成员662重试原封存候选后才ACK");
                     That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL",instance) is [[8L]],
                         "SQL重试仍提交原八人成员封存事实，断线不篡改候选");
-                    AwaitPhaseResults(members,others,completed,0);
+                    // 合成规则由设施直接终结阶段，图内仍有活怪且没有正式ClearFact，不得伪造31。
+                    AwaitPhaseResults(members,others,completed,0,requireRunClear:false);
                     string saved=fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY character_id,instance_id");
                     captain.Send(662,Body(symbol));
                     var replay=Collect(captain);

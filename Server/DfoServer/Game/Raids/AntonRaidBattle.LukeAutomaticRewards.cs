@@ -25,15 +25,22 @@ internal sealed partial class AntonRaidBattle
     internal bool HasConfirmedLukeReward(ushort character, int phase, byte kind)
     { lock (gate) return rewards.Contains((character, phase, kind)); }
 
-    internal void ConfirmAutomaticLukeReward(RaidPhaseEligibility eligibility, byte kind)
+    internal void ConfirmAutomaticLukeReward(RaidPhaseEligibility eligibility, PreparedRaidReward prepared)
     {
         lock (gate)
         {
+            byte kind = prepared.Kind;
             if (rewards.Contains((eligibility.Character, eligibility.Phase, kind))) return;
             if (Kind != RaidKind.Luke || current.State != AntonRaidBattleState.Reward || eligibility.Instance != Instance ||
                 eligibility.Phase != current.Phase || LukeEligibility(eligibility.Character, eligibility.Phase) is not { } actual ||
-                !SameLukeEligibility(actual, eligibility) || !actual.Eligible || !actual.Offers.Any(row => row.Kind == kind))
+                !SameLukeEligibility(actual, eligibility) || !actual.Eligible ||
+                prepared.Instance != Instance || prepared.RaidType != Kind || prepared.Phase != eligibility.Phase ||
+                prepared.Character != eligibility.Character || prepared.Source != eligibility.Source || prepared.Week != eligibility.Week ||
+                actual.Offers.SingleOrDefault(row => row.Kind == kind &&
+                    row.Card == (SelectableRewardCards ? 0 : prepared.Card)) is not { } offer ||
+                !offer.Grants.SequenceEqual(prepared.Grants))
                 throw new InvalidOperationException("自动领奖回执不属于当前阶段");
+            lukeSubmittedRewards.TryAdd((prepared.Phase, prepared.Character, kind), prepared);
             rewards.Add((eligibility.Character, eligibility.Phase, kind));
         }
     }

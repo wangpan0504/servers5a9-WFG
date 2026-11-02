@@ -318,6 +318,7 @@ internal sealed partial class AntonRaidBattle
         current = pending with { Revision = current.Revision + 1, LukePhaseCoinsUsed = current.LukePhaseCoinsUsed };
         pendingTransition = null;
         if (lukeCompletion is not null && current.State == AntonRaidBattleState.Reward &&
+            !(HasLukeFirstMovieLocked() && current.Phase == 0) &&
             lukePhaseCommits.TryGetValue(current.Phase, out var committed) && committed.Members.All(row => !row.Eligible))
             _ = AdvanceAfterRewards(Instance, current.Revision);
         ScheduleLukeClockLocked();

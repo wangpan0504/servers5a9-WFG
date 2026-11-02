@@ -12,7 +12,7 @@ internal static class LukeMovieBarrierTests
     internal static void Run(RaidActor[] original)
     {
         foreach (int count in new[] { 1, 4, 8 }) Check(original.Take(count).ToArray(), "all");
-        foreach (string mode in new[] { "disconnect", "depart", "confirmed-disconnect", "automatic" })
+        foreach (string mode in new[] { "disconnect", "depart", "confirmed-disconnect", "automatic", "ineligible", "ineligible-depart", "ineligible-timeout" })
             Check(original.Take(4).ToArray(), mode);
     }
 
@@ -43,7 +43,8 @@ internal static class LukeMovieBarrierTests
             { ClearMap = new DungeonMap("boss", new(0, 0), 77, "fixture/boss.map") })).ToArray());
         var pending = battle.PendingLukeSettlement()!;
         var eligibility = actors.Select((actor, index) => new RaidPhaseEligibility(battle.Instance, RaidKind.Luke, 0,
-            pending.Event, pending.Anchor.ToUnixTimeSeconds(), actor.Character, false, actors.Length == 1 || index != actors.Length - 1,
+            pending.Event, pending.Anchor.ToUnixTimeSeconds(), actor.Character, false,
+            !mode.StartsWith("ineligible", StringComparison.Ordinal) && (actors.Length == 1 || index != actors.Length - 1),
             "fixture", policies[0].Source, pending.Week, offers)).ToImmutableArray();
         battle.AcceptLukeSettlement(pending, new(eligibility));
         foreach (var row in rows) battle.ReleaseDungeon(row.Actor, run);
@@ -51,6 +52,32 @@ internal static class LukeMovieBarrierTests
         That(view.State == AntonRaidBattleState.Reward && !battle.LukeMovieCardsReady(view) &&
             !battle.CanClaimRaidReward(actors[0], 0) && !battle.CanClaimRaidReward(actors[0], 0, automaticLuke: true),
             "P1真实终结后仍等待动画，提前660与未到期自动资产均拒绝");
+        if (mode.StartsWith("ineligible", StringComparison.Ordinal))
+        {
+            That(battle.AdvanceAfterRewards(view.Instance, view.Revision) is null,
+                "全员达到领奖上限仍保留成功动画，不因空资产义务立即进入等待阶段");
+            if (mode == "ineligible-timeout")
+            {
+                _ = battle.DueLukeRewards();
+                clock.Advance(186);
+                That(battle.DueLukeRewards().Length == 0 && battle.AdvanceAfterRewards(view.Instance, view.Revision) is not null,
+                    "无资格且断线未确认仍沿原185秒有界收尾，不造任何自动奖励");
+            }
+            else
+            {
+                foreach (var actor in actors.Take(actors.Length - 1))
+                    That(battle.CompleteLukeFirstMovie(actor, battle.View) && battle.View.State == AntonRaidBattleState.Reward,
+                        "无资格成员逐个真实确认，最后一人之前不得进入等待阶段");
+                if (mode == "ineligible-depart")
+                    That(battle.DetachStart(actors[^1]), "最后未确认的无资格成员主动离团释放动画屏障");
+                else
+                    That(battle.CompleteLukeFirstMovie(actors[^1], battle.View), "最后一个无资格成员确认完成演出");
+            }
+            That(battle.View.State == AntonRaidBattleState.Intermission && actors.All(actor =>
+                battle.LukeEligibility(actor.Character, 0) is { Eligible: false }),
+                "成功演出或原超时后才进等待，原无领奖资格保持不变");
+            return;
+        }
         That(!battle.CompleteLukeFirstMovie(actors[0], view with { Revision = view.Revision + 1 }),
             "复制或过期view不能登记659=1");
         var last = actors[^1];

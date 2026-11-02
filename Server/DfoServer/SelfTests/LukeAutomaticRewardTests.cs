@@ -21,7 +21,7 @@ internal static class LukeAutomaticRewardTests
     internal static void RunCore()
     {
         int before = Count;
-        foreach (string mode in new[] { "io", "invalid", "claim", "recovery", "clock", "busy-clock" }) Run(mode);
+        foreach (string mode in new[] { "io", "invalid", "claim", "recovery", "clock", "busy-clock", "receipt" }) Run(mode);
         Console.WriteLine($"LukeAutomaticRewardTests core: {Count - before} passed");
     }
 
@@ -52,6 +52,7 @@ internal static class LukeAutomaticRewardTests
                 $"{mode}: 字面奖励0明确为金币，不混用复活币1");
             var offers = ImmutableArray.Create(new RaidRewardOffer(1, 0, [new(0, 7)], []),
                 new RaidRewardOffer(0, 0, [new(0, 11)], []));
+            if (mode == "receipt") offers = offers.AddRange(offers.Select(offer => offer with { Card = 3 }));
             var policies = Enumerable.Range(0, 2).Select(phase => new RaidPhaseRewardPolicy("fixture/auto",
                 offers, new(0, (byte)phase, 0, 0, 0, 0))).ToImmutableArray();
             var completion = new LukeRaidCompletionPolicy("fixture/auto", 2,
@@ -80,7 +81,9 @@ internal static class LukeAutomaticRewardTests
             battle.AcceptLukeSettlement(pending, new([eligibility]));
             battle.ReleaseDungeon(actor, run);
             That(battle.View.State == AntonRaidBattleState.Reward, "清图及原Run退出后开放领奖");
-            Reject<InvalidOperationException>(() => battle.ConfirmAutomaticLukeReward(eligibility with { Phase = 1 }, 1),
+            Reject<InvalidOperationException>(() => battle.ConfirmAutomaticLukeReward(eligibility with { Phase = 1 },
+                new(battle.Instance, 1, 1, 0, actor.Character, eligibility.Source, offers[0].Grants, true, eligibility.Week)
+                { RaidType = RaidKind.Luke }),
                 "错误阶段确认仍硬拒绝，不生成已领标记");
             That(!battle.HasConfirmedLukeReward(actor.Character, 0, 1), "非法确认不替代资产义务");
             var original = session.Selected!;
@@ -101,6 +104,15 @@ internal static class LukeAutomaticRewardTests
                 if (++publications == 1) throw publication;
                 return Task.CompletedTask;
             };
+            if (mode == "receipt")
+            {
+                That(battle.CompleteLukeFirstMovie(actor, battle.View), "非零牌回归先完成真实演出，不绕过动画门禁");
+                foreach (byte kind in new byte[] { 1, 0 })
+                    That(session.ClaimRaidReward(kind, 3, store, items, gold, pieces, clock.GetUtcNow()) is { Prepared.Card: 3 },
+                        "真实660提交非零牌但不确认ACK，原资产只提交一次");
+                That(!battle.HasConfirmedLukeReward(actor.Character, 0, 1) && !battle.HasConfirmedLukeReward(actor.Character, 0, 0),
+                    "丢失ACK仍保留未完成展示确认，不冒充已收成功");
+            }
             if (mode == "recovery")
             {
                 session.ReturnToRoster();
@@ -163,6 +175,9 @@ internal static class LukeAutomaticRewardTests
             else if (clockMode)
                 That(errors is [("luke-auto-reward-publish", LukeRewardPublicationException)] && finalNotices > 0,
                     "时钟报告专用展示错误后仍发布最终休息战况，不提前return");
+            else if (mode == "receipt")
+                That(observed is null && publications == 0 && store.Commits.All(row => row.Card == 3),
+                    "185秒精确确认已提交非零原卡，不重抽Card0、不重发资产或旧展示");
             else
                 That(observed is LukeRewardPublicationException failed && failed.InnerExceptions.Count == 1 &&
                     ReferenceEquals(failed.InnerExceptions[0], publication), "仅展示错误延后保留原异常，不吞编程错误");
@@ -186,7 +201,7 @@ internal static class LukeAutomaticRewardTests
                     "换角领取只更新原角色资产，不向新角色投旧团奖励窗口");
             if (clockMode) clock.Advance(1);
             else automatic.SettleAsync(battle).GetAwaiter().GetResult();
-            That(store.Commits.Count == 2 && publications == 2, "重复settle不重发资产或重复投影");
+            That(store.Commits.Count == 2 && publications == (mode == "receipt" ? 0 : 2), "重复settle不重发资产或重复投影");
             passed = true;
         }
         finally

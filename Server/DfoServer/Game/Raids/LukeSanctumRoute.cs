@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Raids;
 namespace DfoServer.Game.Raids;
 
 // 全部资源三元组在装配时核验；每团只冻结一个组，通关步序由原Battle推进。
-// 组等概率选择是本服兼容策略，不声称复原了原服的随机分布。
+// 生产组由频道日牌组冻结；显式未注入日牌组的诊断夹具保留随机兼容。
 internal sealed class LukeSanctumRoute(ImmutableArray<LukeFixedCardRoute> groups)
 {
     public int GroupCount => groups.Length;

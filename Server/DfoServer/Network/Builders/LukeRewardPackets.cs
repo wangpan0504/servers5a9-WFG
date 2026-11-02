@@ -29,4 +29,18 @@ internal static class LukeRewardPackets
         }
         return body;
     }
+
+    // wire3是原生自动揭示的团队页，只复用阶段事务已密封的kind0权益，不另发资产。
+    internal static byte[] TeamResults(IReadOnlyList<LukeRewardResult> results)
+    {
+        if (results.Count > 8 || results.Any(row => row.Kind != 0) ||
+            results.Select(row => row.Owner).Distinct().Count() != results.Count)
+            throw new InvalidDataException("卢克团队汇总结果无效");
+        var rows = results.Select(Result).ToArray();
+        byte[] body = new byte[2 + rows.Sum(row => row.Length - 2)];
+        body[0] = 3; body[1] = checked((byte)rows.Length);
+        int at = 2;
+        foreach (var row in rows) { row.AsSpan(2).CopyTo(body.AsSpan(at)); at += row.Length - 2; }
+        return body;
+    }
 }

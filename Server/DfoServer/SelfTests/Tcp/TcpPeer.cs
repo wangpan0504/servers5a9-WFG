@@ -97,6 +97,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] PremiumInfo { get; private set; } = [];
     public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] RaidWeeklyClearInfo { get; private set; } = [];
+    public byte[] LukeChannelCardsInfo { get; private set; } = [];
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
     public byte[] EventInfoPayload { get; private set; } = [];
@@ -1322,7 +1323,32 @@ internal sealed partial class TcpPeer : IDisposable
             // 初始化使用真实持久次数；具体日周用量由各团本生命周期回归断言。
             RaidWeeklyClearInfo = Expect(0, 1446).Body;
             RaidPanelTests.ReadWeeklyClears(RaidWeeklyClearInfo);
-            Expect(0, 1232, [0]); // POST_CHARAC_INFO：单字节消费者释放团本窗口初始忙状态。
+            LukeChannelCardsInfo = [];
+            var postInfo = Read();
+            if (postInfo is { Kind: 0, Opcode: 1184 })
+            {
+                TestCheck.That(channelNumber == 20, "只有卢克频道在入城序列发送塔罗预览");
+                var body = postInfo.Body;
+                TestCheck.That(body.Length >= 3 && body[0] == 0 && body[1] == 3 && body[^1] == 1,
+                    "频道预览为一阶段完整三图且自动展示一次");
+                int offset = 2;
+                for (int i = 0; i < 3; i++)
+                {
+                    TestCheck.That(offset + 4 < body.Length && U16(body, offset) == 5054 + i &&
+                        body[offset + 2] < (i == 1 ? 4 : 2) && body[offset + 3] > 0, "频道塔罗保留三图合法布局和真实怪物");
+                    int count = body[offset + 3]; offset += 4;
+                    TestCheck.That(offset + count * 5 < body.Length, "频道塔罗怪物行不截断");
+                    for (int row = 0; row < count; row++, offset += 5)
+                        TestCheck.That(U32(body, offset) > 0 && body[offset + 4] == 0, "塔罗模板非空且保留字节为零");
+                }
+                TestCheck.That(offset == body.Length - 1, "频道塔罗包无多余正文");
+                LukeChannelCardsInfo = body;
+                postInfo = Read();
+            }
+            else TestCheck.That(channelNumber != 20 || fixture?.ProductionLukeCards != true,
+                "生产卢克频道必须在入城时展示日牌组");
+            TestCheck.That(postInfo is { Kind: 0, Opcode: 1232 }, "塔罗预览后仍须完成POST_CHARAC_INFO");
+            TestCheck.Bytes(postInfo.Body, [0], "POST_CHARAC_INFO保持单字节合同");
         }
 
         void ReadSceneInitialization()

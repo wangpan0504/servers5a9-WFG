@@ -101,6 +101,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly DfoServer.GameWorld.Towns.TownCatalog? townCatalog;
     readonly TimeProvider? clock;
     readonly DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy;
+    internal bool ProductionLukeCards => lukeStartPolicy is null;
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
     readonly bool enablePromotionPage;

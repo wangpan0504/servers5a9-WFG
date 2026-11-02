@@ -15,7 +15,7 @@ namespace DfoServer.Network.Projection;
 
 internal sealed record TownCharacterProjection(Character Character, DateTimeOffset AppearanceTime);
 
-internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
+internal sealed partial class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
@@ -235,6 +235,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
         RaidClearProjection.Refresh(context, initialize: true);
+        PublishLukeChannelCards(context);
         // 03BD1990读取单个u8后调用01DC6480，释放寻找攻坚队的初始忙状态；客户端保留原生3秒冷却。
         await context.Notify(NotiPacketType.POST_CHARAC_INFO, [0], "post_character_info");
         if (resumeTown)

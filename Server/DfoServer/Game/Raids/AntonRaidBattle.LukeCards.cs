@@ -5,7 +5,10 @@ using DfoServer.GameWorld.Raids;
 namespace DfoServer.Game.Raids;
 
 internal sealed record LukeDungeonCards(ushort Dungeon, byte Pattern, ImmutableArray<int> Monsters);
-internal sealed record LukeCardsDisplay(byte Phase, ImmutableArray<LukeDungeonCards> Dungeons, ImmutableHashSet<int> Killed);
+internal sealed record LukeCardsDisplay(byte Phase, ImmutableArray<LukeDungeonCards> Dungeons, ImmutableHashSet<int> Killed)
+{
+    internal bool AutoDisplay { get; init; }
+}
 
 internal sealed partial class AntonRaidBattle
 {

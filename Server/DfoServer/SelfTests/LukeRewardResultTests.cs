@@ -17,6 +17,13 @@ internal static class LukeRewardResultTests
         Bytes(LukeRewardPackets.Result(new(1, 0x4321, 2, spec)),
             [1,1,0x21,0x43,2,1,7,0x78,0x56,0x34,0x12,3,0,9,0xef,0xcd,0xab,0x89,0,0,0,0],
             "Luke单行原箱600精确22B，两尾u32不截断最高位");
+        Bytes(LukeRewardPackets.TeamResults([]), [3, 0], "P1空团队页使用原生wire3，不新增选牌kind");
+        Bytes(LukeRewardPackets.TeamResults([new(0, 0x4321, 0, spec), new(0, 0x1234, 2, spec)]),
+            [3,2,0x21,0x43,0,1,7,0x78,0x56,0x34,0x12,3,0,9,0xef,0xcd,0xab,0x89,0,0,0,0,
+                0x34,0x12,2,1,7,0x78,0x56,0x34,0x12,3,0,9,0xef,0xcd,0xab,0x89,0,0,0,0],
+            "团队权益页两名成员完整16B物品行，owner来自封存资格不借party槽号");
+        Reject<InvalidDataException>(() => LukeRewardPackets.TeamResults([new(1, 1, 0, spec)]), "个人奖励不得误投团队页");
+        Reject<InvalidDataException>(() => LukeRewardPackets.TeamResults([new(0, 1, 0, spec), new(0, 1, 1, spec)]), "团队权益页拒绝重复角色");
         Bytes(RaidCombatPackets.Reward(1, [new(0x4321, 2, [new(7,0x12345678,3,9)])]),
             [1,1,0x21,0x43,2,1,7,0x78,0x56,0x34,0x12,3,0,9], "Anton既有8B物品布局不变");
         foreach (var incomplete in new[] { spec with {RawCode=null}, spec with {ItemId=null}, spec with {DisplayNumber=null},
