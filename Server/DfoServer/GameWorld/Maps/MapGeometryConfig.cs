@@ -10,7 +10,7 @@ namespace DfoServer.GameWorld.Maps;
 internal sealed class MapGeometryConfig
 {
     private sealed record Atom(byte Kind, int Number, string? Text);
-    private sealed record Rule(string Id, string Tag, int Occurrence, Atom[][] From, Atom[] To);
+    private sealed record Rule(string Id, string Tag, int Occurrence, Atom[][] From, Atom[] To, string Kind);
     private readonly Dictionary<string, Rule[]> maps;
     private readonly Dictionary<string, string> aliases;
     private readonly Dictionary<string, int> stringIds;
@@ -18,11 +18,73 @@ internal sealed class MapGeometryConfig
     public static MapGeometryConfig Empty { get; } = new([],[]);
     public IReadOnlyCollection<string> Paths => maps.Keys;
     public IReadOnlyDictionary<string, string> Aliases => aliases;
+    internal IEnumerable<(string Missing, string Empty)> ExtensionRepairs()
+    {
+        foreach (var row in maps)
+            foreach (var rule in row.Value.Where(rule => rule.Kind == "dungeon_ext_tilefiles_repair"))
+            {
+                int slot = RepairSlot(rule.From[0],rule.To);
+                yield return (ResolveReference(row.Key,rule.From[0][slot].Text!),ResolveReference(row.Key,rule.To[slot].Text!));
+            }
+    }
+    internal static bool EmptyExtendedTile(IReadOnlyList<PvfToken> tokens, Func<int,string> resolve) =>
+        tokens.Count >= 144 && (tokens.Count - 4) % 14 == 0 && tokens[0].Type == 3 && resolve(tokens[0].Value).Equals("[image]",StringComparison.OrdinalIgnoreCase) &&
+        tokens[1].Type == 6 && resolve(tokens[1].Value).Length == 0 && tokens[2] == new PvfToken(0,0) &&
+        tokens[3].Type == 3 && resolve(tokens[3].Value).Equals("[pass type]",StringComparison.OrdinalIgnoreCase) &&
+        tokens.Skip(4).All(token => token.Type == 0 && token.Value == 2);
+    private static int RepairSlot(Atom[] before, Atom[] after)
+    {
+        int changed = -1;
+        for (int i = 0; i < before.Length; ++i)
+            if (before[i] != after[i])
+            {
+                if (i % 2 != 1 || before[i].Kind != 6 || after[i].Kind != 6 || changed >= 0)
+                    throw new InvalidDataException("World empty extension repair identity");
+                changed = i;
+            }
+        return changed >= 0 ? changed : throw new InvalidDataException("World empty extension repair missing replacement");
+    }
     public string SignatureKind(string path)
     {
         path = Normalize(path);
         if (path.EndsWith(".til",StringComparison.Ordinal)) return "DCT1";
+        if (maps.TryGetValue(path,out var anchored) && anchored.Any(rule => MapGeometrySignature.AnchorTags.Contains(rule.Tag))) return "DCG3";
         return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]") ? "DCG2" : "DCG1";
+    }
+    private static (int Stride, int X, int Strings) AnchorLayout(string kind) => kind switch
+    {
+        "dungeon_animation5" => (5,2,3),
+        "dungeon_passive4" => (4,1,0),
+        "dungeon_monster10_fixed_normal" => (10,3,(1 << 8) | (1 << 9)),
+        "dungeon_ai8" => (8,1,(1 << 4) | (1 << 5)),
+        "dungeon_event_xyz3" => (3,0,0),
+        "dungeon_special11_single_child" => (11,1,1 << 5),
+        _ => default
+    };
+    private static void ValidateAnchor(string kind, Atom[] before, Atom[] after)
+    {
+        var layout = AnchorLayout(kind);
+        if (before.Length == 0 || before.Length != after.Length || before.Length % layout.Stride != 0)
+            throw new InvalidDataException("World anchor record shape");
+        for (int start = 0; start < before.Length; start += layout.Stride)
+        {
+            for (int n = 0; n < layout.Stride; ++n)
+            {
+                var source = before[start + n]; var target = after[start + n];
+                if (source.Kind != ((layout.Strings & (1 << n)) != 0 ? 6 : 0) || target.Kind != source.Kind)
+                    throw new InvalidDataException("World anchor token shape");
+                if (n == layout.X)
+                {
+                    if (source.Number is < -1048576 or > 1048352 || target.Number != source.Number + (source.Number >= 672 ? 224 : 0))
+                        throw new InvalidDataException("World anchor insertion mapping");
+                }
+                else if (source != target) throw new InvalidDataException("World anchor identity changed");
+            }
+            if (kind == "dungeon_monster10_fixed_normal" && (before[start + 8].Text != "[fixed]" || before[start + 9].Text != "[normal]"))
+                throw new InvalidDataException("World anchor monster tail");
+            if (kind == "dungeon_special11_single_child" && (before[start + 4].Number != 1 || before[start + 5].Text is not ("[trap]" or "[monster]")))
+                throw new InvalidDataException("World anchor special child");
+        }
     }
     private MapGeometryConfig(Dictionary<string, Rule[]> maps, Dictionary<string, string> aliases)
     {
@@ -97,20 +159,29 @@ internal sealed class MapGeometryConfig
                 ("tile_pass14", "[pass type]") => 14,
                 ("dungeon_tiles", "[tile]") => 1,
                 ("dungeon_ext_tilefiles", "[tile files]") => 2,
+                ("dungeon_ext_tilefiles_repair", "[tile files]") => 2,
                 ("dungeon_ext_tilemap", "[tile map]") => 1,
+                ("dungeon_animation5", "[animation]") => 5,
+                ("dungeon_passive4", "[passive object]") => 4,
+                ("dungeon_monster10_fixed_normal", "[monster]") => 10,
+                ("dungeon_ai8", "[ai character]") => 8,
+                ("dungeon_event_xyz3", "[event monster position]") => 3,
+                ("dungeon_special11_single_child", "[special passive object]") => 11,
                 _ => throw new InvalidDataException("World mechanism has no verified record adapter")
             };
             var from = Profiles(row.GetProperty("from"));
             var to = Profiles(row.GetProperty("to"));
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
-            if ((gate || tile || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilemap") && occurrence != 0)
+            bool anchor = AnchorLayout(kind).Stride != 0;
+            if ((anchor || gate || tile || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap") && occurrence != 0)
                 throw new InvalidDataException("World dungeon/grid adapter requires the unique first record");
-            if ((gate || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilemap") && !path.EndsWith(".map",StringComparison.Ordinal) ||
+            if ((anchor || gate || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap") && !path.EndsWith(".map",StringComparison.Ordinal) ||
                 tile && (!path.EndsWith(".til",StringComparison.Ordinal) || !aliases.ContainsKey(path)))
                 throw new InvalidDataException("World mechanism resource kind/alias");
             foreach (var before in from)
             {
+                if (anchor) { ValidateAnchor(kind,before,to[0]); continue; }
                 if (kind == "dungeon_tiles")
                 {
                     if (before.Length != 4 || to[0].Length != 5 || before.Concat(to[0]).Any(atom => atom.Kind != 6) ||
@@ -119,10 +190,12 @@ internal sealed class MapGeometryConfig
                         throw new InvalidDataException("World dungeon tile recipe");
                     continue;
                 }
-                if (kind == "dungeon_ext_tilefiles")
+                if (kind is "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair")
                 {
+                    bool repair = kind == "dungeon_ext_tilefiles_repair";
                     if (before.Length == 0 || before.Length % 2 != 0 || to[0].Length <= before.Length || to[0].Length % 2 != 0 ||
-                        !before.SequenceEqual(to[0].Take(before.Length))) throw new InvalidDataException("World extended tile file recipe");
+                        (!repair && !before.SequenceEqual(to[0].Take(before.Length))) || repair && !before.SequenceEqual(from[0])) throw new InvalidDataException("World extended tile file recipe");
+                    if (repair) _ = RepairSlot(before,to[0]);
                     _ = TileFileIds(before); _ = TileFileIds(to[0]);
                     for (int i = before.Length; i < to[0].Length; i += 2)
                         if (!aliases.ContainsKey(ResolveReference(path,to[0][i + 1].Text!)))
@@ -160,11 +233,21 @@ internal sealed class MapGeometryConfig
             }
             if (!result.TryGetValue(path, out var list)) result.Add(path, list = []);
             if (list.Any(r => r.Tag == tag && r.Occurrence == occurrence)) throw new InvalidDataException("Overlapping world selectors");
-            list.Add(new(id, tag, occurrence, from, to[0]));
+            list.Add(new(id, tag, occurrence, from, to[0], kind));
         }
         if (aliases.Keys.Any(path => !result.TryGetValue(path,out var rules) || !rules.Any(rule => rule.Tag == "[pass type]" && rule.Occurrence == 0)))
             throw new InvalidDataException("World alias requires guarded pass grid");
         foreach (var rules in result.Values) ValidateExtendedRecipe(rules);
+        foreach (var row in result)
+            foreach (var repair in row.Value.Where(rule => rule.Kind == "dungeon_ext_tilefiles_repair"))
+            {
+                string target = ResolveReference(row.Key,repair.To[RepairSlot(repair.From[0],repair.To)].Text!);
+                if (!aliases.ContainsKey(target) || !result.TryGetValue(target,out var guarded) || guarded.Count != 1)
+                    throw new InvalidDataException("World repaired extension alias missing");
+                var pass = guarded[0];
+                if (pass.Kind != "tile_pass14" || pass.To.Length < 140 || pass.From.Any(before => !before.SequenceEqual(pass.To) || before.Any(atom => atom.Kind != 0 || atom.Number != 2)))
+                    throw new InvalidDataException("World repaired extension must preserve all-blocked source");
+            }
         return new(result.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal),aliases);
     }
 
@@ -184,6 +267,14 @@ internal sealed class MapGeometryConfig
                 { begin = i + 1; break; }
             if (begin < 0) throw new InvalidDataException($"Unmatched world tag: {path} {rule.Id}");
             for (int i = begin; i < input.Length; ++i) if (input[i].Type == 3) { end = i; break; }
+            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag))
+            {
+                string close = "[/" + rule.Tag[1..];
+                if (end == input.Length || Resolve(input[end].Value).ToLowerInvariant() != close ||
+                    input.Count(token => token.Type == 3 && Resolve(token.Value).Equals(rule.Tag,StringComparison.OrdinalIgnoreCase)) != 1 ||
+                    input.Count(token => token.Type == 3 && Resolve(token.Value).Equals(close,StringComparison.OrdinalIgnoreCase)) != 1)
+                    throw new InvalidDataException("World anchor closure missing or duplicated");
+            }
             if (rule.Tag is "[tile files]" or "[tile map]")
             {
                 bool extended = false;

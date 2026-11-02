@@ -25,6 +25,8 @@ internal static partial class MapGeometryTests
 
     private static void RunDungeonCore()
     {
+        RunAnchorCore();
+        RunEmptyExtensionCore();
         const string map = "map/test.map", tile = "map/test/displaycompat/grid.til";
         foreach (var (kind,tag) in new[] { ("gate_points8","[pathgate pos]"), ("gate_recognize8","[pathgate recognize range]") })
         {
@@ -262,11 +264,13 @@ internal static partial class MapGeometryTests
         string[] paths = capabilities.Keys.Where(path => !oldPaths.Contains(path)).Order(StringComparer.Ordinal).ToArray();
         using var writer = new BinaryWriter(File.Create(vectors),Encoding.UTF8);
         void WriteString(string value) { byte[] utf8 = Encoding.UTF8.GetBytes(value); writer.Write(utf8.Length); writer.Write(utf8); }
-        writer.Write(paths.Length);
+        writer.Write("DGG2"u8); writer.Write(paths.Length);
         foreach (string path in paths)
         {
             var tokens = config.ReadTokens(pvf,path);
-            WriteString(path); writer.Write(tokens.Length);
+            WriteString(path);
+            writer.Write(path.EndsWith(".til",StringComparison.Ordinal) ? 4 : config.SignatureKind(path) == "DCG3" ? 3 : 2);
+            writer.Write(tokens.Length);
             foreach (var token in tokens)
             {
                 writer.Write((uint)token.Type);

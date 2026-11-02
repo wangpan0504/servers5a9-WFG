@@ -26,6 +26,12 @@ internal static class MapGeometryCapabilities
             if (!tokens.TryGetValue(path, out var value)) tokens.Add(path, value = read(path));
             return value;
         }
+        foreach (var repair in config.ExtensionRepairs())
+        {
+            if (contains(repair.Missing)) throw new InvalidDataException("Repaired map geometry source now exists: " + repair.Missing);
+            if (!MapGeometryConfig.EmptyExtendedTile(Read(repair.Empty),resolve))
+                throw new InvalidDataException("Repaired map geometry extension is not empty: " + repair.Empty);
+        }
         void Add(string path, string kind)
         {
             if (kinds.TryGetValue(path, out string? known))
@@ -37,6 +43,7 @@ internal static class MapGeometryCapabilities
             byte[] signature = kind switch
             {
                 "DCG2" => MapGeometrySignature.ComputeDungeon(path, data, resolve),
+                "DCG3" => MapGeometrySignature.ComputeAnchors(path, data, resolve),
                 "DCT1" => MapGeometrySignature.ComputeTile(path, data, resolve),
                 _ => MapGeometrySignature.Compute(path, data, resolve)
             };
@@ -48,7 +55,7 @@ internal static class MapGeometryCapabilities
             Add(path, config.SignatureKind(path));
         }
 
-        foreach (string root in config.Paths.Where(path => config.SignatureKind(path) == "DCG2"))
+        foreach (string root in config.Paths.Where(path => config.SignatureKind(path) is "DCG2" or "DCG3"))
         {
             var states = new Dictionary<string, byte>(StringComparer.Ordinal);
             var pending = new Stack<(string Path, bool Exit, int Depth)>();
@@ -64,7 +71,7 @@ internal static class MapGeometryCapabilities
                 bool tile = node.Path.EndsWith(".til", StringComparison.Ordinal);
                 if (!tile && !node.Path.EndsWith(".map", StringComparison.Ordinal))
                     throw new InvalidDataException("Unsupported map geometry dependency: " + node.Path);
-                Add(node.Path, tile ? "DCT1" : "DCG2");
+                Add(node.Path, tile ? "DCT1" : config.SignatureKind(node.Path) == "DCG3" ? "DCG3" : "DCG2");
                 states.Add(node.Path, 1);
                 pending.Push((node.Path, true, node.Depth));
                 if (tile) continue;
