@@ -453,6 +453,7 @@ internal static partial class SinglePlayerDungeonRunTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
+        VerifyCompanionProfiles(pvf);
         var authority = new FixtureCombatAuthority();
         var a = new DungeonMap("map", new(0, 0), 1, "map/fixture-a.map");
         var b = new DungeonMap("map", new(1, 0), 2, "map/fixture-b.map");
