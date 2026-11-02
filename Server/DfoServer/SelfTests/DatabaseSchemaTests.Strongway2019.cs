@@ -36,7 +36,11 @@ internal static partial class DatabaseSchemaTests
                         Execute(db, "ALTER TABLE character_strongway2019_statistics ADD COLUMN unknown INTEGER");
                 }
                 string current = Snapshot(path);
-                using (var db = Open(path)) Execute(db, $"PRAGMA user_version={previousVersion}");
+                using (var db = Open(path))
+                {
+                    RewindReleasedBattlePassTables(db, previousVersion);
+                    Execute(db, $"PRAGMA user_version={previousVersion}");
+                }
                 if (scenario == "replay")
                 {
                     _ = new CharacterRepository(path);

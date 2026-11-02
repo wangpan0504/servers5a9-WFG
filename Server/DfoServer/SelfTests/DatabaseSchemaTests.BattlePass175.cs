@@ -119,12 +119,15 @@ internal static partial class DatabaseSchemaTests
                 string counterState = CounterState(path);
                 if (incompatible)
                 {
-                    bool late = false;
+                    bool rejected = false;
                     try { _ = new CharacterRepository(path); }
-                    catch (InvalidDataException error) when (error.Message == "战令点券消费账结构不兼容") { late = true; }
-                    Check(late, $"{sourceVersion}升189在前序迁移后检测到不兼容的点券订单表");
+                    catch (InvalidDataException error) when (error.Message == (sourceVersion is 179 or 180
+                        ? "旧战令编号库冷却或版本不兼容" : "战令点券消费账结构不兼容")) { rejected = true; }
+                    Check(rejected, sourceVersion is 179 or 180
+                        ? "179/180的畸形战令表不匹配已知旧编号，在识别阶段拒绝"
+                        : $"{sourceVersion}升189在前序迁移后检测到不兼容的点券订单表");
                     Check(Snapshot(path) == before && AssetSnapshot(path) == assets && UpstreamState(path) == upstreamState && CounterState(path) == counterState,
-                        $"{sourceVersion}升189晚期失败回滚全部结构、版本、婚姻礼遇、漩涡水位、传送冷却和原角色资产");
+                        $"{sourceVersion}升189失败回滚全部结构、版本、婚姻礼遇、漩涡水位、传送冷却和原角色资产");
                     using var db = Open(path);
                     Check(Query(db, "PRAGMA user_version") is long rollbackVersion && rollbackVersion == sourceVersion &&
                         Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name LIKE 'account_battle_pass_%' OR name='battle_pass_season_rules')") is 1L &&

@@ -19,6 +19,7 @@ internal static partial class DatabaseSchemaTests
             Dictionary<string, (string[] Columns, string Rows)> beforeRows;
             using (var db = Open(path))
             {
+                RewindReleasedBattlePassTables(db, previousVersion);
                 foreach (string table in strongwayTables) Execute(db, "DROP TABLE " + table);
                 if (previousVersion == 162) RewindFrozenLootSchema(db);
                 Execute(db, """
