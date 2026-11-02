@@ -15,6 +15,7 @@ internal static partial class BattlePassMissionTests
         Periods();
         Persistence();
         DailyLoginPersistence();
+        NativeShopVisitPersistence();
         CompletionPersistence();
         WriterClockPersistence();
         Console.WriteLine($"PASS BattlePassMissionTests core ({Count - before} checks)");
@@ -53,7 +54,7 @@ internal static partial class BattlePassMissionTests
             "本服高级日第4槽用资源3倍经验，真实远征日周定义在指定有界组激活");
     }
 
-    static BattlePassCatalog Catalog(int weeklyGroups = 15, bool dailyLogin = false, bool completion = false)
+    static BattlePassCatalog Catalog(int weeklyGroups = 15, bool dailyLogin = false, bool completion = false, bool shopVisit = false)
     {
         var source = new List<object> { "[ui path]", "UI/MissionCoreFixture.xui" };
         for (int id = 1; id <= 70; id++)
@@ -61,15 +62,16 @@ internal static partial class BattlePassMissionTests
             bool complete = completion && id is (54 or 55);
             int target = complete ? id == 54 ? 150 : 30 : dailyLogin && id == 43 ? 3 : dailyLogin && id == 56 ? 50 : id == 38 ? 3 : id == 51 ? 2_000_000_000 : 1;
             int experience = complete ? 1600 : dailyLogin && id == 43 ? 1000 : dailyLogin && id == 56 ? 1600 : id == 38 ? 1000 : 100;
-            source.AddRange(new object[] { "[mission]", id, target, experience, complete ? 36 : dailyLogin && id is (43 or 56) ? 30 : id is 12 or 38 ? 12 : 777,
+            source.AddRange(new object[] { "[mission]", id, target, experience, shopVisit && id == 11 ? 11 : complete ? 36 : dailyLogin && id is (43 or 56) ? 30 : id is 12 or 38 ? 12 : 777,
                 complete ? "累积完成日周任务" : dailyLogin && id is (43 or 56) ? "每日登录游戏" : id is 12 or 38 ? "派遣冒险团远征队" : "合成任务夹具", complete ? id - 54 : -1, "[/mission]" });
         }
         source.Add("[daily mission]");
         for (int day = 0; day < 100; day++) source.AddRange(day switch
         {
             14 => new object[] { 1, 2, 3, 12 },
-            58 => new object[] { 1, 12, 3, 4 },
-            59 => new object[] { 12, 2, 3, 4 },
+            58 => shopVisit ? new object[] { 1, 11, 3, 4 } : new object[] { 1, 12, 3, 4 },
+            59 => shopVisit ? new object[] { 11, 2, 3, 4 } : new object[] { 12, 2, 3, 4 },
+            99 => shopVisit ? new object[] { 11, 2, 3, 4 } : new object[] { 1, 2, 3, 4 },
             _ => new object[] { 1, 2, 3, 4 }
         });
         source.AddRange(new object[] { "[/daily mission]", "[weekly mission]" });

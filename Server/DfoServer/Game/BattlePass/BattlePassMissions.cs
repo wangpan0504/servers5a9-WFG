@@ -109,4 +109,7 @@ internal sealed class BattlePassMissionPolicy
         definition.RawParameter == -1 && (definition.Id == 43 && definition.RequiredCount == 3 && definition.Experience == 1000 ||
         definition.Id == 56 && definition.RequiredCount == 50 && definition.Experience == 1600);
 
+    public static bool IsNativeShopVisit(BattlePassMission definition) => definition is
+        { Id: 11, RawTypeCode: 11, RawParameter: -1, RequiredCount: 1, Experience: 100 };
+
 }
