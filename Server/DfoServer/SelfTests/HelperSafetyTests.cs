@@ -1,6 +1,9 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using static DfoServer.Testing.TestCheck;
 
@@ -58,6 +61,49 @@ internal static class HelperSafetyTests
             "资格协议包含槽位、完整64位指纹和操作类别");
         That(entry != HelperSafetyPackets.Entry(new(gear with { Position = new(InventoryListType.Main, 21) }, 2)), "同模板换槽必须改变资格指纹");
         That(entry != HelperSafetyPackets.Entry(new(gear with { Core = gear.Core with { Attr = 1 } }, 2)), "物品属性变化必须改变资格指纹");
+        That(HelperSafetyPackets.Entry(new(gear, 2, true)) == entry &&
+            HelperSafetyPackets.EntryWithWearability(new(gear, 2, true)) == entry + ":1" &&
+            HelperSafetyPackets.EntryWithWearability(new(gear, 2)) == entry + ":0",
+            "旧资格条目逐字节不变，新字段不改变原指纹或操作授权");
+        string page = string.Join('|', "1", new string('a', 32), ushort.MaxValue, long.MaxValue, 341, 342,
+            string.Join(',', Enumerable.Repeat("4095:ffffffffffffffff:2:1", 12)));
+        ServerNoticePackets.Build("95_HELPER_SAFE/2", page, out bool truncated);
+        That(!truncated, "新协议最大身份与十二项分页不会截断");
+        Wearability(equipment, gear);
         Console.WriteLine("PASS helper-safety");
+    }
+
+    static void Wearability(ItemTemplate equipment, InventoryItem gear)
+    {
+        var character = new Character(1, 0, "fixture", 0, new(1, 0, 10, 10), null) { Job = 0, GrowType = 1, Level = 1 };
+        var epic = equipment with { Rarity = 4, Jobs = 1, MinimumLevel = 95 };
+        That(HelperSafetyPolicy.WearableEpic(character, epic), "本职业低等级史诗按未来可穿保护");
+        That(!HelperSafetyPolicy.WearableEpic(character with { Job = 1 }, epic) &&
+            !HelperSafetyPolicy.WearableEpic(character with { Job = 11 }, epic), "其他职业与男女基础职业位不可混用");
+        That(HelperSafetyPolicy.WearableEpic(character, epic with { Jobs = ushort.MaxValue, EquipmentSlot = 22 }),
+            "通用防具饰品不按防具精通或未解锁槽位缩小保护");
+        foreach (int rarity in new[] { 0, 1, 2, 3, 5, 6 })
+            That(!HelperSafetyPolicy.WearableEpic(character, epic with { Rarity = rarity }), "只对史诗品级提供本职业元数据");
+        That(!HelperSafetyPolicy.WearableEpic(character, epic with { Kind = ItemKind.Material }), "普通材料不伪装职业史诗");
+        var required = epic with { RequiredSkill = 91 };
+        SkillLearningDefinition Skill(byte job, ushort skill) => new(job, skill, "fixture.skl", SkillType.Passive,
+            null, null, skill == 368 ? [0, 0, 0, 0, 0, 1] : [0, 1, 0, 0, 1, 0], null, null, null, null, false, false, []);
+        That(HelperSafetyPolicy.WearableEpic(character, required, Skill) &&
+            !HelperSafetyPolicy.WearableEpic(character with { GrowType = 2 }, required, Skill),
+            "固定技能成长许可区分本分支与其他分支，不依赖当前已学技能");
+        That(HelperSafetyPolicy.WearableEpic(character with { GrowType = 0x21 }, required, Skill), "觉醒不丢失本分支穿戴许可");
+        var witch = character with { Job = 3, GrowType = 0x25 };
+        var broom = required with { Jobs = 8, WeaponSubType = 4 };
+        That(HelperSafetyPolicy.WearableEpic(witch, broom, Skill) &&
+            !HelperSafetyPolicy.WearableEpic(witch with { GrowType = 2 }, broom, Skill),
+            "小魔女扫把共用穿戴特例，其他女法师分支不扩大准入");
+        That(HelperSafetyPolicy.WearableEpic(character, required, (_, _) => throw new KeyNotFoundException()) &&
+            HelperSafetyPolicy.WearableEpic(character, required, (job, skill) => new(job, skill, "unknown.skl", SkillType.Unknown,
+                null, null, null, null, null, null, null, false, false, [])),
+            "技能资源缺失或成长声明未知时保守保护");
+        That(HelperSafetyPolicy.Operations(gear, epic, false) == 2 &&
+            HelperSafetyPolicy.Operations(gear with { Core = gear.Core with { Attr = 1 } }, epic, false) == 0 &&
+            HelperSafetyPolicy.Operations(gear with { Core = gear.Core with { EquipmentLockId = 1 } }, epic, false) == 0,
+            "职业元数据不改变出售或手动基础操作资格，锁与打造保护仍优先");
     }
 }

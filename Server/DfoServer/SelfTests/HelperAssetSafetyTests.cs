@@ -1,4 +1,8 @@
 using DfoServer.Game.Accounts;
+using System.Buffers.Binary;
+using System.Net;
+using System.Text;
+using DfoServer.Game.Chat;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -7,6 +11,10 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using DfoServer.Infrastructure;
+using DfoServer.Network;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Protocol;
 using DfoServer.Testing;
 using Microsoft.Data.Sqlite;
 using PvfLib;
@@ -191,6 +199,59 @@ internal static class HelperAssetSafetyTests
         }
     }
 
+    internal static async Task RunProtocolAsync()
+    {
+        using var f = new Fixture(epic: true);
+        using var stop = new CancellationTokenSource();
+        using var stream = new MemoryStream();
+        var frames = new List<(ushort Opcode, byte[] Body, string Action)>();
+        await using var sender = new GameConnectionSender(f.Owner, stream, stop, 0,
+            (_, opcode, _, body, action) => frames.Add((opcode, body.ToArray(), action)));
+        var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), f.Owner, f.Session, sender);
+        using var log = new ServerLog(Path.Combine(f.Root, "Logs"));
+        var commands = new GameCommandRegistry();
+        new ChatHandler(new ChatService(f.Repository, new NoChatDelivery()), null, log).Register(commands);
+        commands.Seal();
+        const string nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        byte[]? legacy = null;
+        foreach (int version in new[] { 1, 2, 3 })
+        {
+            f.Clock.Advance(TimeSpan.FromSeconds(2));
+            frames.Clear();
+            byte[] text = Encoding.ASCII.GetBytes($"#95-helper/1 {nonce} {f.Session.Selected!.Id} safe {version}");
+            byte[] body = new byte[11 + text.Length];
+            body[0] = 3;
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), (uint)text.Length);
+            text.CopyTo(body, 11);
+            await commands.DispatchAsync(context, new(1, (ushort)CmdPacketType.SEND_MESSAGE, body));
+            await sender.DrainAsync();
+            var frame = frames.Single(row => row.Action == "helper_safety");
+            That(frame.Opcode == (ushort)NotiPacketType.AAS_TIPS && frames[0].Action == "helper_safety_inventory" &&
+                frames.FindIndex(row => row.Action == "helper_safety_cargo") < frames.FindIndex(row => row.Action == "helper_safety"),
+                "真实助手路由先恢复完整背包与仓库，再投递资格");
+            using var reader = new BinaryReader(new MemoryStream(frame.Body), Encoding.UTF8);
+            string title = Encoding.UTF8.GetString(reader.ReadBytes(reader.ReadInt32()));
+            string response = Encoding.UTF8.GetString(reader.ReadBytes(reader.ReadInt32()));
+            That(reader.ReadByte() == 0 && reader.BaseStream.Position == reader.BaseStream.Length &&
+                title == (version == 3 ? "95_HELPER_SAFE/2" : "95_HELPER_SAFE/1"), "协商版本决定完整标题并保持原通知包形状");
+            string[] fields = response.Split('|');
+            string[] item = fields[^1].Split(':');
+            That(fields.Length == 7 && fields[0] == "1" && fields[1] == nonce && fields[2] == f.Session.Selected!.Id.ToString() &&
+                fields[4] == "0" && fields[5] == "1" && item[0] == "20" && item[1].Length == 16 && item[2] == "2" &&
+                item.Length == (version == 3 ? 4 : 3) && (version != 3 || item[3] == "1"),
+                "真实候选仅给新版本追加本职业史诗元数据");
+            if (version == 1) legacy = frame.Body;
+            else if (version == 2) That(frame.Body.SequenceEqual(legacy!), "旧 safe1 与 safe2 回复逐字节一致");
+        }
+        That(f.Disjoint().Accepted, "史诗元数据不剥夺原手动分解精确授权");
+    }
+
+    sealed class NoChatDelivery : IChatDelivery
+    {
+        public int DeliverAll(Func<ChatRecipient, bool> filter, ChatNotice notice) => throw new InvalidOperationException("Unexpected chat broadcast");
+        public bool DeliverTo(string account, Func<ChatRecipient, bool> filter, ChatNotice notice) => throw new InvalidOperationException("Unexpected chat whisper");
+    }
+
     sealed class Clock : TimeProvider
     {
         long milliseconds;
@@ -203,6 +264,7 @@ internal static class HelperAssetSafetyTests
     sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-helper-asset-safety-" + Guid.NewGuid().ToString("N"));
+        public string Root => root;
         public AccountOwners Owners { get; } = new();
         public AccountOwners.Lease Owner { get; }
         public CharacterRepository Repository { get; }
@@ -215,14 +277,14 @@ internal static class HelperAssetSafetyTests
         readonly InventoryService inventory;
         readonly InventoryShopService? shop;
 
-        public Fixture(bool red = true, bool material = false, NpcShopCatalog? shops = null)
+        public Fixture(bool red = true, bool material = false, NpcShopCatalog? shops = null, bool epic = false)
         {
             Directory.CreateDirectory(root);
             var location = new Location(1, 0, 10, 10);
             var towns = new TownCatalog(new Dictionary<(byte, byte), TownArea>(), location, location,
                 new TownDock(0, [], []), [], new Dictionary<uint, uint[]>());
             var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
-            var gear = new ItemTemplate(2001, ItemKind.Equipment, 12, 1, 100, 1, 0, 0, 0, "free", 0, 0, "Gear")
+            var gear = new ItemTemplate(2001, ItemKind.Equipment, 12, 1, 100, 1, 0, epic ? 4 : 0, 0, "free", ushort.MaxValue, 0, "Gear")
             { DisjointValue = 150, ShopPrice = new(500, 100, [], null) };
             catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
             {

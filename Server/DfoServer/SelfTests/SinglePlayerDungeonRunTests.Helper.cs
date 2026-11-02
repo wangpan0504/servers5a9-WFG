@@ -57,6 +57,11 @@ internal static partial class SinglePlayerDungeonRunTests
         }
         var valid = Packet($"#95-helper/1 {nonce} 99 hell 1");
         That(HelperRequests.Parse(valid) == new HelperRequest(nonce, 99, true), "助手命令精确解析角色、nonce及明确开关值");
+        That(HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 safe 1")) == new HelperRequest(nonce, 99, false, Safety: true) &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 safe 2")) == new HelperRequest(nonce, 99, false, Safety: true) &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 safe 3")) == new HelperRequest(nonce, 99, false, Safety: true, SafetyVersion: 2) &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 safe 4")) is null,
+            "新职业元数据请求单独协商版本，旧资格参数与未知版本边界保持");
         That(HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 1")) == new HelperRequest(nonce, 99, false, 1) &&
             HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 2")) == new HelperRequest(nonce, 99, false, 2) &&
             HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 0")) is null &&

@@ -5,7 +5,7 @@ using System.Text;
 namespace DfoServer.Network.Parsers;
 
 internal sealed record HelperRequest(string Nonce, ushort CharacterId, bool HellRotation, byte Cargo = 0,
-    bool Safety = false, bool? DirectPickup = null, byte CapabilityVersion = 1);
+    bool Safety = false, bool? DirectPickup = null, byte CapabilityVersion = 1, byte SafetyVersion = 1);
 
 internal static class HelperRequests
 {
@@ -51,6 +51,7 @@ internal static class HelperRequests
             "hell" when argument is "0" or "1" => new(nonce, id, argument == "1"),
             "pickup" when argument is "0" or "1" => new(nonce, id, false, DirectPickup: argument == "1"),
             "safe" when argument is "1" or "2" => new(nonce, id, false, Safety: true),
+            "safe" when argument == "3" => new(nonce, id, false, Safety: true, SafetyVersion: 2),
             "cargo" when argument is "1" or "2" => new(nonce, id, false, argument == "1" ? (byte)1 : (byte)2),
             _ => null
         };

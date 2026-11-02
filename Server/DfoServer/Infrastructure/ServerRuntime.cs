@@ -920,7 +920,8 @@ internal static class ServerRuntime
                 new Game.Chat.NamedWhisperService(online, repository), guildContribution,
                 new SelfCharacterScoreProjection(new Game.Characters.CharacterInvestmentService(itemResources.Items,
                     itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions),
-                    new Game.Characters.CombatPowerService(itemResources.Items, itemResources.CharacterInvestmentMetadata, stats)), chatEmoticons, promotionPage: promotionPage)
+                    new Game.Characters.CombatPowerService(itemResources.Items, itemResources.CharacterInvestmentMetadata, stats)), chatEmoticons,
+                promotionPage: promotionPage, learning: learning)
         ];
         foreach (var module in modules)
             module.Register(commands);

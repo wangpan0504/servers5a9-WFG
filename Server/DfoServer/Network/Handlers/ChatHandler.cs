@@ -37,7 +37,8 @@ namespace DfoServer.Network.Handlers;
 internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
     NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
     SelfCharacterScoreProjection? selfScore = null, DfoServer.GameWorld.Characters.ChatEmoticonCatalog? emoticons = null,
-    PromotionPageProjection? promotionPage = null) : IGameCommandModule
+    PromotionPageProjection? promotionPage = null,
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -74,7 +75,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             }
             if (helper.Safety)
             {
-                var safety = context.Session.ReadHelperSafety(helper.CharacterId);
+                var safety = context.Session.ReadHelperSafety(helper.CharacterId, learning);
                 if (safety is null) return CommandResult.Handled;
                 bool CanPublish() => context.Session.CanPublishHelperSafety(safety);
                 // 同一快照的完整背包/账号仓库先于资格回执投递，避免换频道沿用旧仓库格。
@@ -84,13 +85,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
                 await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(safety.Character.Inventory, InventoryListType.AccountCargo), "helper_safety_cargo", CanPublish);
                 await InventoryProjection.RestoreLocksAsync(context, safety.Character.Inventory,
                     safety.Character.Inventory.Items.Where(item => item.Position.List == InventoryListType.AccountCargo).Select(item => item.Position), canSend: CanPublish);
-                var entries = safety.Candidates.Select(HelperSafetyPackets.Entry).ToArray();
+                var entries = safety.Candidates.Select(row => helper.SafetyVersion == 2
+                    ? HelperSafetyPackets.EntryWithWearability(row) : HelperSafetyPackets.Entry(row)).ToArray();
                 int total = Math.Max(1, (entries.Length + 11) / 12);
                 for (int index = 0; index < total; index++)
                 {
                     string safetyText = string.Join('|', "1", helper.Nonce, safety.Character.Id, safety.Epoch, index, total,
                         string.Join(',', entries.Skip(index * 12).Take(12)));
-                    var response = ServerNoticePackets.Build("95_HELPER_SAFE/1", safetyText, out bool safetyTruncated);
+                    var response = ServerNoticePackets.Build(helper.SafetyVersion == 2 ? "95_HELPER_SAFE/2" : "95_HELPER_SAFE/1",
+                        safetyText, out bool safetyTruncated);
                     if (safetyTruncated) throw new InvalidDataException("助手资格回执不得截断");
                     await context.Notify(NotiPacketType.AAS_TIPS, response, "helper_safety", CanPublish);
                 }
