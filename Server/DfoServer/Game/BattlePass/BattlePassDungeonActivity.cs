@@ -9,7 +9,7 @@ using DfoServer.GameWorld.BattlePass;
 
 namespace DfoServer.Game.BattlePass;
 
-// 普通、帝国逐轮、祭坛、安徒恩及漩涡引导/团队死亡和原疲劳消费分别取原事实。
+// 普通、帝国逐轮、祭坛、安徒恩、漩涡、卢克及普雷引导死亡和原疲劳消费分别取原事实。
 internal sealed class BattlePassDungeonActivity
 {
     readonly DungeonEntryPlan? entry;
@@ -47,7 +47,13 @@ internal sealed class BattlePassDungeonActivity
         if (raidEligibility is not null)
         {
             if (!EligibleRaidMonsterDeath(run,prepared) || !raidEligibility.Matches(run,prepared)) return null;
-            string source = raidEligibility.Kind == RaidKind.Anton ? "anton_raid_monster_death" : "fiendwar_team_monster_death";
+            string source = raidEligibility.Kind switch
+            {
+                RaidKind.Anton => "anton_raid_monster_death",
+                RaidKind.Luke => "luke_raid_monster_death",
+                RaidKind.Prey => "prey_guide_monster_death",
+                _ => "fiendwar_team_monster_death"
+            };
             return new(prepared.Death.Identity,source,
                 SourceKey(source,FormattableString.Invariant($"{prepared.Death.Identity.CharacterId}:{prepared.Death.EventId:N}")),
                 1,prepared.Monster.IsBoss,clock,run.Entry,prepared,raidEligibility:raidEligibility);
@@ -181,7 +187,7 @@ internal sealed class BattlePassDungeonActivity
         SHA256.HashData(Encoding.UTF8.GetBytes(kind + ":" + identity)).AsSpan(0, 16)).ToLowerInvariant();
 
     public bool MatchesMission(byte category, BattlePassMission mission) => category==0 && mission.RawParameter==-1 &&
-        mission.Experience==100 && (SourceKind is "anton_raid_monster_death" or "fiendwar_team_monster_death" or "fiendwar_guide_monster_death" or "normal_formal_monster_death" or "imperial_arena_monster_death" or "altar_quest_target_monster_death" or "altar_non_target_monster_death" && (mission is
+        mission.Experience==100 && (SourceKind is "luke_raid_monster_death" or "prey_guide_monster_death" or "anton_raid_monster_death" or "fiendwar_team_monster_death" or "fiendwar_guide_monster_death" or "normal_formal_monster_death" or "imperial_arena_monster_death" or "altar_quest_target_monster_death" or "altar_non_target_monster_death" && (mission is
             { Id:1,RawTypeCode:1,RequiredCount:10 } || IsBoss && mission is { Id:2,RawTypeCode:2,RequiredCount:2 }) ||
             SourceKind=="dungeon_fatigue_spend" && mission is { Id:4,RawTypeCode:3,RequiredCount:10 });
 }

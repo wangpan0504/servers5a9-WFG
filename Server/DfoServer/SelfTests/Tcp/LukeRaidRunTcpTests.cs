@@ -147,13 +147,13 @@ internal static partial class LukeRaidRunTcpTests
             "所有已开团角色最终仍在正式候战位置");
     }
 
-    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0,(int Symbol,int Value)? expectedHp=null,int? passiveTarget=null,Action<List<WirePacket>>? observe=null,IReadOnlyDictionary<int,RaidDungeonState>? expectedStates=null,Dictionary<TcpPeer,List<WirePacket>>? phaseResults=null,Action<DungeonMap>? roomCleared=null,IReadOnlyList<DungeonPoint>? waypoints=null)
+    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0,(int Symbol,int Value)? expectedHp=null,int? passiveTarget=null,Action<List<WirePacket>>? observe=null,IReadOnlyDictionary<int,RaidDungeonState>? expectedStates=null,Dictionary<TcpPeer,List<WirePacket>>? phaseResults=null,Action<DungeonMap>? roomCleared=null,IReadOnlyList<DungeonPoint>? waypoints=null,Func<ushort,byte,Action>? checkDeath=null,Func<byte[]>? expectedBattlePassMissions=null)
     {
         uint completedDungeon = U32(entry.Single(packet => packet.Opcode == 28).Body);
         var clearFrames = members.Concat(others).ToDictionary(peer => peer, _ => new List<WirePacket>());
         List<WirePacket> Read(TcpPeer peer)
         {
-            var frames=Drain(peer,phaseResults is not null);
+            var frames=Drain(peer,phaseResults is not null,expectedBattlePassMissions);
             clearFrames[peer].AddRange(frames);
             if(phaseResults is not null) phaseResults[peer].AddRange(frames);
             return frames;
@@ -211,6 +211,7 @@ internal static partial class LukeRaidRunTcpTests
                 .Where(offset=>map[offset+13]!=9&&map[offset+14]==0).OrderBy(offset=>map[offset+13]==3))
             {
                 last=U16(map,offset+6);lastLevel=map[offset+12];
+                var afterDeath=checkDeath?.Invoke(last,lastLevel);
                 captain.Send(39,FormalDungeonTcpTests.Death(last,captain.Id,lastLevel));
                 var own=Read(captain);
                 observe?.Invoke(own);
@@ -226,6 +227,7 @@ internal static partial class LukeRaidRunTcpTests
                 }
                 // 另一分队也是活跃客户端，逐事件消费；不能积压整图怪物快照后误报单批预算超限。
                 ObserveOthers();
+                afterDeath?.Invoke();
             }
             if(routeIndex==route.Length-1)break;
             if(map.Length!=16) roomCleared?.Invoke(maze.MapSpecification!.Concat(maze.MapAlternatives).Distinct()
@@ -510,14 +512,20 @@ internal static partial class LukeRaidRunTcpTests
         foreach(var peer in members.Where(peer=>peer!=target))returned.AddRange(Drain(peer,phaseResults));
         return returned;
     }
-    static List<WirePacket> Drain(TcpPeer peer,bool phaseResults=false)
+    static List<WirePacket> Drain(TcpPeer peer,bool phaseResults=false,Func<byte[]>? expectedBattlePassMissions=null)
     {
         peer.SendBarrier();List<WirePacket> rows=[];
         for(int index=0;index<256;index++)
         {
             var packet=peer.Read();
             if(packet is {Kind:1,Opcode:1347}){Bytes(packet.Body,[1],"Luke Run连接屏障");return rows;}
-            ValidatePacket(packet,phaseResults);
+            if(peer.ExpectedBattlePassEnd is not null && expectedBattlePassMissions is not null && packet is {Kind:0,Opcode:1801})
+            {
+                var expected=expectedBattlePassMissions();
+                That(expected.Length==156,"显式战令fixture独立构造完整26槽期望");
+                Bytes(packet.Body,expected,"卢克真实死亡1801与权威任务完整156B独立投影一致");
+            }
+            else ValidatePacket(packet,phaseResults);
             rows.Add(packet);
         }
         throw new InvalidOperationException("Luke Run通知超过有界预算");

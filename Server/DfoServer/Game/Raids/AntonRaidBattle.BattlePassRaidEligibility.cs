@@ -35,7 +35,7 @@ internal sealed partial class AntonRaidBattle
                 var identity = dungeon.Snapshot.Identity;
                 var at = battle.lukeClock.GetUtcNow();
                 var monster = dungeon.CurrentLivingMonster(key);
-                if (battle.Kind is not (RaidKind.Anton or RaidKind.Fiendwar) ||
+                if (battle.Kind is not (RaidKind.Anton or RaidKind.Fiendwar or RaidKind.Luke or RaidKind.Prey) ||
                     dungeon.Entry.RaidEntry is not { } raid || raid.Kind != battle.Kind ||
                     raid.InstanceId != battle.Instance || raid.Phase != battle.current.Phase ||
                     battle.current.State != AntonRaidBattleState.Fighting || battle.current.ClockFaulted ||
@@ -53,6 +53,9 @@ internal sealed partial class AntonRaidBattle
                     dungeon.Entry.IsClassExperience || dungeon.Entry.IsQuestReplay || dungeon.Entry.IsAltar || dungeon.Entry.IsTagSystem ||
                     monster is null || monster.MonsterId <= 0 || !monster.CanReportDeath || monster.IsFriendly ||
                     monster.IsSpecialChild || monster.AiCharacter is not null)
+                    return null;
+                if (battle.Kind == RaidKind.Prey &&
+                    (battle.lukeCompletion?.Source != PreyGuideRewards.Source || run.Active.Count != 1))
                     return null;
                 if (battle.Kind == RaidKind.Fiendwar && (battle.fiendwarDefinition is not { Guide: false } ||
                     !FiendwarTitleFacts.IsTeamDungeon(dungeon.Entry.DungeonId) ||
