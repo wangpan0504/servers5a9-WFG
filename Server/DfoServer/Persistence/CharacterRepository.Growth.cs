@@ -25,9 +25,9 @@ internal sealed partial class CharacterRepository
         ArgumentNullException.ThrowIfNull(catalog);
         if (run.Entry.IsAltar)
         {
-            if (loot is not null || questDrops is not null || equipmentGrowth is not null)
+            if (loot is not null || equipmentGrowth is not null)
                 throw new InvalidDataException("祭坛任务死亡不接入普通掉落或装备成长");
-            return CommitAltarQuestDeath(owner, expected, run, prepared, reward, catalog);
+            return CommitAltarQuestDeath(owner, expected, run, prepared, reward, catalog, questDrops);
         }
         ulong amount = reward.Amount;
         if (run.TagEvildomLife is not null || !run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||

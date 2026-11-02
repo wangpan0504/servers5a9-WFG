@@ -90,8 +90,9 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("拾取revision冲突");
         var inventory = WriteInventory(db, tx, owner, current.Id, plan, plan.After);
-        var active = quests is null ? current.ActiveMainQuests : DfoServer.Game.Quests.QuestInventoryProgress.Refresh(
-            current.ActiveMainQuests, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)).ToArray();
+        var active = quests is null ? current.ActiveMainQuests : DfoServer.Game.Quests.QuestEventProgress.Inventory(
+            DfoServer.Game.Quests.QuestInventoryProgress.Refresh(current.ActiveMainQuests, inventory, quests,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)), quests, plan).ToArray();
         WriteQuestConditions(db, tx, current.Id, current.ActiveMainQuests, active);
         var actual = inventory.Find(slot) ?? throw new InvalidOperationException("已提交拾取缺目标槽");
         var character = current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };

@@ -46,7 +46,9 @@ internal sealed record QuestDefinition(ImmutableArray<QuestField> Fields)
     public ImmutableArray<QuestDropDefinition> Drops { get; init; } = [];
     public ImmutableArray<string> Diagnostics { get; init; } = [];
 
-    public ImmutableArray<QuestRewardToken> Values(string name) => Fields.FirstOrDefault(field => field.Name == name)?.Values ?? [];
+    public ImmutableArray<QuestRewardToken> Values(string name) =>
+        (name is "type" or "sub type" or "int data" ? Fields.LastOrDefault(field => field.Name == name) :
+            Fields.FirstOrDefault(field => field.Name == name))?.Values ?? [];
     public bool Has(string name) => Fields.Any(field => field.Name == name);
 }
 
@@ -148,13 +150,14 @@ internal static class QuestDefinitionReader
             Drops = QuestDropDefinition.Read(fields,errors),
             Diagnostics = errors.ToImmutable()
         };
-        var quest = new StoryQuest(id, path, type ?? "", Scalar("sub type") ?? -1, Integers("int data"),
+        var quest = new StoryQuest(id, path, type ?? "", Scalar("sub type") ?? 0, Integers("int data"),
             Scalar("npc index") ?? -1, Scalar("complete npc index") ?? -1,
             level.Length == 2 ? level[0] : -1, level.Length == 2 ? level[1] : -1,
             groups.SelectMany(group => group).ToImmutableArray(), Scalar("main quest"),
             dungeon.Length == 2 ? dungeon[0] : null, dungeon.Length == 2 ? dungeon[1] : null,
             Values("reward int data"), null, null, [])
         {
+            HasDeclaredSubType = fields.Any(field => field.Name == "sub type"),
             Grade = grades.FirstOrDefault().Text, Difficulty = Text("difficulty"), RewardType = Text("reward type"),
             DeclaredGoldMultiple = Scalar("gold multiple"), DeclaredIgnoreLevelForExperience = Scalar("ignore quest level 4 exp"),
             Attributes = Values("attribute").Where(value => value.Text is not null).Select(value => value.Text!).ToImmutableArray(),
@@ -168,6 +171,8 @@ internal static class QuestDefinitionReader
         ImmutableArray<QuestRewardToken> Values(string name)
         {
             var matches = fields.Where(field => field.Name == name).ToArray();
+            // 04191170：目标标量后值覆盖，重复int data先清空再读取；Fields仍保存全部原声明。
+            if (matches.Length != 0 && name is "type" or "sub type" or "int data") return matches[^1].Values;
             // 同值重复声明不改变解释；冲突声明保留原文并禁止取得资格。
             if (matches.Length > 1 && matches.All(field => field.Values.SequenceEqual(matches[0].Values)) &&
                 name is not ("pre required quest" or "collision quest" or "account collision quest"))

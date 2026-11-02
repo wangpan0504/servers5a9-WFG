@@ -38,7 +38,7 @@ internal static partial class FormalDungeonTcpTests
             var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get((int)sample.Dungeon).Mazes
                 .Single(row => row.ConnectsQuest(sample.Quest));
             long attempt = 0;
-            foreach (byte difficulty in new byte[] { 0, 1, 3 })
+            foreach (byte difficulty in new byte[] { 0, 1, 2, 3 })
             foreach (ushort request in new ushort[] { sample.Quest, 0 })
             {
                 SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
@@ -59,7 +59,7 @@ internal static partial class FormalDungeonTcpTests
                 That(information.Length == 36 && U32(information, 0) == sample.Dungeon && information[4] == difficulty &&
                     information[7] == maze.SourceOrdinal && information[8] == maze.Bosses.Single().X &&
                     information[9] == maze.Bosses.Single().Y && U32(map, 14) == sample.Start,
-                    "普通/冒险/王者及显式/零请求保留所选难度、原任务maze、首房与Boss坐标：" + sample.Quest);
+                    "普通四档及显式/零请求保留客户端所选难度、原任务maze、首房与Boss坐标：" + sample.Quest);
                 Load(peer); peer.Barrier();
                 That(Active() == active && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)
                     is [[long actual]] && actual == ++attempt, "任务难度只创建一次尝试，保留原接取和进度");

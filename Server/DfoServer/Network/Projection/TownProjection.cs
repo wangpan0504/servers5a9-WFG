@@ -228,7 +228,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // NOTI1153：技能窗职业变更菜单的已变更次数(报价索引)与等级(012A6DAA 等级>=50拒绝)。
         await context.Notify(NotiPacketType.CHARACTER_MANAGE_INFO,
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
-        await TrainingSkillsAsync(context, initializing: true);
+        await TrainingSkillsAsync(context, initializing: true, skills: learning, preserveContext: resumeTown);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         await ServerEventsAsync(context);
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
@@ -355,7 +355,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (detached is null)
             return;
         await detached;
-        await TrainingSkillsAsync(context, canSend: CanSend);
+        await TrainingSkillsAsync(context, canSend: CanSend, skills: learning, enteringArea: true);
         await LocationAsync(context, receipt.Character, canSend: CanSend);
         bool joined = context.Owner.Execute(() =>
         {
@@ -377,13 +377,28 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         }
     }
 
-    // 在地区切换触发客户端训练对象绑定前，先给出独立技能快照；不覆盖普通 NOTI19 双树。
-    internal static async Task TrainingSkillsAsync(GameConnectionContext context, bool initializing = false, Func<bool>? canSend = null)
+    // 切入地区时沿原生1234装载；同场景后继任务使用1235，不能释放角色仍引用的训练对象。
+    internal static Task TrainingSkillsAsync(GameConnectionContext context, bool initializing = false, Func<bool>? canSend = null,
+        SkillLearningCatalog? skills = null, bool preserveContext = false, bool enteringArea = false)
     {
-        if (context.Session.ReadPvpTrainingSkills(initializing) is not {State: { } state, Receipt: { } receipt}) return;
+        if (context.Session.ReadPvpTrainingSkills(initializing) is not {State: { } state, Receipt: { } receipt}) return Task.CompletedTask;
         bool Guard() => (canSend?.Invoke() ?? true) && context.Session.CanPublishPvpTrainingSkills(receipt, initializing);
-        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_USE_STATUS, [0], "pvp_training_skill_status", Guard);
-        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA, PvpTrainingPackets.Skills(state), "pvp_training_skill_snapshot", Guard);
+        bool Current() => context.Session.CanPublishPvpTrainingSkillContext(receipt);
+        byte[] initial=PvpTrainingPackets.Skills(state);
+        byte[] update=SkillPackets.Initialized(state,skills is null ? null : id=>skills.Get(receipt.Character.Job,id).DefaultCommand);
+        context.Owner.Execute(()=>
+        {
+            if(!Guard()) return false;
+            bool initialized=preserveContext || !enteringArea && context.Session.HasPvpTrainingSkillContext;
+            // 构包在锁外；锁内只做有界FIFO入队和选角标记，不等待网络或写库。
+            if(!context.Sender.TryPost(0,(ushort)NotiPacketType.ARCADE_MODE_SKILL_USE_STATUS,[0],"pvp_training_skill_status",Current) ||
+                !context.Sender.TryPost(0,(ushort)(initialized ? NotiPacketType.SKILLINFO_ARCADE : NotiPacketType.ARCADE_MODE_SKILL_DATA),
+                    initialized ? update : initial,initialized ? "pvp_training_skill_update" : "pvp_training_skill_snapshot",Current))
+                throw new IOException("Training skill send queue unavailable");
+            context.Session.MarkPvpTrainingSkillsQueued(receipt);
+            return true;
+        });
+        return Task.CompletedTask;
     }
 
     public void Join(GameConnectionContext context, Func<bool>? canJoin = null)

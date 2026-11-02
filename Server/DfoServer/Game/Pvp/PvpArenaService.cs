@@ -22,13 +22,15 @@ internal sealed partial class PvpArenaService
     readonly PvpTotalTeamService? totalTeams;
     readonly PvpTotalRatingSettlement? totalRatings;
     readonly DfoServer.GameWorld.Characters.SkillLearningCatalog? totalSkills;
+    readonly DfoServer.GameWorld.Quests.QuestCatalog? quests;
     ushort nextId;
     public event Action? Changed;
     public void PresenceChanged() => Changed?.Invoke();
 
     public PvpArenaService(GameCache memory, PvpArenaCatalog catalog, IPvpArenaResultStore results, int matchingCapacity = 4096,
         PvpRatingSettlement? ratings = null, PvpTotalTeamService? totalTeams = null,
-        PvpTotalRatingSettlement? totalRatings = null, DfoServer.GameWorld.Characters.SkillLearningCatalog? totalSkills = null)
+        PvpTotalRatingSettlement? totalRatings = null, DfoServer.GameWorld.Characters.SkillLearningCatalog? totalSkills = null,
+        DfoServer.GameWorld.Quests.QuestCatalog? quests = null)
     {
         if (matchingCapacity is < 1 or > 65534) throw new ArgumentOutOfRangeException(nameof(matchingCapacity));
         this.catalog = catalog;
@@ -37,6 +39,7 @@ internal sealed partial class PvpArenaService
         this.totalTeams = totalTeams;
         this.totalRatings = totalRatings;
         this.totalSkills = totalSkills;
+        this.quests = quests;
         this.matchingCapacity = matchingCapacity;
         rooms = memory.CreateIndex<ushort, PvpArenaRoom>();
         members = memory.CreateIndex<GameSession, PvpArenaMembership>();
@@ -73,7 +76,8 @@ internal sealed partial class PvpArenaService
                 bool installed = false;
                 try
                 {
-                    var seat = room.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, 0, job: admission.Actor.Character.Job)!;
+                    var seat = room.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, 0, job: admission.Actor.Character.Job,
+                        questBindings: Quests.QuestPvpProgress.Bindings(admission.Actor.Character.ActiveMainQuests, quests))!;
                     var member = new PvpArenaMembership(room, seat.Token, admission.Actor, admission.Identity);
                     if (!session.InstallPvpArena(member)) return null;
                     rooms.Add(room.Id, room);
@@ -103,7 +107,8 @@ internal sealed partial class PvpArenaService
                     expected.Channel != ChannelKey(admission.Identity.Channel) || !expected.AcceptsPassword(password)) return null;
                 var current = expected.View().Members.Where(row => !row.Spectator).ToArray();
                 byte team = (byte)(current.Count(row => row.Team == 0) <= current.Count(row => row.Team == 1) ? 0 : 1);
-                var seat = expected.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, team, spectator, admission.Actor.Character.Job);
+                var seat = expected.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, team, spectator, admission.Actor.Character.Job,
+                    Quests.QuestPvpProgress.Bindings(admission.Actor.Character.ActiveMainQuests, quests));
                 if (seat is null) return null;
                 var member = new PvpArenaMembership(expected, seat.Token, admission.Actor, admission.Identity);
                 if (!session.InstallPvpArena(member)) { expected.Leave(seat.Token); return null; }
@@ -200,9 +205,10 @@ internal sealed partial class PvpArenaService
                 if (match.CommittedRecord is null) match.InstallRecord(committed);
             }
             if (ratings is not null && committed.RatingMode is PvpRatingMode.Ordinary or PvpRatingMode.Matching &&
-                ratings.Recover(member.Actor.Owner, member.Actor.Character.Id))
+                ratings.Recover(member.Actor.Owner, member.Actor.Character.Id, member.Actor.Session.InstallPvpQuestAdvance))
             {
                 var receipt = ratings.Settle(member.Actor.Owner, member.Actor.Character.Id, committed.MatchId, committed.RatingMode);
+                member.Actor.Session.InstallPvpQuestAdvance(receipt);
                 lock (gate)
                 {
                     if (!Current(member) || !ReferenceEquals(member.Room.Match, match))
@@ -214,6 +220,7 @@ internal sealed partial class PvpArenaService
             {
                 var total = totalRatings.Settle(member.Actor.Owner, committed.MatchId);
                 var receipt = total.Characters.Single(row => row.CharacterId == member.Actor.Character.Id);
+                member.Actor.Session.InstallPvpQuestAdvance(receipt);
                 lock (gate)
                 {
                     if (!Current(member) || !ReferenceEquals(member.Room.Match, match))

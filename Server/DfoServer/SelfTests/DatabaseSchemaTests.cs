@@ -821,6 +821,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindExpertJobTutorialCompletion(SqliteConnection db)
     {
+        RewindQuestTargetTypes(db);
         const string table = "character_quest_completion_receipts";
         if (Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + table + "'") is not string sql ||
             !sql.Contains("12,17,19,25", StringComparison.Ordinal)) return;

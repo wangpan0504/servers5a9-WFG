@@ -11,7 +11,8 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog items, GoldLimitCatalog goldLimits,
-    EpicPieceCatalog pieces, ServerLog log, QuestProjection? projection = null) : IGameCommandModule
+    EpicPieceCatalog pieces, ServerLog log, QuestProjection? projection = null,
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? trainingSkills = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -73,7 +74,7 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
             : QuestPackets.GivenUp(questId);
         // 在道场内首次接取时没有切图事件；ACK31前必须装载同一已提交身份的独立技能快照。
         if (action == QuestLifecycleAction.Accept && DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quests.Get(questId)))
-            await TownProjection.TrainingSkillsAsync(context,canSend: Guard);
+            await TownProjection.TrainingSkillsAsync(context,canSend: Guard,skills: trainingSkills);
         await context.Reply(opcode, body, "quest_lifecycle_committed", Guard);
         if (plan.Inventory.ChangedSlots.Length != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,

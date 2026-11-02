@@ -226,6 +226,37 @@ internal static class SkillLearningTests
         Console.WriteLine($"PASS {Count - checks} pure skill learning planning assertions");
     }
 
+    internal const string LancerAutoBody = "0112BE000001AF000002BA00000A0200002A03000009050000280700000106000005300000012F0000013900000A04000024310000213800000A320000142900001F2A00001C2D00001A01";
+
+    internal static void RunPvpLevel(PvfArchive pvf)
+    {
+        var actual = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var lancerFree = actual.FreeSkills(13, 1);
+        var lancerNormal = SkillPointLedger.Synchronize(13, 1, 66,
+            SkillLearning.Initialize(13, lancerFree, actual).State! with { SelectedTree = 1 }, actual);
+        var lancer = new Character(1, 0, "LancerAuto", 0, new(10, 0, 10, 10), null)
+            { Job = 13, GrowType = 1, Level = 66, Learning = lancerNormal };
+        var parsed = DfoServer.Network.Parsers.SkillRequests.ParsePurchase(Convert.FromHexString(LancerAutoBody));
+        var automatic = new SkillLearningCommand(parsed.Context, parsed.Mode, parsed.Items.Select(item =>
+            new SkillLearningChangeRequest(item.SkillId, item.Decrease != 0, item.Magnitude)).ToArray());
+        That(SkillLearning.Plan(13, 1, 66, lancerNormal, automatic, actual).Failure == SkillLearningFailure.RequiredLevel,
+            "真实18项自动方案在普通66级仍拒绝85级技能，不放宽普通学习门槛");
+        var arenaSource = DfoServer.Game.Pvp.PvpTrainingSkills.ArenaSource(lancer, actual);
+        var learnedArena = SkillLearning.Plan(13, 1, DfoServer.Game.Pvp.PvpTrainingSkills.Level(lancer, actual), arenaSource, automatic, actual);
+        That(actual.PvpRevisionLevel == 85 && learnedArena.Success && learnedArena.Changes.Single(skill => skill.Id == 2).Level == 43 &&
+            lancer.Level == 66 && lancer.Learning == lancerNormal && learnedArena.State!.Experience == lancerNormal.Experience &&
+            learnedArena.State.Trees[0].Skills.SequenceEqual(arenaSource.Trees[0].Skills),
+            "真实魔枪士自动方案按本版85级补正成功，只修改决斗指定页，不修改真实等级经验或普通双树");
+        var trainingQuest = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf).Get(2672);
+        var trainingRole = lancer with { Position = new(10, 4, 10, 10), ActiveMainQuests =
+            [new(0,2672,DfoServer.Game.Pvp.PvpTrainingProgress.Initial(trainingQuest)) { AcceptanceId = Guid.NewGuid() }] };
+        var trainingPlan = DfoServer.Game.Pvp.PvpTrainingSkillPlan.Prepare(trainingRole, automatic with {Mode=3},
+            actual, global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf), DfoServer.Game.Pvp.PvpTrainingSkills.Level(lancer,actual));
+        That(trainingPlan is not null && trainingPlan.ActiveAfter.Single().ConditionState == 262656 &&
+            trainingPlan.After.Learning.Trees[1].Skills.Any(skill => skill.Id == 2 && skill.Level == 43) &&
+            trainingRole.Learning == lancerNormal, "同一原生自动方案在2672道场也按决斗补正，只清自动加点通道");
+    }
+
     public static void Run(PvfArchive pvf, CharacterCatalog characters)
     {
         int checks = Count;
@@ -242,9 +273,11 @@ internal static class SkillLearningTests
         var arenaCharacter=new Character(1,0,"ArenaGrowth",0,new(10,0,0,0),null)
             {Level=50,Learning=ordinary50,PvpTrainingSkills=new(arenaPaid,0,Guid.Empty){Arena=arenaPaid}};
         var arena50=DfoServer.Game.Pvp.PvpTrainingSkills.ArenaSource(arenaCharacter,actual);
-        That(arena50.Trees[0].Tp==1 && arena50.Trees[0].Sp==ordinary50.Trees[0].Sp-15 &&
+        byte pvpLevel = actual.PvpRevisionLevel ?? arenaCharacter.Level;
+        That(arena50.Trees[0].Tp==actual.TotalTp(pvpLevel) && arena50.Trees[0].Sp==actual.TotalSp(pvpLevel)-15 &&
             arena50.Trees[0].Skills.Single(skill=>skill.Id==5).Level==arenaPaid.Trees[0].Skills.Single(skill=>skill.Id==5).Level &&
-            arenaPaid.Trees[0].Tp==0,"正式PK投影按当前等级即时重算SP/TP，保留独立付费等级和原存档");
+            arenaPaid.Trees[0].Tp==0,"正式PK投影按资源补正等级重算SP/TP，保留独立付费等级和普通存档");
+        RunPvpLevel(pvf);
         That(actualProfile.Skills.Length == 6 && realInitial.Success && realInitial.State!.Trees.All(tree => tree.Sp == 0 && tree.Tp == 0),
             "real job0 all six initial skills bind with zero points including mastered resource without range");
         That(realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).SequenceEqual(actualProfile.Skills)) &&

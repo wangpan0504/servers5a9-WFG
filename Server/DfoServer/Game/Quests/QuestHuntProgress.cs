@@ -8,6 +8,7 @@ namespace DfoServer.Game.Quests;
 internal readonly record struct QuestHuntTarget(int DungeonId, int MinimumDifficulty, int MonsterId, int Count)
 {
     public int EnemyType { get; init; } = 1;
+    public QuestDungeonSelector? Scope { get; init; }
 }
 
 // Full03分类2/6分别读取四/五元组，怪物、APC与被动物件消费服务端绑定的独立事件。
@@ -34,21 +35,21 @@ internal static class QuestHuntProgress
             targets = [new(-1,-1,-1,quest.IntData[4]), new(-1,-1,-3,quest.IntData[9])];
             return true;
         }
-        bool monsterOnly = quest.Condition == "[hunt monster]";
-        int stride = monsterOnly ? 4 : 5;
-        if (quest.Condition is not ("[hunt enemy]" or "[hunt monster]") || quest.SubType != -1 || !QuestCoverage.HasOrdinaryDeclarations(quest) ||
+        if (quest.Condition is not ("[hunt enemy]" or "[hunt monster]") || quest.SubType is not (-1 or 0) || !QuestCoverage.HasOrdinaryDeclarations(quest) ||
             quest.Grade == "[training]" || QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Hidden or QuestResourceEntry.Creature) ||
-            quest.Definition is not { Diagnostics.Length: 0 } ||
-            quest.IntData.Count < stride || quest.IntData.Count > stride*3 || quest.IntData.Count % stride != 0) return false;
+            quest.Definition is not { Diagnostics.Length: 0 }) return false;
+        var parsed = QuestTargetSchema.Read(quest);
+        if (parsed.State != QuestParameterState.Parsed || parsed.Hunts.IsEmpty || parsed.Hunts.Any(row => !QuestDungeonScope.CanEvaluate(row.Dungeon, quest))) return false;
         var rows = ImmutableArray.CreateBuilder<QuestHuntTarget>();
-        for (int at = 0; at < quest.IntData.Count; at += stride)
+        foreach (var objective in parsed.Hunts)
         {
-            int dungeon = quest.IntData[at], difficulty = quest.IntData[at + 1], monster = quest.IntData[at + 2], count = quest.IntData[at + stride - 1];
-            int enemyType = monsterOnly ? 1 : quest.IntData[at + 3];
-            if (dungeon < -1 || difficulty is < -1 or > 3 || monster <= 0 && !(monsterOnly && (monster is -5 or -3 || EliteSelectorAllowed(quest,dungeon,monster) || OrdinaryMonsterSelectorAllowed(quest,dungeon,monster))) ||
-                enemyType is not (1 or 2 or 3) || count is < 1 or > 511)
-                return false;
-            rows.Add(new(dungeon,difficulty,monster,count) { EnemyType = enemyType });
+            int dungeon = objective.Dungeon.Kind == QuestDungeonSelectorKind.Dungeon ? objective.Dungeon.Id : -1;
+            int monster = objective.Enemy;
+            if (monster <= 0 && monster is not (-5 or -3 or -4) && !EliteSelectorAllowed(quest, dungeon, monster) &&
+                !OrdinaryMonsterSelectorAllowed(quest, dungeon, monster)) return false;
+            if (objective.EnemyType is 2 or 3 or 10 && monster <= 0 && monster != -5) return false;
+            rows.Add(new(dungeon, objective.Dungeon.Difficulty, monster, objective.Count)
+                { EnemyType = objective.EnemyType, Scope = objective.Dungeon });
         }
         targets = rows.ToImmutable(); return true;
     }
@@ -102,8 +103,7 @@ internal static class QuestHuntProgress
                 {
                     var target = hunt[index];
                     if ((row.ConditionState >> (index*9) & 511) > 0 && target.EnemyType == 3 &&
-                        (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
-                        (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) targets.Add((row,quest,target));
+                        MatchesEntry(target, quest, entry)) targets.Add((row,quest,target));
                 }
         if (targets.Count != 1) return active.ToImmutableArray();
         var match = targets[0];
@@ -126,12 +126,15 @@ internal static class QuestHuntProgress
         {
             var target = targets[at]; uint count = scalar >> (at * 9) & 511;
             // Full03 type2的-3只接已确认普通SpawnType3；APC的rank8来源未闭合，不能并入。
-            if (count != 0 && target.EnemyType == enemyType && (target.MonsterId > 0 && target.MonsterId == templateId || target.MonsterId == -5 ||
+            if (count != 0 && (target.EnemyType == enemyType || target.EnemyType == 10 && enemyType is 1 or 2) && (target.MonsterId > 0 && target.MonsterId == templateId || target.MonsterId == -5 ||
                 target.MonsterId == -3 && ordinaryBoss || target.MonsterId == EliteMonsterSelector && elite ||
-                (daily || OrdinaryMonsterSelectorAllowed(quest,target.DungeonId,target.MonsterId)) && dailyMonster && target.MonsterId == -1 && !ordinaryBoss && templateId is not (>= 50000 and <= 51000) and not (>= 56000 and <= 60000)) &&
-                (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
-                (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) scalar -= 1u << (at * 9);
+                target.MonsterId == -4 && elite || dailyMonster && target.MonsterId == -1 && !ordinaryBoss && templateId is not (>= 50000 and <= 51000) and not (>= 56000 and <= 60000)) &&
+                MatchesEntry(target, quest, entry)) scalar -= 1u << (at * 9);
         }
         return scalar == row.ConditionState ? row : row with { ConditionState = scalar };
     }).ToImmutableArray();
+
+    static bool MatchesEntry(QuestHuntTarget target, StoryQuest quest, DungeonEntryPlan entry) =>
+        QuestDungeonScope.Matches(target.Scope ?? new(target.DungeonId == -1 ? QuestDungeonSelectorKind.Any : QuestDungeonSelectorKind.Dungeon,
+            target.DungeonId, target.MinimumDifficulty), quest, entry);
 }

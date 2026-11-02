@@ -125,7 +125,7 @@ internal sealed partial class GameSession
             incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
             incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
-        var rank = quest.Condition == "[pvp rank]" ? pvpRatings?.Capture(owner,expected.Id) : null;
+        var rank = QuestStateProgress.Type(quest) is 5 or 27 ? pvpRatings?.Capture(owner,expected.Id) : null;
         QuestCompletionPreparation preparation;
         if (captured.Pending is { } pending && pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase &&
             pending.DungeonIdentity == captured.Identity && ReferenceEquals(pending.Plan.Expected, expected) &&

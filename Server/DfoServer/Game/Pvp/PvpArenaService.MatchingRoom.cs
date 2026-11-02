@@ -47,7 +47,8 @@ internal sealed partial class PvpArenaService
                         {
                             var identity = load.Characters[at];
                             var actor = ticket.Actor with { Character = identity.Character };
-                            var seat = room.Join(actor.Owner.Account, actor.Character.Id, (byte)at, job: actor.Character.Job) ??
+                            var seat = room.Join(actor.Owner.Account, actor.Character.Id, (byte)at, job: actor.Character.Job,
+                                questBindings: Quests.QuestPvpProgress.Bindings(actor.Character.ActiveMainQuests, quests)) ??
                                 throw new InvalidOperationException("已核验的匹配成员无法建立席位");
                             return new PvpArenaMembership(room, seat.Token, actor, identity);
                         }).ToImmutableArray();

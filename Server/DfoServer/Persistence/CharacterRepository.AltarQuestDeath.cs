@@ -10,7 +10,8 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     DungeonGrowthCommit CommitAltarQuestDeath(AccountOwners.Lease owner, Character expected,
-        SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog growth)
+        SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog growth,
+        QuestDropPlan? questDrops)
     {
         if (quests is null || !run.Entry.IsAltar || !run.IsPendingDeath(prepared) ||
             prepared.Death.Identity.CharacterId != expected.Id ||
@@ -18,6 +19,9 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("祭坛任务提交需要原角色死亡和明确的专用零奖励规则");
         var death = prepared.Death;
         var identity = death.Identity;
+        if (questDrops is not null && (!ReferenceEquals(questDrops.Expected, expected) || questDrops.EventId != death.EventId ||
+            questDrops.Identity != identity || questDrops.MapId != prepared.Result.Snapshot.CurrentMap.Id))
+            throw new InvalidDataException("祭坛任务掉落不是原死亡、角色和地图的冻结规划");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitAltarQuestDeath", deferred: true);
         using var tx = write.Transaction;
@@ -47,22 +51,30 @@ internal sealed partial class CharacterRepository
         if (current.Id != expected.Id) throw new InvalidOperationException("祭坛任务角色已变化");
         if (duplicate)
         {
+            VerifyQuestDrops(db, tx, owner.Account, expected.Id, death.EventId, questDrops);
             tx.Commit();
             return new(current, true);
         }
         if (current.Revision != expected.Revision || !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests))
             throw new InvalidOperationException("祭坛任务revision或原接取已变化");
-        var active = QuestHuntProgress.MonsterDeath(current.ActiveMainQuests, run.Entry, quests, prepared.Monster);
-        if (active.SequenceEqual(current.ActiveMainQuests))
+        var inventory = questDrops?.Inventory;
+        var inventoryCharacter = inventory is null ? current : CommitInventoryInTransaction(db, tx, owner, current, expected, inventory);
+        var active = QuestHuntProgress.MonsterDeath(inventoryCharacter.ActiveMainQuests, run.Entry, quests, prepared.Monster);
+        if (inventory is not null)
+            active = QuestInventoryProgress.Refresh(active, inventoryCharacter.Inventory, quests,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), QuestEligibility.Completed(current));
+        if (active.SequenceEqual(current.ActiveMainQuests) && questDrops?.Outcomes.Length is not > 0)
             throw new InvalidOperationException("祭坛非目标死亡不应申请任务写事务");
         var plan = CharacterGrowthPlan.WithoutExperience(current, growth);
         if (!plan.Success) throw new InvalidDataException("祭坛零经验候选被拒绝: " + plan.Failure);
-        command.Parameters.AddWithValue("$revision", current.Revision);
-        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
+        command.Parameters.AddWithValue("$increment", inventory?.Changed == true ? 0 : 1);
+        command.CommandText = "UPDATE characters SET revision=revision+$increment WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("祭坛任务revision已变化");
-        WriteQuestConditions(db, tx, expected.Id, current.ActiveMainQuests, active);
+        WriteQuestConditions(db, tx, expected.Id, inventoryCharacter.ActiveMainQuests, active);
         WriteDungeonGrowthReceipt(db, tx, owner, current, prepared, reward, plan.Plan!, 0);
-        var committed = current with { Revision = checked(current.Revision + 1), ActiveMainQuests = ReadActiveMainQuests(db, expected.Id, tx) };
+        if (questDrops is not null) SaveQuestDrops(db, tx, owner.Account, questDrops, inventoryCharacter.Inventory);
+        var committed = inventoryCharacter with { Revision = checked(current.Revision + 1), ActiveMainQuests = ReadActiveMainQuests(db, expected.Id, tx) };
         tx.Commit();
         return new(committed, false);
     }

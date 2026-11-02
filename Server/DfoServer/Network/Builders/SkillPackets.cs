@@ -51,6 +51,8 @@ internal static class SkillPackets
 
     public static byte[] Reset(byte context) => context <= 1 ? [1, context, 1] :
         throw new InvalidDataException("重置上下文非法");
+    // ACK491的原生失败消费者265F090明确处理19；不能让客户端一直等待清空完成。
+    public static byte[] ResetFailure() => [0, 19, 0];
 
     // NOTI66 type2的剩余秒数，同时驱动客户端达人超等级技能状态。
     public static byte[] ExpertContract(long expiresAt, long now)
@@ -111,8 +113,8 @@ internal static class SkillPackets
         => Changes(context, mode, state, changes, allowEmpty: mode == 1);
 
     // 仅正式训练事务可使用mode3，普通Success继续拒绝该模式。
-    public static byte[] TrainingSuccess(byte mode,CharacterLearningState state,IReadOnlyList<LearnedSkill> changes)
-        => Changes(0,mode,state,changes,allowEmpty:mode is 1 or 3,training:true);
+    public static byte[] TrainingSuccess(byte context,byte mode,CharacterLearningState state,IReadOnlyList<LearnedSkill> changes)
+        => Changes(context,mode,state,changes,allowEmpty:mode is 1 or 3,training:true);
 
     // 成长差量沿用ACK29；空列表只恢复当前树及点数，不清理客户端技能运行对象。
     public static byte[] Growth(byte context, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes)

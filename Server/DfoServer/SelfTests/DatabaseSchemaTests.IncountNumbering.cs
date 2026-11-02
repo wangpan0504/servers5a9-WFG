@@ -10,7 +10,7 @@ internal static partial class DatabaseSchemaTests
     const string MainlineV62To66Sql = "SELECT (SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('character_growup_change','character_consumable_states'))" +
         "+(SELECT count(*) FROM pragma_table_info('characters') WHERE name='blacklist_count')" +
         "+(SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='other_bonus_experience')" +
-        "+(SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts' AND sql LIKE '%60,64,65,67,70%')";
+        "+(SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts' AND (sql LIKE '%60,64,65,67,70%' OR sql LIKE '%60,62,63,64,65,66,67,68,69,70,71%'))";
     const string SkinColumnSql = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='weapon_skin_state'";
     const string PermanentStatSql = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_permanent_stats'";
     const string ProficiencyGainSql = "SELECT (SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='proficiency_gain')" +
@@ -350,6 +350,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindToLocalIncountNumbering(SqliteConnection db, int local)
     {
+        RewindQuestTargetTypes(db);
         RemoveExperienceBonusSchema(db);
         RemoveMainlineAdventureAdditions(db);
         Execute(db, "ALTER TABLE characters DROP COLUMN blacklist_count; ALTER TABLE characters DROP COLUMN weapon_skin_state");

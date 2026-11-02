@@ -165,7 +165,7 @@ public static class ServerApplication
             {
                 using var output = Console.OpenStandardOutput();
                 var scanItems = new ItemResources(pvf);
-                var scanQuests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(scanItems.Creatures);
+                var scanQuests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(scanItems.Creatures).WithItems(scanItems.Items);
                 var scanDungeons = DungeonCatalog.Load(pvf);
                 var scanRooms = DungeonRoomCatalog.Load(pvf);
                 var scanHope = OperationHopeCatalog.Load(pvf,scanDungeons,scanQuests,scanRooms);
@@ -219,7 +219,7 @@ public static class ServerApplication
                 return 0;
             }
 
-            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures));
+            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures).WithItems(itemResources.Items));
             // 冒险团经验账本与角色成长共用同一份等级经验表，必须在仓储建立前装配。
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));

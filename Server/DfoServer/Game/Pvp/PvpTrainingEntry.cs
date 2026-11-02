@@ -28,7 +28,8 @@ internal sealed record PvpTrainingEntry(Character Expected, ActiveMainQuest Ques
         if(!PvpTrainingExposure.Allows(character,quest) || active is null || active.AcceptanceId==Guid.Empty || !PvpTrainingProgress.Valid(quest,active.ConditionState) ||
             active.ConditionState==0 || mode.Index is <0 or >254 || mode.Difficulty is <0 or >2 ||
             mode.Rounds is <1 or >255 || mode.Coins is <0 or >255 ||
-            opponents.FixedRounds.Count==0 && opponents.RandomOpponents.IsEmpty) return null;
+            // 职业块没有固定或随机对手时仍使用模式原池；81教学配置就是这一合法形式。
+            opponents.FixedRounds.Count==0 && opponents.RandomOpponents.IsEmpty && mode.RandomOpponents.IsEmpty) return null;
         return new(character,active,mode);
     }
 }

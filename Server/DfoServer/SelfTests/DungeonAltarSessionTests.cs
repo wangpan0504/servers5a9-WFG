@@ -42,10 +42,10 @@ internal static class DungeonAltarSessionTests
             That(accepted?.Commit is not null, "合法接取祭坛关联支线：" + questId);
             That(linked.Session.BeginDungeonSelection() is not null, "关联任务祭坛建立原选图上下文");
             That(linked.Session.EnterFormalDungeon(dungeonId, (uint)(questId + 1), 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
-                linked.Session.EnterFormalDungeon(dungeonId == 11006 ? 11007u : 11006u, questId, 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
+                linked.Session.EnterFormalDungeon(dungeonId, questId, 1, dungeons, rooms, pieces: items.EpicPieces) is null &&
                 linked.Session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.All(row => row.Daily == 3) &&
                 linked.Session.Selected!.Inventory.Gold == 500000 && linked.Session.DungeonSnapshot is null,
-                "未接取或目标属于另一祭坛的任务仍拒绝，不扣费扣次或安装实例");
+                "未接取任务或祭坛不支持的难度仍拒绝，不扣费扣次或安装实例");
             var entered = linked.Session.EnterFormalDungeon(dungeonId, questId, 0, dungeons, rooms, pieces: items.EpicPieces);
             That(entered is not null, $"关联任务不阻断祭坛准入：{questId}/{linked.Session.LastFormalDungeonRejection}");
             That(entered!.Monsters.Altar is not null && entered.Entry.QuestId == questId && entered.Entry.RouteQuestId == 0 &&
@@ -150,6 +150,76 @@ internal static class DungeonAltarSessionTests
             That(finished.Receipt is not null && linked.Read().CompletedQuests.Contains(questId) &&
                 linked.Read().ActiveMainQuests.All(row => row.QuestId != questId),
                 "祭坛任务沿原领奖事务完成并移出活动列表：" + questId);
+        }
+        foreach (bool lost in new[] { false, true })
+        {
+            var clock = new Clock();
+            using var linked = New(clock, done.Append(5650).Distinct().ToArray(), lost);
+            That(linked.Session.ChangeQuest(5651, QuestLifecycleAction.Accept, resources.Quests,
+                items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
+                "真实5651寻物支线可合法接取");
+            That(linked.Session.BeginDungeonSelection() is not null, "5651建立原生祭坛选图上下文");
+            var entered = linked.Session.EnterFormalDungeon(11006, 5651, 0, dungeons, rooms,
+                drops: SelfTestCatalogs.MonsterDrops(archive), items: items.Items, draw: _ => 0, pieces: items.EpicPieces);
+            That(entered is not null, "接取5651后仍可进入无尽祭坛：" + linked.Session.LastFormalDungeonRejection);
+            var loaded = linked.Session.CompleteFormalDungeonLoading()!;
+            That(linked.Session.PrepareDungeonAltarUi(loaded), "寻物祭坛加载原生UI");
+            var current = linked.Session.StartDungeonAltar(loaded)!;
+            That(current.State.Plan.Actors.Any(actor => actor.Phase.MonsterId == 56004), "真实祭坛房间包含任务目标史莱姆王");
+            bool found = false;
+            while (!found && !current.State.Completed)
+            {
+                clock.AdvanceTo(current.Due!.Value);
+                current = linked.Session.TickDungeonAltar(current)!;
+                if (current.Batch is not { } batch) continue;
+                foreach (var actor in batch.Actors)
+                {
+                    if (actor.Phase.MonsterId != 56004)
+                    {
+                        current = linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth)!;
+                        continue;
+                    }
+                    var beforeDeath = linked.Read();
+                    var selected = linked.Session.Selected;
+                    if (lost)
+                    {
+                        Reject<IOException>(() => linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth),
+                            "祭坛任务材料已提交但返回丢失");
+                        That(ReferenceEquals(selected, linked.Session.Selected) && Held() == 1,
+                            "未知结果保留原在线快照及已落库任务材料");
+                    }
+                    else
+                    {
+                        linked.Sql("CREATE TRIGGER fail_altar_drop AFTER INSERT ON character_quest_drop_receipts BEGIN SELECT RAISE(ABORT,'altar drop rollback'); END");
+                        Reject<Microsoft.Data.Sqlite.SqliteException>(() => linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth),
+                            "祭坛材料回执晚期SQL失败");
+                        That(Held() == 0 && linked.Read().Revision == beforeDeath.Revision && ReferenceEquals(selected, linked.Session.Selected),
+                            "任务材料、条件、死亡与revision全部回滚");
+                        linked.Sql("DROP TRIGGER fail_altar_drop");
+                    }
+                    current = linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth)!;
+                    var committed = linked.Read();
+                    That(Held() == 1 && committed.ActiveMainQuests.Single(row => row.QuestId == 5651).ConditionState == 0 &&
+                        current.QuestCharacter == linked.Session.Selected && current.QuestDropSlots.Length == 1 &&
+                        current.QuestCharacter!.Inventory.Find(current.QuestDropSlots[0]) is { Uid: > 0, Core.ItemId: 4363 },
+                        "祭坛真实目标死亡后提交材料实际UID并提供库存/任务投影");
+                    That(committed.Revision == beforeDeath.Revision + 1 && committed.Learning.Experience == beforeDeath.Learning.Experience &&
+                        committed.Inventory.Gold == beforeDeath.Inventory.Gold,
+                        "祭坛材料与任务共用一次revision，不额外授予普通经验或金币");
+                    That(linked.Session.ObserveDungeonAltarDeaths([actor.ObjectKey], new string('B', 64), growth) is not null &&
+                        linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth) is not null &&
+                        Held() == 1 && linked.Read().Revision == committed.Revision,
+                        "39/255交叉重报和未知结果恢复不重复材料或任务进度");
+                    found = true;
+                    break;
+                }
+            }
+            That(found && linked.Session.ReturnFromFormalDungeon() is not null, "取得任务材料后可按原生路径回城");
+            var finished = linked.Session.FinishQuest(5651, ushort.MaxValue, resources.Quests,
+                SelfTestCatalogs.QuestRewardParameters(archive), items.Items, items.GoldLimits, items.EpicPieces, growth);
+            That(finished.Receipt is not null && linked.Read().CompletedQuests.Contains(5651) && Held() == 0,
+                "5651按实际材料交付，完成任务后精确扣除碎片");
+            int Held() => linked.Read().Inventory.Items.Where(item => item.Core.ItemId == 4363).Sum(item => item.Core.Count);
         }
         foreach (uint dungeonId in new uint[] { 11006, 11007 })
         {
@@ -347,10 +417,10 @@ internal static class DungeonAltarSessionTests
         }
         Console.WriteLine($"PASS {Count-before} 实际祭坛入口、全波次、专用结算、复活窗口和币上限断言");
 
-        QuestSceneTests.Fixture New(Clock clock, int[]? completed = null)
+        QuestSceneTests.Fixture New(Clock clock, int[]? completed = null, bool loseGrowth = false)
         {
             var fixture = new QuestSceneTests.Fixture(resources.Towns,resources.Characters,resources.Learning,growth,
-                resources.Quests,false,70,completed ?? done,position:position,timeProvider:clock);
+                resources.Quests,false,70,completed ?? done,loseGrowth:loseGrowth,position:position,timeProvider:clock);
             That(fixture.Session.MutateInventory(c => CurrencyService.SetGold(c,500000)).Accepted,"准备隔离角色祭坛费用");
             return fixture;
         }

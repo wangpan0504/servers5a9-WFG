@@ -12,6 +12,7 @@ internal sealed record PvpArenaFighter(Guid Membership, ushort CharacterId, byte
     public byte? Job { get; init; }
     public PvpRatingSnapshot? Rating { get; init; }
     public PvpTotalTeam? TotalTeam { get; init; }
+    public ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest> QuestBindings { get; init; } = [];
 }
 internal sealed record PvpArenaResult(Guid MatchId, ImmutableArray<PvpArenaStanding> Standings, bool Forfeit);
 internal sealed record PvpArenaStanding(PvpArenaFighter Fighter, PvpArenaOutcome Outcome);
@@ -97,7 +98,9 @@ internal sealed class PvpArenaMatch
         // 首次失败后保留同一快照，重试不能更换时间或参与者来绕过去重。
         pendingRecord ??= new(Id, room, channel, Mode, Result.Standings.Select(row =>
             new PvpArenaResultParticipant(row.Fighter.Account, row.Fighter.CharacterId, row.Fighter.Seat,
-                row.Fighter.Team, row.Outcome) { Rating = row.Fighter.Rating, TotalTeam = row.Fighter.TotalTeam, Job = row.Fighter.Job, Kills = Kills(row.Fighter.Membership) }).ToImmutableArray(), Result.Forfeit, now.ToUnixTimeSeconds())
+                row.Fighter.Team, row.Outcome) { Rating = row.Fighter.Rating, TotalTeam = row.Fighter.TotalTeam, Job = row.Fighter.Job,
+                    QuestBindings = row.Fighter.QuestBindings.IsDefaultOrEmpty ? null : row.Fighter.QuestBindings,
+                    Kills = Kills(row.Fighter.Membership) }).ToImmutableArray(), Result.Forfeit, now.ToUnixTimeSeconds())
             { RatingMode = ratingMode };
         pendingRecord.Validate();
         return pendingRecord;

@@ -26,7 +26,7 @@ internal static class DungeonKillExperiencePolicy
 {
     internal const string AltarQuestDeathRule = "altar-quest-death-no-kill-reward-v1";
 
-    // 祭坛击杀仅产生任务死亡事实；经验与物品归bloodclearreward专用结算。
+    // 祭坛击杀只推进任务及其材料；普通经验与普通物品归bloodclearreward专用结算。
     public static DungeonExperienceReward PlanAltarQuestDeath(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared)
     {
         if (!run.Entry.IsAltar || !run.IsPendingDeath(prepared))

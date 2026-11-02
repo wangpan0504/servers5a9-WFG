@@ -25,9 +25,9 @@ internal static class QuestPlayOnlyTests
     {
         int checks = Count;
         var quest = PlayQuest();
-        That(QuestStateProgress.Type(quest) == 49 && QuestStateProgress.Type(quest with { SubType = 0 }) is null &&
-            QuestStateProgress.Type(quest with { IntData = [1] }) is null,
-            "play only仅接入本版type49、sub-1、无附加整数的已确认形状");
+        That(QuestStateProgress.Type(quest) == 49 && QuestStateProgress.Type(quest with { SubType = 0 }) == 49 &&
+            QuestStateProgress.Type(quest with { SubType = 1 }) is null && QuestStateProgress.Type(quest with { IntData = [1] }) is null,
+            "play only接受原生默认0和旧显式-1，不忽略未知子型或附加整数");
         var catalog = new QuestCatalog(new() { [quest.Id] = quest });
         var accepted = new ActiveMainQuest(3,100,1) { AcceptanceId = Guid.NewGuid() };
         for (byte job = 0; job < 16; job++)

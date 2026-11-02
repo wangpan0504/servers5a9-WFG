@@ -34,7 +34,7 @@ internal static class PvpTrainingSkillsTests
                 SkillLearning.Plan(0,0,60,source,command,(_,_)=>definition);
             var request=new SkillLearningCommand(0,3,[new(5,false,1)]);
             That(PvpTrainingSkillPlan.Prepare(original with {Position=new(38,1,10,10)},request,quests,Learn) is null &&
-                PvpTrainingSkillPlan.Prepare(original,request with {Context=1},quests,Learn) is null &&
+                PvpTrainingSkillPlan.Prepare(original,request with {Context=2},quests,Learn) is null &&
                 PvpTrainingSkillPlan.Prepare(original,request with {Mode=2},quests,Learn) is null,
                 "训练加点限定原训练地区、主树和已证模式");
             That(PvpTrainingSkillPlan.Prepare(original with {ActiveMainQuests=[]},request,quests,Learn) is null,

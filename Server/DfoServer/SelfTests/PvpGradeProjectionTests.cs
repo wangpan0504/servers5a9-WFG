@@ -98,7 +98,7 @@ internal static class PvpGradeProjectionTests
             return new(1, State);
         }
         public PvpRatingClaim? ReadPvpRatingClaim(AccountOwners.Lease owner, ushort characterId, Guid matchId) => throw new InvalidOperationException();
-        public Guid[] ReadPendingPvpRatings(AccountOwners.Lease owner, ushort characterId, int limit) => throw new InvalidOperationException();
+        public Guid[] ReadPendingPvpRatings(AccountOwners.Lease owner, ushort characterId, int limit) => [];
         public PvpRatingReceipt CommitPvpRating(AccountOwners.Lease owner, PvpRatingPlan plan) => throw new InvalidOperationException();
     }
 }

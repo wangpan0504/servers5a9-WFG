@@ -8,6 +8,17 @@ internal enum PvpTrainingFact { SkillsCommitted, ComboCompleted, OpponentsDefeat
 // 正式调用方还须绑定训练实例、角色、选角及接取UUID，取得已提交的权威事实后才能保存结果。
 internal static class PvpTrainingProgress
 {
+    // 015D9490先按原接取选择教学模式；015D9535..015D9548只发送该模式的difficulty+1。
+    // 2679保留玩家选择的普通道场难度，完成资格仍单独检查勇士难度。
+    public static int ArcadeIndex(StoryQuest quest,byte difficultyFlag) =>
+        !Matches(quest) || difficultyFlag is <1 or >3 ? -1 : quest.Id switch
+        {
+            2672 or 2676 => 80,
+            2673 or 2677 => 81,
+            2674 or 2678 => 82,
+            _ => difficultyFlag-1
+        };
+
     public static bool Matches(StoryQuest quest)
     {
         int mode = quest.Id switch { 2672 or 2676 or 2678 => 0, 2674 => 1, 2673 or 2677 or 2679 => 2, _ => -1 };

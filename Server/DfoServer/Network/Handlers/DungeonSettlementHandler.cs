@@ -612,6 +612,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 log.Write("hell_party_entry_ticket_consumed", new { Connection = context.Id, retry.Entry.DungeonId,
                     retry.HellTicket, retry.LegendTicket, retry.EntryFatigueCharged, retry.Snapshot.Identity });
             }
+            await QuestProjection.DungeonTerrainBypassAsync(context, retry.Entry, RetryGuard);
             return CommandResult.Handled;
         }
         if (option == 1)

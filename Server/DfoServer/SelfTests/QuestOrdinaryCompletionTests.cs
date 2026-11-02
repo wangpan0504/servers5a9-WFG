@@ -883,7 +883,7 @@ internal static class QuestOrdinaryCompletionTests
         var parameters=global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         var actual=global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf).Get(3868);
         // 复用真实三选项，NPC/等级和前置映射到已有合成场景；不将此测试当作Windows对话验收。
-        var question=actual with {MinimumLevel=1,Npc=1,IntData=[2],Prerequisites=[],
+        var question=actual with {MinimumLevel=1,Npc=2,IntData=[1],Prerequisites=[],
             Definition=actual.Definition! with {PrerequisiteGroups=[]}};
         var branches=Enumerable.Range(0,3).Select(answer=>QuestEligibilityTests.Quest(100+answer) with
             {Definition=new([]) {RequiredAnswers=[new(3868,answer)]}}).ToArray();
@@ -913,6 +913,11 @@ internal static class QuestOrdinaryCompletionTests
             That(f.Read().ActiveMainQuests.Single().ConditionState==QuestQuestionProgress.Unanswered &&
                 QuestCompletionPlan.Prepare(f.Read(),question,ushort.MaxValue,f.Catalog,parameters,items.Items,
                     items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,"重选不把客户端进行中1写回成第二个答案");
+            var wrongNpc = new QuestCatalog(new[] { question with { Npc = 99999, IntData = [2] } }.Concat(branches).ToDictionary(row => row.Id));
+            That(f.Session.ChangeQuest(3868, QuestLifecycleAction.Condition, wrongNpc, items.Items, items.GoldLimits,
+                items.EpicPieces, new(null, 0, choice))?.Commit is null &&
+                f.Read().ActiveMainQuests.Single().ConditionState == QuestQuestionProgress.Unanswered,
+                "int data命中当前NPC也不能代替独立npc index字段");
             f.Change(3868,QuestLifecycleAction.Condition,new(null,0,choice));
             That(f.Read().ActiveMainQuests.Single().ConditionState==choice &&
                 QuestQuestionProgress.ClientState(choice)==choice,"选择0/1/2继续保留原零基答案");

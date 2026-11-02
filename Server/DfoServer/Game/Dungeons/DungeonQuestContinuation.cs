@@ -5,7 +5,10 @@ using DfoServer.GameWorld.Quests;
 
 namespace DfoServer.Game.Dungeons;
 
-internal sealed record DungeonQuestContinuation(ActiveMainQuest Quest, uint DungeonId, byte Difficulty);
+internal sealed record DungeonQuestContinuation(ActiveMainQuest Quest, uint DungeonId, byte Difficulty)
+{
+    public byte? RequestedDifficulty { get; init; }
+}
 
 internal static class DungeonQuestContinuationRules
 {
@@ -40,7 +43,7 @@ internal static class DungeonQuestContinuationRules
                 var dungeon = dungeons.Get(id);
                 connected |= dungeon.Mazes.Any(maze => maze.HasActiveQuestConnection(active.QuestId) ||
                     next.MainQuest is > 0 && maze.HasActiveQuestConnection(next.MainQuest.Value));
-                if (DungeonEntryPlan.TryCreate(dungeons,character,checked((uint)id),active.QuestId,entry.Difficulty,
+                if (DungeonEntryPlan.TryCreate(dungeons,character,checked((uint)id),active.QuestId,entry.RequestedDifficulty ?? entry.Difficulty,
                     out var route,out _,quest: next,quests: quests)) routes.Add(route!);
             }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { }
@@ -48,7 +51,7 @@ internal static class DungeonQuestContinuationRules
         if (routes.Count == 1)
         {
             reason = "successor-dungeon-ready";
-            return new(active,routes[0].DungeonId,routes[0].Difficulty);
+            return new(active,routes[0].DungeonId,routes[0].Difficulty) { RequestedDifficulty = routes[0].RequestedDifficulty };
         }
         if (routes.Count == 0 && !connected && next.Definition!.Dungeons.Length == 0 && next.Condition == "[meet npc]")
         {

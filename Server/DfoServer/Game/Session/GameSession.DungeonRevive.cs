@@ -95,6 +95,7 @@ internal sealed partial class GameSession
                         formalDungeon.CharacterDead = false;
                         formalDungeon.AltarRevivalDue = null;
                         formalDungeon.ReviveCount++;
+                        formalDungeon.Run.QuestFacts.Revived();
                         if (formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton)
                             PartyDungeon?.RecordAntonRevival();
                     }

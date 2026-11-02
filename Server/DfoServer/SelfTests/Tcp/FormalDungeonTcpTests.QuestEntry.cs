@@ -55,24 +55,29 @@ internal static partial class FormalDungeonTcpTests
             long attempt = 0;
             bool auxiliary = scenario.Quest is 674 or 675;
             uint initial = scenario.Quest == 2948 || auxiliary ? QuestHuntProgress.Initial(resources.Quests.Get(scenario.Quest)) : 1;
-            foreach (ushort request in auxiliary ? new[] { checked((ushort)scenario.Quest) } : new[] { checked((ushort)scenario.Quest),(ushort)0 })
+            if (auxiliary)
+            {
+                peer.Send(31,[31,0,(byte)scenario.Quest,(byte)(scenario.Quest >> 8)]);
+                That(peer.Expect(1,31).Body[0] == 1,"装备槽资格任务由生产31合法接取"); RefreshedQuests(peer);
+            }
+            foreach (var (request, difficulty) in auxiliary
+                ? new[] { (checked((ushort)scenario.Quest),(byte)1), (checked((ushort)scenario.Quest),(byte)2) }
+                : new[] { (checked((ushort)scenario.Quest),(byte)0), ((ushort)0,(byte)0) })
             {
                 byte[] information = [];
                 byte[] map;
                 if (auxiliary)
                 {
-                    peer.Send(31,[31,0,(byte)scenario.Quest,(byte)(scenario.Quest >> 8)]);
-                    That(peer.Expect(1,31).Body[0] == 1,"装备槽资格任务由生产31合法接取"); RefreshedQuests(peer);
                     SelectMap(peer, incompleteHellQuest: incompleteHellQuest);
-                    var selection = Selection(1);
+                    var selection = Selection(difficulty);
                     BinaryPrimitives.WriteUInt32LittleEndian(selection,checked((uint)scenario.Dungeon));
                     BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),request);
                     string before = fixture.Snapshot();
-                    peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
-                    That(fixture.Snapshot() == before,"资格任务低于声明难度拒绝，不保存尝试或篡改接取");
-                    selection[4] = 2;
+                    var malformed = (byte[])selection.Clone(); malformed[4] = 255;
+                    peer.Send(16,malformed); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                    That(fixture.Snapshot() == before,"非法难度仍拒绝，不保存尝试或篡改接取");
                     peer.Send(16,selection); information=peer.Expect(0,28).Body; map=peer.Expect(0,29).Body;
-                    That(information[4] == 2,"原显式任务请求在拒绝后仍可按合法难度入场");
+                    That(information[4] == difficulty,"原显式猎杀任务不因目标最低难度阻拦普通入场");
                 }
                 else map = Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,
                     requestQuestId:request,incompleteHellQuest:incompleteHellQuest);

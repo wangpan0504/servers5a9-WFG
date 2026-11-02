@@ -39,6 +39,11 @@ internal static class PvpTrainingSessionTests
                 ? entry with {Rounds=PvpArcadeCatalog.Resolve(mode,opponents,_=>true)!.Allowed} : null;
             That(session.BeginPvpTraining(_=>throw new Exception("不应规划")) is null,"未就绪不解析训练资源");
             session.MarkReady(); var original=session.Selected!;
+            var skillContext=new DfoServer.Game.Skills.SkillLearningReceipt(original,owner.Generation,session.SelectionEpoch);
+            That(!session.HasPvpTrainingSkillContext &&
+                !session.MarkPvpTrainingSkillsQueued(skillContext with {SelectionEpoch=skillContext.SelectionEpoch-1}) &&
+                session.MarkPvpTrainingSkillsQueued(skillContext) && session.HasPvpTrainingSkillContext,
+                "训练初始化只记当前选角身份，不接受旧epoch建立上下文");
             var parties = new DfoServer.Game.Party.PartyService(repository);
             session.CurrentParty = () => parties.Current(session);
             That(parties.SetInformation(session, 0, DfoServer.Game.Party.PartySettings.Default).Accepted &&
@@ -52,6 +57,10 @@ internal static class PvpTrainingSessionTests
             That(PvpTrainingEntry.Prepare(original,quest with {Npc=324},mode,opponents) is null &&
                 PvpTrainingEntry.Prepare(original,quest,mode with {Rounds=0},opponents) is null,
                 "资源声明不匹配或零轮次不能规划训练");
+            var modePool=new PvpArcadeOpponents(FrozenDictionary<int,System.Collections.Immutable.ImmutableArray<int>>.Empty,[]);
+            That(PvpTrainingEntry.Prepare(original,quest,mode,modePool) is not null &&
+                PvpTrainingEntry.Prepare(original,quest,mode with {RandomOpponents=[]},modePool) is null,
+                "职业对手块为空时沿原模式随机池，所有有效来源均为空才拒绝训练");
             var entered=session.BeginPvpTraining(Plan)!;
             That(entered is not null && session.GetState()==UserState.PvpRoom && session.CanPublishPvpTraining(entered),"正式Session安装原epoch训练实例");
             That(session.BeginPvpTraining(Plan) is null && session.EndPvpTraining(Guid.NewGuid()) is null,"重复进入及错误实例不能替换或结束训练");
@@ -82,6 +91,8 @@ internal static class PvpTrainingSessionTests
             session.ReturnToRoster();
             That(!session.CanPublishPvpTraining(next) && session.GetState()==UserState.CharacterSelect,"小退清原训练实例");
             session.Select(created.Slot);session.MarkReady();
+            That(!session.HasPvpTrainingSkillContext && !session.MarkPvpTrainingSkillsQueued(skillContext),
+                "重新选角必须重新初始化，旧选角回调不能标记新训练上下文");
             That(session.GetState()==UserState.Town && !session.CanPublishPvpTraining(next) &&
                 session.Selected!.ActiveMainQuests.Single().ConditionState==262657,"重登不恢复训练或伪造任务事实");
             var read=repository.LoadCharacter(owner,created.Slot);

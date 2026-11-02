@@ -113,6 +113,8 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
     bool Holds(Character character, StoryQuest quest, long now)
     {
         if (quest.IntData.Count == 0 || quest.IntData.Count % 2 != 0) return false;
+        if (quest.IntData.Where((_, at) => at % 2 == 0).Any(id => id < 0))
+            QuestItemProgress.Prepare(character.Inventory, items);
         for (int at = 0; at < quest.IntData.Count; at += 2)
         {
             int itemId = quest.IntData[at], count = quest.IntData[at + 1];
@@ -120,9 +122,8 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             if (CurrencyWallet.RewardKind(itemId) is { } currency) held = CurrencyWallet.Get(character.Inventory, currency);
             else if (itemId > 0) held = character.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == itemId && !item.IsExpired(now)).Sum(item => (long)item.Core.Count);
             // 资源要求已孵化宠物；实例SealFlag不证明模板是成宠，未孵化蛋也可能为0。
-            else if (itemId == -7 && quest.SubType == 25) held = character.Inventory.Items.Count(item =>
-                item.Core.Kind == ItemKind.Creature && IsHatchedCreature(item, items.Get(item.Core.ItemId), now));
-            else if (itemId == -7) held = character.Inventory.Items.Count(item => item.Core.Kind == ItemKind.Avatar && !item.IsExpired(now));
+            else if (itemId is >= -7 and < 0)
+                held = QuestItemProgress.Count(character.Inventory, quest, itemId, items, now);
             else return false;
             if (count <= 0 || held < count) return false;
         }

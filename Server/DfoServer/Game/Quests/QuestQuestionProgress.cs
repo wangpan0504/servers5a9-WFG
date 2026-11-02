@@ -15,7 +15,7 @@ internal static class QuestQuestionProgress
     public static bool TryCount(StoryQuest quest,out int count)
     {
         count = 0;
-        if (quest.Condition != "[question]" || quest.SubType != -1 || quest.IntData is not [> 0] ||
+        if (quest.Condition != "[question]" || quest.SubType is not (-1 or 0) || quest.IntData is not [> 0] || quest.Npc <= 0 ||
             quest.Definition is not { Diagnostics.Length: 0 } definition) return false;
         var info = definition.Fields.Where(field => field.Name == "question info").ToArray();
         if (info is not [{ Children.Length: 0 }] || info[0].Values.Length is < 3 or > 129 ||

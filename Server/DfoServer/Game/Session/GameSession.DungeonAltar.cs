@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Characters;
 
@@ -20,12 +21,13 @@ internal sealed record DungeonAltarReceipt(long Generation, long SelectionEpoch,
     public DungeonAltarResultReceipt? Result { get; init; }
     public DfoServer.Game.Town.TownTravelReceipt? Returned { get; init; }
     public Character? QuestCharacter { get; init; }
+    public ImmutableArray<InventorySlot> QuestDropSlots { get; init; } = [];
 }
 
 internal sealed partial class GameSession
 {
     // 仅保留当前实例尚未发送的已提交投影；任务权威仍为Selected与数据库。
-    (Guid Instance, Character Character)? altarQuestProjection;
+    (Guid Instance, Character Character, ImmutableArray<InventorySlot> Slots)? altarQuestProjection;
     public bool HasDungeonAltar => owner.Execute(() => formalDungeon?.Run.CurrentAltar is not null);
 
     public DungeonAltarReceipt? WaitDungeonAltarRevival() => owner.Execute(() =>
@@ -133,15 +135,25 @@ internal sealed partial class GameSession
             var preparation = dungeon.Run.PrepareConfirmedDeath(issued.Death);
             if (preparation.Outcome == DungeonRunOutcome.Duplicate) { duplicate = true; continue; }
             if (preparation.Outcome != DungeonRunOutcome.Accepted || preparation.Pending is not { } pending) continue;
-            // 仅真实目标条件变化才提交死亡回执；SQL失败保留同一个pending，原对象重报可继续提交。
-            if (questCatalog is not null && !QuestHuntProgress.MonsterDeath(Selected.ActiveMainQuests,
+            // 任务材料与真实死亡同事务；失败复用原抽选，不能因祭坛使用专用结算而漏掉任务物品。
+            if (dungeon.QuestDrops is { } resources)
+                dungeon.PendingQuestDrop ??= QuestDropPlan.Create(Selected, dungeon.Entry, resources, pending.Death.EventId,
+                    pending.Death.Identity, pending.Result.Snapshot.CurrentMap.Id, pending.Monster.MonsterId,
+                    pending.Monster.EnemyType, pending.Result.ClearFact is not null, dungeon.Draw,
+                    (timeProvider ?? TimeProvider.System).GetUtcNow());
+            var questDrop = dungeon.PendingQuestDrop;
+            if (questDrop?.Outcomes.Length > 0 || questCatalog is not null && !QuestHuntProgress.MonsterDeath(Selected.ActiveMainQuests,
                     dungeon.Entry, questCatalog, pending.Monster).SequenceEqual(Selected.ActiveMainQuests))
             {
                 var committed = repository.CommitDungeonGrowth(owner, Selected, dungeon.Run, pending,
-                    DungeonKillExperiencePolicy.PlanAltarQuestDeath(dungeon.Run, pending), growth);
+                    DungeonKillExperiencePolicy.PlanAltarQuestDeath(dungeon.Run, pending), growth, questDrops: questDrop);
                 Selected = committed.Character;
-                altarQuestProjection = (dungeon.Run.Snapshot.Identity.InstanceId, committed.Character);
+                var slots = altarQuestProjection is { } previous && previous.Instance == dungeon.Run.Snapshot.Identity.InstanceId
+                    ? previous.Slots : [];
+                altarQuestProjection = (dungeon.Run.Snapshot.Identity.InstanceId, committed.Character,
+                    slots.Concat(questDrop?.Inventory.ChangedSlots ?? []).Distinct().ToImmutableArray());
             }
+            dungeon.PendingQuestDrop = null;
             // 祭坛奖励归专用结算，不伪造普通怪物经验/掉落。
             if (dungeon.Run.ConfirmCommittedDeath(pending).Outcome != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("祭坛死亡不能确认原实例候选");
@@ -187,10 +199,17 @@ internal sealed partial class GameSession
 
     long AltarClock() => (long)(timeProvider ?? TimeProvider.System).GetElapsedTime(formalDungeon!.AltarStartedTimestamp).TotalMilliseconds;
 
-    DungeonAltarReceipt AltarReceipt(DungeonAltarState state, long now) => new(owner.Generation, SelectionEpoch,
-        formalDungeon!.Run.Snapshot.Identity.InstanceId, formalDungeon.Run.Snapshot.CurrentMap, state,
-        state.Round, state.Difficulty, state.NextDue ?? state.ChoiceDue, now)
-        { DisplayRound = formalDungeon.Run.CompletedAltarRounds + state.Round,
-            QuestCharacter = altarQuestProjection is { } projection && projection.Instance == formalDungeon.Run.Snapshot.Identity.InstanceId &&
-                ReferenceEquals(projection.Character, Selected) ? projection.Character : null };
+    DungeonAltarReceipt AltarReceipt(DungeonAltarState state, long now)
+    {
+        var dungeon = formalDungeon!;
+        var projection = altarQuestProjection is { } pending && pending.Instance == dungeon.Run.Snapshot.Identity.InstanceId &&
+            ReferenceEquals(pending.Character, Selected) ? altarQuestProjection : null;
+        return new(owner.Generation, SelectionEpoch, dungeon.Run.Snapshot.Identity.InstanceId, dungeon.Run.Snapshot.CurrentMap, state,
+            state.Round, state.Difficulty, state.NextDue ?? state.ChoiceDue, now)
+        {
+            DisplayRound = dungeon.Run.CompletedAltarRounds + state.Round,
+            QuestCharacter = projection?.Character,
+            QuestDropSlots = projection?.Slots ?? []
+        };
+    }
 }

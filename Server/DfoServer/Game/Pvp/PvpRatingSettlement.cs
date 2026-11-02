@@ -4,7 +4,14 @@ namespace DfoServer.Game.Pvp;
 
 internal sealed record PvpRatingSnapshot(long Revision, PvpRatingState State);
 internal sealed record PvpRatingReceipt(Guid MatchId, ushort CharacterId, string Account, PvpArenaOutcome Outcome,
-    long BeforeRevision, long Revision, PvpRatingChange Change, string RuleVersion);
+    long BeforeRevision, long Revision, PvpRatingChange Change, string RuleVersion)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public PvpQuestAdvance? QuestAdvance { get; init; }
+}
+internal sealed record PvpQuestAdvance(long BeforeRevision, long Revision,
+    System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest> Before,
+    System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.ActiveMainQuest> After);
 internal sealed record PvpRatingClaim(Guid MatchId, ushort CharacterId, PvpRatingMode Mode, PvpArenaOutcome Outcome,
     PvpRatingReceipt? Receipt)
 {
@@ -68,10 +75,13 @@ internal sealed class PvpRatingSettlement(IPvpRatingStore store, PvpRatingCalcul
         return store.ReadPendingPvpRatings(owner, characterId, 1).FirstOrDefault() == matchId;
     });
 
-    public bool Recover(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
+    public bool Recover(AccountOwners.Lease owner, ushort characterId, Action<PvpRatingReceipt>? applied = null) => owner.Execute(() =>
     {
         foreach (var match in store.ReadPendingPvpRatings(owner, characterId, 32))
-            Settle(owner, characterId, match);
+        {
+            var receipt = Settle(owner, characterId, match);
+            applied?.Invoke(receipt);
+        }
         return store.ReadPendingPvpRatings(owner, characterId, 1).Length == 0;
     });
 }

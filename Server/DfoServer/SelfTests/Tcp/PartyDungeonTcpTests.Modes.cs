@@ -121,7 +121,8 @@ internal static partial class PartyDungeonTcpTests
         foreach (var scenario in new[] { "quest","short","rollback","success" })
         {
             using var group = new Coop(fixture,resources,"h"+scenario,position,done.ToArray(),95,2,
-                tickets:scenario=="short" ? 29 : 90,withoutHellQuest:scenario=="quest");
+                tickets:scenario=="short" ? 29 : 90,withoutHellQuest:scenario=="quest",
+                leaderTerrainQuest: scenario=="success" ? (ushort)5958 : null);
             group.Join(); group.Open(scenario == "quest" ? [1] : []);
             string before=fixture.Snapshot();
             if (scenario=="rollback") fixture.Sql("CREATE TRIGGER reject_coop_hell BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id="+
@@ -142,6 +143,16 @@ internal static partial class PartyDungeonTcpTests
                 continue;
             }
             group.ReadEntry(rows);
+            const string terrainText = "已优先进入深渊模式地下城， 部分任务可能无法在本次通关中完成";
+            byte[] encodedTerrainText = CharacterName.Encoding.GetBytes(terrainText);
+            var terrainNotices = rows[0].Where(packet => packet is {Kind:0,Opcode:502}).ToArray();
+            That(terrainNotices is [{Body:var notice}] && notice.Length==5+encodedTerrainText.Length && notice[0]==2 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(notice.AsSpan(1))==encodedTerrainText.Length &&
+                notice.AsSpan(5).SequenceEqual(encodedTerrainText) && rows[1].All(packet=>packet.Opcode!=502),
+                "深渊优先特殊任务地形后只向有该要求的本人发送一次502聊天固定文本，不误弹窗或全队广播");
+            That(fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE quest_id=5958")==
+                group.TerrainQuestBefore && group.Information[7]==0,
+                "生产16进入普通组成的深渊迷宫，入场不改写特殊地图任务的接取和条件");
             That(rows.All(r => r.Any(p => p is { Kind:0,Opcode:14 })) && group.Information[14]==1 && group.Map[7]==1,
                 "深渊全员扣票、安装相同模式和路线并各自同步背包");
             That(group.Peers.All(p => fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=3330",p.Id) is [[60L]]),
@@ -312,12 +323,14 @@ internal static partial class PartyDungeonTcpTests
         public byte[] Map { get; private set; }=[];
         public uint LegendTarget { get; private set; }
         public WirePacket[][] LastPackets { get; private set; }=[];
+        public string TerrainQuestBefore { get; }
         byte[] physicalMap=[];
         readonly ushort[] expectedIncompleteHellQuestSlots;
         public Coop(TcpTestFixture fixture,TcpTestResources resources,string prefix,Location position,int[] done,byte level,int count,
             int tickets=0,bool withoutHellQuest=false,int stones=0,
             IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? rewards=null,
-            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? leaderRewards=null, byte[]? memberJobs=null)
+            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? leaderRewards=null, byte[]? memberJobs=null,
+            ushort? leaderTerrainQuest=null)
         {
             this.fixture=fixture;
             Peers=new TcpPeer[count];
@@ -332,6 +345,8 @@ internal static partial class PartyDungeonTcpTests
                 var learning=SkillPointLedger.Synchronize(job, memberJobs is null ? (byte)0 : (byte)1,level,candidate.InitialLearning with { Experience=growth.GetLevelStartExperience(level) },resources.Learning);
                 var repo=new CharacterRepository(fixture.Database);
                 var role=repo.Create(owner,candidate with { GrowType = memberJobs is null ? (byte)0 : (byte)1, Level=level,AcceptedStoryLevel=level,InitialLearning=learning,
+                    ActiveMainQuests=i==0 && leaderTerrainQuest is { } questId
+                        ? [new(0,questId,1) {AcceptanceId=Guid.NewGuid()}] : candidate.ActiveMainQuests,
                     CompletedQuests=withoutHellQuest && i==1 ? done.Except([6080]).ToArray() : done });
                 if (FormalDungeonTcpTests.HasIncompleteHellQuest(resources, role)) blocked.Add((ushort)i);
                 if (tickets>0) role=repo.CommitInventory(owner,role,new(role.Inventory,role.Inventory with { Items=role.Inventory.Items.Add(
@@ -352,6 +367,7 @@ internal static partial class PartyDungeonTcpTests
             }
             expectedIncompleteHellQuestSlots = blocked.ToArray();
             All();
+            TerrainQuestBefore=fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE quest_id=5958");
         }
         public WirePacket[][] All(TcpPeer? requester=null)
         {

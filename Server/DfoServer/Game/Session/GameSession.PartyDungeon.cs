@@ -83,7 +83,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Guid instance, uint firstKey, PartyDungeonPreparation? shared = null, uint questId = 0,
-        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
+        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true, byte memberCount = 1)
     {
         LastFormalDungeonRejection = null;
         var retry = Phase == SessionPhase.Settlement ? FormalDungeonResultFocus() : null;
@@ -91,6 +91,7 @@ internal sealed partial class GameSession
         if (shared is not null)
         {
             var source = shared.Session.PreparedParty(shared).Dungeon.Entry;
+            difficulty = source.Difficulty;
             // 队员共用队长已冻结的物理迷宫，任务、槽位及接取身份仍由本人生成和提交。
             if (source.Hope is { } hope &&
                 !BeginOperationHope(hope.Catalog,catalog,requiredMaze:hope.MazeOrdinal)) return null;
@@ -100,7 +101,7 @@ internal sealed partial class GameSession
         }
         var prepared = PrepareFormalDungeon(dungeonId, questId, difficulty, catalog, rooms, drops, items, null, pieces, null, retry,
             prepareDrops: prepareDrops ?? previousDrops, shared: shared, partyFirstKey: firstKey, partyInstance: instance, partyAdmission: true,
-            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden);
+            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden, partyMemberCount: memberCount);
         if (prepared is null && shared is not null) shared.Session.LastFormalDungeonRejection = LastFormalDungeonRejection;
         return owner.Execute(() =>
         {

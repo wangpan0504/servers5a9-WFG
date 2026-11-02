@@ -197,7 +197,7 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
             if (fiendwarPrepared is null) foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
-                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, canUseDimensionHidden);
+                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, canUseDimensionHidden, checked((byte)party.Members.Length));
                 if (plan is null)
                 {
                     if (member.Actor.Session.LastFormalDungeonRejection is { } reason)

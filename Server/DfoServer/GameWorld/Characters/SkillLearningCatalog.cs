@@ -210,6 +210,7 @@ internal sealed class SkillLearningCatalog
     private SkillGrantCatalog grants = null!;
     private SkillCatalog points = null!;
     public int ExpertContractLevels { get; }
+    public byte? PvpRevisionLevel { get; private init; }
     public IReadOnlyList<ushort> SkillIds(byte job) => Array.AsReadOnly(paths.Keys.Where(key => key.Job == job)
         .Select(key => key.SkillId).Order().ToArray());
     public int ActiveExpertContractLevels(long expiresAt, long utcSeconds) => expiresAt > 0 && expiresAt > utcSeconds ? ExpertContractLevels : 0;
@@ -257,13 +258,29 @@ internal sealed class SkillLearningCatalog
             }
         }
 
-        var catalog = new SkillLearningCatalog(pvf, paths, expertContractLevels) { grants = SkillGrantCatalog.Load(pvf), points = SkillCatalog.Load(pvf) };
+        var catalog = new SkillLearningCatalog(pvf, paths, expertContractLevels)
+        {
+            grants = SkillGrantCatalog.Load(pvf), points = SkillCatalog.Load(pvf), PvpRevisionLevel = ReadPvpRevisionLevel(pvf)
+        };
         // 成长提交会引用赠技；在装配阶段解码，SQLite writer 内只访问已缓存的定义。
         foreach (var key in catalog.grants.SkillIds)
             if (paths.ContainsKey((key.Job, key.Id))) catalog.Get(key.Job, key.Id);
         foreach (int job in jobs)
             catalog.FixedSkills((byte)job);
         return catalog;
+    }
+
+    static byte? ReadPvpRevisionLevel(PvfArchive pvf)
+    {
+        const string path = "etc/pvpparameter.etc";
+        if (!pvf.Contains(path)) return null;
+        var document = new PvfTokenDocument(pvf.ReadTokens(path), pvf.ResolveString);
+        var fields = document.Sections.Where(section => section.Name == "pvp revision level").ToArray();
+        // 没有补正声明的资源仍按实际等级，不为普通技能目录补造决斗等级。
+        if (fields.Length == 0) return null;
+        if (fields is not [{ Children.Length: 0, Values: [{ Type: 0, Value: >= 1 and <= 95 } value] }])
+            throw new InvalidDataException("决斗技能补正等级声明无效");
+        return checked((byte)value.Value);
     }
 
     public SkillLearningDefinition Get(byte job, ushort skillId)

@@ -17,6 +17,16 @@ internal static class UserStateTests
     public static async Task RunCoreAsync()
     {
         int checks = Count;
+        foreach (int type in new[] { 4, 5, 7, 8, 9, 10, 13, 14, 20, 24, 31, 34, 35, 41 })
+            That(UserStatePolicy.Mode(type) == UserMode.Pvp, "匹配客户端的决斗频道在选角前即属于PvP模式：" + type);
+        That(UserStatePolicy.Mode(null) == UserMode.Normal && UserStatePolicy.Mode(1) == UserMode.Normal &&
+            UserStatePolicy.Mode(22) == UserMode.Normal, "未指定及普通、团队频道不误用PvP模式");
+        That(UserStatePolicy.Read(SessionPhase.Unselected, false, false, false, null, false, pvpChannel: true) == UserState.CharacterSelect &&
+            UserStatePolicy.Read(SessionPhase.Unselected, true, false, false, null, false, pvpChannel: true) == UserState.EnteringWorld &&
+            UserStatePolicy.Read(SessionPhase.Town, true, true, false, null, false, pvpChannel: true) == UserState.PvpTown &&
+            UserStatePolicy.Meets(UserState.PvpTown, UserStateRequirement.WorldReady) &&
+            !UserStatePolicy.Meets(UserState.PvpTown, UserStateRequirement.DungeonContext),
+            "PvP模式不跳过选角与初始化，决斗城镇不是战斗房间或地下城");
         foreach (var (phase, state) in new[] { (SessionPhase.Loading, SinglePlayerDungeonPhase.Loading),
             (SessionPhase.Dungeon, SinglePlayerDungeonPhase.Dungeon), (SessionPhase.Settlement, SinglePlayerDungeonPhase.Settlement) })
         {
@@ -40,7 +50,7 @@ internal static class UserStateTests
             {
                 UserState.CharacterSelect => requirement == UserStateRequirement.Owner,
                 UserState.EnteringWorld => requirement is UserStateRequirement.Owner or UserStateRequirement.CharacterSelected,
-                UserState.Town or UserState.DungeonSelect or UserState.PvpRoom or UserState.PvpBattle => requirement != UserStateRequirement.DungeonContext,
+                UserState.Town or UserState.PvpTown or UserState.DungeonSelect or UserState.PvpRoom or UserState.PvpBattle => requirement != UserStateRequirement.DungeonContext,
                 UserState.Dungeon or UserState.TutorialDungeon => true,
                 _ => false
             };
@@ -95,6 +105,20 @@ internal static class UserStateTests
             repository.Create(owner, new("StateRole", point, point) { Level = 85, CompletedQuests = [12829, 3779] });
             var session = new GameSession(repository, towns, owner, entry: new(new(2, 37), 22, "[harlem]"));
             var online = new OnlineSessionDirectory(memory);
+            using (var pvpOwner = owners.Acquire("pvp-state", () => { }))
+            {
+                repository.Create(pvpOwner, new("PvpStateRole", point, point));
+                var pvp = new GameSession(repository, towns, pvpOwner, entry: new(new(2, 55), 13, "[pvp]"));
+                That(pvp.Mode == UserMode.Pvp && pvp.UsesArenaSkills && pvp.GetState() == UserState.CharacterSelect,
+                    "频道绑定即选择独立决斗技能域，不等到建房或开战");
+                pvp.Select(0); pvp.MarkReady();
+                var travel = new TownTravelReceipt(pvp.Selected!, pvpOwner.Generation, pvp.SelectionEpoch);
+                That(pvp.GetState() == UserState.PvpTown && pvp.CanPublishTravel(travel),
+                    "决斗城镇保留普通切图发布能力，不因区分模式吞掉城镇回复");
+                pvp.ReturnToRoster();
+                That(pvp.Mode == UserMode.Pvp && pvp.GetState() == UserState.CharacterSelect,
+                    "返回选角只清角色上下文，不改变本连接绑定的决斗频道模式");
+            }
             online.Register(owner, session);
             That(online.Snapshot().Length == 0, "诊断查询不把未选角连接伪装成在线角色");
             That(session.ChannelEntry is { Identity.Number: 37, Type: 22, Group: "[harlem]" } && session.GetState() == UserState.CharacterSelect,

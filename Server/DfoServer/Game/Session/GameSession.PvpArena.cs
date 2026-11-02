@@ -21,7 +21,23 @@ internal sealed partial class GameSession
     });
 
     internal bool RecoverPvpRatings(PvpRatingSettlement ratings) => owner.Execute(() =>
-        Ready && Selected is { } character && ratings.Recover(owner, character.Id));
+        Ready && Selected is { } character && ratings.Recover(owner, character.Id, InstallPvpQuestAdvance));
+
+    internal void InstallPvpQuestAdvance(PvpRatingReceipt receipt) => owner.Execute(() =>
+    {
+        if (receipt.QuestAdvance is not { } progress || Selected is not { } character ||
+            receipt.Account != owner.Account || receipt.CharacterId != character.Id) return true;
+        Selected = ApplyPvpQuestAdvance(character, progress);
+        return true;
+    });
+
+    static DfoServer.Game.Characters.Character ApplyPvpQuestAdvance(DfoServer.Game.Characters.Character character, PvpQuestAdvance progress)
+    {
+        if (character.Revision == progress.Revision && character.ActiveMainQuests.SequenceEqual(progress.After) || character.Revision > progress.Revision) return character;
+        if (character.Revision != progress.BeforeRevision || !character.ActiveMainQuests.SequenceEqual(progress.Before))
+            throw new InvalidOperationException("决斗任务回执与本角色快照不一致");
+        return character with { Revision = progress.Revision, ActiveMainQuests = progress.After.ToArray() };
+    }
     internal bool RecoverPvpTotalRatings(PvpTotalRatingSettlement ratings) => owner.Execute(() =>
         Ready && Selected is not null && ratings.Recover(owner));
 

@@ -22,7 +22,7 @@ internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Qu
             if (catalog.TryGet(id,out var parent) && QuestRelationProgress.SequentialParent(parent,catalog)) ids.UnionWith(parent.IntData);
         var definitions = ids.Where(id => catalog.TryGet(id,out _)).Select(catalog.Get)
             .Where(quest => QuestCoverage.HasOrdinaryDeclarations(quest)).ToDictionary(quest => quest.Id);
-        var templates = definitions.Values.SelectMany(quest => quest.Definition!.Drops)
+        var templates = definitions.Values.SelectMany(quest => QuestTargetRules.Drops(quest, entry))
             .Where(row => row.MatchesEntry(entry.DungeonId,entry.Difficulty)).Select(row => row.ItemId).Distinct().ToDictionary(id => id,items.Get);
         foreach (var template in templates.Values)
             if (template.Kind is not (ItemKind.Quest or ItemKind.Material or ItemKind.Consumable) ||
@@ -64,7 +64,7 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
         foreach (var active in character.ActiveMainQuests.OrderBy(row => row.Slot))
         {
             if (!QuestHuntProgress.Bound(active,entry) || !resources.Quests.TryGetValue(active.QuestId,out var quest)) continue;
-            foreach (var row in quest.Definition!.Drops.Where(row => row.Matches(entry.DungeonId,entry.Difficulty,templateId,enemyType,cleared)))
+            foreach (var row in QuestTargetRules.Drops(quest, entry).Where(row => row.Matches(entry.DungeonId,entry.Difficulty,templateId,enemyType,cleared)))
             {
                 // 已满上限、随机未中或背包已满也读取了资产前提，不能按Granted==0跳过复验。
                 readsInventory = true;
@@ -73,7 +73,7 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                 long limit = row.MaximumHeld;
                 if (quest.Condition is "[seeking]" or "[seek n meet npc]" && QuestLifecyclePlan.ValidSeeking(quest))
                 {
-                    long required = Enumerable.Range(0,(quest.IntData.Count - (quest.Condition == "[seek n meet npc]" ? 1 : 0)) / 2)
+                    long required = Enumerable.Range(0,QuestLifecyclePlan.MaterialLength(quest) / 2)
                         .Where(at => quest.IntData[at * 2] == row.ItemId).Sum(at => (long)quest.IntData[at * 2 + 1]);
                     if (required > 0) limit = limit < 0 ? required : Math.Min(limit,required);
                 }

@@ -3,12 +3,12 @@ using System.Collections.Immutable;
 namespace DfoServer.GameWorld.Quests;
 
 // 与S4A21/external的资源行同序：monster 7项、enemy 8项、clear 6项。
-// EnemyType: 0通关、1怪物、2 AI角色、3被动物件。难度是精确匹配，-1为任意。
+// EnemyType: 0通关、1怪物、2 AI角色、3被动物件。难度为最低要求，-1为任意。
 internal sealed record QuestDropDefinition(int TemplateId, int EnemyType, int DungeonId, int Difficulty,
     int ItemId, int Count, int Rate, int MaximumHeld)
 {
     public bool MatchesEntry(uint dungeon, byte difficulty) =>
-        (DungeonId == -1 || DungeonId == dungeon) && (Difficulty == -1 || Difficulty == difficulty);
+        (DungeonId == -1 || DungeonId == dungeon) && (Difficulty == -1 || difficulty >= Difficulty);
 
     public bool Matches(uint dungeon, byte difficulty, int template, int enemyType, bool cleared) =>
         (EnemyType == 0 ? cleared : EnemyType == enemyType && TemplateId == template) &&
@@ -29,7 +29,7 @@ internal sealed record QuestDropDefinition(int TemplateId, int EnemyType, int Du
                 var row = new QuestDropDefinition(width == 6 ? 0 : Value(0), width == 6 ? 0 : width == 7 ? 1 : Value(1),
                     Value(offset),Value(offset + 1),Value(offset + 2),Value(offset + 3),Value(offset + 4),Value(offset + 5));
                 if (row.EnemyType is < 0 or > 3 || row.EnemyType != 0 && row.TemplateId <= 0 || row.DungeonId < -1 ||
-                    row.Difficulty is < -1 or > 3 || row.ItemId <= 0 || row.Count <= 0 || row.Rate is < 0 or > 100 || row.MaximumHeld < -1)
+                    row.Difficulty is < -1 or > 4 || row.ItemId <= 0 || row.Count <= 0 || row.Rate is < 0 or > 100 || row.MaximumHeld < -1)
                     errors.Add("任务掉落参数无效: " + field.Name);
                 else result.Add(row);
             }

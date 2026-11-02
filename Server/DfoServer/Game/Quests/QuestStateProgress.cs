@@ -8,11 +8,13 @@ namespace DfoServer.Game.Quests;
 internal static class QuestStateProgress
 {
     public static byte? Type(StoryQuest quest) => quest.Condition == "[meet npc]" && quest.SubType == 1 && quest.IntData is [> 0] ? (byte)4 :
-        quest.SubType == -1 ? quest.Condition switch
+        quest.Condition == "[pvp quest]" && quest.SubType == 8 && quest.IntData.Count > 0 && quest.IntData[0] is >= 0 and < 255 ? (byte)27 :
+        quest.SubType is -1 or 0 ? quest.Condition switch
     {
         "[clear quest]" when quest.IntData is [> 0 and < 30000] => 12,
         "[pvp rank]" when quest.IntData is [>= 0 and < 255] => 5,
         "[level up]" when quest.IntData is [>= 1 and <= 95] => 31,
+        "[user level]" when quest.IntData is [>= 0, >= 0] && quest.IntData[0] <= quest.IntData[1] => 43,
         "[first grow]" when quest.IntData.Count == 0 => 39,
         "[awakening]" when quest.IntData is [1 or 2] => 40,
         "[play only]" when quest.IntData.Count == 0 => 49,
@@ -21,10 +23,11 @@ internal static class QuestStateProgress
 
     public static uint Scalar(Character character, StoryQuest quest, int? pvpGrade = null) => Type(quest) switch
     {
-        5 => pvpGrade is int grade ? grade >= quest.IntData[0] ? 0u : 1u :
+        5 or 27 => pvpGrade is int grade ? grade >= quest.IntData[0] ? 0u : 1u :
             throw new NotSupportedException("决斗段位目标需要现有评分账本的真实段位"),
         12 => QuestEligibility.Completed(character).Contains(quest.IntData[0]) ? 0u : 1u,
         31 => character.Level >= quest.IntData[0] ? 0u : 1u,
+        43 => character.Level >= quest.IntData[0] && character.Level <= quest.IntData[1] ? 0u : 1u,
         39 => (character.GrowType & 15) != 0 ? 0u : 1u,
         40 => character.GrowType >> 4 >= quest.IntData[0] ? 0u : 1u,
         // Full03的type4/sub1与type49在ACK31安装本次QST后即归零；不等待NPC点击或故事UI结束。
@@ -34,5 +37,5 @@ internal static class QuestStateProgress
 
     public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active, Character character, QuestCatalog quests) =>
         active.Select(row => row.AcceptanceId != Guid.Empty && quests.TryGet(row.QuestId,out var quest) && Type(quest) is not null &&
-            Type(quest) != 5 && QuestCoverage.HasOrdinaryDeclarations(quest) ? row with { ConditionState = Scalar(character,quest) } : row).ToImmutableArray();
+            Type(quest) is not (5 or 27) && QuestCoverage.HasOrdinaryDeclarations(quest) ? row with { ConditionState = Scalar(character,quest) } : row).ToImmutableArray();
 }

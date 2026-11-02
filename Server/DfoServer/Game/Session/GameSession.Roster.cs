@@ -38,16 +38,20 @@ internal sealed partial class GameSession
     public bool PvpPrivateSelectionBlocked(ushort index) => owner.Execute(() =>
         PublishedRosterEntry(index)?.IsPvpPrivate == true && ChannelEntry?.Type is not (8 or 24));
 
-    public void SelectFromRosterIndex(ushort index, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => owner.Execute(() =>
+    public void SelectFromRosterIndex(ushort index, GoldLimitCatalog? goldLimits = null, bool resumeTown = false)
     {
-        if (Selected is not null) throw new InvalidDataException("Invalid selection state");
-        var entry = PublishedRosterEntry(index) ?? throw new InvalidDataException("Selection published roster index absent");
-        var roster = publishedRoster!;
-        SelectCharacter(entry.Slot, goldLimits, entry, resumeTown);
-        // 只有选角成功才把原发布映射绑定到新生命周期；普通选角映射仍保持自己的旧 epoch。
-        selectedRoster = roster with { SelectionEpoch = SelectionEpoch };
-        return true;
-    });
+        owner.Execute(() =>
+        {
+            if (Selected is not null) throw new InvalidDataException("Invalid selection state");
+            var entry = PublishedRosterEntry(index) ?? throw new InvalidDataException("Selection published roster index absent");
+            var roster = publishedRoster!;
+            SelectCharacter(entry.Slot, goldLimits, entry, resumeTown);
+            // 只有选角成功才把原发布映射绑定到新生命周期；普通选角映射仍保持自己的旧 epoch。
+            selectedRoster = roster with { SelectionEpoch = SelectionEpoch };
+            return true;
+        });
+        PrepareSelectedQuestItemFacts();
+    }
 
     public CharacterSlotChangeResult ChangeCharacterSlots(uint indexA, uint indexB) => owner.Execute(() =>
     {

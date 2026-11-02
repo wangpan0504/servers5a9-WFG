@@ -49,7 +49,7 @@ internal static class QuestHuntProgressTests
             QuestHuntProgress.AiCharacterDeath([target],passiveEntry,apcCatalog,13099)[0].ConditionState == 0,
             "APC类型2只由实际APC死亡推进，同号怪物和被动物件不能替代");
         foreach (var unsupported in new[] { quest with { IntData = [3,-1,13099,0,1] }, quest with { IntData = [3,-1,1,1,512] },
-            quest with { IntData = [3,-1,1,1] }, quest with { SubType = 0 }, quest with { Grade = "[daily random]" }, quest with { Grade = "[training]" },
+            quest with { IntData = [3,-1,1,1] }, quest with { SubType = 1 }, quest with { Grade = "[daily random]" }, quest with { Grade = "[training]" },
             quest with { MinimumLevel = 255 } })
             That(!QuestHuntProgress.TryTargets(unsupported,out _), "非普通怪物、编码越界或专用状态不借用猎杀成功合同");
         var done = active with { ConditionState = 0 };
@@ -156,12 +156,21 @@ internal static class QuestHuntProgressTests
             "冒险-1保持副本、APC与物件隔离");
         That(!QuestHuntProgress.TryTargets(mission with { DungeonIndex = 4 },out _) &&
             !QuestHuntProgress.TryTargets(mission with { Grade = "[side]" },out _), "不推广未确认的负选择符形状");
-        foreach (int selector in new[] {-1,-2,-4,-11})
+        foreach (int selector in new[] {-1,-2,-11})
             That(!QuestHuntProgress.TryTargets(monsterQuest with { IntData = [3,-1,selector,1] },out _),
                 "未闭合的怪物对象谓词不只按rank启用："+selector);
-        foreach (var unsupported in new[] { monsterQuest with { IntData = [-2,1,1,1] }, quest with { IntData = [3,-1,-5,1,1] },
+        var eliteQuest = monsterQuest with { IntData = [3,-1,-4,1] };
+        var eliteCatalog = new QuestCatalog(new() { [100] = eliteQuest });
+        var eliteActive = active with { ConditionState = 1 };
+        foreach (byte rank in new byte[] { 0, 1, 2, 3 })
+            That(QuestHuntProgress.MonsterDeath([eliteActive], entry with { QuestAcceptances = [eliteActive] }, eliteCatalog,
+                Monster(400, rank))[0].ConditionState == (rank is 1 or 2 ? 0u : 1u),
+                "原生-4只匹配普通怪物精英，不替代-2稀有或-3领主");
+        That(QuestHuntProgress.TryTargets(quest with { IntData = [3,4,-5,1,1], SubType = 0 }, out _),
+            "省略sub的原生0与第五档难度保持实际猎杀合同，不沿旧-1/前三档白名单误拒");
+        foreach (var unsupported in new[] { monsterQuest with { IntData = [-2,1,1,1] }, quest with { IntData = [3,-1,-3,10,1] },
             monsterQuest with { IntData = [3,-1,1,512] }, monsterQuest with { IntData = [3,-1,1,1,2] },
-            monsterQuest with { IntData = [3,-2,1,1] }, monsterQuest with { IntData = [3,4,1,1] } })
+            monsterQuest with { IntData = [3,-2,1,1] }, monsterQuest with { IntData = [3,5,1,1] } })
             That(!QuestHuntProgress.TryTargets(unsupported,out _),"非法副本、分类6负码、溢出数量和五元组不能冒充普通四元组猎杀");
         That(QuestHuntProgress.TryTargets(monsterQuest with { Definition = monsterQuest.Definition! with {
             AccountQuest = true, AccountCollisions = [101], RequiredAnswers = [new(102,1)] } },out _),

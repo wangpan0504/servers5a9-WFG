@@ -39,6 +39,7 @@ internal static class CharacterSlotsTcpTests
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; ALTER TABLE characters DROP COLUMN daily_booster_usage");
         fixture.Sql("ALTER TABLE account_wallets DROP COLUMN character_slots");
         DatabaseSchemaTests.RewindRaidLifecycle(fixture.Database);
+        DatabaseSchemaTests.RewindQuestTargetTypes(fixture.Database);
         fixture.Sql(DatabaseSchemaTests.GuildExtensionFixtureRewindSql + "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'CHECK(slot BETWEEN 0 AND 61)','CHECK(slot BETWEEN 0 AND 31)') WHERE name='characters'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=46");
         // 领奖账本的唯一类型同样退回 v46：后续每步只认自己的前置结构，不能拿当前版本的表蒙混过关。
         fixture.Sql("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(replace(replace(sql,',4,5,6,',',4,6,'),'60,64,65,67,70','64,65,67,70'),'12,17,19,25','12,19,25') WHERE name='character_quest_completion_receipts'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9001");

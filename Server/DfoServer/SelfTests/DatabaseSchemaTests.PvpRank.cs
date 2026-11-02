@@ -6,6 +6,7 @@ internal static partial class DatabaseSchemaTests
 {
     internal static void RewindPvpRankCompletion(Microsoft.Data.Sqlite.SqliteConnection db)
     {
+        RewindQuestTargetTypes(db);
         const string table="character_quest_completion_receipts";
         if(Query(db,"SELECT sql FROM sqlite_schema WHERE name='"+table+"'") is not string sql ||
             !sql.Contains(",4,5,6,",StringComparison.Ordinal)) return;
@@ -33,7 +34,7 @@ internal static partial class DatabaseSchemaTests
             _=new CharacterRepository(path);
             using(var db=Open(path))
             {
-                ChangeReceiptDefinition(db,table,sql=>sql.Replace(",4,5,6,",",4,6,",StringComparison.Ordinal));
+                RewindPvpRankCompletion(db);
                 Execute(db,"CREATE INDEX rank_fixture_index ON character_quest_completion_receipts(quest_id)");
                 Execute(db,"CREATE TRIGGER rank_fixture_trigger AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT 1; END");
                 Execute(db,"PRAGMA user_version=138");

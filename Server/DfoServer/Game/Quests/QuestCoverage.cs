@@ -17,6 +17,14 @@ internal sealed record QuestCoverageRow(int Id, string Path, string? Grade, stri
     public bool RegionalAutoDaily { get; init; }
     public ImmutableArray<string> SupportedDedicatedPaths { get; init; } = [];
     public ImmutableArray<int> MissingDungeonReferences { get; init; } = [];
+    public QuestTargetSupport TargetSupport { get; init; }
+    public string TargetKind { get; init; } = nameof(QuestTargetKind.Unknown);
+    public string ProgressSources { get; init; } = nameof(QuestProgressSource.None);
+    public int? DeclaredSubType { get; init; }
+    public int ClientSubType { get; init; }
+    public byte? NativeType { get; init; }
+    public QuestParameterState ParameterState { get; init; }
+    public string ParameterReason { get; init; } = "";
 }
 internal sealed record QuestCoverageReport(int Definitions, int ImplementedPaths, ImmutableArray<QuestCoverageRow> Quests,
     ImmutableArray<ImmutableArray<int>> PrerequisiteCycles, ImmutableArray<ImmutableArray<int>> ParentCycles)
@@ -48,7 +56,7 @@ internal static class QuestCoverage
     };
 
     public static ImmutableArray<string> Unconfirmed(StoryQuest quest) => quest.Definition?.Fields
-        .Where(field => !KnownFields.Contains(field.Name) &&
+        .Where(field => !KnownFields.Contains(field.Name) && !QuestTargetSchema.IsTargetField(quest, field) &&
             !(field.Name is "episode town use" or "npc visivility not revert" && QuestEpisodeEntry.Supports(quest)) &&
             !(field.Name == "npc dialog" && QuestHiddenEntry.NpcDialogueShape(quest)) &&
             !(field.Name is "stand by area" or "hidden set" && QuestStandbyEntry.Supports(quest)) &&
@@ -219,24 +227,7 @@ internal static class QuestCoverage
             throw new NotSupportedException("任务需要尚未确认的分类修饰、例外、首次NPC、阈值或特殊属性");
     }
 
-    internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => quest.Condition switch
-    {
-        "[custom quest]" => QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest),
-        "[epic production]" => QuestEpicProductionProgress.Supports(quest),
-        "[self disjoint item]" => QuestExpertJobProgress.SelfDisjoint(quest),
-        "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
-        "[seeking]" or "[seek n meet npc]" => QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
-        "[hunt enemy]" or "[hunt monster]" => QuestHuntProgress.TryTargets(quest,out _),
-        "[quest clear]" => QuestRelationProgress.SequentialParent(quest,catalog),
-        "[clear multi quest]" => QuestRelationProgress.ThresholdParent(quest,catalog),
-        "[clear map]" => QuestClearEligibility.IsSingleMap(quest),
-        "[condition under clear]" or "[clear a dungeon]" => QuestDungeonClearProgress.Supports(quest),
-        "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
-        "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest),
-        "[custom multi condition]" => QuestDazzlementStorage.Matches(quest) || DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest),
-        "[question]" => QuestQuestionProgress.TryCount(quest,out _),
-        _ => QuestStateProgress.Type(quest) is not null
-    };
+    internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => QuestTargetRules.Supports(quest, catalog);
 
     public static QuestCoverageReport Scan(QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces, QuestRewardParameterCatalog parameters, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
         QuestConnectionCatalog? connections = null, DfoServer.GameWorld.Dungeons.OperationHopeCatalog? hope = null)
@@ -289,18 +280,10 @@ internal static class QuestCoverage
             if (!HasOrdinaryDisplay(quest)) reasons.Add("NPC可见性、标题、视频或男性对话文本的显示声明形状尚未确认");
             if (!HasOrdinaryCascade(quest)) reasons.Add("casecade clear需要1..29999的单整数marker声明");
             {
-                bool sequential = QuestRelationProgress.SequentialParent(quest,catalog);
-                bool threshold = QuestRelationProgress.ThresholdParent(quest,catalog);
-                bool parent = sequential || threshold;
-                bool range = QuestClientSceneProgress.TownRange(quest);
-                bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
-                bool state = QuestStateProgress.Type(quest) is not null;
-                bool rental = QuestRentalProgress.Supports(quest);
-                bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-                if (quest.SubType != -1 && !QuestClearEligibility.ProtectsActors(quest) && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest) && !QuestDazzlementStorage.Matches(quest)) reasons.Add("目标子类型尚未接入");
+                bool target = HasSupportedTarget(quest,catalog);
+                if (quest.SubType != -1 && !target) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
-                bool target = HasSupportedTarget(quest,catalog);
                 if (!target) reasons.Add(TargetRestriction(quest));
                 if (QuestQuestionProgress.TryCount(quest,out int options) && Enumerable.Range(0,options)
                     .Any(answer => !QuestQuestionProgress.OrdinaryChoice(quest,checked((uint)answer),catalog) && special?.Answers.Contains(answer) != true))
@@ -359,7 +342,15 @@ internal static class QuestCoverage
                     .Select(row => row.DungeonId).Where(id => id > 0 && !dungeons.ContainsDungeon(id)).Distinct().Order().ToImmutableArray()
             });
         }
-        var result = rows.ToImmutable();
+        var result = rows.Select(row =>
+        {
+            var quest = catalog.Get(row.Id);
+            var parameters = QuestTargetSchema.Read(quest);
+            return row with { TargetSupport = QuestTargetRules.Inspect(quest, catalog), TargetKind = quest.TargetKind.ToString(),
+                DeclaredSubType = quest.DeclaredSubType, ClientSubType = quest.SubType, NativeType = quest.TargetRegistration?.NativeType,
+                ParameterState = parameters.State, ParameterReason = parameters.Reason,
+                ProgressSources = (quest.TargetRegistration?.Sources ?? QuestProgressSource.None).ToString() };
+        }).ToImmutableArray();
         return new(result.Length, result.Count(row => row.ImplementedPath), result, Cycles(prerequisite), Cycles(parents))
         {
             DungeonReferencesChecked = dungeons is not null,
@@ -372,24 +363,24 @@ internal static class QuestCoverage
     // 说明实际依赖；报告不解锁入口，也不把普通客户端通知充当这些玩法的完成事实。
     static string TargetRestriction(StoryQuest quest) => quest.Condition switch
     {
-        "[pvp match]" or "[pvp quest]" => "目标尚未接入本版比赛任务的条件消费者",
-        "[pvp rank]" => "段位目标仅支持单一非负段位整数且无子类型",
-        "[raid phase clear]" => "目标依赖团本阶段、队伍和参与身份；团本领域尚未接入",
+        "[pvp match]" or "[pvp quest]" => "此决斗任务子型尚未具备完整结算事实，不能以普通胜负代替",
+        "[pvp rank]" => "段位目标需要单一非负段位及已确认子型",
+        "[raid phase clear]" => "团本已有独立领域；此任务仍缺少本版阶段与参与身份的进度映射",
         "[custom multi condition]" when quest.SubType == 1 => "目标依赖特殊塔场景及多条件事件；对应塔流程尚未接入",
         "[custom multi condition]" when quest.Path.Contains("/pvp/",StringComparison.Ordinal) => "目标依赖决斗训练场多条件事件；对应场景及条件通道尚未接入",
         "[custom multi condition]" => "本版多条件类型60已确认；实际场景、条件通道和进度保存尚未接入",
         "[clear multi quest]" => "类型70需要已确认的sub4完整子任务引用与有效最小完成数；其他阈值形状尚未接入",
-        "[clear a dungeon]" => "目标需要sub6及完整的正地下城/最低难度成对列表",
-        "[condition under clear]" => "目标要求带条件通关；本版子类型及相应服务端结算统计尚未接入",
-        "[play only]" => "接取型目标仅支持本版无参数且无子类型声明；其它目标参数尚未接入",
-        "[get score]" => "目标依赖指定场景的真实评分；评分统计尚未接入任务进度",
-        "[use skill]" => "目标依赖真实技能使用事实；施法确认及本版进度编码尚未接入",
+        "[clear a dungeon]" => "此地下城对或独立通关辅助参数尚未接入已确认的条件算法",
+        "[condition under clear]" => "此通关子型、区域筛选或所需统计来源尚未闭合",
+        "[play only]" => "接取型目标仅支持原生默认0或显式-1且无附加整数",
+        "[get score]" => "此指标或观察场景尚未接入原生33路径",
+        "[use skill]" => "技能类别仅确认0/1的原生33，其他类别不能猜测事件",
         "[use item]" or "[use fortune coin]" => "目标依赖实际道具使用或幸运币结果；对应消费事件尚未接入任务进度",
         "[disjoint item]" or "[self disjoint item]" => "目标依赖分解结果及分解者身份；对应领域事务尚未接入任务进度",
-        "[equipped item]" => "目标依赖资源指定的装备属性；本版子类型及槽位条件尚未接入",
-        "[get item]" => "目标依赖实际取得道具事件；不能用当前库存替代取得历史",
+        "[equipped item]" => "目标缺少显式物品事实目录或已确认的部位、品级及等级形状",
+        "[get item]" => "此获取变体尚无同一次取得的完整物品及队伍事实，不能以库存替代历史",
         "[amplify item]" => "目标依赖增幅结果；增幅领域尚未接入任务进度",
-        "[epic production]" => "目标依赖史诗制作结果；史诗制作领域尚未接入",
+        "[epic production]" => "资源不符合已接入的史诗制作任务形状，不能借用其他制作结果",
         "[send chatting]" => "目标依赖聊天场景及内容事件；对应任务条件尚未接入",
         "[ui click]" => "目标依赖本版界面事件；对应33通道及场景校验尚未接入",
         "[check time]" => "目标依赖时间与场景记录；本版计时起止及进度编码尚未接入",

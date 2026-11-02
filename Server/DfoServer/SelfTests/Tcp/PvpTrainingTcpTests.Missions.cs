@@ -110,10 +110,8 @@ internal static partial class PvpTrainingTcpTests
             var catalog = new PvpArcadeCatalog(resources.Archive);
             foreach (int difficulty in new[] { 0, 2 })
             {
-                var plan = catalog.Modes.Values.Where(mode => mode.Difficulty == difficulty)
-                    .Select(mode => catalog.Resolve(0, 0, mode.Index)).Where(row => row is not null)
-                    .OrderBy(row => row!.Allowed.Length).ThenBy(row => row!.Mode.Index).First()!;
-                byte[] arcade = (byte[])create.Clone(); arcade[^2] = 3; arcade[^1] = checked((byte)(plan.Mode.Index + 1));
+                var plan = catalog.Resolve(0, 0, difficulty)!;
+                byte[] arcade = (byte[])create.Clone(); arcade[^2] = 3; arcade[^1] = checked((byte)(difficulty + 1));
                 peer.Send(50, arcade); peer.Expect(1,50,[1]);
                 That(peer.Expect(0,41).Body[13] == 10, "无风云任务也能创建资源绑定的道场实例");
                 before = f.Snapshot();

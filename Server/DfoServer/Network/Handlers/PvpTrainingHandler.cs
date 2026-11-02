@@ -95,10 +95,11 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
             }
             return CommandResult.Handled;
         }
-        var receipt=request is {Kind:3,MapIndex:0,Setting:0,Mode:>0} or {Kind:1,MapIndex:0,Setting:0,Mode:0}
+        var receipt=request is {Kind:3,MapIndex:0,Setting:0,Mode:>=1 and <=3} or {Kind:1,MapIndex:0,Setting:0,Mode:0}
             ? context.Session.BeginPvpTraining(Prepare,context.BlocksTownActions) : null;
         var standalone = context.Session.Selected;
-        var arcadePlan = request.Kind == 3 && standalone is not null ? arcade.Resolve(standalone.Job, standalone.GrowType, request.Mode - 1) : null;
+        var arcadePlan = request.Kind == 3 && request.Mode is >=1 and <=3 && standalone is not null
+            ? arcade.Resolve(standalone.Job, standalone.GrowType, request.Mode - 1) : null;
         if (receipt is null && request is { Kind: 3, MapIndex: 0, Setting: 0, Mode: > 0 } && arcadePlan is not null &&
             standalone is { Position.Town: 10, Position.Area: <= 7 })
         {
@@ -115,7 +116,8 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
             }
         }
         log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,
-            request.Kind,Mode=request.Mode,Instance=receipt?.Run.InstanceId,Town=standalone?.Position.Town,Area=standalone?.Position.Area});
+            request.Kind,Mode=request.Mode,ResourceMode=receipt?.Run.Entry.Mode?.Index,Rounds=receipt?.Run.Entry.Rounds.Length,
+            Instance=receipt?.Run.InstanceId,Town=standalone?.Position.Town,Area=standalone?.Position.Area});
         if(receipt is null) await context.Reply(CmdPacketType.MAKE_PVP_ROOM,PvpTrainingPackets.Rejected(),"pvp_training_rejected");
         else
         {
@@ -131,8 +133,8 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
                 PvpTrainingProgress.Valid(q,row.ConditionState) && row.ConditionState!=0).ToArray();
             if(candidates is not [var active] || !quests.TryGet(active.QuestId,out var quest)) return null;
             if(request.Kind==1) return PvpTrainingEntry.PrepareCombo(character,quest,combos.Resolve(character.Job,character.GrowType));
-            var plan=arcade.Resolve(character.Job,character.GrowType,request.Mode-1);
-            if(plan is null) return null;
+            var plan=arcade.Resolve(character.Job,character.GrowType,PvpTrainingProgress.ArcadeIndex(quest,request.Mode));
+            if(plan is null || plan.Mode.Difficulty!=request.Mode-1) return null;
             // 已解析模式池同时用于正式回合校验；不借其它角色或职业提供候选。
             var source=arcade.Opponents.GetValueOrDefault((character.Job,character.GrowType,plan.Mode.Index));
             source ??=new(System.Collections.Frozen.FrozenDictionary<int,ImmutableArray<int>>.Empty,plan.Mode.RandomOpponents);
@@ -183,7 +185,9 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
             if (reward is not null && missions?.QueueRewards(context, reward) != false) missions?.Queue(context, update: true);
         }
         log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=accepted,
-            report.Event,report.Round,report.Opponent,WonAllRounds=receipt?.WonAllRounds==true});
+            report.Event,report.Round,report.TotalRounds,report.Opponent,Instance=current?.InstanceId,
+            ResourceMode=current?.Entry.Mode?.Index,ExpectedRounds=current?.Entry.Rounds.Length,ExpectedRound=current?.Round.Round,
+            WonAllRounds=receipt?.WonAllRounds==true});
         // 1287没有已证实的ACK消费者；不伪造成功包。任务事务另行消费正式事实。
         return Task.FromResult(CommandResult.Handled);
     }

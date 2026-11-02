@@ -79,7 +79,7 @@ internal static class PvpArenaSessionTests
             {
                 long priorRevision = room.Revision;
                 That(arena.Join(guest, room, false) is null && arena.Join(guest, room, false, password: "wrong") is null &&
-                    guest.CurrentPvpArena is null && guest.GetState() == UserState.Town && room.Revision == priorRevision,
+                    guest.CurrentPvpArena is null && guest.GetState() == UserState.PvpTown && room.Revision == priorRevision,
                     "缺密码或错密码不安装成员、不改变席位和房间版本");
                 joined = arena.Join(guest, room, false, password: "secret")!;
                 That(joined.View.Members.Length == 2 && joined.Notices is [{ Recipient: var recipient }] &&
@@ -198,7 +198,7 @@ internal static class PvpArenaSessionTests
                 }
                 var left = arena.Leave(host);
                 var departure = left.Single(row => row.Departure is not null).Departure!;
-                That(room.View().Leader == room.Member(joined.Member.Token)!.Seat && host.GetState() == UserState.Town &&
+                That(room.View().Leader == room.Member(joined.Member.Token)!.Seat && host.GetState() == UserState.PvpTown &&
                     host.CurrentPvpArena is null && host.CanPublishPvpArenaDeparture(departure),
                     "房主退出移交房主并以原退出版本发布本人返城");
                 That(arena.Leave(host).Length == 0 && room.View().Members.Length == 1,
@@ -241,7 +241,7 @@ internal static class PvpArenaSessionTests
             That(repository.ReadPvpRating(hostOwner, host.Selected!.Id) is { State.Experience: 900, Revision: 2 },
                 "维护驱动在房间门禁外逐账号完成已提交普通来源，不要求胜方再报一次死亡");
             host.ReturnToRoster(); host.Select(0); host.MarkReady();
-            That(host.CurrentPvpArena is null && host.GetState() == UserState.Town,
+            That(host.CurrentPvpArena is null && host.GetState() == UserState.PvpTown,
                 "换角清会话原房间指针但由服务精确收尾索引");
             That(await arena.DetachAsync(host) is [] && arena.Directory(host.ChannelEntry!.Identity).Length == 1,
                 "换角后精确收尾空旧房间，不改变新选角上下文");
@@ -261,7 +261,7 @@ internal static class PvpArenaSessionTests
                 That(await arena.DetachAsync(guest) is [] && fresh.Member.IsCurrent,
                     "旧连接重复清理不影响接管者");
                 await arena.DetachAsync(replacement);
-                That(replacement.GetState() == UserState.Town && arena.Directory(replacement.ChannelEntry!.Identity).Length == 0,
+                That(replacement.GetState() == UserState.PvpTown && arena.Directory(replacement.ChannelEntry!.Identity).Length == 0,
                     "最后成员退出回城并回收房间索引");
             }
             var persisted = repository.LoadCharacter(hostOwner, 0);
