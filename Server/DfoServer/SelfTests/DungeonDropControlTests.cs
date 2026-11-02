@@ -7,7 +7,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class DungeonDropControlTests
+internal static partial class DungeonDropControlTests
 {
     public static void RunCore()
     {
@@ -80,6 +80,18 @@ internal static class DungeonDropControlTests
         That(listed.Sum(row => row.Probability) == 1 && listed[0].Probability == 0.09375m && listed[1].Probability == 0.28125m &&
             listed[2].Probability == 0.125m && listed.All(row => row.Attempts == 2),
             "清单保留稀有度区间、互斥分支与候选权重；每次概率不冒充多次至少一次概率");
+        VerifyEquipmentAndFilters();
+        foreach (var factor in new[] { 0m, 0.5m, 1m, 2m, 100m })
+        {
+            var comparison = DungeonDropListing.ComparisonRows(plan, new(Materials: factor)).Single();
+            That(comparison.OriginalProbability == 0.2m && comparison.Multiplier == factor &&
+                comparison.Probability == Math.Min(1m, 0.2m * factor), "零值及封顶仍保留真实原概率与已保存倍率");
+        }
+        var compared = DungeonDropListing.ComparisonRows(branched, new(Special: 2)).ToArray();
+        That(compared.Length == listed.Length && compared.Zip(listed).All(pair =>
+            pair.First.OriginalProbability == pair.Second.Probability && pair.First.ItemId == pair.Second.ItemId &&
+            pair.First.Channel == pair.Second.Channel && pair.First.Attempts == pair.Second.Attempts),
+            "重复物品及不同稀有度分支逐行对应，不按物品编号合并原概率");
         VerifyFile();
         Console.WriteLine($"PASS drop control: {Count - before} checks");
     }
@@ -107,7 +119,7 @@ internal static class DungeonDropControlTests
                 That(config.Answer("drop-control reload")!.StartsWith("ERR ") && ReferenceEquals(previous, config.Settings.Current),
                     "未知字段、数字范围及越界倍率拒绝并保留旧配置");
             }
-            That(config.Answer("drop-control status")!.Contains("\"version\":1") &&
+            That(config.Answer("drop-control status")!.Contains("\"version\":2") &&
                 config.Answer("drop-control reload extra")!.StartsWith("ERR "), "查询包含能力版本，命令参数严格验证");
         }
         finally { TestFiles.DeleteDirectory(directory, true); }

@@ -40,7 +40,7 @@ internal sealed class DungeonDropConfiguration(string dataDirectory)
             if (words[1] == "reload") Reload();
             var snapshot = Settings.Current;
             return "OK " + JsonSerializer.Serialize(new { enabled = snapshot.Enabled, rules = snapshot.Rules,
-                effective = "new-entries", probabilityCap = 1, version = 1 }, Json);
+                effective = "new-entries", probabilityCap = 1, version = 2, hellEquipmentMultiplier = true, lowQualityFilters = true }, Json);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or NotSupportedException or KeyNotFoundException or ArgumentException)
         { return "ERR " + error.Message; }

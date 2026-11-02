@@ -53,6 +53,8 @@ internal static partial class DevelopmentGm
             request.Validate();
             if (request.Action == DevelopmentAction.DirectMarriage)
                 return DirectMarriage(repository, owners, find, request, catalog);
+            if (request.Action is DevelopmentAction.GuildCreateInfo or DevelopmentAction.GuildCreate)
+                return CreateGuild(repository, owners, find, request, catalog);
             if (request.Action == DevelopmentAction.ProfessionOptions)
             {
                 var reset = progress ?? throw new InvalidOperationException("职业资源未装配");
@@ -72,6 +74,7 @@ internal static partial class DevelopmentGm
                     })
                 });
             }
+            if (request.Action == DevelopmentAction.CharacterCopy) return CopyCharacter(repository, owners, find, request, catalog);
             if (request.Action == DevelopmentAction.Profession)
             {
                 if (find(request.Account) is not null) throw new InvalidOperationException("改基础职业前请退出该账号，离线后再执行");
@@ -162,6 +165,24 @@ internal static partial class DevelopmentGm
                 if (request.Primary >= 0) debugSettings.PremiumPcRoom = request.Primary == 1;
                 return "OK " + JsonSerializer.Serialize(new { premiumPcRoom = debugSettings.PremiumPcRoom });
             }
+            if (request.Action is DevelopmentAction.SupportCompanion or DevelopmentAction.SupportCompanions or DevelopmentAction.SupportCompanionProfile)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("支援兵选择仅支持在线服务");
+                if (request.Primary >= 0)
+                {
+                    if (request.Action == DevelopmentAction.SupportCompanionProfile)
+                    {
+                        var configuration = new SupportCompanionConfiguration(request.Primary, request.Args[0], request.Args[1], request.Args[2]);
+                        foreach (var kind in GameDebugSettings.SupportCompanionKinds(configuration.SelectionMask))
+                            if (!debugSettings.SupportProfiles.HasProfile(DungeonCompanion.BaseId(kind), configuration.TierFor(kind)))
+                                throw new InvalidDataException("缺少所选支援兵档次与套装的配套PVF资源，未修改配置");
+                        debugSettings.SupportConfiguration = configuration;
+                    }
+                    else if (request.Action == DevelopmentAction.SupportCompanions) debugSettings.SupportCompanions = request.Primary;
+                    else debugSettings.SupportCompanion = (SupportCompanionKind)request.Primary;
+                }
+                return "OK " + JsonSerializer.Serialize(SupportCompanionState(debugSettings));
+            }
             if (request.Action == DevelopmentAction.SummonWangFugui)
             {
                 if (debugSettings is null) throw new InvalidOperationException("王富贵开关仅支持在线服务");
@@ -173,6 +194,18 @@ internal static partial class DevelopmentGm
                 if (debugSettings is null) throw new InvalidOperationException("光兵开关仅支持在线服务");
                 if (request.Primary >= 0) debugSettings.SummonGuangbing = request.Primary == 1;
                 return "OK " + JsonSerializer.Serialize(new { summonGuangbing = debugSettings.SummonGuangbing });
+            }
+            if (request.Action == DevelopmentAction.SummonFemaleCrusader)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("奶妈支援兵开关仅支持在线服务");
+                if (request.Primary >= 0) debugSettings.SummonFemaleCrusader = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { summonFemaleCrusader = debugSettings.SummonFemaleCrusader });
+            }
+            if (request.Action == DevelopmentAction.SummonEnchantress)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("奶萝支援兵开关仅支持在线服务");
+                if (request.Primary >= 0) debugSettings.SummonEnchantress = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { summonEnchantress = debugSettings.SummonEnchantress });
             }
             if (request.Action == DevelopmentAction.CashShopExpiration)
             {

@@ -37,12 +37,11 @@ internal sealed class DungeonDropInspection(DungeonCatalog dungeons, DungeonRoom
         var rate = snapshot.Enabled ? snapshot.Rules.FirstOrDefault(rule => rule.Scope == scope && Matches(rule))?.Multipliers ??
             snapshot.Rules.FirstOrDefault(rule => rule.Scope == DungeonDropScope.All && Matches(rule))?.Multipliers : null;
         var original = policy.Prepare(sample.MonsterId, sample.CandidateLevel, sample.RewardType, difficulty, definition.BasisLevel);
-        var adjusted = DungeonDropControlSnapshot.Apply(original, rate);
-        var rows = DungeonDropListing.Rows(adjusted).Skip(checked(page * 64)).Take(65).ToArray();
+        var rows = DungeonDropListing.ComparisonRows(original, rate).Skip(checked(page * 64)).Take(65).ToArray();
         return "OK " + JsonSerializer.Serialize(new { dungeonId, scope = scope.ToString(), difficulty, page,
             monsters = samples.Select((monster, index) => new { index, id = monster.MonsterId, level = monster.CandidateLevel,
                 rank = monster.RewardType, map = monster.SourceMap?.Id }), rows = rows.Take(64), hasNext = rows.Length > 64,
-            note = "已保存范围规则下的基础掉落预览：每次抽样概率。含基础通道、怪物声明及基础独立/世界掉落；深渊等入场专用扩展、药剂、成长契约、活动期限和每日资格以真实入场为准。",
+            note = "对照游戏原概率和已保存设置后的概率，均为每次掉落尝试的机会。一次击杀可尝试多次，不能把单次概率当成整次击杀的概率。包含基础掉落及怪物自带清单；深渊等专用玩法、药剂、成长契约、活动和每日资格以实际入场为准。",
             warnings });
     }
 }

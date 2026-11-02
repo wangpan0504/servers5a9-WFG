@@ -52,7 +52,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
         openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, .. openEvents];
-        if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
+        bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
+        if (nolanVisible)
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
@@ -81,7 +82,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);
-        if (canSend?.Invoke() == false) return;
+        if (publish?.Invoke() == false) return;
         long? npcRevision = events?.Strongway2019DisplayRevision;
         var strongway = events?.Read(ServerEventService.Strongway2019Id);
         var npcCharacter = context.Session.Selected;
@@ -97,7 +98,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 Strongway2019NpcPackets.Display(strongway?.Active == true), "strongway_npc_display", NpcCurrent))
                 throw new IOException("Strongway NPC send queue unavailable");
         }
-        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0);
+        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0, nolanVisible);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }

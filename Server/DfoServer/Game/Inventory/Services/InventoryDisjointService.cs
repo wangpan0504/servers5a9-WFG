@@ -18,14 +18,18 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         var now = utcNow ?? Clock.GetUtcNow();
         var source = before.Find(request.Position);
         if (!Enum.IsDefined(mode)) return InventoryResult.Reject(19);
-        bool playerMachine = mode != DisjointMode.Ordinary;
+        bool playerMachine = mode is DisjointMode.OwnMachine or DisjointMode.OtherMachine;
         if (request.Position.List != InventoryListType.Main || request.ToolSlot < -1 || source is null)
             return InventoryResult.Reject(17);
         if (source.Core.Kind != ItemKind.Equipment || source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var template = catalog.Get(source.Core.ItemId);
+        if (mode == DisjointMode.HelperAuthorized && (request.ToolSlot != -1 ||
+            HelperSafetyPolicy.Operations(source, template,
+                character.SkillSwitchInventory.Items.Any(binding => binding.ItemUid == source.Uid)) != 2))
+            return InventoryResult.Reject(19);
         if (source.Core.DisjointForbidden || template.DisjointForbidden || template.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) ||
-            !playerMachine && (source.Core.AmplifyType & 0x80) != 0 ||
+            mode == DisjointMode.Ordinary && (source.Core.AmplifyType & 0x80) != 0 ||
             playerMachine && (character.ExpertJobType != 3 || expertJobs is null || request.ToolSlot != -1))
             return InventoryResult.Reject(19);
         if (disjoint.PieceResults.TryGetValue(template.Id, out int pieceId) &&

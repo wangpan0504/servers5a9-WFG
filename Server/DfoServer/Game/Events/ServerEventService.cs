@@ -47,8 +47,9 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 
     public ServerEventState Schedule(ushort eventId, DateTimeOffset start, DateTimeOffset end)
     {
-        if (eventId == NolanVisibilityId)
-            throw new InvalidDataException("2532仅支持常驻开关，不支持时间表");
+        RequireRegistered(eventId);
+        if (ServerEventDefinition.Find(eventId)?.SupportsSchedule != true)
+            throw new InvalidDataException("该活动只支持开关，不支持设置起止时间");
         return Update(eventId,
             value => value with { StartsAt = start.ToUnixTimeSeconds(), EndsAt = end.ToUnixTimeSeconds(), OverrideActive = null });
     }
@@ -72,7 +73,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 
     public static void RequireRegistered(ushort eventId)
     {
-        if (eventId != DoubleGoldCardId && eventId != NolanVisibilityId && eventId != MileageShopId && eventId != Strongway2019Id)
+        if (ServerEventDefinition.Find(eventId) is null)
             throw new InvalidDataException("尚未登记该服务端活动；黄金卡牌双倍奖励为64，积分商城为266，2019强者之路为312，诺兰常驻状态为2532，公告74不是活动开关");
     }
 }

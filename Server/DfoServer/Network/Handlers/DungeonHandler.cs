@@ -566,7 +566,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         log.Write("formal_dungeon_death", new { Connection = context.Id, Recognized = true, context.Session.Phase,
             result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
-            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact });
+            result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact,
+            DirectItems = result.DirectPickup.GroundKeys.Length });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Handled;
         if (result.ClearFact is { } strongwayClear && context.Session.CurrentStrongway2019Match is { } match &&
@@ -663,9 +664,22 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await EnableSettlementAsync(context, result.MonsterKey);
         if (CharacterExperienceNotice.ShouldPublish(previousLevel))
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
-        if (result.QuestDropSlots.Count > 0)
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
-                InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
+        // 直入包只发布已提交的真实实例差量；不发送依赖既有地面对象的NOTI39或伪造拾取ACK。
+        var directCurrencySlots = result.DirectPickup.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
+            .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value));
+        foreach (var changed in result.QuestDropSlots.Concat(result.DirectPickup.ChangedSlots).Concat(directCurrencySlots)
+            .Distinct().GroupBy(slot => slot.List))
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                changed.Key, [.. changed]), "formal_death_items", Guard);
+        if (result.DirectPickup.ChangedCurrencies.Any(kind => kind is >= CurrencyKind.Cera and <= CurrencyKind.HappyTokenCera))
+            await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(receipt.Character.Inventory.AccountWallet),
+                "formal_direct_currency", Guard);
+        if (!result.DirectPickup.EpicPieceIndexes.IsEmpty && pieces is not null)
+            await context.Notify(NotiPacketType.EPIC_BOOK_INFO,
+                EpicBookPackets.Info(receipt.Character.Inventory.EpicPieces, pieces, result.DirectPickup.EpicPieceIndexes),
+                "formal_direct_epic_pieces", Guard);
+        if (result.DirectPickup.AccountMaterialsChanged)
+            await town.AccountMaterialsAsync(context, receipt.Character, canSend: Guard);
 
         foreach (var change in result.EquipmentChanges.Where(change => change.Before.Core.ItemId == change.After.Core.ItemId))
             await context.Notify(NotiPacketType.GROWTH_ITEM_RENEW_DATA, EquipmentGrowthPackets.Experience(change.After, change.Gain),

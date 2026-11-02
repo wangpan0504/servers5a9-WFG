@@ -1,6 +1,7 @@
 using static DfoServer.Testing.TestCheck;
 using System.Collections;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Dungeons;
 using PvfLib;
 
@@ -251,30 +252,30 @@ internal static class DungeonMonsterPlanTests
         // 放行断言使用只有伴侣行的房间；与原生AI演员叠加的情况另有断言。
         var companionOnlyRoom = room with { AiCharacters = companionActors };
         var companionOnlyClosed = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10);
-        var wangOnly = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(true, false));
+        var wangOnly = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.WangFugui));
         That(wangOnly.Monsters.Count == companionOnlyClosed.Monsters.Count + 1 &&
             wangOnly.Monsters[^1] is { SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false, IsBoss: false } wang &&
             wang.AiCharacter is { Id: DungeonCompanion.WangFuguiId },
             "召唤王富贵只放行20900那一行");
-        // 光兵沿用28号本体5409：两个开关各自独立，只开光兵时不放地图里的20900行。
+        // 单选光兵只放专用9986，不放王富贵，也不改变原生5409人偶。
         var guangRow = new DungeonRoomAiCharacter(DungeonCompanion.GuangbingId, [DungeonCompanion.GuangbingId, 120, 200, 0, 0, 0],
             "[character]", "[normal]", "aicharacter/fixture.aic", 95);
         var bothRoom = room with { AiCharacters = [.. companionActors, guangRow] };
-        var bothOn = DungeonMonsterPlan.FromRoom(bothRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(true, true));
+        var bothOn = DungeonMonsterPlan.FromRoom(bothRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.WangFugui));
         var bothCompanions = bothOn.Monsters.Where(row => row.AiCharacter is not null).ToArray();
-        That(bothOn.Monsters.Count == companionOnlyClosed.Monsters.Count + 2 &&
-            bothCompanions.Select(row => row.AiCharacter!.Id).SequenceEqual([DungeonCompanion.WangFuguiId, DungeonCompanion.GuangbingId]) &&
+        That(bothOn.Monsters.Count == companionOnlyClosed.Monsters.Count + 1 &&
+            bothCompanions.Select(row => row.AiCharacter!.Id).SequenceEqual([DungeonCompanion.WangFuguiId]) &&
             bothCompanions.All(row => row.SpawnType == 5 && row.IsFriendly && !row.IsBlocking),
-            "两个伴侣开关都开时按地图行序放出20900与5409");
-        var guangOnly = DungeonMonsterPlan.FromRoom(bothRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(false, true));
+            "地图声明两类伴侣时仍只放入场快照选中的一名");
+        var guangOnly = DungeonMonsterPlan.FromRoom(bothRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.Guangbing));
         That(guangOnly.Monsters.Count == companionOnlyClosed.Monsters.Count + 1 &&
             guangOnly.Monsters.Where(row => row.AiCharacter is not null).Select(row => row.AiCharacter!.Id)
                 .SequenceEqual([DungeonCompanion.GuangbingId]),
-            "只开光兵时只放5409那一行");
+            "只选光兵时只放9986那一行");
         // 地图自带原生AI演员时（91548 的 55430 一类）照常叠加伴侣：原生演员的行号、key与合同不变。
         var nativeActor = new DungeonRoomAiCharacter(55430, [55430, 100, 200, 0, 0, 0], "[monster]", "[boss]", "aicharacter/fixture.aic", 95);
         var nativeRoom = DungeonMonsterPlan.FromRoom(room with { AiCharacters = [nativeActor, .. companionActors] }, 99, 10,
-            companionRows: DungeonCompanion.EnabledRows(true, false));
+            companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.WangFugui));
         That(nativeRoom.Monsters.Count(row => row.AiCharacter is not null) == 2 &&
             nativeRoom.Monsters.Where(row => row.AiCharacter is not null).Select(row => row.AiCharacter!.Id)
                 .SequenceEqual([55430, DungeonCompanion.WangFuguiId]) &&
@@ -283,11 +284,41 @@ internal static class DungeonMonsterPlanTests
             "原生AI演员地图照样叠加伴侣行，原生演员行号与对象key不受影响");
         var excludedRoom = bothRoom with { Map = bothRoom.Map with { Id = 91548 }, AiCharacters = [nativeActor, .. companionActors, guangRow] };
         var excludedClosed = DungeonMonsterPlan.FromRoom(excludedRoom, 99, 10);
-        var excludedEnabled = DungeonMonsterPlan.FromRoom(excludedRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(true, true));
+        var excludedEnabled = DungeonMonsterPlan.FromRoom(excludedRoom, 99, 10, companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.Guangbing));
         That(excludedEnabled.Monsters.SequenceEqual(excludedClosed.Monsters) &&
             excludedEnabled.Monsters.Where(row => row.AiCharacter is not null).Select(row => row.AiCharacter!.Id).SequenceEqual([55430]),
             "Map 91548 excludes both companions while preserving native actors and object keys");
         var nextRoom = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10, companionRows: []);
+        // 历史注入行按真实迁移证据识别；相同模板号的原生人偶、坐标或序号变化不能被误删。
+        var legacyGuang = new DungeonRoomAiCharacter(5409, [5409, 643, 291, 0, 0, 0],
+            "[character]", "[normal]", "aicharacter/fixture.aic", 95);
+        var knownLegacyRoom = room with
+        {
+            Map = room.Map with { Path = "map/144_redcrystal_forest/55605_1776(1,0).map" },
+            AiCharacters = [nativeActor, legacyGuang]
+        };
+        That(DungeonCompanion.IsCompanionRow(knownLegacyRoom, 1) &&
+            !DungeonCompanion.IsCompanionRow(knownLegacyRoom with { AiCharacters = [legacyGuang] }, 0) &&
+            !DungeonCompanion.IsCompanionRow(knownLegacyRoom with { AiCharacters = [nativeActor,
+                legacyGuang with { RawValues = [5409, 644, 291, 0, 0, 0] }] }, 1),
+            "旧光兵清单有界解码后仍精确核对原序号和六字段");
+        var unknownLegacyRoom = room with
+        {
+            Map = room.Map with { Path = "map/dtt/dtt/dtt1.map" },
+            AiCharacters = [legacyGuang with { RawValues = [5409, 177, 315, 0, 0, 0] }]
+        };
+        That(!DungeonCompanion.IsCompanionRow(unknownLegacyRoom, 0) && !DungeonCompanion.IsCompanionRow(5409),
+            "来源未证的真实5409不归入支援兵分类");
+        foreach (var selected in new[] { SupportCompanionKind.FemaleCrusader, SupportCompanionKind.Enchantress })
+        {
+            int id = DungeonCompanion.EnabledRows(selected).Single();
+            var actorRow = new DungeonRoomAiCharacter(id, [id, 120, 200, 0, 0, 0], "[character]", "[normal]", "aicharacter/fixture.aic", 95);
+            var repeated = DungeonMonsterPlan.FromRoom(room with { AiCharacters = [actorRow, actorRow] }, 99, 10,
+                companionRows: DungeonCompanion.EnabledRows(selected));
+            That(repeated.Monsters.Count(row => row.AiCharacter is { } value && value.Id == id) == 1 &&
+                repeated.Monsters[^1] is { IsFriendly: true, IsBlocking: false, CanReportDeath: false },
+                "新增奶妈奶萝专用行每类仅放一名，不产生敌对死亡资格");
+        }
         That(nextRoom.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))
                 .SequenceEqual(companionOnlyClosed.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))) &&
             wangOnly.Monsters.Take(companionOnlyClosed.Monsters.Count).Select(row => (row.SourceOrdinal, row.ObjectKey))
@@ -303,7 +334,7 @@ internal static class DungeonMonsterPlanTests
         try
         {
             DungeonMonsterPlan.FromRoom(room with { AiCharacters = [malformed] }, 99, 10,
-                companionRows: DungeonCompanion.EnabledRows(true, false));
+                companionRows: DungeonCompanion.EnabledRows(SupportCompanionKind.WangFugui));
         }
         catch (NotSupportedException) { malformedRejected = true; }
         That(malformedRejected, "放行的伴侣行仍按原规则校验，字段不完整不能静默刷出");

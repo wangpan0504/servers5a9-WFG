@@ -20,6 +20,7 @@ internal static class GuildCreationTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources resources, PvfArchive pvf)
     {
+        GuildCreateGmTests.RunResources(towns, characters, resources, pvf);
         int before = Count;
         string path = Path.Combine(Path.GetTempPath(), "guild-create-" + Guid.NewGuid().ToString("N") + ".db");
         try

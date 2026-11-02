@@ -11,6 +11,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using System.Security.Cryptography;
 using System.Collections.Immutable;
+using DfoServer.Game.Settings;
 using DfoServer.Game.Caching;
 
 namespace DfoServer.Game.Session;
@@ -655,7 +656,9 @@ internal sealed partial class GameSession
         if (shared is not null)
         {
             var source = shared.Session.PreparedParty(shared).Dungeon;
-            var participantEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
+            // 物理路线及伴侣集合均取队长已冻结快照，不能用成员重新读取的开关或空集合复验同一场景。
+            var participantEntry = entry with { CharacterRevision = checked(expected.Revision + 1),
+                CompanionMapRows = source.Entry.CompanionMapRows, CompanionProfiles = source.Entry.CompanionProfiles };
             var participantAuthority = new NativeDungeonCombatAuthority();
             if (!SinglePlayerDungeonRun.TryCreate(participantEntry, state.LastAttempt + 1, epoch, source.Route, participantAuthority,
                 out var participant, out var reason, timeProvider, battleLevels: monsterBattleLevels, sharedBattleLevels: source.Run.BattleLevels,
@@ -689,15 +692,18 @@ internal sealed partial class GameSession
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
         var topology = entry!.Maze.StaticTopology;
         if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
-        // GM伴侣：王富贵（20900）与光兵28号（5409）两个开关默认关闭（可各自临时开启）。
+        // GM伴侣：王富贵20900、专用光兵9986、奶妈74990与奶萝19973各自默认关闭，可独立临时开启。
         // 只作用于正式副本流程，训练/职业体验/练习/比赛不注入；祭坛、绝望之塔与眩惑之塔按资源标记 AllowsCompanionAi 整类排除。
         // 深渊派对与宇宙裂缝也放行；地图自带原生 AI 演员的房间同样叠加。
         // 放行集合冻结进入场计划，只在起始房间发送：客户端会让该AIC跨房间跟随，逐房重发会每房多出一名并卡清房。
         if (!entry.IsTutorial && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsPractice &&
             !entry.IsTournament && entry.AllowsCompanionAi)
         {
-            var companionRows = DungeonCompanion.EnabledRows(debugSettings?.SummonWangFugui == true, debugSettings?.SummonGuangbing == true);
-            if (!companionRows.IsEmpty) entry = entry with { CompanionMapRows = companionRows };
+            var support = debugSettings?.SupportConfiguration ?? SupportCompanionConfiguration.Default;
+            var companionRows = DungeonCompanion.EnabledRows(support.SelectionMask);
+            if (!companionRows.IsEmpty) entry = entry with { CompanionMapRows = companionRows,
+                CompanionProfiles = DungeonCompanion.FreezeProfiles(support, debugSettings?.SupportProfiles ?? SupportCompanionCatalog.Empty,
+                    draw ?? RandomNumberGenerator.GetInt32) };
         }
         var plans = new List<DungeonMonsterPlan>();
         int bossRushOffset = 0;
@@ -727,7 +733,7 @@ internal sealed partial class GameSession
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
-                        companionRows: map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
+                        companionRows: map.Id == entry.StartMap.Id ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
                 if (entry.ChampionPercents.IsEnabled)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
                         entry.NamedMonsters);
@@ -1462,7 +1468,8 @@ internal sealed partial class GameSession
             reward = reward with { Bonuses = actualBonuses, Amount = actualBonuses.Total };
         dungeon.PendingDeathReward = null;
         dungeon.PendingQuestDrop = null;
-        if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot))
+        var directPickup = committed.Commit.DirectPickup;
+        if (loot is not null && !dungeon.Ground.PublishCommitted(pending, loot, directPickup.GroundKeys))
             throw new InvalidOperationException("已提交掉落的原准备不能发布");
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
         // 满级入口线后角色经验到账为 0，击杀累计改用「角色到账 + 熟练度到账」的有效经验。
@@ -1481,10 +1488,17 @@ internal sealed partial class GameSession
             dungeon.KillBossExperience = checked(dungeon.KillBossExperience + reward.BaseAmount);
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
-        return AttachBossRushHud(new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
-            committed.Death.ClearFact, loot?.UsesCollectionLedger == true ? null : loot?.Ground, previousLevel)
+        var floorDrops = loot?.Grounds ?? [];
+        if (!directPickup.GroundKeys.IsEmpty)
         {
-            Drops = loot?.Grounds ?? [],
+            var directKeys = directPickup.GroundKeys.ToHashSet();
+            floorDrops = floorDrops.Where(ground => !directKeys.Contains(ground.Reservation.GroundKey)).ToImmutableArray();
+        }
+        return AttachBossRushHud(new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
+            committed.Death.ClearFact, loot?.UsesCollectionLedger == true ? null : floorDrops.FirstOrDefault(), previousLevel)
+        {
+            Drops = floorDrops,
+            DirectPickup = directPickup,
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,
             ProficiencyGained = committed.Commit.ProficiencyGained,

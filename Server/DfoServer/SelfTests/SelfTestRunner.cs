@@ -13,6 +13,10 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        HelperSafetyTests.RunCore();
+        HelperAssetSafetyTests.RunCore();
+        MapGeometryTests.RunCore();
+        await MapGeometryHttpTests.RunCoreAsync();
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         await AntonSymbolProjectionTests.RunAsync();
         CinematicDeathRulesTests.Run();

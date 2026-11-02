@@ -57,6 +57,15 @@ internal static partial class SinglePlayerDungeonRunTests
         }
         var valid = Packet($"#95-helper/1 {nonce} 99 hell 1");
         That(HelperRequests.Parse(valid) == new HelperRequest(nonce, 99, true), "助手命令精确解析角色、nonce及明确开关值");
+        That(HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 1")) == new HelperRequest(nonce, 99, false, 1) &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 2")) == new HelperRequest(nonce, 99, false, 2) &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 0")) is null &&
+            HelperRequests.Parse(Packet($"#95-helper/1 {nonce} 99 cargo 3")) is null,
+            "双金库请求只能选择明确个人或账号容器");
+        That(HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {nonce} 99")) == new HelperRequest(nonce, 99, false) &&
+            HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/1 {nonce} 099")) is null &&
+            HelperRequests.ParseCapability(Encoding.ASCII.GetBytes($"95_HELPER_CAPS/2 {nonce} 99")) is null,
+            "静默库存同步扩展严格识别版本、nonce和规范角色号");
         foreach (string text in new[] { $"#95-helper/2 {nonce} 99 hell 1", $"#95-helper/1 {nonce} 099 hell 1",
             $"#95-helper/1 {nonce} 0 hell 1", $"#95-helper/1 {nonce} 99 hell 2", "#95-helper/1 " + new string('0', 32) + " 99 hell 1" })
             That(HelperRequests.Reserved(Packet(text)) && HelperRequests.Parse(Packet(text)) is null,

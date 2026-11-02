@@ -37,9 +37,17 @@
 ./dist/win-x64/DfoServer.exe --gm-port 23102 --gm event auto 64
 ```
 
-活动是全服配置，禁止account前缀；登记64黄金卡牌双倍奖励、266积分商城和2532诺兰常驻状态，公告编号74不是活动ID。64/266的时间必须带Z或显式时区，开始包含、结束不包含；on/off为持久立即覆盖，auto恢复时间表，schedule保存新区间并清除覆盖。64只影响下一份通关冻结计划，不修改已展示奖励。
+活动是全服配置，禁止account前缀；登记64黄金卡牌双倍奖励、266积分商城、312首期强者之路和2532诺兰常驻状态，公告编号74不是活动ID。64/266/312的时间必须带Z或显式时区，开始包含、结束不包含；on/off为持久立即覆盖，auto恢复时间表，schedule保存新区间并清除覆盖。64只影响下一份通关冻结计划，不修改已展示奖励；312未配置时默认关闭，流程和奖励见[首期强者之路](../模块/强者之路.md)。
 
 2532只支持status/on/off/auto，拒绝schedule；未配置或auto时默认显示诺兰，显式off持久隐藏，on持久显示。默认值只用于读取，不自动补写配置或清除已有off；已保存的历史日期不参与2532判断，也不改变64的状态或版本。入城和换频道投影当前显示状态，保留2037与当前团本事件；仅控制NPC显示，春节活动功能仍禁用。重启保留配置，停服后的离线GM仍遵守原实例锁。
+
+管理页面通过`GET /api/events/catalog`读取已接通活动及能力：每项包含`id/name/purpose/conditions/supportsControl/supportsSchedule/controlReason/defaultState/endpoint/state/stateError`。可写活动为64/266/312/2532；64、266和312支持时间表。`state`包含`eventId/active/mode/revision/startsAt/endsAt`，时间点是Unix秒，读取失败时为null并提供`stateError`，不能把失败当关闭。`on/off`立即覆盖时间表，`auto`按现有时间表或默认值运行，`schedule`保存起止时间并清除强制开关。
+
+原`GET /api/events?id=编号`与`POST /api/events`同样接通三个注册活动；写入正文为`id/op/start/end/confirm`，只支持`on/off/auto/schedule`，设置时间必须带时区。积分商城及诺兰变化沿有界唤醒队列重发完整EVENT_INFO，不定时轮询、不清除其他活动目录；黄金卡牌只影响之后生成的奖励计划。
+
+目录同时说明2037幸运值、2378公会红包、2395乔纳森与10999礼包累计的真实业务和缺少通用控制的原因；这些条目禁用通用写操作。`relatedBusiness`提供礼包配置可用状态及关联掉落、售货机、租赁、公会出勤说明，不把关联玩法计为新增可运营活动。
+
+`GET /api/events/resources?offset=0&limit=50&kind=definition&q=关键字`只读查询当前已加载PVF中的活动资源。`kind`可选`all/definition/component/directory/list`，单页最多100项；第一次打开管理资源目录时扫描并缓存，游戏启动及战斗不扫描。仅直接存在的中文标题用作名称；未确认名称为null。条目统一禁止控制，原文活动编号只作为声明证据，不扩大服务端活动白名单。
 
 ## 积分商城活动
 
@@ -318,3 +326,7 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 已成功请求优先原样重放receipt/mailIDs，不再因模板变化或资源未装配重新规划；换card拒绝。尚未领取才基于原grants和当前合法物品目录规划，无法规划明确失败，不换物品/数量。账号接管、角色版本或原资格变化均拒绝。SQL成功后管理响应丢失可用同一完整请求重试，不重复发奖。
 
 不发送猜测的600/601或自动选牌；正常重新选角后由既有库存载入显示资产。原生客户端660没有历史instance参数，仍不承担此恢复入口。完整卢克默认入口保护保持不变。
+
+## GM一键创建公会
+
+`guild-create-info <角色名>` 只读返回当前PVF建会费用。`guild-create <角色名> <UTF-8公会名的Base64> <预期金币费用>` 要求账号完全离线，使用拒绝接管租约，按原GuildDirectory规划并原子扣费、建会及写入会长成员。费用与当前PVF不同、名字无效或被占用、金币不足、已有公会或仍在入会冷却均拒绝。地址沿原客户端回退为公会名，不伪造认可人、邀请或第二成员；成功返回实际guildId、guildName、characterId、createCost及余额，重新登录后读取公会。

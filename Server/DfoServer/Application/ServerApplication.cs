@@ -183,7 +183,8 @@ public static class ServerApplication
                 return 0;
             }
 
-            var towns = Load("Town resources", () => TownCatalog.Load(pvf));
+            var geometry = Load("Common map geometry", () => DfoServer.GameWorld.Maps.MapGeometryConfig.ReadFile(Path.Combine(options.DataDirectory, "DisplayCompat.world.json")));
+            var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry));
             if (command.Kind == ServerCommandKind.InspectTowns)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new { Room = towns.Room, Return = towns.InitialReturn, Areas = towns.Areas.Values }));

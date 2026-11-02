@@ -330,7 +330,8 @@ internal sealed class DungeonGroundState
     }
 
     // 由调用方在明确SQL提交并Run确认后调用；精确候选查询不能被复制Prepared绕过。
-    public bool PublishCommitted(PreparedDungeonDeath prepared, FrozenDungeonGroundDeath result)
+    public bool PublishCommitted(PreparedDungeonDeath prepared, FrozenDungeonGroundDeath result,
+        ImmutableArray<uint> directlyPicked = default)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(result);
@@ -340,9 +341,13 @@ internal sealed class DungeonGroundState
             state.Committed || result.Grounds.Any(ground => groundItems[ground.Reservation.GroundKey].Status != DungeonGroundStatus.Frozen) || current.CurrentMap != result.Map ||
             current.Identity != result.CommittedIdentity || current.Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement))
             return false;
+        var directKeys = directlyPicked.IsDefaultOrEmpty ? null : directlyPicked.ToHashSet();
+        if (directKeys is not null && (directKeys.Count != directlyPicked.Length ||
+            directKeys.Any(key => !groundItems.TryGetValue(key, out var item) || !ReferenceEquals(item.Death, state)))) return false;
         state.Committed = true;
         foreach (var ground in result.Grounds)
-            groundItems[ground.Reservation.GroundKey].Status = DungeonGroundStatus.Available;
+            groundItems[ground.Reservation.GroundKey].Status = directKeys?.Contains(ground.Reservation.GroundKey) == true
+                ? DungeonGroundStatus.Picked : DungeonGroundStatus.Available;
         return true;
     }
 

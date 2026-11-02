@@ -25,6 +25,7 @@ internal static class TcpRegressionTests
             AntonResourceRewardTests.Run(resources);
             return Task.CompletedTask;
         }),
+        ("character-copy", (_, _, resources) => { CharacterCopyTests.RunResources(resources); return Task.CompletedTask; }),
         ("quest-stage-growth", async (options, root, resources) =>
         {
             QuestStagePolicyTests.RunResources(resources);

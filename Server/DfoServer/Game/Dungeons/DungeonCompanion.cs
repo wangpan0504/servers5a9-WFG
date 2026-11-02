@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -8,19 +10,54 @@ internal static class DungeonCompanion
 {
     // 王富贵：priest/heal_soldier/heal_soldier.aic，20900 行写在每张可解析的副本地图里。
     public const int WangFuguiId = 20900;
-    // 光兵：沿用28号本体 fighter/28/28.aic（人偶 2600261 用的同一编号），5409 行写在每张可解析的副本地图里。
-    // 20903/20904 在 aicharacter.lst 里没有注册，客户端建不出来会闪退，不能再用那两个编号。
-    public const int GuangbingId = 5409;
+    // 专用光兵不再复用人偶2600261的5409；奶妈、奶萝与光兵须配套各自注册的AIC及MAP行。
+    public const int GuangbingId = 9986;
+    public const int FemaleCrusaderId = 74990;
+    public const int EnchantressId = 19973;
 
-    // 两个开关各自独立、可同时开启；关闭的开关一行都不发，行序仍按地图 [ai character] 原顺序。
-    public static ImmutableArray<int> EnabledRows(bool summonWangFugui, bool summonGuangbing)
+    public static int BaseId(SupportCompanionKind kind) => kind switch
     {
-        var rows = ImmutableArray.CreateBuilder<int>(2);
-        if (summonWangFugui) rows.Add(WangFuguiId);
-        if (summonGuangbing) rows.Add(GuangbingId);
-        return rows.ToImmutable();
+        SupportCompanionKind.WangFugui => WangFuguiId,
+        SupportCompanionKind.Guangbing => GuangbingId,
+        SupportCompanionKind.FemaleCrusader => FemaleCrusaderId,
+        SupportCompanionKind.Enchantress => EnchantressId,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+    public static string NameForBaseId(int id) => id switch
+    {
+        WangFuguiId => "wangfugui", GuangbingId => "guangbing", FemaleCrusaderId => "female-crusader", EnchantressId => "enchantress",
+        _ => throw new ArgumentOutOfRangeException(nameof(id))
+    };
+    public static ImmutableArray<SupportCompanionProfile> FreezeProfiles(SupportCompanionConfiguration selected,
+        SupportCompanionCatalog catalog, Func<int, int> draw) =>
+        [.. GameDebugSettings.SupportCompanionKinds(selected.SelectionMask)
+            .Select(kind => catalog.Pick(BaseId(kind), selected.TierFor(kind), draw)).OfType<SupportCompanionProfile>()];
+
+    // 入图仅消费一次两组选择快照；共享实例成员沿用创建者冻结的集合。
+    public static ImmutableArray<int> EnabledRows(int mask)
+    {
+        if (!GameDebugSettings.ValidSupportCompanions(mask)) throw new ArgumentOutOfRangeException(nameof(mask));
+        return GameDebugSettings.SupportCompanionKinds(mask).SelectMany(kind => EnabledRows(kind)).ToImmutableArray();
     }
 
-    // 两行都算伴侣：未放行时在房间计划里丢弃，放行后按资源行原样发送。
-    public static bool IsCompanionRow(int id) => id is WangFuguiId or GuangbingId;
+    // 旧单选调用仍映射到同一份专用资源 ID。
+    public static ImmutableArray<int> EnabledRows(SupportCompanionKind selected) => selected switch
+    {
+        SupportCompanionKind.Off => [],
+        SupportCompanionKind.WangFugui => [WangFuguiId],
+        SupportCompanionKind.Guangbing => [GuangbingId],
+        SupportCompanionKind.FemaleCrusader => [FemaleCrusaderId],
+        SupportCompanionKind.Enchantress => [EnchantressId],
+        _ => throw new ArgumentOutOfRangeException(nameof(selected))
+    };
+
+    // ID判定只覆盖专用模板；5409原生演员与人偶不能全局归入伴侣。
+    public static bool IsCompanionRow(int id) => id is WangFuguiId or GuangbingId or FemaleCrusaderId or EnchantressId;
+
+    // 旧5409仅在来源清单中的MAP原行及完整六字段仍匹配时过滤；不改人偶或原生剧情演员。
+    public static bool IsCompanionRow(DungeonRoomDefinition room, int ordinal)
+    {
+        var row = room.AiCharacters[ordinal];
+        return IsCompanionRow(row.Id) || row.Id == 5409 && DungeonCompanionLegacyRows.IsKnown(room.Map.Path, ordinal, row);
+    }
 }

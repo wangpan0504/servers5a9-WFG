@@ -161,7 +161,8 @@ internal static class ServerRuntime
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
         // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
-        var debugSettings = new GameDebugSettings { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory) };
+        var debugSettings = new GameDebugSettings { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
+            SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf) };
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
         log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });
@@ -381,7 +382,7 @@ internal static class ServerRuntime
                 GameWorld.Raids.RaidResourceLoader.Load(pvf, productionLuke, dungeonCatalog, itemResources.Items),
                 itemResources.Items, itemResources.Boosters);
         // 正式Luke Run策略装配静态对象证据；与普通副本共用房间目录。
-        var lukeObjectRooms = lukeStartPolicy?.Run is null ? null : DungeonRoomCatalog.Load(pvf);
+        var lukeObjectRooms = lukeStartPolicy?.Run is null ? null : DungeonRoomCatalog.Load(pvf, towns.Geometry);
         var raidCatalog = raidDefinitions.PrepareResources(pvf, dungeonCatalog, itemResources.Items,
             lukeObjectRooms,
             antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath),
@@ -551,7 +552,7 @@ internal static class ServerRuntime
         {
             selectionDungeons = dungeonCatalog;
             assaultMode = StartupStage.Run(log, "Assault mode catalog", () => AssaultModeCatalog.Load(pvf, dungeonCatalog));
-            var rooms = StartupStage.Run(log, "Dungeon room catalog", () => lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf));
+            var rooms = StartupStage.Run(log, "Dungeon room catalog", () => lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf, towns.Geometry));
             operationHope = StartupStage.Run(log, "Operation Hope catalog", () => OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms));
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
@@ -693,7 +694,7 @@ internal static class ServerRuntime
         {
             var catalog = dungeonCatalog;
             var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
-                ? DungeonRoomCatalog.Load(pvf) : null;
+                ? DungeonRoomCatalog.Load(pvf, towns.Geometry) : null;
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
             createActivity = static session => new DungeonProbeState(session);
         }
@@ -929,12 +930,21 @@ internal static class ServerRuntime
         var startedAt = DateTimeOffset.Now;
         var webReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool rechargeWebAvailable = false;
+        var geometrySignatures = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (string path in towns.GeometryPaths.Concat(towns.Geometry.Paths).Distinct(StringComparer.Ordinal))
+        {
+            var tokens = towns.Geometry.ReadTokens(pvf, path);
+            geometrySignatures.Add(path, GameWorld.Maps.MapGeometrySignature.Compute(path, tokens, pvf.ResolveString));
+        }
+        log.Write("startup", new { Stage = "Common map geometry capability", State = "complete", Maps = geometrySignatures.Count });
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options,
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows,
+                new GameWorld.Events.EventResourceCatalog(pvf), promotions), stop, capture, options,
                 available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
                 error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,
-                    Reason = error.GetType().Name, error.Message, Continuing = "Game listeners remain enabled" }));
+                    Reason = error.GetType().Name, error.Message, Continuing = "Game listeners remain enabled" }),
+                geometry: path => geometrySignatures.GetValueOrDefault(path));
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         // 决斗维护也使用此生命周期；关闭两个GM入口时仍须配对及回收预约。
         Func<PacketCapture?, CancellationToken, Task> management = RunManagement;

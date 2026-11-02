@@ -18,6 +18,7 @@ internal static partial class GmWebServerTests
         public List<string> Returned { get; } = [];
         public bool InGame = true;
         public bool RejectProfession;
+        public string Companion = "off";
         public List<string> Disconnected { get; } = [];
         public bool Disconnect(string account) { Disconnected.Add(account); return account == "acct"; }
         public GmAudit Audit { get; } = new(audit);
@@ -28,6 +29,12 @@ internal static partial class GmWebServerTests
         public string Command(string line)
         {
             Commands.Add(line);
+            if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new { supportCompanion = Companion });
+            if (line.StartsWith("support-companion ", StringComparison.Ordinal))
+            {
+                Companion = line[18..];
+                return "OK " + JsonSerializer.Serialize(new { supportCompanion = Companion });
+            }
             if (RejectProfession && line.Contains(" profession ")) return "ERR 改基础职业前请退出该账号，离线后再执行";
             if (line.Contains(" items ")) return "OK {\"name\":\"Hero\",\"gold\":99,\"items\":[{\"list\":0,\"slot\":1,\"id\":100,\"name\":\"剑\",\"count\":1}]}";
             if (line == "exp-table") return "OK {\"max\":3,\"levels\":[{\"level\":1,\"start\":0,\"span\":1000},{\"level\":2,\"start\":1000,\"span\":2000},{\"level\":3,\"start\":3000,\"span\":0}]}";
@@ -97,6 +104,34 @@ internal static partial class GmWebServerTests
         TestCheck.That(page.StatusCode == HttpStatusCode.NotFound, "GM接口不提供旧网页");
         TestCheck.That(page.Headers.CacheControl?.NoStore == true, "GM响应禁止缓存");
         TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM接口保留内容安全策略");
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
+        {
+            Content = JsonContent.Create(new { key = "support-companion", value = "enchantress", confirm = true })
+        })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.IsSuccessStatusCode && data.Companion == "enchantress", "管理端单次请求提交枚举选择");
+        }
+        int beforeCompanionRead = data.Commands.Count;
+        var debug = (await http.GetFromJsonAsync<JsonElement>("/api/debug")).GetProperty("data");
+        TestCheck.That(debug.GetProperty("supportCompanion").GetString() == "enchantress" &&
+            debug.GetProperty("summonEnchantress").GetBoolean() && !debug.GetProperty("summonWangFugui").GetBoolean() &&
+            !debug.GetProperty("summonGuangbing").GetBoolean() && !debug.GetProperty("summonFemaleCrusader").GetBoolean() &&
+            data.Commands.Skip(beforeCompanionRead).Count(line => line.StartsWith("support-companion", StringComparison.Ordinal)) == 1 &&
+            data.Commands.Skip(beforeCompanionRead).All(line => !line.StartsWith("summon-", StringComparison.Ordinal)),
+            "管理回读一次原子选择派生四个兼容字段");
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
+        {
+            Content = JsonContent.Create(new { key = "support-companion", value = "invalid", confirm = true })
+        })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            int beforeInvalidSelection = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeInvalidSelection &&
+                data.Companion == "enchantress", "无效单选在调用GM前拒绝，不先清空当前项");
+        }
         foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
             TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
         string[] embeddedPages = ["DfoServer.GmWeb.recharge.html", "DfoServer.GmWeb.client.includeImg.htm",

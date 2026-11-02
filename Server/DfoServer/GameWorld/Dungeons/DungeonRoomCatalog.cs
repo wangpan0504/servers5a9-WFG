@@ -62,6 +62,7 @@ internal sealed record DungeonRoomDefinition(
 internal sealed class DungeonRoomCatalog
 {
     private readonly PvfArchive archive;
+    private DfoServer.GameWorld.Maps.MapGeometryConfig geometry = DfoServer.GameWorld.Maps.MapGeometryConfig.Empty;
     private readonly IReadOnlyDictionary<int, string> monsters;
     private readonly IReadOnlyDictionary<int, string> passiveObjects;
     private readonly IReadOnlyDictionary<int, string> aiCharacters;
@@ -77,14 +78,14 @@ internal sealed class DungeonRoomCatalog
         hellParty = new(() => DungeonHellPartyCatalog.Load(archive));
     }
 
-    public static DungeonRoomCatalog Load(PvfArchive pvf)
+    public static DungeonRoomCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null)
     {
 
         var monsters = DungeonCatalog.ParseDirectory(pvf.ReadTokens("monster/monster.lst"), pvf.ResolveString, "monster");
         var objects = ParsePassiveDirectory(pvf.ReadTokens("passiveobject/passiveobject.lst"), pvf.ResolveString);
         var actors = DungeonCatalog.ParseDirectory(pvf.ReadTokens("aicharacter/aicharacter.lst"),pvf.ResolveString,"aicharacter");
         var maps = DungeonCatalog.ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map");
-        return new(pvf, monsters, objects, actors, maps);
+        return new(pvf, monsters, objects, actors, maps) { geometry = geometry ?? DfoServer.GameWorld.Maps.MapGeometryConfig.Empty };
     }
 
     internal static IReadOnlyDictionary<int, string> ParsePassiveDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
@@ -114,7 +115,7 @@ internal sealed class DungeonRoomCatalog
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
             || source is null)
             throw new InvalidDataException("房间地图路径或索引无效");
-        var tokens = source.ReadTokens(path);
+        var tokens = geometry.ReadTokens(source, path);
         var roomMonsters = ReferenceEquals(source, archive) ? monsters : DungeonCatalog.ParseDirectory(source.ReadTokens("monster/monster.lst"), source.ResolveString, "monster");
         var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
         var room = ParseResource(map with { Path = path }, tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,

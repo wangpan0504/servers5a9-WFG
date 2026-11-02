@@ -69,6 +69,8 @@ internal sealed class TownCatalog
     public bool IsGuildHall(Location position, IReadOnlySet<int> completed) => Scene(position, completed).IsGuildHall;
     static readonly IReadOnlySet<int> NoQuests = new HashSet<int>();
     public IReadOnlyDictionary<(byte, byte), TownArea> Areas { get; }
+    public DfoServer.GameWorld.Maps.MapGeometryConfig Geometry { get; private init; } = DfoServer.GameWorld.Maps.MapGeometryConfig.Empty;
+    public IReadOnlyCollection<string> GeometryPaths { get; private init; } = Array.Empty<string>();
     public IReadOnlySet<byte> EpisodeTowns { get; init; } = new HashSet<byte>();
     public Location Room { get; }
     public Location InitialReturn { get; }
@@ -438,8 +440,9 @@ internal sealed class TownCatalog
         area.Map(completed).Links.Any(l => l.Gate.Door && l.Town == target.Town && l.Area == target.Area);
 
     public bool CanTravel(Location current, Location target, int level, IReadOnlySet<int>? completed = null, Location? roomReturn = null) => Admission(current, target, level, completed, roomReturn) == "ready";
-    public static TownCatalog Load(PvfArchive pvf)
+    public static TownCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null)
     {
+        geometry ??= DfoServer.GameWorld.Maps.MapGeometryConfig.Empty;
         var areas = new Dictionary<(byte, byte), TownArea>();
         var maps = new Dictionary<string, TownMap>();
         var texts = new Dictionary<string, MapText>();
@@ -518,7 +521,7 @@ internal sealed class TownCatalog
             { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
         }
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
-            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
+            { Geometry = geometry, GeometryPaths = Array.AsReadOnly(texts.Keys.ToArray()), SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
                 LostLandEntryNpcs = lostLandNpcs, MarriageDungeonEntryNpcs = marriageDungeonNpcs,
                 EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
@@ -532,7 +535,7 @@ internal sealed class TownCatalog
             TownMap map;
             try
             {
-                var data = ReadMap(pvf, path, [], texts);
+                var data = ReadMap(pvf, path, [], texts, geometry);
                 var own = data.Text;
                 var bounds = Rows(own, "virtual movable area", 4).Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray();
                 var movable = Rows(own, "town movable area", 6);
@@ -622,13 +625,13 @@ internal sealed class TownCatalog
     }
 
     sealed record MapText(string Text, bool IsRoom);
-    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache)
+    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache, DfoServer.GameWorld.Maps.MapGeometryConfig geometry)
     {
         if (cache.TryGetValue(path, out var cached))
             return cached;
         if (!chain.Add(path))
             throw new InvalidDataException("Recursive map import: " + path);
-        string own = pvf.ReadText(path), parent = "";
+        string own = geometry.ReadText(pvf, path), parent = "";
         bool room = path is "map/common/gate_seria.map" or "map/common/(r)gate_seria.map";
         foreach (Match m in Regex.Matches(Section(own, "import script"), "`([^`]+)`"))
         {
@@ -641,7 +644,7 @@ internal sealed class TownCatalog
                 imported = imported[..(slash + 1)] + "(r)" + imported[(slash + 1)..];
             }
 
-            var data = ReadMap(pvf, imported, chain, cache);
+            var data = ReadMap(pvf, imported, chain, cache, geometry);
             parent += data.Text + "\n";
             room |= data.IsRoom;
         }

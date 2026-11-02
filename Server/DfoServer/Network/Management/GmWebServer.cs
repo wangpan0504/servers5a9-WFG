@@ -41,6 +41,8 @@ internal interface IGmWebData
     // 三张团本卡的每周时段（数据目录 gm-raid-windows.json，不进角色库）。
     string ReadRaidWindows();
     void WriteRaidWindows(string json);
+    object? EventResources(int offset, int limit, string? query, string kind) => null;
+    object? EventBusinessStatus() => null;
     byte[]? ItemIcon(int id);
     object? ItemPreview(int id);
     // 纸娃娃（只读）：按角色当前外观合成站立帧；tryOn 为只在内存中替换的物品编号。
@@ -57,20 +59,20 @@ internal static partial class GmWebServer
 
     public static async Task RunWithRechargeAsync(int port, int rechargePort, IGmWebData data, CancellationToken stop,
         PacketCapture? capture = null, ServerOptions? options = null, Action<bool>? started = null,
-        Action<Exception>? unavailable = null)
+        Action<Exception>? unavailable = null, Func<string, byte[]?>? geometry = null)
     {
         bool bound = false;
         try
         {
             await RunCoreAsync(port, rechargePort, data, stop, capture, options,
-                () => { bound = true; started?.Invoke(true); }, clientPages: true);
+                () => { bound = true; started?.Invoke(true); }, clientPages: true, geometry: geometry);
         }
         catch (Exception error) when (!bound && !stop.IsCancellationRequested && error is IOException or SocketException)
         {
             // Kestrel绑定失败会释放同一应用的全部端点；仅重新建立独立配置的GM入口，不探测后抢占端口。
             if (port != 0 && port != rechargePort)
                 await RunCoreAsync(port, null, data, stop, capture, options,
-                    () => { unavailable?.Invoke(error); started?.Invoke(false); }, clientPages: true);
+                    () => { unavailable?.Invoke(error); started?.Invoke(false); }, clientPages: true, geometry: geometry);
             else
             {
                 unavailable?.Invoke(error);
@@ -82,7 +84,7 @@ internal static partial class GmWebServer
     }
 
     static async Task RunCoreAsync(int port, int? rechargePort, IGmWebData data, CancellationToken stop,
-        PacketCapture? capture, ServerOptions? options, Action? started, bool clientPages = false)
+        PacketCapture? capture, ServerOptions? options, Action? started, bool clientPages = false, Func<string, byte[]?>? geometry = null)
     {
         if (port is < 0 or > 65535 || port == 0 && rechargePort is null || rechargePort is < 1 or > 65535)
             throw new InvalidDataException("Invalid GM web port");
@@ -104,6 +106,7 @@ internal static partial class GmWebServer
         {
             MapRecharge(app, data);
             MapClientPages(app);
+            MapClientGeometry(app, geometry);
         }
         if (capture is not null && options is not null)
             MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
@@ -195,6 +198,21 @@ internal static partial class GmWebServer
         });
         app.MapGet("/api/exp-table", () => Reply(data.Command("exp-table")));
         app.MapGet("/api/debug", () => Results.Json(new { ok = true, data = DebugState(data) }));
+        app.MapGet("/api/support-companions", () => Reply(data.Command("support-profile")));
+        app.MapPost("/api/support-companions", (HttpContext http, SupportCompanionsBody b) =>
+        {
+            if (b.Confirm != true) return Bad("需要二次确认");
+            if (b.Companions is null || b.Companions.Length > 3 ||
+                b.Companions.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress")))
+                return Bad("支援兵名单无效");
+            string[] names = ["wangfugui", "female-crusader", "enchantress"];
+            if (b.Tiers is null || b.Tiers.Count != names.Length ||
+                names.Any(name => !b.Tiers.TryGetValue(name, out var tier) || tier is not ("entry" or "graduate" or "huge")))
+                return Bad("请同时提交奶爸、奶妈、小魔女的门槛、毕业或超大档次");
+            string selection = b.Companions.Length == 0 ? "off" : string.Join(',', b.Companions);
+            string command = $"support-profile {selection} {string.Join(' ', names.Select(name => b.Tiers[name]))}";
+            return Run(http, data, "support-companions", "-", "-", command, "support-profile");
+        });
         app.MapPost("/api/disconnect", (HttpContext http, KickBody b) =>
         {
             if (!Token.IsMatch(b.Account)) return Bad("账号无效");
@@ -403,14 +421,29 @@ internal static partial class GmWebServer
         app.MapPost("/api/debug", (HttpContext http, DebugBody b) =>
         {
             if (b.Confirm != true) return Bad("需要二次确认");
+            if (b.Key == "support-companions")
+            {
+                // 这里只校验传输标记，分组数量与重复项由同一开发命令执行器原子校验。
+                string[] names = b.Value?.Split(',') ?? [];
+                if (b.Value != "off" && (names.Length is < 1 or > 4 ||
+                    names.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress"))))
+                    return Bad("支援兵选择无效");
+                return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
+            }
+            if (b.Key == "support-companion")
+            {
+                if (b.Value is not ("off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
+                    return Bad("支援兵选择无效");
+                return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
+            }
             if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
             if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room" or
-                "summon-wangfugui" or "summon-guangbing")) return Bad("未知调试开关");
+                "summon-wangfugui" or "summon-guangbing" or "summon-female-crusader" or "summon-enchantress")) return Bad("未知调试开关");
             return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
         });
     }
 
-    static Dictionary<string, bool?> DebugState(IGmWebData data)
+    static Dictionary<string, object?> DebugState(IGmWebData data)
     {
         bool? Flag(string command, string property)
         {
@@ -424,14 +457,48 @@ internal static partial class GmWebServer
             }
             catch (JsonException) { return null; }
         }
+        string[]? selections = null;
+        JsonElement? companionTiers = null, companionProfiles = null;
+        string companion = data.Command("support-companion");
+        if (companion.StartsWith("OK ", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(companion[3..]);
+                if (document.RootElement.TryGetProperty("supportCompanionTiers", out var tiers) && tiers.ValueKind == JsonValueKind.Object)
+                    companionTiers = tiers.Clone();
+                if (document.RootElement.TryGetProperty("profiles", out var profiles) && profiles.ValueKind == JsonValueKind.Array)
+                    companionProfiles = profiles.Clone();
+                if (document.RootElement.TryGetProperty("supportCompanions", out var values) && values.ValueKind == JsonValueKind.Array &&
+                    values.EnumerateArray().All(value => value.ValueKind == JsonValueKind.String &&
+                        value.GetString() is "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
+                {
+                    selections = values.EnumerateArray().Select(value => value.GetString()!).ToArray();
+                }
+                else if (document.RootElement.TryGetProperty("supportCompanion", out var value) && value.ValueKind == JsonValueKind.String &&
+                    value.GetString() is "off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress")
+                    selections = value.GetString() == "off" ? [] : [value.GetString()!];
+            }
+            catch (JsonException) { }
+        }
         return new()
         {
             ["infiniteFatigue"] = Flag("infinite-fatigue", "infiniteFatigue"),
             ["ignoreAbsoluteExpiration"] = Flag("cash-shop-expiration", "ignoreAbsoluteExpiration"),
             ["ignoreUsablePeriod"] = Flag("cash-shop-usable-period", "ignoreUsablePeriod"),
             ["premiumPcRoom"] = Flag("pc-room", "premiumPcRoom"),
-            ["summonWangFugui"] = Flag("summon-wangfugui", "summonWangFugui"),
-            ["summonGuangbing"] = Flag("summon-guangbing", "summonGuangbing")
+            ["supportCompanion"] = selections is null ? null : selections.FirstOrDefault(name => name != "guangbing") ?? selections.FirstOrDefault() ?? "off",
+            ["supportCompanions"] = selections,
+            ["supportCompanionTiers"] = companionTiers,
+            ["profiles"] = companionProfiles,
+            ["supportAuxiliary"] = selections is null ? null : selections.FirstOrDefault(name => name != "guangbing") ?? "off",
+            ["supportSynergies"] = selections?.Where(name => name == "guangbing").ToArray(),
+            ["supportAuxiliaryLimit"] = 1,
+            ["supportSynergyLimit"] = 2,
+            ["summonWangFugui"] = selections?.Contains("wangfugui"),
+            ["summonGuangbing"] = selections?.Contains("guangbing"),
+            ["summonFemaleCrusader"] = selections?.Contains("female-crusader"),
+            ["summonEnchantress"] = selections?.Contains("enchantress")
         };
     }
 
@@ -446,6 +513,7 @@ internal static partial class GmWebServer
     internal sealed record BlackDiamondBody(string Account, string Name, int Days, bool? Confirm);
     internal sealed record ExpertJobBody(string Account, string Name, int Type, int Level, bool? Confirm);
     internal sealed record DebugBody(string Key, string Value, bool? Confirm);
+    internal sealed record SupportCompanionsBody(string[]? Companions, Dictionary<string, string>? Tiers, bool? Confirm);
 
     // 物品分页：page/pageSize（pageSize 1–200，默认 50）；兼容旧的 offset。命令偏移参数写成 "偏移/每页条数"。
     // /api/items/search 与 /filter 的扩展参数（都可省略，省略时与旧版完全一致）：

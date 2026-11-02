@@ -48,6 +48,8 @@ internal sealed record DungeonEntryPlan(
     // GM伴侣：本次入场放行的地图 [ai character] 行编号。空表示未开启或该副本类型不注入；
     // 只在起始房间发送，非起始房间的行由 DungeonMonsterPlan.FromRoom 丢弃。
     public ImmutableArray<int> CompanionMapRows { get; init; } = [];
+    // 按本次档次抽取的完整套装模板；入场、共享成员与复验沿用同一结果，不再重新随机。
+    public ImmutableArray<SupportCompanionProfile> CompanionProfiles { get; init; } = [];
     // 资源侧准入：祭坛、塔与亡者峡谷不注入伴侣（DungeonDefinition.AllowsCompanionAi）；
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;

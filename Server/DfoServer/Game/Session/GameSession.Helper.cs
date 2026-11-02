@@ -1,6 +1,7 @@
 using DfoServer.Game.Caching;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 
@@ -8,12 +9,60 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    sealed record HelperPreferences(ushort CharacterId, long Epoch, bool HellRotation);
+    sealed record HelperPreferences(ushort CharacterId, long Epoch, long Generation, bool HellRotation, bool DirectPickup);
     static readonly GameCacheSlot<HelperPreferences> helperPreferencesSlot = new();
+    static readonly GameCacheSlot<HelperCapabilityReceipt> helperDirectCapabilitySlot = new();
     sealed record HelperRotationCapture(FormalDungeon Source, Character Character, long Epoch,
         DungeonRunIdentity Identity, DungeonPoint Target, HelperPreferences Preferences, HelperHellRotation Rotation);
 
     internal sealed record HelperSettingsReceipt(ushort CharacterId, long Epoch, bool Accepted, bool HellRotation);
+    internal sealed record HelperPickupReceipt(ushort CharacterId, long Epoch, long Generation, bool Accepted, bool Enabled);
+    internal sealed record HelperCapabilityReceipt(ushort CharacterId, long Epoch, long Generation);
+    internal sealed record HelperCargoReceipt(Character Character, long Epoch, long Generation,
+        Guid? Instance, InventoryListType List, bool Accepted);
+
+    internal HelperCapabilityReceipt? ReadHelperCapabilities(ushort characterId, bool directPickup = false) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is not { } character || character.Id != characterId) return null;
+        var receipt = new HelperCapabilityReceipt(character.Id, SelectionEpoch, owner.Generation);
+        if (directPickup) gameCache.Set(helperDirectCapabilitySlot, receipt);
+        return receipt;
+    });
+
+    internal bool CanPublishHelperCapabilities(HelperCapabilityReceipt receipt) => owner.Execute(() =>
+        Ready && Selected?.Id == receipt.CharacterId && SelectionEpoch == receipt.Epoch && owner.Generation == receipt.Generation);
+
+    internal HelperCargoReceipt? SetHelperPortableCargo(ushort characterId, InventoryListType list) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is not { } character || character.Id != characterId) return null;
+        bool accepted = list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo &&
+            Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
+            pendingRental is null && !HasPendingTownQuestCommit && !HasPendingFormalCard &&
+            formalDungeon?.PendingTutorialClear is null && formalDungeon?.PendingInventoryDiscard is null &&
+            formalDungeon?.HasPendingFatigue != true && formalDungeon?.Run.HasPendingDeath != true &&
+            formalDungeon?.Run.HasPendingSettlement != true && formalDungeon?.Ground.HasPendingOperation != true &&
+            (list == InventoryListType.PersonalCargo ? character.Inventory.CargoCapacity > 0 : character.Inventory.AccountCargo.Capacity > 0) &&
+            (Phase == SessionPhase.Town || formalDungeon is not null);
+        if (accepted && formalDungeon is { } dungeon && Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
+        {
+            // 只授权本次选中的真实仓库；不影响随身仓库道具原有的双仓库资格。
+            var previous = portableCargo;
+            bool same = previous is not null && previous.Generation == owner.Generation && previous.SelectionEpoch == SelectionEpoch &&
+                previous.DungeonInstance == dungeon.Run.Snapshot.Identity.InstanceId &&
+                previous.PersonalCapacity == character.Inventory.CargoCapacity && previous.AccountCapacity == character.Inventory.AccountCargo.Capacity;
+            portableCargo = new(owner.Generation, SelectionEpoch, dungeon.Run.Snapshot.Identity.InstanceId,
+                character.Inventory.CargoCapacity, character.Inventory.AccountCargo.Capacity,
+                list == InventoryListType.PersonalCargo || same && previous!.Personal,
+                list == InventoryListType.AccountCargo || same && previous!.Account);
+        }
+        return new HelperCargoReceipt(character, SelectionEpoch, owner.Generation,
+            formalDungeon?.Run.Snapshot.Identity.InstanceId, list, accepted);
+    });
+
+    internal bool CanPublishHelperCargo(HelperCargoReceipt receipt) => owner.Execute(() =>
+        Ready && ReferenceEquals(Selected, receipt.Character) && SelectionEpoch == receipt.Epoch && owner.Generation == receipt.Generation &&
+        formalDungeon?.Run.Snapshot.Identity.InstanceId == receipt.Instance &&
+        (!receipt.Accepted || Phase == SessionPhase.Town || CanAccessPortableCargo(receipt.List)));
 
     internal HelperSettingsReceipt? SetHelperHellRotation(ushort characterId, bool enabled) => owner.Execute(() =>
     {
@@ -21,9 +70,30 @@ internal sealed partial class GameSession
         if (enabled && (PartyDungeon is not null || HasMultiplePartyMembers?.Invoke() == true ||
             Phase is not (SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Dungeon)))
             return new HelperSettingsReceipt(character.Id, SelectionEpoch, false, false);
-        gameCache.Set(helperPreferencesSlot, new(character.Id, SelectionEpoch, enabled));
+        var previous = CurrentHelperPreferences(character.Id);
+        gameCache.Set(helperPreferencesSlot, new(character.Id, SelectionEpoch, owner.Generation, enabled, previous?.DirectPickup == true));
         return new HelperSettingsReceipt(character.Id, SelectionEpoch, true, enabled);
     });
+
+    HelperPreferences? CurrentHelperPreferences(ushort characterId) => gameCache.Get(helperPreferencesSlot) is { } value &&
+        value.CharacterId == characterId && value.Epoch == SelectionEpoch && value.Generation == owner.Generation ? value : null;
+
+    internal HelperPickupReceipt? SetHelperDirectPickup(ushort characterId, bool enabled) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is not { } character || character.Id != characterId) return null;
+        var previous = CurrentHelperPreferences(character.Id);
+        var capability = gameCache.Get(helperDirectCapabilitySlot);
+        if (enabled && (capability is null || capability.CharacterId != character.Id ||
+            capability.Epoch != SelectionEpoch || capability.Generation != owner.Generation))
+            return new HelperPickupReceipt(character.Id, SelectionEpoch, owner.Generation, false, previous?.DirectPickup == true);
+        gameCache.Set(helperPreferencesSlot, new(character.Id, SelectionEpoch, owner.Generation, previous?.HellRotation == true, enabled));
+        return new HelperPickupReceipt(character.Id, SelectionEpoch, owner.Generation, true, enabled);
+    });
+
+    internal bool CanPublishHelperPickup(HelperPickupReceipt receipt) => owner.Execute(() =>
+        Ready && Selected?.Id == receipt.CharacterId && SelectionEpoch == receipt.Epoch && owner.Generation == receipt.Generation);
+
+    bool HelperDirectPickupEnabled => Selected is { } character && CurrentHelperPreferences(character.Id)?.DirectPickup == true;
 
     internal bool CanPublishHelperSettings(HelperSettingsReceipt receipt) => owner.Execute(() =>
         Ready && Selected?.Id == receipt.CharacterId && SelectionEpoch == receipt.Epoch);
@@ -33,7 +103,7 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, capture.Character) && SelectionEpoch == capture.Epoch &&
         ReferenceEquals(formalDungeon, capture.Source) && ReferenceEquals(gameCache.Get(helperPreferencesSlot), capture.Preferences) &&
         capture.Preferences is { HellRotation: true } && capture.Preferences.CharacterId == capture.Character.Id &&
-        capture.Preferences.Epoch == capture.Epoch && !capture.Source.CharacterDead &&
+        capture.Preferences.Epoch == capture.Epoch && capture.Preferences.Generation == owner.Generation && !capture.Source.CharacterDead &&
         !capture.Source.Ground.HasPendingOperation && capture.Source.PendingTutorialClear is null &&
         !HasPendingQuestScene && !HasPendingFormalCard && !capture.Source.Run.HasPendingDeath &&
         HelperHellRotation.Supports(capture.Source.Entry) &&
