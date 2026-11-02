@@ -57,6 +57,8 @@ internal sealed partial class GameSession
             return Reject("boss-potion-requires-town");
         if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("epic-potion-requires-town");
+        if (definition.HellLegendEpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("hell-legend-epic-potion-requires-town");
         if (definition.EnhancementPotion is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("enhancement-potion-requires-town");
         if (definition.TownGiftItem != 0 && captured.Guard.Phase != SessionPhase.Town) return Reject("gift_requires_town");

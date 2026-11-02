@@ -1382,7 +1382,11 @@ internal sealed partial class GameSession
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
                     int epicBonus = EpicDropPotionBonus(Selected, now);
-                    var ordinary = generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus).Generate(dungeon.Draw, now);
+                    var boosted = generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus);
+                    if (dungeon.Entry.IsHellLegend)
+                        boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
+                            HellLegendEpicDropBuffDefinition.BonusScale);
+                    var ordinary = boosted.Generate(dungeon.Draw, now);
                     if (springTreasure is null || !SpringTreasureDropPolicy.MayDrop(dungeon.Entry, pending.Monster)) return ordinary;
                     return ordinary.Concat(springTreasure.Generate(Selected, dungeon.Entry, pending.Monster, dungeon.Draw, now,
                         debugSettings?.IgnoreCashShopAbsoluteExpiration == true, debugSettings?.IgnoreCashShopUsablePeriod == true)).ToArray();

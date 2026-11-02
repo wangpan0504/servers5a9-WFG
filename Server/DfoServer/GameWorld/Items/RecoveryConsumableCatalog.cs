@@ -24,6 +24,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool RevivalBlessing { get; init; }
     public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
     public EpicDropBuffDefinition? EpicDropBuff { get; init; }
+    public HellLegendEpicDropBuffDefinition? HellLegendEpicDropBuff { get; init; }
     public EnhancementPotionDefinition? EnhancementPotion { get; init; }
     public ConsumableDisguiseDefinition? Disguise { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
@@ -42,8 +43,10 @@ internal sealed class RecoveryConsumableCatalog
     readonly ConcurrentDictionary<int, Lazy<RecoveryConsumableDefinition?>> definitions = new();
     readonly Lazy<ImmutableDictionary<int, BossSelectionBuffDefinition>> bossSelection;
     readonly Lazy<ImmutableDictionary<int, EpicDropBuffDefinition>> epicDrop;
+    readonly Lazy<ImmutableDictionary<int, HellLegendEpicDropBuffDefinition>> hellLegendEpicDrop;
     readonly Lazy<ImmutableDictionary<int, EnhancementPotionDefinition>> enhancementPotions;
     internal IReadOnlyDictionary<int, EpicDropBuffDefinition> EpicDropBuffs => epicDrop.Value;
+    internal IReadOnlyDictionary<int, HellLegendEpicDropBuffDefinition> HellLegendEpicDropBuffs => hellLegendEpicDrop.Value;
     internal IReadOnlyDictionary<int, EnhancementPotionDefinition> EnhancementPotions => enhancementPotions.Value;
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, ItemCatalog items)
@@ -53,6 +56,7 @@ internal sealed class RecoveryConsumableCatalog
         this.items = items;
         bossSelection = new(() => BossSelectionBuffDefinition.Load(archive));
         epicDrop = new(() => EpicDropBuffDefinition.Load(archive));
+        hellLegendEpicDrop = new(() => HellLegendEpicDropBuffDefinition.Load(archive));
         enhancementPotions = new(() => EnhancementPotionDefinition.Load(archive, stackable));
     }
 
@@ -61,6 +65,8 @@ internal sealed class RecoveryConsumableCatalog
         var rows = source.ToArray();
         bossSelection = new(() => ImmutableDictionary<int, BossSelectionBuffDefinition>.Empty);
         epicDrop = new(() => rows.Where(row => row.EpicDropBuff is not null).ToImmutableDictionary(row => row.ItemId, row => row.EpicDropBuff!));
+        hellLegendEpicDrop = new(() => rows.Where(row => row.HellLegendEpicDropBuff is not null)
+            .ToImmutableDictionary(row => row.ItemId, row => row.HellLegendEpicDropBuff!));
         enhancementPotions = new(() => rows.Where(row => row.EnhancementPotion is not null)
             .ToImmutableDictionary(row => row.ItemId, row => row.EnhancementPotion!));
         foreach (var definition in rows)
@@ -68,7 +74,8 @@ internal sealed class RecoveryConsumableCatalog
     }
 
     internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file, BossSelectionBuffDefinition? bossBuff = null,
-        EpicDropBuffDefinition? epicBuff = null, EnhancementPotionDefinition? enhancementPotion = null)
+        EpicDropBuffDefinition? epicBuff = null, EnhancementPotionDefinition? enhancementPotion = null,
+        HellLegendEpicDropBuffDefinition? hellLegendBuff = null)
     {
         var raw = file.Stackable;
         // 原生工厂优先构造普通持续属性对象；use action packet并不将它改成515动作类。
@@ -81,7 +88,7 @@ internal sealed class RecoveryConsumableCatalog
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || raw.TypeDeclaration is null || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
             (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } && !nativeDisguise &&
                 !(raw.TypeDeclaration is { Label: "[expert town potion]", Parameters: [0] } &&
-                    (bossBuff is not null || epicBuff is not null || enhancementPotion is not null)) &&
+                    (bossBuff is not null || epicBuff is not null || enhancementPotion is not null || hellLegendBuff is not null)) &&
                 !(enhancementPotion is not null && raw.TypeDeclaration is
                     { Label: "[item upgrad buff usual upgrade]" or "[item upgrad buff amplify upgrade]", Parameters: [> 0] })) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.DeclaredMinimumLevel is < 0 or > 255 ||
@@ -97,12 +104,18 @@ internal sealed class RecoveryConsumableCatalog
                 !(raw.DeclaredUseActionPacket == 1 && nativeStatUse) ||
             file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
-        if ((bossBuff is not null || epicBuff is not null) && (file.StructureDiagnostics.Length != 0 ||
+        if ((bossBuff is not null || epicBuff is not null || hellLegendBuff is not null) && (file.StructureDiagnostics.Length != 0 ||
             raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
             !places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]")))) return null;
-        if (epicBuff is not null && (bossBuff is not null || epicBuff.BuffId <= 0 || epicBuff.Percent != 100 ||
+        if (epicBuff is not null && (bossBuff is not null || hellLegendBuff is not null || epicBuff.BuffId <= 0 || epicBuff.Percent != 100 ||
             file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
             file.EffectMaintenance is null or 0)) return null;
+        byte hellLegendMaintenance = file.EffectMaintenance ?? file.CooltimeMaintenance ?? 0;
+        if (hellLegendBuff is not null && (bossBuff is not null || epicBuff is not null || enhancementPotion is not null ||
+            hellLegendBuff.BuffId != HellLegendEpicDropBuffDefinition.CanonicalBuffId ||
+            hellLegendBuff.Param != HellLegendEpicDropBuffDefinition.CanonicalParam ||
+            file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
+            hellLegendMaintenance == 0)) return null;
         ushort jobs = ushort.MaxValue;
         if (raw.DeclaredUsableJobs is { Count: > 0 } tags && !tags.Contains("[all]"))
         {
@@ -125,6 +138,7 @@ internal sealed class RecoveryConsumableCatalog
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
             BossSelectionBuff = bossBuff,
             EpicDropBuff = epicBuff,
+            HellLegendEpicDropBuff = hellLegendBuff,
             EnhancementPotion = enhancementPotion,
             Disguise = nativeDisguise ? new(1, file.Disguise!.FormId, file.Disguise.Seconds) : null,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
@@ -132,7 +146,7 @@ internal sealed class RecoveryConsumableCatalog
             QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,
             ExpBonusMilliseconds = expBonus ? file.ExpBonusMilliseconds!.Value : 0,
             EffectMilliseconds = revival ? ConsumableSpecialItems.RevivalMilliseconds : file.StatChangeDuration?.Milliseconds ?? 0,
-            EffectMaintenance = revival ? (byte)0 : file.EffectMaintenance ?? 0,
+            EffectMaintenance = revival ? (byte)0 : hellLegendBuff is not null ? hellLegendMaintenance : file.EffectMaintenance ?? 0,
             CooltimeMaintenance = file.CooltimeMaintenance ?? 0,
             Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]",
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
@@ -163,14 +177,16 @@ internal sealed class RecoveryConsumableCatalog
         var file = RecoveryConsumableFile.Parse(id, "stackable/" + path, tokens, archive.ResolveString);
         var buff = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? bossSelection.Value.GetValueOrDefault(id) : null;
         var epic = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? epicDrop.Value.GetValueOrDefault(id) : null;
-        if (epic is not null)
+        var hellLegend = file.Stackable.TypeDeclaration?.Label == "[expert town potion]"
+            ? hellLegendEpicDrop.Value.GetValueOrDefault(id) : null;
+        if (epic is not null || hellLegend is not null)
         {
             var events = new PvfTokenDocument(tokens, archive.ResolveString).Sections.Where(field => field.Name == "usable event").ToArray();
             // 旧版同族STK可不带事件；出现该声明时必须完整匹配已核2284，不能忽略未知事件。
             if (events.Length != 0 && events is not [{ Children.Length: 0, Values: [{ Type: 0, Value: 2284 }] }]) return null;
         }
         var enhancement = enhancementPotions.Value.GetValueOrDefault(id);
-        var definition = Read(file, buff, epic, enhancement);
+        var definition = Read(file, buff, epic, enhancement, hellLegend);
         if (definition is null)
             return null;
         var template = items!.Get(id);

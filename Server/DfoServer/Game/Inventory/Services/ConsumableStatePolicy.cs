@@ -30,6 +30,9 @@ internal static class ConsumableStatePolicy
         // 固定同族药剂覆盖效果期限，不叠加倍率；家族成员只来自已验证的资源映射。
         if (definition.EpicDropBuff is { } epic)
             rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId && epic.IsFamilyItem(row.ItemId));
+        if (definition.HellLegendEpicDropBuff is { } hellLegend)
+            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
+                hellLegend.IsFamilyItem(row.ItemId));
         if (definition.EnhancementPotion is { } enhancement)
             rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
                 enhancement.IsFamilyItem(row.ItemId));

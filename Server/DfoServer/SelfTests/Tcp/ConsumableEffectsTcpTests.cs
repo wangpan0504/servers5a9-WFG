@@ -26,6 +26,7 @@ internal static partial class ConsumableUseTcpTests
             Create(owner, "GiftCaster", 70, [(7789,1)]);
             Create(owner, "EpicDose", 95, [(490000413,3),(490002458,2),(490004594,2),(10004688,2)]);
             var variant = Create(owner, "WeakVariant", 40, [(490003621,3)]);
+            Create(owner, "StarDose", 95, [(490704393,3)]);
             repository.CommitInventory(owner, variant, new(variant.Inventory, variant.Inventory with
                 { StaminaUntil = clock.GetUtcNow().ToUnixTimeSeconds()+600 }, "variant_weakness_fixture"));
         }
@@ -69,6 +70,23 @@ internal static partial class ConsumableUseTcpTests
                     "升级药剂重选沿原生172/174整表恢复各自真实剩余秒数："+id);
             That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id="+peer.Id) == upgrades,
                 "真实双模式重选保持原截止和库存，不续期、不清另一模式或重扣");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(4);
+            Use(peer,65,0,490704393); Accepted(peer,65,0,490704393); peer.Barrier();
+            long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 300000;
+            That(fixture.Query("SELECT kind,until_ms FROM character_consumable_states WHERE character_id=$p0 ORDER BY kind",peer.Id)
+                    .Select(row => (Convert.ToInt32(row[0]), Convert.ToInt64(row[1]))).SequenceEqual(new[] { (0,until),(1,until) }),
+                "截图星空裂缝史诗Buff药剂真实44成功后同事务保存五分钟效果和冷却");
+            string snapshot = fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id);
+            Use(peer,65,1,490704393); Refused(peer,1,490704393); peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
+                "星空药新token冷却拒绝不重扣、不续期");
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2); peer.Select(4);
+            That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
+                fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
+                "星空药重选恢复实际剩余时限，不再扣源或重新起算");
         }
         using (var peer = Open(fixture))
         {

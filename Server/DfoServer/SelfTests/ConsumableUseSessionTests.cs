@@ -23,6 +23,7 @@ internal static class ConsumableUseSessionTests
         RunTimedStates(towns, characters, archive);
         RunStaminaVariant(towns, characters, archive);
         RunEpicDropStates(towns, characters, archive);
+        RunHellLegendEpicDropStates(towns, characters, archive);
         RunRevivalTimeouts(towns, characters, archive);
         var bossDefinition = ConsumableUseTests.Hp with { ItemId = 490705256,
             BossSelectionBuff = new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]) };
@@ -284,6 +285,80 @@ internal static class ConsumableUseSessionTests
             That(Same(before, f.Read()) && Same(before, f.Session.Selected!) && f.Count == 3 &&
                 f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
                 "固定史诗SQL失败回滚源、revision和药效，掉落输入没有未提交加成");
+        }
+    }
+
+    static void RunHellLegendEpicDropStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var hellEffect = new HellLegendEpicDropBuffDefinition(1271, 6520)
+            { ItemIds = ImmutableHashSet.Create(490704393, 490703675) };
+        var fixedEffect = new EpicDropBuffDefinition(1136, 100) { ItemIds = ImmutableHashSet.Create(490000413) };
+        var definition = new RecoveryConsumableDefinition(490704393, 95, 300000, 253)
+            { HellLegendEpicDropBuff = hellEffect, EffectMilliseconds = 300000, EffectMaintenance = 7, CooltimeMaintenance = 7 };
+        var catalog = new RecoveryConsumableCatalog(
+        [
+            definition,
+            definition with { ItemId = 490703675, MinimumLevel = 1 },
+            new RecoveryConsumableDefinition(490000413, 1, 600000, -490000413)
+                { EpicDropBuff = fixedEffect, EffectMilliseconds = 600000, EffectMaintenance = 15, CooltimeMaintenance = 7 },
+            ConsumableUseTests.Mp
+        ]);
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
+        {
+            f.Select();
+            That(f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0 &&
+                f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "未成功使用的星空药剂不因持有物品产生掉率加成");
+            var used = f.Use();
+            var saved = f.Read();
+            long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                f.Session.HellLegendEpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 6520 &&
+                f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 0 && f.Session.CanPublishConsumable(used.Guard!),
+                "星空药剂在城镇正规消费后与持续状态同事务落库，1136 掉落输入仍为零");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+            f.Session.ReturnToRoster(); f.Select();
+            That(f.Count == 2 &&
+                f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until &&
+                f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 6520,
+                "同角色重选仅恢复原星空药效截止，不续期或二次消费");
+            var now = f.Clock.GetUtcNow();
+            var contaminated = f.Read() with { Inventory = f.Read().Inventory with { ConsumableStates = [
+                new(ConsumableStateKind.Effect, 490704393, now.ToUnixTimeMilliseconds() + 1000, 7, 253),
+                new(ConsumableStateKind.Effect, 490000413, now.ToUnixTimeMilliseconds() + 999999, 15, 251),
+                new(ConsumableStateKind.Effect, 490703675, now.ToUnixTimeMilliseconds() + 2000, 7, 253)] } };
+            That(f.Session.HellLegendEpicDropPotionBonus(contaminated, now) == 6520 &&
+                f.Session.EpicDropPotionBonus(contaminated, now) == 100 &&
+                f.Session.HellLegendEpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 0 &&
+                f.Session.EpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 100,
+                "星空同族取最大且不与固定1136相加或互相冒充");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
+        {
+            f.Select();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                "星空药剂城镇限制回归沿真实入口旅行");
+            f.Session.BeginDungeonSelection();
+            var before = f.Read();
+            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                "选图阶段不能消费仅城镇星空药剂");
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "星空药剂限制回归建立实际正式副本");
+            before = f.Read();
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) &&
+                f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "副本里拒绝星空城镇药剂且不扣源、改revision或创建效果");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
+        {
+            f.Select();
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER fail_hell_legend_potion AFTER INSERT ON character_consumable_states WHEN NEW.kind=0 BEGIN SELECT RAISE(ABORT,'hell legend potion rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Use(), "星空效果账本写入失败不先提交消耗");
+            That(Same(before, f.Read()) && Same(before, f.Session.Selected!) && f.Count == 3 &&
+                f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "星空药剂SQL失败回滚源、revision和药效");
         }
     }
 
@@ -561,6 +636,7 @@ internal static class ConsumableUseSessionTests
             var store = lost ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseInventoryResult = true } : null;
             consumables ??= new([hp, ConsumableUseTests.Mp]);
             _ = consumables.EpicDropBuffs;
+            _ = consumables.HellLegendEpicDropBuffs;
             Session = new(store is null ? Repository : store, towns, Owner,
                 timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables);
             Service = new(consumables, Clock);

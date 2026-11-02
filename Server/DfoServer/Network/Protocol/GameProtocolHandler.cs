@@ -76,6 +76,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             return;
         // 资源映射在账号状态锁外共享预热，死亡冻结阶段只查询不可变结果。
         _ = consumables?.EpicDropBuffs;
+        _ = consumables?.HellLegendEpicDropBuffs;
         _ = consumables?.EnhancementPotions;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) =>
         {
