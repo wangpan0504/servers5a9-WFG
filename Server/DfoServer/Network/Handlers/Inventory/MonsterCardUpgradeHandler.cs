@@ -48,7 +48,17 @@ internal sealed class MonsterCardUpgradeHandler(InventoryMonsterCardUpgradeServi
         if (receipt is null)
             throw new InvalidOperationException("卡片升级提交后缺少业务回执");
         await context.Reply(CmdPacketType.UPGRADE_CARD, MonsterCardUpgradePackets.Success(receipt), "monster_card_upgrade_committed", CanSend);
-        await projection.RefreshAsync(context, result);
+        try
+        {
+            await projection.RefreshAsync(context, result);
+            if (result.Plan?.MonsterCardUpgrade is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.MonsterCardUpgrade is not null)
+        {
+            // 原升级与材料已提交，后置读取失败不能重复发起升级或消费材料。
+            throw new IOException("Committed monster card upgrade publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

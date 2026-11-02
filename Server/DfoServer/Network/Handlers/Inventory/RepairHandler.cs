@@ -32,7 +32,17 @@ internal sealed class RepairHandler(InventoryRepairService repair, InventoryProj
             consumed = [new(InventoryListType.Main, request.RepairItemSlot)];
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(used.Character.Inventory), "repair_item_remaining", CanSend);
         }
-        await projection.RefreshAsync(context, result, consumed);
+        try
+        {
+            await projection.RefreshAsync(context, result, consumed);
+            if (result.Accepted && result.Plan?.EquipmentRepair is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Accepted && result.Plan?.EquipmentRepair is not null)
+        {
+            // 修理与任务已提交，后置读取失败不能重放扣费或道具消耗。
+            throw new IOException("Committed equipment repair publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

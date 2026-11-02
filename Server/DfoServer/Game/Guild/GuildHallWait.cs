@@ -65,7 +65,8 @@ internal sealed class GuildHallWaitClock(GuildDungeonMembership membership, Time
 // 一个有界生命周期循环复用在线目录；不为每个玩家建立Timer或另一套在线字典。
 internal sealed class GuildHallWaitService(IGuildHallWaitStore store, GuildHallWaitCatalog catalog,
     OnlineSessionDirectory online, GuildContributionService contribution, TimeProvider? clock = null,
-    Action<Exception>? failure = null, GuildRankingService? ranking = null)
+    Action<Exception>? failure = null, GuildRankingService? ranking = null,
+    Action<GameSession, ushort, DateTimeOffset>? contributionCommitted = null)
 {
     readonly TimeProvider time = clock ?? TimeProvider.System;
 
@@ -76,9 +77,14 @@ internal sealed class GuildHallWaitService(IGuildHallWaitStore store, GuildHallW
             if (!actor.Ready || actor.Phase != SessionPhase.Town) continue;
             try
             {
-                var result = online.Find(actor.Account)?.TickGuildHallWait(store, catalog, time);
+                var session = online.Find(actor.Account);
+                var result = session?.TickGuildHallWait(store, catalog, time);
                 // 跨账号通知在本人的owner释放后发布，不在计时/SQL锁内取其他账号锁。
-                if (result is { Points: > 0 }) contribution.Publish(result);
+                if (result is { Success: true, Points: > 0 } && session is not null)
+                {
+                    contribution.Publish(result);
+                    contributionCommitted?.Invoke(session, actor.CharacterId, time.GetUtcNow());
+                }
             }
             catch (Exception error) when (failure is not null)
             {

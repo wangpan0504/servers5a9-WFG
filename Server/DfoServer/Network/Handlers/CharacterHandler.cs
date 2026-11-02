@@ -27,7 +27,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null,
     PvpTotalTeamProjection? totalTeamProjection = null, PvpMissionProjection? pvpMissions = null,
     DfoServer.Game.Pvp.PvpMissionBook? missionBook = null, ItemCatalog? renameItems = null,
-    SelectionContentsProjection? selectionContents = null, Strongway2019Projection? strongway2019 = null) : IGameCommandModule
+    SelectionContentsProjection? selectionContents = null, Strongway2019Projection? strongway2019 = null, BattlePassProjection? battlePass = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -175,6 +175,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             }
         }
         if (raids is not null) await raids.NotifyDisconnAsync(context);
+        if (battlePass is not null) await battlePass.ReadyAsync(context);
         return CommandResult.Handled;
     }
 

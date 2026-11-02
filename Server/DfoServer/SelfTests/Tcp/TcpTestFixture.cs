@@ -303,7 +303,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         }
         if (resources is not null && !isolatedProcess)
         {
-            var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures);
+            var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures).WithItems(resources.ItemResources.Items);
             var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources) : null;
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotions?.Invoke() ?? promotionCatalog!;
             TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);

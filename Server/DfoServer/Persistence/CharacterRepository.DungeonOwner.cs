@@ -179,6 +179,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             command.Parameters.AddWithValue("$remaining", fatigueAfter.Remaining);
             command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("入场疲劳缺少原疲劳owner");
+            ApplyBattlePassDungeonActivity(db,tx,owner.Account,DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareFatigue(
+                identity,"entry",charge.MapId,fatigueBefore,fatigueAfter,charge.BattlePassMissionClock));
         }
         var committed = Require(db, tx, owner.Account, expected.Name);
         cachedFatigue = fatigueBefore is not null && fatigueAfter is not null

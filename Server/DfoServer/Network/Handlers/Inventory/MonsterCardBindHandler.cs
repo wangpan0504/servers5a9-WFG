@@ -72,7 +72,17 @@ internal sealed class MonsterCardBindHandler(InventoryMonsterCardBindService com
 
         await context.Reply(CmdPacketType.MONSTERCARD_BIND, MonsterCardBindPackets.Success(receipt),
             "monster_card_bind_committed", CanSend);
-        await projection.RefreshAsync(context, result, result.Plan!.ChangedSlots.ToHashSet());
+        try
+        {
+            await projection.RefreshAsync(context, result, result.Plan!.ChangedSlots.ToHashSet());
+            if (result.Plan.MonsterCardBind is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.MonsterCardBind is not null)
+        {
+            // 原合成器、卡片和随机奖励已提交，发布失败不能重抽或重扣。
+            throw new IOException("Committed monster card bind publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

@@ -287,6 +287,8 @@ internal sealed partial class CharacterRepository
         var retained = character.Inventory.Items.Select(item => item.Uid).ToHashSet();
         foreach (var item in plan.Items.Where(item => !retained.Contains(item.Uid)))
             DeleteHeldItem(db, tx, owner.Account, expected.Id, item.Uid);
+        // 原成功附件已真实入包并完成原认领/审计；来源随本笔原事务一起提交。
+        ApplyBattlePassUndefeatedSongMail(db, tx, owner.Account, expected.Id, plan, DateTimeOffset.FromUnixTimeSeconds(now));
         tx.Commit();
         return new(MailboxError.None, character) { Claimed = plan.Results };
     });

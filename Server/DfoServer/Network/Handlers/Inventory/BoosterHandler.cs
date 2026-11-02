@@ -18,6 +18,21 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
         commands.Register(CmdPacketType.OPEN_CERAPACKAGE, HandleCeraPackage, nameof(BoosterHandler));
     }
 
+    async Task RefreshAfterOpenAsync(GameConnectionContext context, InventoryResult result, Func<bool> canPublish)
+    {
+        try
+        {
+            await projection.RefreshAsync(context, result);
+            if (result.Accepted && result.Plan?.BoosterSongAcquisition is { } fact && canPublish())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, (clock ?? TimeProvider.System).GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Accepted && result.Plan?.BoosterSongAcquisition is not null)
+        {
+            // 原物品和来源均已提交，发布读取失败不得触发原抽签和扣源重放。
+            throw new IOException("Committed booster material acquisition publication failed", error);
+        }
+    }
+
     async Task<CommandResult> HandleLottery(GameConnectionContext context, Packet packet)
     {
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
@@ -46,7 +61,7 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_LOTTERY_ITEM, LotteryPackets.Opened(result, receipt),
             result.Accepted ? "lottery_opened" : "lottery_rejected", Guard);
-        await projection.RefreshAsync(context, result);
+        await RefreshAfterOpenAsync(context, result, Guard);
         return CommandResult.Handled;
     }
 
@@ -126,7 +141,7 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_BOOSTER_ITEM, BoosterPackets.Opened(result, receipt),
             result.Accepted ? "booster_opened" : "booster_open_rejected", Guard);
-        await projection.RefreshAsync(context, result);
+        await RefreshAfterOpenAsync(context, result, Guard);
         return CommandResult.Handled;
     }
 
@@ -171,7 +186,7 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.OPEN_CERAPACKAGE, CeraPackagePackets.Opened(result, request),
             result.Accepted ? "cera_package_opened" : "cera_package_rejected", Guard);
-        await projection.RefreshAsync(context, result);
+        await RefreshAfterOpenAsync(context, result, Guard);
         return CommandResult.Handled;
     }
 }

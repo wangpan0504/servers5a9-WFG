@@ -160,11 +160,13 @@ internal sealed partial class GameSession
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                     { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动前提已变化" };
+            plan.BattlePassCompletion ??= DfoServer.Game.BattlePass.BattlePassQuestCompletion.Prepare(plan, timeProvider ?? TimeProvider.System);
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);
             var commit = repository.CommitQuestCompletion(owner, plan);
             var result = new QuestFinishResult(QuestFinishOutcome.Committed,
-                new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity) { Phase = captured.Phase });
+                new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity)
+                { Phase = captured.Phase, BattlePassMissionAt = (timeProvider ?? TimeProvider.System).GetUtcNow() });
             // 失效投影仍保留实际提交回执和原pending，交由Handler关闭连接，不安装外部变更后的角色。
             if (!commit.ProjectionCurrent) return result;
             Selected = commit.Character;

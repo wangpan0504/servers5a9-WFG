@@ -51,7 +51,8 @@ internal sealed partial class GameSession
             var death = dungeon.Run.ConfirmCommittedTagEvildomClear(committed);
             if (death.Outcome != DungeonRunOutcome.Accepted) throw new InvalidOperationException("已提交TAG通关不能安装原终点");
             SetState(SessionPhase.Settlement);
-            var receipt = new TagEvildomClearReceipt(FormalReceipt(), committed);
+            var receipt = new TagEvildomClearReceipt(FormalReceipt() with
+                { BattlePassMissionClock = timeProvider ?? TimeProvider.System }, committed);
             dungeon.CommittedTagEvildomClear = receipt;
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, receipt.Dungeon, expected.Death.Death.MonsterKey)
             {

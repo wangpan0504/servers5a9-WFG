@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
+using DfoServer.Game.BattlePass;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
@@ -6,6 +7,7 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Towns;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.Infrastructure;
 using DfoServer.Testing;
 using static DfoServer.Testing.TestCheck;
@@ -151,9 +153,13 @@ internal static class DungeonAltarSessionTests
                 linked.Read().ActiveMainQuests.All(row => row.QuestId != questId),
                 "祭坛任务沿原领奖事务完成并移出活动列表：" + questId);
         }
+        var passPolicy = new BattlePassMissionPolicy("altar-drop-nontarget-fixture",
+            new DateTimeOffset(2026,10,22,6,0,0,TimeSpan.FromHours(8)), BattlePassCatalog.Load(archive));
+        var passAt = Enumerable.Range(0,passPolicy.Days).Select(day=>passPolicy.Start.AddDays(day).AddHours(1))
+            .First(value=>passPolicy.Active(value).Any(row=>row.Key.Category==0 && row.Key.Id==1));
         foreach (bool lost in new[] { false, true })
         {
-            var clock = new Clock();
+            var clock = new Clock(passAt);
             using var linked = New(clock, done.Append(5650).Distinct().ToArray(), lost);
             That(linked.Session.ChangeQuest(5651, QuestLifecycleAction.Accept, resources.Quests,
                 items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null,
@@ -181,12 +187,19 @@ internal static class DungeonAltarSessionTests
                     }
                     var beforeDeath = linked.Read();
                     var selected = linked.Session.Selected;
+                    long growthBefore = Convert.ToInt64(linked.Query("SELECT count(*) FROM character_dungeon_growth_receipts"));
+                    long dropsBefore = Convert.ToInt64(linked.Query("SELECT count(*) FROM character_quest_drop_receipts"));
+                    linked.Repository.ConfigureBattlePassMissions(passPolicy);
+                    var missionBefore = linked.Repository.ReadBattlePassMissions(linked.Owner,clock.GetUtcNow())!;
+                    That(missionBefore.Slots.Single(row=>row.Instance.Key.Category==0 && row.Instance.Key.Id==1).Count==0 &&
+                        linked.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='altar_non_target_monster_death'") is 0L,
+                        "启用战令后从零观察原寻物死亡，不预置战令来源");
                     if (lost)
                     {
                         Reject<IOException>(() => linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth),
                             "祭坛任务材料已提交但返回丢失");
-                        That(ReferenceEquals(selected, linked.Session.Selected) && Held() == 1,
-                            "未知结果保留原在线快照及已落库任务材料");
+                        That(ReferenceEquals(selected, linked.Session.Selected) && Held() == 1 && Sources()==1 && Kills()==1,
+                            "未知结果保留原在线快照，任务材料和战令来源已共同提交一次");
                     }
                     else
                     {
@@ -196,30 +209,54 @@ internal static class DungeonAltarSessionTests
                         That(Held() == 0 && linked.Read().Revision == beforeDeath.Revision && ReferenceEquals(selected, linked.Session.Selected),
                             "任务材料、条件、死亡与revision全部回滚");
                         linked.Sql("DROP TRIGGER fail_altar_drop");
+                        linked.Sql($"CREATE TRIGGER fail_altar_pass AFTER INSERT ON account_battle_pass_source_events WHEN NEW.source_kind='altar_non_target_monster_death' BEGIN SELECT CASE WHEN (SELECT count(*) FROM character_quest_drop_receipts)={dropsBefore+1} AND (SELECT count(*) FROM character_dungeon_growth_receipts)={growthBefore+1} THEN RAISE(ABORT,'altar drop pass rollback') ELSE RAISE(ABORT,'altar drop pass prerequisites missing') END; END");
+                        bool passLate = false;
+                        try { linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth); }
+                        catch (Microsoft.Data.Sqlite.SqliteException error) when (error.SqliteErrorCode==19 &&
+                            error.Message=="SQLite Error 19: 'altar drop pass rollback'.") { passLate = true; }
+                        That(passLate && Held()==0 && Sources()==0 && Kills()==0 &&
+                            Convert.ToInt64(linked.Query("SELECT count(*) FROM character_quest_drop_receipts"))==dropsBefore &&
+                            Convert.ToInt64(linked.Query("SELECT count(*) FROM character_dungeon_growth_receipts"))==growthBefore && linked.Read().Revision==beforeDeath.Revision &&
+                            linked.Read().ActiveMainQuests.SequenceEqual(beforeDeath.ActiveMainQuests) && ReferenceEquals(selected,linked.Session.Selected),
+                            "战令来源晚故障回滚材料、任务、角色和来源并保留原死亡");
+                        linked.Sql("DROP TRIGGER fail_altar_pass");
                     }
                     current = linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth)!;
                     var committed = linked.Read();
                     That(Held() == 1 && committed.ActiveMainQuests.Single(row => row.QuestId == 5651).ConditionState == 0 &&
                         current.QuestCharacter == linked.Session.Selected && current.QuestDropSlots.Length == 1 &&
-                        current.QuestCharacter!.Inventory.Find(current.QuestDropSlots[0]) is { Uid: > 0, Core.ItemId: 4363 },
+                        current.QuestCharacter!.Inventory.Find(current.QuestDropSlots[0]) is { Uid: > 0, Core.ItemId: 4363 } &&
+                        current.BattlePassCharacter == linked.Session.Selected && current.BattlePassMissionClock is not null &&
+                        linked.Session.CanPublishDungeonAltarBattlePass(current) && Sources()==1 && Kills()==1 &&
+                        Convert.ToInt64(linked.Query("SELECT count(*) FROM character_quest_drop_receipts"))==dropsBefore+1 &&
+                        Convert.ToInt64(linked.Query("SELECT count(*) FROM character_dungeon_growth_receipts"))==growthBefore+1,
                         "祭坛真实目标死亡后提交材料实际UID并提供库存/任务投影");
                     That(committed.Revision == beforeDeath.Revision + 1 && committed.Learning.Experience == beforeDeath.Learning.Experience &&
                         committed.Inventory.Gold == beforeDeath.Inventory.Gold,
                         "祭坛材料与任务共用一次revision，不额外授予普通经验或金币");
                     That(linked.Session.ObserveDungeonAltarDeaths([actor.ObjectKey], new string('B', 64), growth) is not null &&
                         linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth) is not null &&
-                        Held() == 1 && linked.Read().Revision == committed.Revision,
+                        Held() == 1 && linked.Read().Revision == committed.Revision && Sources()==1 && Kills()==1,
                         "39/255交叉重报和未知结果恢复不重复材料或任务进度");
                     found = true;
                     break;
                 }
             }
             That(found && linked.Session.ReturnFromFormalDungeon() is not null, "取得任务材料后可按原生路径回城");
+            var reopened = new DfoServer.Persistence.CharacterRepository(
+                (string)linked.Query("SELECT file FROM pragma_database_list WHERE name='main'")!,resources.Quests);
+            reopened.ConfigureBattlePassMissions(passPolicy);
+            That(reopened.LoadCharacter(linked.Owner,0).Inventory.Items.Any(item=>item.Core.ItemId==4363 && item.Core.Count==1) &&
+                reopened.ReadBattlePassMissions(linked.Owner,clock.GetUtcNow())!.Slots.Single(row=>row.Instance.Key.Category==0 && row.Instance.Key.Id==1).Count==1 &&
+                Sources()==1,"重建仓储恢复任务材料与唯一战令死亡来源");
             var finished = linked.Session.FinishQuest(5651, ushort.MaxValue, resources.Quests,
                 SelfTestCatalogs.QuestRewardParameters(archive), items.Items, items.GoldLimits, items.EpicPieces, growth);
             That(finished.Receipt is not null && linked.Read().CompletedQuests.Contains(5651) && Held() == 0,
                 "5651按实际材料交付，完成任务后精确扣除碎片");
             int Held() => linked.Read().Inventory.Items.Where(item => item.Core.ItemId == 4363).Sum(item => item.Core.Count);
+            long Sources() => Convert.ToInt64(linked.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='altar_non_target_monster_death'"));
+            long Kills() => linked.Repository.ReadBattlePassMissions(linked.Owner,clock.GetUtcNow())!.Slots
+                .Single(row=>row.Instance.Key.Category==0 && row.Instance.Key.Id==1).Count;
         }
         foreach (uint dungeonId in new uint[] { 11006, 11007 })
         {
@@ -435,12 +472,12 @@ internal static class DungeonAltarSessionTests
             true, new string('A',64));
     }
 
-    sealed class Clock : TimeProvider
+    sealed class Clock(DateTimeOffset? now = null) : TimeProvider
     {
         long elapsed;
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() => elapsed;
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(1792756800).AddMilliseconds(elapsed);
+        public override DateTimeOffset GetUtcNow() => (now ?? DateTimeOffset.FromUnixTimeSeconds(1792756800)).AddMilliseconds(elapsed);
         public void AdvanceTo(long value) => elapsed = Math.Max(elapsed,value);
     }
 }

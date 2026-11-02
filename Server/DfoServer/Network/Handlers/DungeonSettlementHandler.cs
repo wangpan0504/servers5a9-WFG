@@ -221,6 +221,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 receipt.Entry.DungeonId, receipt.Snapshot.Identity.InstanceId, Counts = guildDungeon.Counts });
         }
         if (result.GuildContribution is { } contribution) guildContribution?.Publish(contribution);
+        if (result.BattlePassMissionClock is { } battlePassClock)
+            await BattlePassMissionProjection.RefreshAsync(context, battlePassClock.GetUtcNow());
         return CommandResult.Handled;
     }
 
@@ -298,6 +300,16 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (selected.Inventory is { } inventory)
                 await (inventoryProjection ?? throw new InvalidOperationException("付费牌缺少库存投影")).RefreshAsync(context,inventory);
             if (selected.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+            DfoServer.Game.Session.BattlePassMissionSessionState? state;
+            try { state = context.Session.ReadBattlePassMissionState((receipt.BattlePassMissionClock ?? TimeProvider.System).GetUtcNow()); }
+            catch (System.Data.Common.DbException error)
+            {
+                // 已提交付费牌，不能重派原请求并再次发布牌面。
+                throw new IOException("Committed paid card mission publication failed", error);
+            }
+            if (state is { State.Active:true })
+                await context.Notify(NotiPacketType.BATTLE_PASS_INFO_MISSION,state.State.ToPayload(),"battle_pass_golden_paid_card",
+                    () => context.Session.CanPublishDungeonSettlement(receipt) && context.Session.CanPublishInventory(state.Receipt));
             return CommandResult.Handled;
         }
         else return CommandResult.Unhandled;

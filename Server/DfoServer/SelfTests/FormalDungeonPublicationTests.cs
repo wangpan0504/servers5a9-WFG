@@ -472,8 +472,8 @@ internal static class FormalDungeonPublicationTests
                     Scene: result.Receipt, Pickup: result, Peer: picker.Actor.Character.Id));
                 await observer.Session.PartyDungeonNoticeArrived!(new(PartyDungeonNoticeKind.Pickup, viewer, members,
                     Scene: observerScene, Pickup: result, Peer: picker.Actor.Character.Id));
-                // 组队发布的 await 只保证入队；读取输出前等待双方原发送队列完成。
-                await Task.WhenAll(sender.DrainAsync(), observerSender.DrainAsync());
+                // 组队发布只保证入队；在读取两个测试输出前等待原FIFO写泵完成。
+                await Task.WhenAll(sender.DrainAsync(), observerSender.DrainAsync()).WaitAsync(TimeSpan.FromSeconds(5));
                 Check(observerStream.Opcodes.SequenceEqual(new ushort[] { 39 }) && Same(observerBefore, observer.Read()) &&
                     BinaryPrimitives.ReadUInt16LittleEndian(observerStream.Frames[0].AsSpan(32)) == ushort.MaxValue,
                     "组队旁观者仅移除地面对象，不接收拾取者钱包、额度、虚假实体或ACK，不修改自己的资产");
@@ -931,9 +931,9 @@ internal static class FormalDungeonPublicationTests
         public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => inner.CommitOperationHopeReward(owner,plan);
         public Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
             DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals) => inner.ClearOperationHopeAcceptances(owner,expected,catalog,removals);
-        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run);
-        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
-            inner.ConsumeDungeonRoomFatigue(owner, expected, run);
+        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock);
         PreparedDungeonDeath? first;
         public int Calls { get; private set; }
         int settlementCalls;

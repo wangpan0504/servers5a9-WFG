@@ -82,11 +82,15 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
             foreach (var item in planned)
                 if (sourcePlan.BeforeIndex.Find(item.Position) != item)
                     after = after with { Items = after.Items.Replace(after.Find(item.Position)!, item) };
-            return new(true, 0, new(before, after with { Gold = checked(before.Gold - (uint)total) },
-                tool!.Label == "[repair coupon]" ? "equipment_repair_coupon" : "equipment_repair_item", new(character, deadline, clock, requirePosition: true)));
+            after = after with { Gold = checked(before.Gold - (uint)total) };
+            return new(true, 0, new(before, after,
+                tool!.Label == "[repair coupon]" ? "equipment_repair_coupon" : "equipment_repair_item", new(character, deadline, clock, requirePosition: true))
+            { EquipmentRepair = EquipmentRepairFact.Capture(before, after, request, time, clock) });
         }
-        return new(true, 0, new(before, before with { Items = planned, Gold = checked(before.Gold - (uint)total) }, "equipment_repair",
-            new(character, deadline, clock, requirePosition: true)));
+        var repaired = before with { Items = planned, Gold = checked(before.Gold - (uint)total) };
+        return new(true, 0, new(before, repaired, "equipment_repair",
+            new(character, deadline, clock, requirePosition: true))
+        { EquipmentRepair = EquipmentRepairFact.Capture(before, repaired, request, time, clock) });
     }
 
     internal static InventoryResult Automatic(Character character, ItemCatalog catalog, DateTimeOffset time,

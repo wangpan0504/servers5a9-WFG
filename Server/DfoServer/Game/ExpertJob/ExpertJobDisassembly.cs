@@ -59,10 +59,15 @@ internal sealed class ExpertJobDisassembly(InventoryDisjointService disjoint, Ex
             if (products.Count > byte.MaxValue) return null;
             var gain = scripts.DisjointGain(3);
             int experience = checked(character.ExpertJobExperience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
+            var receipt = new DisjointReceipt(request, products.ToArray());
             var inventory = new InventoryPlan(character.Inventory, grant.Plan.After, "expert_job_machine_disjoint",
-                new(character, source.ExpireTime > 0 ? source.ExpireTime : null, time));
+                new(character, source.ExpireTime > 0 ? source.ExpireTime : null, time))
+            {
+                EquipmentDisjoint = EquipmentDisjointFact.Capture(character.Inventory, paid, grant.Plan.After, request, receipt,
+                    ownMachine ? DisjointMode.OwnMachine : DisjointMode.OtherMachine, "expert_job_machine_disjoint", source, null, now, time)
+            };
             return new(character, inventory, experience, character.ExpertMachineEndurance - rules.DisjointEnduranceCost,
-                Disjoint: new(request, products.ToArray()));
+                Disjoint: receipt);
         }
         catch (OverflowException) { return null; }
         catch (InvalidDataException) { return null; }

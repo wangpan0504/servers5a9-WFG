@@ -72,7 +72,17 @@ internal sealed class AvatarDisjointHandler(InventoryAvatarDisjointService disjo
             : AvatarDisjointPackets.StandardAck(result, receipt);
         await context.Reply(opcode, acknowledgement,
             result.Accepted ? "avatar_disjoint_committed" : "avatar_disjoint_rejected", CanSend);
-        await projection.RefreshAsync(context, result);
+        try
+        {
+            await projection.RefreshAsync(context, result);
+            if (result.Accepted && result.Plan?.AvatarDisjoint is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.AvatarDisjoint is not null)
+        {
+            // 原装扮与随机徽章已提交，发布失败不能重抽或再次分解。
+            throw new IOException("Committed avatar disjoint publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

@@ -56,6 +56,8 @@ internal sealed class TagEvildomRunProjection(TagEvildomRewardCatalog rewards, I
         if (context.Session.TagEvildomClearState(receipt, configuration.Store, configuration.Now) is { } state)
             await context.Notify(NotiPacketType.EVILDOM_GATHERING, TagEvildomPackets.Gathering(state), "tag_evildom_clear_counts", Guard);
         await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "tag_evildom_reward_mail", Guard);
+        if (Guard() && receipt.Dungeon.BattlePassMissionClock is { } clock)
+            await BattlePassMissionProjection.RefreshAsync(context, clock.GetUtcNow());
         log.Write("tag_evildom_clear_committed", new { Connection = context.Id, receipt.Dungeon.Snapshot.Identity,
             committed.MailId, committed.Duplicate, committed.Plan.Reward.DefinitionId, committed.Plan.ElapsedMilliseconds,
             Recipient = committed.Plan.Fact.Admission.Primary.Id, Rule = TagEvildomRewardPolicy.Rule });

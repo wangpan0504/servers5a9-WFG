@@ -21,6 +21,11 @@ internal static partial class FormalDungeonTcpTests
     {
         DungeonAltarRewardTests.Run(resources.Archive,resources.ItemResources);
         DungeonAltarSessionTests.Run(resources);
+        BattlePassAltarFinalBusyTests.Run(resources);
+        BattlePassAltarQuestDeathTests.Run(resources);
+        BattlePassAltarQuestDeathTests.RunPendingRetry(resources);
+        BattlePassAltarNonTargetTests.Run(resources);
+        BattlePassAltarQuestDeathTests.RunMixedBatch(resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         var clock = new AltarTimers(20);

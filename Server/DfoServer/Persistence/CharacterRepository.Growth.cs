@@ -230,6 +230,8 @@ internal sealed partial class CharacterRepository
         };
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
+        ApplyBattlePassDungeonDeath(db,tx,owner.Account,run,prepared);
+        ApplyBattlePassHellCosmoCompletion(db, tx, owner.Account, run, prepared);
         var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, committed.Id, current.Inventory, committed.Inventory);
         var directPickupCommit = SaveDirectPickupCommit(db, tx, owner, committed, appliedDirectPickup);
         tx.Commit();

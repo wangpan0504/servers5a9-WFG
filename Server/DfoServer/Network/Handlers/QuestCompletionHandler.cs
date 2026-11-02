@@ -134,6 +134,8 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, expertJobs, includeQualifications: true),
                 "quest_expert_job_info", Guard);
+        if (receipt.BattlePassMissionAt is { } at)
+            await BattlePassMissionProjection.RefreshAsync(context, at);
         return CommandResult.Handled;
     }
 }

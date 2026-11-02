@@ -173,6 +173,7 @@ internal sealed class QuestCompletionPlan
         Skills = !UpdatesLearning ? Expected.Skills : TargetLearning.Trees.Single(tree => tree.Context == TargetLearning.ActiveContext).Skills
             .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray() };
 
+    internal DfoServer.Game.BattlePass.BattlePassQuestCompletion? BattlePassCompletion { get; set; }
     public Character Expected { get; }
     public QuestClearReceipt? AuthoritativeClear { get; }
     public QuestClearReceipt Clear => AuthoritativeClear ?? throw new InvalidOperationException("此任务不使用清图凭据");

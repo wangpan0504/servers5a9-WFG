@@ -6,18 +6,20 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMonsterCardBindService(ItemCatalog items, MonsterCardBindCatalog compounds,
-    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<long, long>? random = null)
+    GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<long, long>? random = null, TimeProvider? clock = null)
 {
     const ushort Rejection = 22;
     const ushort InventoryFull = 23;
     readonly Func<long, long> draw = random ?? Random.Shared.NextInt64;
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
     public InventoryResult Apply(Character character, MonsterCardBindRequest request,
         out MonsterCardBindReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
     {
         receipt = null;
         rejection = null;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         long seconds = now.ToUnixTimeSeconds();
         var before = character.Inventory;
         if (request.CardSlots.IsDefaultOrEmpty || request.CardSlots.Any(slot => slot is < 0 or > 351 || slot == request.SynthesizerSlot))
@@ -122,7 +124,12 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
         receipt = new(request.SynthesizerSlot, bindType, inputRarity, outputRarity, rarityUpgraded,
             request.CardSlots, rewards);
         return new(true, 0, new InventoryPlan(before, after, "monster_card_bind",
-            new InventoryCharacterPrecondition(character, deadline)));
+            new InventoryCharacterPrecondition(character, deadline))
+        {
+            MonsterCardBind = new(Guid.NewGuid(), plannedAt, Clock, request, receipt, synthesizer, bindType,
+                cards.GroupBy(card => card.Position).Select(group => new MonsterCardBindMaterial(
+                    group.First(), group.Count(), inputRarity)).ToImmutableArray(), selected.ItemId, before, paid, after)
+        });
     }
 
     int OutputRarity(int bindType, int count, int inputRarity, decimal coefficient)

@@ -25,6 +25,41 @@ internal static class SelfTestRunner
         AccountMaterialTests.RunCore();
         BattlePassCatalogTests.RunCore();
         BattlePassRequestTests.RunCore();
+        BattlePassRewardTests.RunCore();
+        await BattlePassRewardTests.RunRewardAckAsync();
+        BattlePassProgressTests.RunCore();
+        BattlePassMissionTests.RunCore();
+        await BattlePassRewardTests.RunMissionAckAsync();
+        await BattlePassRewardTests.RunReadyProjectionAsync();
+        BattlePassEnhancementTests.RunCore();
+        BattlePassRepairTests.RunCore();
+        BattlePassCeraConsumptionTests.RunCore();
+        DungeonSettlementTests.RunBattlePassTayberrsCore();
+        DungeonSettlementTests.RunBattlePassFormalClearCore();
+        DungeonSettlementTests.RunBattlePassDazzlementClearCore();
+        DungeonSettlementTests.RunBattlePassBossRushRewardCore();
+        DungeonSettlementTests.RunBattlePassGoldenPaidCardCore();
+        DungeonSettlementTests.RunBattlePassDungeonActivityCore();
+        DungeonSettlementTests.RunBattlePassHellCosmoCompletionCore();
+        BattlePassEmblemTests.RunCore();
+        BattlePassMonsterCardBindTests.RunCore();
+        BattlePassGuildHallEntryTests.RunCore();
+        BattlePassAvatarDisjointTests.RunCore();
+        BattlePassNpcGiftTests.RunCore();
+        BattlePassQuestCompletionTests.RunCore();
+        BattlePassEquipmentEnchantTests.RunCore();
+        BattlePassGuildContributionTests.RunCore();
+        BattlePassOperationHopeCompletionTests.RunCore();
+        BattlePassNpcMaterialConsumeTests.RunCore();
+        BattlePassUndefeatedSongTests.RunCore();
+        BattlePassUndefeatedSongMailTests.RunCore();
+        BattlePassGloryCrystalTests.RunCore();
+        BattlePassBraveCrystalTests.RunCore();
+        BattlePassUndefeatedSongBoosterTests.RunCore();
+        BattlePassAvatarCompoundTests.RunCore();
+        BattlePassMonsterCardUpgradeTests.RunCore();
+        BattlePassEquipmentDisjointTests.RunCore();
+        BattlePassCertificateTests.RunCore();
         BattlePassPacketTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
         LukeRaidIntermissionTests.RunCore();
@@ -443,6 +478,8 @@ internal static class SelfTestRunner
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         BattlePassCatalogTests.Run(pvf);
+        BattlePassRewardResourceTests.RunResources(DfoServer.GameWorld.BattlePass.BattlePassCatalog.Load(pvf),
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, DateTimeOffset.UtcNow);
         MarriageResourceTests.Run(pvf);
         var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
         MarriageCoupleTests.Run(marriageCatalog, itemResources.Items);

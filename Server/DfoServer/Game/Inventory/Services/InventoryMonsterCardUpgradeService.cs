@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
@@ -5,9 +6,10 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, EnchantmentCatalog enchantments,
-    MonsterCardBindCatalog cards, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null)
+    MonsterCardBindCatalog cards, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null, TimeProvider? clock = null)
 {
     readonly Func<int, int> draw = random ?? Random.Shared.Next;
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
     public InventoryResult Apply(Character character, MonsterCardUpgradeRequest request,
         out MonsterCardUpgradeReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
@@ -17,7 +19,8 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
         if (request.MaterialSlots.IsDefaultOrEmpty || request.MaterialSlots.Length > 4 || request.TargetSlot is < 0 or > 351 ||
             request.MaterialSlots.Any(slot => slot is < 0 or > 351))
             return Reject("invalid-slots", out rejection);
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var plannedAt = Clock.GetUtcNow();
+        var now = utcNow ?? plannedAt;
         var before = character.Inventory;
         var target = before.Find(new(InventoryListType.Main, request.TargetSlot));
         if (!Valid(target, before, now, out var targetTemplate))
@@ -79,6 +82,7 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
             return Reject("invalid-roll", out rejection);
         bool upgraded = roll < chance;
         byte level = upgraded ? nextLevel : target.Core.EnchantUpgrade;
+        var paid = after;
         if (upgraded)
             after = upgradedInventory;
         long? deadline = null;
@@ -86,7 +90,12 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
             if (item.ExpireTime > 0 && (deadline is null || item.ExpireTime < deadline.Value))
                 deadline = item.ExpireTime;
         receipt = new(upgraded, target.Core.ItemId, level);
-        return new(true, 0, new(before, after, "monster_card_upgrade", new InventoryCharacterPrecondition(character, deadline)));
+        return new(true, 0, new(before, after, "monster_card_upgrade", new InventoryCharacterPrecondition(character, deadline))
+        {
+            MonsterCardUpgrade = upgraded ? new(Guid.NewGuid(), plannedAt, Clock, request, receipt, target,
+                request.MaterialSlots.GroupBy(slot => slot).Select(group => new MonsterCardUpgradeMaterial(
+                    before.Find(new(InventoryListType.Main, group.Key))!, group.Count())).ToImmutableArray(), before, paid, after) : null
+        });
     }
 
     bool Valid(InventoryItem? item, InventorySnapshot inventory, DateTimeOffset now, out ItemTemplate? template)

@@ -206,7 +206,7 @@ internal static class ServerRuntime
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
         adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
-        var adventureProjection = new AdventureProjection(adventureCatalog);
+        var adventureProjection = new AdventureProjection(adventureCatalog, clock);
         var adventureWeeklyProjection = new AdventureWeeklyProjection(options.AdventureWeekly, log);
         var adventureRepresentatives = new Game.Adventure.AdventureRepresentativeService(adventureCatalog);
         expeditionCatalog ??= new GameWorld.Adventure.AdventureExpeditionCatalog(pvf);
@@ -324,7 +324,8 @@ internal static class ServerRuntime
         var guildContribution = new GuildContributionProjection(guildContributionService, inventoryProjection, log, guildHongbao);
         var guildHallWait = new Game.Guild.GuildHallWaitService(repository,
             new GameWorld.Guilds.GuildHallWaitCatalog(pvf), online, guildContributionService, clock,
-            error => log.Write("guild_hall_contribution_failed", new { Error = error.Message }), guildRanking);
+            error => log.Write("guild_hall_contribution_failed", new { Error = error.Message }), guildRanking,
+            (session, characterId, at) => BattlePassMissionProjection.Post(session, characterId, online, at));
         var guildNpcCatalog = new GameWorld.Guilds.GuildNpcCatalog(pvf);
         var guildNpcBenefits = new GameWorld.Guilds.GuildNpcBenefitCatalog(pvf);
         var guildNpcBenefitService = new Game.Guild.GuildNpcBenefitService(repository, guildNpcCatalog,
@@ -675,7 +676,7 @@ internal static class ServerRuntime
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
                 evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart,
                 strongwayRoute: strongwayRoutes, strongwayMatching: strongwayMatching,
-                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards);
+                strongwayProjection: strongwayProjection, strongwayRewards: strongwayRewards, altarProjectionBusy: SqliteBusyRetry.IsBusy);
             strongwayProjection.Depart = (context, holds) => ((DungeonHandler)dungeon).DepartStrongway2019Async(context, holds);
             strongwayHandler = new(strongwayMatching, strongwayProjection,
                 new Strongway2019MatchingEntryService(strongwayMatching, parties, repository, repository, clock),
@@ -707,6 +708,17 @@ internal static class ServerRuntime
             quests,levelUpProjection,log);
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
         var npcFavor = new NpcFavorCatalog(pvf);
+        var battlePassSeason = options.BattlePassSeasonKey;
+        var battlePassCatalog = battlePassSeason is null ? null : GameWorld.BattlePass.BattlePassCatalog.Load(pvf);
+        var battlePassProjection = battlePassSeason is null || battlePassCatalog is null ? null : new BattlePassProjection(battlePassSeason, battlePassCatalog, clock);
+        if (options.BattlePassSeasonStart is { } battlePassStart)
+        {
+            if (battlePassSeason is null || battlePassCatalog is null)
+                throw new InvalidDataException("任务周期需要显式battle-pass-season");
+            repository.ConfigureBattlePassMissions(new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, battlePassStart, battlePassCatalog));
+        }
+        var battlePassRewards = battlePassCatalog is null ? null : new Game.BattlePass.BattlePassRewardService(
+            battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -721,12 +733,13 @@ internal static class ServerRuntime
             new PvpRecordHandler(pvpRecords, online, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
-                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents, strongwayProjection),
+                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents, strongwayProjection, battlePassProjection),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena, tradeHandler),
             tradeHandler,
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
-            new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
+            new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock,
+                battlePassChanged: context => BattlePassMissionProjection.RefreshAsync(context, (clock ?? TimeProvider.System).GetUtcNow())),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
                 adventureProjection, inventoryProjection, projection, clock),
             new TutorialHandler(tutorials, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection),
@@ -768,7 +781,8 @@ internal static class ServerRuntime
                 inventoryProjection, log,
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
                     itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection,
-                serverEvents: events, strongwayShops: itemResources.Shops),
+                serverEvents: events, strongwayShops: itemResources.Shops,
+                battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
@@ -786,15 +800,15 @@ internal static class ServerRuntime
                 itemResources.EpicPieces, itemResources.Contracts, itemResources.Boosters.DirectActivationItems,
                 debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
             new EmblemCompoundHandler(new InventoryEmblemCompoundService(itemResources.Items,
-                itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log, guildNpcBenefitService),
+                itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log, guildNpcBenefitService),
             new MonsterCardBindHandler(new InventoryMonsterCardBindService(itemResources.Items,
-                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             new MonsterCardUpgradeHandler(new InventoryMonsterCardUpgradeService(itemResources.Items, itemResources.Enchantments,
-                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
                 itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
-                itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
+                itemResources.AvatarCompounds, itemResources.AvatarPackages, clock: clock), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new AvatarAbilityChangeHandler(new InventoryAvatarAbilityChangeService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
             new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
@@ -822,7 +836,7 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService, machineDisassembly,
                 new Game.ExpertJob.ExpertJobEnchanting(expertJobs, itemResources.Items, itemResources.Enchantments, expertPolicy, clock), online),
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
-                itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+                itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
             new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
@@ -910,6 +924,10 @@ internal static class ServerRuntime
         ];
         foreach (var module in modules)
             module.Register(commands);
+        if (battlePassRewards is not null && battlePassSeason is not null)
+            new BattlePassHandler(battlePassRewards, battlePassSeason, inventoryProjection, log).Register(commands);
+        if (options.BattlePassSeasonStart is not null && battlePassProjection is not null)
+            new BattlePassMissionHandler(clock, battlePassProjection.MissionStateAsync, log).Register(commands);
         if (itemResources.PcRoom is { } pcRoom)
         {
             new PcRoomHandler(new Game.PcRoom.PcRoomRewardService(pcRoom, itemResources.Items,

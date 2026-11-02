@@ -68,7 +68,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             if (plan.After.Gold - (long)grantBefore!.Gold != reward.Count)
                 return InventoryResult.Reject(4);
             receipt = new(request.Slot, default, 0, reward.Count);
-            return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems } };
+            return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems, BoosterSongAcquisition = plan.BoosterSongAcquisition } };
         }
         var grantBeforeIndex = new InventoryIndex(grantBefore!);
         var destinations = plan.After.Items.Where(item => item.Core.ItemId == reward.ItemId &&
@@ -78,7 +78,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             destinations.Sum(item => item.Core.Count - PriorCount(item)) != reward.Count)
             return InventoryResult.Reject(4);
         receipt = new(request.Slot, destinations[0].Position, reward.ItemId, destinations[0].Core.Count - PriorCount(destinations[0]));
-        return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems } };
+        return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems, BoosterSongAcquisition = plan.BoosterSongAcquisition } };
 
         int PriorCount(InventoryItem item)
         {
@@ -721,8 +721,16 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             SelectionTrace = trace,
             SelectionSummary = trace is null ? null : IndependentAttributePairSampler.Describe(selectionPolicy.Policy!, trace)
         };
+        BoosterSongAcquisition? song = null;
+        if (totals.TryGetValue(BoosterSongAcquisition.ItemId, out int declaredSong) && declaredSong > 0)
+        {
+            if (catalog.Get(BoosterSongAcquisition.ItemId).Kind != ItemKind.Material)
+                return InventoryResult.Reject(19);
+            song = new(character.Id, character.Revision, source, request.Count, declaredSong, now);
+        }
         return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems)
-        { UsedItems = [new(source.Core.ItemId, request.Count)], AccountMaterialRaidWeek = grant.Plan.AccountMaterialRaidWeek });
+        { UsedItems = [new(source.Core.ItemId, request.Count)], AccountMaterialRaidWeek = grant.Plan.AccountMaterialRaidWeek,
+            BoosterSongAcquisition = song });
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }

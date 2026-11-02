@@ -144,7 +144,10 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             }
         }
         return new(true, 0, new(before, after, "npc_shop_buy", new(character, deadline, Clock, requirePosition: true))
-            { RequiredEvent = requiredEvent });
+        {
+            RequiredEvent = requiredEvent,
+            NpcMaterialConsume = NpcMaterialConsumeFact.Capture(shops, template, price, request, count, before, paid, after, now, Clock)
+        });
     }
 
     public ShopPurchaseCount[]? PurchaseCounts(Character character, int npcId, DateTimeOffset? utcNow = null)

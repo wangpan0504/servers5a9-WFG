@@ -59,7 +59,13 @@ internal static partial class RaidCombatProjection
         }
         PostRoster(context, view, actor, Guard);
         if (view.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed)
+        {
             RaidClearProjection.Refresh(context, Guard);
+            // 两条原阶段writer都在提交后沿此通知；任务不依赖实际领奖，且不重放原终结。
+            if (context.Session.ReadBattlePassRaidCompletionState(actor,view) is {} mission)
+                context.Sender.Post(0,(ushort)NotiPacketType.BATTLE_PASS_INFO_MISSION,mission.State.ToPayload(),
+                    "battle_pass_raid_completion",()=>Guard() && context.Session.CanPublishInventory(mission.Receipt));
+        }
     }
 
     static void PostRetryEligibility(GameConnectionContext context, Func<bool> current)

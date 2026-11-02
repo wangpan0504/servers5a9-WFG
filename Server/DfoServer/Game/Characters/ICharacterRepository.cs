@@ -53,8 +53,8 @@ internal interface ICharacterRepository
     OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan);
     Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
         DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals);
-    Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
-    Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
+    Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null);
+    Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null);
     Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
     Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now);
     System.Collections.Immutable.ImmutableDictionary<int, AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner);

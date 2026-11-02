@@ -64,6 +64,8 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         if (refreshList) await RefreshAsync(context,character,Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合，356须放在完整任务投影最后。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(character),"quest_ready_children_completed",Guard);
+        if (receipt.BattlePassMissionAt is { } at)
+            await BattlePassMissionProjection.RefreshAsync(context, at);
         return true;
     }
 

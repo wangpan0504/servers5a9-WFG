@@ -41,11 +41,23 @@ internal sealed class GuildContributionProjection(GuildContributionService servi
         }
     }
 
-    public void Chat(GameConnectionContext context)
+    public async Task ChatAsync(GameConnectionContext context)
     {
-        try { Record(context, "chat", service.Observe(context.Session, GuildContributionSource.Chat)); }
+        GuildContributionCommit result;
+        try
+        {
+            result = service.Observe(context.Session, GuildContributionSource.Chat);
+            Record(context, "chat", result);
+        }
         catch (Exception error) when (error is not (OutOfMemoryException or AccessViolationException))
-        { log.Write("guild_contribution_error", new { Connection = context.Id, Source = "chat", Error = error.ToString() }); }
+        {
+            log.Write("guild_contribution_error", new { Connection = context.Id, Source = "chat", Error = error.ToString() });
+            return;
+        }
+        if (result is not { Success: true, Points: > 0 }) return;
+        try { await BattlePassMissionProjection.RefreshAsync(context, service.Clock.GetUtcNow()); }
+        catch (System.Data.Common.DbException error)
+        { throw new IOException("Committed guild contribution publication failed", error); }
     }
 
     void Record(GameConnectionContext context, string source, GuildContributionCommit result)

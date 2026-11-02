@@ -345,6 +345,10 @@ internal static class SqliteMigrations
                 .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal)
                 .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal))),
         new(185, "网吧领取与燃烧选择", PcRoomSchema.Upgrade),
+        new(186, "账号战令赛季与等级奖励领取", BattlePassSchema.Upgrade),
+        new(187, "战令任务周期与真实来源经验账", BattlePassMissionSchema.Upgrade),
+        new(188, "战令资格购买原子订单", BattlePassCertificateSchema.Upgrade),
+        new(189, "战令实际点券消费经验与累计余数", BattlePassCeraConsumptionSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";

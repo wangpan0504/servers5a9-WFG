@@ -108,8 +108,8 @@ internal sealed partial class CharacterRepository
         bool exists = false; int streak = 0, lastDay = 0;
         using (var reader = query.ExecuteReader())
             if (reader.Read()) { exists = true; streak = reader.GetInt32(0); lastDay = reader.GetInt32(1); }
-        // 已存在且同一06:00周期的账号保持只读：外部writer存在时也能完成初始化检查。
-        if (exists && day <= lastDay) return true;
+        // 冒险团和当前战令日来源均已初始化时保持只读；时钟回拨不新增旧日来源。
+        if (exists && day <= lastDay && !BattlePassDailyLoginPending(db, null, owner.Account, lastDay, day, now)) return true;
         using var write = db.BeginWrite("CharacterRepository.InitializeAdventure");
         using var tx = write.Transaction;
         query.Transaction = tx;
@@ -118,7 +118,8 @@ internal sealed partial class CharacterRepository
             exists = reader.Read();
             if (exists) { streak = reader.GetInt32(0); lastDay = reader.GetInt32(1); }
         }
-        if (exists && day <= lastDay) { tx.Rollback(); return true; }
+        if (exists && day <= lastDay && !BattlePassDailyLoginPending(db, tx, owner.Account, lastDay, day, now))
+        { tx.Rollback(); return true; }
         if (!exists)
         {
             var state = AdventureState.Initial(owner.Account, now) with { LoginStreakDays = 1, LastLoginDay = day };
@@ -136,7 +137,7 @@ internal sealed partial class CharacterRepository
             query.Parameters.AddWithValue("$day", day);
             query.ExecuteNonQuery();
         }
-        else
+        else if (day > lastDay)
         {
             // 新的06:00周期才推进连续天数与账号版本；断一天或更久归零重计。
             query.Parameters.AddWithValue("$streak", AdventurePeriod.NextLoginStreak(lastDay, streak, day));
@@ -145,6 +146,8 @@ internal sealed partial class CharacterRepository
             query.CommandText = "UPDATE account_adventures SET login_streak_days=$streak,last_login_day=$day,revision=revision+1 WHERE account=$account AND last_login_day=$previous";
             if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团登录周期已变化");
         }
+        // 本次真实登录与冒险团日事实共用事务；同日首次配置战令也只补当日的一次来源。
+        ApplyBattlePassDailyLogin(db, tx, owner.Account, day, now);
         tx.Commit();
         return true;
     });

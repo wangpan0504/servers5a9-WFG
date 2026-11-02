@@ -169,7 +169,12 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true, UsesLevelProbability = !lucky,
             TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
         return new(true, 0, new(before, after, reason, new(character, deadline, clock,
-                qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds)));
+                qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds))
+        {
+            EquipmentEnhancement = lucky ? null : new(Guid.NewGuid(), DateTimeOffset.FromUnixTimeSeconds(now),
+                clock ?? TimeProvider.System, portable ? OrdinaryEnhancementSource.Portable : OrdinaryEnhancementSource.Material,
+                wallet ? null : source, count, target, receipt) { WalletMaterial = walletKind }
+        });
     }
 
     internal static int AdjustedFailureWeight(int failureWeight, int successBonusWeight, int guildSuccessPercent = 0)

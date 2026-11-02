@@ -41,6 +41,8 @@ internal sealed class NpcFavorService(NpcFavorCatalog npcs, TownCatalog? towns =
             row is null && before.NpcFavor.Length >= byte.MaxValue) return InventoryResult.Reject(19);
         InventoryResult paid;
         NpcFavorGift? gift;
+        InventoryItem? sourceItem = null;
+        CurrencyKind? currencyKind = null;
         long deadline = DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds();
         if (request.Operation == 0 && request.SourceType == 36 && request.SourceIndex is >= 354 and <= 359)
         {
@@ -48,6 +50,7 @@ internal sealed class NpcFavorService(NpcFavorCatalog npcs, TownCatalog? towns =
             if (!rules.Gifts.TryGetValue(id, out gift) || CurrencyWallet.RewardKind(id) is not { } currency)
                 return InventoryResult.Reject(19);
             paid = CurrencyService.Spend(before, currency, gift.Count);
+            currencyKind = currency;
         }
         else if (request.Operation == 2 && request.SourceType == 0 && request.SourceIndex <= short.MaxValue)
         {
@@ -59,6 +62,7 @@ internal sealed class NpcFavorService(NpcFavorCatalog npcs, TownCatalog? towns =
                 return InventoryResult.Reject(19);
             if (source.ExpireTime > 0) deadline = Math.Min(deadline, source.ExpireTime);
             paid = InventoryDeleteService.Plan(before, slot, source.Core.ItemId, gift.Count);
+            sourceItem = source;
         }
         else return InventoryResult.Reject(19);
         if (!paid.Accepted) return InventoryResult.Reject(22);
@@ -68,8 +72,14 @@ internal sealed class NpcFavorService(NpcFavorCatalog npcs, TownCatalog? towns =
         {
             Points = points + gain, GiftDay = day, GiftCount = checked((byte)((row?.EffectiveGifts(day) ?? 0) + 1))
         };
-        return new(true, 0, new(before, Replace(paid.Plan!.After, row, afterRow), "npc_favor_gift",
-            new(character, deadline, clock, requirePosition: true)));
+        var paidInventory = paid.Plan!.After;
+        var after = Replace(paidInventory, row, afterRow);
+        return new(true, 0, new InventoryPlan(before, after, "npc_favor_gift",
+            new(character, deadline, clock, requirePosition: true))
+        {
+            NpcGift = new(Guid.NewGuid(), now, clock, request, gift, target.OwnerId, target.Maximum, rules.GiftLimit,
+                sourceItem, currencyKind, row, afterRow, before, paidInventory, after)
+        });
     }
 
     bool Present(Character character, int ownerId) => towns is null ||

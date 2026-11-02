@@ -139,7 +139,7 @@ internal sealed partial class CharacterRepository
             query.Parameters.AddWithValue("$position", checked((long)plan.PositionAfter));
             if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("冒险团角色里程行缺失");
         }
-        return plan;
+        return plan with { OccurredAt = now };
     }
 
     // 升级券、状态表、跳跃表与GM等级/经验改写：直接按改后有效位置改写里程，账号总量保持不变。
@@ -154,13 +154,14 @@ internal sealed partial class CharacterRepository
     }
 
     // 计入来源走完整进度写入（等级、经验、余数、结晶、胶囊、排除额）；排除来源只写排除额。
-    static void WriteAdventureCredit(SqliteConnection db, SqliteTransaction tx, string account,
+    void WriteAdventureCredit(SqliteConnection db, SqliteTransaction tx, string account,
         AdventureCreditPlan plan, AdventureCreditSource source, AdventureCatalog catalog)
     {
         if (plan.After == plan.Before) return;
         if (source == AdventureCreditSource.Earned)
         {
             WriteAdventureProgression(db, tx, account, plan.Before, plan.After, catalog);
+            ApplyBattlePassBraveCrystalAcquisition(db, tx, account, plan, source, catalog);
             return;
         }
         using var command = db.CreateCommand(); command.Transaction = tx;

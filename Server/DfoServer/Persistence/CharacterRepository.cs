@@ -17,7 +17,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
     Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, TimeProvider? promotionClock = null)
     : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore, DfoServer.Game.Creatures.ICreatureTransportStore,
       DfoServer.Game.Inventory.Services.IEquipmentTransportStore,
-      DfoServer.Game.CashShopPromotions.ICashShopPromotionStore
+      DfoServer.Game.CashShopPromotions.ICashShopPromotionStore, DfoServer.Game.BattlePass.IBattlePassStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>

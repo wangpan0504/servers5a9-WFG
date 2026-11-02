@@ -5,7 +5,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class AdventureProjection(AdventureCatalog catalog)
+internal sealed class AdventureProjection(AdventureCatalog catalog, TimeProvider? clock = null)
 {
     public async Task OtherInformationAsync(GameConnectionContext context, GameSession other, ushort target)
     {
@@ -24,13 +24,13 @@ internal sealed class AdventureProjection(AdventureCatalog catalog)
         await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "other_adventure_information", Guard);
     }
 
-    public void Prepare(GameConnectionContext context) => context.Session.InitializeAdventure(catalog, DateTimeOffset.UtcNow);
+    public void Prepare(GameConnectionContext context) => context.Session.InitializeAdventure(catalog, (clock ?? TimeProvider.System).GetUtcNow());
     public async Task InformationAsync(GameConnectionContext context, bool ack = false, bool initialization = false)
     {
         var selected = context.Session.Selected;
         if (selected is null && !context.Session.CheckState(UserState.CharacterSelect)) return;
         long epoch = context.Session.SelectionEpoch;
-        var snapshot = context.Session.ReadAdventure(catalog, DateTimeOffset.UtcNow);
+        var snapshot = context.Session.ReadAdventure(catalog, (clock ?? TimeProvider.System).GetUtcNow());
         bool Guard() => context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, selected) &&
             (selected is null ? context.Session.CheckState(UserState.CharacterSelect) : initialization || context.Session.Ready);
         var body = AdventurePackets.Information(selected?.Id ?? 0, snapshot, catalog, snapshot.Representatives(catalog), ack);

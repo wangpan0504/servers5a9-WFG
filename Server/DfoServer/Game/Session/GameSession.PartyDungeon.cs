@@ -185,7 +185,7 @@ internal sealed partial class GameSession
         preparedPartyDungeon = plan with { Dungeon = dungeon with { GuildTraining = training?.Snapshot } };
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
-            { GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+            { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
@@ -245,7 +245,8 @@ internal sealed partial class GameSession
         return FormalReceipt() with { EntryItemConsumedSlots = installing.HellTicket is null ? payment?.ChangedSlots ?? [] : [],
             HellConsumedSlots = installing.HellTicket is not null ? payment?.ChangedSlots ?? [] : [],
             HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
-            EntryFatigueCharged = reservation.Charge.Fatigue, EnterCounts = result.EnterCounts,
+            EntryFatigueCharged = reservation.Charge.Fatigue,
+            BattlePassMissionClock = reservation.Charge.Fatigue > 0 ? reservation.Charge.BattlePassMissionClock : null, EnterCounts = result.EnterCounts,
             EntryChangedCurrencies = payment?.ChangedCurrencies ?? [],
             ChannelConsumedSlots = installing.ChannelCost?.Consume is not null ? payment?.ChangedSlots ?? [] : [] };
     });

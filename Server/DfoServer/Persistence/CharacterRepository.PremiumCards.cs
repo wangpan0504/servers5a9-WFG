@@ -74,6 +74,7 @@ internal sealed partial class CharacterRepository
               paid_revision=$revision,paid_day=$claimDay WHERE character_id=$id AND instance_id=$instance AND paid_reward_json IS NULL
             """;
         if (query.ExecuteNonQuery() != 1) throw new InvalidOperationException("付费牌资格已被消费");
+        ApplyBattlePassGoldenPaidCard(db,tx,owner.Account,prepared,current.Id,now);
         tx.Commit();
         return new(true,current,delivery.Rewards[0],new(expected.Inventory,current.Inventory,"dungeon_card_reward"),mail);
     });

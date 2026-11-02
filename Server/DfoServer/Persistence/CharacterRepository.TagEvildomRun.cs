@@ -80,6 +80,7 @@ internal sealed partial class CharacterRepository : ITagEvildomClearStore
             WHERE account=$account AND instance_id=$instance AND clearance_receipt IS NULL
             """;
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("再战通关回执并发冲突");
+        ApplyBattlePassTagEvildomCompletion(db, tx, owner.Account, plan);
         tx.Commit();
         return new TagEvildomClearCommit(plan, mailId, false);
     });

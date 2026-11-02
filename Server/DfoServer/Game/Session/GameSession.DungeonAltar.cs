@@ -22,12 +22,15 @@ internal sealed record DungeonAltarReceipt(long Generation, long SelectionEpoch,
     public DfoServer.Game.Town.TownTravelReceipt? Returned { get; init; }
     public Character? QuestCharacter { get; init; }
     public ImmutableArray<InventorySlot> QuestDropSlots { get; init; } = [];
+    public TimeProvider? BattlePassMissionClock { get; init; }
+    public Character? BattlePassCharacter { get; init; }
 }
 
 internal sealed partial class GameSession
 {
     // 仅保留当前实例尚未发送的已提交投影；任务权威仍为Selected与数据库。
-    (Guid Instance, Character Character, ImmutableArray<InventorySlot> Slots)? altarQuestProjection;
+    (Guid Instance, Character Character, ImmutableArray<InventorySlot> Slots, TimeProvider? BattlePassClock)? altarQuestProjection;
+    (Guid Instance, Character Character, TimeProvider Clock)? altarBattlePassProjection;
     public bool HasDungeonAltar => owner.Execute(() => formalDungeon?.Run.CurrentAltar is not null);
 
     public DungeonAltarReceipt? WaitDungeonAltarRevival() => owner.Execute(() =>
@@ -142,16 +145,33 @@ internal sealed partial class GameSession
                     pending.Monster.EnemyType, pending.Result.ClearFact is not null, dungeon.Draw,
                     (timeProvider ?? TimeProvider.System).GetUtcNow());
             var questDrop = dungeon.PendingQuestDrop;
-            if (questDrop?.Outcomes.Length > 0 || questCatalog is not null && !QuestHuntProgress.MonsterDeath(Selected.ActiveMainQuests,
-                    dungeon.Entry, questCatalog, pending.Monster).SequenceEqual(Selected.ActiveMainQuests))
+            bool huntChanged = questCatalog is not null && !QuestHuntProgress.MonsterDeath(Selected.ActiveMainQuests,
+                dungeon.Entry, questCatalog, pending.Monster).SequenceEqual(Selected.ActiveMainQuests);
+            if (questDrop?.Outcomes.Length > 0 || huntChanged)
             {
+                if (questCatalog is not null)
+                {
+                    // 仅材料掉落也使用原死亡事务，战令仍按真实猎杀目标资格冻结。
+                    if (huntChanged) pending.FreezeBattlePassAltarQuestTarget(dungeon.Run, Selected, questCatalog, timeProvider ?? TimeProvider.System);
+                    else pending.FreezeBattlePassAltarNonTarget(dungeon.Run, Selected, questCatalog, timeProvider ?? TimeProvider.System);
+                }
                 var committed = repository.CommitDungeonGrowth(owner, Selected, dungeon.Run, pending,
                     DungeonKillExperiencePolicy.PlanAltarQuestDeath(dungeon.Run, pending), growth, questDrops: questDrop);
                 Selected = committed.Character;
                 var slots = altarQuestProjection is { } previous && previous.Instance == dungeon.Run.Snapshot.Identity.InstanceId
                     ? previous.Slots : [];
                 altarQuestProjection = (dungeon.Run.Snapshot.Identity.InstanceId, committed.Character,
-                    slots.Concat(questDrop?.Inventory.ChangedSlots ?? []).Distinct().ToImmutableArray());
+                    slots.Concat(questDrop?.Inventory.ChangedSlots ?? []).Distinct().ToImmutableArray(), pending.BattlePassActivity?.Clock);
+            }
+            else if (questCatalog is not null && repository is DfoServer.Game.BattlePass.IBattlePassAltarDeathStore store)
+            {
+                // 非目标死亡独立提交原战令来源，不伪造任务变化或普通经验回执。
+                pending.FreezeBattlePassAltarNonTarget(dungeon.Run,Selected,questCatalog,timeProvider ?? TimeProvider.System);
+                if (pending.BattlePassActivity is {} fact)
+                {
+                    if (store.CommitBattlePassAltarDeath(owner,Selected,dungeon.Run,pending))
+                        altarBattlePassProjection=(dungeon.Run.Snapshot.Identity.InstanceId,Selected,fact.Clock);
+                }
             }
             dungeon.PendingQuestDrop = null;
             // 祭坛奖励归专用结算，不伪造普通怪物经验/掉落。
@@ -160,9 +180,11 @@ internal sealed partial class GameSession
             changed = true;
         }
         if (!changed)
-            return acknowledgeDuplicate && duplicate || altarQuestProjection is { } projection &&
-                projection.Instance == dungeon.Run.Snapshot.Identity.InstanceId && ReferenceEquals(projection.Character, Selected)
-                ? AltarReceipt(state, AltarClock()) with { Completed = state.Completed } : null;
+        {
+            var replay=AltarReceipt(state,AltarClock()) with { Completed=state.Completed };
+            return acknowledgeDuplicate && duplicate || replay.QuestCharacter is not null || replay.BattlePassCharacter is not null
+                ? replay : null;
+        }
         long now = AltarClock();
         bool advanced = dungeon.Run.AdvanceAltar(now);
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
@@ -191,6 +213,29 @@ internal sealed partial class GameSession
         return false;
     });
 
+    public bool CanPublishDungeonAltarBattlePass(DungeonAltarReceipt receipt) => owner.Execute(() =>
+        IsCurrentAltar(receipt) && receipt.State.Round==receipt.Round && receipt.State.Difficulty==receipt.Difficulty &&
+        receipt.BattlePassCharacter is {} character && Selected?.Id==character.Id);
+
+    public bool MarkDungeonAltarBattlePassPublished(DungeonAltarReceipt receipt) => owner.Execute(() =>
+    {
+        if (CanPublishDungeonAltarBattlePass(receipt) && receipt.BattlePassCharacter is not null &&
+            altarBattlePassProjection is {} projection && projection.Instance==receipt.InstanceId &&
+            projection.Character.Id==receipt.BattlePassCharacter.Id && ReferenceEquals(projection.Clock,receipt.BattlePassMissionClock))
+        {
+            altarBattlePassProjection=null;
+            return true;
+        }
+        if (CanPublishDungeonAltarBattlePass(receipt) && receipt.BattlePassCharacter is not null &&
+            altarQuestProjection is {} target && target.Instance==receipt.InstanceId &&
+            target.Character.Id==receipt.BattlePassCharacter.Id && ReferenceEquals(target.BattlePassClock,receipt.BattlePassMissionClock))
+        {
+            altarQuestProjection=(target.Instance,target.Character,target.Slots,null);
+            return true;
+        }
+        return false;
+    });
+
     bool IsCurrentAltar(DungeonAltarReceipt receipt) => Ready && Selected is not null &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement && owner.Generation == receipt.Generation &&
         SelectionEpoch == receipt.SelectionEpoch && formalDungeon is { } dungeon &&
@@ -209,7 +254,16 @@ internal sealed partial class GameSession
         {
             DisplayRound = dungeon.Run.CompletedAltarRounds + state.Round,
             QuestCharacter = projection?.Character,
-            QuestDropSlots = projection?.Slots ?? []
+            QuestDropSlots = projection?.Slots ?? [],
+            BattlePassCharacter = altarBattlePassProjection is {} battlePassCharacter && battlePassCharacter.Instance==dungeon.Run.Snapshot.Identity.InstanceId &&
+                battlePassCharacter.Character.Id==Selected?.Id ? battlePassCharacter.Character :
+                altarQuestProjection is {} targetCharacter && targetCharacter.BattlePassClock is not null &&
+                targetCharacter.Instance==dungeon.Run.Snapshot.Identity.InstanceId && targetCharacter.Character.Id==Selected?.Id
+                    ? targetCharacter.Character : null,
+            BattlePassMissionClock = altarBattlePassProjection is {} battlePass && battlePass.Instance == dungeon.Run.Snapshot.Identity.InstanceId &&
+                battlePass.Character.Id==Selected?.Id ? battlePass.Clock :
+                altarQuestProjection is {} target && target.Instance==dungeon.Run.Snapshot.Identity.InstanceId &&
+                target.Character.Id==Selected?.Id ? target.BattlePassClock : null
         };
     }
 }

@@ -243,7 +243,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             {
                 Connection = context.Id, Kind = kind.ToString(), dispatch.Recipients, dispatch.LayerFallback
             });
-            if (kind == ChatKind.Guild) guildContribution?.Chat(context);
+            if (kind == ChatKind.Guild && guildContribution is not null) await guildContribution.ChatAsync(context);
             // 喇叭：记种类、类型字节与编码后的段落长度，便于定位"客户端的喇叭页签为什么没这一行"；
             // 不写正文（正文可能很长，且热点日志不应复制玩家文本）。
             if (kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)
@@ -330,7 +330,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         else
         {
             context.Session.RememberItemHyperlink(link);
-            if (kind == ChatKind.Guild) guildContribution?.Chat(context);
+            if (kind == ChatKind.Guild && guildContribution is not null) await guildContribution.ChatAsync(context);
             var plan = isNamed || kind == ChatKind.Guild
                 ? ItemLinkPackets.DesignNamed(new(namedType ?? ChatMessageType.Guild, 0, origin.Name,
                     origin.Scene.Channel.ServerIndex, ""), link.Text, link.Records)

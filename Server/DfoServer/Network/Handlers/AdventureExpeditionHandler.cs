@@ -8,7 +8,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class AdventureExpeditionHandler(AdventureExpeditionService service, AdventureExpeditionProjection projection,
-    TimeProvider? clock = null) : IGameCommandModule
+    TimeProvider? clock = null, Func<GameConnectionContext, Task>? battlePassChanged = null) : IGameCommandModule
 {
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
     public void Register(GameCommandRegistry commands)
@@ -38,6 +38,8 @@ internal sealed class AdventureExpeditionHandler(AdventureExpeditionService serv
         await context.Reply(CmdPacketType.MERCENARY_COMPETITION, AdventurePackets.Ack(result.Error), "expedition_start",
             result.Accepted ? () => context.Session.CanPublishAdventureExpedition(result) : null);
         if (result.Accepted) await projection.InformationAsync(context, result: result);
+        if (result.Accepted && battlePassChanged is not null && context.Session.CanPublishAdventureExpedition(result))
+            await battlePassChanged(context);
         return CommandResult.Handled;
     }
     async Task<CommandResult> Finish(GameConnectionContext context, Packet packet, bool claim)
@@ -57,6 +59,8 @@ internal sealed class AdventureExpeditionHandler(AdventureExpeditionService serv
                 snapshot.Representatives(service.Catalog)), "expedition_account_information", Guard);
             await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(selected.Id, snapshot.State, service.Catalog),
                 "expedition_account_actor", Guard);
+            if (claim && battlePassChanged is not null && Guard())
+                await battlePassChanged(context);
         }
         return CommandResult.Handled;
     }

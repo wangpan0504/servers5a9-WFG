@@ -243,6 +243,7 @@ internal static partial class DatabaseSchemaTests
             MarriageSameAccountUpgrade(root);
             PrivilegeServiceUpgrade(root);
             FiendwarCounterUpgrade(root);
+            BattlePass175Upgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);

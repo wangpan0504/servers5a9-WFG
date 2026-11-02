@@ -73,8 +73,18 @@ internal sealed class EmblemCompoundHandler(InventoryEmblemCompoundService compo
 
         await context.Reply(CmdPacketType.COMPOUND_EMBLEM, EmblemCompoundPackets.Success(receipt),
             "emblem_compound_committed", CanSend);
-        await projection.RefreshAsync(context, result);
-        if (benefitCommit is not null) guildBenefits!.Publish(benefitCommit);
+        try
+        {
+            await projection.RefreshAsync(context, result);
+            if (result.Plan?.EmblemCompound is { } fact && CanSend())
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, fact.Clock.GetUtcNow());
+            if (benefitCommit is not null) guildBenefits!.Publish(benefitCommit);
+        }
+        catch (System.Data.Common.DbException error) when (result.Plan?.EmblemCompound is not null)
+        {
+            // 原随机奖励与材料已提交，后置读取失败不能重放合成或公会扣次数。
+            throw new IOException("Committed emblem compound publication failed", error);
+        }
         return CommandResult.Handled;
     }
 }

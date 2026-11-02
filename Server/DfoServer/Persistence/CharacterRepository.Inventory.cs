@@ -421,6 +421,19 @@ internal sealed partial class CharacterRepository
         if (plan.Before.PrivilegeService != inventory.PrivilegeService)
             WritePrivilegeService(db, transaction, owner.Account, current.Id, inventory.PrivilegeService);
         if (!plan.Before.ServerItems.Same(inventory.ServerItems)) WriteServerItems(db, transaction, current.Id, inventory.ServerItems);
+        ApplyBattlePassEnhancement(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassRepair(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassEmblem(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassMonsterCardBind(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassAvatarDisjoint(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassNpcGift(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassEquipmentEnchant(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassAvatarCompound(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassMonsterCardUpgrade(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassEquipmentDisjoint(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassNpcMaterialConsume(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassCeraConsumption(db, transaction, owner.Account, current.Id, plan, inventory);
+        ApplyBattlePassUndefeatedSongBooster(db, transaction, owner.Account, current.Id, current.Revision, plan);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
             EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,

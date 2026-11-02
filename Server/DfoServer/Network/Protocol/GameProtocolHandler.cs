@@ -67,6 +67,37 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         catch (Exception) { }
     }
 
+    // 已提交战况的单成员投递边界；数据库读失败只结束本连接，不中断其余成员。
+    internal static Action<DfoServer.Game.Raids.AntonRaidBattleView, DfoServer.Game.Raids.RaidActor> CreateRaidBattleNotice(
+        GameConnectionContext context, ServerLog log,
+        Action<DfoServer.Game.Raids.AntonRaidBattleView, DfoServer.Game.Raids.RaidActor> publish) => (view, actor) =>
+    {
+        try { publish(view, actor); }
+        catch (System.Data.Common.DbException error)
+        {
+            try
+            {
+                log.Write("game_send_failed", new
+                {
+                    Connection = context.Id, Stage = "raid_battle_notice", Character = actor.Character,
+                    view.Instance, view.Phase, view.Revision, Reason = error.GetType().Name,
+                    Code = error.ErrorCode, SqliteCode = (error as SqliteException)?.SqliteErrorCode,
+                    ExtendedCode = (error as SqliteException)?.SqliteExtendedErrorCode
+                });
+            }
+            finally
+            {
+                try { context.Disconnect(); }
+                catch (AggregateException callbacks)
+                {
+                    // Cancel已请求停止；回调失败单独记录，继续其它成员通知。
+                    log.Write("game_send_failed", new { Connection = context.Id, Stage = "raid_battle_disconnect",
+                        Reason = callbacks.GetType().Name, Callbacks = callbacks.InnerExceptions.Count });
+                }
+            }
+        }
+    };
+
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
 
@@ -190,12 +221,15 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         ushort socialCharacter = 0;
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart, projection);
-        session.RaidBattleNoticeArrived = (view, actor) => RaidCombatProjection.Notice(context, view, actor);
+        session.RaidBattleNoticeArrived = CreateRaidBattleNotice(context, log,
+            (view, actor) => RaidCombatProjection.Notice(context, view, actor));
         session.RaidRunClearedArrived = (cleared, actor) => RaidCombatProjection.RunCleared(context, cleared, actor);
         session.AutomaticRaidRewardArrived = async receipt =>
         {
             if (inventory is not null) await inventory.RefreshAsync(context, receipt.Inventory);
             if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
+            if (DfoServer.Game.BattlePass.BattlePassUndefeatedSongSource.DeclaresSong(receipt.Prepared) && session.CanPublishRaidReward(receipt))
+                await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
             if (items is not null && DfoServer.Game.Raids.LukeRewardResults.Bind(receipt, items,
                 (time ?? TimeProvider.System).GetUtcNow()) is { } result)
             {
@@ -203,7 +237,13 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 await context.Sender.DrainAsync();
             }
         };
-        session.AutomaticLukeRecoveryArrived = result => inventory?.RefreshAsync(context, result) ?? Task.CompletedTask;
+        session.AutomaticLukeRecoveryArrived = async result =>
+        {
+            if (inventory is not null) await inventory.RefreshAsync(context, result);
+            // 任务为账号共享；原回调已安装当前选角快照，不把旧角色资产发给其它角色。
+            if (result.Receipt is { } receipt && session.CanPublishInventory(receipt))
+                await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
+        };
         session.AntonAutoRewardRequested = (battle, phase) =>
         {
             if (repository is not DfoServer.Game.Raids.IRaidRewardStore rewardStore || items is null ||

@@ -88,9 +88,11 @@ internal sealed partial class GameSession
                     return InventoryResult.Reject();
                 try
                 {
+                    int coinsBefore = Selected.Inventory.ReviveCoins;
                     var result = CommitInventory(Selected, DungeonRevive.Plan(Selected, PreservesDungeonConsumables));
                     if (result.Accepted)
                     {
+                        formalDungeon.ReviveCoinsSpent = checked(formalDungeon.ReviveCoinsSpent + coinsBefore - Selected!.Inventory.ReviveCoins);
                         reservation?.Commit();
                         formalDungeon.CharacterDead = false;
                         formalDungeon.AltarRevivalDue = null;

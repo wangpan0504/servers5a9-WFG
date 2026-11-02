@@ -21,6 +21,16 @@ internal static class TagEvildomRunTests
     internal static void Run()
     {
         RequestsAndClearCodec();
+        var originalMission = new DfoServer.GameWorld.BattlePass.BattlePassMission(36, 4, 1000, 35, "", -1);
+        That(DfoServer.Game.BattlePass.BattlePassTagEvildomCompletion.MatchesMission(1, originalMission),
+            "魔界竞技任务保持原周36/raw35/四次/1000XP/参数-1定义");
+        foreach (var changed in new[] { originalMission with { Id = 35 }, originalMission with { RawTypeCode = 34 },
+            originalMission with { RawParameter = 0 }, originalMission with { RequiredCount = 3 }, originalMission with { Experience = 100 } })
+            That(!DfoServer.Game.BattlePass.BattlePassTagEvildomCompletion.MatchesMission(1, changed),
+                "同玩法周三次或其它任务不能改写原四次任务定义");
+        That(!DfoServer.Game.BattlePass.BattlePassTagEvildomCompletion.MatchesMission(0, originalMission) &&
+            !DfoServer.Game.BattlePass.BattlePassTagEvildomCompletion.MatchesMission(2, originalMission),
+            "再战正式来源不借日/季任务类别");
         var participants = Participants();
         foreach (var invalid in new[] { participants with { ConfigurationRevision = 0 },
             participants with { Standby = participants.Primary },
