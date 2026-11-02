@@ -262,10 +262,46 @@ internal static class LukeRaidStartTcpTests
             for(int index=0;index<4;index++)peers.Add(CreatePeer(index));
             foreach(var peer in peers)Drain(peer);
             var leader=peers[0];
+            Location? waitingGate = null;
+            Location? recruitment = null;
+            if(!runDungeons)
+            {
+                leader.Send(1426);
+                var exit = Until(leader,0,23).Body; Drain(leader);
+                recruitment = new(exit[2],exit[3],U16(exit,4),U16(exit,6));
+                That(recruitment is {Town:32} && recruitment.Area != raw.WaitingRoom!.Area,
+                    "真实1426先进入卢克招募街区，不绕过候战门禁");
+                waitingGate = resources.Towns.Entrance(recruitment,
+                    new(checked((byte)raw.WaitingRoom!.Town),checked((byte)raw.WaitingRoom.Area),0,0),new HashSet<int>{2903,4872});
+                That(waitingGate is not null,"当前候选PVF包含招募街区到候战区的真实门");
+                string beforeGate = fixture.Snapshot();
+                leader.Send(36,Area(waitingGate!.Town,waitingGate.Area,waitingGate.X,waitingGate.Y,
+                    recruitment.Town,recruitment.Area));
+                Bytes(Until(leader,1,36).Body,[0,1,0,waitingGate.Town,waitingGate.Area],
+                    "未组成卢克攻坚队时返回原生切图失败ACK，客户端不挂起");
+                Bytes(Until(leader,0,0x06ad).Body,Build(writer=>{
+                    var title=System.Text.Encoding.UTF8.GetBytes("卢克攻坚队");
+                    var text=System.Text.Encoding.UTF8.GetBytes("请先创建或加入卢克攻坚队。");
+                    writer.Write(title.Length);writer.Write(title);writer.Write(text.Length);writer.Write(text);writer.Write((byte)0);
+                }),"门禁提示按原生UTF8长度合同独立编码，与建团要求一致");
+                var denied = new List<WirePacket>(); Drain(leader,denied.Add);
+                That(denied.All(packet=>packet.Opcode is not (23 or 24)) && fixture.Snapshot()==beforeGate,
+                    "拒绝时给出建团提示，不发布切图、不改变位置或任何资产");
+            }
             leader.Send(664,Build(w=>{w.Write((byte)1);w.Write(Name("LkStart"));w.Write(new byte[] { 0, 0, 0, 7 });}));
             Until(leader,0,590);Until(leader,0,591);var createdRaid=Until(leader,1,664).Body;
             Bytes(createdRaid[..1],[1],"真实Runtime创建Luke团");uint raidKey=U32(createdRaid,1);
             CheckNormalMode(leader,raidKey);
+            if(waitingGate is not null)
+            {
+                leader.Send(36,Area(waitingGate.Town,waitingGate.Area,waitingGate.X,waitingGate.Y,
+                    recruitment!.Town,recruitment.Area));
+                var entered = Until(leader,0,23).Body; Drain(leader);
+                That(entered[2]==waitingGate.Town && entered[3]==waitingGate.Area &&
+                    fixture.Query("SELECT town,area FROM characters WHERE id=$p0",leader.Id)
+                        is [[32L,4L]],"同一真实连接建团后可从同一门进入候战街区");
+                foreach(var peer in peers.Skip(1))Drain(peer);
+            }
             for(int index=1;index<peers.Count;index++)
             {
                 leader.Send(10,Peer(peers[index].Id,0,true));Until(leader,1,10);Until(peers[index],0,7);

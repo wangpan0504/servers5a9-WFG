@@ -55,6 +55,13 @@ internal sealed partial class GameSession
         TravelReason = plan.Reason;
         if (pendingRental is not null || HasPendingTownQuestCommit || !plan.Accepted)
             return null;
+        // 候战街区属于当前卢克攻坚队；普通队伍、旧选角身份及客户端目标坐标都不能授权。
+        if (plan.Position is { Town: 32, Area: 4 } &&
+            (ChannelEntry?.Type != 32 || raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 1 }))
+        {
+            TravelReason = "luke-raid-required";
+            return null;
+        }
         // 等待区只允许当前真实魔界大战队伍进入；拒绝必须发生在保存位置和发布切图之前。
         if (ChannelEntry?.Type == 54 && Selected?.Position is { Town: 67, Area: 1 } &&
             plan.Position is { Town: 67, Area: 2 } &&
