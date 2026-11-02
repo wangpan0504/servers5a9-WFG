@@ -71,6 +71,18 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         // 原生换频道直接发C2S4；普通选角先请求C2S8，返回选角也有已推送名册。
         bool resumeTown = !context.RosterRequested && !context.SelectionRosterPushed;
         ushort selection=CharacterRequests.Select(request.Body);
+        if (context.ChannelSelectionRequired || !context.HasEnteredWorld && !resumeTown &&
+            context.Session.ChannelEntry?.Type is 23 or 32 or 45 or 50)
+        {
+            // 新登录不能沿上次团本端点直接入城；原生主动换频道不先请求名册，仍走原链。
+            context.ChannelSelectionRequired = true;
+            await context.Reply(CmdPacketType.SELECT_CHARACTER, [0, 96, 0], "raid_relogin_channel_required");
+            // 0239D930不读取正文，调用029075C0(5)；0290BB60确认5为MODULE_TYPE_SELECT_CHANNEL。
+            await context.Notify(NotiPacketType.REQUEST_MOVING_CHANNEL_SELECTING_SCENE, [], "raid_relogin_channel_select");
+            log.Write("raid_relogin_channel_select", new { Connection = context.Id, Channel = context.Channel.Number,
+                Type = context.Session.ChannelEntry?.Type, Reason = "fresh-login-requires-channel-selection" });
+            return CommandResult.Handled;
+        }
         if(context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
         {
             // 023428B1的96明确显示当前频道不允许此操作，失败无额外body且重置选角UI。
@@ -113,6 +125,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
+        context.HasEnteredWorld = true;
         if (strongway2019 is not null) await strongway2019.RecoverRewardsAsync(context);
         if (warRewards is not null)
         {
