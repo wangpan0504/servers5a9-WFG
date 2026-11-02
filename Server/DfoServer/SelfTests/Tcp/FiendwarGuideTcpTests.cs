@@ -1,10 +1,13 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Events;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Game.BattlePass;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -14,8 +17,16 @@ namespace DfoServer.Testing;
 internal static class FiendwarGuideTcpTests
 {
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
+        => await RunFixtureAsync(source, root, resources, false);
+
+    internal static async Task RunBattlePassNoticeAsync(ServerOptions source, string root, TcpTestResources resources)
+        => await RunFixtureAsync(source, root, resources, true);
+
+    static async Task RunFixtureAsync(ServerOptions source, string root, TcpTestResources resources, bool battlePass)
     {
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-11-03T00:00:00Z"));
+        var startAt = DateTimeOffset.Parse("2026-10-29T06:00:00+08:00");
+        if (battlePass) source = source with { BattlePassSeasonKey = "fiendwar-notice-fixture", BattlePassSeasonStart = startAt };
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-guide"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var repository = new CharacterRepository(fixture.Database);
@@ -40,8 +51,11 @@ internal static class FiendwarGuideTcpTests
             SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items).Find(2)!.Resources!;
         var guide = modes.FiendwarGuide!;
         using var peer = Open(fixture, "fwguide", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
+        if (battlePass)
+            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
+        var missionPackets = new List<byte[]>();
         int dynamicSpawnRooms = 0;
         Select();
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
@@ -49,7 +63,7 @@ internal static class FiendwarGuideTcpTests
         That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "引导普通药使用真实目录声明");
         clock.Advance(checked((ordinary.CoolTime + 999) / 1000));
         That(clears.Count == 4 && clears[2] == (0u, 0u), "初次登录四类团本次数初始化为真实零记录");
-        for (int route = 0; route < 2; route++)
+        for (int route = 0; route < (battlePass ? 1 : 2); route++)
         {
             peer.Send(1426); Read();
             Create(true);
@@ -72,8 +86,23 @@ internal static class FiendwarGuideTcpTests
                     .Any(action => action.Op is FiendwarOp.CreateSingleEnemy or FiendwarOp.CreateSingleMonster && action.A == next);
                 if (dungeon <= 0 || !active || route == 0 && next == 41) continue;
                 if (next == 35) Move(35, 36, accepted: false);
+                if (battlePass && dungeon == 5356) missionPackets.Clear();
                 Clear(dungeon, route);
                 peer.Send(42); Read();
+                if (battlePass && dungeon == 5356)
+                {
+                    var observer = new CharacterRepository(fixture.Database);
+                    observer.ConfigureBattlePassMissions(new BattlePassMissionPolicy("fiendwar-notice-fixture", startAt,
+                        BattlePassCatalog.Load(resources.Archive)));
+                    using var observerOwner = new AccountOwners().Acquire("fwguide", () => { });
+                    var authoritative = observer.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!;
+                    That(authoritative.Slots.Single(row => row.Instance.Key.Id == 58).Count == 1 &&
+                        fixture.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE account=$p0 AND source_kind='raid_completion'", "fwguide") is [[1L]],
+                        "真实漩涡引导终杀同事务写入赛季58来源，尚未领取奖励");
+                    That(missionPackets.Any(body => body.SequenceEqual(authoritative.ToPayload())),
+                        "真实漩涡终结后由原Notice发送权威1801，不依赖领奖");
+                    return;
+                }
             }
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0 AND raid_type=2 AND state=2", peer.Id)
                 is [[long completed]] && completed == route + 1, "原单世界终杀提交真实共享type2通关");
@@ -237,6 +266,7 @@ internal static class FiendwarGuideTcpTests
         List<WirePacket> Read()
         {
             var rows = AntonTcpProbe.Barrier(peer, "fiendwar guide");
+            if (battlePass) missionPackets.AddRange(rows.Where(row => row is { Kind: 0, Opcode: 1801 }).Select(row => row.Body));
             foreach (var row in rows.Where(row => row is { Kind: 0, Opcode: 1446 }))
                 foreach (var (type, usage) in RaidPanelTests.ReadWeeklyClears(row.Body)) clears[type] = usage;
             foreach (var row in rows.Where(row => row is { Kind: 0, Opcode: 1530, Body.Length: > 0 }))

@@ -9,14 +9,22 @@ internal static class TcpRegressionTests
     [
         ("knight-shield", KnightShieldTcpTests.RunAsync),
         ("fiendwar-raid-flow", FiendwarRaidTcpTests.RunAsync),
-        ("fiendwar-guide", FiendwarGuideTcpTests.RunAsync),
+        ("fiendwar-guide", async (options, root, resources) =>
+        {
+            await FiendwarGuideTcpTests.RunAsync(options, root, resources);
+            await FiendwarGuideTcpTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
+        }),
         ("fiendwar-recovery", FiendwarRecoveryTests.RunAsync),
         ("fiendwar-reward-rules", (_, _, resources) =>
         {
             FiendwarRewardClosureTests.Run(resources);
             return Task.CompletedTask;
         }),
-        ("prey-guide", PreyGuideTests.RunAsync),
+        ("prey-guide", async (options, root, resources) =>
+        {
+            await PreyGuideTests.RunAsync(options, root, resources);
+            await PreyGuideTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
+        }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
         ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
