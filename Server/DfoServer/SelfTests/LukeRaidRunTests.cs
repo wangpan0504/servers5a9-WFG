@@ -107,12 +107,194 @@ internal static class LukeRaidRunTests
             !departed.HasDungeonContribution(group[0].Actor, group[0].Identity.InstanceId) &&
             survivors.All(row => departed.HasDungeonContribution(row.Actor, row.Fact.Identity.InstanceId)),
             "已离开Run但未提交清图的成员不因共享Cleared获得参与资格");
+        MonitorCommittedDeaths();
+        FinalizeStatusHp();
         ObjectiveGenerations();
         LukeFixedCardRouteTests.RunCore(actors);
         LukeMemberRouteTests.RunCore(actors);
         LukeEnergyObjectTests.RunCore(actors);
         LukeSanctumObjectRulesTests.RunCore(actors);
         Console.WriteLine($"PASS {Count - before} 卢克Run预留、阶段屏障和成员事实断言");
+
+        void MonitorCommittedDeaths()
+        {
+            var monitor = new LukeMonsterMonitorCatalog(ImmutableDictionary<(int, int), ImmutableArray<LukeMonsterMonitor>>.Empty
+                .Add((10, -1), [new(100, false), new(200, false), new(300, true)]), []);
+            var cards = new LukeCardSetCatalog(null, []) { Monitors = monitor };
+            var program = quiet with { Phases = quiet.Phases.SetItem(0, quiet.Phases[0] with {
+                Dungeons = [new(10, RaidDungeonState.Open, "[hp]", 3, 1)] }) };
+            var battle = new AntonRaidBattle(program, kind: RaidKind.Luke, lukeCards: cards);
+            foreach (var actor in actors) That(battle.JoinStart(actor), "监控测试登记当前owner");
+            var start = new DungeonMap("map", new(0, 0), 101, "fixture/monitor-start.map");
+            var second = new DungeonMap("map", new(1, 0), 102, "fixture/monitor-second.map");
+            var boss = new DungeonMap("boss", new(2, 0), 103, "fixture/monitor-boss.map");
+            var unused = new DungeonMap("map", new(0, 1), 104, "fixture/monitor-unused.map");
+            var maze = new DungeonMaze(0, 3, 2, "fixture-monitor", [start.Position], [boss.Position], [start, second, boss, unused], []);
+            var authority = new MonitorAuthority();
+            var source = Create(); Install(source);
+            Report([73, 41, 90]);
+            That(battle.RecordLukeNamedDeath(actors[0], source.Snapshot.Identity, source, 1000) is null,
+                "仅调用目标key不能冒充正式死亡账本");
+            var pending = source.PrepareConfirmedDeath(authority.Death(source.Snapshot.Identity, 1000, 1)).Pending!;
+            That(pending is not null && battle.RecordLukeNamedDeath(actors[0], source.Snapshot.Identity, source, 1000) is null,
+                "待提交死亡候选尚不固定监控百分比");
+            source.ConfirmCommittedDeath(pending!);
+            That(battle.RecordLukeNamedDeath(actors[0], source.Snapshot.Identity, source, 1000) is null && Values().SequenceEqual(new uint[] { 73, 41, 90 }),
+                "同一监控目标还有真实已加载实体存活，首个死亡不能将合并血条清零");
+            Kill(1001, 2);
+            That(Values().SequenceEqual(new uint[] { 0, 41, 90 }),
+                "实际生成的同模板实体全部提交死亡才固定该监控项0，未生成分支不阻塞");
+            Report([100, 81, 96]);
+            That(Values().SequenceEqual(new uint[] { 0, 81, 96 }),
+                "客户端重报100不能复活已死监控项，活目标和物件目标可正常回血");
+            var previous = battle.View;
+            That(battle.ReportStatusHp(actors[0], source.Snapshot.Identity, new(1, [actors[0].Character], 0, 19, [100, 100])) is null &&
+                ReferenceEquals(previous, battle.View) && Values().SequenceEqual(new uint[] { 0, 81, 96 }),
+                "有资源目录时错误长度695整批拒绝，既有HP及已死集合保持，不猜索引");
+            Kill(1002, 3);
+            source.Move(source.Snapshot.Identity, Guid.NewGuid(), second.Position);
+            source.CompleteLoading(source.Snapshot.Identity, Guid.NewGuid());
+            battle.ObserveLukeRun(source.Snapshot.Identity.InstanceId, [(actors[0], source.Snapshot.Identity)], second.Id, second, source);
+            Report([67, 100, 100]);
+            That(Values().SequenceEqual(new uint[] { 67, 100, 100 }),
+                "后续房间同模板实际新生成活演员解除旧死亡锁存，可正常回血，不把未来未加载支路提前算活");
+            Kill(1500, 4);
+            source.Move(source.Snapshot.Identity, Guid.NewGuid(), boss.Position);
+            source.CompleteLoading(source.Snapshot.Identity, Guid.NewGuid());
+            battle.ObserveLukeRun(source.Snapshot.Identity.InstanceId, [(actors[0], source.Snapshot.Identity)], boss.Id, boss, source);
+            That(Values().SequenceEqual(new uint[] { 0, 100, 100 }), "已提交的同模板新演员死亡后，再过无该模板的新房仍保留零值");
+            Report([100, 100, 100]);
+            That(Values().SequenceEqual(new uint[] { 0, 100, 100 }), "换房695重读默认100后，只有真实已死项仍0");
+            Kill(2000, 5);
+            That(Values().SequenceEqual(new uint[] { 0, 0, 100 }), "普通怪物账本不伪造PASSIVE物件死亡");
+            That(battle.CompleteLukeDungeon([(actors[0], source.ClearFact!)]) is not null && Values().SequenceEqual(new uint[] { 0, 0, 0 }),
+                "真实Run清图事实才将剩余物件监控项终态清零");
+            var old = source;
+            battle.ReleaseDungeon(actors[0], old.Snapshot.Identity.InstanceId);
+            source = Create(); Install(source); Report([99, 100, 50]);
+            That(Values().SequenceEqual(new uint[] { 99, 100, 50 }) &&
+                battle.RecordLukeNamedDeath(actors[0], old.Snapshot.Identity, old, 1001) is null,
+                "新Run独立监控死亡集合，旧Run已提交死亡不能覆盖本次活目标");
+            battle.ReleaseDungeon(actors[0], source.Snapshot.Identity.InstanceId);
+
+            SinglePlayerDungeonRun Create()
+            {
+                var entry = new DungeonEntryPlan(actors[0].Character, 1, 10, 0, byte.MaxValue, 0, maze, start, boss);
+                var route = new DungeonFixedRoute([Plan(start, 1000, (100, 100, 400)), Plan(second, 1500, (100, 0, 0)),
+                    Plan(boss, 2000, (200, 0, 0)), Plan(unused, 3000, (100, 0, 0))],
+                    [new(start.Position, second.Position), new(second.Position, boss.Position), new(start.Position, unused.Position)]);
+                That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, route, authority, out var value, out _), "监控来源沿正式Run规划生成");
+                value!.CompleteLoading(value.Snapshot.Identity, Guid.NewGuid());
+                return value;
+            }
+            DungeonMonsterPlan Plan(DungeonMap room, ushort key, (int First, int Second, int Third) ids)
+            {
+                int[] templates = new[] { ids.First, ids.Second, ids.Third }.Where(id => id != 0).ToArray();
+                var monsters = templates.Select(id => new DungeonRoomMonster(id, [id, 0, 3, 100, 100, 0, 1, 1],
+                    "[fixed]", room == boss ? "[boss]" : "[normal]", "monster/fixture-monitor.mob")).ToArray();
+                return DungeonMonsterPlan.FromRoom(new(room, monsters, [], []), actors[0].Character, key);
+            }
+            void Install(SinglePlayerDungeonRun run)
+            {
+                using var reservation = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), 10,
+                    [(actors[0], run.Snapshot.Identity)], mazeOrdinal: 0)!;
+                That(reservation is not null, "监控绑定原Run及当前maze"); reservation!.Install();
+                battle.ObserveLukeRun(run.Snapshot.Identity.InstanceId, [(actors[0], run.Snapshot.Identity)], start.Id, start);
+            }
+            void Kill(ushort key, long sequence)
+            {
+                var death = source.PrepareConfirmedDeath(authority.Death(source.Snapshot.Identity, key, sequence)).Pending!;
+                That(death is not null, "监控死亡先由原战斗能力准备"); source.ConfirmCommittedDeath(death!);
+                battle.RecordLukeNamedDeath(actors[0], source.Snapshot.Identity, source, key);
+            }
+            void Report(uint[] values) => That(battle.ReportStatusHp(actors[0], source.Snapshot.Identity,
+                new(1, [actors[0].Character], 0, 17, [.. values])) is not null, "监控报告严格按资源原序进入展示");
+            ImmutableArray<uint> Values() => battle.StatusSnapshot(battle.View).Single().Values;
+        }
+
+        void FinalizeStatusHp()
+        {
+            var program = quiet with { Symbols = quiet.Symbols.Add("[other hp]", 701),
+                Phases = quiet.Phases.SetItem(0, quiet.Phases[0] with { Dungeons = [
+                    new(10, RaidDungeonState.Open, "[hp]", 3, 1),
+                    new(11, RaidDungeonState.Open, "[other hp]", 3, 1)] }) };
+            var battle = Battle(program);
+            var first = Bindings(0); var other = Bindings(4);
+            Install(10, 1, first); Install(11, 2, other);
+            Report(first, 1, 0x12345678, [100, 100]);
+            Report(other, 2, 19, [88]);
+            Report(first, 1, 0x12345678, [0, 0]);
+            That(!Status(10).Cleared && battle.View.Symbols["[hp]"] == 3 &&
+                first.All(row => !battle.HasDungeonContribution(row.Actor, row.Identity.InstanceId)),
+                "HP零只是展示，不推动权威清图、通关次数或参与资格");
+            Report(first, 1, 0x12345678, [73, 41]);
+            var facts = Facts(first);
+            That(battle.CompleteLukeDungeon(facts[..3]) is null && Status(10).Values.SequenceEqual(new uint[] { 73, 41 }),
+                "未完整提交全员事实时不能提前清除双目标血条");
+            That(battle.CompleteLukeDungeon(facts) is not null && Status(10) is { Cleared: true, Context: 0x12345678 } completed &&
+                completed.Values.SequenceEqual(new uint[] { 0, 0 }) && Status(11).Values.SequenceEqual(new uint[] { 88 }),
+                "真实清图仅将本Run既有目标原序投影为零，Context和另一分队HP保持");
+            var expected = DfoServer.Testing.TcpPeer.Build(writer =>
+            {
+                writer.Write((byte)1); writer.Write((ushort)1); writer.Write((byte)first.Length);
+                foreach (var row in first.OrderBy(row => row.Actor.Character)) writer.Write(row.Actor.Character);
+                writer.Write(0u); writer.Write(0x12345678u); writer.Write((byte)2); writer.Write(0u); writer.Write(0u);
+            });
+            Bytes(RaidCombatPackets.StatusHp([Status(10)]), expected,
+                "634保留分队/成员/币数/Context及双目标列表形状，红条与type4蓝条共用真实清图零百分比");
+            var clearedView = battle.View;
+            That(battle.ReportStatusHp(first[0].Actor, first[0].Identity,
+                new(1, [.. first.Select(row => row.Actor.Character)], 0, 999, [100, 100])) is null &&
+                ReferenceEquals(clearedView, battle.View) && Status(10).Context == 0x12345678 &&
+                Status(10).Values.SequenceEqual(new uint[] { 0, 0 }),
+                "清图后的迟到695不能恢复旧100百分比、替换Context或产生新投影版本");
+            That(battle.CompleteLukeDungeon(facts) is null && ReferenceEquals(clearedView, battle.View),
+                "清图重复不再改变HP或版本");
+            battle.ReleaseDungeon(first[0].Actor, first[0].Identity.InstanceId);
+            That(Status(10).Members.Length == 3 && Status(10).ClearedMembers.Length == 4 &&
+                Status(10).Values.SequenceEqual(new uint[] { 0, 0 }),
+                "部分成员退场仍保留原目标形状的零血条，不回到未知或默认满条");
+            var survivors = first.Skip(1).Select(row => (row.Actor, Identity: row.Identity with { Epoch = row.Identity.Epoch + 1 })).ToArray();
+            battle.ObserveLukeRun(first[0].Identity.InstanceId, survivors, map.Id, map);
+            That(Status(10).Values.SequenceEqual(new uint[] { 0, 0 }),
+                "已清图Run迟到地图回调不能清除终态目标形状");
+            foreach (var row in first.Skip(1)) battle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
+            That(battle.StatusSnapshot(battle.View).All(row => row.Dungeon != 10),
+                "最后一人离开移除Run及HP终态，不保留无限目标历史");
+
+            var replacement = Bindings(0);
+            Install(10, 1, replacement);
+            That(Status(10) is { Cleared: false, Context: 0 } && Status(10).Values.IsEmpty,
+                "新Run无报告时保持未知列表，不继承上次清图零值或猜目标数量");
+            That(battle.ReportStatusHp(first[0].Actor, first[0].Identity,
+                new(1, [.. first.Select(row => row.Actor.Character)], 0, 111, [100, 100])) is null,
+                "已移除Run的旧报告不能污染新入场");
+            Report(replacement, 1, 23, [62]);
+            That(Status(10).Values.SequenceEqual(new uint[] { 62 }) && Status(10).Context == 23,
+                "新Run可按实际新报告重新建立独立目标形状和Context");
+            var moved = replacement.Select(row => (row.Actor, Identity: row.Identity with { Epoch = row.Identity.Epoch + 1 })).ToArray();
+            battle.ObserveLukeRun(replacement[0].Identity.InstanceId, moved, map.Id, map);
+            That(Status(10).Values.IsEmpty && Status(10).Context == 0,
+                "未清图正式换房仍丢弃旧房HP，不能挪用旧房目标形状");
+            That(battle.CompleteLukeDungeon(Facts(moved)) is not null && Status(10).Cleared && Status(10).Values.IsEmpty && Status(10).Context == 0,
+                "未知HP清图保留空列表与未知Context，不捏造单目标或双目标百分比");
+            foreach (var row in replacement) battle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
+            foreach (var row in other) battle.ReleaseDungeon(row.Actor, row.Identity.InstanceId);
+
+            void Install(uint dungeon, byte squad, (RaidActor Actor, DungeonRunIdentity Identity)[] rows)
+            {
+                using var reservation = battle.ReserveDungeon(new(battle.Instance, 0, squad, RaidKind.Luke), dungeon, rows)!;
+                That(reservation is not null, "终态HP测试沿正式Run预留及安装"); reservation!.Install();
+                battle.ObserveLukeRun(rows[0].Identity.InstanceId, rows, map.Id, map);
+            }
+            void Report((RaidActor Actor, DungeonRunIdentity Identity)[] rows, ushort squad, uint context, uint[] values) =>
+                That(battle.ReportStatusHp(rows[0].Actor, rows[0].Identity,
+                    new(squad, [.. rows.Select(row => row.Actor.Character)], 0, context, [.. values])) is not null,
+                    "当前未清图Run接纳真实HP展示");
+            RaidRunDisplay Status(uint dungeon) => battle.StatusSnapshot(battle.View).Single(row => row.Dungeon == dungeon);
+            (RaidActor Actor, DungeonClearFact Fact)[] Facts((RaidActor Actor, DungeonRunIdentity Identity)[] rows) =>
+                rows.Select(row => (row.Actor, new DungeonClearFact(row.Identity, 10, [Guid.NewGuid()]) { ClearMap = map })).ToArray();
+        }
 
         void ObjectiveGenerations()
         {
@@ -302,5 +484,11 @@ internal static class LukeRaidRunTests
             var instance = Guid.NewGuid();
             return actors.Skip(first).Take(4).Select(actor => (actor, new DungeonRunIdentity(actor.Character, 0, 1, instance, 1))).ToArray();
         }
+    }
+
+    sealed class MonitorAuthority : DungeonCombatAuthority
+    {
+        internal ConfirmedDungeonMonsterDeath Death(DungeonRunIdentity identity, ushort key, long sequence) =>
+            ConfirmDeath(identity, Guid.NewGuid(), key, sequence);
     }
 }

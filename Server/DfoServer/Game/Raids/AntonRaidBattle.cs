@@ -45,7 +45,10 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
 internal enum RaidStageFactKind { EnterDungeon, EnterMap, GiveUpDungeon, PhaseEnd }
 // 只由已复验的正式Run或阶段deadline构造；不接客户端任意symbol/地图号。
 internal readonly record struct RaidStageFact(RaidStageFactKind Kind, int Phase, int Dungeon = 0, int Map = 0);
-internal sealed record AntonRaidBattleChange(AntonRaidBattleView Before, AntonRaidBattleView After);
+internal sealed record AntonRaidBattleChange(AntonRaidBattleView Before, AntonRaidBattleView After)
+{
+    internal AntonRaidBattle.LukeRunCleared? LukeClear { get; init; }
+}
 
 // 正式实例的阶段聚合。输入只有已绑定副本的清图事实、服务端计时器和服务端机制结果；不执行客户端 SET。
 internal sealed partial class AntonRaidBattle
@@ -110,11 +113,12 @@ internal sealed partial class AntonRaidBattle
     }
 
     // 精确移除原actor及其Run占用；不清新会话，不把离团当作领奖或退款。
-    internal bool DetachStart(RaidActor actor)
+    internal bool DetachStart(RaidActor actor, bool disconnected = false)
     {
         lock (gate)
         {
             if (!members.Remove(actor)) return false;
+            LeaveLukeFirstMovieLocked(actor, disconnected);
             ReleaseDungeonActor(actor, null);
             if (Kind == RaidKind.Fiendwar) RemoveFiendwarPosition(actor.Character);
             if (Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar || HasAntonRewards)
@@ -164,7 +168,10 @@ internal sealed partial class AntonRaidBattle
         // 四团资源均将其定义为击杀全员；按名称与编号匹配，不能误删其它同号状态。
         // 统一节奏已由服务端安全退场，不投递102；原规则仅保留真正非零的执行值。
         var symbols = script.Symbols.Where(row => row.Key != "[kill all character]" || row.Value != 102 ||
-            lukePacing is null && view.Symbols[row.Key] != 0).ToDictionary(row => row.Value, row => view.Symbols[row.Key]);
+            lukePacing is null && view.Symbols[row.Key] != 0)
+            // 64301的139=2同一ACT行为会直接SET HP 0；统一节奏以原Run安全退场接管，领域仍保留2和王座封锁。
+            .Where(row => lukePacing is null || row.Key != "[energy save effect]" || row.Value != 139 || view.Symbols[row.Key] != 2)
+            .ToDictionary(row => row.Value, row => view.Symbols[row.Key]);
         // 原生完整/简易血条按已完成次数选帧；领域HP仍是剩余次数，设施破坏符号保持原值。
         if (Kind == RaidKind.Luke)
             foreach (var dungeon in script.Phases[view.Phase].Dungeons)

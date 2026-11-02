@@ -9,6 +9,10 @@ internal static partial class RaidCombatProjection
     internal static void RestoreStatusForScene(GameConnectionContext context, Func<bool> current)
     {
         if (context.Session.RaidStatusSnapshot() is not { Battle.Kind: RaidKind.Luke } snapshot) return;
+        // 加载前的583只能缓存符号，尚未就绪的地图效果物件收不到onChangeRaidSymbol；30后恢复原值供ACT重评。
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+            RaidCombatPackets.Symbols(snapshot.Battle.SymbolSnapshot(snapshot.View)), "raid_scene_symbols",
+            () => current() && context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View));
         PostStatus(context, snapshot.Battle, snapshot.View,
             () => current() && context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View), restore: true);
     }
@@ -18,11 +22,13 @@ internal static partial class RaidCombatProjection
     {
         var rows = battle.StatusSnapshot(view);
         bool Guard() => current() && battle.IsCurrent(view);
+        // Luke的op4由正式Run单次事件独立发布；位置快照仍严格复验当前view。
+        bool notifyClears = !restore && battle.Kind != RaidKind.Luke;
         byte[] next = RaidCombatPackets.Participation([], rows);
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_DUNGEON_PARTICIPATION_INFO, 561, () =>
             !restore && context.RaidParticipationBody is { } displayed && next.AsSpan().SequenceEqual(displayed) &&
-                !rows.Any(row => row.Cleared && !context.RaidParticipationRows.Any(old => old.Run == row.Run && old.Cleared)) ? null :
-                RaidCombatPackets.Participation(context.RaidParticipationRows, rows, notifyClears: !restore), "raid_participation", Guard,
+                (!notifyClears || !rows.Any(row => row.Cleared && !context.RaidParticipationRows.Any(old => old.Run == row.Run && old.Cleared))) ? null :
+                RaidCombatPackets.Participation(context.RaidParticipationRows, rows, notifyClears: notifyClears), "raid_participation", Guard,
             allowShorter: true, written: () =>
             {
                 context.RaidParticipationBody = next;

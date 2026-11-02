@@ -150,10 +150,17 @@ internal static partial class LukeRaidRunTcpTests
     static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0,(int Symbol,int Value)? expectedHp=null,int? passiveTarget=null,Action<List<WirePacket>>? observe=null,IReadOnlyDictionary<int,RaidDungeonState>? expectedStates=null,Dictionary<TcpPeer,List<WirePacket>>? phaseResults=null,Action<DungeonMap>? roomCleared=null,IReadOnlyList<DungeonPoint>? waypoints=null)
     {
         uint completedDungeon = U32(entry.Single(packet => packet.Opcode == 28).Body);
-        var completedEvents = members.Concat(others).ToDictionary(peer => peer, _ => 0);
+        var clearFrames = members.Concat(others).ToDictionary(peer => peer, _ => new List<WirePacket>());
         List<WirePacket> Read(TcpPeer peer)
         {
             var frames=Drain(peer,phaseResults is not null);
+            clearFrames[peer].AddRange(frames);
+            if(phaseResults is not null) phaseResults[peer].AddRange(frames);
+            return frames;
+        }
+        int CompletedEvents(IEnumerable<WirePacket> frames)
+        {
+            int completed = 0;
             foreach (var packet in frames.Where(packet => packet is { Kind: 0, Opcode: 584 }))
             {
                 int at = 1;
@@ -166,13 +173,12 @@ internal static partial class LukeRaidRunTcpTests
                             Enumerable.Range(0, count).Select(index => U16(packet.Body, at + 6 + 2 * index)).Order()
                                 .SequenceEqual(members.Select(member => member.Id).Order()),
                             "584独立通关事件只含本次已提交Run的真实图号及完整分队，不混入待命成员");
-                        completedEvents[peer]++;
+                        completed++;
                     }
                     at += 6 + 2 * count;
                 }
             }
-            if(phaseResults is not null) phaseResults[peer].AddRange(frames);
-            return frames;
+            return completed;
         }
         byte[] information=entry.Single(p=>p.Opcode==28).Body;
         byte[] map=entry.Single(p=>p.Opcode==29).Body;
@@ -209,7 +215,8 @@ internal static partial class LukeRaidRunTcpTests
                 var own=Read(captain);
                 observe?.Invoke(own);
                 lastSymbols=own.LastOrDefault(packet=>packet.Opcode==583)?.Body ?? lastSymbols;
-                That(!own.Any(p=>p.Opcode is 31 or 115 || p.Opcode==601&&phaseResults is null),"Luke清图不借普通结算许可，阶段末才允许真实团本结果");
+                That(!own.Any(p=>p.Opcode is 34 or 35 || p.Opcode==601&&phaseResults is null),
+                    "团本每场许可不套用普通评分/翻牌，阶段末才允许真实团本奖励结果");
                 That(own.Any(p=>p is {Kind:0,Opcode:38}&&U16(p.Body)==last),"队长真实39提交死亡");
                 foreach(var member in members.Where(peer=>peer!=captain))
                 {
@@ -271,10 +278,48 @@ internal static partial class LukeRaidRunTcpTests
         foreach(var peer in members.OrderBy(peer=>peer==captain?0:1))
             That(!Read(peer).Any(p=>p.Opcode==38),"终图死亡重放不重复成员死亡事务");
         foreach(var peer in others)Read(peer);
-        if (phaseResults is null)
-            foreach (var peer in members.Concat(others))
-                That(completedEvents[peer] == 1, "全团每人只收到一次584真实通关事件，清图死亡重放不重播横幅");
+        if (passiveTarget is null)
+        {
+            // 使用原39的已签发生成统计重放117；不能凭另一个Boss或猜测HP得到许可。
+            foreach (var peer in members)
+            {
+                peer.Send(117, Build(writer =>
+                {
+                    writer.Write(peer.Id); writer.Write(last); writer.Write(new byte[9]);
+                    writer.Write((uint)lastLevel); writer.Write(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(
+                        FormalDungeonTcpTests.Death(last, captain.Id, lastLevel).AsSpan(60)));
+                    writer.Write(new byte[14]);
+                }));
+                var replay = Read(peer);
+                That(!replay.Any(packet => packet.Opcode is 31 or 115) && CompletedEvents(replay) == 0,
+                    "真实Boss的117协调重放不重复每场结算许可、慢动作确认或584通关事件");
+            }
+        }
+        // 各成员117均已执行后收齐全团尾帧，旁观者和先重放成员也不得新增op4。
+        foreach (var peer in members.Concat(others)) Read(peer);
         if(phaseResults is not null) AwaitPhaseResults(members,others,phaseResults,phase);
+        foreach (var peer in members.Concat(others))
+        {
+            var frames = phaseResults is not null ? phaseResults[peer] : clearFrames[peer];
+            That(CompletedEvents(frames) == 1,
+                "每场含P1第九Run与P2末图，全团每人严格一次584真实通关事件，死亡重放不重播横幅");
+            int clear = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 31 });
+            bool participant = members.Contains(peer);
+            That(frames.Count(packet => packet is { Kind: 0, Opcode: 31 }) == (participant ? 1 : 0),
+                "每次真实Run向各参与成员只发一次31，首两次圣所清图同样许可，旁观者无结果菜单");
+            int bosses = frames.Count(packet => packet is { Kind: 0, Opcode: 115 });
+            That(bosses == (participant && passiveTarget is null ? 1 : 0),
+                "战斗终点每场各人一次真实Boss确认，纯物件能源终点不补造死亡key");
+            if (participant && passiveTarget is null)
+            {
+                int boss = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 115 });
+                ushort key = U16(frames[boss].Body, 2);
+                int death = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 38 } && U16(packet.Body) == key);
+                That(death >= 0 && boss > death && clear > boss,
+                    "每场真实死亡38先写出，再115确认和空31许可，不等待累计第三次DGN Clear");
+            }
+            That(!frames.Any(packet => packet.Opcode is 34 or 35), "团本每场结束不发普通评分或翻牌奖励");
+        }
         That(fixture.Query("SELECT count(*),coalesce(sum(amount),0) FROM character_dungeon_growth_receipts") is [[long receipts,0L]]&&receipts>0,
             "禁经验仍提交正式死亡receipt，但全员到账经验严格0");
 
@@ -299,7 +344,8 @@ internal static partial class LukeRaidRunTcpTests
             if(members.Contains(peer))
             {
                 int town=result.FindIndex(packet=>packet is {Kind:0,Opcode:24});
-                That(town>=0&&movie>town,"图内成员自动正式退场，24安装城镇后才播放601");
+                int clear=result.FindIndex(packet=>packet is {Kind:0,Opcode:31});
+                That(clear>=0&&town>clear&&movie>town,"阶段末参与成员先31清图许可，再24自动退场，最后601阶段动画");
                 That(!result.Any(packet=>packet.Kind==1&&packet.Opcode is 42 or 72),"自动退场不伪造玩家返回或选择按钮应答");
             }
         }
@@ -415,9 +461,10 @@ internal static partial class LukeRaidRunTcpTests
         {
             That(frames.Any(p => p is { Kind: 1, Opcode: 37, Body: [1] }), "全员完成原加载屏障");
             int released = frames.FindIndex(p => p is { Kind: 0, Opcode: 30 });
-            That(released >= 0 && frames.FindIndex(released + 1, p => p is { Kind: 0, Opcode: 584 }) > released &&
+            int symbols = released < 0 ? -1 : frames.FindIndex(released + 1, p => p is { Kind: 0, Opcode: 583 });
+            That(symbols > released && released >= 0 && frames.FindIndex(symbols + 1, p => p is { Kind: 0, Opcode: 584 }) > symbols &&
                 frames.FindIndex(released + 1, p => p is { Kind: 0, Opcode: 634 }) > released,
-                "首次及后续加载完成后恢复真实成员位置和HP，不以加载前已发送而跳过");
+                "首次及后续30后先恢复ACT能源原符号，再恢复真实成员位置和HP，不依靠受伤695补发");
         }
         foreach(var peer in members.SkipLast(1))
         {
@@ -485,6 +532,10 @@ internal static partial class LukeRaidRunTcpTests
     }
     static void Validate(WirePacket packet)
     {
+        if (packet is { Kind: 0, Opcode: 31 })
+        { That(packet.Body.Length == 0, "31严格空体，独立许可每场结算"); return; }
+        if (packet is { Kind: 0, Opcode: 115 })
+        { That(packet.Body is [1, 1, _, _], "115严格四字节真实Boss确认"); return; }
         if (packet is { Kind: 0, Opcode: 583 })
         {
             var body = packet.Body;

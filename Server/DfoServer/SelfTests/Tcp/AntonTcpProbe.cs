@@ -338,10 +338,14 @@ internal static partial class AntonTcpProbe
             throw new InvalidOperationException(dungeon + " 没有 28/29：" + string.Join(',', entered.Select(p => p.Kind + ":" + p.Opcode)));
         if (!clear)
             return;
+        int confirmationsBefore = report.Opcode115, permissionsBefore = report.Opcode31;
+        bool formalSettles = requireClearNotice &&
+            (catalog.Type == 3 || catalog.Type == 0 && dungeon is >= 210 and <= 224);
         peer.Send(37, new byte[8]);
         Note(report, Flush(peer, "37 加载"));
         var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
-        ClearRoom(peer, map.Body, report, out ushort bossKey, out byte bossLevel, path[0].X == info.Body[8] && path[0].Y == info.Body[9]);
+        ClearRoom(peer, map.Body, report, out ushort bossKey, out byte bossLevel, path[0].X == info.Body[8] && path[0].Y == info.Body[9],
+            requireSettlementOrder: formalSettles);
         for (int i = 1; i < path.Length; i++)
         {
             byte[] move = new byte[100];
@@ -354,7 +358,8 @@ internal static partial class AntonTcpProbe
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             peer.Send(37, new byte[8]);
             Note(report, Flush(peer, "37 下一房"));
-            ClearRoom(peer, map.Body, report, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length);
+            ClearRoom(peer, map.Body, report, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length,
+                requireSettlementOrder: formalSettles);
             if (dungeon is 213 or 215 && i == 1)
             {
                 // strongleg_lower/lower2.dgn 的第二房不是(0,0)终点；已死的有效房内怪也不能充当最终Boss。
@@ -379,14 +384,18 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        if (formalSettles)
+            RequireRunSettlement(report, confirmationsBefore, permissionsBefore, dungeon);
         peer.Send(117, check);
         int seen = report.Opcode586;
         var cleared = Flush(peer, "117 确认 " + dungeon);
         Note(report, cleared);
-        // DungeonSettlementHandler.BossAsync 的团本分支只确认115并发布战况，不借用普通结算入口。
+        // 正式Run已随39发送许可，117仅协调重放；未启用正式Run的诊断保持原确认合同。
         if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 or 600 or 601 } or { Kind: 1, Opcode: 72 }))
             throw new InvalidOperationException(dungeon + " 的117误发普通结算、阶段牌面或未请求的EPLP确认");
-        if (requireClearNotice && report.Opcode586 == seen && !cleared.Any(p => p is { Kind: 0, Opcode: 115 or 586 }))
+        if (formalSettles && cleared.Any(packet => packet is { Kind: 0, Opcode: 115 }))
+            throw new InvalidOperationException(dungeon + " 的117重发了已提交Run的Boss确认");
+        if (requireClearNotice && !formalSettles && report.Opcode586 == seen && !cleared.Any(p => p is { Kind: 0, Opcode: 115 or 586 }))
             throw new InvalidOperationException(dungeon + " 的清图没有 586，117 也没有确认");
         if (cleared.Any(p => p is { Kind: 0, Opcode: 587, Body: [3, 0] }))
             report.Reward = true;
@@ -399,7 +408,7 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom,
-        TcpPeer? witness = null, AntonProbeReport? witnessReport = null)
+        TcpPeer? witness = null, AntonProbeReport? witnessReport = null, bool requireSettlementOrder = false)
     {
         bossKey = 0;
         bossLevel = 0;
@@ -424,8 +433,13 @@ internal static partial class AntonTcpProbe
                 if (boss || died.Any(p => p.Opcode is 115 or 31 or 72))
                     throw new InvalidOperationException("擎天(0,1)被标为Boss或死亡触发了结算/退场包");
             }
+            if (requireSettlementOrder) RequireSettlementOrder(died, key);
             if (witness is not null)
-                Note(witnessReport!, Barrier(witness, "39 队员 key " + key));
+            {
+                var witnessed = Barrier(witness, "39 队员 key " + key);
+                Note(witnessReport!, witnessed);
+                if (requireSettlementOrder) RequireSettlementOrder(witnessed, key);
+            }
             if (!died.Any(p => p is { Kind: 0, Opcode: 38 }))
                 throw new InvalidOperationException($"怪物 {key} 死亡未被接受");
             if (boss || bossRoom && bossKey == 0)
@@ -540,6 +554,8 @@ internal static partial class AntonTcpProbe
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
         AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null)
     {
+        int leaderConfirmations = leaderReport.Opcode115, leaderPermissions = leaderReport.Opcode31;
+        int memberConfirmations = memberReport.Opcode115, memberPermissions = memberReport.Opcode31;
         leader.Send(15, DungeonId(dungeon));
         bool fiendwar = IsFiendwarDungeon(dungeon);
         List<WirePacket> selected = fiendwar ? [] : Flush(leader, "15 分队选择 " + dungeon);
@@ -573,7 +589,7 @@ internal static partial class AntonTcpProbe
         int memberSymbolsBefore = memberReport.Symbols.Count, memberStatesBefore = memberReport.States.Count;
         var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
         ClearRoom(leader, map.Body, leaderReport, out ushort bossKey, out byte bossLevel,
-            path[0].X == info.Body[8] && path[0].Y == info.Body[9], member, memberReport);
+            path[0].X == info.Body[8] && path[0].Y == info.Body[9], member, memberReport, requireSettlementOrder: true);
         for (int i = 1; i < path.Length; i++)
         {
             byte[] move = new byte[100];
@@ -591,7 +607,8 @@ internal static partial class AntonTcpProbe
             member.Send(37, new byte[8]);
             Note(leaderReport, Flush(leader, "37 下一房"));
             Note(memberReport, Barrier(member, "37 队员下一房"));
-            ClearRoom(leader, map.Body, leaderReport, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length, member, memberReport);
+            ClearRoom(leader, map.Body, leaderReport, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length,
+                member, memberReport, requireSettlementOrder: true);
             if (i + 1 == path.Length)
             {
                 bossKey = nextBoss;
@@ -603,14 +620,19 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
-        leader.Send(117, check);
-        int seen = leaderReport.Opcode586;
-        var cleared = Flush(leader, "117 确认 " + dungeon);
-        var memberCleared = Barrier(member, "117 队员 " + dungeon);
-        Note(leaderReport, cleared);
-        Note(memberReport, memberCleared);
-        if (leaderReport.Opcode586 == seen && !cleared.Any(packet => packet is { Kind: 0, Opcode: 115 or 586 }))
-            throw new InvalidOperationException(dungeon + " 的分队清图没有 586，117 也没有确认");
+        RequireRunSettlement(leaderReport, leaderConfirmations, leaderPermissions, dungeon);
+        RequireRunSettlement(memberReport, memberConfirmations, memberPermissions, dungeon);
+        foreach (var sender in new[] { leader, member, leader })
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(check, sender.Id);
+            sender.Send(117, check);
+            var cleared = Flush(leader, "117 分队重放 " + dungeon);
+            var memberCleared = Barrier(member, "117 队员重放 " + dungeon);
+            Note(leaderReport, cleared);
+            Note(memberReport, memberCleared);
+            if (cleared.Concat(memberCleared).Any(packet => packet is { Kind: 0, Opcode: 31 or 115 or 34 or 35 }))
+                throw new InvalidOperationException(dungeon + " 的117重放重复了分队结算许可或引入普通奖励");
+        }
         if (memberReport.Symbols.Count == memberSymbolsBefore && memberReport.States.Count == memberStatesBefore)
             throw new InvalidOperationException("队员没有收到本次清图的583血量或586状态更新");
         if (!leave) return;
@@ -627,10 +649,38 @@ internal static partial class AntonTcpProbe
             throw new InvalidOperationException("29 分队地图键或房间坐标不同步");
     }
 
+    static void RequireRunSettlement(AntonProbeReport report, int confirmationsBefore, int permissionsBefore, int dungeon)
+    {
+        if (report.Opcode115 != confirmationsBefore + 1 || report.Opcode31 != permissionsBefore + 1)
+            throw new InvalidOperationException(dungeon + " 的正式Run未向该参与成员恰好发送一次115和31");
+    }
+
+    static void RequireSettlementOrder(List<WirePacket> packets, ushort key)
+    {
+        if (!packets.Any(packet => packet is { Kind: 0, Opcode: 115 or 31 })) return;
+        int death = packets.FindIndex(packet => packet is { Kind: 0, Opcode: 38 } && TcpPeer.U16(packet.Body) == key);
+        int boss = packets.FindIndex(packet => packet is { Kind: 0, Opcode: 115 });
+        int clear = packets.FindIndex(packet => packet is { Kind: 0, Opcode: 31 });
+        if (death < 0 || boss <= death || clear <= boss || TcpPeer.U16(packets[boss].Body, 2) != key ||
+            packets.Count(packet => packet is { Kind: 0, Opcode: 115 }) != 1 ||
+            packets.Count(packet => packet is { Kind: 0, Opcode: 31 }) != 1)
+            throw new InvalidOperationException("正式死亡必须先38，再真实Boss键115，最后恰好一次空31");
+    }
+
     internal static void Note(AntonProbeReport report, List<WirePacket> rows)
     {
         foreach (var packet in rows)
         {
+            if (packet is { Kind: 0, Opcode: 115 })
+            {
+                if (packet.Body is not [1, 1, _, _]) throw new InvalidOperationException("115必须是四字节真实Boss确认");
+                report.Opcode115++;
+            }
+            if (packet is { Kind: 0, Opcode: 31 })
+            {
+                if (packet.Body.Length != 0) throw new InvalidOperationException("31必须严格空体");
+                report.Opcode31++;
+            }
             if (packet is { Kind: 0, Opcode: 587, Body: [var state, var phase] })
                 report.Waiting = state == 5 && phase == 0;
             if (report.Waiting && packet is { Kind: 0, Opcode: 596 }) report.Wait596++;
@@ -819,6 +869,8 @@ internal static partial class AntonTcpProbe
         public bool Started;
         public bool Entered210;
         public bool Reward;
+        public int Opcode115;
+        public int Opcode31;
         public int Opcode586;
         public int Opcode596;
         public int Opcode597;

@@ -65,6 +65,7 @@ internal static partial class LukeRaidRunTcpTests
                 }
                 else That(!result.Any(packet=>packet.Opcode==601),"HP尚未归零不提前显示阶段结果");
             }
+            if(phase==0) ConfirmFirstPhaseMovie(peers,[0,1]);
             foreach(var peer in peers)
             {
                 foreach(byte invalid in new byte[]{2,5})
@@ -104,5 +105,34 @@ internal static partial class LukeRaidRunTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL",instance)
                 is [[8L]],"进入下一阶段及最终领奖均不覆盖P1冻结资格");
         }
+    }
+
+    static void ConfirmFirstPhaseMovie(TcpPeer[] peers,byte[] kinds)
+    {
+        for(int index=0;index<peers.Length;index++)
+        {
+            var sender=peers[index];
+            sender.Send(659,[1]);
+            foreach(var peer in new[]{sender}.Concat(peers.Where(peer=>peer!=sender)))
+            {
+                var frames=Drain(peer,true);
+                That(frames.Count(packet=>packet is {Kind:1,Opcode:659})==(peer==sender?1:0)&&
+                    (peer!=sender||frames.Any(packet=>packet is {Kind:1,Opcode:659,Body:[1]})),
+                    "P1原生659演出确认仅回应真实请求成员，不替他人确认");
+                if(index<peers.Length-1)
+                    That(!frames.Any(packet=>packet.Opcode is 587 or 600),
+                        "P1先完成者仍等待全体Present，包括未参战待命分队，不提前开牌");
+                else
+                    That(frames.Count(packet=>packet is {Kind:0,Opcode:587,Body:[4,0]})==1&&
+                        frames.Count(packet=>packet is {Kind:0,Opcode:587})==1&&
+                        frames.Count(packet=>packet is {Kind:0,Opcode:600})==kinds.Length&&
+                        kinds.All(kind=>frames.Count(packet=>packet is {Kind:0,Opcode:600,Body:[var actual,0]}&&actual==kind)==1),
+                        "P1最后一人确认后全员各一次翻牌状态与配置原kind空列表，再允许实际660领奖");
+            }
+        }
+        peers[0].Send(659,[1]);
+        foreach(var peer in peers)
+            That(!Drain(peer,true).Any(packet=>packet.Opcode is 587 or 600),
+                "P1重复演出确认不重播翻牌状态或空600，不代领奖");
     }
 }

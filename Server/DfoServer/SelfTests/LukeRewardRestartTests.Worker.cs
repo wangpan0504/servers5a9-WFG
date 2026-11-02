@@ -47,8 +47,10 @@ internal static partial class LukeRewardRestartTests
             proof=>{Console.WriteLine(ControlPrefix+JsonSerializer.Serialize(new Signal(input.Nonce,Environment.ProcessId,"PRECOMMIT",Proof:proof)));Console.Out.Flush();},
             error=>{Console.WriteLine(ControlPrefix+JsonSerializer.Serialize(new Signal(input.Nonce,Environment.ProcessId,"FAILED",Claim:error)));Console.Out.Flush();}):null;
         observer?.VerifyScopeAndArm();
+        // 专属child初始化仓储时已建池；注册原生观察器后释放旧连接，领奖必须由已安装回调的新连接执行。
+        if(observer is not null)SqliteDatabaseBootstrap.ReleaseRuntimePool();
         string response=Answer(claim,catalog);
-        if(input.BeforeCommit)throw new InvalidOperationException("真实领取返回但未停在提交前观察点，不能算crash通过");
+        if(input.BeforeCommit)throw new InvalidOperationException("真实领取返回但未停在提交前观察点，不能算crash通过："+response);
         if(!response.StartsWith("OK ",StringComparison.Ordinal))throw new InvalidDataException("真实GM领取失败："+response);
         using(var result=JsonDocument.Parse(response[3..]))
             if(result.RootElement.GetProperty("duplicate").GetBoolean())throw new InvalidDataException("首领不能重放旧回执");

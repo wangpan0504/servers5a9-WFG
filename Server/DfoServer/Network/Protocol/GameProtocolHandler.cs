@@ -171,6 +171,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart, projection);
         session.RaidBattleNoticeArrived = (view, actor) => RaidCombatProjection.Notice(context, view, actor);
+        session.RaidRunClearedArrived = (cleared, actor) => RaidCombatProjection.RunCleared(context, cleared, actor);
         session.AutomaticRaidRewardArrived = async receipt =>
         {
             if (inventory is not null) await inventory.RefreshAsync(context, receipt.Inventory);

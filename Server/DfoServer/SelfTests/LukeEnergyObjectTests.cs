@@ -84,6 +84,9 @@ internal static class LukeEnergyObjectTests
             var facts = projections.Select(row => (row.Actor, Fact: row.Prepared.Result.ClearFact!)).ToArray();
             That(battle.CompleteLukeDungeon(facts) is null, "全员加载房间尚未登记不能消费能源事实");
             battle.ObserveLukeRun(instance, rows, map.Id, map);
+            That(battle.ReportStatusHp(rows[0].Actor, rows[0].Identity,
+                new(1, [.. rows.Select(row => row.Actor.Character)], 0, 0x12345678, [100, 100])) is not null,
+                "真实能源Run在清图前接纳双目标原序百分比，不能仅以HP报告推进能源销毁");
             var original = facts[0].Fact;
             var passive = original.PassiveSource!;
             foreach (var invalid in new[] {
@@ -97,10 +100,15 @@ internal static class LukeEnergyObjectTests
                     "错误能源来源整批拒绝，不扣HP或发布信号");
             That(battle.CompleteLukeDungeon(facts[..3]) is null && battle.View.LukeEnergySignals[symbol] == 0,
                 "缺一人提交不推进图或信号");
+            That(battle.StatusSnapshot(battle.View).Single().Values.SequenceEqual(new uint[] { 100, 100 }),
+                "能源对象非法来源或全员提交不足时双目标血条保持原已知值");
             foreach (var row in projections) row.Run.ConfirmCommittedPassiveClear(row.Prepared);
             That(battle.CompleteLukeDungeon(facts) is not null && battle.CompleteLukeDungeon(facts) is null &&
                 battle.View.LukeEnergySignals[symbol] == 1 && battle.View.Symbols[$"[hp{dungeon}]"] == 0,
                 "四份正式物件事实只推进一次Run并发布原值113/114");
+            That(battle.StatusSnapshot(battle.View).Single() is { Context: 0x12345678, Cleared: true } terminal &&
+                terminal.Values.SequenceEqual(new uint[] { 0, 0 }),
+                "5063和5066真实能源销毁事实将634双目标终态投影零，不冻结最后100百分比或改写Context");
             battle.SetMechanism(battle.Instance, battle.View.Revision, "[control]", 2);
             That(battle.View.LukeEnergySignals[symbol] == 0 && battle.CompleteLukeDungeon(facts) is null,
                 "目标重开清除旧能源信号，旧Run不能再次触发");

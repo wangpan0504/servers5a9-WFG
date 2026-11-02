@@ -32,7 +32,7 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                         try
                         {
                             if (session.Selected?.Id == eligibility.Character && session.RaidCombatView()?.Instance == battle.Instance)
-                                receipt = session.ClaimRaidReward(offer.Kind, offer.Card, store, items, gold, pieces, clock.GetUtcNow());
+                                receipt = session.ClaimRaidReward(offer.Kind, offer.Card, store, items, gold, pieces, clock.GetUtcNow(), automaticLuke: true);
                             else
                             {
                                 receipt = null;

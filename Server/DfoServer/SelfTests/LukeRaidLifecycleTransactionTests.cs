@@ -105,6 +105,7 @@ internal static class LukeRaidLifecycleTransactionTests
             battle=sessions[0].CurrentRaidBattle(actors[0])!;
             RunStages(false,unclaimedRestart:true);
             LukeRaidResourceRulesTests.Run(definition.Resources.Script,actors,policy.Completion!);
+            LukeMovieBarrierTests.Run(actors);
             if(restartPvf is not null) That(recoveryCandidates is not null,"重启测试必须实际生成待领资格，不能静默跳过");
             if(recoveryCandidates is not null)
             {
@@ -272,6 +273,8 @@ internal static class LukeRaidLifecycleTransactionTests
                     return;
                 }
                 if(phase==0&&!supersede)clock.Now=clock.Now.AddSeconds(2);
+                if(phase==0)foreach(var actor in actors)
+                    That(battle.CompleteLukeFirstMovie(actor,battle.View),"领奖事务夹具逐人确认P1演出完成");
                 var character=sessions[0].Selected!;var eligibility=battle.LukeEligibility(character.Id,phase)!;
                 That(eligibility.Week==(!supersede&&phase==0?20261018:20261025),"阶段anchor跨显式合成周界，迟领P1仍取旧周而P2按新anchor周");
                 var beforeClaim=ReadCommitted(battle.Instance,phase,actors[0]);

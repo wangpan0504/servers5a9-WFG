@@ -33,8 +33,15 @@ internal static class LukeRaidResourceRulesTests
         {
             var original = script;
             var adapted = pacing.Adapt(original);
+            string birthHp = original.Phases[0].Dungeons.Single(row => row.Id == 5054).HpSymbol;
             That(original.Phases.Sum(phase => phase.Rules.Length) == 40 && adapted.Phases.Sum(phase => phase.Rules.Length) == 38 &&
-                ReferenceEquals(adapted.Phases[0], original.Phases[0]), "统一节奏只派生P2差量，不改原40条资源或P1");
+                original.Phases[0].Rules.Any(rule => rule.Trigger.Any(clause => clause is { Tag: "[on enter dungeon]", DungeonId: 5054 })) &&
+                adapted.Phases[0].Rules.Any(rule => rule.Trigger.Any(clause => clause.Tag == "[on change symbol]" &&
+                    clause.Symbol == birthHp) && rule.Trigger.Any(clause => clause is { Tag: "[if]", RawIntegers: [2] } &&
+                    clause.Symbol == birthHp) &&
+                    rule.Behavior.Count(clause => clause is
+                        { Tag: "[set dungeon state]", DungeonId: 5055 or 5056, State: RaidDungeonState.Open }) == 2),
+                "统一节奏派生诞生首次清图开门及P2差量，原40条资源保持只读");
             That(adapted.Phases[1].Rules.All(rule => !rule.Trigger.Any(clause => clause.Tag == "[on giveup dungeon]" &&
                 clause.DungeonId is 5061 or 5062)), "离开任一王座均不再全团关闭能源/踢能源队");
         }
@@ -42,16 +49,30 @@ internal static class LukeRaidResourceRulesTests
         That(battle.SymbolSnapshot(battle.View).All(row => row.Id != 102),
             "初始102零值不进入583，不能在开团或首次入图触发原生结果菜单");
         foreach(var actor in actors)That(battle.JoinStart(actor),"原始角色身份登记到纯解释器");
+        if (pacing is not null)
+        {
+            var abandoned = Enter(5054);
+            Exit(abandoned);
+            That(battle.View.Symbols[script.Phases[0].Dungeons.Single(row => row.Id == 5054).HpSymbol] == 3,
+                "进入后放弃诞生不消耗三次通关进度");
+            RejectOtherSanctums();
+        }
         foreach(int dungeon in route == 1 ? new[] {5054,5055,5056} : new[] {5054,5056,5055})
             for(int run=0;run<3;run++)
             {
                 var rows=Enter(dungeon);
-                if(dungeon==5054&&run==0)That(battle.View.Dungeons[5055]==RaidDungeonState.Open&&battle.View.Dungeons[5056]==RaidDungeonState.Open,
-                    "完整原规则由Enter5054开放另两圣所");
+                if(dungeon==5054&&run==0)
+                    That(new[] {5055, 5056}.All(id => battle.View.Dungeons[id] ==
+                        (pacing is null ? RaidDungeonState.Open : RaidDungeonState.Hide)),
+                        "原资源入诞生开门，本服统一规则等待首次真实通关");
                 Clear(dungeon,rows);
+                if (pacing is not null && dungeon == 5054)
+                    That(new[] {5055, 5056}.All(id => battle.View.Dungeons[id] == RaidDungeonState.Open),
+                        "诞生第一次真实通关即同时开放湮灭和蔓延，后续保持开放");
                 if(dungeon==(route==1?5055:5056)&&run==2)That(battle.View.Symbols["[2phase dungeon type]"]==route,"原目标HP归零后才选择route，非首次Run就选路");
                 if(dungeon!=(route==1?5056:5055)||run!=2)That(!battle.HasPendingTransition,"原P1未完成三图各三次不能终结");
                 Exit(rows);
+                if (pacing is not null && dungeon == 5054 && run == 0) AdmitOtherSanctums();
             }
         That(battle.HasPendingTransition&&battle.PendingLukeSettlement()?.Members.Take(Math.Min(4, actors.Length)).All(member=>member.CommittedRuns==9)==true,
             "原P1九Run才形成成功终结，参与按Run而非角色数累计");
@@ -135,6 +156,30 @@ internal static class LukeRaidResourceRulesTests
             using var reservation=battle.ReserveDungeon(new(battle.Instance,battle.View.Phase,squad,RaidKind.Luke),(uint)dungeon,rows);
             That(reservation is not null,"完整原规则授权当前Open目标："+dungeon);reservation!.Install();battle.ObserveLukeRun(id,rows);return rows;
         }
+        void RejectOtherSanctums()
+        {
+            foreach (int dungeon in new[] {5055, 5056})
+            {
+                var id = Guid.NewGuid();
+                var rows = actors.Take(4).Select(actor =>
+                    (actor, new DungeonRunIdentity(actor.Character, 0, 1, id, 1))).ToArray();
+                using var denied = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), (uint)dungeon, rows);
+                That(battle.View.Dungeons[dungeon] == RaidDungeonState.Hide && denied is null,
+                    "诞生尚未首次通关时地图状态与直接Run准入共同拒绝：" + dungeon);
+            }
+        }
+        void AdmitOtherSanctums()
+        {
+            foreach (int dungeon in new[] {5055, 5056})
+            {
+                var id = Guid.NewGuid();
+                var rows = actors.Take(4).Select(actor =>
+                    (actor, new DungeonRunIdentity(actor.Character, 0, 1, id, 1))).ToArray();
+                using var allowed = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), (uint)dungeon, rows);
+                That(battle.View.Dungeons[dungeon] == RaidDungeonState.Open && allowed is not null,
+                    "诞生首次通关后地图状态与直接Run准入共同开放：" + dungeon);
+            }
+        }
         void Clear(int dungeon,(RaidActor Actor,DungeonRunIdentity Identity)[] rows)
         {
             var facts=rows.Select(row=>(row.Actor,new DungeonClearFact(row.Identity,(uint)dungeon,[Guid.NewGuid()])
@@ -183,6 +228,8 @@ internal static class LukeRaidResourceRulesTests
                     battle.View.LukeEnergyBlocked && battle.View.Dungeons[5066] == RaidDungeonState.Open,
                     "满能源保留effect2并锁王座，安全退场不产生KILL死亡信号");
                 That(light.All(row => battle.RequiresLukeEnergyReturn(row.Actor, row.Identity.InstanceId)), "只标记当时王座原Run等待安全退场");
+                That(battle.SymbolSnapshot(battle.View).All(row => row.Id != 139),
+                    "满能领域保留2但不投递64301原生SET HP 0执行事件，加载后恢复同样安全");
                 var blocked = battle.View;
                 Clear(5061, light);
                 That(ReferenceEquals(blocked, battle.View), "满能源后迟到王座清图不再推进通关");
@@ -199,6 +246,8 @@ internal static class LukeRaidResourceRulesTests
                 Clear(5066, pressed); Exit(pressed); concurrent = [];
                 That(!battle.View.LukeEnergyBlocked && battle.View.Symbols["[energy save effect]"] == 0 && battle.View.Timers[recovery] == 300,
                     "满能源后仍须真实清图压制，不自动完成");
+                That(battle.SymbolSnapshot(battle.View).Single(row => row.Id == 139).Value == 0,
+                    "真实压制后139原值0正常发布，解除旧能源效果而不伪造完成");
                 That(battle.SymbolSnapshot(battle.View).All(row => row.Id != 102),
                     "统一节奏满能源仍只走服务端安全退场，不投递102零值或原生击杀事件");
                 light = Enter(5061); battle.ObserveLukeRun(light[0].Identity.InstanceId, light, 55845);

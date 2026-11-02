@@ -15,6 +15,8 @@ internal sealed partial class AntonRaidBattle
         public uint Dungeon { get; } = dungeon;
         public byte Squad { get; } = squad;
         public long Generation { get; } = generation;
+        public int? MazeOrdinal { get; init; }
+        public HashSet<int> KilledMonitorTargets { get; } = [];
         public (RaidActor Actor, DungeonRunIdentity Identity)[] Actors { get; } = actors;
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
         public LukeRouteLease? Route { get; init; }
@@ -37,6 +39,7 @@ internal sealed partial class AntonRaidBattle
         public HashSet<ushort> RosterContributions { get; } = [];
         public bool GuildPartyRecorded { get; set; }
         public bool Cleared => ClearFacts.Count != 0;
+        public LukeRunCleared? LukeClear { get; set; }
         public bool AntonEnergyConfirmed { get; set; }
         public AntonHpDisplay? Hp { get; set; }
         public long EnergyReturnEpoch { get; set; }
@@ -88,7 +91,7 @@ internal sealed partial class AntonRaidBattle
                     : route is not null) return null;
                 var run = new RaidDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors)
-                    { Objects = objects, Route = route, RevivalLimit = coinLimit };
+                    { Objects = objects, Route = route, RevivalLimit = coinLimit, MazeOrdinal = mazeOrdinal };
                 if (!battle.ReserveFiendwarEncounter(run)) return null;
                 if (!battle.dungeonRuns.TryAdd(run.Id, run)) return null;
                 return new(battle, run);
@@ -181,7 +184,7 @@ internal sealed partial class AntonRaidBattle
             }
             run.FreezeClearedMembers();
             CommitBattleCandidate(before, candidate);
-            return new(before, current);
+            return new(before, current) { LukeClear = LukeRunCleared.Capture(this, run.Id) };
         }
     }
 
@@ -189,7 +192,7 @@ internal sealed partial class AntonRaidBattle
     // 规则失败不消费事件，下次原Run加载/同步仍可重试；失效目标代仅确认事实而不执行新代业务。
     internal AntonRaidBattleChange? ObserveLukeRun(Guid instance,
         (RaidActor Actor, DungeonRunIdentity Identity)[] actors, int? map = null,
-        DfoServer.GameWorld.Dungeons.DungeonMap? objectRoom = null)
+        DfoServer.GameWorld.Dungeons.DungeonMap? objectRoom = null, SinglePlayerDungeonRun? monitorSource = null)
     {
         lock (gate)
         {
@@ -204,8 +207,13 @@ internal sealed partial class AntonRaidBattle
                     row.Identity.Epoch < run.MapEpochs.GetValueOrDefault(row.Actor))) return null;
             bool enter = !run.EnterConsumed;
             bool changedMap = map is not null && actors.Any(row => row.Identity.Epoch > run.MapEpochs.GetValueOrDefault(row.Actor));
-            if (changedMap) run.Hp = null;
-            if (!enter && !changedMap) return null;
+            if (changedMap && !run.Cleared && LukeMonitorTargets(run).IsEmpty) run.Hp = null;
+            // 初次过房可能仍Loading；加载回调即使epoch已登记，也须依据真实已加载演员解除同模板旧死亡。
+            int[] revived = !run.Cleared && monitorSource is { Phase: SinglePlayerDungeonPhase.Dungeon } source &&
+                source.DungeonId == run.Dungeon && source.Entry.Maze.SourceOrdinal == run.MazeOrdinal &&
+                actors.Any(row => row.Identity == source.Snapshot.Identity)
+                    ? run.KilledMonitorTargets.Where(source.HasLivingMonitorTarget).ToArray() : [];
+            if (!enter && !changedMap && revived.Length == 0) return null;
             var before = current;
             var candidate = before;
             if (pendingTransition is null && before.State == AntonRaidBattleState.Fighting && run.EnergyReturnEpoch == 0 && CurrentObjective(run))
@@ -225,6 +233,8 @@ internal sealed partial class AntonRaidBattle
                 run.EnergyRoom = lukeEnergyObjects && run.Phase == 1 && bindings is [var energy] &&
                     energy.IsEnergy && energy == run.Objects?.Energy ? energy : null;
             }
+            foreach (int template in revived) run.KilledMonitorTargets.Remove(template);
+            if (revived.Length != 0 && ReferenceEquals(before, candidate)) candidate = before with { };
             CommitBattleCandidate(before, candidate);
             return ReferenceEquals(before, current) ? null : new(before, current);
         }
@@ -250,7 +260,8 @@ internal sealed partial class AntonRaidBattle
     internal bool HasDungeonContribution(RaidActor actor, Guid run)
     {
         lock (gate) return actor.IsCurrent && entries.TryGetValue((run, actor.Character), out var entry) &&
-            entry.Run?.ClearFacts.ContainsKey(actor) == true;
+            entry.Run is { } completed && (completed.ClearFacts.ContainsKey(actor) ||
+                Kind == RaidKind.Anton && completed.Cleared && completed.RosterContributions.Contains(actor.Character));
     }
 
     bool CurrentObjective(RaidDungeonRun run) => !TerminalRequested(current) && !LukePhaseDueLocked() && run.Phase == current.Phase &&
@@ -333,7 +344,8 @@ internal sealed partial class AntonRaidBattle
                 Enumerable.Range(1, 16).Any(slot => current.Symbols[$"[area_{slot}]"] == run.Dungeon))
                 CommitBattleCandidate(current, RemovePreyArea(DamagePreyShip(current, PreyHeader("[single defence fail]")), checked((int)run.Dungeon)));
             run.Active.Remove(actor);
-            run.Hp = null;
+            // 已清图Luke保留最后已知目标形状，余下成员继续显示终态0；最后一人退出即移除Run。
+            if (Kind != RaidKind.Luke || !run.Cleared && LukeMonitorTargets(run).IsEmpty) run.Hp = null;
             current = current with { Revision = checked(current.Revision + 1) };
             if (Kind == RaidKind.Anton) entries.Remove((run.Id, actor.Character));
             if (run.Active.Count == 0)

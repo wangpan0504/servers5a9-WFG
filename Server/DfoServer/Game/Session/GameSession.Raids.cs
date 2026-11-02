@@ -121,7 +121,8 @@ internal sealed partial class GameSession
         {
             try { RecordFiendwarDeparture(previous.Actor, previous.Battle, disconnected); }
             catch (Exception error) { notices.PersistenceFailure = error; }
-            previous.Battle.DetachStart(previous.Actor);
+            previous.Battle.DetachStart(previous.Actor, disconnected);
+            notices.Battle = previous.Battle;
         }
         raidCombat = null;
         raidDungeonAdmission = null;
