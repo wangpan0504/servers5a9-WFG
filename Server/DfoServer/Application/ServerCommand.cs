@@ -23,7 +23,9 @@ internal enum ServerCommandKind
     PrepareBookCharacter,
     ImportCharacters,
     AntonProbe,
-    HostedEligibilityFakeHost
+    HostedEligibilityFakeHost,
+    MapGeometryGolden,
+    MapGeometryInterop
 }
 
 internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments, bool PacketCapture = false)
@@ -59,6 +61,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --adventure-weekly <Off|Slots|Full> 每周地下城信息下发，默认 Slots（721/720），Full 另发719
           --packet-capture [目录]    启动并记录应用层帧
           --selftest-core            基础自测，无需 PVF
+          --selftest-map-geometry-golden <world> <PVF> <向量文件> 离线导出完整副本几何闭包，不访问数据库或监听
+          --selftest-map-geometry-interop <world> <PVF> <自测EXE> <向量文件> 隔离HTTP与客户端几何交叉自测
           --selftest                 完整服务端自测
           --selftest-tcp [测试组]    隔离 TCP 回归
           --selftest-tcp-list-json   只读导出测试组，不加载资源或创建数据库
@@ -74,6 +78,18 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
 
     public static ServerCommand Parse(string[] args)
     {
+        if (args.Length != 0 && args[0] == "--selftest-map-geometry-interop")
+        {
+            if (args.Length != 5 || args.Skip(1).Any(string.IsNullOrWhiteSpace))
+                throw new InvalidDataException("用法：DfoServer --selftest-map-geometry-interop <world> <PVF> <自测EXE> <向量文件>");
+            return new(ServerCommandKind.MapGeometryInterop, args[1..]);
+        }
+        if (args.Length != 0 && args[0] == "--selftest-map-geometry-golden")
+        {
+            if (args.Length != 4 || args.Skip(1).Any(string.IsNullOrWhiteSpace))
+                throw new InvalidDataException("用法：DfoServer --selftest-map-geometry-golden <world> <PVF> <向量文件>");
+            return new(ServerCommandKind.MapGeometryGolden, args[1..]);
+        }
         if (args.Length != 0 && args[0] is "--pvf-list" or "--pvf-text")
         {
             if (args.Length != 3)

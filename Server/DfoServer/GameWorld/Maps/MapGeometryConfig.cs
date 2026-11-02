@@ -12,30 +12,68 @@ internal sealed class MapGeometryConfig
     private sealed record Atom(byte Kind, int Number, string? Text);
     private sealed record Rule(string Id, string Tag, int Occurrence, Atom[][] From, Atom[] To);
     private readonly Dictionary<string, Rule[]> maps;
-    public static MapGeometryConfig Empty { get; } = new([]);
+    private readonly Dictionary<string, string> aliases;
+    private readonly Dictionary<string, int> stringIds;
+    private readonly Dictionary<int, string> strings;
+    public static MapGeometryConfig Empty { get; } = new([],[]);
     public IReadOnlyCollection<string> Paths => maps.Keys;
-    private MapGeometryConfig(Dictionary<string, Rule[]> maps) => this.maps = maps;
+    public IReadOnlyDictionary<string, string> Aliases => aliases;
+    public string SignatureKind(string path)
+    {
+        path = Normalize(path);
+        if (path.EndsWith(".til",StringComparison.Ordinal)) return "DCT1";
+        return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]") ? "DCG2" : "DCG1";
+    }
+    private MapGeometryConfig(Dictionary<string, Rule[]> maps, Dictionary<string, string> aliases)
+    {
+        this.maps = maps; this.aliases = aliases;
+        stringIds = new(StringComparer.Ordinal); strings = [];
+        foreach (string value in maps.Values.SelectMany(rows => rows).SelectMany(rule => rule.To)
+            .Where(atom => atom.Kind == 6).Select(atom => atom.Text!).Distinct(StringComparer.Ordinal))
+        {
+            int id = -1 - strings.Count;
+            strings.Add(id,value); stringIds.Add(value,id);
+        }
+    }
+
+    // 配置解析时冻结的虚拟字符串只用于新TIL引用，不修改PVF字符串池。
+    public string ResolveString(int id, Func<int, string> originalResolver) => id >= 0 ? originalResolver(id) :
+        strings.TryGetValue(id,out string? value) ? value : throw new InvalidDataException("Unknown world virtual string");
 
     public static MapGeometryConfig ReadFile(string path)
     {
         if (!File.Exists(path)) return Empty;
         using var source = File.OpenRead(path);
-        if (source.Length is <= 0 or > 2 * 1024 * 1024) throw new InvalidDataException("World configuration size");
+        if (source.Length is <= 0 or > 32 * 1024 * 1024) throw new InvalidDataException("World configuration size");
         using var reader = new StreamReader(source, new UTF8Encoding(false, true), true);
         return Parse(reader.ReadToEnd());
     }
 
     public static MapGeometryConfig Parse(string text)
     {
-        if (Encoding.UTF8.GetByteCount(text) > 2 * 1024 * 1024) throw new InvalidDataException("World configuration size");
+        if (Encoding.UTF8.GetByteCount(text) > 32 * 1024 * 1024) throw new InvalidDataException("World configuration size");
         using var doc = JsonDocument.Parse(text.TrimStart('\uFEFF'), new() { MaxDepth = 16 });
         int nodes = 0;
         ValidateJson(doc.RootElement, ref nodes);
         var root = doc.RootElement;
-        Keys(root, "schema", "layer", "rules");
+        Keys(root, "schema", "layer", "rules", "aliases");
         if (root.GetProperty("schema").GetInt32() != 1 || Text(root, "layer") != "world") throw new InvalidDataException("World schema/layer");
         var rows = root.GetProperty("rules");
-        if (rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() > 2048) throw new InvalidDataException("World rule budget");
+        if (rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() > 32768) throw new InvalidDataException("World rule budget");
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (root.TryGetProperty("aliases",out var aliasRows))
+        {
+            if (aliasRows.ValueKind != JsonValueKind.Object || aliasRows.EnumerateObject().Count() > 8192)
+                throw new InvalidDataException("World alias budget/shape");
+            foreach (var alias in aliasRows.EnumerateObject())
+            {
+                if (alias.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException("World alias source");
+                string target = Normalize(alias.Name), source = Normalize(alias.Value.GetString() ?? throw new InvalidDataException("World alias source"));
+                if (!target.EndsWith(".til",StringComparison.Ordinal) || !target.Contains("/displaycompat/",StringComparison.Ordinal) ||
+                    !source.EndsWith(".til",StringComparison.Ordinal) || source.Contains("/displaycompat/",StringComparison.Ordinal) ||
+                    !aliases.TryAdd(target,source)) throw new InvalidDataException("World alias namespace/source");
+            }
+        }
         var result = new Dictionary<string, List<Rule>>(StringComparer.Ordinal);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows.EnumerateArray())
@@ -54,14 +92,55 @@ internal sealed class MapGeometryConfig
                 ("town_gate", "[town movable area]") => 6,
                 ("walk_area", "[virtual movable area]") => 4,
                 ("npc_position", "[npc]") => 5,
+                ("gate_points8", "[pathgate pos]") => 8,
+                ("gate_recognize8", "[pathgate recognize range]") => 8,
+                ("tile_pass14", "[pass type]") => 14,
+                ("dungeon_tiles", "[tile]") => 1,
+                ("dungeon_ext_tilefiles", "[tile files]") => 2,
+                ("dungeon_ext_tilemap", "[tile map]") => 1,
                 _ => throw new InvalidDataException("World mechanism has no verified record adapter")
             };
             var from = Profiles(row.GetProperty("from"));
             var to = Profiles(row.GetProperty("to"));
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
+            bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
+            if ((gate || tile || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilemap") && occurrence != 0)
+                throw new InvalidDataException("World dungeon/grid adapter requires the unique first record");
+            if ((gate || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilemap") && !path.EndsWith(".map",StringComparison.Ordinal) ||
+                tile && (!path.EndsWith(".til",StringComparison.Ordinal) || !aliases.ContainsKey(path)))
+                throw new InvalidDataException("World mechanism resource kind/alias");
             foreach (var before in from)
             {
+                if (kind == "dungeon_tiles")
+                {
+                    if (before.Length != 4 || to[0].Length != 5 || before.Concat(to[0]).Any(atom => atom.Kind != 6) ||
+                        !before.Take(3).SequenceEqual(to[0].Take(3)) ||
+                        to[0].Skip(3).Any(atom => !aliases.ContainsKey(ResolveReference(path,atom.Text!))))
+                        throw new InvalidDataException("World dungeon tile recipe");
+                    continue;
+                }
+                if (kind == "dungeon_ext_tilefiles")
+                {
+                    if (before.Length == 0 || before.Length % 2 != 0 || to[0].Length <= before.Length || to[0].Length % 2 != 0 ||
+                        !before.SequenceEqual(to[0].Take(before.Length))) throw new InvalidDataException("World extended tile file recipe");
+                    _ = TileFileIds(before); _ = TileFileIds(to[0]);
+                    for (int i = before.Length; i < to[0].Length; i += 2)
+                        if (!aliases.ContainsKey(ResolveReference(path,to[0][i + 1].Text!)))
+                            throw new InvalidDataException("World extended tile file alias");
+                    continue;
+                }
+                if (kind == "dungeon_ext_tilemap")
+                {
+                    if (before.Length == 0 || before.Length % 4 != 0 || to[0].Length != before.Length / 4 * 5 ||
+                        before.Concat(to[0]).Any(atom => atom.Kind != 0 || atom.Number < -1))
+                        throw new InvalidDataException("World extended tile matrix shape");
+                    for (int rowIndex = 0; rowIndex < before.Length / 4; ++rowIndex)
+                        if (!before.Skip(rowIndex * 4).Take(3).SequenceEqual(to[0].Skip(rowIndex * 5).Take(3)))
+                            throw new InvalidDataException("World extended tile matrix prefix");
+                    continue;
+                }
                 if (before.Length == 0 || before.Length != to[0].Length || before.Length % stride != 0) throw new InvalidDataException("World record shape");
+                if (gate && before.Length != 8) throw new InvalidDataException("World gate record shape");
                 for (int i = 0; i < before.Length; ++i)
                 {
                     var a = before[i]; var b = to[0][i];
@@ -70,8 +149,11 @@ internal sealed class MapGeometryConfig
                         throw new InvalidDataException("World coordinate kind/range or NPC facing");
                     if ((kind == "town_gate" && i % stride >= 4 || kind == "npc_position" && i % stride is 0 or 4) && a != b)
                         throw new InvalidDataException("World target or condition identity");
+                    if (gate && (a.Number is < -1048576 or > 1048576) ||
+                        tile && (a.Number is < 0 or > 255 || b.Number is < 0 or > 255))
+                        throw new InvalidDataException("World gate/grid value range");
                 }
-                if (kind != "npc_position")
+                if (kind is "town_gate" or "walk_area")
                     for (int i = 0; i < before.Length; i += stride)
                         if (before[i + 2].Number <= 0 || before[i + 3].Number <= 0 || to[0][i + 2].Number <= 0 || to[0][i + 3].Number <= 0)
                             throw new InvalidDataException("World rectangle extent");
@@ -80,35 +162,85 @@ internal sealed class MapGeometryConfig
             if (list.Any(r => r.Tag == tag && r.Occurrence == occurrence)) throw new InvalidDataException("Overlapping world selectors");
             list.Add(new(id, tag, occurrence, from, to[0]));
         }
-        return new(result.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal));
+        if (aliases.Keys.Any(path => !result.TryGetValue(path,out var rules) || !rules.Any(rule => rule.Tag == "[pass type]" && rule.Occurrence == 0)))
+            throw new InvalidDataException("World alias requires guarded pass grid");
+        foreach (var rules in result.Values) ValidateExtendedRecipe(rules);
+        return new(result.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal),aliases);
     }
 
     public PvfToken[] Apply(string path, PvfToken[] input, Func<int, string> resolve)
     {
         if (!maps.TryGetValue(Normalize(path), out var rules)) return input;
-        var result = input.ToArray();
+        string Resolve(int id) => ResolveString(id,resolve);
+        var writes = new List<(int At, int Length, PvfToken[] Tokens)>();
         foreach (var rule in rules)
         {
+            if ((rule.Tag is "[pathgate pos]" or "[pathgate recognize range]" or "[pass type]" or "[tile]" or "[tile files]" or "[tile map]") &&
+                input.Count(token => token.Type == 3 && Resolve(token.Value).Equals(rule.Tag,StringComparison.OrdinalIgnoreCase)) != 1)
+                throw new InvalidDataException("World dungeon/grid tag missing or duplicated");
             int begin = -1, end = input.Length, occurrence = 0;
             for (int i = 0; i < input.Length; ++i)
-                if (input[i].Type == 3 && resolve(input[i].Value).Equals(rule.Tag, StringComparison.OrdinalIgnoreCase) && occurrence++ == rule.Occurrence)
+                if (input[i].Type == 3 && Resolve(input[i].Value).Equals(rule.Tag, StringComparison.OrdinalIgnoreCase) && occurrence++ == rule.Occurrence)
                 { begin = i + 1; break; }
             if (begin < 0) throw new InvalidDataException($"Unmatched world tag: {path} {rule.Id}");
             for (int i = begin; i < input.Length; ++i) if (input[i].Type == 3) { end = i; break; }
+            if (rule.Tag is "[tile files]" or "[tile map]")
+            {
+                bool extended = false;
+                for (int i = 0; i < begin - 1; ++i)
+                    if (input[i].Type == 3)
+                    {
+                        string tag = Resolve(input[i].Value);
+                        if (tag.Equals("[extended tile]",StringComparison.OrdinalIgnoreCase))
+                        { if (extended) throw new InvalidDataException("Nested extended tile block"); extended = true; }
+                        else if (tag.Equals("[/extended tile]",StringComparison.OrdinalIgnoreCase)) extended = false;
+                    }
+                bool closed = false;
+                for (int i = end; i < input.Length; ++i)
+                    if (input[i].Type == 3)
+                    {
+                        string tag = Resolve(input[i].Value);
+                        if (tag.Equals("[extended tile]",StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Nested extended tile block");
+                        if (tag.Equals("[/extended tile]",StringComparison.OrdinalIgnoreCase)) { closed = true; break; }
+                    }
+                if (!extended || !closed)
+                    throw new InvalidDataException("World extended tile container missing closure");
+            }
             bool Matches(Atom[] atoms) => atoms.Length == end - begin && atoms.Select((a, i) =>
-                a.Kind == input[begin + i].Type && (a.Kind == 6 ? a.Text == resolve(input[begin + i].Value) : a.Number == input[begin + i].Value)).All(value => value);
+                a.Kind == input[begin + i].Type && (a.Kind == 6 ? a.Text == Resolve(input[begin + i].Value) : a.Number == input[begin + i].Value)).All(value => value);
             if (!rule.From.Append(rule.To).Any(Matches)) throw new InvalidDataException($"Unmatched world endpoint: {path} {rule.Id}");
+            var replacement = new PvfToken[rule.To.Length];
             for (int i = 0; i < rule.To.Length; ++i)
-                if (rule.To[i].Kind == 0) result[begin + i] = new(0, rule.To[i].Number);
+            {
+                var atom = rule.To[i];
+                replacement[i] = atom.Kind == 0 ? new(0,atom.Number) :
+                    i < end - begin && input[begin + i].Type == 6 && Resolve(input[begin + i].Value) == atom.Text ? input[begin + i] :
+                    new(6,stringIds[atom.Text!]);
+            }
+            writes.Add((begin,end - begin,replacement));
         }
-        return result;
+        var result = input.ToList();
+        foreach (var write in writes.OrderByDescending(write => write.At))
+        {
+            result.RemoveRange(write.At,write.Length); result.InsertRange(write.At,write.Tokens);
+        }
+        return result.ToArray();
     }
 
-    public PvfToken[] ReadTokens(PvfArchive pvf, string path) => Apply(path, pvf.ReadTokens(path), pvf.ResolveString);
+    private string SourcePath(PvfArchive pvf, string path)
+    {
+        path = Normalize(path);
+        if (!aliases.TryGetValue(path,out string? source)) return path;
+        if (pvf.Contains(path) || !pvf.Contains(source)) throw new InvalidDataException("World alias shadows source or source missing");
+        return source;
+    }
+
+    public PvfToken[] ReadTokens(PvfArchive pvf, string path) => Apply(path, pvf.ReadTokens(SourcePath(pvf,path)), pvf.ResolveString);
 
     public string ReadText(PvfArchive pvf, string path)
     {
-        string text = pvf.ReadText(path);
+        string text = pvf.ReadText(SourcePath(pvf,path));
         if (!maps.TryGetValue(Normalize(path), out var rules)) return text;
         // 先按无损token验证所有守卫；城镇旧文本解析只替换已核实的完整几何段。
         _ = ReadTokens(pvf, path);
@@ -134,6 +266,58 @@ internal sealed class MapGeometryConfig
             throw new InvalidDataException("World resource path");
         return path;
     }
+
+    private static string ResolveReference(string path, string reference)
+    {
+        if (reference.IndexOfAny([':', '\0']) >= 0 || reference.StartsWith('/') || reference.StartsWith('\\'))
+            throw new InvalidDataException("World tile reference");
+        reference = reference.Replace('\\','/').ToLowerInvariant();
+        // 原生加载器直接拼接当前MAP目录；不能把map/前缀误当成绝对资源引用。
+        if (reference.StartsWith("map/",StringComparison.Ordinal)) throw new InvalidDataException("World tile reference must be map-relative");
+        var parts = path[..(path.LastIndexOf('/') + 1)].Split('/',StringSplitOptions.RemoveEmptyEntries).ToList();
+        foreach (string part in reference.Split('/',StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".") continue;
+            if (part == "..") { if (parts.Count <= 1) throw new InvalidDataException("World tile reference escapes map root"); parts.RemoveAt(parts.Count - 1); }
+            else parts.Add(part);
+        }
+        return Normalize(string.Join('/',parts));
+    }
+
+    private static HashSet<int> TileFileIds(Atom[] atoms)
+    {
+        var ids = new HashSet<int>();
+        for (int i = 0; i < atoms.Length; i += 2)
+            if (atoms[i].Kind != 0 || atoms[i].Number < 0 || atoms[i + 1].Kind != 6 || !ids.Add(atoms[i].Number))
+                throw new InvalidDataException("World extended tile file identity");
+        return ids;
+    }
+
+    private static void ValidateExtendedRecipe(List<Rule> rules)
+    {
+        var fileRules = rules.Where(rule => rule.Tag == "[tile files]").ToArray();
+        var mapRules = rules.Where(rule => rule.Tag == "[tile map]").ToArray();
+        if (fileRules.Length == 0 && mapRules.Length == 0) return;
+        if (fileRules.Length != 1 || mapRules.Length != 1 || fileRules[0].Occurrence != 0 || mapRules[0].Occurrence != 0 ||
+            rules.Count(rule => rule.Tag == "[tile]" && rule.Occurrence == 0) != 1)
+            throw new InvalidDataException("World extended tile recipe must bind the complete dungeon tile plan");
+        var files = fileRules[0]; var matrix = mapRules[0];
+        bool Valid(Atom[] values, HashSet<int> ids) => values.All(atom => atom.Number == -1 || ids.Contains(atom.Number));
+        if (!Valid(matrix.To,TileFileIds(files.To))) throw new InvalidDataException("World extended tile target id missing");
+        for (int profile = 0; profile < 3; ++profile)
+        {
+            var originalIds = TileFileIds(files.From[profile]);
+            if (!Valid(matrix.From[profile],originalIds)) throw new InvalidDataException("World extended tile source id missing");
+            for (int row = 0; row < matrix.From[profile].Length / 4; ++row)
+            {
+                int before = matrix.From[profile][row * 4 + 3].Number;
+                int native = matrix.To[row * 5 + 3].Number, extension = matrix.To[row * 5 + 4].Number;
+                if (before == -1 ? native != -1 || extension != -1 :
+                    native < 0 || extension < 0 || originalIds.Contains(native) || originalIds.Contains(extension))
+                    throw new InvalidDataException("World extended tile split must bind new native/extension aliases or preserve empty cell");
+            }
+        }
+    }
     private static string Text(JsonElement row, string name) => row.GetProperty(name).GetString() ?? throw new InvalidDataException("World string required");
     private static void Keys(JsonElement obj, params string[] names)
     {
@@ -141,8 +325,16 @@ internal sealed class MapGeometryConfig
     }
     private static Atom[][] Profiles(JsonElement obj)
     {
+        if (obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty("all", out var common))
+        {
+            Keys(obj, "all");
+            var values = Sequence(common);
+            return [values, values, values];
+        }
         Keys(obj, "800", "1067", "960");
-        return [Sequence(obj.GetProperty("800")), Sequence(obj.GetProperty("1067")), Sequence(obj.GetProperty("960"))];
+        if (!obj.TryGetProperty("800", out var standard) || !obj.TryGetProperty("1067", out var wide) || !obj.TryGetProperty("960", out var compact))
+            throw new InvalidDataException("World profile endpoints require all or three explicit profiles");
+        return [Sequence(standard), Sequence(wide), Sequence(compact)];
     }
     private static Atom[] Sequence(JsonElement array)
     {
@@ -156,7 +348,7 @@ internal sealed class MapGeometryConfig
     }
     private static void ValidateJson(JsonElement value, ref int nodes)
     {
-        if (++nodes > 65536) throw new InvalidDataException("World JSON node budget");
+        if (++nodes > 8388608) throw new InvalidDataException("World JSON node budget");
         if (value.ValueKind == JsonValueKind.Object)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);

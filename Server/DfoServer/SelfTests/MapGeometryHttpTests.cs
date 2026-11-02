@@ -12,13 +12,14 @@ namespace DfoServer;
 
 internal static class MapGeometryHttpTests
 {
-    private static WebApplication App(Func<string, byte[]?> query)
+    private static WebApplication App(Func<string, byte[]?> query, MapGeometryHttpSnapshot? snapshot = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         var app = builder.Build();
         GmWebServer.MapClientGeometry(app, query);
+        if (snapshot is not null) GmWebServer.MapClientGeometryBatch(app, () => snapshot);
         return app;
     }
     public static async Task RunCoreAsync()
@@ -40,10 +41,11 @@ internal static class MapGeometryHttpTests
     }
     public static async Task RunInteropAsync(string configuration, string pvfPath, string executable, string vectors)
     {
+        MapGeometryTests.RunCore();
         var config = MapGeometryConfig.ReadFile(configuration);
         using var pvf = PvfArchive.Open(pvfPath);
-        var signatures = config.Paths.ToDictionary(path => path,path => MapGeometrySignature.Compute(path,config.ReadTokens(pvf,path),pvf.ResolveString),StringComparer.Ordinal);
-        await using var app = App(path => signatures.GetValueOrDefault(path));
+        var signatures = MapGeometryCapabilities.Build(pvf,config,Array.Empty<string>());
+        await using var app = App(path => signatures.GetValueOrDefault(path),new MapGeometryHttpSnapshot(signatures));
         await app.StartAsync();
         try
         {

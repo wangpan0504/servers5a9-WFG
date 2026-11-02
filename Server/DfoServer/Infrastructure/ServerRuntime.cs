@@ -961,12 +961,7 @@ internal static class ServerRuntime
         var startedAt = DateTimeOffset.Now;
         var webReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool rechargeWebAvailable = false;
-        var geometrySignatures = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (string path in towns.GeometryPaths.Concat(towns.Geometry.Paths).Distinct(StringComparer.Ordinal))
-        {
-            var tokens = towns.Geometry.ReadTokens(pvf, path);
-            geometrySignatures.Add(path, GameWorld.Maps.MapGeometrySignature.Compute(path, tokens, pvf.ResolveString));
-        }
+        var geometrySignatures = GameWorld.Maps.MapGeometryCapabilities.Build(pvf, towns.Geometry, towns.GeometryPaths);
         log.Write("startup", new { Stage = "Common map geometry capability", State = "complete", Maps = geometrySignatures.Count });
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
@@ -975,7 +970,8 @@ internal static class ServerRuntime
                 available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
                 error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,
                     Reason = error.GetType().Name, error.Message, Continuing = "Game listeners remain enabled" }),
-                geometry: path => geometrySignatures.GetValueOrDefault(path));
+                geometry: path => geometrySignatures.GetValueOrDefault(path),
+                geometrySnapshot: new MapGeometryHttpSnapshot(geometrySignatures));
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         // 决斗维护也使用此生命周期；关闭两个GM入口时仍须配对及回收预约。
         Func<PacketCapture?, CancellationToken, Task> management = RunManagement;

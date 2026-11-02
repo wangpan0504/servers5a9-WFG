@@ -59,20 +59,21 @@ internal static partial class GmWebServer
 
     public static async Task RunWithRechargeAsync(int port, int rechargePort, IGmWebData data, CancellationToken stop,
         PacketCapture? capture = null, ServerOptions? options = null, Action<bool>? started = null,
-        Action<Exception>? unavailable = null, Func<string, byte[]?>? geometry = null)
+        Action<Exception>? unavailable = null, Func<string, byte[]?>? geometry = null,
+        MapGeometryHttpSnapshot? geometrySnapshot = null)
     {
         bool bound = false;
         try
         {
             await RunCoreAsync(port, rechargePort, data, stop, capture, options,
-                () => { bound = true; started?.Invoke(true); }, clientPages: true, geometry: geometry);
+                () => { bound = true; started?.Invoke(true); }, clientPages: true, geometry: geometry, geometrySnapshot: geometrySnapshot);
         }
         catch (Exception error) when (!bound && !stop.IsCancellationRequested && error is IOException or SocketException)
         {
             // Kestrel绑定失败会释放同一应用的全部端点；仅重新建立独立配置的GM入口，不探测后抢占端口。
             if (port != 0 && port != rechargePort)
                 await RunCoreAsync(port, null, data, stop, capture, options,
-                    () => { unavailable?.Invoke(error); started?.Invoke(false); }, clientPages: true, geometry: geometry);
+                    () => { unavailable?.Invoke(error); started?.Invoke(false); }, clientPages: true, geometry: geometry, geometrySnapshot: geometrySnapshot);
             else
             {
                 unavailable?.Invoke(error);
@@ -84,7 +85,8 @@ internal static partial class GmWebServer
     }
 
     static async Task RunCoreAsync(int port, int? rechargePort, IGmWebData data, CancellationToken stop,
-        PacketCapture? capture, ServerOptions? options, Action? started, bool clientPages = false, Func<string, byte[]?>? geometry = null)
+        PacketCapture? capture, ServerOptions? options, Action? started, bool clientPages = false, Func<string, byte[]?>? geometry = null,
+        MapGeometryHttpSnapshot? geometrySnapshot = null)
     {
         if (port is < 0 or > 65535 || port == 0 && rechargePort is null || rechargePort is < 1 or > 65535)
             throw new InvalidDataException("Invalid GM web port");
@@ -107,6 +109,7 @@ internal static partial class GmWebServer
             MapRecharge(app, data);
             MapClientPages(app);
             MapClientGeometry(app, geometry);
+            MapClientGeometryBatch(app, () => geometrySnapshot);
         }
         if (capture is not null && options is not null)
             MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
@@ -148,7 +151,8 @@ internal static partial class GmWebServer
             {
                 // 防跨站请求：自定义头无法由普通跨站表单带出；Origin 存在时必须与本机 Host 同源。
                 string? origin = context.Request.Headers.Origin;
-                if (context.Request.Headers[recharge ? "X-Recharge-Request" : "X-GM-Request"] != "1" ||
+                bool geometryQuery = clientPages && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == GeometryBatchRoute;
+                if ((!geometryQuery && context.Request.Headers[recharge ? "X-Recharge-Request" : "X-GM-Request"] != "1") ||
                     origin is not null && origin != "http://" + context.Request.Host.Value)
                 {
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
