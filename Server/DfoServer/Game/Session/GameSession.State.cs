@@ -35,6 +35,7 @@ internal sealed partial class GameSession
         }
         if (endingDungeon)
         {
+            CancelHostedDungeonEligibility();
             portableCargo = null;
             formalDungeon?.Run.CancelTagEvildom();
             ReleaseCurrentRaidDungeon();

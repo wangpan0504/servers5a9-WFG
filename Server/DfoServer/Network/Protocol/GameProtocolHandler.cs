@@ -50,6 +50,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null,
     DfoServer.Game.Dungeons.SpringTreasureDropPolicy? springTreasure = null) : IConnectionProtocol
 {
+    DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
+
+    internal void AttachHostedDungeonEligibility(DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? coordinator) =>
+        hostedDungeonEligibility = coordinator;
+
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
     {
@@ -87,6 +92,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure);
+        session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
         context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);

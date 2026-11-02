@@ -198,6 +198,16 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             info.ArgumentList.Add("--dungeon-entry-probe");
             info.ArgumentList.Add(Options.DevelopmentDungeonEntryProbe.ToString());
         }
+        if (Options.EnableHostedDungeonEligibility)
+        {
+            info.ArgumentList.Add("--hosted-dungeon-eligibility");
+            info.ArgumentList.Add("On");
+        }
+        if (!string.IsNullOrWhiteSpace(Options.HostedDungeonEligibilityHost))
+        {
+            info.ArgumentList.Add("--hosted-dungeon-eligibility-host");
+            info.ArgumentList.Add(Options.HostedDungeonEligibilityHost);
+        }
         return info;
     }
 
