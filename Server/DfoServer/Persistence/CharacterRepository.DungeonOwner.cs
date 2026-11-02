@@ -104,6 +104,9 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue,
         DungeonIncountUsage? partyCounted = null)
     {
+        if (charge.RequiredEvent is { } required &&
+            !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
+            throw new DfoServer.Game.Inventory.Models.InventoryEventRejectedException();
         var state = ReservationState(expected, nextObjectKey);
         var identity = charge.Identity;
         if (identity.CharacterId != expected.Id || identity.InstanceId == Guid.Empty || identity.Epoch <= 0 ||

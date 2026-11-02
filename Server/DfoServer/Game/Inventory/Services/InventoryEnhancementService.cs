@@ -28,13 +28,23 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         if (definition is null && request.Mode is EnhancementMode.Amplify or EnhancementMode.Reinforce)
             return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
-        return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition,
+        var now = Clock.GetUtcNow();
+        EnhancementSuccessBonus bonus = default;
+        if (definition.Additional && definition.Level == 1 && definition.Mode != EnhancementMode.RandomReinforce && consumables is not null)
+        {
+            bonus = EnhancementPotionPolicy.ActiveBonus(character.Inventory.ConsumableStates, consumables.EnhancementPotions,
+                definition.Mode == EnhancementMode.Amplify ? EnhancementPotionMode.Amplify : EnhancementPotionMode.Reinforce,
+                now.ToUnixTimeMilliseconds());
+            if (definition.Mode == EnhancementMode.Reinforce)
+                bonus = EnhancementSuccessBonus.Max(bonus, DisguiseUpgradeLuckPolicy.ActiveBonus(character, consumables, now.ToUnixTimeMilliseconds()));
+        }
+        var result = Plan(character, request, now.ToUnixTimeSeconds(), definition,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId),
             () => (random ?? Random.Shared).Next(definition.Mode == EnhancementMode.RandomReinforce ? definition.RandomWeight : 10000), out receipt,
-            guildSuccessPercent, consumables is null ? 0 : EnhancementPotionPolicy.ActiveBonusWeight(
-                character.Inventory.ConsumableStates, consumables.EnhancementPotions,
-                definition.Mode == EnhancementMode.Amplify ? EnhancementPotionMode.Amplify : EnhancementPotionMode.Reinforce,
-                Clock.GetUtcNow().ToUnixTimeMilliseconds()));
+            guildSuccessPercent, bonus.Weight);
+        return result.Plan is not { } plan ? result : result with { Plan = plan.WithAfter(plan.After,
+            new(character, plan.CharacterPrecondition?.QualificationExpiresAt, Clock,
+                qualificationExpiresAtMilliseconds: bonus.QualificationExpiresAtMilliseconds)) };
     }
 
     // 勋章强化：概率与惩罚取flag_upgrade_table目标等级行，材料为公会硬币，

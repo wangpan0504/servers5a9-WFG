@@ -24,6 +24,9 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     ushort Durability, int StackLimit, int Weight, int Rarity, int Grade, string AttachType,
     ushort Jobs, ushort RequiredSkill, string Name, string StackableType = "")
 {
+    public int AntiEvil { get; init; }
+    public bool UsableExpired { get; init; }
+    public ImmutableArray<int> PartSetIds { get; init; } = [];
     public decimal ExperiencePercent { get; init; }
     public ImmutableHashSet<string> ExperienceForbiddenModules { get; init; } = ImmutableHashSet<string>.Empty;
     public bool CreatureEgg { get; init; }

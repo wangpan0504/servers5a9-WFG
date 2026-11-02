@@ -119,9 +119,12 @@ internal static class AntonRaidRejoinTcpTests
         if (!enabled)
         {
             AntonRaidTcpTests.Drain(again);
+            string rejectedState = RejoinState();
             again.Send(668, Build(w => w.Write(key)));
             Bytes(AntonRaidTcpTests.Until(again, 1, 668).Body, [0, 19, 0], "关闭时668仍是原拒绝");
             AssertRejoinClean(fixture, again, "关闭");
+            That(RejoinState() == rejectedState,
+                "关闭重入及未授权选图不改变完整角色、库存、审计、奖励回执、团本Run或副本尝试");
             await fixture.StopAsync();
             var events = CompleteEvents(logs);
             That(!events.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_notice"), "开关关闭不在重登后下发835");
@@ -185,6 +188,10 @@ internal static class AntonRaidRejoinTcpTests
                 entry.GetProperty("Runs")[0].GetGuid() == restored.GetProperty("Run").GetGuid(),
                 "恢复日志与真实入场日志的Battle/Run GUID完全相同，没有另建实例");
         }
+
+        string RejoinState() => fixture.Snapshot() + RejoinAssets() +
+            fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2") +
+            fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY 1");
 
         string RejoinAssets() => fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY character_id,item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
@@ -260,11 +267,15 @@ internal static class AntonRaidRejoinTcpTests
         again.Send(833, Build(w => { w.Write((byte)0); w.Write(0u); w.Write(0x100u); w.Write(0u); w.Write(Name("")); }));
         That(AntonRaidTcpTests.Until(again, 0, 756).Body.Length >= 12, why + " 时重连后仍能 833 寻找队");
         again.Send(15, new byte[4]);
-        Bytes(AntonRaidTcpTests.Until(again, 1, 15).Body, [1], why + " 时同角色仍能打开候战室选图");
-        AntonTcpProbe.Barrier(again, "重连后选图");
-        again.Send(132);
-        Bytes(AntonRaidTcpTests.Until(again, 1, 132).Body, [1], why + " 时同角色仍能退出选图回城");
-        AntonTcpProbe.Barrier(again, "重连后回城");
+        var rejected = AntonTcpProbe.Barrier(again, "未恢复原团的选图拒绝");
+        var acknowledgements = rejected.Where(packet => packet is { Kind: 1, Opcode: 15 }).ToArray();
+        That(acknowledgements.Length == 1, why + " 时未授权选图恰有一次拒绝应答");
+        Bytes(acknowledgements[0].Body, [0, 1, 0], why + " 时未恢复原Battle，选图沿原门禁精确拒绝");
+        That(rejected.All(packet => packet is not { Kind: 0, Opcode: 3 or 23 or 24 or 27 or 28 or 29 or 30 or
+                585 or 586 or 587 or 594 or 600 or 601 } && packet is not { Kind: 1, Opcode: 16 or 666 }),
+            why + " 时拒绝前后不发布选图、场景、Run、开战或奖励成功通知");
+        // 有授权的同角色正控保留在enabled分支：原668恢复后再次参加原分队15选图。
+        // 正式新团664/669/666后的15/132与不扣票合同由AntonRaidTcpTests.Start覆盖。
     }
 
     static string? LastReason(JsonElement[] events, string kind) => events.Last(row => row.GetProperty("Kind").GetString() == kind)

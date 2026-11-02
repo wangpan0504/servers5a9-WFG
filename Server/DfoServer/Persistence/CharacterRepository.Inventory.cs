@@ -325,8 +325,8 @@ internal sealed partial class CharacterRepository
         if (plan.RequiredEvent is { } requiredEvent &&
             !requiredEvent.Matches(ServerEventRepository.Read(db, transaction, requiredEvent.Schedule.EventId)))
             throw new InventoryEventRejectedException();
-        // 礼堂实例是本次选角的临时场景身份，重读资产不能将它丢掉；不写入角色存档。
-        current = current with { WeddingHall = expected.WeddingHall };
+        // 礼堂及变身属于本次选角的临时状态，重读资产须保留原身份和期限；不写入角色存档。
+        current = current with { WeddingHall = expected.WeddingHall, Disguise = expected.Disguise };
         if (plan.CharacterPrecondition?.IsExpired() == true)
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)

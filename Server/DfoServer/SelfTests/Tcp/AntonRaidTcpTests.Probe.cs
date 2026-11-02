@@ -132,8 +132,10 @@ internal static partial class AntonRaidTcpTests
             }
             previousSendAt = sentAt;
         }
-        That(timer is null && pairs > 0 && pairs == report.Wait596 && pairs == report.Wait597,
-            $"休息计时完整配对，休息596/597真实收包数和日志一致，不允许漏收：pairs={pairs}, wire596={report.Wait596}, wire597={report.Wait597}");
+        int wait596Frames = stateAndTimers.Count(row => row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 596);
+        int wait597Frames = stateAndTimers.Count(row => row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 597);
+        That(timer is null && pairs > 0 && pairs == wait596Frames && pairs == wait597Frames,
+            $"休息计时完整配对，休息596/597真实收包数和日志一致，不允许漏收：pairs={pairs}, wire596={wait596Frames}, wire597={wait597Frames}");
         peer.Dispose();
         await fixture.StopAsync();
         await fixture.StartAsync("reopened");

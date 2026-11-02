@@ -18,6 +18,7 @@ internal static class ConsumableUseTests
 
     public static void RunCore()
     {
+        RandomDisguiseRepeatedStackLimit();
         BossSelectionMappings();
         EpicDropMappings();
         HellLegendMappings();
@@ -45,9 +46,11 @@ internal static class ConsumableUseTests
         }
         byte[] body = [65, 0, 0, 0xEF, 0xCD, 0xAB, 0x89, 0x54, 4, 0, 0, 0, 0, 0, 0];
         var request = ConsumableUseRequests.Read(body);
-        var disguiseRequest = ConsumableDisguiseRequests.Read([1,60,0,0,0,0x42,0x5b,0x9d,0]);
-        That(disguiseRequest is { Type: 1, Seconds: 60, ItemId: 10312514 },
-            "211按9B保留类型、秒数和源物品模板，形态ID不在请求中");
+        // ARAD 02E5127E..02E512C7原生producer：monster=2，形态63039，源药剂10312386。
+        var (disguiseType, disguiseFormId, disguiseItemId) =
+            ConsumableDisguiseRequests.Read([2,0x3F,0xF6,0,0,0xC2,0x5A,0x9D,0]);
+        That((disguiseType, disguiseFormId, disguiseItemId) == ((byte)2, 63039, 10312386),
+            "211独立9B金值保留wire类型、形态ID与源模板，持续秒数不在请求中");
         foreach (int length in new[] {0,8,10})
             Reject<InvalidDataException>(() => ConsumableDisguiseRequests.Read(new byte[length]),"211拒绝截断及未知尾");
         ConsumableDisguiseRequests.Cancel([]);
@@ -277,8 +280,11 @@ internal static class ConsumableUseTests
             potential is { CoolTime: 60000, CoolGroup: 10, EffectMilliseconds: 60000 },
             "潜能药按原生持续属性使用分支保留团队及引导35图、60秒持续和组10冷却");
         That(resources.RecoveryConsumables.TryGet(10312386, out var orc) &&
-            orc is { CoolTime: 60000, Disguise: { Type: 1, FormId: 63039, Seconds: 60 }, AllowedDungeons: null },
+            orc is { CoolTime: 60000, Disguise: { Type: 2, FormId: 63039, Seconds: 60 }, AllowedDungeons: null },
             "兽人药从真实资源解析城镇怪物形态和时长，44扣药后仍须211兑现，不借属性药分支伪造效果");
+        That(resources.RecoveryConsumables.TryGet(490013028, out var randomCos) &&
+            randomCos is { CoolTime: 10000, CoolGroup: -490013028, CooltimeMaintenance: 0, Unlimited: true, Disguise: { Type: 2 }, AllowedDungeons: null },
+            "惊喜COS装扮按真实random disguise资源保留直接211资格、模板默认独立组的10秒会话冷却及顶层免耗声明，完整九形态由TCP验证");
         var mentalUse = new InventoryConsumableUseService(resources.RecoveryConsumables);
         foreach (var (id, group, milliseconds) in new[]
         {
@@ -495,6 +501,27 @@ internal static class ConsumableUseTests
                     "全部活动防虚弱使用各自九分钟、十分钟、十五分钟、三十分钟或一小时原期限：" + id);
         That(!ConsumableSpecialItems.IsStaminaRecovery(490003620) && !ConsumableSpecialItems.IsStaminaRecovery(490000413),
             "邻接编号和史诗药不能借固定防虚弱清单取得免虚弱资格");
+    }
+
+    static void RandomDisguiseRepeatedStackLimit()
+    {
+        string[] strings = ["[stackable type]","[random disguise]","[stack limit]","[string data]",
+            "monster","[/string data]","[int data]","[/int data]","[unlimited waste]"];
+        RecoveryConsumableFile Read(params PvfToken[] secondLimit) => RecoveryConsumableFile.Parse(490013028,
+            "stackable/synthetic-cos.stk", [new(3,0),new(6,1),new(0,0),new(3,2),new(0,1),
+                new(3,2),..secondLimit,new(3,3),new(6,4),new(3,5),new(3,6),new(0,58026),new(0,300),
+                new(3,7),new(3,8),new(0,1)], id=>strings[id]);
+        var complete = Read(new PvfToken(0,1));
+        That(complete.Diagnostics.IsEmpty && complete.Stackable.DeclaredStackLimit is null &&
+            complete.Stackable.UnsupportedFields.Contains("stack limit"),
+            "真实COS重复stack limit1/1在恢复目录兼容，通用StackableFile仍保留严格重复诊断与空上限");
+        That(RecoveryConsumableCatalog.Read(complete) is
+            { Unlimited: true, Disguise: { Type: 2, FormId: 58026, Seconds: 300 } },
+            "monster声明映射原生Actor类型2的Monster.lst，不能送入类型1的NPC资源链");
+        foreach (var invalid in new PvfToken[][] { [],[new(0,2)],[new(0,0)],[new(0,-1)],
+            [new(6,4)],[new(0,1),new(0,1)] })
+            That(!Read(invalid).Diagnostics.IsEmpty,
+                "重复堆叠上限冲突、空值、坏类型或非完整标量继续拒绝，不能只取某个合法值");
     }
 
     static void BossSelectionMappings()

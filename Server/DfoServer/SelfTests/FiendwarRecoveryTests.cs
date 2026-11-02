@@ -34,6 +34,7 @@ internal static partial class FiendwarRecoveryTests
         var owners = new AccountOwners(); var leases = new List<AccountOwners.Lease>();
         var sessions = new List<GameSession>(); var actors = new List<RaidActor>();
         var registry = new RaidRegistry(); var now = DateTimeOffset.Parse("2026-11-01T04:00:00Z");
+        var clock = new LukeRaidClockTests.Clock(now);
         var definition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items).Find(2)!;
         // 合成双份费用只用于覆盖多格原票，不改正式资源或正式入场数量。
@@ -52,7 +53,7 @@ internal static partial class FiendwarRecoveryTests
                     .Add(paid with { Uid = 0, Position = paid.Position with { Index = checked((short)(paid.Position.Index + 1)) },
                         Core = paid.Core with { Value = 1, ExpireTime = checked((int)now.AddDays(2).ToUnixTimeSeconds()), TradeRestriction = 1 } });
                 InventoryService.Commit(repository, lease, role, new(true, 0, new(role.Inventory, role.Inventory with { Items = split }, "fixture_split_original_tickets")));
-                var session = Session(repository, lease, resources);
+                var session = Session(repository, lease, resources, clock);
                 sessions.Add(session); actors.Add(session.CaptureRaidActor(registry)!);
             }
             That(registry.Create(actors[0], 2, "Recovery", "Recovery"u8.ToArray(), 8) is not null, "恢复SQL夹具沿原目录建团");
@@ -78,7 +79,7 @@ internal static partial class FiendwarRecoveryTests
             repository.RecordFiendwarDeparture(actors[3], instance, now);
             repository.RecordFiendwarDeparture(actors[4], instance, now.AddSeconds(300));
             var replacementLease = owners.Acquire(actors[4].Owner.Account, () => { }); leases.Add(replacementLease);
-            var replacementSession = Session(repository, replacementLease, resources); sessions.Add(replacementSession);
+            var replacementSession = Session(repository, replacementLease, resources, clock); sessions.Add(replacementSession);
             var replacement = replacementSession.CaptureRaidActor(new RaidRegistry())!;
             That(repository.ChangeFiendwarRejoin(actors[4], replacement, instance, now), "合法重返CAS原代次并绑定新owner");
             That(repository.ChangeFiendwarRejoin(actors[4], replacement, instance, now, undo: true), "安装失败可归还原断线资格");
@@ -141,10 +142,10 @@ internal static partial class FiendwarRecoveryTests
         { using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
     }
 
-    static GameSession Session(CharacterRepository repository, AccountOwners.Lease lease, TcpTestResources resources)
+    static GameSession Session(CharacterRepository repository, AccountOwners.Lease lease, TcpTestResources resources, TimeProvider? clock = null)
     {
         var session = new GameSession(repository, resources.Towns, lease, questCatalog: resources.Quests,
-            entry: new(new(2, 39), 45, "[raid]"));
+            entry: new(new(2, 39), 45, "[raid]"), timeProvider: clock);
         session.Select(0); session.MarkReady(); return session;
     }
 

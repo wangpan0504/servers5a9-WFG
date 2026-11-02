@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
@@ -16,7 +17,7 @@ internal static class OfflineBookPreparation
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public static void Run(ServerOptions options, CharacterCatalog characters, TownCatalog towns,
-        CharacterRepository repository, string[] arguments)
+        CharacterRepository repository, SkillLearningCatalog learning, CharacterGrowthCatalog growth, string[] arguments)
     {
         if (!byte.TryParse(arguments[0], NumberStyles.None, CultureInfo.InvariantCulture, out byte job) || job > 15)
             throw new InvalidDataException("职业必须是0–15");
@@ -42,8 +43,13 @@ internal static class OfflineBookPreparation
             new AuthenticationService(credentials).Create(account, LoginCredentials.DevelopmentDigest);
         var profile = characters.Get(job);
         // 收藏簿按职业+分支入册；二觉写高半字节2，等级与接受剧情等级和现有95级角色一致。
-        NewCharacter creation = CharacterCreation.Prepare(name, profile, towns.Room, towns.InitialReturn, null)
+        NewCharacter creation = CharacterCreation.Prepare(name, profile, towns.Room, towns.InitialReturn, learning.Get)
             with { GrowType = checked((byte)(branch | 0x20)), Level = 95, AcceptedStoryLevel = 95 };
+        creation = creation with { InitialLearning = SkillPointLedger.Synchronize(job, creation.GrowType, 95,
+            creation.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, learning) };
+        creation = creation with { Skills = creation.InitialLearning.Trees.Single(tree =>
+            tree.Context == creation.InitialLearning.ActiveContext).Skills.OrderBy(skill => skill.Id)
+            .Select(skill => new CharacterSkill(skill.Id, skill.Level)).ToArray() };
         Directory.CreateDirectory(audit);
         File.WriteAllText(Path.Combine(audit, "intent.json"), JsonSerializer.Serialize(new
         {
@@ -65,6 +71,7 @@ internal static class OfflineBookPreparation
         Character persisted = repository.List(owner).Single(value => value.Id == created.Id);
         if (persisted.Name != name || persisted.Job != job || persisted.GrowType != creation.GrowType ||
             persisted.Level != 95 || persisted.AcceptedStoryLevel != 95 ||
+            !persisted.Learning.Initialized || persisted.Learning.Experience != growth.GetLevelStartExperience(95) ||
             !persisted.Skills.SequenceEqual(creation.Skills))
             throw new InvalidDataException("创建后读取的角色与请求不一致");
         File.WriteAllText(Path.Combine(audit, "committed.json"),

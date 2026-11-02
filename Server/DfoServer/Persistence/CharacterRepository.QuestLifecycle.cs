@@ -74,6 +74,9 @@ internal sealed partial class CharacterRepository
                 return new QuestLifecycleCommit(current, plan, true, projectionCurrent);
             }
         }
+        if (plan.RequiredEvent is { } required &&
+            !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
+            throw new InvalidOperationException("任务活动计划的原时间表已变化或已停用");
         VerifyQuestPvpRating(db,tx,owner.Account,expected.Id,plan.PvpRating);
         if (current.Id != expected.Id || current.Revision != expected.Revision || current.Level != expected.Level ||
             current.Job != expected.Job || current.GrowType != expected.GrowType || current.Position != expected.Position ||

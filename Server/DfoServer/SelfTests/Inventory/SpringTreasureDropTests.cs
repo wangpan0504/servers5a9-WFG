@@ -97,6 +97,7 @@ internal static class SpringTreasureDropTests
             definition with { WarriorsDungeon = "Tayberrs" }, definition with { Path = "dungeon/towers/test.dgn" },
             definition with { RawSections = [new("evildom war dungeon", [])] },
             definition with { RawSections = [new("warriors dungeon", [])] },
+            definition with { RawSections = [new("disable drop item", [])] },
             definition with { RawSections = [new("operation hope dungeon", [new(0, 1)])] },
             definition with { RawSections = [new("cosmo dungeon", [])] } })
             That(!SpringTreasureDropPolicy.IsPotential(excludedDefinition, entry) &&

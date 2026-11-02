@@ -688,7 +688,7 @@ internal static partial class SessionPlanningTests
 
         public void Sql(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True;Pooling=False");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -697,7 +697,7 @@ internal static partial class SessionPlanningTests
 
         public object? Scalar(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True;Pooling=False");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -706,7 +706,7 @@ internal static partial class SessionPlanningTests
 
         public string Rows(string sql)
         {
-            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True");
+            using var db = new SqliteConnection("Data Source=" + Database + ";Foreign Keys=True;Pooling=False");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = sql;
@@ -723,7 +723,7 @@ internal static partial class SessionPlanningTests
 
         string[] Tables()
         {
-            using var db = new SqliteConnection("Data Source=" + Database);
+            using var db = new SqliteConnection("Data Source=" + Database + ";Pooling=False");
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
@@ -733,20 +733,25 @@ internal static partial class SessionPlanningTests
             return tables.ToArray();
         }
 
-        // 快照逐表各开一次连接；夹具辅助连接走连接池，免去每表重开文件与重解析整套结构。
-        // 夹具 Dispose 经 TestFiles 删目录前释放池句柄。
+        // 辅助连接不入池，避免清理临时目录的句柄异常掩盖业务断言。
         public string Snapshot() => Scalar("PRAGMA user_version") + ":" +
             Rows("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name") + ":" +
             string.Join('|', Tables().Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid")));
 
-        public string SharedSnapshot() => string.Join('|', Tables().Where(table => table.StartsWith("account", StringComparison.Ordinal) &&
+        // 两表虽带character_前缀，仍是按账号保留的完成/额度事实，不随收件角色删除。
+        static bool RetainedStrongway2019AccountFact(string table) => table is
+            "character_strongway2019_completions" or "character_strongway2019_match_facts";
+
+        public string SharedSnapshot() => string.Join('|', Tables().Where(table => (table.StartsWith("account", StringComparison.Ordinal) ||
+            RetainedStrongway2019AccountFact(table)) &&
             table != "account_completed_quests").Select(table => Rows("SELECT rowid,* FROM \"" + table + "\" ORDER BY rowid"))) +
             Rows("SELECT rowid,account,quest_id,acceptance_id,daily_period,answer FROM account_completed_quests ORDER BY rowid") +
             Rows("SELECT * FROM character_inventory_items WHERE character_id IS NULL ORDER BY item_uid") +
             Rows("SELECT * FROM character_inventory_slots WHERE character_id IS NULL ORDER BY item_uid") +
             Rows("SELECT * FROM shop_purchase_counts WHERE character_id=0 ORDER BY rowid");
 
-        public long[] PrivateRows(ushort id) => Tables().Where(table => table.StartsWith("character_", StringComparison.Ordinal))
+        public long[] PrivateRows(ushort id) => Tables().Where(table => table.StartsWith("character_", StringComparison.Ordinal) &&
+            !RetainedStrongway2019AccountFact(table))
             .Select(table => Convert.ToInt64(Scalar("SELECT count(*) FROM \"" + table + "\" WHERE " +
                 (table == "character_social_links" ? "owner_id=" + id + " OR target_id=" : "character_id=") + id))).ToArray();
 
@@ -912,7 +917,19 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
                 INSERT INTO character_prey_normal_progress VALUES({{id}},'planning',20261031,3,4);
                 INSERT INTO character_anton_normal_progress VALUES({{id}},'planning',20261031,3,4);
+                INSERT INTO character_strongway2019_statistics VALUES('planning',{{id}},'abcdef1234567890abcdef1234567890',1,1,5359,0,1000,'{}');
+                INSERT INTO account_strongway2019_rewards VALUES('planning','abcdef1234567890abcdef1234567890',{{id}},1,1,5359,0,20261102,20261028,1,'{}','{}',1);
+                INSERT INTO character_strongway2019_completions(account,instance_id,character_id,task_attempt,run_epoch,
+                  dungeon_id,bucket,day,week,created_at,reward_json,fact_json,state,mail_id)
+                  VALUES('planning','10000000000000000000000000000001',{{id}},2,1,5359,0,20261102,20261028,1,'{}','{}',2,NULL);
+                INSERT INTO character_strongway2019_match_facts(account,character_id,instance_id,competition_id,bucket,
+                  day,week,created_at,state,snapshot_json)
+                  VALUES('planning',{{id}},'10000000000000000000000000000002','10000000000000000000000000000003',1,
+                    20261102,20261028,1,0,'{}');
                 """);
+            TestCheck.That(Scalar("SELECT count(*) FROM character_strongway2019_completions WHERE account='planning' AND character_id=" + id) is 1L &&
+                Scalar("SELECT count(*) FROM character_strongway2019_match_facts WHERE account='planning' AND character_id=" + id) is 1L,
+                "删除夹具同时保存额度已满完成和未消费匹配权益，由共享快照核对删角及重建后保留");
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }
 

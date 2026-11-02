@@ -1,3 +1,4 @@
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection;
@@ -5,7 +6,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class ConsumableDisguiseHandler(TownProjection town, ServerLog log, TimeProvider? time = null) : IGameCommandModule
+internal sealed class ConsumableDisguiseHandler(TownProjection town, ServerLog log, InventoryConsumableUseService consumables, TimeProvider? time = null) : IGameCommandModule
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
 
@@ -18,10 +19,12 @@ internal sealed class ConsumableDisguiseHandler(TownProjection town, ServerLog l
     async Task<CommandResult> Apply(GameConnectionContext context, Packet packet)
     {
         var request = ConsumableDisguiseRequests.Read(packet.Body);
-        var result = context.Session.ApplyConsumableDisguise(request.Type, request.Seconds, request.ItemId,
-            clock.GetUtcNow().ToUnixTimeMilliseconds(), context.BlocksTownActions);
+        var result = context.Session.ApplyConsumableDisguise(request.Type, request.FormId, request.ItemId,
+            clock.GetUtcNow().ToUnixTimeMilliseconds(), context.BlocksTownActions) ??
+            context.Session.ApplyUnlimitedRandomDisguise(request.Type, request.FormId, request.ItemId,
+                consumables, context.BlocksTownActions);
         log.Write("consumable_disguise", new { Connection = context.Id, request.ItemId, Accepted = result is not null,
-            Character = result?.Character.Id, Reason = result is null ? "no_matching_committed_use" : "activated" });
+            Character = result?.Character.Id, Reason = result is null ? "no_matching_disguise_authorization" : "activated" });
         if (result is not null) await ConsumableDisguiseProjection.PublishAsync(context, town, result, clock);
         // 已证的消费者为USERINFO Actor，不为没有原生ACK合同的211制造成功包。
         return CommandResult.Handled;

@@ -201,13 +201,31 @@ internal static class LukeRaidRejoinTests
             That(parties.Current(allBack[0].Session) is { Members.Length: 3 } recreated &&
                 allBack.All(actor => parties.Current(actor.Session)?.Id == recreated.Id),
                 "首位重返重建分队，其余成员汇合而非另建平行分队");
+            // 第299秒恢复后保持在线跨过原第300秒，真实触发候选清理与重返幂等入口。
+            clock.Advance(1);
+            That(allBack.All(actor => records.Peek(actor.Character) is { LukeDeadlineAnchor: null } &&
+                recovery.Restore(actor, leaderFact.Key).Reason == "already-bound") &&
+                raids.Find(allBack[0]) is { Members.Length: 3 },
+                "在线重返跨原300秒后仍绑定原团，旧断线截止不能清除已绑定候选");
+            var onlineParty = parties.Current(allBack[0].Session)!;
+            var onlineLeader = onlineParty.Members.Single(member => member.Slot == onlineParty.Leader).Actor.Session;
+            That(selection.Select(onlineLeader, 10, onlineParty).Length == 3 &&
+                allBack.All(actor => actor.Session.HasLukeRaidSelection),
+                "跨原断线截止后原分队仍能实际选图，不能只保留名册或候选");
+            That(selection.CancelSelection(onlineLeader, parties.Current(onlineLeader)), "跨旧截止后的选图仍可正常取消");
             foreach (var disconnect in allBack)
             {
                 var reserved = recovery.Capture(disconnect)!;
+                That(reserved is { LukeDeadlineAnchor: { } anchor } && clock.GetElapsedTime(anchor) == TimeSpan.Zero,
+                    "再次断线捕获当前新锚点，不复用已过期的首次断线锚点");
                 disconnect.Session.End(); parties.Detach(disconnect.Session); disconnect.Owner.Dispose();
                 That(recovery.RecordDisconnected(reserved), "重返后再次断线以本次离线重新计五分钟");
             }
-            clock.Advance(300);
+            clock.Advance(299);
+            That(allBack.All(actor => records.Peek(actor.Character) is { LukeDeadlineAnchor: not null }) &&
+                raids.Find(leaderFact.Key, leaderFact.Channel) is { Members.IsEmpty: true },
+                "再次离线未重返者在新锚点299秒仍保留原预约和空团");
+            clock.Advance(1);
             That(records.Peek(fresh.Character) is null && raids.Count == 0,
                 "恰好五分钟原预约及空团回收，不可用历史key复活实例");
             // 同一数据库第二次真实开团，独立于上面的仍Fighting末成员清理竞态。

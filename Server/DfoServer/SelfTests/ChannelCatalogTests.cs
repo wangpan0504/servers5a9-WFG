@@ -65,10 +65,14 @@ internal static class ChannelCatalogTests
                 ChannelPackets.LoginChannelType(embedded.Entry(51)) == 4 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(51)))[3] == 4,
                 "普通决斗场使用原生51/type4与已有新手名称键，追加末尾且LOGIN保留实际类型");
-            That(embedded.Channels[^1] == new ChannelDefinition(55, "<channel_info_cname_505>", 13, "[pvp]") &&
+            That(embedded.Channels.Single(row => row.Number == 55) == new ChannelDefinition(55, "<channel_info_cname_505>", 13, "[pvp]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(55)) == 13 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 13,
                 "自由练习场追加本服55/type13（新版集成自由练习场），使用自由练习名称且LOGIN保留真实类型");
+            That(embedded.Channels[^1].Number == 50 && embedded.Channels[^1].Type == 55 &&
+                embedded.Channels[^1].NameReference == "<chn_channel_info_059>" &&
+                ChannelPackets.LoginChannelType(embedded.Entry(50)) == 55,
+                "强者之路追加独立50号/type55原生入口，使用本版名称059并保留既有频道端口顺序");
             foreach (int number in new[] { 101, 47, 51, 55 })
             {
                 string channelRow = embedded.SourceText.Split('\n').Single(line => line.StartsWith(number + " ", StringComparison.Ordinal));
@@ -100,6 +104,13 @@ internal static class ChannelCatalogTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         var catalog = ChannelCatalog.Parse(source);
+        foreach (var (type, expected) in new (int Type, byte Expected)[] { (22, 22), (54, 54), (55, 55), (56, 0), (57, 0) })
+        {
+            byte loginType = ChannelPackets.LoginChannelType(new(new(2, 10), type, "[granfloris]"));
+            byte[] endpoint = ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: loginType);
+            That(loginType == expected, $"LOGIN类型投影保留CHANNEL_DPL_PVE 55及既有类型边界：type{type}");
+            That(endpoint[3] == expected, $"ACK LOGIN正文模式字段发送真实频道类型且不扩大白名单：type{type}");
+        }
         foreach (int pvpType in new[] { 4, 5, 8, 13, 24 })
             That(!ChannelAreaLanding.SameSnapshotPredicates(22, pvpType) &&
                 !ChannelAreaLanding.SameSnapshotPredicates(pvpType, 22) &&
@@ -108,6 +119,10 @@ internal static class ChannelCatalogTests
                 "决斗入口独立于普通快照且直接入城，决斗入口之间可保留决斗地区");
         That(ChannelAreaLanding.SameSnapshotPredicates(53, 53) && !ChannelAreaLanding.SameSnapshotPredicates(22, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
+        That(ChannelAreaLanding.SameSnapshotPredicates(55, 55), "强者之路同类型频道保留城镇快照");
+        foreach (int type in new[] { 22, 54, 39, 53 })
+            That(!ChannelAreaLanding.SameSnapshotPredicates(55, type) && !ChannelAreaLanding.SameSnapshotPredicates(type, 55),
+                $"原生vt+48独立比较强者之路55，进出type{type}不保留城镇快照");
         That(!ChannelAreaLanding.SameSnapshotPredicates(22, 56) && !ChannelAreaLanding.SameSnapshotPredicates(56, 22) &&
             ChannelAreaLanding.SameSnapshotPredicates(56, 56), "五陵补丁独立比较类型，普通互换不保留快照，同类型仍保留");
         foreach (int type in new[] { 11, 22, 56, 24, 39, 53, 54, 32 })

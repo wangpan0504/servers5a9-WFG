@@ -9,12 +9,16 @@ using DfoServer.Network.Protocol;
 using DfoServer.Infrastructure;
 using DfoServer.Game.Marriage;
 using DfoServer.Network.Projection;
+using DfoServer.Game.Events;
+using DfoServer.Game.Strongway2019;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection,
     ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null,
-    PromotionPageProjection? promotionPage = null, TownProjection? nativePromotionTown = null) : IGameCommandModule
+    PromotionPageProjection? promotionPage = null, TownProjection? nativePromotionTown = null,
+    ServerEventService? serverEvents = null, NpcShopCatalog? strongwayShops = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -97,6 +101,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         MarriageRecord? marriage = null;
         InventoryResult result;
         if (context.Activity?.BlocksTownActions == true) result = InventoryResult.Reject(17);
+        else if (Strongway2019ShopRules.Handles(request.ShopId))
+            result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
+                context.Session.PlanAndCommitStrongway2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);
         else if (marriageShop?.Handles(request.ItemId) == true)
         {
             result = InventoryResult.Reject(17);

@@ -8,6 +8,7 @@ internal readonly record struct RandomOption(byte Type, byte Value1, byte Value2
 // 尚未恢复效果语义的字段保留独立类型；普通创建置零，移动和保存必须完整保留。
 internal readonly record struct ItemExtension(byte Flag, uint Value);
 internal sealed record EpicExchangeOrigin(int Version, int SourceItemId);
+internal sealed record Strongway2019FrameOrigin(int Version);
 
 internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
 {
@@ -59,6 +60,9 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     public bool IsRental { get; init; }
     // 服务端装备实例来源；旧 JSON 为 null，不从模板或未知 wire 位推断。
     public EpicExchangeOrigin? EpicExchangeOrigin { get; init; }
+    // 仅本活动新兑换的316及其真实318奖励携带；不占用客户端核心字段。
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Strongway2019FrameOrigin? Strongway2019FrameOrigin { get; init; }
     // 礼包创建时写入的服务端实例限制；旧实例不按模板反推，不占未知客户端位。
     public bool DisjointForbidden { get; init; }
     public bool DestructionSoulForbidden { get; init; }
@@ -75,6 +79,8 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
             Kind != ItemKind.Creature && SealFlag > 1 || Chronicle0.Id == 0 && Chronicle1.Id != 0 ||
             Random0.Type == 0 && (Random1.Type != 0 || Random2.Type != 0) || Random1.Type == 0 && Random2.Type != 0 ||
             EpicExchangeOrigin is { } origin && (Kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0) ||
+            Strongway2019FrameOrigin is { } frameOrigin && (frameOrigin.Version != 1 || Kind != ItemKind.Consumable ||
+                ItemId is not (490013316 or 490013318)) ||
             DisjointForbidden && Kind != ItemKind.Equipment || DestructionSoulForbidden && !DisjointForbidden)
             throw new InvalidDataException("无效物品核心");
         if (Kind == ItemKind.Talisman)

@@ -115,6 +115,7 @@ internal static class ChannelAreaLandingTests
         using var owner = new AccountOwners().Acquire("channel-landing", () =>
         {
         });
+        RunStrongway2019(towns, repo, owner);
         var created = repo.Create(owner, new("Landing", towns.Room, towns.InitialReturn));
         var placed = CharacterSelection.Prepare(repo, owner, created, towns, none, null, false, null, channel: elven);
         That(placed.Position == towns.Room, "频道选角先进赛丽亚房间（艾尔文频道）");
@@ -354,7 +355,7 @@ internal static class ChannelAreaLandingTests
         // 47=决斗场无双频道（type 8，33f95e72 接入）、48=帝国竞技场（type 39）同属按频道落点出门，不随普通频道回记住地区。
         // 决斗场普通入口按客户端 etc/pvpchannellist.etc 登记为 101（原 40 已不存在），特殊出口清单随目录取号。
         // 55=自由练习频道（type 5，dc3f551b 接入；222cd1db 起 LOGIN 保留新版 type13），同属决斗类频道，房间出口不随普通频道回记住地区。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 51, 55 };
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 55 };
         That(script.Channels.All(row => row.Number != 49 && row.Type != 40), "退役频道不再发布");
         var retiredEntry = new ChannelEntry(new(2,49),40,"[beast]");
         That(ChannelAreaLanding.Decide(towns,retiredEntry,95,new HashSet<int> {5927}).Spot is null,
@@ -381,6 +382,76 @@ internal static class ChannelAreaLandingTests
                 : $"LAND {row.Number} type {row.Type} {row.Group} {decision.Spot.Town}/{decision.Spot.Area} {decision.Spot.X},{decision.Spot.Y} reason {decision.Reason}");
         }
         Console.WriteLine($"PASS {Count - before} 频道落点断言");
+    }
+
+    static void RunStrongway2019(TownCatalog towns, CharacterRepository repo, AccountOwners.Lease owner)
+    {
+        int before = Count;
+        var none = new HashSet<int>();
+        // 这里只验证真实type55；频道编号与分组不作为城镇路由依据。
+        var strongway = new ChannelEntry(new(2, 155), 55, "[none]");
+        var ordinary = new ChannelEntry(new(2, 1), 22, "[elven_guard]");
+        var gateRoom = new Location(65, 0, 0, 0);
+        var gate = towns.Areas[(65, 0)].Map(none);
+        var main = towns.Areas[(65, 1)];
+        That(gate.IsRoom && gate.Path.EndsWith("event/dpl/gate_fiend.map", StringComparison.OrdinalIgnoreCase) &&
+            gate.Links.Any(link => link.Town == 65 && link.Area == 1),
+            "首期65/0由Gate_Fiend导入赛丽亚房间，保留本地65/1出口");
+        That(main.DungeonWorldMap == 78 && !main.Map(none).IsRoom &&
+            main.Map(none).Npcs.Any(npc => npc.Id == 400001052),
+            "首期65/1是真实worldmap78主城并有卡西利亚斯返回NPC");
+        var street = towns.Entrance(gateRoom, new(65, 1, 0, 0), none)
+            ?? throw new InvalidDataException("首期主城缺少可解析的本地房间门口");
+        That(street is { Town: 65, Area: 1 } && towns.IsPosition(street, none) && !towns.IsRoom(street, none),
+            "首期主城落点由TownCatalog按真实门计算，不猜坐标");
+        That(towns.DestinationAdmission(street, 94, none) != "ready" &&
+            towns.DestinationAdmission(street, 95, none) == "ready",
+            "首期城镇95级边界来自地区资源，不追加会面任务门禁");
+
+        var high = repo.Create(owner, new("Strong95", towns.Room, towns.InitialReturn) { Level = 95 });
+        var selected = CharacterSelection.Prepare(repo, owner, high, towns, none, null, channel: strongway);
+        That(!ChannelAreaLanding.LandsInChannelTown(strongway) && towns.Room is { Town: 38, Area: 1 } &&
+            selected.Position == towns.Room && selected.Return == towns.InitialReturn,
+            "type55初次选角仍为38/1共享房间，不直接出生65或污染普通返回地区");
+        var exit = TownTravel.LeaveRoom(selected, towns, none, strongway);
+        That(exit.Accepted && exit.Position == street && exit.Return == towns.InitialReturn &&
+            ChannelAreaLanding.RoomExit(towns, strongway, towns.Room, 95, none) == street,
+            "type55共享房间一次出门直达65/1可站主城，不能二次进入65/0房间");
+
+        var low = repo.Create(owner, new("Strong94", towns.Room, towns.InitialReturn) { Level = 94 });
+        var lowSelected = CharacterSelection.Prepare(repo, owner, low, towns, none, null, channel: strongway);
+        var lowExit = TownTravel.LeaveRoom(lowSelected, towns, none, strongway);
+        That(lowSelected.Position == towns.Room && ChannelAreaLanding.RoomExit(towns, strongway, towns.Room, 94, none) is null &&
+            lowExit.Position is { Town: not 65 } && lowExit.Return == towns.InitialReturn,
+            "94级不准通过共享房间进入首期城镇，普通返回地区不变");
+        That(towns.DefaultReturn(gateRoom, none) == street,
+            "65/0的本地出口优先返回65/1，不被导入房间的普通出口带走");
+        That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, ordinary, street) &&
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, strongway, street),
+            "无进程频道历史时，65号存档只在type55保留快照，不能留在type22");
+
+        var saved = repo.Save(owner, selected, street, towns.InitialReturn);
+        var ordinarySession = new GameSession(repo, towns, owner, entry: ordinary);
+        ordinarySession.Select(saved.Slot, resumeTown: true);
+        var returned = ordinarySession.Selected!;
+        That(!ordinarySession.TownSnapshotResumed && returned.Position == towns.Room && returned.Return == towns.InitialReturn,
+            "无history的65号存档进入普通频道回38/1，保存的普通Return不被65覆盖");
+        That(TownTravel.LeaveRoom(returned, towns, none, ordinary) is { Position: var ordinaryExit, Reason: "ready" } &&
+            ordinaryExit == towns.InitialReturn,
+            "离开首期频道后，普通房间出门仍回进入前的普通地区");
+        ordinarySession.ReturnToRoster();
+
+        var ordinarySaved = repo.LoadCharacter(owner, returned.Slot);
+        That(ordinarySaved.Position == towns.Room && ordinarySaved.Return == towns.InitialReturn,
+            "离开首期后的普通房间位置与Return已持久保存");
+        saved = repo.Save(owner, ordinarySaved, street, towns.InitialReturn);
+        var strongwaySession = new GameSession(repo, towns, owner, entry: strongway);
+        strongwaySession.Select(saved.Slot, resumeTown: true);
+        That(strongwaySession.TownSnapshotResumed && strongwaySession.Selected!.Position == street &&
+            strongwaySession.Selected.Return == towns.InitialReturn,
+            "无history的65号存档回type55保持原城镇快照与普通Return");
+        strongwaySession.ReturnToRoster();
+        Console.WriteLine($"PASS {Count - before} 首期强者之路type55落点与无历史换频道回归");
     }
 
     static void RunLegacyTownReturn(TownCatalog towns)

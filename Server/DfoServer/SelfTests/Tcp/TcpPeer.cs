@@ -45,6 +45,9 @@ internal sealed partial class TcpPeer : IDisposable
     long UnixTime => (fixture?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
     public byte[] Roster { get; private set; } = [];
     public byte[] LoginEndpoint { get; private set; } = [];
+    public byte[] StrongwayHistory { get; private set; } = [];
+    public byte[] StrongwayAccountRewards { get; private set; } = [];
+    public byte[] StrongwayNpcDisplay { get; private set; } = [];
     public byte[] PvpTotalActors { get; private set; } = [];
     public byte[] PvpMissions { get; private set; } = [];
     internal int PvpMissionRewardBatches { get; set; }
@@ -924,7 +927,7 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
         byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
-        (int BuffId, int Remaining)? bossBuff = null)
+        (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1126,6 +1129,13 @@ internal sealed partial class TcpPeer : IDisposable
         }
         foreach (var notice in expected.Skip(afterCargo))
         {
+            if (notice == ((byte)0, (ushort)22) && LoginEndpoint.Length > 3 && LoginEndpoint[3] == 55)
+            {
+                StrongwayHistory = Expect(0, 1491, strongwayHistory ?? new byte[16]).Body;
+                TestCheck.That(StrongwayHistory.Length == 16, "强者之路选角在位置包前严格恢复四个u32历史字段");
+                StrongwayAccountRewards = Expect(0, 1753, strongwayAccountRewards ?? new byte[24]).Body;
+                TestCheck.That(StrongwayAccountRewards.Length == 24, "强者之路选角恢复六个u32账号奖励字段");
+            }
             if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization();
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
@@ -1275,6 +1285,17 @@ internal sealed partial class TcpPeer : IDisposable
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
             if (ExpectedOpenEvents.Contains(ServerEventService.MileageShopId))
                 MileageLimits = Expect(0, 706).Body;
+            // 312不属于108目录；按隔离库的原始开关/时段独立计算，不能用收到的action自证。
+            var npcFixture = fixture ?? throw new InvalidOperationException("活动NPC初始化缺少隔离夹具");
+            var npcSchedule = npcFixture.Query("SELECT starts_at,ends_at,override_active FROM server_events WHERE event_id=312");
+            bool npcActive = npcSchedule is [var npcRow] && (npcRow[2] is not DBNull
+                ? Convert.ToInt64(npcRow[2]) != 0
+                : npcRow[0] is not DBNull && npcRow[1] is not DBNull &&
+                    Convert.ToInt64(npcRow[0]) <= UnixTime && UnixTime < Convert.ToInt64(npcRow[1]));
+            var npc = Expect(0, 639);
+            TestCheck.That(!npc.Protected, "639使用原生普通帧并位于108及可选706之后、36之前");
+            Strongway2019NpcTests.AssertDisplay(npc.Body, npcActive);
+            StrongwayNpcDisplay = npc.Body;
             var fatigue = Expect(0, 36);
             TestCheck.That(fatigue.Body.Length == 10, "EVENT_INFO建立城镇HUD后同步本版五个u16疲劳字段");
             using (var compressed = new MemoryStream(events.Body, writable: false))

@@ -64,6 +64,10 @@ internal sealed partial class GameSession
         public DfoServer.Game.TagEvildom.TagEvildomRewardSelection? TagEvildomRewardSelection { get; set; }
         public DfoServer.Game.TagEvildom.TagEvildomClearPlan? PendingTagEvildomReward { get; set; }
         public TagEvildomClearReceipt? CommittedTagEvildomClear { get; set; }
+        public Strongway2019RewardPreparation? PendingStrongway2019Reward { get; set; }
+        public DfoServer.Game.Strongway2019.Strongway2019Admission? Strongway2019Admission { get; init; }
+        public DfoServer.Game.Strongway2019.Strongway2019RewardPlan? Strongway2019RewardPlan { get; set; }
+        public Strongway2019RewardReceipt? CommittedStrongway2019Reward { get; set; }
         public bool TagEvildomResultPublished { get; set; }
         public OperationHopeRewardPlan? PendingHopeReward { get; set; }
         public bool HopeRewardConfirmed { get; set; }
@@ -153,7 +157,8 @@ internal sealed partial class GameSession
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true,
-        byte partyMemberCount = 1, HelperRotationCapture? helperRotation = null)
+        byte partyMemberCount = 1, HelperRotationCapture? helperRotation = null,
+        DfoServer.Game.Strongway2019.Strongway2019Admission? strongwayAdmission = null)
     {
         if (hellParty) questId = 0;
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
@@ -171,6 +176,21 @@ internal sealed partial class GameSession
         if (expected is null || expected.DungeonState is null ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        DfoServer.Game.Strongway2019.Strongway2019Admission? strongway = null;
+        if (DfoServer.Game.Strongway2019.Strongway2019EntryPolicy.Contains(dungeonId))
+        {
+            if (questId != 0 || practice || classExperience || hellParty || hellLegend || sealDoor ||
+                !catalog.Get(checked((int)dungeonId)).TryGetDesignatedDifficulty(out byte strongwayDifficulty) ||
+                difficulty != strongwayDifficulty)
+                return RejectFormal("strongway2019-mode-conflict");
+            strongway = strongwayAdmission ?? PrepareStrongway2019Admission(dungeonId);
+            if (strongway is null || !ReferenceEquals(strongway.Character, expected) || strongway.DungeonId != dungeonId ||
+                !IsCurrentStrongway2019Admission(strongway) ||
+                strongway.Mode == DfoServer.Game.Strongway2019.Strongway2019Mode.Matching &&
+                    (strongwayAdmission is null || !partyAdmission || !CanPrepareStrongway2019Matching(strongway)))
+                return RejectFormal("strongway2019-admission-required");
+        }
+        else if (strongwayAdmission is not null) return RejectFormal("strongway2019-wrong-dungeon");
         if (dungeonId <= int.MaxValue &&
             catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/fiendwar_kr/", StringComparison.Ordinal) == true &&
             catalog.Get((int)dungeonId).IsRaid)
@@ -313,13 +333,13 @@ internal sealed partial class GameSession
                 practice || hellParty || hellLegend || sealDoor || classExperience, partyAdmission) : null;
         if (MarriageDungeonAdmission.Applies(dungeonId) && marriageAdmission is null)
             return RejectFormal("marriage-dungeon-pair-or-npc-required");
-        if (marriageAdmission is null && war is null && tagEntry is null && imperialEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
+        if (strongway is null && marriageAdmission is null && war is null && tagEntry is null && imperialEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
             return RejectFormal(selectionReason);
         // 频道专属城镇（最后防线）的选图副本要求持有 dgn [required item]；次数与第三列消耗见 EntryCost。
         bool channelTown = !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
             ChannelAreaLanding.IsChannelBoundTown(towns, expected.Position.Town);
         // 悲叹/绝望之塔与祭坛的入场券、邀请函由各自准入策略规划，不再按频道城镇 [required item] 先行拒绝。
-        bool specialAdmission = war is not null || tagEntry is not null || imperialEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
+        bool specialAdmission = strongway is not null || war is not null || tagEntry is not null || imperialEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
         if (channelTown && !specialAdmission &&
             ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, DateTimeOffset.UtcNow) is { } missingItem)
             return RejectFormal(missingItem);
@@ -393,6 +413,23 @@ internal sealed partial class GameSession
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         difficulty = entry!.Difficulty;
         entry = entry with { PartyMemberCount = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyMemberCount ?? partyMemberCount };
+        // 只消费本次已通过首期准入的真实资源标记，避免扩大普通副本的经验规则。
+        if (strongway is not null && catalog.Get(checked((int)dungeonId)).RawSections.Any(row => row.Tag == "disable exp"))
+            entry = entry! with { DisableMonsterAndClearExperience = true };
+        if (strongway is not null)
+        {
+            if (catalog.Get(checked((int)dungeonId)).RawSections.Any(row => row.Tag == "disable drop item" && row.Tokens.Count == 0))
+                entry = entry! with { DisableItemDrops = true, SpringTreasurePotential = false, SpringTreasureRecommended = false };
+            if (catalog.Get(checked((int)dungeonId)).PersonalCoinInfoLimit(difficulty) is not { } coinLimit)
+                return RejectFormal("strongway2019-personal-coin-limit-missing");
+            entry = entry! with { CoinLimit = coinLimit };
+        }
+        if (strongway is { Mode: not DfoServer.Game.Strongway2019.Strongway2019Mode.Matching })
+        {
+            if (catalog.Get(checked((int)dungeonId)).LimitTimeSeconds is not { } seconds)
+                return RejectFormal("strongway2019-normal-time-limit-missing");
+            entry = entry! with { Strongway2019TimeLimitSeconds = seconds };
+        }
         if (marriageAdmission is not null) entry = entry! with { Marriage = marriageAdmission };
         if (dimension is not null) entry = entry! with { Dimension = dimension, DimensionRewardProfession = (expected.Job, expected.GrowType) };
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
@@ -549,6 +586,7 @@ internal sealed partial class GameSession
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, ImperialArenaEntry = imperialEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
+                Strongway2019Admission = strongway,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
@@ -620,7 +658,7 @@ internal sealed partial class GameSession
             var participantEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
             var participantAuthority = new NativeDungeonCombatAuthority();
             if (!SinglePlayerDungeonRun.TryCreate(participantEntry, state.LastAttempt + 1, epoch, source.Route, participantAuthority,
-                out var participant, out var reason, battleLevels: monsterBattleLevels, sharedBattleLevels: source.Run.BattleLevels,
+                out var participant, out var reason, timeProvider, battleLevels: monsterBattleLevels, sharedBattleLevels: source.Run.BattleLevels,
                 monsterAi: monsterAi, sharedMonsterAi: source.Run.MonsterAiRooms)) return RejectFormal("party-participant:" + reason);
             participant!.BindPartyInstance(source.Run.Snapshot.Identity.InstanceId);
             if (entry.Hope is { } participantHope)
@@ -717,7 +755,7 @@ internal sealed partial class GameSession
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
         // 比赛副本 [disable drop item]，不准备掉落。
-        if (drops is not null && items is not null && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
         {
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops;
             try { prepareMonsterDrops = prepareDrops?.Invoke(entry); }
@@ -766,7 +804,7 @@ internal sealed partial class GameSession
                 }
             }
         }
-        else if (prepareDrops is not null && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        else if (prepareDrops is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
@@ -868,6 +906,7 @@ internal sealed partial class GameSession
         // 先持久预留本实例key/attempt；通知失败不重新安装或复用原实例身份。
         var character = prepared.Character;
         var installing = prepared.Dungeon;
+        if (installing.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;
         if (installing.TagEvildomEntry is { } tagEntry &&
             !ReferenceEquals(CurrentTagEvildomSelection(character, prepared.SelectionEpoch, installing.Entry.DungeonId), tagEntry)) return null;
         if (installing.ImperialArenaEntry is { } imperialEntry &&
@@ -1025,7 +1064,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1034,7 +1073,8 @@ internal sealed partial class GameSession
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
                         prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
-                AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
+                AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
+                RequiredEvent = Strongway2019RequiredEvent(installing.Strongway2019Admission) });
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {

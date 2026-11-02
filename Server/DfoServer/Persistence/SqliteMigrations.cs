@@ -329,6 +329,21 @@ internal static class SqliteMigrations
             FiendwarCounterSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(179, "礼遇传送独立冷却", (db, tx) => AddAuraCooldown(db, tx, "privilege_until")),
         new(180, "本版任务目标类型与旧领奖回执兼容", UpgradeQuestTargetTypes),
+        new(181, "首期强者之路账号奖励与邮件回执", static (db, tx) =>
+            Execute(db, tx, (Strongway2019RewardSchema.Definition + Strongway2019RewardSchema.WeekIndex)
+                .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal)
+                .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(182, "首期强者之路角色历史与权威计时", static (db, tx) =>
+            Execute(db, tx, Strongway2019StatisticsSchema.Definition
+                .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(183, "首期强者之路持久完成与未交付恢复", static (db, tx) =>
+            Execute(db, tx, (Strongway2019CompletionSchema.Definition + Strongway2019CompletionSchema.Index)
+                .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal)
+                .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(184, "首期匹配独立权威终局检查点", static (db, tx) =>
+            Execute(db, tx, (Strongway2019MatchingCheckpointSchema.Definition + Strongway2019MatchingCheckpointSchema.Index)
+                .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal)
+                .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2471,6 +2486,10 @@ internal static class SqliteMigrations
             ("character_permanent_stats",PermanentStatSchema.Sql),
             ("character_skill_switch_inventory_items",SkillSwitchInventoryItemsSchema),
             (EvildomWarRewardSchema.Table,EvildomWarRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            (Strongway2019RewardSchema.Table,Strongway2019RewardSchema.Definition),
+            (Strongway2019StatisticsSchema.Table,Strongway2019StatisticsSchema.Definition),
+            (Strongway2019CompletionSchema.Table,Strongway2019CompletionSchema.Definition),
+            (Strongway2019MatchingCheckpointSchema.Table,Strongway2019MatchingCheckpointSchema.Definition),
             ("evildom_war_battles",EvildomWarRecoverySchema.Battles.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

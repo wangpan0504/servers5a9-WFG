@@ -64,7 +64,8 @@ internal static class VendingTcpTests
             short coinSlot = machine.Id == 1 ? (short)128 : (short)129;
             using (var peer = Open(fixture))
             {
-                peer.Select(index, resumeTown: true, room: false, premiumContracts: true);
+                peer.Select(index, resumeTown: true, room: false, premiumContracts: true,
+                    expertContract: Read(index).Learning.ExpertContractExpiresAt > 0);
                 string before = State();
                 foreach (byte[] malformed in new[] { Array.Empty<byte>(), new byte[9], new byte[11] })
                 {
@@ -82,7 +83,8 @@ internal static class VendingTcpTests
             }
             using (var peer = Open(fixture))
             {
-                peer.Select(index, resumeTown: true, room: false, premiumContracts: true);
+                peer.Select(index, resumeTown: true, room: false, premiumContracts: true,
+                    expertContract: Read(index).Learning.ExpertContractExpiresAt > 0);
                 for (int attempt = 0; attempt < 2; attempt++)
                 {
                     var before = Read(index);
@@ -131,7 +133,8 @@ internal static class VendingTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.Select(resumeTown: true, room: false, premiumContracts: true); peer.Barrier();
+            peer.Select(resumeTown: true, room: false, premiumContracts: true,
+                expertContract: Read(0).Learning.ExpertContractExpiresAt > 0); peer.Barrier();
             That(State() == committed, "服务重建重连后完整资产、期限及UID保持已提交结果");
         }
         await fixture.StopAsync();

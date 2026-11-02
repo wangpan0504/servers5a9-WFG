@@ -58,6 +58,9 @@ internal static class ChannelTcpTests
                 int at = 12 + i * 64;
                 int number = numbers[i];
                 That(Encoding.ASCII.GetString(directory, at, 20).TrimEnd('\0') == "#ch." + number, "目录保留独立分类号 " + number);
+                That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(at + 20)) == 50 &&
+                    BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(at + 24)) == 0,
+                    "空频道目录保持原生容量50/在线0，显示流畅状态：" + number);
                 That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(at + 60)) == endpoints[(byte)number] &&
                     Encoding.ASCII.GetString(directory, at + 28, 32).TrimEnd('\0') == serverAddress, "分类入口端口独立，同一目录使用本连接的服务端地址");
             }

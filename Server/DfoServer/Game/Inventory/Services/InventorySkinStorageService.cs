@@ -78,6 +78,10 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
                 !definition.Places.Contains(town ? "[village]" : "[dungeon]") &&
                 !(town && seriaRoom && definition.Places.Contains("[seria room]")))
             return InventoryResult.Reject(3) with { RejectReason = "invalid_skin_token_or_context" };
+        if (token.Core is { ItemId: 490013318, Strongway2019FrameOrigin: { Version: 1 } } &&
+            definition is { Type: PartyFrameType, AccountWide: false, SkinId: 420000004 } &&
+            definition.SkinIds is [420000004])
+            definition = definition with { Expiration = new() };
         // 账号归属的券写入账号皮肤仓，其余写入角色皮肤仓；选中项始终留在角色身上。
         var state = definition.AccountWide ? before.AccountSkins : before.Skins;
         long? deadline = token.ExpireTime > 0 ? token.ExpireTime : null;

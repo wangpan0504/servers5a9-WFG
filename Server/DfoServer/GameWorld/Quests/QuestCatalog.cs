@@ -30,6 +30,8 @@ internal sealed record StoryQuest(
 
 internal sealed class QuestCatalog
 {
+    internal const int Strongway2019QuestId = 8698;
+    internal const string Strongway2019QuestPath = "n_quest/strong_way/strong_way_1.qst";
     // 既有地图字段回归；不限制任务目录或可接任务。
     static readonly int[] VerifiedMapQuests = [3145, 4873, 3146, 3157, 3054, 3147, 3148, 4875, 3149];
     readonly Dictionary<int, StoryQuest> quests;
@@ -121,7 +123,17 @@ internal sealed class QuestCatalog
         }
         foreach (var (id, path) in paths)
             if (id is <= 0 or >= 30000) throw new InvalidDataException("任务编号越界: " + id);
+        RestoreStrongway2019Index(paths, pvf.Contains(Strongway2019QuestPath));
         return paths;
+    }
+
+    // 原生频道要求8698，后继资源声明其为前置；仅兼容补齐缺失的首步索引。
+    // 显式编号或已注册路径始终优先，不推测后继编号，不扫描其它未登记脚本。
+    internal static void RestoreStrongway2019Index(Dictionary<int, string> paths, bool resourcePresent)
+    {
+        if (resourcePresent && !paths.ContainsKey(Strongway2019QuestId) &&
+            !paths.Values.Contains(Strongway2019QuestPath, StringComparer.Ordinal))
+            paths.Add(Strongway2019QuestId, Strongway2019QuestPath);
     }
 
     static Dictionary<int, string> MapIndex(PvfArchive pvf)

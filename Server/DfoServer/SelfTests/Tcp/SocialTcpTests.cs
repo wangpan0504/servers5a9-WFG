@@ -374,8 +374,25 @@ internal static class SocialTcpTests
         observer.Send(1404, Query(observer.Id, "PanelA")); observer.Expect(0, 9, queryResult);
         observer.Send(36, Area(38, 0, 629, 196, 38, 2));
         observer.Batch((0, 23), (0, 24)); leader.Expect(0, 23, AreaNotice(observer.Id, 38, 0, 629, 196));
-        RemoteDirectory();
-        observer.Barrier();
+        byte[] remoteActor = RemoteDirectory();
+        int repeatedDirectories = 0;
+        bool awaitingDirectory = false;
+        observer.Barrier(packet =>
+        {
+            if (!awaitingDirectory)
+            {
+                That(++repeatedDirectories <= 1 && packet is { Kind: 0, Opcode: 2 },
+                    "切区屏障仅允许一组已发送的同一异区队伍快照，先Actor后名册");
+                Bytes(packet.Body, remoteActor, "重复异区Actor与本轮已校验队长公开资料逐字节一致");
+            }
+            else
+            {
+                That(packet is { Kind: 0, Opcode: 9 }, "重复异区Actor后必须紧接当前名册");
+                Bytes(packet.Body, queryResult, "重复异区名册逐字节对应独立构造的当前队伍查询结果");
+            }
+            awaitingDirectory = !awaitingDirectory;
+        });
+        That(!awaitingDirectory, "切区屏障前额外目录必须成对完成");
         observer.NoFrame(100, "异区队伍资料不能生成城镇实体、位置或移动", (0, 3), (0, 22), (0, 23), (0, 24));
         // 使用无队伍客户端实收58B默认请求，路由字段仍不参与授权。
         byte[] nativeQuery = Convert.FromHexString("030001000000000000000000001C0003000000000100000106070000000000000000000000000000000000000000000000000000000000000000");
@@ -417,12 +434,13 @@ internal static class SocialTcpTests
         leader.Expect(0, 9, [0, 0, 0, 0]);
         leader.Barrier(); observer.Barrier();
 
-        void RemoteDirectory()
+        byte[] RemoteDirectory()
         {
             var remote = observer.Expect(0, 2).Body;
             That(remote[0] == 0 && U16(remote, 1) == 1 && U16(remote, 121) == leader.Id,
                 "异区名册前先安装当前队长公开资料，不能引用缺失Actor或安装本人资料");
             observer.Expect(0, 9, queryResult);
+            return remote;
         }
 
         void OwnSceneInformation()

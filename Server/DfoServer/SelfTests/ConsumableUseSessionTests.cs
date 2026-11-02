@@ -15,7 +15,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class ConsumableUseSessionTests
+internal static partial class ConsumableUseSessionTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
@@ -551,6 +551,52 @@ internal static class ConsumableUseSessionTests
                 That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2,
                     "免费实例的临时冷却不封锁出图后新的普通有偿使用，旧完整token仍单独保护");
         }
+    }
+
+    public static void RunDisguiseInventoryLifetime(TownCatalog towns, CharacterCatalog characters,
+        RecoveryConsumableCatalog consumables)
+    {
+        const int itemId = 490013028, formId = 56673;
+        That(consumables.TryGet(itemId, out var definition) && definition is
+            { Unlimited: true, Disguise: { Type: 2, Seconds: 300 } },
+            "变身跨库存回归读取正式028的免耗九形态与300秒定义");
+        using var f = new Fixture(towns, characters, hp: definition, consumables: consumables, level: 95);
+        f.Select();
+        var source = f.Session.Selected!.Inventory.Find(f.Request.Position)!;
+        uint originalGold = f.Session.Selected.Inventory.Gold;
+        long started = f.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var activated = f.Session.ApplyUnlimitedRandomDisguise(2, formId, itemId, f.Service);
+        That(activated is not null && f.Session.CurrentConsumableDisguise() is not null,
+            "真实028持有源经直接211用例激活，不预发44或伪造在线Disguise");
+        var original = f.Session.CurrentConsumableDisguise()!.Value;
+        That(original.Appearance is { Type: 2, FormId: formId, SourceItemId: itemId } &&
+            original.Appearance.UntilMilliseconds == started + 300000,
+            "028原始身份、来源和截止由现有变身状态持有");
+
+        f.Clock.Advance(TimeSpan.FromSeconds(60));
+        var committed = f.Session.PlanAndCommitInventory(character => new(true, 0,
+            new(character.Inventory, character.Inventory with { Gold = character.Inventory.Gold + 1 },
+                "disguise_inventory_lifetime_probe", new(character))));
+        That(committed.Accepted && committed.Receipt is not null && f.Read().Inventory.Gold == originalGold + 1,
+            "普通库存规划真实提交并安装新的角色快照");
+        That(f.Session.CurrentConsumableDisguise() is { } retained && retained.Epoch == original.Epoch &&
+            ReferenceEquals(retained.Appearance, original.Appearance) &&
+            ReferenceEquals(f.Session.Selected!.Disguise, original.Appearance) &&
+            original.Appearance.UntilMilliseconds == started + 300000 &&
+            f.Session.Selected.Inventory.Find(f.Request.Position) == source,
+            "普通库存提交保留exact变身对象、身份和原截止，不消耗或替换028来源");
+        That(f.Read().Disguise is null && !JsonSerializer.Serialize(f.Session.Selected).Contains("\"Disguise\"", StringComparison.Ordinal),
+            "保留的是当前选角临时状态，不写库或序列化为重登效果");
+
+        f.Clock.Advance(TimeSpan.FromMilliseconds(239999));
+        That(f.Session.RefreshConsumableDisguise(f.Clock.GetUtcNow().ToUnixTimeMilliseconds()) is null &&
+            f.Session.CurrentConsumableDisguise() == original,
+            "跨库存提交后仍在原300秒截止前一毫秒保持同一变身");
+        f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+        That(f.Session.RefreshConsumableDisguise(f.Clock.GetUtcNow().ToUnixTimeMilliseconds()) is { Character.Disguise: null } &&
+            f.Session.CurrentConsumableDisguise() is null &&
+            f.Session.RefreshConsumableDisguise(f.Clock.GetUtcNow().ToUnixTimeMilliseconds()) is null,
+            "跨库存提交不续期，原到期刷新在300秒等号只清理一次");
     }
 
     static void RunRevivalTimeouts(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)

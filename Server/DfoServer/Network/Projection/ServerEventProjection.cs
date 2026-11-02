@@ -17,8 +17,10 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     readonly Channel<bool> pending = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
         { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
     readonly Task worker;
-    long epoch = -1;
-    bool active;
+    long queuedEpoch = -1;
+    long queuedStrongwayRevision = -1;
+    bool queuedMileage;
+    bool queuedStrongway;
 
     public ServerEventProjection(GameConnectionContext context, ServerEventService events, TownProjection town, ServerLog log, TimeProvider time)
     {
@@ -27,11 +29,19 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         events.Changed += Changed;
         worker = RunAsync();
     }
-    void Changed(ushort id) { if (id == ServerEventService.MileageShopId) pending.Writer.TryWrite(true); }
-    public void Published(bool value)
+    void Changed(ushort id)
     {
-        epoch = context.Session.SelectionEpoch;
-        active = value;
+        if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id) pending.Writer.TryWrite(true);
+    }
+    internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||
+        queuedStrongway != value || queuedStrongwayRevision != events.Strongway2019DisplayRevision;
+    // 这里只去重已接受的快照，不表示客户端已显示；版本变化仍须重发被发送守卫丢弃的旧包。
+    public void Queued(bool value, bool strongway, long selectionEpoch, long revision)
+    {
+        queuedEpoch = selectionEpoch;
+        queuedMileage = value;
+        queuedStrongway = strongway;
+        queuedStrongwayRevision = revision;
         pending.Writer.TryWrite(true);
     }
     async Task RunAsync()
@@ -41,11 +51,14 @@ internal sealed class ServerEventProjection : IAsyncDisposable
             while (!stop.IsCancellationRequested)
             {
                 var state = events.Read(ServerEventService.MileageShopId);
-                var schedule = state.Schedule;
-                if (epoch >= 0 && context.Session.Ready && active != (state.Active && town.MileageAvailable)) pending.Writer.TryWrite(true);
+                var strongway = events.Read(ServerEventService.Strongway2019Id);
+                if (queuedEpoch >= 0 && context.Session.Ready &&
+                    (queuedMileage != (state.Active && town.MileageAvailable) ||
+                     NeedsStrongwayDisplay(strongway.Active))) pending.Writer.TryWrite(true);
                 var now = time.GetUtcNow();
-                long? next = schedule.OverrideActive is not null ? null :
-                    new[] { schedule.StartsAt, schedule.EndsAt }.Where(value => value > now.ToUnixTimeSeconds()).Min();
+                long? next = new[] { state.Schedule, strongway.Schedule }.Where(schedule => schedule.OverrideActive is null)
+                    .SelectMany(schedule => new[] { schedule.StartsAt, schedule.EndsAt })
+                    .Where(value => value > now.ToUnixTimeSeconds()).Min();
                 using (var wait = CancellationTokenSource.CreateLinkedTokenSource(stop.Token))
                 {
                     var request = pending.Reader.ReadAsync(wait.Token).AsTask();
@@ -62,7 +75,9 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 {
                     var selection = context.Owner.Execute(() => (context.Session.Ready, context.Session.Selected, context.Session.SelectionEpoch));
                     bool current = events.Read(ServerEventService.MileageShopId).Active && town.MileageAvailable;
-                    if (!selection.Ready || selection.Selected is null || epoch == selection.SelectionEpoch && current == active) continue;
+                    bool strongwayCurrent = events.Read(ServerEventService.Strongway2019Id).Active;
+                    if (!selection.Ready || selection.Selected is null || queuedEpoch == selection.SelectionEpoch &&
+                        current == queuedMileage && !NeedsStrongwayDisplay(strongwayCurrent)) continue;
                     bool CanSend() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == selection.SelectionEpoch);
                     await town.ServerEventsAsync(context, CanSend);
                 }
@@ -73,7 +88,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         catch (ChannelClosedException) when (stop.IsCancellationRequested) { }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            log.Write("connection_error", new { Connection = context.Id, Stage = "mileage_shop_event", Error = error.Message });
+            log.Write("connection_error", new { Connection = context.Id, Stage = "server_event_display", Error = error.Message });
             context.Disconnect();
         }
     }

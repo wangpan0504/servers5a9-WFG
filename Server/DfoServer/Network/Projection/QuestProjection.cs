@@ -69,7 +69,7 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
 
     public async Task InitializeAsync(GameConnectionContext context, Character character)
     {
-        await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, Prepare(character), "quest_list_initialize");
+        await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, Prepare(context, character), "quest_list_initialize");
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_initialize");
     }
 
@@ -77,12 +77,13 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
     {
         if (!canSend())
             return;
-        byte[] body = Prepare(character);
+        byte[] body = Prepare(context, character);
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, body, "quest_list_refresh", canSend);
         // 21会重建任务界面列表；先保留场景所需的完成位，再在列表刷新后恢复完成历史。
         if (restoreCompleted)
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_refresh", canSend);
     }
 
-    private byte[] Prepare(Character character) => QuestPackets.AvailableList(character.Level, QuestEligibility.Candidates(character, quests));
+    private byte[] Prepare(GameConnectionContext context, Character character) => QuestPackets.AvailableList(character.Level,
+        QuestEligibility.Candidates(character, quests, strongway2019Active: context.Session.Strongway2019QuestActive));
 }

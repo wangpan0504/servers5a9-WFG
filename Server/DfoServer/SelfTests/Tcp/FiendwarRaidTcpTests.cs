@@ -133,7 +133,33 @@ internal static partial class FiendwarRaidTcpTests
         Travel(2);
         Travel(15);
         var report = new AntonTcpProbe.AntonProbeReport();
-        AntonTcpProbe.Enter(peer, raid.EntryCatalog!, raid.Fiendwar!.Areas[15].DungeonId, report, clear: true);
+        int eventsBeforeRadar = fixture.Events().Length;
+        int radarDungeon = raid.Fiendwar!.Areas[15].DungeonId;
+        // 漩涡清图同步原生战况；不用安徒恩586或legacy117确认作为成功条件。
+        AntonTcpProbe.Enter(peer, raid.EntryCatalog!, radarDungeon, report, clear: true, requireClearNotice: false);
+        var radarEvents = fixture.Events().Skip(eventsBeforeRadar).ToArray();
+        var radarClears = radarEvents.Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_death")
+            .Select(row => row.GetProperty("Detail"))
+            .Where(detail => detail.TryGetProperty("ClearFact", out var fact) &&
+                fact.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                fact.GetProperty("DungeonId").GetUInt32() == (uint)radarDungeon).ToArray();
+        That(radarClears.Length == 1 && radarClears[0].GetProperty("Outcome").GetInt32() == 0 &&
+            radarClears[0].GetProperty("ClearFact").GetProperty("ConfirmedDeathEvents").GetArrayLength() > 0,
+            "雷达真实39被接受并生成一次正式ClearFact，117不重复产生通关事实");
+        var clearIdentity = radarClears.Single().GetProperty("ClearFact").GetProperty("Identity");
+        string? radarRun = clearIdentity.GetProperty("InstanceId").GetString();
+        That(radarEvents.Where(row => row.GetProperty("Kind").GetString() == "raid_run_clear")
+            .Select(row => row.GetProperty("Detail")).Any(detail =>
+                detail.GetProperty("Run").GetString() == radarRun &&
+                detail.GetProperty("Dungeon").GetUInt32() == (uint)radarDungeon &&
+                detail.GetProperty("AfterRevision").GetInt64() > detail.GetProperty("BeforeRevision").GetInt64() &&
+                detail.GetProperty("State").GetString() == "Fighting"),
+            "同一正式Run清图推进漩涡战况revision，保持整团Fighting");
+        That(radarEvents.Where(row => row.GetProperty("Kind").GetString() == "send")
+            .Select(row => row.GetProperty("Detail")).Any(detail =>
+                detail.GetProperty("Opcode").GetInt32() == 1528 &&
+                detail.GetProperty("Body").GetString() == "010F0C0000000000000000"),
+            "雷达通关实发区域15种类12完整计时清除行，End与Duration均为0");
         That(fixture.Query("SELECT state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[0L]],
             "雷达清图与正常退场不冒充整团胜利");
         foreach (int count in new[] { 1, 4, 8 }) VerifyParties(fixture, resources, raid, repository, clock, count);

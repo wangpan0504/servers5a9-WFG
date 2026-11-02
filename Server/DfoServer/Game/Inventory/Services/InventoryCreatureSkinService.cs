@@ -38,19 +38,22 @@ internal sealed class InventoryCreatureSkinService(ItemCatalog items, TimeProvid
         if (sourceSlot > short.MaxValue || list != (byte)InventoryListType.Main || action != AuraAction)
             return InventoryResult.Reject(Rejection);
         var source = character.Inventory.Find(new(InventoryListType.Main, (short)sourceSlot));
-        if (source?.Core.ItemId != AuraTicketId)
+        if (source is null)
             return InventoryResult.Reject(Rejection);
         var template = items.Get(source.Core.ItemId);
         return PlanAuraAction(character, (short)sourceSlot, utcSeconds, template);
     }
 
     internal static InventoryResult PlanAuraAction(Character character, short sourceSlot, long utcSeconds, ItemTemplate? template) =>
-        template?.OpensAuraSkinSlot == true
-            ? PlanUnlock(character, sourceSlot, AuraTargetSlot, utcSeconds, template)
+        template is { Kind: ItemKind.Consumable, StackableType: "[etc] 1", OpensAuraSkinSlot: true }
+            ? PlanUnlockCore(character, sourceSlot, AuraTargetSlot, utcSeconds, template, auraAction: true)
             : InventoryResult.Reject(Rejection);
 
     internal static InventoryResult PlanUnlock(Character character, short sourceSlot, ushort target, long utcSeconds,
-        ItemTemplate? template)
+        ItemTemplate? template) => PlanUnlockCore(character, sourceSlot, target, utcSeconds, template, auraAction: false);
+
+    static InventoryResult PlanUnlockCore(Character character, short sourceSlot, ushort target, long utcSeconds,
+        ItemTemplate? template, bool auraAction)
     {
         byte flag = target switch { TargetSlot => UnlockFlag, AuraTargetSlot => AuraUnlockFlag, _ => 0 };
         if (flag == 0 || (character.EquipmentSlotFlags & flag) != 0)
@@ -60,10 +63,12 @@ internal sealed class InventoryCreatureSkinService(ItemCatalog items, TimeProvid
         var before = character.Inventory;
         var position = new InventorySlot(InventoryListType.Main, sourceSlot);
         var source = before.Find(position);
-        ItemKind kind = target == AuraTargetSlot ? ItemKind.Material : ItemKind.Consumable;
+        ItemKind kind = target == AuraTargetSlot && !auraAction ? ItemKind.Material : ItemKind.Consumable;
         bool validTicket = target == AuraTargetSlot
-            ? template is { Id: AuraTicketId, Kind: ItemKind.Material, StackableType: "[material] 0" } &&
-              source?.Core.ItemId == AuraTicketId
+            ? auraAction
+                ? template is { Kind: ItemKind.Consumable, StackableType: "[etc] 1", OpensAuraSkinSlot: true }
+                : template is { Id: AuraTicketId, Kind: ItemKind.Material, StackableType: "[material] 0" } &&
+                  source?.Core.ItemId == AuraTicketId
             : template?.OpensCreatureSkinSlot == true;
         if (source is null || source.Uid <= 0 || source.Core.Kind != kind || source.Core.Count <= 0 ||
             source.Core.EquipmentLockId != 0 || source.IsExpired(utcSeconds) ||

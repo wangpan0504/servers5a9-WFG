@@ -34,10 +34,14 @@ internal static class CreatureEggTcpTests
             original = repository.List(owner).Single();
         }
         string originalUids = Uids(), originalDetails = Details();
+        DfoServer.Game.Currency.AccountWallet walletBeforeHatch;
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
             peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713)]);
+            // 正常选角已初始化本周账号材料额度；孵化以此完整钱包快照为基线。
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                walletBeforeHatch = repository.LoadAccountWallet(owner);
             string before = Snapshot();
             foreach (byte[] invalid in new byte[][] { [7, 2, 0], [7, 3, 0], [3, 26, 0], [7, 0, 1], [7, 0], [7, 0, 0, 0] })
             {
@@ -115,7 +119,7 @@ internal static class CreatureEggTcpTests
                     "重开仓储保留原UID、核心和完整详情，原2038期限不按无期限PVF目标重置");
             }
             That(saved.Inventory.Find(Pet(2)) == original.Inventory.Find(Pet(2)) && saved.Inventory.Gold == original.Inventory.Gold &&
-                saved.Inventory.AccountWallet.Same(original.Inventory.AccountWallet), "其它宠物、金币和账号钱包保持原事实");
+                saved.Inventory.AccountWallet.Same(walletBeforeHatch), "其它宠物、金币和账号钱包保持原事实");
         }
         That(Uids() == originalUids && Details() == originalDetails &&
             fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name='hatch_creature_egg'") is [[2L]] &&

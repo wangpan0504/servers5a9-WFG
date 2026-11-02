@@ -225,11 +225,26 @@ internal sealed partial class SinglePlayerDungeonRun
     // 截止瞬间停止新战斗与移动，不依赖后台任务何时取得命令门；已准备的事务仍由原回执确认。
     public SinglePlayerDungeonPhase Phase
     {
-        get => phase != SinglePlayerDungeonPhase.Returned && LostLandClock?.Elapsed == true ? SinglePlayerDungeonPhase.TimedOut : phase;
+        get => phase != SinglePlayerDungeonPhase.Returned && (LostLandClock?.Elapsed == true || Strongway2019TimeElapsed)
+            ? SinglePlayerDungeonPhase.TimedOut : phase;
         private set => phase = value;
     }
     internal LostLandRunClock? LostLandClock { get; }
-    public DungeonClearFact? ClearFact { get; private set; }
+    readonly TimeProvider strongway2019Clock;
+    long? strongway2019Started;
+    bool Strongway2019TimeElapsed => phase is SinglePlayerDungeonPhase.Loading or SinglePlayerDungeonPhase.Dungeon &&
+        entry.Strongway2019TimeLimitSeconds is { } seconds && strongway2019Started is { } started &&
+        strongway2019Clock.GetElapsedTime(started) >= TimeSpan.FromSeconds(seconds);
+    DungeonClearFact? clearFact;
+    public DungeonClearFact? ClearFact
+    {
+        get => clearFact;
+        private set
+        {
+            clearFact = value;
+            if (value is not null) FreezeStrongway2019Elapsed();
+        }
+    }
     internal void BindPartyInstance(Guid instance)
     {
         if (tagEvildom is not null || instance == Guid.Empty || Phase != SinglePlayerDungeonPhase.Loading || allRooms.Any(room => room.Loaded))
@@ -275,6 +290,7 @@ internal sealed partial class SinglePlayerDungeonRun
                 TerminalLayerQuestSlot = byte.MaxValue, TerminalLayerAcceptanceId = Guid.Empty };
         this.entry = entry;
         QuestFacts = new(time ?? TimeProvider.System);
+        strongway2019Clock = time ?? TimeProvider.System;
         LostLandClock = entry.LostLand is { } admission ? new(admission, time ?? TimeProvider.System) : null;
         this.authority = authority;
         var baseRooms = route.Rooms.Where(plan => entry.Maze.MapSpecification!.Contains(plan.Room.Map)).Select(plan => new Room(
@@ -573,6 +589,9 @@ internal sealed partial class SinglePlayerDungeonRun
         LastLoadingFact = new(expected, actionId, entry.DungeonId, current.Plan.Room.Map, entry.Maze.SourceOrdinal,
             first, initialized, count, MazeInitializationThreshold) { InitializationCounterSupported = InitializationCounterSupported };
         Phase = SinglePlayerDungeonPhase.Dungeon;
+        // 服务端普通首期策略：首次真实加载后计时，过房不重置，终点结算冻结成功。
+        if (entry.Strongway2019TimeLimitSeconds is not null)
+            strongway2019Started ??= strongway2019Clock.GetTimestamp();
         Advance();
         return SettleIfCleared();
     }

@@ -16,6 +16,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
     internal Action? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
+    internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
@@ -78,7 +79,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public bool SelectionRosterPushed { get; set; }
     // 可选活动只暴露操作门禁与连接收尾；具体状态由对应模块拥有。
     public IGameConnectionActivity? Activity { get; } = activity;
-    public bool BlocksTownActions => Activity?.BlocksTownActions == true ||
+    public bool BlocksTownActions => Activity?.BlocksTownActions == true || Session.Strongway2019BlocksTownActions ||
         Session.Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement or SessionPhase.PvpRoom;
 
     // 私有包序号只在本次连接内递增；从1开始，回绕到0前必须结束连接，不能复用已发序号。

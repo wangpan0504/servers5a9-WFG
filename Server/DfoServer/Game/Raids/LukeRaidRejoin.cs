@@ -140,6 +140,7 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
                         var battlefield = registry.RestoreLukeMember(raid, fact, actor, () => reservation.Battle.RestoreLukeMember(reservation, actor,
                             () => actor.Session.InstallLukeRejoin(actor, reservation.Battle)));
                         if (battlefield is null) return new(false, "binding-conflict");
+                        if (!candidates.MarkLukeCandidateBound(fact)) throw new InvalidOperationException("漩涡重返成功后候选已失效");
                         reservation.Bound = actor;
                         installed = true;
                         return new(true, "bound-without-wire", battlefield, null, reservation.Battle.View);
@@ -158,6 +159,7 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
                     return restored is not null;
                 });
                 if (restoredParty is null) return new(false, "binding-conflict");
+                if (!candidates.MarkLukeCandidateBound(fact)) throw new InvalidOperationException("卢克重返成功后候选已失效");
                 reservation.Bound = actor;
                 return new(true, "bound-without-wire", restored, restoredParty, reservation.Battle.View);
             });

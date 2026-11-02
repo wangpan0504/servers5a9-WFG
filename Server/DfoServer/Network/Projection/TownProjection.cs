@@ -26,6 +26,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null)
 {
     const ushort JonathanVisibleEvent = 2395;
+    internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
         DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
@@ -80,7 +81,23 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);
-        if (publish?.Invoke() != false) context.ServerEvents?.Published(mileage);
+        if (canSend?.Invoke() == false) return;
+        long? npcRevision = events?.Strongway2019DisplayRevision;
+        var strongway = events?.Read(ServerEventService.Strongway2019Id);
+        var npcCharacter = context.Session.Selected;
+        long npcEpoch = context.Session.SelectionEpoch;
+        bool NpcCurrent() => context.Owner.IsCurrent && npcCharacter is not null &&
+            context.Session.SelectionEpoch == npcEpoch && context.Session.Selected?.Id == npcCharacter.Id &&
+            events?.Strongway2019DisplayRevision == npcRevision &&
+            (strongway is null || strongway.Schedule.IsActive(timer.GetUtcNow()) == strongway.Active);
+        if (canSend is null || context.ServerEvents?.NeedsStrongwayDisplay(strongway?.Active == true) != false)
+        {
+            // 只读显隐快照在泵写出前仍复验，不能沿已提交奖励的发布语义丢掉独立守卫；泵内不读库。
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.EVENT_NPC_DYNAMIC_DISPLAY,
+                Strongway2019NpcPackets.Display(strongway?.Active == true), "strongway_npc_display", NpcCurrent))
+                throw new IOException("Strongway NPC send queue unavailable");
+        }
+        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }
@@ -313,6 +330,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
 
     async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true)
     {
+        // 原生地区65会自动打开首期窗口；先提供本角色成绩，避免沿用前一角色的单例显示。
+        if (Strongway2019Profile is not null) await Strongway2019Profile.InformationAsync(context, canSend);
         // 切图前不在旧场景移动实体；124 只属于选角入城。
         if (initial)
             await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c, false), "position", canSend);
@@ -446,6 +465,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
 
     public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
     {
+        if (canReturn is not null && !context.Owner.Execute(canReturn)) return;
+        if (context.Strongway2019 is not null) await context.Strongway2019.BeforeDepartureAsync(context);
         DfoServer.Game.Party.PartySnapshot? departedParty = null;
         long returnedEpoch = 0;
         var notices = new DfoServer.Game.Session.GameSession.DepartureNotices();

@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Strongway2019;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Adventure;
 using DfoServer.GameWorld.Adventure;
@@ -193,11 +194,14 @@ internal sealed partial class GameSession
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var previous = Selected!;
         var definitionForReward = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
+        bool strongwayNormal = dungeon.Strongway2019Admission is { Mode: Strongway2019Mode.Simple or Strongway2019Mode.Hero };
         var tournamentRules = definitionForReward.TournamentRewards;
         var reward = dungeon.Settlement?.Pending.Reward ?? (dungeon.Entry.IsTournament
             ? new DungeonClearExperienceReward(tournamentRules!.Experience[DungeonTournamentPlan.RoundCount], 0,
                 tournamentRules.Experience[DungeonTournamentPlan.RoundCount], -1, DungeonTournamentRewards.Rule, definitionForReward.Path)
-            : rewards.Calculate(definitionForReward, dungeon.Entry.Difficulty, rankPoint));
+            : strongwayNormal && dungeon.Entry.DisableMonsterAndClearExperience
+                ? new DungeonClearExperienceReward(0, 0, 0, -1, DungeonClearExperienceCatalog.RuleId, definitionForReward.Path)
+                : rewards.Calculate(definitionForReward, dungeon.Entry.Difficulty, rankPoint));
         if (dungeon.Settlement is null)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -220,7 +224,7 @@ internal sealed partial class GameSession
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
         bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
-            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null;
+            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !noClearCards ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
             job:Selected!.Job,grow:Selected.GrowType,ancientBonus:ancientGate?.Bonus == true) : null);

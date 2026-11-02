@@ -39,6 +39,7 @@ internal sealed class QuestLifecyclePlan
     public Guid AcceptanceId { get; }
     public Guid OperationId { get; }
     internal DfoServer.Game.Pvp.PvpRatingSnapshot? PvpRating { get; set; }
+    internal InventoryEventPrecondition? RequiredEvent { get; set; }
     public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
     public InventoryPlan Inventory { get; }
     public QuestSceneEvent? SceneEvent { get; }
@@ -158,9 +159,10 @@ internal sealed class QuestLifecyclePlan
     }
 
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
-        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null)
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null,
+        bool strongway2019Active = false)
     {
-        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog);
+        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog, strongway2019Active: strongway2019Active);
         if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
             !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
             throw new InvalidDataException(eligibility.Reason);

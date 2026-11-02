@@ -131,8 +131,13 @@ internal sealed record DungeonRequiredItem(int ItemId, int Count, int Flag);
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public int? LimitTimeSeconds => RawSections.Where(row => row.Tag == "limit time").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 } seconds] }] ? seconds.Value : null;
     public int? CoinLimit => RawSections.Where(row => row.Tag == "coin limit").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 } count] }] ? count.Value : null;
+    internal IReadOnlyList<int> PersonalCoinInfoLimits { get; init; } = [];
+    public int? PersonalCoinInfoLimit(byte difficulty) => difficulty < PersonalCoinInfoLimits.Count
+        ? PersonalCoinInfoLimits[difficulty] : null;
     public byte AltarKind => RawSections.Where(row => row.Tag == "blood dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 or 2 } kind] }] ? (byte)kind.Value : (byte)0;
     public int AltarMaxRounds => RawSections.Where(row => row.Tag == "blood max round").ToArray() is
@@ -688,6 +693,7 @@ internal sealed class DungeonCatalog
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
             DungeonType = dungeonType,
+            PersonalCoinInfoLimits = ReadPersonalCoinInfoLimits(),
             WarriorsDungeon = sections.Where(section => section.Tag == "warriors dungeon").ToArray() is
                 [{ Tokens: [{ Type: 6 } warriors] }] ? resolve(warriors.Value) : null,
             RoomMoveKeepState = Flag("room move keep state"),
@@ -706,6 +712,24 @@ internal sealed class DungeonCatalog
                     _ => group.Any(section => section.Tokens.Count == 0)
                 })
         };
+
+        IReadOnlyList<int> ReadPersonalCoinInfoLimits()
+        {
+            var rows = sections.Where(section => section.Tag == "coin info").ToArray();
+            if (rows is not [{ Tokens.Count: 16 }] || rows[0].Tokens[0] is not { Type: 0, Value: 0 }) return [];
+            var values = rows[0].Tokens;
+            string[] names = ["[normal]", "[expert]", "[master]", "[king]", "[slayer]"];
+            var limits = new int[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                int offset = 1 + i * 3;
+                if (values[offset].Type != 6 || resolve(values[offset].Value) != names[i] ||
+                    values[offset + 1] is not { Type: 0, Value: >= 0 } count ||
+                    values[offset + 2] is not { Type: 0, Value: 0 }) return [];
+                limits[i] = count.Value;
+            }
+            return Freeze(limits);
+        }
 
         bool Flag(string tag) => sections.LastOrDefault(section => section.Tag == tag)?.Tokens is [{ Type: 0, Value: 1 }];
 

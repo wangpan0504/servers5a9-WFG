@@ -42,8 +42,10 @@ internal static class MileageTcpTests
         using (var peer=Open(fixture))
         {
             CheckInitial(peer,0,123); peer.Barrier();
+            long walletRevisionBeforeUse=(long)fixture.Query("SELECT revision FROM account_wallets").Single().Single();
             Use(peer,65); Ack(peer,65); Change(peer,123,223); peer.Barrier();
-            That(Count(65)==1 && fixture.Query("SELECT mileage,revision FROM account_wallets") is [[223L,2L]],
+            That(Count(65)==1 && fixture.Query("SELECT mileage,revision FROM account_wallets") is [[223L,long savedWalletRevision]] &&
+                savedWalletRevision==checked(walletRevisionBeforeUse+1),
                 "扣礼盒、积分、账号revision、角色和冷却同笔保存");
             string before=State(); Use(peer,65); Rejected(peer,65); peer.Barrier();
             That(State()==before,"同冷却期重复使用拒绝，既不重复扣源也不重复增加积分");

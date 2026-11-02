@@ -1,5 +1,6 @@
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Party;
+using DfoServer.Game.Session;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
@@ -7,10 +8,14 @@ namespace DfoServer.Network.Projection;
 internal static class PartyDungeonProjection
 {
     // 先提交原分队退场，再确认请求；退出者发送失败也必须通知幸存成员。
-    public static async Task<CommandResult> DepartAsync(GameConnectionContext context,
+    public static Task<CommandResult> DepartAsync(GameConnectionContext context,
+        PartyDungeonService? dungeons, PartyService? parties, Func<Task> acknowledge) =>
+        DepartAsync(context.Session, dungeons, parties, acknowledge);
+
+    internal static async Task<CommandResult> DepartAsync(GameSession session,
         PartyDungeonService? dungeons, PartyService? parties, Func<Task> acknowledge)
     {
-        var departure = dungeons?.Depart(context.Session, preserveSolo: true);
+        var departure = dungeons?.Depart(session, preserveSolo: true);
         if (departure is null || departure.Error != 0) return CommandResult.Unhandled;
         try { await acknowledge(); }
         finally
@@ -30,7 +35,8 @@ internal static class PartyDungeonProjection
         }
     }
 
-    public static async Task<IDisposable> AcquirePeersAsync(GameConnectionContext caller, PartyMember[] members, CancellationToken? stop = null)
+    public static async Task<IDisposable> AcquirePeersAsync(GameConnectionContext caller, PartyMember[] members, CancellationToken? stop = null,
+        Func<SemaphoreSlim, bool>? holdsCommandGate = null)
     {
         var held = new List<SemaphoreSlim>();
         try
@@ -39,6 +45,7 @@ internal static class PartyDungeonProjection
             {
                 if (ReferenceEquals(member.Actor.Session, caller.Session)) continue;
                 var gate = member.Actor.Session.CommandGate;
+                if (holdsCommandGate?.Invoke(gate) == true) continue;
                 await gate.WaitAsync(stop ?? caller.Stop);
                 held.Add(gate);
             }
