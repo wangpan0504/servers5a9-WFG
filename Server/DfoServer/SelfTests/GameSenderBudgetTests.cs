@@ -26,7 +26,45 @@ internal static class GameSenderBudgetTests
         await RevalidatedProtectedAsync();
         await QueuedPartyCommandAsync();
         await AcceptedPostAsync();
+        await ConfirmedAreaAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
+    }
+
+    static async Task ConfirmedAreaAsync()
+    {
+        foreach (bool fail in new[] { false, true })
+        {
+            using var owner = new AccountOwners().Acquire("confirmed-area", () => { });
+            using var stop = new CancellationTokenSource();
+            using var stream = new HeldStream { FailWrite = fail };
+            await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+            var held = sender.Send(0, 22, [0], "held");
+            await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            bool current = true;
+            var skipped = sender.SendConfirmedAsync(0, 23, [0], "stale-area", () => current);
+            bool outer = true;
+            Task<bool> staleOuter;
+            using (sender.QueuePublication(() => outer))
+                staleOuter = sender.SendConfirmedAsync(0, 23, [0], "outer-area", () => true);
+            current = false;
+            outer = false;
+            stream.Release.TrySetResult();
+            if (fail)
+            {
+                await FailuresAsync([held, skipped, staleOuter]);
+                continue;
+            }
+            await held;
+            TestCheck.That(!await skipped && stream.Frames.Count == 1,
+                "23在队列中守卫失效返回明确未发布，不把Task完成当作成功写帧");
+            TestCheck.That(!await staleOuter && stream.Frames.Count == 1,
+                "23真实发布复验外层共享发布守卫，不能只检查旅行回执");
+            using (sender.QueuePublication(() => false))
+                TestCheck.That(!await sender.SendConfirmedAsync(0, 23, [0], "outer-already-stale", () => true),
+                    "入队前外层失效也明确拒绝且不伪造已发布");
+            TestCheck.That(await sender.SendConfirmedAsync(0, 23, [1], "current-area", () => true) && stream.Frames.Count == 2,
+                "23仅在真实写帧完成之后返回成功");
+        }
     }
 
     static async Task ResultWrittenSequenceAsync()
@@ -215,6 +253,19 @@ internal static class GameSenderBudgetTests
                 await context.Reply(CmdPacketType.EXIT, [1], "party-exit-reply");
                 return Network.Protocol.CommandResult.CloseConnection;
             }, nameof(GameSenderBudgetTests));
+            var waitingArea = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            commands.Register(CmdPacketType.SET_USER_AREA, (context, _) =>
+            {
+                context.AfterDispatch = async () =>
+                {
+                    TestCheck.That(context.DispatchGates is null && context.CommandGate.CurrentCount == 1 &&
+                        party.Commands.CurrentCount == 1, "等待真实23前已释放本人及共享队伍门禁");
+                    waitingArea.TrySetResult();
+                    TestCheck.That(await context.Sender.SendConfirmedAsync(0, 23, [1], "confirmed-area-after-dispatch", () => true),
+                        "AfterDispatch由原调用等待真实23写出，未使用脱离所有者的后台任务");
+                };
+                return Task.FromResult(Network.Protocol.CommandResult.Handled);
+            }, nameof(GameSenderBudgetTests));
             commands.Seal();
             Task held = slow.Send(0, 2, [1], "held");
             await slowStream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -222,14 +273,16 @@ internal static class GameSenderBudgetTests
             await commands.DispatchAsync(slowContext, request).WaitAsync(TimeSpan.FromSeconds(2));
             Task closing = commands.DispatchAsync(slowContext, new(1, (ushort)CmdPacketType.EXIT, []));
             TestCheck.That(!closing.IsCompleted, "退出须在门禁外等待队列中的应答真正写出");
+            Task moving = commands.DispatchAsync(slowContext, new(1, (ushort)CmdPacketType.SET_USER_AREA, []));
+            await waitingArea.Task.WaitAsync(TimeSpan.FromSeconds(2));
             await commands.DispatchAsync(fastContext, request).WaitAsync(TimeSpan.FromSeconds(2));
             await fast.Send(0, 2, [2], "fast-barrier");
-            TestCheck.That(!held.IsCompleted && fastStream.Length > 0 && party.Commands.CurrentCount == 1,
+            TestCheck.That(!held.IsCompleted && !moving.IsCompleted && fastStream.Length > 0 && party.Commands.CurrentCount == 1,
                 "成员本地应答不等待慢写入，释放队伍门禁后队友命令和响应继续");
             slowStream.Release.TrySetResult();
-            await Task.WhenAll(held, closing).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(held, closing, moving).WaitAsync(TimeSpan.FromSeconds(5));
             await slow.Send(0, 2, [3], "slow-barrier");
-            TestCheck.That(slowStream.Frames.Count == 4 && slow.PendingBytes == 0, "慢连接恢复后按原序写出完整应答并释放预算");
+            TestCheck.That(slowStream.Frames.Count == 5 && slow.PendingBytes == 0, "慢连接恢复后按原序写出完整应答及真实23并释放预算");
         }
         finally
         {

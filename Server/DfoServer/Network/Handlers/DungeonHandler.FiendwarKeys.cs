@@ -9,8 +9,9 @@ namespace DfoServer.Network.Handlers;
 internal sealed partial class DungeonHandler
 {
     static Task PublishFiendwarKeyMessageAsync(GameConnectionContext context, FiendwarKeyLeaseMessage message) =>
-        context.Sender.Send(0, FiendwarKeyLeasePackets.Opcode, FiendwarKeyLeasePackets.Build(message), "fiendwar_key_lease",
-            () => context.Owner.IsCurrent && context.Session.CanPublishFiendwarKeyMessage(message));
+        context.Sender.TryPost(0, FiendwarKeyLeasePackets.Opcode, FiendwarKeyLeasePackets.Build(message), "fiendwar_key_lease",
+            () => context.Owner.IsCurrent && context.Session.CanPublishFiendwarKeyMessage(message))
+            ? Task.CompletedTask : Task.FromException(new IOException("Fiendwar key send queue unavailable"));
 
     static async Task PublishFiendwarKeyOffersAsync(FiendwarEntryPreparation pending)
     {

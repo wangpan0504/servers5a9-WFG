@@ -18,6 +18,7 @@ internal sealed partial class DungeonHandler
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
+        context.Session.FiendwarAreaTravelArrived = receipt => town.TravelFiendwarAsync(context, receipt);
         context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
         if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
     }

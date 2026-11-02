@@ -3,6 +3,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Party;
 using DfoServer.Game.Session;
+using DfoServer.Game.Town;
 using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
@@ -10,6 +11,72 @@ namespace DfoServer.Game.Raids;
 internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService parties, RaidDungeonCatalog catalog, RaidDungeonCatalog? guideCatalog = null)
 {
     internal RaidParty? Find(GameSession session) => registry.FindCurrent(session, session.SelectionEpoch);
+    internal FiendwarAreaEncounter? CaptureAreaEncounter(GameSession session, AreaRequest request)
+    {
+        if (session.Phase != SessionPhase.Town || session.ChannelEntry?.Type != 45 || request.Town != 57 ||
+            session.Selected?.Position is not { Town: 57 } position || position.Area == request.Area ||
+            Find(session) is not { Type: 2, Started: { } start } raid ||
+            raid.Members.SingleOrDefault(member => ReferenceEquals(member.Actor.Session, session)) is not { } member ||
+            session.CurrentRaidBattle(member.Actor) is not { Kind: RaidKind.Fiendwar } battle ||
+            battle.Instance != start.InstanceId || battle.FiendwarDefinition is not { } definition || definition.Guide != raid.Guide ||
+            !definition.Areas.TryGetValue(request.Area, out var target) || target.DungeonId <= 0 ||
+            !battle.AllowsFiendwarEntry(target.DungeonId)) return null;
+        // 00DEB440在发送36前列出当前地区成员，确认的是这批成员共同进入目标战斗。
+        var members = raid with { Members = raid.Members.Where(row =>
+            battle.FiendwarPosition(row.Actor.Character) == position.Area).ToImmutableArray() };
+        return new(raid, members, battle, position.Area, target.DungeonId, request);
+    }
+
+    internal FiendwarAreaTravelReceipt[] TravelEncounter(FiendwarAreaEncounter encounter, out string? reason)
+    {
+        reason = "fiendwar-area-members-changed";
+        var actors = encounter.Members.Members.Select(row => row.Actor).ToArray();
+        if (actors.Length is < 1 or > 4) return [];
+        var captured = actors.Select(actor => actor.Session.CaptureFiendwarAreaTravel(actor, encounter.Request)).ToArray();
+        if (captured.Any(row => row is null)) { reason = "fiendwar-area-travel-rejected"; return []; }
+        using var movement = encounter.Battle.ReserveFiendwarAreaMovement(actors, encounter.Source, encounter.Request.Area);
+        if (movement is null) { reason = "fiendwar-area-unavailable"; return []; }
+        var result = GameSession.CommitFiendwarAreaTravel(captured.Select(row => row!).ToArray(), movement,
+            () => registry.IsCurrent(encounter.Raid) && actors.All(actor => actor.IsCurrent &&
+                actor.Session.CurrentRaidBattle(actor) == encounter.Battle));
+        if (result.Length == 0) return [];
+        foreach (var row in result) Travelled(row.Actor.Session);
+        reason = null;
+        return result;
+    }
+
+    internal bool CanResumeAreaEncounter(FiendwarAreaEncounter encounter, FiendwarAreaTravelReceipt[] receipts)
+    {
+        if (receipts.Any(row => !row.Actor.IsCurrent)) return false;
+        try
+        {
+            return AccountOwners.Lease.ExecuteGroup(receipts.Select(row => (row.Actor.Owner, row.Actor.Character)).ToArray(), () =>
+            registry.IsCurrent(encounter.Raid) && encounter.Battle.AllowsFiendwarEntry(encounter.Dungeon) &&
+            receipts.Length == encounter.Members.Members.Length && receipts.All(row =>
+                encounter.Members.Members.Any(member => member.Actor == row.Actor) && row.Actor.IsCurrent &&
+                row.Actor.Owner.Generation == row.Travel.Generation && row.Actor.Session.SelectionEpoch == row.Travel.SelectionEpoch &&
+                row.Actor.Session.Phase == SessionPhase.Town && ReferenceEquals(row.Actor.Session.Selected, row.Travel.Character) &&
+                row.Travel.Character.Position is { Town: 57 } position && position.Area == encounter.Request.Area &&
+                row.Actor.Session.CurrentRaidBattle(row.Actor) == encounter.Battle &&
+                encounter.Battle.FiendwarPosition(row.Actor.Character) == encounter.Request.Area));
+        }
+        catch (InvalidOperationException error) when (error.Message == "组合成员租约已失效" && receipts.Any(row => !row.Actor.Owner.IsCurrent))
+        { return false; }
+    }
+    internal int? CurrentEncounterDungeon(GameSession session)
+    {
+        if (session.Phase != SessionPhase.Town || session.ChannelEntry?.Type != 45 ||
+            session.Selected?.Position is not { Town: 57 } position ||
+            Find(session) is not { Type: 2, Started: { } start } raid ||
+            raid.Members.SingleOrDefault(member => ReferenceEquals(member.Actor.Session, session)) is not { } member ||
+            !member.Actor.IsCurrent || session.CurrentRaidBattle(member.Actor) is not { Kind: RaidKind.Fiendwar } battle ||
+            battle.Instance != start.InstanceId || battle.FiendwarPosition(member.Actor.Character) != position.Area ||
+            battle.FiendwarDefinition is not { } definition || definition.Guide != raid.Guide ||
+            !definition.Areas.TryGetValue(position.Area, out var area) || area.DungeonId <= 0 ||
+            !battle.AllowsFiendwarEntry(area.DungeonId)) return null;
+        return area.DungeonId;
+    }
+
     internal RaidParty EncounterMembers(GameSession session, RaidParty raid)
     {
         var actor = raid.Members.Single(member => ReferenceEquals(member.Actor.Session, session)).Actor;
@@ -17,7 +84,7 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
         return battle is null ? raid : raid with { Members = raid.Members.Where(member =>
             battle.FiendwarPosition(member.Actor.Character) == battle.FiendwarPosition(actor.Character)).ToImmutableArray() };
     }
-    internal PartySnapshot? Group(GameSession initiator, int dungeon, out string? reason)
+    internal PartySnapshot? Group(GameSession initiator, int dungeon, out string? reason, RaidParty? expectedMembers = null)
     {
         reason = "fiendwar-encounter-not-ready";
         if (Find(initiator) is not { Type: 2, Started: { } start } raid ||
@@ -28,6 +95,8 @@ internal sealed class FiendwarDungeonService(RaidRegistry registry, PartyService
         var members = raid.Members.Where(member => member.Actor.IsCurrent && battle.FiendwarPosition(member.Actor.Character) == area)
             .OrderBy(member => member == anchor ? 0 : 1).ThenBy(member => member.Slot).ToArray();
         if (members.Length is < 1 or > 4 || members.Any(member => member.Actor.Session.Phase != SessionPhase.Town)) return null;
+        if (expectedMembers is not null && (members.Length != expectedMembers.Members.Length ||
+            members.Any(member => !expectedMembers.Members.Any(expected => expected.Actor == member.Actor)))) return null;
         var grouped = AccountOwners.Lease.ExecuteGroup(members.Select(member => (member.Actor.Owner, member.Actor.Character)).ToArray(),
             () => registry.IsCurrent(raid) && members.All(member => member.Actor.IsCurrent &&
                 battle.FiendwarPosition(member.Actor.Character) == area && member.Actor.Session.Selected?.Position is { Town: 57 } position && position.Area == area)

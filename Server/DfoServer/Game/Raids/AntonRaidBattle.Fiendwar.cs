@@ -15,6 +15,7 @@ internal sealed partial class AntonRaidBattle
     readonly Dictionary<Guid, (int Area, FiendwarCombatScale Scale, DateTimeOffset Started, DateTimeOffset Deadline)> fiendwarEncounters = [];
     readonly Dictionary<int, (long Generation, long Enemy, long Monster, int Ordinal)> fiendwarMazes = [];
     readonly Dictionary<ushort, FiendwarMovement> fiendwarMovements = [];
+    readonly HashSet<int> fiendwarAreaTravels = [];
 
     internal FiendwarScript? FiendwarDefinition => fiendwarDefinition;
     internal DateTimeOffset FiendwarNow => lukeClock.GetUtcNow();
@@ -131,6 +132,72 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
+    internal sealed class FiendwarAreaMovement(AntonRaidBattle battle, int source, int destination,
+        FiendwarMovement[] movements) : IDisposable
+    {
+        bool installed;
+        bool disposed;
+        internal bool IsCurrent
+        {
+            get
+            {
+                lock (battle.gate) return !installed && !disposed && battle.fiendwarAreaTravels.Contains(source) &&
+                    battle.fiendwarAreaTravels.Contains(destination) && movements.All(move =>
+                        battle.fiendwarMovements.Values.Contains(move)) &&
+                    battle.current.Fiendwar is { Failed: false, Cleared: false } battlefield &&
+                    battle.lukeClock.GetUtcNow() < battlefield.Deadline && !TerminalRequested(battle.current);
+            }
+        }
+        internal void Install()
+        {
+            lock (battle.gate)
+            {
+                // SQL已提交之后只核对预留身份；截止计时不能使半队停留在旧内存位置。
+                foreach (var movement in movements) movement.Install();
+                installed = true;
+            }
+        }
+        public void Dispose()
+        {
+            lock (battle.gate)
+            {
+                if (disposed) return;
+                disposed = true;
+                foreach (var movement in movements) movement.Dispose();
+                battle.fiendwarAreaTravels.Remove(source);
+                battle.fiendwarAreaTravels.Remove(destination);
+            }
+        }
+    }
+
+    internal FiendwarAreaMovement? ReserveFiendwarAreaMovement(RaidActor[] actors, int source, int destination)
+    {
+        lock (gate)
+        {
+            if (actors.Length is < 1 or > 4 || actors.Select(actor => actor.Character).Distinct().Count() != actors.Length ||
+                source == destination || fiendwarAreaTravels.Contains(source) || fiendwarAreaTravels.Contains(destination) ||
+                fiendwarMovements.Values.Any(move => move.Destination == source || move.Destination == destination) ||
+                current.FiendwarPositions.Any(row => row.Value == destination) ||
+                current.FiendwarPositions.Where(row => row.Value == source).Select(row => row.Key).Order()
+                    .SequenceEqual(actors.Select(actor => actor.Character).Order()) == false)
+                return null;
+            var held = new List<FiendwarMovement>();
+            foreach (var actor in actors)
+            {
+                if (ReserveFiendwarMovement(actor, destination) is not { } movement)
+                {
+                    foreach (var previous in held) previous.Dispose();
+                    return null;
+                }
+                held.Add(movement);
+            }
+            // 预留覆盖出发地与目的地，SQL期间其它请求不能改变本次自动组队名单。
+            fiendwarAreaTravels.Add(source);
+            fiendwarAreaTravels.Add(destination);
+            return new(this, source, destination, held.ToArray());
+        }
+    }
+
     // 位置SQL之前预留名额；领域gate不跨SQL持有。失败Dispose不改位置或重新抽样。
     internal FiendwarMovement? ReserveFiendwarMovement(RaidActor actor, int destination)
     {
@@ -141,6 +208,7 @@ internal sealed partial class AntonRaidBattle
                 lukeClock.GetUtcNow() >= field.Deadline || !fiendwarDefinition!.Areas.TryGetValue(destination, out var target) ||
                 dungeonRuns.Values.Any(run => run.Active.Contains(actor)) || fiendwarMovements.ContainsKey(actor.Character)) return null;
             int origin = current.FiendwarPositions.GetValueOrDefault(actor.Character, FiendwarBaseArea);
+            if (fiendwarAreaTravels.Contains(origin) || fiendwarAreaTravels.Contains(destination)) return null;
             if (origin != destination && !fiendwarDefinition.Areas[origin].Neighbours.Contains(destination)) return null;
             if (fiendwarDefinition.Guide)
             {

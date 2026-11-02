@@ -7,6 +7,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Game.Raids;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Parsers;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
@@ -33,6 +34,9 @@ internal static partial class FiendwarRaidTcpTests
         var counterRooms = new Dictionary<ushort, byte[]>();
         var previousCounters = new Dictionary<ushort, byte[]>();
         var partyRemovals = new Dictionary<ushort, byte[]>();
+        var nativeEntries = new Dictionary<ushort, List<WirePacket>>();
+        var fieldEnemies = new HashSet<int>();
+        var fieldMonsters = new HashSet<int>();
         bool titleReplayChecked = false;
         bool battlePassProbeChecked = false;
         bool counterRollbackChecked = false;
@@ -183,8 +187,9 @@ internal static partial class FiendwarRaidTcpTests
                 fixture.Sql("UPDATE guild_members SET joined_at_unix=1001 WHERE character_id=$p0", peers[7].Id);
             }
             if (count == 4) Reconnect(3);
-            foreach (var (peer, index) in peers.Select((peer, index) => (peer, index))) Move(peer, index < 4 ? 15 : 17);
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
+            MoveTeam(first, 15);
+            if (second.Length != 0) MoveTeam(second, 17);
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
             foreach (var peer in peers) VerifyCubeContractInRaid(fixture, peer);
@@ -231,7 +236,7 @@ internal static partial class FiendwarRaidTcpTests
             var timed = second;
             if (timed.Length == 0)
             {
-                foreach (var peer in first) Move(peer, 17, 15);
+                MoveTeam(first, 17, 15);
                 timed = first; Enter(timed, 17);
             }
             // 一人/八人保留局部超时；单人另有299秒断线，四人保留较短安全通关正例。
@@ -254,7 +259,7 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var peer in timed) { peer.Send(42); Drain(peer); }
             foreach (int camp in new[] { 27, 28, 29 })
             {
-                foreach (var peer in first) Move(peer, camp);
+                MoveTeam(first, camp);
                 var campEntry = Enter(first, camp); Clear(first, camp, campEntry);
                 if (battlePassProbe is not null)
                 {
@@ -266,7 +271,7 @@ internal static partial class FiendwarRaidTcpTests
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
             That(count != 1 || counterRollbackChecked, "单人团队沿真实兵营终房完成一次破招生产者晚SQL回滚和重新入场");
             That(dynamicSpawnRooms > 0, "每种人数的团队真实终房均完成动态召唤生成及零奖励退休");
-            foreach (var peer in first) Move(peer, 30);
+            MoveTeam(first, 30);
             var blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
             uint firstElement = symbols[(first[0].Id, 92)];
             That(firstElement is >= 5 and <= 8, "单侧抵达真实本体即可获得元素，不等对侧上线");
@@ -285,7 +290,7 @@ internal static partial class FiendwarRaidTcpTests
                     "全团离线重返保留原黑世界完成状态与实际剩余HP，不重抽元素或回血");
             }
             var white = second.Length == 0 ? first : second;
-            foreach (var peer in white) Move(peer, 31);
+            MoveTeam(white, 31);
             var whiteRoom = Clear(white, 31, Enter(white, 31), terminal: false);
             That(symbols[(white[0].Id, 93)] is >= 5 and <= 8, "另一侧保留第四个必要元素，接力不重抽已做成果");
             BossReport(white, 1, symbols[(white[0].Id, 93)]);
@@ -697,6 +702,19 @@ internal static partial class FiendwarRaidTcpTests
         }
         void Observe(TcpPeer peer, WirePacket frame)
         {
+                if (frame is { Kind: 0, Opcode: 1526 or 1527 })
+                {
+                    int width = frame.Opcode == 1526 ? 10 : 14;
+                    That(frame.Body.Length == 1 + frame.Body[0] * width, "自然路线依据完整真实兵线通知");
+                    var units = frame.Opcode == 1526 ? fieldMonsters : fieldEnemies;
+                    for (int index = 0; index < frame.Body[0]; index++)
+                    {
+                        int at = 1 + index * width;
+                        if (U32(frame.Body, at + 6) == 1) units.Add(frame.Body[at]);
+                        else if (U32(frame.Body, at + 6) == 2) units.Remove(frame.Body[at]);
+                        else That(false, "兵线通知操作只能是原生增加或移除");
+                    }
+                }
                 if ((count == 1 || battlePassCase == 1) && server != 0 && frame is { Kind: 0, Opcode: 9, Body.Length: > 11 } && frame.Body[9] == 0)
                 {
                     That(U16(frame.Body) == 1 && U16(frame.Body, 2) == 9999 && U16(frame.Body, 4) != 0 &&
@@ -750,46 +768,84 @@ internal static partial class FiendwarRaidTcpTests
             That(before == System.Text.Json.JsonSerializer.Serialize(fixture.Query(
                 "SELECT id,revision FROM characters ORDER BY id")), "支援显示不修改角色持久revision或资产");
         }
-        void Move(TcpPeer peer, int target, int? from = null)
+        void MoveTeam(TcpPeer[] team, int target, int? from = null)
         {
-            int origin = from ?? locations[peer.Id];
+            int origin = from ?? locations[team[0].Id];
+            That(team.All(peer => peer.SavedTownPosition().Area == origin), "出发同区成员沿真实原生确认共同移动");
             var queue = new Queue<int>(); queue.Enqueue(origin);
             var previous = new Dictionary<int, int> { [origin] = -1 };
             while (queue.TryDequeue(out int current) && !previous.ContainsKey(target))
-                foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next == target || next is not (30 or 31)))
+                foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next == target ||
+                    next is not (30 or 31) && !fieldEnemies.Contains(next) && !fieldMonsters.Contains(next)))
                     if (previous.TryAdd(next, current)) queue.Enqueue(next);
+            if (!previous.ContainsKey(target))
+            {
+                queue = new Queue<int>(); queue.Enqueue(origin);
+                previous = new Dictionary<int, int> { [origin] = -1 };
+                while (queue.TryDequeue(out int current) && !previous.ContainsKey(target))
+                    foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next is not (30 or 31)))
+                        if (previous.TryAdd(next, current)) queue.Enqueue(next);
+            }
+            That(previous.ContainsKey(target), "当前真实兵线存在可清理路线，空路封闭时沿真实遭遇继续");
             var path = new List<int>();
             for (int step = target; step != origin; step = previous[step]) path.Add(step);
             path.Reverse();
             foreach (int next in path)
             {
+                CompletePriorCommands();
                 var destination = new Location(57, checked((byte)next), 0, 0);
                 // 黑白入口为单向门，目标图只声明一处回门；其它兵营入口使用真实可站落点。
                 var arrival = resources.Towns.Entrance(new(57, checked((byte)origin), 0, 0), destination, new HashSet<int> { 8672 })
                     ?? resources.Towns.Spawn(destination, new HashSet<int> { 8672 })
                     ?? throw new InvalidDataException("Fiendwar destination has no valid landing");
-                peer.Send(36, Area(57, checked((byte)next), checked((ushort)arrival.X), checked((ushort)arrival.Y), 57, checked((ushort)origin)));
-                That(Drain(peer).Any(row => row is { Kind: 0, Opcode: 23 } && row.Body[3] == next), "多人各自移动且保存同一战场位置");
+                var moved = team.Select(_ => new List<WirePacket>()).ToArray();
+                // 空区仍各自移动；遭遇的一次确认会同时移动出发地成员，不再让假客户端逐人挤进已开战区域。
+                foreach (var member in team)
+                {
+                    if (member.SavedTownPosition().Area == next) continue;
+                    member.Send(36, Area(57, checked((byte)next), checked((ushort)arrival.X), checked((ushort)arrival.Y), 57, checked((ushort)origin)));
+                    for (int index = 0; index < team.Length; index++) moved[index].AddRange(Drain(team[index]));
+                }
+                That(team.All(peer => peer.SavedTownPosition().Area == next), "真实36提交并保存全部本次同区成员位置");
+                if (moved.Any(rows => rows.Any(row => row is { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode })))
+                {
+                    AntonTcpProbe.CompleteFiendwarEntry(team, moved, Drain);
+                    for (int index = 0; index < team.Length; index++) nativeEntries[team[index].Id] = moved[index];
+                    if (next != target)
+                    {
+                        Clear(team, next, Enter(team, next));
+                        if (battlePassProbeChecked) return;
+                        foreach (var member in team) { member.Send(42); Drain(member); }
+                    }
+                }
                 origin = next;
-                locations[peer.Id] = next;
+                foreach (var member in team) locations[member.Id] = next;
             }
             // 八人时另一线路仍持续接收全团战况，不能把数百个合法广播积到最后才读。
-            foreach (var other in peers.Where(other => other != peer)) Drain(other);
+            foreach (var other in peers.Where(other => !team.Contains(other))) Drain(other);
         }
         List<WirePacket>[] Enter(TcpPeer[] team, int area, bool direct = false)
         {
             foreach (var peer in team) returned.Remove(peer.Id);
             int dungeon = raid.Fiendwar!.Areas[area].DungeonId;
-            if (!direct)
+            bool natural = team.All(peer => nativeEntries.TryGetValue(peer.Id, out var rows) &&
+                rows.Any(row => row is { Kind: 0, Opcode: 28 } && U32(row.Body) == (uint)dungeon));
+            List<WirePacket>[] rows;
+            if (natural)
             {
-                team[0].Send(15, BitConverter.GetBytes(dungeon));
+                rows = team.Select(peer => { var frames = nativeEntries[peer.Id]; nativeEntries.Remove(peer.Id); return frames; }).ToArray();
             }
-            byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone();
-            BinaryPrimitives.WriteInt32LittleEndian(request, dungeon); team[0].Send(16, request);
-            var rows = team.Select(Drain).ToArray();
-            AntonTcpProbe.CompleteFiendwarEntry(team, rows, Drain);
-            if (!direct)
-                That(rows[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "同区域四人完成对象键握手后接受连续15/16");
+            else
+            {
+                That(!direct, "首次普通团队入口必须来自真实36确认，不能补发选图代替");
+                // 原地撤退重进继续覆盖已有15/16兼容，不冒充原生首次遇敌请求。
+                team[0].Send(15, BitConverter.GetBytes(dungeon));
+                byte[] request = (byte[])AntonTcpProbe.LiveSelect210.Clone();
+                BinaryPrimitives.WriteInt32LittleEndian(request, dungeon); team[0].Send(16, request);
+                rows = team.Select(Drain).ToArray();
+                AntonTcpProbe.CompleteFiendwarEntry(team, rows, Drain);
+                That(rows[0].Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "原地撤退重进兼容既有连续15/16");
+            }
             var map = rows[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
             foreach (var frames in rows)
             {

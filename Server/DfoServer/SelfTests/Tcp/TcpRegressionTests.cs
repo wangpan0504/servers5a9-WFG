@@ -14,6 +14,7 @@ internal static class TcpRegressionTests
         ("battle-pass-period-weekly", BattlePassOnlinePeriodTcpTests.WeeklyAsync),
         ("battle-pass-period-utc", BattlePassOnlinePeriodTcpTests.UtcAsync),
         ("fiendwar-raid-flow", FiendwarRaidTcpTests.RunAsync),
+        ("fiendwar-native-area-entry", FiendwarAreaEntryTcpTests.RunAsync),
         ("battle-pass-fiendwar-team-death", FiendwarRaidTcpTests.RunBattlePassTeamDeathAsync),
         ("battle-pass-fiendwar-team-boundary", FiendwarRaidTcpTests.RunBattlePassTeamBoundaryAsync),
         ("fiendwar-guide", async (options, root, resources) =>

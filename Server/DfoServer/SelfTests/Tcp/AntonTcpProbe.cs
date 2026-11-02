@@ -321,15 +321,16 @@ internal static partial class AntonTcpProbe
     internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
         bool leave = true, bool requireClearNotice = true)
     {
-        peer.Send(15, DungeonId(dungeon));
         bool fiendwar = IsFiendwarDungeon(dungeon);
+        if (!fiendwar) peer.Send(15, DungeonId(dungeon));
         List<WirePacket> opened = fiendwar ? [] : Flush(peer, "15 选图 " + dungeon);
         if (!fiendwar && !opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
             throw new InvalidOperationException(dungeon + " 的 15 未被接受");
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
-        peer.Send(16, request);
-        var entered = Flush(peer, "16 进图 " + dungeon);
+        if (!fiendwar) peer.Send(16, request);
+        // 自然36的收包屏障已完成FWL1；不能补15/16把缺失入口伪装成通过。
+        var entered = fiendwar ? TakeFiendwarEntry(peer, dungeon) : Flush(peer, "16 进图 " + dungeon);
         if (fiendwar && !entered.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
             throw new InvalidOperationException(dungeon + " 的握手后15未被接受");
         Note(report, entered);
@@ -492,6 +493,7 @@ internal static partial class AntonTcpProbe
                     continue;
                 }
                 Console.WriteLine($"  barrier complete elapsedMs={elapsed.Elapsed.TotalMilliseconds:F1}");
+                RememberFiendwarEntry(peer, rows);
                 return rows;
             }
             rows.Add(packet);
@@ -672,6 +674,7 @@ internal static partial class AntonTcpProbe
     {
         foreach (var packet in rows)
         {
+            report.Observe?.Invoke(packet);
             if (packet is { Kind: 0, Opcode: 115 })
             {
                 if (packet.Body is not [1, 1, _, _]) throw new InvalidOperationException("115必须是四字节真实Boss确认");
@@ -866,6 +869,7 @@ internal static partial class AntonTcpProbe
 
     internal sealed class AntonProbeReport
     {
+        public Action<WirePacket>? Observe;
         public DateTimeOffset StartedAt { get; } = DateTimeOffset.Now;
         public bool Started;
         public bool Entered210;

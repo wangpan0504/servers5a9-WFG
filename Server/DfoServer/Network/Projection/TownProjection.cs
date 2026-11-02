@@ -360,14 +360,19 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
 
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;
 
-    async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true)
+    async Task<bool> LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true,
+        bool confirmArea = false)
     {
         // 原生地区65会自动打开首期窗口；先提供本角色成绩，避免沿用前一角色的单例显示。
         if (Strongway2019Profile is not null) await Strongway2019Profile.InformationAsync(context, canSend);
         // 切图前不在旧场景移动实体；124 只属于选角入城。
         if (initial)
             await context.Notify(NotiPacketType.USER_POSITION, TownPackets.Position(c, false), "position", canSend);
-        await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c, true), "area", canSend);
+        bool published = true;
+        if (confirmArea)
+            published = await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.USER_AREA,
+                TownPackets.Position(c, true), "area", canSend!);
+        else await context.Notify(NotiPacketType.USER_AREA, TownPackets.Position(c, true), "area", canSend);
         if (transition)
             await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(c, canSend);
@@ -376,11 +381,19 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (towns.IsRoom(c.Position, completed) &&
             (ChannelAreaLanding.RoomExit(towns, context.Session.ChannelEntry, c.Position, c.Level, completed) ?? c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
+        return published;
     }
 
-    public async Task TravelAsync(GameConnectionContext context, TownTravelReceipt receipt, bool auraTeleport = false, bool partyTeleport = false)
+    public Task TravelAsync(GameConnectionContext context, TownTravelReceipt receipt, bool auraTeleport = false, bool partyTeleport = false) =>
+        TravelCoreAsync(context, receipt, auraTeleport, partyTeleport, false);
+
+    internal Task<bool> TravelFiendwarAsync(GameConnectionContext context, TownTravelReceipt receipt) =>
+        TravelCoreAsync(context, receipt, false, false, true);
+
+    async Task<bool> TravelCoreAsync(GameConnectionContext context, TownTravelReceipt receipt, bool auraTeleport, bool partyTeleport, bool confirmArea)
     {
-        bool CanSend() => context.Session.CanPublishTravel(receipt);
+        bool CanSend() => confirmArea ? context.Session.CanPublishFiendwarAreaTravel(receipt) : context.Session.CanPublishTravel(receipt);
+        if (confirmArea && !CanSend()) return false;
         if (marriage is not null)
             await marriage.WeddingSceneAsync(context, receipt.Character, arrival: false, CanSend);
         auraTeleport |= partyTeleport;
@@ -405,10 +418,10 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             return context.Sender.ClearScene(SceneActorClear.Preserve);
         });
         if (detached is null)
-            return;
+            return false;
         await detached;
         await TrainingSkillsAsync(context, canSend: CanSend, skills: learning, enteringArea: true);
-        await LocationAsync(context, receipt.Character, canSend: CanSend);
+        bool published = await LocationAsync(context, receipt.Character, canSend: CanSend, confirmArea: confirmArea);
         bool joined = context.Owner.Execute(() =>
         {
             if (!CanSend()) return false;
@@ -427,6 +440,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await marriage.WeddingSceneAsync(context, receipt.Character, arrival: true, CanSend);
             await marriage.HomeSceneAsync(context, receipt.Character, CanSend);
         }
+        return published && joined && CanSend();
     }
 
     // 切入地区时沿原生1234装载；同场景后继任务使用1235，不能释放角色仍引用的训练对象。

@@ -98,5 +98,6 @@ internal static class FiendwarResourceTests
         Console.WriteLine($"PASS {Count - before} 漩涡真实资源断言");
         FiendwarBattlefieldTests.RunResources(script);
         FiendwarGuideTests.RunResources(resources);
+        FiendwarBattlefieldTests.RunTimerProjectionAsync(script, resources.FiendwarGuide!.Fiendwar!).GetAwaiter().GetResult();
     }
 }
