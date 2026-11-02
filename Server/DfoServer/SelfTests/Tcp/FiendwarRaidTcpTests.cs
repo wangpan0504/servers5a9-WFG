@@ -1,4 +1,6 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.BattlePass;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -58,6 +60,31 @@ internal static partial class FiendwarRaidTcpTests
             System.Text.Json.JsonSerializer.Serialize(fixture.Query(
                 "SELECT revision,revive_coins,(SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0) FROM characters WHERE id=$p0", peer.Id)) == before,
             "拒绝币券保留原UID/Core、复活币、revision和审计，不先发钱包或源物品通知");
+    }
+
+    internal static async Task RunBattlePassTeamDeathAsync(ServerOptions source, string root, TcpTestResources resources)
+        => await RunBattlePassTeamFixtureAsync(source, root, resources, 0);
+
+    internal static async Task RunBattlePassTeamBoundaryAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await RunBattlePassTeamFixtureAsync(source, Path.Combine(root, "rollback"), resources, 1);
+        await RunBattlePassTeamFixtureAsync(source, Path.Combine(root, "writer"), resources, 2);
+    }
+
+    static async Task RunBattlePassTeamFixtureAsync(ServerOptions source, string root, TcpTestResources resources, int probeCase)
+    {
+        var start = DateTimeOffset.Parse("2026-10-29T06:00:00+08:00");
+        var policy = new BattlePassMissionPolicy("fiendwar-team-death-fixture", start, BattlePassCatalog.Load(resources.Archive));
+        var now = Enumerable.Range(0, policy.Days).Select(day => start.AddDays(day).AddHours(2))
+            .First(at => policy.Active(at).Any(row => row.Key.Category == 0 && row.Key.Id == 1));
+        var clock = new LukeRaidClockTests.Clock(now);
+        source = source with { BattlePassSeasonKey = policy.SeasonKey, BattlePassSeasonStart = start };
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-team-death"), resources: resources,
+            clock: clock, fiendwarMazeRandom: new MazeCoverageRandom());
+        await fixture.StartAsync();
+        var raid = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
+            SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items).Find(2)!.Resources!;
+        VerifyParties(fixture, resources, raid, new CharacterRepository(fixture.Database), clock, 4, policy, probeCase);
     }
 
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)

@@ -78,10 +78,11 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     }
     bool battlePassActivityFrozen;
     internal void FreezeBattlePassActivity(SinglePlayerDungeonRun run, TimeProvider clock,
-        DfoServer.Game.Raids.AntonRaidBattle? battle = null, DfoServer.Game.Raids.RaidActor? actor = null)
+        DfoServer.Game.Raids.AntonRaidBattle? battle = null, DfoServer.Game.Raids.RaidActor? actor = null,
+        DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility? raidEligibility = null, bool raidEligibilityCaptured = false)
     {
         if(battlePassActivityFrozen)return;
-        BattlePassActivity=DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareDeath(run,this,clock,battle,actor);
+        BattlePassActivity=DfoServer.Game.BattlePass.BattlePassDungeonActivity.PrepareDeath(run,this,clock,battle,actor,raidEligibility,raidEligibilityCaptured);
         battlePassActivityFrozen=true;
     }
 

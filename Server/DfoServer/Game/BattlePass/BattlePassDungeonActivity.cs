@@ -9,12 +9,13 @@ using DfoServer.GameWorld.BattlePass;
 
 namespace DfoServer.Game.BattlePass;
 
-// 普通、帝国逐轮、祭坛、单人漩涡引导死亡及原疲劳消费分别取原事实；其它专用死亡仍未接入。
+// 普通、帝国逐轮、祭坛、安徒恩及漩涡引导/团队死亡和原疲劳消费分别取原事实。
 internal sealed class BattlePassDungeonActivity
 {
     readonly DungeonEntryPlan? entry;
     readonly PreparedDungeonDeath? death;
     readonly AntonRaidBattle.FiendwarGuideDeath? guideDeath;
+    readonly AntonRaidBattle.RaidDeathEligibility? raidEligibility;
     readonly Character? altarCharacter;
     readonly QuestCatalog? altarQuests;
     public DungeonRunIdentity Identity { get; }
@@ -28,17 +29,30 @@ internal sealed class BattlePassDungeonActivity
     private BattlePassDungeonActivity(DungeonRunIdentity identity, string kind, string id, int amount,
         bool boss, TimeProvider clock, DungeonEntryPlan? entry = null, PreparedDungeonDeath? death = null,
         Character? altarCharacter = null, QuestCatalog? altarQuests = null,
-        AntonRaidBattle.FiendwarGuideDeath? guideDeath = null)
+        AntonRaidBattle.FiendwarGuideDeath? guideDeath = null, AntonRaidBattle.RaidDeathEligibility? raidEligibility = null)
     {
         Identity=identity;SourceKind=kind;SourceId=id;Amount=amount;IsBoss=boss;Clock=clock;
-        PlannedAt=guideDeath?.CapturedAt ?? clock.GetUtcNow();this.entry=entry;this.death=death;
+        PlannedAt=guideDeath?.CapturedAt ?? raidEligibility?.CapturedAt ?? clock.GetUtcNow();this.entry=entry;this.death=death;
         this.altarCharacter=altarCharacter;this.altarQuests=altarQuests;
         this.guideDeath=guideDeath;
+        this.raidEligibility=raidEligibility;
     }
 
     public static BattlePassDungeonActivity? PrepareDeath(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared,
-        TimeProvider clock, AntonRaidBattle? battle = null, RaidActor? actor = null)
+        TimeProvider clock, AntonRaidBattle? battle = null, RaidActor? actor = null,
+        AntonRaidBattle.RaidDeathEligibility? raidEligibility = null, bool raidEligibilityCaptured = false)
     {
+        if (!raidEligibilityCaptured && actor is not null)
+            raidEligibility = battle?.CaptureRaidDeathEligibility(actor,run,prepared.Death.MonsterKey);
+        if (raidEligibility is not null)
+        {
+            if (!EligibleRaidMonsterDeath(run,prepared) || !raidEligibility.Matches(run,prepared)) return null;
+            string source = raidEligibility.Kind == RaidKind.Anton ? "anton_raid_monster_death" : "fiendwar_team_monster_death";
+            return new(prepared.Death.Identity,source,
+                SourceKey(source,FormattableString.Invariant($"{prepared.Death.Identity.CharacterId}:{prepared.Death.EventId:N}")),
+                1,prepared.Monster.IsBoss,clock,run.Entry,prepared,raidEligibility:raidEligibility);
+        }
+        if (raidEligibilityCaptured) return null;
         var guideDeath = actor is null ? null : battle?.CaptureFiendwarGuideDeath(actor,run,prepared);
         bool guide = EligibleGuideDeath(run,prepared,guideDeath);
         if(!guide && !EligibleDeath(run,prepared))return null;
@@ -51,15 +65,17 @@ internal sealed class BattlePassDungeonActivity
     }
 
     static bool EligibleGuideDeath(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared,
-        AntonRaidBattle.FiendwarGuideDeath? guideDeath)
+        AntonRaidBattle.FiendwarGuideDeath? guideDeath) =>
+        guideDeath is not null && EligibleRaidMonsterDeath(run,prepared) && guideDeath.Matches(run,prepared);
+
+    static bool EligibleRaidMonsterDeath(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared)
     {
         var e=run.Entry;var m=prepared.Monster;var id=prepared.Death.Identity;
-        return guideDeath is not null && run.IsPendingDeath(prepared) &&
+        return run.IsPendingDeath(prepared) &&
             id==run.Snapshot.Identity && id.CharacterId==e.CharacterId && id.InstanceId!=Guid.Empty &&
             prepared.Death.EventId!=Guid.Empty && !e.IsPractice && !e.IsTrainingRoom && !e.IsTutorial &&
             !e.IsClassExperience && !e.IsQuestReplay && !e.IsAltar && !e.IsTagSystem &&
-            m.MonsterId>0 && m.CanReportDeath && !m.IsFriendly && !m.IsSpecialChild && m.AiCharacter is null &&
-            guideDeath.Matches(run,prepared);
+            m.MonsterId>0 && m.CanReportDeath && !m.IsFriendly && !m.IsSpecialChild && m.AiCharacter is null;
     }
 
     public static BattlePassDungeonActivity? PrepareAltarQuestTarget(SinglePlayerDungeonRun run,
@@ -140,7 +156,8 @@ internal sealed class BattlePassDungeonActivity
     public bool MatchesDeath(SinglePlayerDungeonRun run, PreparedDungeonDeath prepared) =>
         ReferenceEquals(entry,run.Entry) && ReferenceEquals(death,prepared) && run.IsPendingDeath(prepared) &&
         Identity==prepared.Death.Identity && Identity==run.Snapshot.Identity &&
-        (SourceKind=="fiendwar_guide_monster_death"
+        (raidEligibility is not null ? EligibleRaidMonsterDeath(run,prepared) && raidEligibility.Matches(run,prepared) :
+         SourceKind=="fiendwar_guide_monster_death"
             ? EligibleGuideDeath(run,prepared,guideDeath)
             : SourceKind=="altar_quest_target_monster_death"
             ? altarCharacter is {} character && altarQuests is {} quests && EligibleAltarQuestTarget(run,prepared,character,quests)
@@ -164,7 +181,7 @@ internal sealed class BattlePassDungeonActivity
         SHA256.HashData(Encoding.UTF8.GetBytes(kind + ":" + identity)).AsSpan(0, 16)).ToLowerInvariant();
 
     public bool MatchesMission(byte category, BattlePassMission mission) => category==0 && mission.RawParameter==-1 &&
-        mission.Experience==100 && (SourceKind is "fiendwar_guide_monster_death" or "normal_formal_monster_death" or "imperial_arena_monster_death" or "altar_quest_target_monster_death" or "altar_non_target_monster_death" && (mission is
+        mission.Experience==100 && (SourceKind is "anton_raid_monster_death" or "fiendwar_team_monster_death" or "fiendwar_guide_monster_death" or "normal_formal_monster_death" or "imperial_arena_monster_death" or "altar_quest_target_monster_death" or "altar_non_target_monster_death" && (mission is
             { Id:1,RawTypeCode:1,RequiredCount:10 } || IsBoss && mission is { Id:2,RawTypeCode:2,RequiredCount:2 }) ||
             SourceKind=="dungeon_fatigue_spend" && mission is { Id:4,RawTypeCode:3,RequiredCount:10 });
 }

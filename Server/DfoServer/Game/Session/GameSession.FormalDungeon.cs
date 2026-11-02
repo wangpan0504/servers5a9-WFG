@@ -1331,13 +1331,22 @@ internal sealed partial class GameSession
     });
 
     public FormalDungeonDeathResult ObserveFormalDungeonDeath(NativeDungeonDeathObservation observation,
-        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth) => ObserveDungeonDeath(observation,null,rewards,growth);
+        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth,
+        DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility? raidEligibility = null, bool raidEligibilityCaptured = false) =>
+        ObserveDungeonDeath(observation,null,rewards,growth,raidEligibility,raidEligibilityCaptured);
 
     public FormalDungeonDeathResult ObserveFormalDungeonScriptedDeath(NativeDungeonScriptedDeathObservation observation,
-        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth) => ObserveDungeonDeath(null,observation,rewards,growth);
+        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth,
+        DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility? raidEligibility = null, bool raidEligibilityCaptured = false) =>
+        ObserveDungeonDeath(null,observation,rewards,growth,raidEligibility,raidEligibilityCaptured);
+
+    internal DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility? CaptureRaidDeathEligibility(ushort key) => owner.Execute(() =>
+        CanMutatePartyDungeon && Ready && Selected is not null && Phase == SessionPhase.Dungeon && formalDungeon is { } dungeon &&
+        raidCombat is { } combat ? combat.Battle.CaptureRaidDeathEligibility(combat.Actor,dungeon.Run,key) : null);
 
     FormalDungeonDeathResult ObserveDungeonDeath(NativeDungeonDeathObservation? normal, NativeDungeonScriptedDeathObservation? scripted,
-        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth) => owner.Execute(() =>
+        DungeonKillExperienceCatalog rewards, CharacterGrowthCatalog growth,
+        DfoServer.Game.Raids.AntonRaidBattle.RaidDeathEligibility? raidEligibility, bool raidEligibilityCaptured) => owner.Execute(() =>
     {
         if (!CanMutatePartyDungeon || !Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || dungeon.Run.HasPendingPassiveClear || HasPendingQuestScene)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
@@ -1416,8 +1425,12 @@ internal sealed partial class GameSession
                     BossPositionUpdate = death.BossPositionUpdate }, dungeon, target);
         }
         // 首次冻结即携带原攻坚绑定；普通入口不能先把Guide的空来源永久冻结。
+        bool useRaidEligibility = raidEligibilityCaptured && dungeon.Entry.RaidEntry is { } entry &&
+            raidCombat is { } combat && entry.Kind == combat.Battle.Kind &&
+            (combat.Battle.Kind == DfoServer.Game.Raids.RaidKind.Anton ||
+             combat.Battle.Kind == DfoServer.Game.Raids.RaidKind.Fiendwar && combat.Battle.FiendwarDefinition is { Guide: false });
         pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System,
-            raidCombat?.Battle,raidCombat?.Actor);
+            raidCombat?.Battle,raidCombat?.Actor,raidEligibility,useRaidEligibility);
         pending.FreezeBattlePassHellCosmoCompletion(dungeon.Run, timeProvider ?? TimeProvider.System);
         // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
         if (dungeon.PendingDeathReward is null)
