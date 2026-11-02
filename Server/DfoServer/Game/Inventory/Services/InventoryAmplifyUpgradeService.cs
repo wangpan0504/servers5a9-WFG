@@ -25,25 +25,23 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         if (request.Mode is not (EnhancementMode.Amplify or EnhancementMode.LuckyAmplify or EnhancementMode.Reinforce) ||
             request.Target.List is not (InventoryListType.Main or InventoryListType.Equipment) || request.Target == sourcePosition ||
             request.ProtectionSlot != -1 || request.AuxiliarySlot0 != -1 || request.AuxiliarySlot1 != -1 ||
-            source is null || target is null || source.Uid <= 0 || target.Uid <= 0 || source.Uid == target.Uid || !source.Core.IsStackable ||
+            target is null || target.Uid <= 0 ||
             target.Core.ItemId != request.TargetItemId || target.Core.Kind != ItemKind.Equipment || target.Core.IsRental ||
-            source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 || source.IsExpired(now) || target.IsExpired(now) ||
+            target.Core.EquipmentLockId != 0 || target.IsExpired(now) ||
             (reinforce ? target.Core.AmplifyType != 0 : target.Core.AmplifyType is < 1 or > 4 || target.Core.AmplifyValue == 0) ||
             target.Core.Upgrade >= 31 ||
-            !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
+            !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
             return InventoryResult.Reject(RejectCode);
         var template = items.Get(target.Core.ItemId);
-        var sourceTemplate = items.Get(source.Core.ItemId);
-        if (sourceTemplate.Kind != source.Core.Kind || template.Kind != target.Core.Kind || sourceTemplate.UseForbidden ||
+        if (template.Kind != target.Core.Kind ||
             template.EquipmentSlot is not (12 or >= 14 and <= 23 or 25) || target.Core.Durability != template.Durability ||
             !enhancements.Allows(template.Id, request.Mode))
             return InventoryResult.Reject(RejectCode);
 
-        var use = upgrades.Get(source.Core.ItemId);
+        var use = source is null ? null : upgrades.Get(source.Core.ItemId);
         bool lucky = request.Mode == EnhancementMode.LuckyAmplify || reinforce && use?.Kind == AmplifyUseKind.Lucky;
         byte old = target.Core.Upgrade;
         if (use?.PendingRule is not null || use is not null && use.Reinforce != reinforce ||
-            reinforce && use is null ||
             (lucky ? use?.Kind != AmplifyUseKind.Lucky : use is { Kind: not AmplifyUseKind.Portable }))
             return InventoryResult.Reject(RejectCode);
         if (use is not null && !AllowsUse(use, character, target, template))
@@ -54,6 +52,29 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             return InventoryResult.Reject(RejectCode);
         var step = rules.Steps[old];
         bool portable = use?.Kind == AmplifyUseKind.Portable;
+        bool InvalidPhysicalSource()
+        {
+            if (source is null || source.Uid <= 0 || source.Uid == target.Uid || !source.Core.IsStackable ||
+                source.Core.EquipmentLockId != 0 || source.IsExpired(now) ||
+                !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind))
+                return true;
+            var sourceTemplate = items.Get(source.Core.ItemId);
+            return sourceTemplate.Kind != source.Core.Kind || sourceTemplate.UseForbidden;
+        }
+        bool wallet = false;
+        CurrencyKind? walletKind = null;
+        if (portable || lucky)
+        {
+            if (InvalidPhysicalSource()) return InventoryResult.Reject(RejectCode);
+        }
+        else if (CurrencyWallet.RewardKind(step.MaterialId) is { } kind &&
+            ItemSlotBoundService.CurrencySlot(kind) == request.MaterialSlot)
+        {
+            wallet = true;
+            walletKind = kind;
+        }
+        else if (InvalidPhysicalSource() || source!.Core.ItemId != step.MaterialId)
+            return InventoryResult.Reject(RejectCode);
         int failureWeight = AdjustedFailureWeight(step.FailureWeight, portable ? use!.SuccessBonusWeight : 0,
             lucky ? 0 : guildSuccessPercent);
         EnhancementSuccessBonus successBonus = default;
@@ -66,13 +87,16 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
                 successBonus.Weight);
         }
-        if (!portable && !lucky && source.Core.ItemId != step.MaterialId)
-            return InventoryResult.Reject(RejectCode);
         int count = portable || lucky ? 1 : step.MaterialCount;
-        int gold = portable || lucky ? 0 : rules.Gold(template);
-        if (source.Core.Count < count || before.Gold < gold)
+        int gold = portable || lucky ? 0 : rules.Gold(template, old);
+        int available = wallet ? checked((int)Math.Min(int.MaxValue, CurrencyWallet.Get(before, walletKind!.Value))) : source!.Core.Count;
+        if (available < count || before.Gold < gold)
             return InventoryResult.Reject(RejectCode);
-        var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, count).Plan!.After with { Gold = before.Gold - (uint)gold };
+        var spent = wallet
+            ? CurrencyService.Spend(before, walletKind!.Value, count)
+            : InventoryDeleteService.Plan(before, source!.Position, source.Core.ItemId, count);
+        if (!spent.Accepted) return InventoryResult.Reject(RejectCode);
+        var paid = spent.Plan!.After with { Gold = before.Gold - (uint)gold };
         byte penalty = lucky ? (byte)2 : rules.Penalty(template, old);
         InventoryItem? protection = null;
         AmplifyUse? protectionRule = null;
@@ -83,7 +107,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         {
             bool unresolvedProtection = false;
             foreach (var candidate in before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.IsStackable &&
-                item.Uid != source.Uid && item.Core.EquipmentLockId == 0 && !item.IsExpired(now)).OrderBy(item => item.Position.Index))
+                (source is null || item.Uid != source.Uid) && item.Core.EquipmentLockId == 0 && !item.IsExpired(now)).OrderBy(item => item.Position.Index))
                 if (upgrades.Get(candidate.Core.ItemId) is { Kind: AmplifyUseKind.Protection } rule && rule.Reinforce == reinforce)
                 {
                     if (rule.PendingRule is not null) { unresolvedProtection = true; continue; }
@@ -134,14 +158,17 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             refunds = [];
         }
         after.Validate(allocating: true);
-        long? deadline = new[] { source.ExpireTime, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0 }
+        long? deadline = new[] { source?.ExpireTime ?? 0, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0 }
             .Where(value => value > 0).Select(value => (long?)value).Min();
+        int remaining = wallet ? checked((int)CurrencyWallet.Get(paid, walletKind!.Value)) : source!.Core.Count - count;
+        string reason = reinforce
+            ? lucky ? "equipment_reinforcement_lucky" : portable ? "equipment_reinforcement_portable" : "equipment_reinforcement_npc"
+            : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" : "equipment_amplification_npc";
         receipt = new(reinforce ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
-            request.Target, request.MaterialSlot, source.Core.Count - count, old, outcome.Level, outcome.Code == 0)
+            request.Target, request.MaterialSlot, remaining, old, outcome.Level, outcome.Code == 0)
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true, UsesLevelProbability = !lucky,
             TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
-        return new(true, 0, new(before, after, reinforce ? lucky ? "equipment_reinforcement_lucky" : "equipment_reinforcement_portable" : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
-            "equipment_amplification_npc", new(character, deadline, clock,
+        return new(true, 0, new(before, after, reason, new(character, deadline, clock,
                 qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds)));
     }
 

@@ -26,15 +26,20 @@ internal sealed record AmplifyUpgradeRules(ImmutableArray<AmplifyUpgradeStep> St
     ImmutableDictionary<int, int> MaximumLevels, UpgradeDestroyBonus Bonus)
 {
     public int? NoticeLevel { get; init; }
-    public int Gold(ItemTemplate item)
+    public ImmutableArray<float> LevelCostWeights { get; init; } = [];
+    public int Gold(ItemTemplate item, byte upgradeLevel = 0)
     {
         int type = item.EquipmentSlot == 12 ? 0 : item.EquipmentSlot == 25 ? 12 : item.EquipmentSlot - 12;
         if (item.Grade < 0 || item.Grade >= Costs.Length || item.Rarity < 0 || item.Rarity >= RarityWeights.Length ||
             type < 0 || type >= TypeWeights.Length || Costs[item.Grade] <= 0 || TypeWeights[type] <= 0 || RarityWeights[item.Rarity] <= 0)
             throw new InvalidDataException("增幅费用缺少有效的品级、稀有度或部位");
-        // 旧端先乘部位再乘稀有度，两个阶段各自四舍五入；增幅没有强化表的等级费用倍率。
+        // 旧端先乘部位再乘稀有度，两个阶段各自四舍五入；强化表另有 [cost weight by upgrade level]，增幅没有该段。
         double typed = Math.Floor((double)Costs[item.Grade] * TypeWeights[type] + 0.5);
-        return checked((int)Math.Floor(typed * RarityWeights[item.Rarity] + 0.5));
+        double rared = Math.Floor(typed * RarityWeights[item.Rarity] + 0.5);
+        if (LevelCostWeights.IsDefaultOrEmpty) return checked((int)rared);
+        float weight = upgradeLevel < LevelCostWeights.Length ? LevelCostWeights[upgradeLevel] : LevelCostWeights[^1];
+        if (!float.IsFinite(weight) || weight <= 0) throw new InvalidDataException("强化等级费用倍率无效");
+        return checked((int)Math.Floor(rared * weight + 0.5));
     }
 
     public byte Penalty(ItemTemplate item, byte level)
@@ -102,7 +107,8 @@ internal sealed class AmplifyUpgradeCatalog
             ParseBonus(document, resolve))
         {
             NoticeLevel = document.Sections.LastOrDefault(row => row.Name == "notice") is { } notice
-                ? AmplificationFiles.Scalar(notice) : null
+                ? AmplificationFiles.Scalar(notice) : null,
+            LevelCostWeights = reinforce ? ParseLevelCostWeights(document) : []
         };
     }
 
@@ -221,6 +227,21 @@ internal sealed class AmplifyUpgradeCatalog
         var rows = AmplificationFiles.NamedNumbers(One(fields, name), resolve);
         Require(rows.All(row => rarities.Contains(row.Label) && float.IsFinite(row.Value)));
         return rows.ToImmutableDictionary(row => Array.IndexOf(rarities, row.Label), row => row.Value);
+    }
+    static ImmutableArray<float> ParseLevelCostWeights(PvfTokenDocument document)
+    {
+        var sections = document.Sections.Where(row => row.Name == "cost weight by upgrade level").ToArray();
+        Require(sections.Length == 1);
+        var numbers = AmplificationFiles.Numbers(sections[0]);
+        Require(numbers.Length >= 3 && numbers.Length % 3 == 0);
+        var weights = ImmutableArray.CreateBuilder<float>(numbers.Length / 3);
+        for (int at = 0; at < numbers.Length; at += 3)
+        {
+            Require(numbers[at] == weights.Count && numbers[at + 1] == numbers[at + 2] &&
+                float.IsFinite(numbers[at + 1]) && numbers[at + 1] > 0);
+            weights.Add(numbers[at + 1]);
+        }
+        return weights.ToImmutable();
     }
     static PvfTokenSection One(IEnumerable<PvfTokenSection> fields, string name)
     {

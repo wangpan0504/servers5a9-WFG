@@ -16,7 +16,15 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         receipt = null;
         var source = character.Inventory.Find(new(InventoryListType.Main, request.MaterialSlot));
         var target = character.Inventory.Find(request.Target);
-        if (source is null || target is null) return InventoryResult.Reject(Rejection);
+        if (target is null) return InventoryResult.Reject(Rejection);
+        if (source is null)
+        {
+            // 账号晶块虚拟槽（354–365）没有实体；普通NPC强化把无色小晶块发在358。勋章仍要求实体硬币。
+            if (target.Core.Kind == ItemKind.GuildMedal) return InventoryResult.Reject(Rejection);
+            if (request.Mode is EnhancementMode.Reinforce or EnhancementMode.Amplify)
+                return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
+            return InventoryResult.Reject(Rejection);
+        }
         // 勋章强化复用CMD80，但概率、材料与费用来自flag_upgrade_table；目标按种类与物品ID定位，
         // 不绑定列表38槽位：勋章页任意槽、快捷栏与穿戴槽32都属于合法位置。
         if (target.Core.Kind == ItemKind.GuildMedal) return PlanMedal(character, request, out receipt);
