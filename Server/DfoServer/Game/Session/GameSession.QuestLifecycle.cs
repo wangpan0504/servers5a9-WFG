@@ -42,12 +42,14 @@ internal sealed partial class GameSession
         if (movie.CinematicMapId != loaded.Map.Id ||
             entry.Maze.LayeredMaps.Count(map => map.Position == current.Position) != 1)
             return false;
-        // 3984普通Boss清图后由CinematicSettlementLayer批准换层，保留原清图终点。
+        // 已形成基础清图事实的旧路线继续沿原结算换层合同处理。
         if (run.ClearFact?.ClearMap == loaded.Map) return true;
-        // 3991非战斗基础图的演出向下换层，仍使用已核对的相同ACT/CMT与原末层终点。
-        return entry.CinematicClearTerminalMap == current &&
-            dungeon.Route.Rooms.Single(row => row.Room.Map == loaded.Map).Room.CinematicLayerReturn is { } source &&
-            source.CinematicId == movie.IntData[0] && source.CinematicPath == movie.CinematicPath;
+        // 普通Boss死亡演出可先换层再报告原图39；终点已由资源绑定到末层，33不依赖基础ClearFact。
+        if (entry.BossMap == current && dungeon.Route.Rooms.Single(row => row.Room.Map == loaded.Map).Room.BossDeathLayerChange is { } death &&
+            death.CinematicId == movie.IntData[0] && death.CinematicPath == movie.CinematicPath) return true;
+        // 非战斗基础图的演出向下换层，按QST/CMT及已绑定末层判定。
+        return entry.CinematicClearTerminalMap == current && movie.CinematicChangesLayer &&
+            entry.QuestCinematicMapId == loaded.Map.Id && entry.QuestCinematicChangesLayer;
     }
 
     public QuestLifecycleReceipt? ChangeQuest(ushort questId, QuestLifecycleAction action, QuestCatalog quests,

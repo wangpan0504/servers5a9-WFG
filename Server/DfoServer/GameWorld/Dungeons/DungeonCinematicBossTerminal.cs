@@ -11,25 +11,23 @@ internal static class DungeonCinematicBossTerminalRules
     public static int? DieCinematic(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve)
     {
         var indices = Enumerable.Range(0,tokens.Count).Where(i => Tag(tokens[i],resolve) == "die cinematic").ToArray();
-        return indices is [var at] && at+1 < tokens.Count && tokens[at+1] is { Type:0,Value:>0 } &&
-            (at+2 == tokens.Count || tokens[at+2].Type == 3) ? tokens[at+1].Value : null;
-    }
-
-    public static int? StartCinematic(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve)
-    {
-        // 只认首个ON START MAP触发ME行为0；其它触发不授予播放或死亡资格。
-        if (!Match(tokens,0,resolve,"trigger","on start map","do behavior","me",0,"/trigger")) return null;
-        int first = Enumerable.Range(0,tokens.Count).FirstOrDefault(i => Tag(tokens[i],resolve) == "behavior",-1);
-        return first >= 0 && first+3 < tokens.Count && Tag(tokens[first+1],resolve) == "cinematic" &&
-            tokens[first+2] is { Type:0,Value:>0 } && Tag(tokens[first+3],resolve) == "/behavior"
-            ? tokens[first+2].Value : null;
+        if (indices is not [var at] || at+1 >= tokens.Count || tokens[at+1] is not { Type:0,Value:>0 }) return null;
+        int end = at+2;
+        // 当前MOB也可声明死亡后向下换层；其它方向及多余参数不能借用这条路线。
+        if (end < tokens.Count && tokens[end].Type != 3)
+        {
+            if (tokens[end].Type != 6 || resolve(tokens[end].Value) != "down") return null;
+            end++;
+        }
+        return end == tokens.Count || tokens[end].Type == 3 ? tokens[at+1].Value : null;
     }
 
     public static bool DeathChangesLayer(int mapId,IReadOnlyList<PvfToken> tokens,Func<int,string> resolve)
     {
         if (!Map(tokens,mapId,resolve)) return false;
         var changes = Enumerable.Range(0,tokens.Count).Where(i => Tag(tokens[i],resolve) == "change map").ToArray();
-        if (changes is not [var at] || at < 10 ||
+        if (changes is not [var at] || at < 1 ||
+            !Match(tokens,at-1,resolve,"behavior") &&
             !Match(tokens,at-10,resolve,"behavior","actor","type","character","index",0,"pos",0,0,"/actor")) return false;
         string[] fields = ["x min","x max","y min","y max","z min","z max","character view"];
         if (at+17 >= tokens.Count || !Match(tokens,at+15,resolve,"/change map","/behavior","/scene") || at+18 != tokens.Count)
@@ -38,16 +36,6 @@ internal static class DungeonCinematicBossTerminalRules
             if (Tag(tokens[at+1+2*i],resolve) != fields[i] || tokens[at+2+2*i].Type != 0) return false;
         for (int i=0;i<3;i++) if (tokens[at+2+4*i].Value > tokens[at+4+4*i].Value) return false;
         return tokens[at+14].Value is 0 or 1;
-    }
-
-    public static bool RewardedDestroy(int mapId,int ordinal,IReadOnlyList<PvfToken> tokens,Func<int,string> resolve)
-    {
-        if (!Map(tokens,mapId,resolve)) return false;
-        var destroys = Enumerable.Range(0,tokens.Count).Where(i => Tag(tokens[i],resolve) == "destroy").ToArray();
-        if (destroys is not [var at] || at < 10 || at+6 >= tokens.Count ||
-            !Match(tokens,at-10,resolve,"behavior","actor","type","monster","index",ordinal,"pos") ||
-            tokens[at-3].Type != 0 || tokens[at-2].Type != 0 || Tag(tokens[at-1],resolve) != "/actor") return false;
-        return Match(tokens,at+1,resolve,"is show die",0,"is reward",1,"/destroy","/behavior");
     }
 
     static bool Map(IReadOnlyList<PvfToken> tokens,int id,Func<int,string> resolve) =>

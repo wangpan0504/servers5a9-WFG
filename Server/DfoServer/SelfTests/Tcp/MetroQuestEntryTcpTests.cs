@@ -1906,7 +1906,7 @@ internal static class MetroQuestEntryTcpTests
                 {
                     var plan = plans.Single(row => row.Room.Map == maze.MapSpecification!.Single(source => source.Position == path[index]));
                     Actors(peer,map,plan,id,dungeon); FormalDungeonTcpTests.Load(peer); drain(peer,null);
-                    foreach (var actor in plan.Monsters.Where(row => row.IsBlocking))
+                    foreach (var actor in plan.Monsters.Where(row => row.IsBlocking && (!early || index+1<path.Length)))
                     {
                         That(actor.CanReportDeath && !actor.IsScriptedBoss,"比比路线只报告原普通阻挡敌人的合成死亡");
                         peer.Send(39,FormalDungeonTcpTests.Death(actor.ObjectKey,peer.Id,checked((byte)actor.CandidateLevel)));
@@ -1914,10 +1914,14 @@ internal static class MetroQuestEntryTcpTests
                     }
                     if (index+1<path.Length) map = MoveMap(peer,path[index+1],0);
                 }
-                That(U32(map,14) == 76979 && Scalar(peer.Id,id) == 1,"领主实际死亡不代替比比演出终末");
+                That(U32(map,14) == 76979 && Scalar(peer.Id,id) == 1,"基础图的战斗不代替末层通关或演出终末");
+                var sourceBoss = plans.Single(row => row.Room.Map.Id == 76979).Monsters.Single(row => row.IsBoss);
                 map = MoveMap(peer,path[^1],1);
                 Actors(peer,map,plans.Single(row => row.Room.Map.Id == 76989),id,dungeon);
                 string before = State(peer.Id);
+                peer.Send(39,FormalDungeonTcpTests.Death(sourceBoss.ObjectKey,peer.Id,checked((byte)sourceBoss.CandidateLevel)));
+                peer.Barrier();
+                That(State(peer.Id) == before,"按实收包序在换层后报告旧图Boss，不冒充新层对象或发奖");
                 // Loading中的非终末形状按原门禁忽略，不发送任务ACK；Barrier检查连接及无多余回包。
                 peer.Send(33,[33,0,0x90,0x0F,0x10,0,0]); peer.Barrier();
                 That(State(peer.Id) == before,"比比换层Loading错误通道不保存进度或资产");
@@ -1930,7 +1934,19 @@ internal static class MetroQuestEntryTcpTests
                 before = State(peer.Id); SendCondition();
                 That(State(peer.Id) == before,"比比重复终末33不重复保存");
                 if (early) { FormalDungeonTcpTests.Load(peer); drain(peer,null); }
+                var terminalBoss = plans.Single(row => row.Room.Map.Id == 76989).Monsters.Single(row => row.IsBoss);
+                That(terminalBoss.ObjectKey != sourceBoss.ObjectKey,"基础与末层使用各自实际发布的KEY");
+                peer.Send(39,FormalDungeonTcpTests.Death(terminalBoss.ObjectKey,peer.Id,checked((byte)terminalBoss.CandidateLevel)));
+                int permits=0; drain(peer,packet => { if(packet.Kind==0 && packet.Opcode==31) permits++; });
+                That(permits==1 && fixture.Query("SELECT map_id,count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND map_id=76989 GROUP BY map_id",peer.Id)
+                    is [[76989L,1L]],"末层真实Boss死亡只到账一次并开放通关");
+                string cleared = State(peer.Id);
+                peer.Send(39,FormalDungeonTcpTests.Death(terminalBoss.ObjectKey,peer.Id,checked((byte)terminalBoss.CandidateLevel))); drain(peer,null);
+                That(State(peer.Id)==cleared,"重复终点死亡不重复奖励");
                 peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); drain(peer,null);
+                That(fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[76989L]],
+                    "实际46沿末层真实通关事实结算");
+                peer.Send(69);peer.Expect(1,69,[1]);peer.Send(70);peer.Expect(1,70);peer.Send(71,[0,0]);peer.Expect(1,71);drain(peer,null);
                 Finish(peer,id,65);
                 That(fixture.Query("SELECT acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3984",peer.Id)
                     is [[string saved]] && saved == acceptance,"比比34唯一交付同一次接取");

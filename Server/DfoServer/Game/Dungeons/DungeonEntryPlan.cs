@@ -124,6 +124,8 @@ internal sealed record DungeonEntryPlan(
     public DungeonMap? PassiveClearTerminalMap { get; init; }
     // Run从已批准的进图演出换层及末层Boss声明冻结，不改变NOTI28的基础Boss坐标。
     public DungeonMap? CinematicClearTerminalMap { get; init; }
+    public int? QuestCinematicMapId { get; init; }
+    public bool QuestCinematicChangesLayer { get; init; }
     public uint RouteQuestId { get; init; } = QuestId;
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     // 仅供本次深渊入场提示，不参与任务条件或接取绑定。
@@ -701,6 +703,8 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerQuestSlot = terminalQuest?.Slot ?? byte.MaxValue,
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
+            QuestCinematicMapId = layoutQuest?.CinematicMapId,
+            QuestCinematicChangesLayer = layoutQuest?.CinematicChangesLayer == true,
             IsOrdinaryHunt = ordinaryHunt,
             QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             BypassedQuestTerrain = bypassedTerrain,

@@ -1069,7 +1069,7 @@ internal sealed partial class SinglePlayerDungeonRun
         var basis = rooms[entry.BaseBossMap.Position];
         // 全非战斗基础图的ON START MAP演出明确CHANGE MAP，且只有一个同坐标Boss层。
         if (basis.Plan.Monsters.Any(monster => monster.IsBlocking) ||
-            basis.Plan.Room.CinematicLayerReturn is not { IsOnStartMap: true, ActorId: null } ||
+            entry.QuestCinematicMapId != basis.Plan.Room.Map.Id || !entry.QuestCinematicChangesLayer ||
             entry.Maze.LayeredMaps.Where(map => map.Position == entry.BaseBossMap.Position).ToArray() is not [var layer] ||
             !layeredRooms.TryGetValue(layer,out var terminal) || terminal.Plan.Room.DeclaredType != "[boss]" ||
             terminal.Plan.Monsters.Where(monster => monster.IsBlocking).ToArray() is not
