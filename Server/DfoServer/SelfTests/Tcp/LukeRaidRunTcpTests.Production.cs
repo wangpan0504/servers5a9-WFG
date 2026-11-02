@@ -627,8 +627,8 @@ internal static partial class LukeRaidRunTcpTests
                     That(previousCandidate is { Phase: 0, OldOwnerReleased: true } &&
                         previousCandidate.Instance.ToString("N") == instance &&
                         clock.GetElapsedTime(p1RejoinCandidateStamp) >= TimeSpan.FromSeconds(300) &&
-                        fixture.LukeRejoinCandidate(original) is null,
-                        "P1原候选已过期清理，不能把旧owner释放当作本轮断线完成");
+                        fixture.LukeRejoinCandidate(original) == previousCandidate,
+                        "P1已绑定在线候选跨原截止仍保持原阶段，不能把旧owner释放当作本轮P2断线完成");
                     leader.Dispose();
                     await WaitAsync(() => fixture.LukeRejoinCandidate(original) is { Phase: 1, OldOwnerReleased: true } current &&
                         current.Instance == previousCandidate.Instance && current.Key == previousCandidate.Key &&

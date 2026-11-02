@@ -52,18 +52,37 @@ internal static class LukeRaidRejoinTests
                 session.Select(0); session.MarkReady(); session.CurrentParty = () => parties.Current(session);
                 return session.CaptureRaidActor(raids)!;
             }
-            void EnterWaiting(RaidActor actor)
+            LukeRaidRejoinResult Restore(RaidActor actor, uint key)
             {
-                That(actor.Session.LeaveRoom(), "从真实频道房间出口进入Luke频道街区");
-                That(actor.Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)), "沿合成已登记城镇门正常进入候战区");
+                // 与正式668相同：已持本连接命令门禁，先恢复真实身份，再由调用方迁城。
+                actor.Session.CommandGate.Wait();
+                try { return recovery.Restore(actor, key, callerCommandHeld: true); }
+                finally { actor.Session.CommandGate.Release(); }
             }
             var actors = Enumerable.Range(0, 3).Select(index => Login(index, true)).ToArray();
-            EnterWaiting(actors[0]);
+            That(actors[0].Session.LeaveRoom(), "无团角色可离开共享房间到普通频道街区");
+            var unbound = actors[0].Session.Selected;
+            string unboundSql = Assets(path);
+            That(!actors[0].Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0), out var denied) && denied is null &&
+                actors[0].Session.TravelReason == "luke-raid-required" && ReferenceEquals(unbound, actors[0].Session.Selected) &&
+                Assets(path) == unboundSql, "未组真实卢克攻坚队时入口拒绝，位置、资产及切图回执均不变");
+            That(parties.SetInformation(actors[0].Session, 0, PartySettings.Default).Accepted &&
+                parties.Current(actors[0].Session) is not null &&
+                !actors[0].Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)) && Assets(path) == unboundSql,
+                "真实普通队伍也不能代替卢克攻坚队准入");
+            That(parties.Leave(actors[0].Session).Accepted, "普通队伍门禁夹具正常解散");
+            That(raids.Create(actors[0], 0, "wrong", "wrong"u8.ToArray(), 8, 1) is not null &&
+                !actors[0].Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)) &&
+                ReferenceEquals(unbound, actors[0].Session.Selected) && Assets(path) == unboundSql,
+                "其它团本目录身份不能授权卢克入口");
+            That(raids.Leave(actors[0], actors[0].Character) is not null, "其它团本夹具正常离团");
+            That(raids.Create(actors[0], 1, "rejoin", "rejoin"u8.ToArray(), 8, 1) is not null, "普通街区可真实创建卢克攻坚队");
+            That(actors[0].Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)), "真实团员才可沿右侧门进入候战街区");
             var unstarted = actors[0].Session.Selected;
             That(actors[0].Session.BeginDungeonSelection() is null &&
                 actors[0].Session.Phase == SessionPhase.Town && ReferenceEquals(actors[0].Session.Selected, unstarted),
                 "未开团残留在候战区也不能建立普通选图，原角色及Town阶段保持不变");
-            raids.Create(actors[0], 1, "rejoin", "rejoin"u8.ToArray(), 8, 1);
+
             foreach (var member in actors.Skip(1))
             { raids.Invite(actors[0], member, 0); That(raids.Respond(member, actors[0].Character, true).Accepted, "原团邀请"); }
             foreach (var member in actors) raids.Assign(actors[0], member.Character, 1);
@@ -120,10 +139,9 @@ internal static class LukeRaidRejoinTests
                 !captureOnly.Evaluate(fresh, fact!.Key, true, false).Matched,
                 "仅Luke内部候选开关不打开Anton通知或668，不把候选当重返成功");
             string sql = Assets(path); var character = fresh.Session.Selected;
-            That(recovery.Restore(fresh, fact!.Key).Reason == "waiting-room-required" &&
-                fresh.Session.CurrentRaidBattle(fresh) is null && raids.Find(fresh) is null && Assets(path) == sql &&
-                ReferenceEquals(character, fresh.Session.Selected), "普通重登仍在房间时拒绝绑定，不暗中迁城或改SQL");
-            EnterWaiting(fresh);
+            That(fresh.Session.CurrentRaidBattle(fresh) is null && raids.Find(fresh) is null &&
+                fresh.Session.ReturnLukeRejoinToWaiting(fresh) is null && Assets(path) == sql &&
+                ReferenceEquals(character, fresh.Session.Selected), "普通重登没有原团身份时不能借迁城接口进入候战");
             sql = Assets(path); character = fresh.Session.Selected;
             var wrongPhase = fact! with { Luke = new(fact!.Luke!.Original, battle, beforeParty, 2, fact.Luke.Phase + 1) };
             That(!raids.RecordLukeDisconnected(raids.Find(actors[0])!, wrongPhase, records) && ReferenceEquals(records.Peek(fresh.Character), fact),
@@ -132,20 +150,20 @@ internal static class LukeRaidRejoinTests
             using (var held = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), 10,
                 actors.Take(2).Select(a => (a, new DungeonRunIdentity(a.Character, 0, 1, heldRun, 1))).ToArray()))
             {
-                That(held is not null && !recovery.Restore(fresh, fact.Key).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null,
+                That(held is not null && !Restore(fresh, fact.Key).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null,
                     "原团有在途Run预约时拒绝恢复，释放预约后才能继续");
             }
             That(records.Evaluate(fresh, fact!.Key, true, false).Reason == "luke-rejoin-wire-unavailable" && !fact.Attempted,
                 "共用候选容器不让旧Anton668诊断消费Luke预约或发假成功");
-            That(!recovery.Restore(fresh, fact.Key + 1).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null, "错key拒绝且会话未安装");
-            That(!recovery.Restore(fresh with { Channel = new(2, 21) }, fact.Key).Accepted, "错频道拒绝");
-            That(!recovery.Restore(actors[2], fact.Key).Accepted, "旧owner请求拒绝");
+            That(!Restore(fresh, fact.Key + 1).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null, "错key拒绝且会话未安装");
+            That(!Restore(fresh with { Channel = new(2, 21) }, fact.Key).Accepted, "错频道拒绝");
+            That(!Restore(actors[2], fact.Key).Accepted, "旧owner请求拒绝");
             actors[1].Session.CommandGate.Wait();
-            try { That(recovery.Restore(fresh, fact.Key).Reason == "command-busy", "全团命令忙时全部保持未安装"); }
+            try { That(Restore(fresh, fact.Key).Reason == "command-busy", "全团命令忙时全部保持未安装"); }
             finally { actors[1].Session.CommandGate.Release(); }
             That(ReferenceEquals(character, fresh.Session.Selected) && Assets(path) == sql && raids.Find(fresh) is null,
                 "失败规划不改SQL资产、角色快照或registry");
-            var restored = recovery.Restore(fresh, fact.Key);
+            var restored = Restore(fresh, fact.Key);
             That(restored.Accepted && restored.Reason == "bound-without-wire" && ReferenceEquals(fresh.Session.CurrentRaidBattle(fresh), battle) &&
                 restored.Battle!.Instance == beforeRaid.Started!.InstanceId && restored.Battle.Phase == fact.Luke!.Phase,
                 "领域恢复绑定同一个Battle同phase，无新实例");
@@ -154,10 +172,11 @@ internal static class LukeRaidRejoinTests
                 "原团和原普通分队ID/槽位保持");
             That(restored.Raid.Leader == actors[0].Character && restored.Party!.Leader == 0, "普通成员恢复不改原队长");
             long revision = battle.View.Revision;
-            That(recovery.Restore(fresh, fact.Key).Reason == "already-bound" && battle.View.Revision == revision, "同新owner重复恢复幂等且不重锚时钟");
+            That(Restore(fresh, fact.Key).Reason == "already-bound" && battle.View.Revision == revision, "同新owner重复恢复幂等且不重锚时钟");
             raids.RemoveSession(actors[2].Session, actors[2].Epoch);
             That(raids.Find(fresh)?.Started?.InstanceId == battle.Instance && Assets(path) == sql &&
                 ReferenceEquals(character, fresh.Session.Selected), "旧session迟到清理不能移除新owner，恢复不写票据/资产/资格SQL");
+            That(fresh.Session.ReturnLukeRejoinToWaiting(fresh) is not null, "正式重返先绑定真实团，再迁入受保护候战街区");
             var maze = new DungeonMaze(0, 1, 1, "1", [new(0, 0)], [new(0, 0)], [new("boss", new(0, 0), 77, "fixture/rejoin.map")], []);
             var definitions = new[] { 10, 20 }.ToImmutableDictionary(id => id, id => new DungeonDefinition(id, "fixture/rejoin.dgn", 1, 90, [maze], []));
             var catalog = new RaidDungeonCatalog(script, definitions, [], new Dictionary<int, string> { [77] = "fixture/rejoin.map" }, _ => true, 1);
@@ -170,13 +189,14 @@ internal static class LukeRaidRejoinTests
             var leaderFact = recovery.Capture(actors[0])!;
             actors[0].Session.End(); parties.Detach(actors[0].Session); actors[0].Owner.Dispose();
             That(recovery.RecordDisconnected(leaderFact), "原队长断线可保留身份，但不代表可恢复");
-            var leaderLogin = Login(0, false); EnterWaiting(leaderLogin);
+            var leaderLogin = Login(0, false);
             var retainedRaid = raids.Find(actors[1])!; var retainedParty = parties.Current(actors[1].Session)!;
             string leaderAssets = Assets(path);
-            var leaderRestored = recovery.Restore(leaderLogin, leaderFact.Key);
+            var leaderRestored = Restore(leaderLogin, leaderFact.Key);
             That(leaderRestored.Accepted && leaderRestored.Party!.Leader == retainedParty.Leader &&
                 leaderRestored.Raid!.Leader == retainedRaid.Leader && Assets(path) == leaderAssets,
                 "原队长回团保留继任队长，不改变资产");
+            That(leaderLogin.Session.ReturnLukeRejoinToWaiting(leaderLogin) is not null, "旧队长重返绑定后也可迁城");
             That(selection.Select(actors[1].Session, 10, parties.Current(actors[1].Session)).Length == 3,
                 "低slot旧队长回来后，继任队长仍能为完整分队选择地下城");
             That(selection.CancelSelection(actors[1].Session, parties.Current(actors[1].Session)), "重返后取消选图正常");
@@ -193,9 +213,10 @@ internal static class LukeRaidRejoinTests
             var allBack = new[] { Login(2, false), Login(0, false), Login(1, false) };
             foreach (var returning in allBack)
             {
-                EnterWaiting(returning);
-                That(recovery.Restore(returning, leaderFact.Key).Accepted &&
-                    ReferenceEquals(returning.Session.CurrentRaidBattle(returning), battle),
+
+                That(Restore(returning, leaderFact.Key).Accepted &&
+                    ReferenceEquals(returning.Session.CurrentRaidBattle(returning), battle) &&
+                    returning.Session.ReturnLukeRejoinToWaiting(returning) is not null,
                     "全团与普通分队均消失后，第299秒依次返回同一实例");
             }
             That(parties.Current(allBack[0].Session) is { Members.Length: 3 } recreated &&
@@ -204,7 +225,7 @@ internal static class LukeRaidRejoinTests
             // 第299秒恢复后保持在线跨过原第300秒，真实触发候选清理与重返幂等入口。
             clock.Advance(1);
             That(allBack.All(actor => records.Peek(actor.Character) is { LukeDeadlineAnchor: null } &&
-                recovery.Restore(actor, leaderFact.Key).Reason == "already-bound") &&
+                Restore(actor, leaderFact.Key).Reason == "already-bound") &&
                 raids.Find(allBack[0]) is { Members.Length: 3 },
                 "在线重返跨原300秒后仍绑定原团，旧断线截止不能清除已绑定候选");
             var onlineParty = parties.Current(allBack[0].Session)!;
@@ -240,10 +261,10 @@ internal static class LukeRaidRejoinTests
             var phaseFact = recovery.Capture(phaseActors[2])!;
             phaseActors[2].Session.End(); parties.Detach(phaseActors[2].Session); phaseActors[2].Owner.Dispose();
             That(recovery.RecordDisconnected(phaseFact), "兼容高slot候选登记成功");
-            var phaseLogin = Login(2, false); EnterWaiting(phaseLogin);
-            That(phaseBattle.CanRestoreLukeRejoin(phaseFact.Luke!) && phaseBattle.IsLukeWaitingRoom(phaseLogin) &&
+            var phaseLogin = Login(2, false);
+            That(phaseBattle.CanRestoreLukeRejoin(phaseFact.Luke!) && raids.Find(phaseLogin) is null &&
                 phaseFact.Slot == 2 && parties.Current(phaseActors[0].Session)!.Leader == 0,
-                "pending变化之前候选phase/owner/位置及普通队长均兼容");
+                "pending变化之前候选phase/owner及普通队长均兼容，新登录仍未绑定");
             string phaseSql = Assets(path);
             Guid ending = Guid.NewGuid();
             var rows = phaseActors.Take(2).Select(a => (Actor: a, Identity: new DungeonRunIdentity(a.Character, 0, 1, ending, 1))).ToArray();
@@ -253,11 +274,11 @@ internal static class LukeRaidRejoinTests
                 var facts = rows.Select(row => (row.Actor, new DungeonClearFact(row.Identity, 10, [Guid.NewGuid()])
                     { ClearMap = new("boss", new(0, 0), 77, "fixture/rejoin.map") })).ToArray();
                 That(phaseBattle.CompleteLukeDungeon(facts) is not null && phaseBattle.HasPendingTransition &&
-                    recovery.Restore(phaseLogin, phaseFact.Key).Reason == "stale-reservation",
+                    Restore(phaseLogin, phaseFact.Key).Reason == "stale-reservation",
                     "唯一新变化为Run终结待退出屏障，兼容高slot候选仍必须拒绝");
                 foreach (var row in rows) phaseBattle.ReleaseDungeon(row.Actor, ending);
                 That(phaseBattle.View.State == AntonRaidBattleState.Reward &&
-                    recovery.Restore(phaseLogin, phaseFact.Key).Accepted &&
+                    Restore(phaseLogin, phaseFact.Key).Accepted &&
                     ReferenceEquals(phaseLogin.Session.CurrentRaidBattle(phaseLogin), phaseBattle) && Assets(path) == phaseSql,
                     "Run退出后可恢复原Reward阶段，已提交奖励资格和资产不重抽");
             }

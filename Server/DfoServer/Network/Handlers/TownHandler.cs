@@ -55,12 +55,15 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
                 }
             }
         }
-        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required")
+        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required" or "luke-raid-required")
         {
             await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "town_admission_denied");
             if (session.TravelReason == "evildom-war-party-required")
                 await context.Notify(NotiPacketType.AAS_TIPS, DfoServer.Network.Builders.ServerNoticePackets.Build(
                     "魔界大战", "请先创建或加入魔界大战队伍。"), "evildom_war_party_required");
+            else if (session.TravelReason == "luke-raid-required")
+                await context.Notify(NotiPacketType.AAS_TIPS, DfoServer.Network.Builders.ServerNoticePackets.Build(
+                    "卢克攻坚队", "请先创建或加入卢克攻坚队。"), "luke_raid_required");
         }
         return CommandResult.Handled;
     }
