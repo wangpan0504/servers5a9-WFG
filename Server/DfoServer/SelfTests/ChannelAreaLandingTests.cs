@@ -168,7 +168,7 @@ internal static class ChannelAreaLandingTests
         // 1379 房间返回城镇投影与 1426 出房共用 RoomExit，普通频道不再取频道落点。
         That(ChannelAreaLanding.RoomExit(towns, sky, towns.Room, 95, northDone) is null, "普通频道的房间返回地区投影不再取频道落点");
 
-        // 只保护专属城镇已有的返回地区：普通街道照常更新，缺记忆的旧存档保持原恢复路线。
+        // 专属城镇保留普通返回地区；普雷/漩涡缺失或污染记忆时回初始地区，普通街道照常更新。
         foreach (var (name, position, remembered, expected) in new (string, Location, Location?, Location)[]
         {
             ("PreyBack", new(59, 1, 1217, 98), new(38, 0, 622, 196), new(38, 0, 622, 196)),
@@ -177,7 +177,10 @@ internal static class ChannelAreaLandingTests
             ("TagBack", new(62, 0, 474, 234), new(38, 0, 622, 196), new(38, 0, 622, 196)),
             ("ImperialBack", new(48, 0, 474, 234), new(38, 0, 622, 196), new(38, 0, 622, 196)),
             ("PreyBadBack", new(59, 1, 1217, 98), new(255, 255, 0, 0), new(38, 0, 622, 196)),
-            ("PreyNoBack", new(59, 1, 1217, 98), null, new(59, 1, 1217, 98)),
+            ("PreyNoBack", new(59, 1, 1217, 98), null, new(38, 0, 622, 196)),
+            ("PreyPolluted", new(59, 1, 1217, 98), new(59, 1, 1217, 98), new(38, 0, 622, 196)),
+            ("FiendNoBack", new(57, 1, 1245, 142), null, new(38, 0, 622, 196)),
+            ("FiendBadBack", new(57, 1, 1245, 142), new(57, 1, 1245, 142), new(38, 0, 622, 196)),
             ("NorthUpdate", new(39, 0, 596, 144), new(38, 0, 622, 196), new(39, 0, 596, 144)),
             ("PvpNoBack", new(10, 0, 474, 234), null, new(38, 0, 622, 196)),
             ("XianNoBack", new(117, 1, 1070, 213), null, new(38, 0, 622, 196))
@@ -187,6 +190,27 @@ internal static class ChannelAreaLandingTests
             var restored = CharacterSelection.Prepare(repo, owner, rememberedRole, towns, northDone, null, channel: elven);
             That(restored.Position == towns.Room && restored.Return == expected,
                 $"{name} 选角的完整返回地区符合专属记忆/普通更新/缺省恢复边界，实际={restored.Return}");
+            // 新增边界用例验完释放槽位，保留本组后续既有角色覆盖。
+            if (name is "PreyPolluted" or "FiendNoBack" or "FiendBadBack")
+                repo.Delete(owner, new(restored.Id, restored.Slot, restored.Name, restored.Revision));
+        }
+
+        // 返回地区已经污染、当前位置已回普通街区或共享房间时，同频道快照恢复也必须清理，不能等下次切频道。
+        foreach (byte raidTown in new byte[] { 19, 57, 59 })
+        {
+            var polluted = new Location(raidTown, 1, 1, 1);
+            foreach (var position in new[] { towns.Room, towns.InitialReturn })
+            {
+                var oldRole = repo.Create(owner, new($"BadBack{raidTown}{position.Area}", position, polluted) { Level = 95 });
+                var repaired = CharacterSelection.Prepare(repo, owner, oldRole, towns, northDone, null,
+                    resumeTown: true, channel: elven);
+                That(repaired.Position == position && repaired.Return == towns.InitialReturn,
+                    $"旧团本{raidTown}返回记忆在普通频道同类型快照恢复时清理，原位置不变");
+                That(TownTravel.LeaveRoom(repaired with { Position = towns.Room }, towns, northDone, elven) is
+                    { Accepted: true, Position: var outside } && outside == towns.InitialReturn,
+                    $"清理后的普通房间出口不再返回团本{raidTown}");
+                repo.Delete(owner, new(repaired.Id, repaired.Slot, repaired.Name, repaired.Revision));
+            }
         }
 
         var skyRole = repo.Create(owner, new("Sky", towns.Room, towns.InitialReturn));

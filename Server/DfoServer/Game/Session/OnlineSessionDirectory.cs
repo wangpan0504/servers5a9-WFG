@@ -24,6 +24,7 @@ internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session
 {
     // 仅限带角色身份守卫的受控展示；旧诊断Probe保持原行为。
     public Func<ushort, byte[], string, Func<bool>, bool>? GuardedProbe { get; init; }
+    public Action? RefreshFatigue { get; init; }
 }
 
 // GM、在线协议与聊天共用同一会话索引，不复制角色或就绪状态。
@@ -49,8 +50,15 @@ internal sealed class OnlineSessionDirectory
     /// <summary>登记一条已认证连接；<paramref name="probe"/> 只负责把 opcode 与正文入本连接发送队列。</summary>
     public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe,
         OnlineExpertJobConnection? expertJob = null, OnlineMarriageConnection? marriage = null,
-        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null) =>
-        connections.Set(connectionId, new(connectionId, session, probe, expertJob, marriage) { GuardedProbe = guardedProbe });
+        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null, Action? refreshFatigue = null) =>
+        connections.Set(connectionId, new(connectionId, session, probe, expertJob, marriage)
+            { GuardedProbe = guardedProbe, RefreshFatigue = refreshFatigue });
+
+    // 复用同一连接索引与有界发送队列；回调只捕获内存并入队，不等待接收者socket。
+    public void RefreshFatigueDisplays()
+    {
+        foreach (var connection in connections.SnapshotValues()) connection.RefreshFatigue?.Invoke();
+    }
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>
     public ChatProbeConnection? FindConnection(int connectionId) =>

@@ -30,11 +30,12 @@ internal static partial class DevelopmentGm
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
         Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
-        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null)
+        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null,
+        Action? refreshFatigue = null)
     {
         try
         {
-            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog, findConnection, log, noticeSender);
+            return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog, findConnection, log, noticeSender, refreshFatigue);
         }
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
         {
@@ -46,7 +47,8 @@ internal static partial class DevelopmentGm
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
         InventoryCashShopService? cashShop = null, GameDebugSettings? debugSettings = null,
         Game.Events.ServerEventService? events = null, DevelopmentCatalog? catalog = null,
-        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null)
+        Func<int, ChatProbeConnection?>? findConnection = null, ServerLog? log = null, GmNoticeSender? noticeSender = null,
+        Action? refreshFatigue = null)
     {
         try
         {
@@ -156,7 +158,11 @@ internal static partial class DevelopmentGm
             if (request.Action == DevelopmentAction.InfiniteFatigue)
             {
                 if (debugSettings is null) throw new InvalidOperationException("无限疲劳调试开关仅支持在线服务");
-                if (request.Primary >= 0) debugSettings.InfiniteFatigue = request.Primary == 1;
+                if (request.Primary >= 0)
+                {
+                    debugSettings.InfiniteFatigue = request.Primary == 1;
+                    refreshFatigue?.Invoke();
+                }
                 return "OK " + JsonSerializer.Serialize(new { infiniteFatigue = debugSettings.InfiniteFatigue });
             }
             if (request.Action == DevelopmentAction.PcRoom)

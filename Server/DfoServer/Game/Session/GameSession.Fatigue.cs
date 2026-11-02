@@ -3,9 +3,32 @@ using DfoServer.Game.Characters;
 namespace DfoServer.Game.Session;
 
 internal sealed record FatigueDailyResetReceipt(Character Before, Character Character, long Generation, long Epoch, SessionPhase Phase);
+internal sealed record FatigueDisplayReceipt(CharacterFatigueState State, long Generation, long Epoch, ushort CharacterId, SessionPhase Phase);
 
 internal sealed partial class GameSession
 {
+    // 调试开关只刷新当前选角的显示，不改写真实余额、revision或扣点账本。
+    public FatigueDisplayReceipt? CaptureFatigueDisplay()
+    {
+        try
+        {
+            return owner.Execute<FatigueDisplayReceipt?>(() => Ready && Selected is { } character
+                ? new(FatigueForClient(character), owner.Generation, SelectionEpoch, character.Id, Phase) : null);
+        }
+        catch (InvalidOperationException) when (!owner.IsCurrent) { return null; }
+    }
+
+    public bool CanPublishFatigueDisplay(FatigueDisplayReceipt receipt)
+    {
+        try
+        {
+            return owner.Execute(() => Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch &&
+                Phase == receipt.Phase && Selected is { } character && character.Id == receipt.CharacterId &&
+                FatigueForClient(character) == receipt.State);
+        }
+        catch (InvalidOperationException) when (!owner.IsCurrent) { return false; }
+    }
+
     public bool CanAdvanceServiceDay() => owner.Execute(() => Ready && Selected is not null &&
         pendingRental is null && pendingConsumableUse is null && !HasPendingTownQuestCommit && !HasPendingFormalCard &&
         !HasPendingQuestScene && !HasActiveDungeonContinuation && !HasPendingQuestReplay &&

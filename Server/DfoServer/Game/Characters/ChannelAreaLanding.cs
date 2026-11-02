@@ -38,6 +38,10 @@ internal static class ChannelAreaLanding
     // 普雷·伊希斯攻坚战频道类型：ARAD 频道类型名表 03EFBE19 写入 CHANNEL_PREY_RAID = 0x32。页签分类 01EC58C6 经 vt+0x28（028FA400 含 0x32）放进团队页签；
     // 团队列表 017128D0 的 0x32 分支要（事件 414 在 EVENT_INFO 集合 或 当前频道 type 0x11/0x15）且任务 8935 完成且 Lv≥95 才列出。
     internal const int PreyRaidType = 0x32;
+    internal const byte PreyRaidTown = 59;
+
+    // 两个城镇只承载团队玩法；安徒恩战舰仍保留其既有普通城镇快照兼容，卢克32/3也有普通用途。
+    internal static bool IsRaidOnlyTown(byte town) => town is FiendwarTown or PreyRaidTown;
 
     // 五陵频道类型：ARAD 频道类型名表 03EFBF9F 写入 CHANNEL_XIAN_VILLAGE = 0x38。外层白名单 028FB090 含 0x38，页签分类 vt+0x114（01EB5810，type==0x38）
     // 放进特殊区域页；原生 01EB5AF0 对 0x38 与普通 0x16 的谓词全部相同。配套 95JP 补丁额外比较五陵类型位，
@@ -199,7 +203,8 @@ internal static class ChannelAreaLanding
         if (position.Town == 10) return false;
         var candidates = PredicateChannels.Where(bound => Target(bound.Type, bound.Group) is var (town, _) && position.Town == town)
             .Select(bound => SnapshotPredicates(bound.Type)).ToList();
-        if (candidates.Count == 0 || towns is null || !IsChannelBoundTown(towns, position.Town))
+        if (!IsRaidOnlyTown(position.Town) &&
+            (candidates.Count == 0 || towns is null || !IsChannelBoundTown(towns, position.Town)))
             candidates.Add(SnapshotPredicates(OrdinaryType));
         return candidates.Contains(SnapshotPredicates(channel.Type));
     }
@@ -220,11 +225,18 @@ internal static class ChannelAreaLanding
     // 共享房间的返回地区只能落在普通地区：频道起始城镇（只能经频道进入的城镇与安徒恩直达战舰）的街区不参与，
     // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
     internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
-        town is AntonTown or LegacyRetiredTown or PvpTown or XianVillageTown or 48 or 62 || IsChannelBoundTown(towns, town);
+        town is AntonTown or LegacyRetiredTown or PvpTown or XianVillageTown or 48 or 62 ||
+        IsRaidOnlyTown(town) || IsChannelBoundTown(towns, town);
 
     // 卢克频道与普通频道共用32/3入口：团队频道进出该城镇不能覆盖普通返回地区，普通频道仍允许记住32/3。
     internal static bool PreservesRoomReturn(TownCatalog towns, Location position, int? channelType = null) =>
         channelType == 32 && position.Town == 32 || IsRaidInstanceArea(position) || PreservesRoomReturn(towns, position.Town);
+
+    // 选角与城镇切图共用同一返回地区清理规则。旧存档中的团本街区不能继续被当作普通房间出口；
+    // 只有共享普通用途的卢克32/3保留合法记忆，丢失的普通来源由共享房间默认地区恢复。
+    internal static Location? OrdinaryRoomReturn(Location? saved) => saved is
+        { Town: AntonTown or XianVillageTown or FiendwarTown or PreyRaidTown } ||
+        saved is not null && IsRaidInstanceArea(saved) ? null : saved;
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
 
@@ -284,7 +296,7 @@ internal static class ChannelAreaLanding
             "evildom_war" => (67, 1),
             // 普雷·伊希斯攻坚战：etc/raid/prey/prey.etc [WAITING ROOM] 59 2；town 59 Prey_raid.twn（灰色墓地）区域 0..5 均 need level 95，
             // 区域 0 为 Gate_Prey.map（与 67/0 同为门口图）。59/0 与 59/2 均经 PreyChannelTests 资源测试可站，按用户决定取 59/0。
-            "prey" => (59, 0),
+            "prey" => (PreyRaidTown, 0),
             // 五陵：town.lst 117 chn_Teaching_xian.twn 的 [name] 为`五陵`，与名称键 chn_channel_info_055=`五陵` 同名。
             // 区域 0 的 [gate] 474 234 落在 chn_Gate_xian.map——它是 Common/Gate_Seria.map 桩图，唯一出门通往 1/1（银色村庄大街），
             // 进不了 117 其他区域，所以不能当落点。区域 1 chn_fiendwar_xian_start.map（need level 17）是五陵入口图：

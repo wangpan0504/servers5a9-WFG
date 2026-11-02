@@ -5,6 +5,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Testing;
 using DfoServer.Infrastructure;
+using DfoServer.Game.Settings;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -27,9 +28,9 @@ internal static class HelperHellRotationTests
         var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(walk.X + walk.Width / 2)), checked((ushort)(walk.Y + walk.Height / 2)));
 
-        QuestSceneTests.Fixture Create(int tickets, ushort? fatigue = null) => new(towns, characters, skills,
+        QuestSceneTests.Fixture Create(int tickets, ushort? fatigue = null, GameDebugSettings? settings = null) => new(towns, characters, skills,
             growth, quests, false, 95, done.Order().ToArray(), position: position,
-            items: [(3330, tickets)], fatigueRemaining: fatigue);
+            items: [(3330, tickets)], fatigueRemaining: fatigue, debugSettings: settings);
         int Tickets(QuestSceneTests.Fixture fixture) => fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count);
         FormalDungeonReceipt Clear(QuestSceneTests.Fixture fixture, FormalDungeonReceipt current)
         {
@@ -47,12 +48,15 @@ internal static class HelperHellRotationTests
         DungeonPoint Door(FormalDungeonReceipt current) => (current.Entry.Maze.StaticTopology.Links ?? [])
             .Select(link => link.First == current.Snapshot.CurrentMap.Position ? (DungeonPoint?)link.Second :
                 link.Second == current.Snapshot.CurrentMap.Position ? link.First : null).First(point => point is not null)!.Value;
-        FormalDungeonReceipt ReachPillar(QuestSceneTests.Fixture fixture, out int visits)
+        FormalDungeonReceipt ReachPillar(QuestSceneTests.Fixture fixture, out int visits,
+            List<DungeonPlannedMonster>? firstCompanions = null)
         {
             var entry = fixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms,
                 pieces: items.EpicPieces, draw: _ => 0, hellParty: true);
             That(entry is not null && entry.Entry.StartMap.Position != entry.Entry.HellParty!.Room,
                 "首轮保留正常入口，不直接落柱子房：" + fixture.Session.LastFormalDungeonRejection);
+            firstCompanions?.AddRange(entry!.Monsters.Monsters.Where(actor => actor.AiCharacter is { } source &&
+                DungeonCompanion.IsCompanionRow(source.Id)));
             var path = HellPartyEntryTests.RiftPath(entry!.Entry.Maze, entry.Entry.StartMap.Position, entry.Entry.HellParty!.Room);
             visits = path.Count + 1;
             var current = fixture.Session.CompleteFormalDungeonLoading()!;
@@ -121,6 +125,45 @@ internal static class HelperHellRotationTests
                 fixture.Session.CurrentFormalDungeonScene()!.Snapshot.Identity == current.Snapshot.Identity &&
                 Tickets(fixture) == (exhausted ? 30 : 0),
                 exhausted ? "疲劳不足保留原柱子房及票数，不额外计算费用" : "门票不足保留原柱子房，不降级为普通走门");
+        }
+        var settings = new GameDebugSettings { InfiniteFatigue = false, SupportCompanions = 3,
+            SupportProfiles = SupportCompanionCatalog.Load(pvf) };
+        using (var fixture = Create(120, settings: settings))
+        {
+            var actors = new List<DungeonPlannedMonster>();
+            var first = Clear(fixture, ReachPillar(fixture, out _, actors));
+            That(actors.Count == 2 && actors.All(actor => actor.IsFriendly && !actor.CanReportDeath),
+                "真实候选MAP只在首房生成已选择的辅助和三四仔");
+            settings.SupportCompanion = SupportCompanionKind.Off;
+            fixture.Session.SetHelperHellRotation(fixture.Read().Id, true);
+            var door = Door(first);
+            var second = fixture.Session.RotateHelperHell((byte)door.X, (byte)door.Y, 0, dungeons, rooms,
+                pieces: items.EpicPieces).Receipt;
+            That(second is not null && second.Entry.CompanionMapRows.IsEmpty &&
+                second.Entry.CompanionProfiles.SequenceEqual(first.Entry.CompanionProfiles) &&
+                !second.Monsters.Monsters.Any(actor => actor.AiCharacter is { } source && DungeonCompanion.IsCompanionRow(source.Id)) &&
+                !fixture.Session.CanPublishFormalDungeon(first),
+                "助手不重抽GM已变更的名单、不重发APC，保留冻结模板并作废旧场景回执");
+            var loaded = fixture.Session.CompleteFormalDungeonLoading()!;
+            var before = fixture.Read();
+            var retired = fixture.Session.ObserveFormalDungeonScriptedDeath(
+                new(actors[0].ObjectKey, 0, true, new string('C', 64)), kills, growth);
+            That(retired.Outcome == DungeonRunOutcome.Accepted && retired.ReportedTarget == actors[0] &&
+                fixture.Read().Revision == before.Revision,
+                "继承旧key的真实退场沿零奖励友方分支处理，不更改角色资产或经验");
+            loaded = Clear(fixture, loaded);
+            door = Door(loaded);
+            var third = fixture.Session.RotateHelperHell((byte)door.X, (byte)door.Y, 0, dungeons, rooms,
+                pieces: items.EpicPieces).Receipt;
+            That(third is not null && !third.Monsters.Monsters.Any(actor => actor.AiCharacter is { } source && DungeonCompanion.IsCompanionRow(source.Id)),
+                "连续轮换继续不补生退场者或复制幸存支援兵");
+            fixture.Session.CompleteFormalDungeonLoading();
+            var missing = fixture.Session.ObserveFormalDungeonScriptedDeath(
+                new(actors[0].ObjectKey, 0, true, new string('D', 64)), kills, growth);
+            var surviving = fixture.Session.ObserveFormalDungeonScriptedDeath(
+                new(actors[1].ObjectKey, 0, true, new string('E', 64)), kills, growth);
+            That(missing.ReportedTarget is null && surviving.ReportedTarget == actors[1],
+                "第三实例只认领上一轮幸存演员，不继承已退场key");
         }
         Console.WriteLine("HelperHellRotationTests: " + (Count - startChecks) + " checks");
     }

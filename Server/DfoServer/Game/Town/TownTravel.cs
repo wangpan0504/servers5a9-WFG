@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Towns;
+using static DfoServer.Game.Characters.ChannelAreaLanding;
 
 namespace DfoServer.Game.Town;
 
@@ -51,7 +52,7 @@ internal static class TownTravel
             string admission = towns.DestinationAdmission(target, character.Level, completed);
             if (admission != "ready") return TownTravelPlan.Reject(admission);
             // 原生NPC返回坐标可落在步行矩形外，与NPC导航一样保留已经按资源精确核对的坐标。
-            var movieBack = towns.ResolveRoomReturn(target, OrdinaryDistrict(character.Return), character.Level, completed);
+            var movieBack = towns.ResolveRoomReturn(target, OrdinaryRoomReturn(character.Return), character.Level, completed);
             return movieBack is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, movieBack, "ready");
         }
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
@@ -131,7 +132,7 @@ internal static class TownTravel
         }
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
         // 频道起始城镇（安徒恩战舰 19、只能经频道进入的 67 等）内走动不改返回地区，离开频道后仍回进入前的普通地区。
-        var kept = OrdinaryDistrict(character.Return);
+        var kept = OrdinaryRoomReturn(character.Return);
         var back = target.Town == 101 ? character.Return :
             towns.IsRoom(target, completed) && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position, channel?.Type)
             ? kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
@@ -159,7 +160,7 @@ internal static class TownTravel
             return TownTravelPlan.Reject("return-gate-unavailable");
         string reason = towns.Admission(character.Position, target, character.Level, completed, back);
         var remembered = ChannelAreaLanding.PreservesRoomReturn(towns, target, channel?.Type)
-            ? OrdinaryDistrict(character.Return) ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
+            ? OrdinaryRoomReturn(character.Return) ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
             : target;
         return reason == "ready" ? new(target, remembered, reason) : TownTravelPlan.Reject(reason);
     }
@@ -170,7 +171,7 @@ internal static class TownTravel
     {
         // 返回地区规则与原 CharacterSelection 频道落点一致：专属城镇保留进入前地区，其余按落点解析房间返回地区。
         var back = ChannelAreaLanding.PreservesRoomReturn(towns, exit, channel?.Type)
-            ? towns.ResolveRoomReturn(character.Position, OrdinaryDistrict(character.Return), character.Level, completed)
+            ? towns.ResolveRoomReturn(character.Position, OrdinaryRoomReturn(character.Return), character.Level, completed)
             : towns.ResolveRoomReturn(exit, exit, character.Level, completed);
         return new(exit, back, "ready");
     }
@@ -182,7 +183,4 @@ internal static class TownTravel
         ChannelAreaLanding.PreservesRoomReturn(towns, character.Position, channel?.Type)
             ? towns.DefaultReturn(character.Position, completed) : character.Return;
 
-    // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
-    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.XianVillageTown } ||
-        saved is not null && ChannelAreaLanding.IsRaidInstanceArea(saved) ? null : saved;
 }

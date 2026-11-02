@@ -4,6 +4,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Session;
 
@@ -13,7 +14,8 @@ internal sealed partial class GameSession
     static readonly GameCacheSlot<HelperPreferences> helperPreferencesSlot = new();
     static readonly GameCacheSlot<HelperCapabilityReceipt> helperDirectCapabilitySlot = new();
     sealed record HelperRotationCapture(FormalDungeon Source, Character Character, long Epoch,
-        DungeonRunIdentity Identity, DungeonPoint Target, HelperPreferences Preferences, HelperHellRotation Rotation);
+        DungeonRunIdentity Identity, DungeonPoint Target, HelperPreferences Preferences, HelperHellRotation Rotation,
+        ImmutableArray<DungeonPlannedMonster> Companions);
 
     internal sealed record HelperSettingsReceipt(ushort CharacterId, long Epoch, bool Accepted, bool HellRotation);
     internal sealed record HelperPickupReceipt(ushort CharacterId, long Epoch, long Generation, bool Accepted, bool Enabled);
@@ -110,6 +112,7 @@ internal sealed partial class GameSession
         capture.Source.Entry.HellParty is { } hell && capture.Source.Run.Snapshot.CurrentMap.Id == hell.MapId &&
         capture.Source.Run.Snapshot.CurrentMap.Position == hell.Room &&
         capture.Character.Position.Town == capture.Rotation.Town && capture.Character.Position.Area == capture.Rotation.Area &&
+        capture.Source.Run.LivingPublishedCompanions().SequenceEqual(capture.Companions) &&
         capture.Source.Run.CanMove(capture.Identity, capture.Target);
 
     // null/false 表示普通过门；true/null 表示轮换已适用但被拒绝，必须留在旧房，不能降级成普通过门。
@@ -130,7 +133,7 @@ internal sealed partial class GameSession
                 source.Entry.BasisLevel, source.Entry.MonsterBasisLevel, source.Entry.Difficulty, source.Entry.HellPartyMode,
                 source.Run.BattleLevels.Freeze(source.Entry.DungeonId, source.Run.Snapshot.CurrentMap));
             return new HelperRotationCapture(source, character, SelectionEpoch, source.Run.Snapshot.Identity,
-                new(x, y), preferences, rotation);
+                new(x, y), preferences, rotation, source.Run.LivingPublishedCompanions());
         });
         if (capture is null) return (false, null);
         LastFormalDungeonRejection = null;

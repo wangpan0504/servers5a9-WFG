@@ -93,7 +93,17 @@ internal static class ProtocolArchitectureTests
         TestCheck.That(bytes.Length == 0, "registry does not fabricate protocol responses");
         var directory = new OnlineSessionDirectory(memory);
         directory.Register(owner, session);
-        directory.RegisterConnection(1, session, (_, _, _) => { });
+        int fatigueRefreshes = 0, replacementFatigueRefreshes = 0;
+        directory.RegisterConnection(1, session, (_, _, _) => { }, refreshFatigue: () => fatigueRefreshes++);
+        var fatigueSettings = new DfoServer.Game.Settings.GameDebugSettings();
+        string FatigueCommand(string line) => DfoServer.Development.DevelopmentGm.Answer(line, "registry", repository, owners,
+            directory.Find, debugSettings: fatigueSettings, refreshFatigue: directory.RefreshFatigueDisplays);
+        TestCheck.That(FatigueCommand("infinite-fatigue").StartsWith("OK ") && fatigueRefreshes == 0 &&
+            FatigueCommand("infinite-fatigue invalid").StartsWith("ERR ") && fatigueRefreshes == 0,
+            "查询和非法疲劳开关不触发在线显示写通知");
+        TestCheck.That(FatigueCommand("infinite-fatigue off").StartsWith("OK ") &&
+            !fatigueSettings.InfiniteFatigue && fatigueRefreshes == 1,
+            "成功关闭疲劳开关通过原在线连接索引请求即时刷新");
         TestCheck.That(ReferenceEquals(directory.Find("registry"), session), "directory retains the actual session");
         TestCheck.That(ReferenceEquals(directory.FindConnection(1)?.Session, session) && memory.Count == 3,
             "共享缓存只保存账号、会话及连接索引的原对象，不复制在线角色");
@@ -104,7 +114,10 @@ internal static class ProtocolArchitectureTests
         });
         var next = new GameSession(repository, towns, replacement);
         directory.Register(replacement, next);
-        directory.RegisterConnection(1, next, (_, _, _) => { });
+        directory.RegisterConnection(1, next, (_, _, _) => { }, refreshFatigue: () => replacementFatigueRefreshes++);
+        directory.RefreshFatigueDisplays();
+        TestCheck.That(fatigueRefreshes == 1 && replacementFatigueRefreshes == 1,
+            "同连接号替换后只刷新新会话，不调用已替换的疲劳回调");
         release.SetResult();
         await RejectAsync<InvalidOperationException>(() => pending, "generation rechecked after asynchronous handler");
         directory.Remove("registry", session);

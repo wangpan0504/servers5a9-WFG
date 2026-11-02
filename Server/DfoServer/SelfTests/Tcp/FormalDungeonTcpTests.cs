@@ -691,10 +691,16 @@ internal static partial class FormalDungeonTcpTests
             That(Command("infinite-fatigue invalid").StartsWith("ERR ") &&
                 Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}", "错误开关参数不改变默认状态");
             That(Command("infinite-fatigue off") == "OK {\"infiniteFatigue\":false}", "GM可关闭实际Session共享的无限疲劳");
+            peer.Expect(0,36,[156,0,156,0,0,0,0,0,0,0]);
+            That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "关闭开关立即通知当前在线客户端真实零疲劳，不等过图且不改存档");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
             That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
+            peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
+            That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored,
+                "开启开关立即刷新在线零疲劳客户端，实际余额仍为零");
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             Load(peer); peer.Expect(0,36,[0,0,156,0,0,0,156,0,0,0]);
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
