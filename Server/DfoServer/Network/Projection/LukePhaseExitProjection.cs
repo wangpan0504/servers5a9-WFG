@@ -7,7 +7,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection;
 
 // 本连接一个退场执行器和一个待办槽；不拥有阶段时钟，不发未知失败状态或伪造死亡。
-internal sealed class LukePhaseExitProjection(GameConnectionContext context, PartyDungeonService dungeons, TownProjection town, ServerLog log, ILukeRaidLifecycleStore? lifecycle) : IAsyncDisposable
+internal sealed class LukePhaseExitProjection(GameConnectionContext context, PartyDungeonService dungeons, TownProjection town, ServerLog log, ILukeRaidLifecycleStore? lifecycle,
+    AntonRaidStart? raidStart = null) : IAsyncDisposable
 {
     readonly object gate = new();
     readonly CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(context.Stop);
@@ -103,6 +104,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                                 new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
                             if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
                         }
+                        LeaveExpiredAnton();
                         return;
                     }
                     // 回调只能退出捕获的原Run；选图或候战时排入的回调不能退出后来安装的新图。
@@ -118,6 +120,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     }
                     returnCommitted = true;
                     await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
+                    LeaveExpiredAnton();
                     log.Write(prefix + "_" + reason + "_exit", new { Connection = context.Id, view.Instance, view.Phase, Run = run, Reason = "local-policy", State = "returned" });
                     return;
                 }
@@ -139,6 +142,16 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             }
             try { await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(failures - 1, 5))), stop.Token); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+        }
+
+        void LeaveExpiredAnton()
+        {
+            if (exitReason != ExitReason.PhaseExpired || originalBattle?.Kind != RaidKind.Anton) return;
+            if (raidStart?.LeaveExpiredAnton(actor, view.Instance) == true)
+            {
+                returnCommitted = true;
+                log.Write("anton_phase_disband_member", new { Connection = context.Id, view.Instance, view.Phase, State = "left", Reason = "phase-timeout" });
+            }
         }
     }
 

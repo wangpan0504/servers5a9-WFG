@@ -483,9 +483,10 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
+        var raidStart = new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
+            raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards, fiendwarMazeRandom);
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
-                raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards, fiendwarMazeRandom), lukeStart, antonRejoin, parties, lukeRejoin, projection, pvpRecords);
+            raidStart, lukeStart, antonRejoin, parties, lukeRejoin, projection, pvpRecords);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -656,7 +657,7 @@ internal static class ServerRuntime
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
-                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun);
+                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection, fiendwarRaid: fiendwarRun, raidStart: raidStart);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
             var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,

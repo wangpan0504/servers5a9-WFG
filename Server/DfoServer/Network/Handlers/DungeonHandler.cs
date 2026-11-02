@@ -36,7 +36,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? preyRaid = null,
     EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null,
     ImperialArenaProjection? imperialArena = null,
-    DfoServer.Game.Raids.FiendwarDungeonService? fiendwarRaid = null) : IGameCommandModule
+    DfoServer.Game.Raids.FiendwarDungeonService? fiendwarRaid = null,
+    DfoServer.Game.Raids.AntonRaidStart? raidStart = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
