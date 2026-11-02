@@ -29,14 +29,11 @@ internal sealed partial class SinglePlayerDungeonRun
             source.SourceOrdinal != change.MonsterOrdinal || source.MonsterId != change.MonsterId || source.Source?.Path != change.MonsterPath ||
             entry.Maze.LayeredMaps.Where(map => map.Position == entry.BaseBossMap.Position).ToArray() is not [var layer] ||
             !layeredRooms.TryGetValue(layer,out var terminal) || terminal.Plan.Room.DeclaredType != "[boss]" ||
-            terminal.Plan.Room.StartCinematicBossDestroy is not { } destroy || destroy.MapId != layer.Id || destroy.MapPath != layer.Path ||
-            destroy.CinematicId <= 0 || destroy.CinematicPath.Length == 0 ||
-            destroy.MonsterId != change.MonsterId || destroy.MonsterPath != change.MonsterPath ||
             terminal.Plan.Monsters.Where(row => row.IsBlocking).ToArray() is not
-                [{ IsBoss:true, IsScriptedBoss:false, IsFriendly:false, CanReportDeath:true, AiCharacter:null } target] ||
-            target.SourceOrdinal != destroy.MonsterOrdinal || target.MonsterId != destroy.MonsterId || target.Source?.Path != destroy.MonsterPath)
+                [{ IsBoss:true, IsScriptedBoss:false, IsFriendly:false, CanReportDeath:true, AiCharacter:null } target])
             return null;
-        // 基础死亡演出换层、末层演出销毁同模板Boss；仅改终点，不补基础39，也不执行资源中的DESTROY。
+        if (target.MonsterId != change.MonsterId || target.Source?.Path != change.MonsterPath) return null;
+        // 死亡演出和迷宫绑定唯一同模板Boss末层，不依赖客户端ACT如何退场。
         // 末层仍须本实例真实对象39及既有持久死亡事务，才能产生ClearFact和结算许可。
         return terminal;
     }

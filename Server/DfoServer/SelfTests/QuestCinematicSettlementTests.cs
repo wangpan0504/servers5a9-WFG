@@ -176,7 +176,7 @@ internal static class QuestCinematicSettlementTests
                 .ForJob(f.Read().Job,f.Read().GrowType).Length == 0 ? ushort.MaxValue : (ushort)0;
             var opening = f.Session.EnterFormalDungeon(scenario.Dungeon,scenario.Request,0,dungeons,rooms)!;
             That(opening is not null && opening.Entry.RouteQuestId == id && opening.Entry.QuestId == scenario.Request &&
-                opening.Entry.Maze.SourceOrdinal == scenario.Ordinal && opening.Entry.BossMap.Id == scenario.Map &&
+                opening.Entry.Maze.SourceOrdinal == scenario.Ordinal && opening.Entry.BaseBossMap.Id == scenario.Map &&
                 QuestHuntProgress.Bound(accepted,opening.Entry) && (scenario.Request != 0 ||
                     opening.Entry.QuestAcceptanceId == Guid.Empty && opening.Entry.ActiveQuestSlot == byte.MaxValue),
                 "演出显式或普通0保留原路线与接取，0不冒充任务实例号："+id);
@@ -212,8 +212,14 @@ internal static class QuestCinematicSettlementTests
                     receipt.Monsters.Monsters.Single(row => row.MonsterId == 74653) is { IsFriendly:true,CanReportDeath:false } &&
                     opening.Entry.Maze.LayeredMaps.Single().Id == 76989,"3984普通敌对Boss、友方及同坐标叠层均保留");
                 var death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,boss),kills,growth);
-                That(death is { Outcome:DungeonRunOutcome.Accepted,ClearFact.ConfirmedDeathEvents.Count:>0 } &&
-                    death.ClearFact.ConfirmedDeathEvents.Count == deaths+1,"74652合法死亡形成普通通关事实，不把友方算入死亡集合");
+                That(death is { Outcome:DungeonRunOutcome.Accepted,ClearFact:null } && opening.Entry.BossMap.Id == 76989,
+                    "基础Boss死亡不提前结算，实际终点沿已声明的同坐标末层");
+                That(f.Session.MoveFormalDungeon(0,2,1) is not null,"基础死亡后仍按原迷宫进入末层");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+                boss = receipt.Monsters.Monsters.Single(row => row.IsBoss);
+                death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,boss),kills,growth);
+                That(death.ClearFact is { ClearMap.Id:76989 } && death.ClearFact.ConfirmedDeathEvents.Count == deaths+2,
+                    "末层真实Boss死亡形成通关事实，不把演出或友方算作死亡");
                 expectedBoss = boss.ObjectKey;
                 That(f.Session.EnableFormalDungeonSettlement()?.BossKey == expectedBoss && Settle().Outcome == DungeonRunOutcome.Accepted &&
                     f.Read().ActiveMainQuests.Single(row => row.QuestId == id).ConditionState == 1,
@@ -314,18 +320,18 @@ internal static class QuestCinematicSettlementTests
             QuestFinishResult Finish() => f.Session.FinishQuest(id,selector,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
             FormalDungeonSettlementResult Settle() => f.Session.SettleFormalDungeon(parsed!.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth);
         }
-        Verify3984CinematicLayer(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,parameters);
+        Verify3984CinematicLayer(towns,characters,items,quests,skills,growth,dungeons,rooms,kills,clears,parameters);
     }
 
-    // 2843 末段 CHANGE MAP 在 Boss 死亡后才发 kind1。结算阶段仍要进入同坐标 76989，终末 33 在该层归零。
+    // 覆盖自然演出先换层、再补原图死亡、再发终末33的包序；通关只认末层真实对象死亡。
     static void Verify3984CinematicLayer(TownCatalog towns,CharacterCatalog characters,ItemResources items,QuestCatalog quests,
         SkillLearningCatalog skills,CharacterGrowthCatalog growth,DungeonCatalog dungeons,DungeonRoomCatalog rooms,
-        DungeonKillExperienceCatalog kills,QuestRewardParameterCatalog parameters)
+        DungeonKillExperienceCatalog kills,DungeonClearExperienceCatalog clears,QuestRewardParameterCatalog parameters)
     {
         const ushort id = 3984;
         var quest = quests.Get(id);
         var entrance = MiddleQuestEntryTests.Entrance(towns,quest,312);
-        foreach (byte job in new byte[] { 2,0 })
+        foreach (byte job in new byte[] { 3,2,0 })
         foreach (ushort request in new ushort[] { id,0 })
         foreach (bool early in new[] { true,false })
         {
@@ -347,13 +353,20 @@ internal static class QuestCinematicSettlementTests
                 receipt = f.Session.CompleteFormalDungeonLoading()!;
             }
             var boss = receipt.Monsters.Monsters.Single(row => row.MonsterId == 74652);
-            That(receipt.Snapshot.CurrentMap.Id == 76979 &&
-                f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,boss),kills,growth).ClearFact is not null,
-                "74652死亡后仍在基础演出图，并形成通关事实");
+            That(receipt.Snapshot.CurrentMap.Id == 76979 && opening.Entry.BossMap.Id == 76989 &&
+                rooms.Get(receipt.Snapshot.CurrentMap).BossDeathLayerChange is { CinematicId:2843 },
+                "死亡演出down及实际迷宫绑定末层终点，不依赖末层ACT解析");
+            var sourceDeath = FormalDungeonSessionTests.Observation(receipt,boss);
+            if (job != 3)
+                That(f.Session.ObserveFormalDungeonDeath(sourceDeath,kills,growth) is { Outcome:DungeonRunOutcome.Accepted,ClearFact:null },
+                    "已先报告基础死亡时也不提前通关");
             var position = receipt.Snapshot.CurrentMap.Position;
             That(f.Session.MoveFormalDungeon(checked((byte)position.X),checked((byte)position.Y),1) is not null,
-                "结算阶段接受演出末段的同坐标kind1");
+                "原实例接受演出末段的同坐标kind1");
             var before = f.Read();
+            if (job == 3)
+                That(f.Session.ObserveFormalDungeonDeath(sourceDeath,kills,growth).Outcome == DungeonRunOutcome.Rejected &&
+                    QuestCompletionRepositoryTests.Same(before,f.Read()),"Loading中的旧图报告不冒充新层对象或发放奖励");
             That(f.Session.ChangeQuest(id,QuestLifecycleAction.Giveup,quests,items.Items,items.GoldLimits,items.EpicPieces) is null &&
                 f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x10,0,0)) is null &&
                 f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,1,0)) is null &&
@@ -375,6 +388,19 @@ internal static class QuestCinematicSettlementTests
             var after = f.Read();
             That(Condition()?.Outcome == QuestLifecycleOutcome.Unchanged && QuestCompletionRepositoryTests.Same(after,f.Read()),
                 "3984跨加载重复终末33不重复提交");
+            That(f.Session.EnableFormalDungeonSettlement() is null,"演出条件0不能伪造Boss死亡或通关");
+            var terminalBoss = layer.Monsters.Monsters.Single(row => row.IsBoss);
+            var terminalDeath = FormalDungeonSessionTests.Observation(layer,terminalBoss);
+            That(terminalBoss.ObjectKey != boss.ObjectKey &&
+                f.Session.ObserveFormalDungeonDeath(terminalDeath,kills,growth).ClearFact is { ClearMap.Id:76989 },
+                "末层自己的实际KEY死亡才产生真实清图事实，不复用原图KEY");
+            var beforeDuplicate = f.Read();
+            That(f.Session.ObserveFormalDungeonDeath(terminalDeath,kills,growth).Outcome == DungeonRunOutcome.Duplicate &&
+                QuestCompletionRepositoryTests.Same(beforeDuplicate,f.Read()),"重复末层死亡不重复经验或掉落");
+            var report = DungeonSettlementProtocolTests.Report(f.Read().Id,99);
+            That(f.Session.SettleFormalDungeon(f.Read().Id,99,99,report,dungeons,clears,growth).Outcome == DungeonRunOutcome.Accepted &&
+                f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null &&
+                f.Session.SelectFormalDungeonFreeCard(0,0) is not null,"真实末层清图后能结算并领取免费牌");
             That(f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt?.Commit.Character.CompletedQuests.Contains(id) == true,
                 "演出条件归零后按原34交付3984");
             That(f.Session.ReturnFromFormalDungeon() is not null,"3984完成后正常返回城镇");

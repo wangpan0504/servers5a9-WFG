@@ -137,34 +137,17 @@ internal static class TrainQuestSettlementTests
         var basis = rooms.Get(maze.MapSpecification!.Single(map => map.Id == 70077));
         var terminal = rooms.Get(maze.LayeredMaps.Single(map => map.Id == 70078));
         That(basis.BossDeathLayerChange is { MonsterId:70136, MonsterOrdinal:0, CinematicId:2447 } &&
-            terminal.StartCinematicBossDestroy is { MonsterId:70136, MonsterOrdinal:0, CinematicId:2448 },
-            "实际MOB死亡CMT2447与末层ACT/CMT2448绑定原怪物序号，不以任务号硬编码终点");
+            terminal.Monsters.Single(row => row.RankKind == "[boss]").MonsterId == 70136,
+            "死亡演出与迷宫末层保留同模板实际Boss，不要求客户端ACT销毁证据");
         var death = pvf.ReadTokens(basis.BossDeathLayerChange!.CinematicPath);
-        var destroy = pvf.ReadTokens(terminal.StartCinematicBossDestroy!.CinematicPath);
         That(DungeonCinematicBossTerminalRules.DeathChangesLayer(70077,death,pvf.ResolveString) &&
-            DungeonCinematicBossTerminalRules.RewardedDestroy(70078,0,destroy,pvf.ResolveString),"真实CMT正例");
-        That(!DungeonCinematicBossTerminalRules.DeathChangesLayer(70078,death,pvf.ResolveString) &&
-            !DungeonCinematicBossTerminalRules.RewardedDestroy(70077,0,destroy,pvf.ResolveString) &&
-            !DungeonCinematicBossTerminalRules.RewardedDestroy(70078,1,destroy,pvf.ResolveString),"错地图或演员序号不给终点证据");
+            !DungeonCinematicBossTerminalRules.DeathChangesLayer(70078,death,pvf.ResolveString),"死亡演出只绑定真实源地图");
         int changeAt = At(death,"change map");
-        int destroyAt = At(destroy,"destroy");
+        var wrongIndex = death.ToArray(); wrongIndex[changeAt-5] = new(0,1);
         That(!DungeonCinematicBossTerminalRules.DeathChangesLayer(70077,[..death,..death.Take(2)],pvf.ResolveString) &&
             !DungeonCinematicBossTerminalRules.DeathChangesLayer(70077,[..death,death[changeAt]],pvf.ResolveString) &&
-            !DungeonCinematicBossTerminalRules.RewardedDestroy(70078,0,[..destroy,destroy[destroyAt]],pvf.ResolveString),
-            "重复地图、CHANGE MAP或DESTROY声明均拒绝");
-        var noReward = destroy.ToArray(); noReward[destroyAt+4] = new(0,0);
-        var wrongActor = destroy.ToArray(); wrongActor[destroyAt-7] = death[changeAt-7];
-        var wrongIndex = death.ToArray(); wrongIndex[changeAt-5] = new(0,1);
-        That(!DungeonCinematicBossTerminalRules.RewardedDestroy(70078,0,noReward,pvf.ResolveString) &&
-            !DungeonCinematicBossTerminalRules.RewardedDestroy(70078,0,wrongActor,pvf.ResolveString) &&
             !DungeonCinematicBossTerminalRules.DeathChangesLayer(70077,wrongIndex,pvf.ResolveString),
-            "无奖励退休、非怪物主体或非当前角色换图不能套用该终点");
-        string actionPath = terminal.Map.Path[..(terminal.Map.Path.LastIndexOf('/')+1)]+"action/basic_70078.act";
-        var action = pvf.ReadTokens(actionPath);
-        var unrelated = action.ToArray(); unrelated[4] = new(0,1);
-        That(DungeonCinematicBossTerminalRules.StartCinematic(action,pvf.ResolveString) == 2448 &&
-            DungeonCinematicBossTerminalRules.StartCinematic(unrelated,pvf.ResolveString) is null,
-            "末层必须由真实起始触发指向行为0，不借其它触发演出");
+            "重复地图、CHANGE MAP或非当前角色主体不扩大换层范围");
         int At(IReadOnlyList<PvfToken> tokens,string tag) => Enumerable.Range(0,tokens.Count).First(i =>
             tokens[i].Type == 3 && pvf.ResolveString(tokens[i].Value).Trim('[',']').Equals(tag,StringComparison.OrdinalIgnoreCase));
     }
@@ -190,17 +173,20 @@ internal static class TrainQuestSettlementTests
             entry with { QuestAcceptanceId=Guid.NewGuid() },
             entry with { QuestAcceptances=[..entry.QuestAcceptances,entry.QuestAcceptances.Single(row => row.QuestId == 3581)] }
         }) That(!Grants(altered,route),"错路线、失去/重接接取或重复接取不能派生末层终点");
-        foreach (var evidence in new DungeonCinematicBossEvidence?[]
+        That(Grants(entry,route with { Rooms=plans.Select(plan => plan == target ? plan with
+            { Room=plan.Room with { CinematicLayerReturn=null,ScriptedLayerReturn=null } } : plan).ToArray() }),
+            "死亡演出与末层真实Boss足以绑定终点，不要求ACT销毁元数据");
+        var boss = target.Monsters.Single(row => row.IsBlocking);
+        foreach (var monster in new[]
         {
-            null,
-            target.Room.StartCinematicBossDestroy! with { MonsterId=70137 },
-            target.Room.StartCinematicBossDestroy! with { MonsterOrdinal=1 },
-            target.Room.StartCinematicBossDestroy! with { MonsterPath="monster/unrelated.mob" },
-            target.Room.StartCinematicBossDestroy! with { MapId=70077 }
+            boss with { MonsterId=70137 },
+            boss with { Source=boss.Source! with { Path="monster/unrelated.mob" } },
+            boss with { IsFriendly=true },
+            boss with { Source=boss.Source! with { RankKind="[normal]" } }
         })
             That(!Grants(entry,route with { Rooms=plans.Select(plan => plan == target ? plan with
-                { Room=plan.Room with { StartCinematicBossDestroy=evidence } } : plan).ToArray() }),
-                "缺失或错绑终末地图、序号、怪物模板/路径不扩大清图范围");
+                { Monsters=plan.Monsters.Select(row => row == boss ? monster : row).ToArray() } : plan).ToArray() }),
+                "实际末层Boss的模板、资源路径、敌对性或品级不符不能授予终点");
         var extraMap = target.Room.Map with { Id=170078,LayerIndex=target.Room.Map.LayerIndex+1 };
         var extra = DungeonMonsterPlan.FromRoom(target.Room with { Map=extraMap },entry.CharacterId,checked((ushort)next),entry.BasisLevel,playerTeam:entry.PlayerTeam);
         That(!Grants(entry with { Maze=entry.Maze with { LayeredMaps=[..entry.Maze.LayeredMaps,extraMap] } },

@@ -25,6 +25,7 @@ internal sealed record StoryQuest(
     public QuestDefinition? Definition { get; init; }
     public string? CinematicPath { get; init; }
     public int? CinematicMapId { get; init; }
+    public bool CinematicChangesLayer { get; init; }
 }
 
 internal sealed class QuestCatalog
@@ -75,7 +76,12 @@ internal sealed class QuestCatalog
             {
                 // 只读取声明的演出；坏的废弃资源由LoadDefinitions隔离，不替换成其他演出。
                 var cinematicBody = pvf.ReadTokens(cinematicPath);
-                definition = definition with { CinematicPath = cinematicPath, CinematicMapId = CinematicMap(cinematicBody, pvf.ResolveString) };
+                int? mapId = CinematicMap(cinematicBody, pvf.ResolveString);
+                definition = definition with { CinematicPath = cinematicPath, CinematicMapId = mapId,
+                    CinematicChangesLayer = mapId is int map &&
+                        (Dungeons.DungeonCinematicBossTerminalRules.DeathChangesLayer(map,cinematicBody,pvf.ResolveString) ||
+                         Dungeons.DungeonCinematicLayerReturnRules.IsNonCombatMapChange(map,cinematicBody,pvf.ResolveString) ||
+                         Dungeons.DungeonCinematicLayerReturnRules.IsActorMapChange(map,cinematicBody,pvf.ResolveString)) };
             }
             if (VerifiedMapQuests.Contains(id))
                 definition = Parse(id, path, tokens, pvf.ResolveString, maps, pvf) with { Definition = definition.Definition };
