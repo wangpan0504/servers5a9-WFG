@@ -15,6 +15,7 @@ internal static class SelfTestRunner
     {
         HelperSafetyTests.RunCore();
         HelperAssetSafetyTests.RunCore();
+        await HelperAssetSafetyTests.RunProtocolAsync();
         MapGeometryTests.RunCore();
         await MapGeometryHttpTests.RunCoreAsync();
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;

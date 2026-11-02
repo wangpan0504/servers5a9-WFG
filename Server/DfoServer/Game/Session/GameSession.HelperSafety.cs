@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Game.Session;
 
@@ -24,14 +25,14 @@ internal sealed partial class GameSession
         helperAssetPhaseEpoch++;
     }
 
-    internal HelperSafetyReceipt? ReadHelperSafety(ushort characterId)
+    internal HelperSafetyReceipt? ReadHelperSafety(ushort characterId, SkillLearningCatalog? learning = null)
     {
         var capture = owner.Execute(() => Ready && Selected is { } character && character.Id == characterId &&
             Phase == SessionPhase.Town && items is not null && !HasPendingTownQuestCommit && pendingRental is null
                 ? new HelperSafetyReceipt(character, SelectionEpoch, owner.Generation, helperAssetPhaseEpoch, []) : null);
         if (capture is null || items is null) return null;
         // 目录解析及整包资格计算在owner锁外；发送及安装资格时重新核对原角色快照和阶段。
-        var receipt = capture with { Candidates = HelperSafetyPolicy.Read(capture.Character, items) };
+        var receipt = capture with { Candidates = HelperSafetyPolicy.Read(capture.Character, items, learning is null ? null : learning.Get) };
         var safety = new HelperAssetSafety(capture.Character.Id, capture.Epoch, capture.Generation, capture.PhaseEpoch,
             (timeProvider ?? TimeProvider.System).GetTimestamp(), receipt.Candidates
                 .Where(row => row.Operations != 0 && row.Item.Uid > 0)

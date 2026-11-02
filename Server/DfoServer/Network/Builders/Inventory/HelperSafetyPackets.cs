@@ -5,6 +5,8 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class HelperSafetyPackets
 {
+    internal static string EntryWithWearability(HelperSafetyPolicy.Candidate row) => Entry(row) + (row.WearableEpic ? ":1" : ":0");
+
     // 与客户端已完整收到的123B普通物品记录共用指纹，槽位复用或属性变化不再匹配旧资格。
     internal static string Entry(HelperSafetyPolicy.Candidate row)
     {

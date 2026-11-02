@@ -1,15 +1,16 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Characters;
 
 namespace DfoServer.Game.Inventory.Services;
 
 // 自动处理采用比手动操作更保守的资格。只读当前快照，不移动、不销毁、不写存档。
 internal static class HelperSafetyPolicy
 {
-    internal sealed record Candidate(InventoryItem Item, byte Operations);
+    internal sealed record Candidate(InventoryItem Item, byte Operations, bool WearableEpic = false);
 
-    internal static Candidate[] Read(Character character, ItemCatalog catalog)
+    internal static Candidate[] Read(Character character, ItemCatalog catalog, Func<byte, ushort, SkillLearningDefinition>? skills = null)
     {
         var registered = character.SkillSwitchInventory.Items.Select(binding => binding.ItemUid).ToHashSet();
         var result = new List<Candidate>();
@@ -22,9 +23,36 @@ internal static class HelperSafetyPolicy
             try { template = catalog.Get(core.ItemId); }
             catch (Exception error) when (error is InvalidDataException or FileNotFoundException or NotSupportedException) { continue; }
             byte operations = Operations(item, template, registered.Contains(item.Uid));
-            if (operations != 0) result.Add(new(item, operations));
+            if (operations != 0) result.Add(new(item, operations, WearableEpic(character, template, skills)));
         }
         return result.OrderBy(row => row.Item.Position.Index).ToArray();
+    }
+
+    // 保护职业可用的升级装备，不受当前等级、洗点、契约或装备栏解锁影响。
+    internal static bool WearableEpic(Character character, ItemTemplate template, Func<byte, ushort, SkillLearningDefinition>? skills = null)
+    {
+        if (template.Kind != ItemKind.Equipment || template.Rarity != 4 || character.Job >= 16 ||
+            (template.Jobs & (1 << character.Job)) == 0) return false;
+        if (template.RequiredSkill == 0 || AllowsSkill(template.RequiredSkill)) return true;
+        ushort alternate = InventoryMoveService.AlternateRequiredSkill(character, template);
+        return alternate != 0 && AllowsSkill(alternate);
+
+        bool AllowsSkill(ushort skillId)
+        {
+            if (skills is null) return true;
+            try
+            {
+                var definition = skills(character.Job, skillId);
+                if (definition.DeclaredGrowtypeMaximumLevels is null && !definition.SecondGrowtypeMaximumLevels.Any(value => value > 0))
+                    return true;
+                return definition.GetMaximum(character.GrowType) > 0;
+            }
+            catch (Exception error) when (error is KeyNotFoundException or InvalidDataException or FileNotFoundException or NotSupportedException)
+            {
+                // 无法证明不适用时不把资源缺口当成可销毁许可。
+                return true;
+            }
+        }
     }
     internal static byte Operations(InventoryItem item, ItemTemplate template, bool registered)
     {
