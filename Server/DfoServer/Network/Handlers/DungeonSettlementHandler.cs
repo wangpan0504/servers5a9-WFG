@@ -28,7 +28,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     ImperialArenaProjection? imperialArena = null, Game.Party.PartyService? parties = null,
     Game.Raids.LukeRaidDungeonService? lukeRaid = null,
     Game.Raids.AntonRaidDungeonService? antonRaid = null, Game.Raids.AntonRaidDungeonService? preyRaid = null,
-    QuestCompletionHandler? hopeCompletion = null) : IGameCommandModule
+    QuestCompletionHandler? hopeCompletion = null, Func<Exception,bool>? cardProjectionBusy = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -232,7 +232,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             return CommandResult.Unhandled;
         await context.Reply(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, DungeonSettlementPackets.TournamentSelectState(current.Receipt.PartySlot),
             "formal_tournament_reward_state", () => context.Session.CanPublishTournamentCards(current));
-        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion);
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion, cardProjectionBusy);
         await context.Cards.StartAsync(current.Receipt);
         return CommandResult.Handled;
     }
@@ -265,7 +265,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (context.Session.PartyDungeon is { } party && party.CardSnapshot() is { } snapshot &&
             snapshot.Any(card => card?.FreeSelected == true || card?.Paid is not null))
             await DungeonCardProjection.PublishSelectionAsync(context, receipt, view, snapshot, "party_card_sync");
-        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion);
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons, hopeCompletion, cardProjectionBusy);
         await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
     }

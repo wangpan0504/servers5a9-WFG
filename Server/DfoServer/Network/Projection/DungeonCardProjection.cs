@@ -10,7 +10,7 @@ namespace DfoServer.Network.Projection;
 // 每个连接最多一个翻牌计时任务；重复70不重置时钟，断线取消并等待收尾。
 internal sealed class DungeonCardProjection(GameConnectionContext context, ServerLog log,
     InventoryProjection? inventory = null, PartyDungeonService? partyDungeons = null,
-    QuestCompletionHandler? hopeCompletion = null) : IAsyncDisposable
+    QuestCompletionHandler? hopeCompletion = null, Func<Exception,bool>? isBusy = null) : IAsyncDisposable
 {
     CancellationTokenSource? cancellation;
     Task pending = Task.CompletedTask;
@@ -43,6 +43,8 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
         {
             // df_game_r 的大会选牌定时器47同样为4秒；复用连接取消与收尾，不另建计时任务。
             await Task.Delay(TimeSpan.FromSeconds(4), stop);
+            bool retryHope = false;
+            bool retryMission = false;
             using (var gates = await DispatchGateScope.EnterAsync(context, stop))
             {
                 using var publication = !gates.HasShared ? null : context.Sender.QueuePublication(() => context.Owner.IsCurrent && !context.Stop.IsCancellationRequested);
@@ -67,8 +69,46 @@ internal sealed class DungeonCardProjection(GameConnectionContext context, Serve
                 if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
                 // 仅有已完成任务会在牌面提交后通过既有原子领奖合同自动交付；未达成条件时静默跳过。
                 if (hopeCompletion is not null)
-                    await hopeCompletion.CompleteHopeAfterCardAsync(context);
+                {
+                    try { await hopeCompletion.CompleteHopeAfterCardAsync(context); }
+                    catch (Exception error) when (isBusy?.Invoke(error) == true)
+                    {
+                        retryHope = true;
+                        log.Write("formal_hope_reward_busy", new { Connection = context.Id, receipt.Snapshot.Identity });
+                    }
+                    catch (IOException error) when (error.InnerException is { } inner && isBusy?.Invoke(inner) == true)
+                    {
+                        retryMission = true;
+                        log.Write("formal_hope_mission_busy", new { Connection = context.Id, receipt.Snapshot.Identity });
+                    }
+                }
                 log.Write("formal_free_card_revealed", new { Connection = context.Id, receipt.Snapshot.Identity });
+            }
+            while (retryHope || retryMission)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), stop);
+                using var gates = await DispatchGateScope.EnterAsync(context, stop);
+                using var publication = !gates.HasShared ? null : context.Sender.QueuePublication(() => context.Owner.IsCurrent && !context.Stop.IsCancellationRequested);
+                if (!context.Session.CanPublishDungeonCard(expected)) return;
+                try
+                {
+                    if (retryHope)
+                    {
+                        await hopeCompletion!.CompleteHopeAfterCardAsync(context);
+                        retryHope = false;
+                    }
+                    else
+                    {
+                        await BattlePassMissionProjection.RefreshAsync(context);
+                        retryMission = false;
+                    }
+                }
+                catch (Exception error) when (isBusy?.Invoke(error) == true) { }
+                catch (IOException error) when (error.InnerException is { } inner && isBusy?.Invoke(inner) == true)
+                {
+                    retryHope = false;
+                    retryMission = true;
+                }
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested || context.Stop.IsCancellationRequested) { }
