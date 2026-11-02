@@ -317,6 +317,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
 
     // 礼盒 [avatar].type 直接索引 Types。空表走模板；在范围内取该行。
     // type=4 是商城永久档：武器装扮常只声明 7/30/永久，服务端 Types 含合成 7 天后 Length=4，type4 越界且末行永久时落到末行。
+    // type==Length 是越过末档一格（标准时装 Length=5 的 type=5），同样落到末行永久孔。商城散件 TypeIndex 越界仍拒绝。
     internal static bool TryResolveGiftType(AvatarPackageRow row, ItemTemplate template, AvatarPackageItemDefinition avatar,
         out AvatarPackageType type)
     {
@@ -330,7 +331,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             type = avatar.Types[row.Type];
             return true;
         }
-        if (row.Type == 4 && avatar.Types[^1].Days == 0)
+        if (avatar.Types[^1].Days == 0 && (row.Type == 4 || row.Type == avatar.Types.Length))
         {
             type = avatar.Types[^1];
             return true;
