@@ -27,6 +27,7 @@ internal static partial class MapGeometryTests
     {
         RunAnchorCore();
         RunEmptyExtensionCore();
+        RunAdditionalExpansionCore();
         const string map = "map/test.map", tile = "map/test/displaycompat/grid.til";
         foreach (var (kind,tag) in new[] { ("gate_points8","[pathgate pos]"), ("gate_recognize8","[pathgate recognize range]") })
         {

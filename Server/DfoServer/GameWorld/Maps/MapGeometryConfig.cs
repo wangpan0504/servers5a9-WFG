@@ -49,7 +49,7 @@ internal sealed class MapGeometryConfig
         path = Normalize(path);
         if (path.EndsWith(".til",StringComparison.Ordinal)) return "DCT1";
         if (maps.TryGetValue(path,out var anchored) && anchored.Any(rule => MapGeometrySignature.AnchorTags.Contains(rule.Tag))) return "DCG3";
-        return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]") ? "DCG2" : "DCG1";
+        return maps.TryGetValue(path,out var rules) && rules.Any(rule => rule.Tag is "[tile]" or "[tile files]" or "[tile map]" or "[pathgate pos]" or "[pathgate recognize range]" or "[dungeon movable area]") ? "DCG2" : "DCG1";
     }
     private static (int Stride, int X, int Strings) AnchorLayout(string kind) => kind switch
     {
@@ -85,6 +85,25 @@ internal sealed class MapGeometryConfig
             if (kind == "dungeon_special11_single_child" && (before[start + 4].Number != 1 || before[start + 5].Text is not ("[trap]" or "[monster]")))
                 throw new InvalidDataException("World anchor special child");
         }
+    }
+    private static void ValidateAnimationAppend(Atom[] before, Atom[] after)
+    {
+        if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + 5 ||
+            !before.SequenceEqual(after.Take(before.Length)))
+            throw new InvalidDataException("World animation append prefix/shape");
+        for (int at = 0; at < after.Length; at += 5)
+            for (int n = 0; n < 5; ++n)
+                if (after[at + n].Kind != (n < 2 ? 6 : 0) ||
+                    n >= 2 && after[at + n].Number is < -1048576 or > 1048576)
+                    throw new InvalidDataException("World animation append record kind/range");
+        int target = before.Length;
+        if (after[target + 2].Number != 1008)
+            throw new InvalidDataException("World animation append target X");
+        bool source = false;
+        for (int at = 0; at < before.Length; at += 5)
+            if (before[at + 2].Number == 784 && Enumerable.Range(0,5).All(n =>
+                n == 2 || before[at + n] == after[target + n])) source = true;
+        if (!source) throw new InvalidDataException("World animation append source identity");
     }
     private MapGeometryConfig(Dictionary<string, Rule[]> maps, Dictionary<string, string> aliases)
     {
@@ -158,36 +177,63 @@ internal sealed class MapGeometryConfig
                 ("gate_recognize8", "[pathgate recognize range]") => 8,
                 ("tile_pass14", "[pass type]") => 14,
                 ("dungeon_tiles", "[tile]") => 1,
+                ("dungeon_tiles3", "[tile]") => 1,
                 ("dungeon_ext_tilefiles", "[tile files]") => 2,
                 ("dungeon_ext_tilefiles_repair", "[tile files]") => 2,
                 ("dungeon_ext_tilemap", "[tile map]") => 1,
+                ("dungeon_ext_tilemap3", "[tile map]") => 1,
                 ("dungeon_animation5", "[animation]") => 5,
+                ("dungeon_animation5_append", "[animation]") => 5,
                 ("dungeon_passive4", "[passive object]") => 4,
                 ("dungeon_monster10_fixed_normal", "[monster]") => 10,
                 ("dungeon_ai8", "[ai character]") => 8,
                 ("dungeon_event_xyz3", "[event monster position]") => 3,
                 ("dungeon_special11_single_child", "[special passive object]") => 11,
+                ("dungeon_movable_xywh3", "[dungeon movable area]") => 4,
+                ("dungeon_virtual_xywh1", "[virtual movable area]") => 4,
+                ("dungeon_virtual_xywh4_append", "[virtual movable area]") => 4,
                 _ => throw new InvalidDataException("World mechanism has no verified record adapter")
             };
             var from = Profiles(row.GetProperty("from"));
             var to = Profiles(row.GetProperty("to"));
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
-            bool anchor = AnchorLayout(kind).Stride != 0;
-            if ((anchor || gate || tile || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap") && occurrence != 0)
+            bool anchor = AnchorLayout(kind).Stride != 0, metadata = kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append";
+            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append";
+            if ((metadata || anchor || gate || tile || dungeon) && occurrence != 0)
                 throw new InvalidDataException("World dungeon/grid adapter requires the unique first record");
-            if ((anchor || gate || kind is "dungeon_tiles" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap") && !path.EndsWith(".map",StringComparison.Ordinal) ||
+            if ((metadata || anchor || gate || dungeon) && !path.EndsWith(".map",StringComparison.Ordinal) ||
                 tile && (!path.EndsWith(".til",StringComparison.Ordinal) || !aliases.ContainsKey(path)))
                 throw new InvalidDataException("World mechanism resource kind/alias");
             foreach (var before in from)
             {
+                if (kind == "dungeon_animation5_append") { ValidateAnimationAppend(before,to[0]); continue; }
                 if (anchor) { ValidateAnchor(kind,before,to[0]); continue; }
-                if (kind == "dungeon_tiles")
+                if (metadata)
                 {
-                    if (before.Length != 4 || to[0].Length != 5 || before.Concat(to[0]).Any(atom => atom.Kind != 6) ||
-                        !before.Take(3).SequenceEqual(to[0].Take(3)) ||
-                        to[0].Skip(3).Any(atom => !aliases.ContainsKey(ResolveReference(path,atom.Text!))))
+                    bool append = kind == "dungeon_virtual_xywh4_append";
+                    int count = append ? 16 : kind == "dungeon_virtual_xywh1" ? 4 : 12;
+                    if (before.Length != count || to[0].Length != count || before.Concat(to[0]).Any(atom => atom.Kind != 0 || atom.Number is < -1048576 or > 1048576))
+                        throw new InvalidDataException("World dungeon metadata rectangles shape/range");
+                    for (int at = 0; at < count; at += 4)
+                    {
+                        int x = before[at].Number, width = before[at + 2].Number;
+                        if (width <= 0 || before[at + 3].Number <= 0 || to[0][at].Number != x + (!append && x >= 672 ? 224 : 0) ||
+                            to[0][at + 1] != before[at + 1] || to[0][at + 3] != before[at + 3] ||
+                            to[0][at + 2].Number != width + (append ? 448 : x < 672 && (long)x + width > 672 ? 224 : 0))
+                            throw new InvalidDataException("World dungeon metadata insertion mapping");
+                    }
+                    continue;
+                }
+                if (kind is "dungeon_tiles" or "dungeon_tiles3")
+                {
+                    int columns = kind == "dungeon_tiles3" ? 3 : 4;
+                    if (before.Length != columns || to[0].Length != 5 || before.Concat(to[0]).Any(atom => atom.Kind != 6) ||
+                        !before.Take(columns - 1).SequenceEqual(to[0].Take(columns - 1)) ||
+                        to[0].Skip(columns - 1).Any(atom => !aliases.ContainsKey(ResolveReference(path,atom.Text!))))
                         throw new InvalidDataException("World dungeon tile recipe");
+                    if (columns == 3 && to[0].Skip(2).Any(atom => aliases[ResolveReference(path,atom.Text!)] != ResolveReference(path,before[2].Text!)))
+                        throw new InvalidDataException("World three-column tile aliases must preserve terminal source");
                     continue;
                 }
                 if (kind is "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair")
@@ -202,13 +248,14 @@ internal sealed class MapGeometryConfig
                             throw new InvalidDataException("World extended tile file alias");
                     continue;
                 }
-                if (kind == "dungeon_ext_tilemap")
+                if (kind is "dungeon_ext_tilemap" or "dungeon_ext_tilemap3")
                 {
-                    if (before.Length == 0 || before.Length % 4 != 0 || to[0].Length != before.Length / 4 * 5 ||
+                    int columns = kind == "dungeon_ext_tilemap3" ? 3 : 4;
+                    if (before.Length == 0 || before.Length % columns != 0 || to[0].Length != before.Length / columns * 5 ||
                         before.Concat(to[0]).Any(atom => atom.Kind != 0 || atom.Number < -1))
                         throw new InvalidDataException("World extended tile matrix shape");
-                    for (int rowIndex = 0; rowIndex < before.Length / 4; ++rowIndex)
-                        if (!before.Skip(rowIndex * 4).Take(3).SequenceEqual(to[0].Skip(rowIndex * 5).Take(3)))
+                    for (int rowIndex = 0; rowIndex < before.Length / columns; ++rowIndex)
+                        if (!before.Skip(rowIndex * columns).Take(columns - 1).SequenceEqual(to[0].Skip(rowIndex * 5).Take(columns - 1)))
                             throw new InvalidDataException("World extended tile matrix prefix");
                     continue;
                 }
@@ -237,7 +284,14 @@ internal sealed class MapGeometryConfig
         }
         if (aliases.Keys.Any(path => !result.TryGetValue(path,out var rules) || !rules.Any(rule => rule.Tag == "[pass type]" && rule.Occurrence == 0)))
             throw new InvalidDataException("World alias requires guarded pass grid");
-        foreach (var rules in result.Values) ValidateExtendedRecipe(rules);
+        foreach (var row in result)
+        {
+            ValidateExtendedRecipe(row.Key,row.Value,aliases);
+            if (row.Value.Any(rule => rule.Kind is "dungeon_animation5_append" or "dungeon_virtual_xywh1") && row.Value.Count(rule => rule.Kind == "dungeon_tiles") != 1)
+                throw new InvalidDataException("World animation append requires the same map four-to-five tile root");
+            if (row.Value.Any(rule => rule.Kind == "dungeon_virtual_xywh4_append") && row.Value.Count(rule => rule.Kind == "dungeon_tiles3") != 1)
+                throw new InvalidDataException("World four virtual rectangles require the same map three-to-five tile root");
+        }
         foreach (var row in result)
             foreach (var repair in row.Value.Where(rule => rule.Kind == "dungeon_ext_tilefiles_repair"))
             {
@@ -267,7 +321,7 @@ internal sealed class MapGeometryConfig
                 { begin = i + 1; break; }
             if (begin < 0) throw new InvalidDataException($"Unmatched world tag: {path} {rule.Id}");
             for (int i = begin; i < input.Length; ++i) if (input[i].Type == 3) { end = i; break; }
-            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag))
+            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append")
             {
                 string close = "[/" + rule.Tag[1..];
                 if (end == input.Length || Resolve(input[end].Value).ToLowerInvariant() != close ||
@@ -384,7 +438,7 @@ internal sealed class MapGeometryConfig
         return ids;
     }
 
-    private static void ValidateExtendedRecipe(List<Rule> rules)
+    private static void ValidateExtendedRecipe(string path, List<Rule> rules, Dictionary<string,string> aliases)
     {
         var fileRules = rules.Where(rule => rule.Tag == "[tile files]").ToArray();
         var mapRules = rules.Where(rule => rule.Tag == "[tile map]").ToArray();
@@ -393,19 +447,33 @@ internal sealed class MapGeometryConfig
             rules.Count(rule => rule.Tag == "[tile]" && rule.Occurrence == 0) != 1)
             throw new InvalidDataException("World extended tile recipe must bind the complete dungeon tile plan");
         var files = fileRules[0]; var matrix = mapRules[0];
+        bool three = matrix.Kind == "dungeon_ext_tilemap3";
+        if (rules.Single(rule => rule.Tag == "[tile]").Kind != (three ? "dungeon_tiles3" : "dungeon_tiles"))
+            throw new InvalidDataException("World extended tile matrix must match base column adapter");
+        int columns = three ? 3 : 4;
         bool Valid(Atom[] values, HashSet<int> ids) => values.All(atom => atom.Number == -1 || ids.Contains(atom.Number));
         if (!Valid(matrix.To,TileFileIds(files.To))) throw new InvalidDataException("World extended tile target id missing");
         for (int profile = 0; profile < 3; ++profile)
         {
             var originalIds = TileFileIds(files.From[profile]);
             if (!Valid(matrix.From[profile],originalIds)) throw new InvalidDataException("World extended tile source id missing");
-            for (int row = 0; row < matrix.From[profile].Length / 4; ++row)
+            for (int row = 0; row < matrix.From[profile].Length / columns; ++row)
             {
-                int before = matrix.From[profile][row * 4 + 3].Number;
-                int native = matrix.To[row * 5 + 3].Number, extension = matrix.To[row * 5 + 4].Number;
-                if (before == -1 ? native != -1 || extension != -1 :
-                    native < 0 || extension < 0 || originalIds.Contains(native) || originalIds.Contains(extension))
-                    throw new InvalidDataException("World extended tile split must bind new native/extension aliases or preserve empty cell");
+                int before = matrix.From[profile][row * columns + columns - 1].Number;
+                for (int column = columns - 1; column < 5; ++column)
+                {
+                    int target = matrix.To[row * 5 + column].Number;
+                    if (before == -1 ? target != -1 : target < 0 || originalIds.Contains(target))
+                        throw new InvalidDataException("World extended tile split must bind new aliases or preserve empty cell");
+                    if (three && before != -1)
+                    {
+                        int sourceSlot = Array.FindIndex(files.From[profile],atom => atom.Kind == 0 && atom.Number == before);
+                        int targetSlot = Array.FindIndex(files.To,atom => atom.Kind == 0 && atom.Number == target);
+                        string alias = ResolveReference(path,files.To[targetSlot + 1].Text!);
+                        if (!aliases.TryGetValue(alias,out string? source) || source != ResolveReference(path,files.From[profile][sourceSlot + 1].Text!))
+                            throw new InvalidDataException("World three-column extension aliases must preserve terminal source");
+                    }
+                }
             }
         }
     }
@@ -439,7 +507,7 @@ internal sealed class MapGeometryConfig
     }
     private static void ValidateJson(JsonElement value, ref int nodes)
     {
-        if (++nodes > 8388608) throw new InvalidDataException("World JSON node budget");
+        if (++nodes > 32 * 1024 * 1024) throw new InvalidDataException("World JSON node budget");
         if (value.ValueKind == JsonValueKind.Object)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
