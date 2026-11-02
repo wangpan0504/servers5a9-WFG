@@ -1,11 +1,44 @@
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
 internal static partial class SinglePlayerDungeonRunTests
 {
+    static void VerifyCompanionProfiles(PvfArchive pvf)
+    {
+        var catalog = SupportCompanionCatalog.Load(pvf);
+        That(!catalog.Profiles.IsEmpty, "累计资源包含真实支援兵外观与装备模板");
+        foreach (int baseId in new[] { 20900, 9986, 74990, 19973 })
+        foreach (string tier in new[] { "entry", "graduate", "huge" })
+        {
+            if (!catalog.HasProfile(baseId, tier))
+            {
+                That(catalog.Pick(baseId, tier, _ => throw new InvalidOperationException()) is null,
+                    "未注册的职业档次不抽其它职业模板");
+                continue;
+            }
+            var expected = catalog.Profiles.Where(profile => profile.BaseId == baseId &&
+                (catalog.EqualTiers || profile.Tier == tier)).ToArray();
+            for (int ordinal = 0; ordinal < expected.Length; ++ordinal)
+            {
+                int choice = ordinal;
+                var actual = catalog.Pick(baseId, tier, count =>
+                {
+                    That(count == expected.Length, "统一强度目录按同职业完整装备池抽取，旧目录保留档次池");
+                    return choice;
+                });
+                That(actual == expected[ordinal] && actual is { Level: 95 },
+                    "每个真实模板均可抽中并冻结95级身份，不在同次入场重抽装备");
+            }
+        }
+        That(catalog.Pick(20900, "invalid", _ => throw new InvalidOperationException()) is null &&
+            catalog.Pick(1234, "entry", _ => throw new InvalidOperationException()) is null,
+            "三档统一标记不放行未知档次或非支援兵身份");
+    }
+
     static void VerifyCompanionStartRoomIdentity()
     {
         // 同一MAP可以在迷宫多个格子复用；模板编号不能代替出生房间身份。

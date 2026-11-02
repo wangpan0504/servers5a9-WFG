@@ -1,0 +1,233 @@
+{
+  "schema": "support-overdrive-configuration-v2",
+  "bundles": [
+    [
+      100050792,
+      100150662,
+      100100693,
+      100250656,
+      100200637,
+      100300954,
+      100312648,
+      100322541,
+      100344906,
+      100353089,
+      100390029
+    ],
+    [
+      100050793,
+      100150663,
+      100100694,
+      100250657,
+      100200638,
+      100300953,
+      100312647,
+      100322540,
+      100344905,
+      100353088,
+      100390028
+    ],
+    [
+      100050794,
+      100150664,
+      100100695,
+      100250658,
+      100200639,
+      100300946,
+      100312640,
+      100322533,
+      100344897,
+      100353080,
+      100390020
+    ]
+  ],
+  "weapons": {
+    "priest": [
+      108000544,
+      108000538,
+      108000558,
+      108000559
+    ],
+    "fighter": [
+      102000555,
+      102000549,
+      102000569,
+      102000570
+    ],
+    "atpriest": [
+      108000544,
+      108000538,
+      108000558,
+      108000559
+    ],
+    "mage": [
+      106040507,
+      106040532,
+      106040533
+    ]
+  },
+  "definitions": [
+    {
+      "base_id": 20900,
+      "job": "priest",
+      "skills": [
+        {
+          "id": 45,
+          "maximum": true
+        },
+        {
+          "id": 84,
+          "maximum": true
+        },
+        {
+          "id": 238,
+          "maximum": true
+        },
+        {
+          "id": 51,
+          "maximum": false
+        },
+        {
+          "id": 26,
+          "maximum": false
+        },
+        {
+          "id": 20,
+          "maximum": false
+        },
+        {
+          "id": 19,
+          "maximum": false
+        },
+        {
+          "id": 23,
+          "maximum": false
+        },
+        {
+          "id": 22,
+          "maximum": false
+        },
+        {
+          "id": 21,
+          "maximum": false
+        },
+        {
+          "id": 240,
+          "maximum": false
+        },
+        {
+          "id": 239,
+          "maximum": false
+        },
+        {
+          "id": 107,
+          "maximum": false
+        }
+      ]
+    },
+    {
+      "base_id": 9986,
+      "job": "fighter",
+      "skills": [
+        {
+          "id": 30,
+          "maximum": true
+        },
+        {
+          "id": 36,
+          "maximum": true
+        },
+        {
+          "id": 67,
+          "maximum": true
+        },
+        {
+          "id": 26,
+          "maximum": true
+        },
+        {
+          "id": 42,
+          "maximum": false
+        }
+      ]
+    },
+    {
+      "base_id": 74990,
+      "job": "atpriest",
+      "skills": [
+        {
+          "id": 14,
+          "maximum": true
+        },
+        {
+          "id": 33,
+          "maximum": true
+        },
+        {
+          "id": 93,
+          "maximum": true
+        },
+        {
+          "id": 21,
+          "maximum": false
+        },
+        {
+          "id": 23,
+          "maximum": false
+        },
+        {
+          "id": 24,
+          "maximum": false
+        },
+        {
+          "id": 28,
+          "maximum": false
+        },
+        {
+          "id": 32,
+          "maximum": false
+        }
+      ]
+    },
+    {
+      "base_id": 19973,
+      "job": "mage",
+      "skills": [
+        {
+          "id": 335,
+          "maximum": true
+        },
+        {
+          "id": 343,
+          "maximum": true
+        },
+        {
+          "id": 350,
+          "maximum": true
+        },
+        {
+          "id": 330,
+          "maximum": false
+        },
+        {
+          "id": 337,
+          "maximum": false
+        },
+        {
+          "id": 332,
+          "maximum": false
+        },
+        {
+          "id": 367,
+          "maximum": false
+        },
+        {
+          "id": 339,
+          "maximum": false
+        }
+      ]
+    }
+  ],
+  "vision": 0,
+  "excluded_weapons": {}
+}

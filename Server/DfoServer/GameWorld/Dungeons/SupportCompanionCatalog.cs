@@ -11,19 +11,26 @@ internal sealed class SupportCompanionCatalog
     public const string ResourcePath = "etc/support_companion_profiles.etc";
     public static SupportCompanionCatalog Empty { get; } = new([]);
     public ImmutableArray<SupportCompanionProfile> Profiles { get; }
-    private SupportCompanionCatalog(ImmutableArray<SupportCompanionProfile> profiles) => Profiles = profiles;
+    public bool EqualTiers { get; }
+    private SupportCompanionCatalog(ImmutableArray<SupportCompanionProfile> profiles, bool equalTiers = false)
+        => (Profiles, EqualTiers) = (profiles, equalTiers);
 
     public static SupportCompanionCatalog Load(PvfArchive archive)
     {
         if (!archive.Contains(ResourcePath)) return Empty;
         var document = new PvfTokenDocument(archive.ReadTokens(ResourcePath), archive.ResolveString);
-        if (!document.Diagnostics.IsEmpty || document.Sections.Length is < 1 or > 512)
+        if (!document.Diagnostics.IsEmpty || document.Sections.Length is < 1 or > 513)
             throw new InvalidDataException("支援兵档次资源目录不完整或超出容量");
+        var equality = document.Sections.Where(section => section.Name == "equal tiers").ToArray();
+        if (equality.Length > 1 || equality.Any(section => section.IsBlock || !section.Children.IsEmpty ||
+            section.Values.Length != 1 || section.Values[0].Type != 0 || section.Values[0].Value != 1))
+            throw new InvalidDataException("支援兵三档统一标记须为单个整数1");
         var registry = DungeonCatalog.ParseDirectory(archive.ReadTokens("aicharacter/aicharacter.lst"), archive.ResolveString, "aicharacter");
         var entries = ImmutableArray.CreateBuilder<SupportCompanionProfile>();
         var used = new HashSet<int>();
         foreach (var section in document.Sections)
         {
+            if (section.Name == "equal tiers") continue;
             var row = section.Values;
             if (section.Name != "profile" || !section.IsBlock || !section.Children.IsEmpty || row.Length != 4 ||
                 row[0].Type != 0 || row[1].Type != 6 || row[2].Type != 0 || row[3].Type != 6)
@@ -43,13 +50,17 @@ internal sealed class SupportCompanionCatalog
                 throw new InvalidDataException("支援兵档次模板职业或等级与基础模板不匹配");
             entries.Add(new(baseId, tier, templateId, setName, path, minimum[5].Value));
         }
-        return new(entries.ToImmutable());
+        if (entries.Count is < 1 or > 512)
+            throw new InvalidDataException("支援兵模板数超出容量");
+        return new(entries.ToImmutable(), equality.Length != 0);
     }
 
     public bool HasProfile(int baseId, string tier) => Profiles.Any(profile => profile.BaseId == baseId && profile.Tier == tier);
     public SupportCompanionProfile? Pick(int baseId, string tier, Func<int, int> draw)
     {
-        var candidates = Profiles.Where(profile => profile.BaseId == baseId && profile.Tier == tier).ToArray();
+        if (!HasProfile(baseId, tier)) return null;
+        // 只有配套资源明确统一强度才跨档抽装备；旧资源仍保留原来的档次边界。
+        var candidates = Profiles.Where(profile => profile.BaseId == baseId && (EqualTiers || profile.Tier == tier)).ToArray();
         return candidates.Length == 0 ? null : candidates[draw(candidates.Length)];
     }
 }

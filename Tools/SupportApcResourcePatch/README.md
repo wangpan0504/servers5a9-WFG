@@ -14,7 +14,20 @@ SupportApcResourcePatch generate-maps current.pvf audit.json new-output-director
 SupportApcResourcePatch prepare-templates current.pvf new-template-directory
 SupportApcResourcePatch pair-resources map-manifest.json template-plan.json client-contract.json completed-manifest.json
 SupportApcResourcePatch export-evidence current.pvf template-plan.json new-evidence-directory
+SupportApcResourcePatch prepare-overdrive current.pvf Tools/SupportApcResourcePatch/OverdriveConfiguration.json new-output-directory
 ```
+
+## 当前注册模板强化差量
+
+`prepare-overdrive` 只读当前累计候选，输出 `support-profile-delta-v1` 的 `delta.json` 和逐模板 `overdrive-report.json`，不重包或覆盖 PVF。持久配置为 `OverdriveConfiguration.json`，明确列出三套完整的五件防具、三件首饰、三件特殊装备及职业武器；每项还会重新校验当前资源的继承、95级史诗品质、职业、前置技能、部位和真实套装归属。首三项覆盖三个不同完整套装，后续有限循环职业武器组合；王富贵三个现存 profile 因而各有一套不同装备。三档强度通过目录根节 `[equal tiers] 1` 明确启用，profile 行与原外观名称原样保留。
+
+当前配置覆盖主 Buff、一觉、二觉及所有已核实的持续 Buff、护盾、持续治疗/支援技能；单次治疗、单次净化、纯伤害和直接复活另行保留。主 Buff/觉醒最终有效等级到实际普通副本表长，其余目标以原学习等级加15后计入装备加级，超过实际表长则截顶并逐项报告，不将 `maximum level` 当作数据表长，也不越界读取返回零。技能表只接受第一张根表或显式 `dungeon` 表及其严格闭合的前置声明，不借用 PVP 等模式；原文件后续无关说明尾块不参与等级读取。
+
+等级计算包含所保留时装、战斗装备和实际件数达到的套装效果，支持严格完整的职业/成长、技能编号直接加级，以及 `all skill item container` 的学习等级区间、普通主动技能和排除 EX 技能条件。每套装备单独计算，AIC 学习等级减去装备/套装加级，以保证最终有效等级不超过普通表长。未知条件分支、额外字段、重复阈值、坏继承和无效表直接拒绝。
+
+`buff option` 按已核实的原生职业/成长门禁计级：14/1女圣骑士、3/5小魔女，以及未学习技能258的4/1圣骑士。普通直接和区间装备加级不会新学基础等级为0的258；奶爸逐模板确认258仍未学习，并拒绝装备/套装继承中独立授予技能的声明、显式258来源和未证明的嵌套条件。十字架108000538/108000558/108000559因此已与108000544一同纳入配置池。实际随机池受现有profile数量限制：王富贵3套组合、3把武器（544/538/558），光兵12套组合、4把武器，女圣骑士12套组合、4把武器，小魔女9套组合、3把武器。王富贵不扩充编号，不能将配置的12种潜在组合全部称为可抽取。
+
+生成仅修改已注册基础和变体的学习/快捷技能等级、完整战斗装备、移速零基37项乘二、`vision=0`、`warlike=100`，并删除完整 AIC `skill data up` 旧档倍率块。全部既有外观及辅助整数（王富贵为十件）、其它属性项、AI、KEY和其余资源继续使用原输入。视野0使用原生正常 APC 的不限距离分支，status5仍保留原生固定距离；好战100为当前已知安全高值，不宣称已证概率最大。最终体精/智力校准仍依赖配套客户端实现，差量生成不等于客户端实机验收。
 
 迁移证明逐图保留历史原 APC 的 ordinal、六个整数、阵营与品级。只接受历史无 5409、之后按原写入器两条分支新增光兵的记录；当前行再次精确匹配才能迁移。新增女圣骑士和小魔女放在原块尾部，原光兵行仅修改编号，保持 SourceOrdinal。来源不明的 5409 原样保留，该图不追加新支援兵。
 
