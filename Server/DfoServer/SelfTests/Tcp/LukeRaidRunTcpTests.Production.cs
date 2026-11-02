@@ -1,4 +1,6 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.BattlePass;
+using DfoServer.GameWorld.BattlePass;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Raids;
@@ -20,7 +22,7 @@ internal static partial class LukeRaidRunTcpTests
         foreach (int mode in new[] { 0, 1, 2 })
             await ProductionCoreAsync(source, Path.Combine(root, "recovery-mode-" + mode), resources, true, mode);
     }
-    static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0)
+    static async Task ProductionCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool recovery, int recoveryMode = 0, bool battlePassDeath = false)
     {
         static WirePacket Until(TcpPeer peer, byte kind, ushort opcode, List<WirePacket>? observed = null)
         {
@@ -32,7 +34,18 @@ internal static partial class LukeRaidRunTcpTests
             throw new InvalidOperationException("production TCP expected packet not received");
         }
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.UtcNow);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "luke-production"), resources: resources, clock: clock);
+        BattlePassMissionPolicy? deathPolicy = null;
+        if (battlePassDeath)
+        {
+            var start = DateTimeOffset.Parse("2026-09-10T06:00:00+08:00");
+            deathPolicy = new("luke-death-fixture", start, BattlePassCatalog.Load(resources.Archive));
+            clock = new LukeRaidClockTests.Clock(start.AddDays(44).AddHours(2));
+            That(new[] { 1, 2 }.All(id => deathPolicy.Active(clock.GetUtcNow())
+                .Any(row => row.Key.Category == 0 && row.Key.Id == id)), "原调度同日激活日击杀与领主任务");
+            source = source with { BattlePassSeasonKey = "luke-death-fixture", BattlePassSeasonStart = start };
+        }
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root,
+            battlePassDeath ? "battle-pass-luke-raid-death" : "luke-production"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var definition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive), resources.ItemResources.Items,
@@ -40,7 +53,7 @@ internal static partial class LukeRaidRunTcpTests
         var catalog = definition.Resources!.EntryCatalog!;
         var repository = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var port = ChannelTcpTests.Endpoints(fixture)[20];
-        foreach (int count in recovery ? new[] { 1 } : new[] { 1, 4, 8 })
+        foreach (int count in recovery || battlePassDeath ? new[] { 1 } : new[] { 1, 4, 8 })
         {
             var peers = new List<TcpPeer>();
             try
@@ -64,7 +77,13 @@ internal static partial class LukeRaidRunTcpTests
                                 CompletedQuests = [2903, 4872], InitialLearning = learning });
                         }
                     }
-                    var peer = Open(fixture, account, gamePort: port, channelNumber: 20); peer.Select(); peers.Add(peer);
+                    var peer = Open(fixture, account, gamePort: port, channelNumber: 20);
+                    if (deathPolicy is not null)
+                    {
+                        peer.ExpectedOpenEvents = [2532, 266, 2520];
+                        peer.ExpectedBattlePassEnd = checked((uint)deathPolicy.End.ToUnixTimeSeconds());
+                    }
+                    peer.Select(); peers.Add(peer);
                     That(peer.LukeChannelCardsInfo is [.., 1], "尚未建团或开战，进入卢克频道已收到自动展示塔罗牌组");
                     Bytes(peer.LukeChannelCardsInfo, peers[0].LukeChannelCardsInfo, "同频道同一日成员进入时使用完全相同塔罗布局与真实怪物表");
                 }
@@ -140,6 +159,11 @@ internal static partial class LukeRaidRunTcpTests
                             !started.Any(packet => packet is { Kind: 0, Opcode: 586, Body.Length: 6 } &&
                                 U32(packet.Body) == locked && packet.Body[5] == (byte)RaidDungeonState.Open),
                             "正式开团只开放诞生，蔓延和湮灭保留真实未开放状态");
+                }
+                if (deathPolicy is not null)
+                {
+                    VerifyBattlePassDeaths(fixture, leader, catalog, definition.Resources!, clock, deathPolicy);
+                    return;
                 }
                 LukeRaidDisconnectCandidate? p1RejoinCandidate = null;
                 long p1RejoinCandidateStamp = 0;

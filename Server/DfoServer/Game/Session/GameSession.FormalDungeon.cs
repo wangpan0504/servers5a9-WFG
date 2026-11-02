@@ -1427,7 +1427,7 @@ internal sealed partial class GameSession
         // 首次冻结即携带原攻坚绑定；普通入口不能先把Guide的空来源永久冻结。
         bool useRaidEligibility = raidEligibilityCaptured && dungeon.Entry.RaidEntry is { } entry &&
             raidCombat is { } combat && entry.Kind == combat.Battle.Kind &&
-            (combat.Battle.Kind == DfoServer.Game.Raids.RaidKind.Anton ||
+            (combat.Battle.Kind is DfoServer.Game.Raids.RaidKind.Anton or DfoServer.Game.Raids.RaidKind.Luke or DfoServer.Game.Raids.RaidKind.Prey ||
              combat.Battle.Kind == DfoServer.Game.Raids.RaidKind.Fiendwar && combat.Battle.FiendwarDefinition is { Guide: false });
         pending.FreezeBattlePassActivity(dungeon.Run,timeProvider ?? TimeProvider.System,
             raidCombat?.Battle,raidCombat?.Actor,raidEligibility,useRaidEligibility);

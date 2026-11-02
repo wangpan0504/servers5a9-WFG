@@ -39,6 +39,8 @@ internal static class TcpRegressionTests
             await PreyGuideTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
         }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
+        ("prey-guide-battlepass-death", PreyGuideTcpTests.RunBattlePassDeathAsync),
+        ("battle-pass-luke-raid-death", LukeRaidRunTcpTests.RunBattlePassDeathAsync),
         ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
         ("anton-raid-reward-formal", (_, _, resources) =>
