@@ -52,6 +52,25 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
 
     async Task<CommandResult> SendAsync(GameConnectionContext context, Packet packet)
     {
+        // 助手机器命名空间在解码/具名私聊/正文日志之前隔离，畸形或跨频道请求也不广播。
+        if (HelperRequests.Reserved(packet.Body))
+        {
+            if (!context.Session.AllowChatSend() || IsChatBlocked(context.Session)) return CommandResult.Handled;
+            var helper = HelperRequests.Parse(packet.Body);
+            if (helper is null) return CommandResult.Handled;
+            var result = context.Session.SetHelperHellRotation(helper.CharacterId, helper.HellRotation);
+            if (result is null) return CommandResult.Handled;
+            string helperText = string.Join('|', "1", helper.Nonce,
+                result.CharacterId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                result.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture), result.Accepted ? "ok" : "rejected",
+                result.HellRotation ? "1" : "0");
+            var body = ServerNoticePackets.Build("95_HELPER/1", helperText, out bool helperTruncated);
+            if (helperTruncated) throw new InvalidDataException("助手状态回执不得截断");
+            await context.Notify(NotiPacketType.AAS_TIPS, body, "helper_settings",
+                () => context.Session.CanPublishHelperSettings(result));
+            log.Write("helper_settings", new { Connection = context.Id, result.Accepted, result.HellRotation });
+            return CommandResult.Handled;
+        }
         // 预留scene机器包在宽松解码、具名私聊、正文日志和任何广播之前隔离。
         // 即使未安装/未启用scene模块也不能把机器回执投递给玩家；不响应、不协商、不执行领域操作。
         if (LukeSceneReservedRequests.TryRead(packet.Body, out var sceneStatus, out _))

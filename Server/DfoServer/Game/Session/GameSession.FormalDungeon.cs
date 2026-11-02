@@ -152,7 +152,8 @@ internal sealed partial class GameSession
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
-        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true, byte partyMemberCount = 1)
+        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true,
+        byte partyMemberCount = 1, HelperRotationCapture? helperRotation = null)
     {
         if (hellParty) questId = 0;
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
@@ -164,7 +165,8 @@ internal sealed partial class GameSession
             return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
                 shared, partyFirstKey, partyInstance, partyAdmission);
-        var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry, partyAdmission) &&
+        var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) &&
+            (helperRotation is null ? CanEnterFormalDungeon(retry, partyAdmission) : CanRotateHelperHell(helperRotation)) &&
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
@@ -525,6 +527,11 @@ internal sealed partial class GameSession
             entry.IsTutorial || entry.IsQuestReplay || assault is not null)) return RejectFormal("party-mode-unsupported");
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
         if (war?.Battle.View.Hidden?.Dungeon == entry.DungeonId) entry = entry with { IsEvildomWarHidden = true };
+        if (helperRotation is not null)
+        {
+            entry = helperRotation.Rotation.Apply(entry);
+            if (entry is null) return RejectFormal("helper-hell-target-room-unavailable");
+        }
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance,entry.IsBossRush ? catalog.BossRush : null);
         if (prepared is not null && bossBuff is not null)

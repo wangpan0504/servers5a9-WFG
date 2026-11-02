@@ -46,6 +46,7 @@ internal static class TcpRegressionTests
         ("packet-http", PacketCaptureTcpTests.RunHttpAsync),
         ("town", TownProtocolTcpTests.RunAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
+        ("helper-hell-rotation", PartyDungeonTcpTests.RunHelperHellAsync),
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
         ("monster-battle-level", FormalDungeonTcpTests.RunBattleLevelsAsync),
         ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
