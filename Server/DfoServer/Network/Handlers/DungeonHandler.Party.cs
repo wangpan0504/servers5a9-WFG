@@ -121,13 +121,15 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind == PartyDungeonNoticeKind.RaidBattleSync)
         {
-            if (notice.RaidBattleChange is { } change)
+            if (notice.RaidBattleChange is { } change && !ReferenceEquals(change.Before, change.After))
                 log.Write(notice.RaidEvent is null ? "raid_run_clear" : "raid_run_event", new { Connection = context.Id,
                     Event = notice.RaidEvent?.ToString(), RaidType = context.Session.RaidCombatKind(), Instance = change.After.Instance,
                     Run = notice.Scene?.Snapshot.Identity.InstanceId, Dungeon = notice.Scene?.Entry.DungeonId,
                     Members = notice.Members.Length, change.After.Phase, BeforeRevision = change.Before.Revision,
                     AfterRevision = change.After.Revision, State = change.After.State.ToString() });
-            context.Session.PublishRaidCombat();
+            // 真实通关事件先入原整团FIFO，再发布阶段状态及调度自动退场。
+            try { notice.RaidBattleChange?.LukeClear?.Publish(); }
+            finally { context.Session.PublishRaidCombat(); }
             return;
         }
         if (notice.RaidBattleChange is not null && notice.Kind is not (PartyDungeonNoticeKind.Departure or PartyDungeonNoticeKind.ResultReturn))

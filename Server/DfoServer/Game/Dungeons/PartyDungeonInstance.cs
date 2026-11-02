@@ -179,7 +179,8 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         if (captured.Any(row => row is null)) return [];
         var first = captured[0]!.Value;
         if (captured.Any(row => row!.Value.Scene.Snapshot.Identity.InstanceId != Id ||
-            row.Value.Squad != first.Squad || row.Value.Scene.Snapshot.CurrentMap != first.Scene.Snapshot.CurrentMap)) return [];
+            row.Value.Squad != first.Squad || row.Value.Scene.Snapshot.CurrentMap != first.Scene.Snapshot.CurrentMap ||
+            row.Value.MonitorCount is { } count && values.Length != count)) return [];
         // 只保留本Run最近一次C及同顺序百分比，不为客户端任意C建立无界字典；不授予死亡或结算权限。
         var display = new AntonHpDisplay(first.Squad, [..current.OrderBy(member => member.Slot)
             .Select(member => member.Actor.Character.Id)], checked((uint)Volatile.Read(ref antonCoinsUsed)), context, [..values]);

@@ -66,6 +66,12 @@ internal sealed partial class GameSession
         }
         change = firstRaid.Battle.Kind == RaidKind.Fiendwar ? firstRaid.Battle.CompleteFiendwarDungeon(facts.ToArray()) : firstRaid.Battle.Kind == RaidKind.Prey
             ? firstRaid.Battle.CompletePreyDungeon(facts.ToArray()) : firstRaid.Battle.CompleteLukeDungeon(facts.ToArray());
+        // 网络前中断后只复用同一Run的已提交事件；不重新造事实或重复登记接收者。
+        if (change is null && firstRaid.Battle.CaptureLukeRunCleared(instance) is { } cleared)
+        {
+            var view = firstRaid.Battle.View;
+            change = new(view, view) { LukeClear = cleared };
+        }
         return facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
     }
 
@@ -99,7 +105,8 @@ internal sealed partial class GameSession
             map = snapshot.CurrentMap;
             rows.Add((raid.Actor, snapshot.Identity));
         }
-        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null, observeMap ? map : null);
+        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null, observeMap ? map : null,
+            members[0].Actor.Session.formalDungeon!.Run);
         // 通知仍由原发布队列在owner锁外分发；重放时允许以当前view恢复丢失投影。
         return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members,
             members[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change,

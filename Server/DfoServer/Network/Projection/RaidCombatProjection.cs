@@ -169,6 +169,8 @@ internal static partial class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (view.Phase == 0 && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } lukeMovie)
+                PostLukeMovieCards(context, actor, lukeMovie, view);
             if (view.State == AntonRaidBattleState.Reward &&
                 context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey &&
                 prey.LukeEligibility(actor.Character, view.Phase) is { Eligible: true } &&

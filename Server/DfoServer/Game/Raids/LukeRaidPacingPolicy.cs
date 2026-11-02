@@ -26,6 +26,27 @@ internal sealed record LukeRaidPacingPolicy(string Source, int StorageRecoverySe
         bool Trigger(RaidRule rule, string tag, int? dungeon = null, string? symbol = null) =>
             rule.Trigger.Any(clause => clause.Tag == tag && clause.DungeonId == dungeon && clause.Symbol == symbol);
 
+        var birth = original.Phases[0].Dungeons.SingleOrDefault(row => row.Id == 5054);
+        if (birth is not { HpRaw: 3 } || !original.Symbols.ContainsKey(birth.HpSymbol))
+            throw new InvalidDataException("卢克诞生圣所缺少三次通关HP声明");
+        int sanctumGates = 0;
+        var firstPhaseRules = original.Phases[0].Rules.Select(rule =>
+        {
+            if (!Trigger(rule, "[on enter dungeon]", 5054)) return rule;
+            if (rule.Behavior.Count(action => action is
+                { Tag: "[set dungeon state]", DungeonId: 5055 or 5056, State: RaidDungeonState.Open }) != 2)
+                throw new InvalidDataException("卢克一阶段圣所开门规则形状变化");
+            sanctumGates++;
+            // 首个已提交Run使HP从3降至2才开后两图；进入、放弃或后续清图不重复触发。
+            var trigger = rule.Trigger.Select(clause => clause is { Tag: "[on enter dungeon]", DungeonId: 5054 }
+                ? new RaidClause("[on change symbol]", token++, null, birth.HpSymbol, null, null, [])
+                : clause).ToImmutableArray().Add(
+                    new RaidClause("[if]", token++, null, birth.HpSymbol, null, null, [2]));
+            return rule with { Trigger = trigger };
+        }).ToImmutableArray();
+        if (sanctumGates != 1)
+            throw new InvalidDataException("卢克一阶段缺少唯一诞生圣所开门规则");
+
         int temples = 0, storageEntries = 0, lightClears = 0, giveups = 0, fullEnergy = 0, storageTimers = 0, controlTimers = 0;
         var rules = ImmutableArray.CreateBuilder<RaidRule>();
         foreach (var rule in original.Phases[1].Rules)
@@ -90,6 +111,8 @@ internal sealed record LukeRaidPacingPolicy(string Source, int StorageRecoverySe
         if ((temples, storageEntries, lightClears, giveups, fullEnergy, storageTimers, controlTimers) != (1, 1, 1, 2, 1, 2, 3))
             throw new InvalidDataException("卢克统一节奏能源规则数量或时钟声明变化");
         // 原资源与token保留只读；本服差量不改地图、Boss、奖励或实例/SQL所有权。
-        return original with { Phases = original.Phases.SetItem(1, original.Phases[1] with { Rules = rules.ToImmutable() }) };
+        return original with { Phases = original.Phases
+            .SetItem(0, original.Phases[0] with { Rules = firstPhaseRules })
+            .SetItem(1, original.Phases[1] with { Rules = rules.ToImmutable() }) };
     }
 }

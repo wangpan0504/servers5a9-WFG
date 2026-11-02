@@ -40,14 +40,21 @@ internal sealed partial class AntonRaidBattle
 
     internal int[] LukeNamedTemplates => lukeCards?.Templates.Order().ToArray() ?? [];
 
-    internal AntonRaidBattleChange? RecordLukeNamedDeath(RaidActor actor, DungeonRunIdentity identity, int monster)
+    internal AntonRaidBattleChange? RecordLukeNamedDeath(RaidActor actor, DungeonRunIdentity identity, SinglePlayerDungeonRun source, ushort key)
     {
         lock (gate)
         {
             if (Kind != RaidKind.Luke || !actor.IsCurrent || !dungeonRuns.TryGetValue(identity.InstanceId, out var run) ||
                 !run.Installed || run.Phase != current.Phase || !run.Active.Contains(actor) ||
-                lukeCards?.Templates.Contains(monster) != true ||
-                !lukeKilledNamed.Add((current.Phase, monster))) return null;
+                !entries.TryGetValue((run.Id, actor.Character), out var entry) || !ReferenceEquals(entry.Run, run) ||
+                identity.CharacterId != actor.Character || identity.QuestId != entry.Identity.QuestId || identity.TaskAttempt != entry.Identity.TaskAttempt ||
+                identity.Epoch < run.MapEpochs.GetValueOrDefault(actor) || source.Snapshot.Identity != identity ||
+                source.DungeonId != run.Dungeon || source.Entry.Maze.SourceOrdinal != run.MazeOrdinal ||
+                !source.CommittedMonitorDeath(key, out int monster, out bool exhausted)) return null;
+            bool changed = lukeCards?.Templates.Contains(monster) == true && lukeKilledNamed.Add((current.Phase, monster));
+            if (exhausted && LukeMonitorTargets(run).Any(target => !target.Passive && target.Template == monster))
+                changed |= run.KilledMonitorTargets.Add(monster);
+            if (!changed) return null;
             var before = current;
             current = current with { Revision = checked(current.Revision + 1) };
             return new(before, current);

@@ -167,7 +167,9 @@ internal sealed partial class AntonRaidBattle
             !current.ClockFaulted && actor.IsCurrent && members.ContainsKey(actor) &&
             (pendingTransition is { State: AntonRaidBattleState.Reward } terminal && terminal.Phase == phase ||
                 current.State == AntonRaidBattleState.Reward) &&
-            lukePhaseCommits.ContainsKey(phase);
+            lukePhaseCommits.ContainsKey(phase) &&
+            // 阶段资格时钟也会发布终结view；所有原通关事件先入全团FIFO再允许退场。
+            !dungeonRuns.Values.Any(run => run.Phase == phase && run.LukeClear is { Published: false });
     }
 
     internal AntonRaidBattleChange? AcceptLukeSettlement(LukePhaseSettlement candidate, LukePhaseCommit receipt)

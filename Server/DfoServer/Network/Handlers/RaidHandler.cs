@@ -107,7 +107,9 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                 if (raid.Type == 2)
                     context.Sender.Post(0, (ushort)NotiPacketType.START_FIEND_WAR, [], "fiendwar_rejoin_started", Current,
                         () => context.FiendwarTimers = context.FiendwarTimers.Clear());
-                RaidCombatProjection.Notice(context, view, actor);
+                // 卢克重返替换了全团view，补齐其它连接被旧view守卫过滤的排队展示。
+                if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle) battle.Publish(view);
+                else RaidCombatProjection.Notice(context, view, actor);
                 await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
             }
             else await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_rejected", () => actor.IsCurrent);

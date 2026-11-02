@@ -26,6 +26,7 @@ internal static partial class LukeRaidRunTcpTests
         }
         That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND phase0_receipt IS NOT NULL AND state=0",instance) is [[8L]],
             "资源最少0使全团八人获得真实P1资格，且P1不占周clear");
+        ConfirmFirstPhaseMovie(peers,[0]);
         foreach(var peer in peers)
         {
             That(Amount(peer.Id,10308804)==0&&Amount(peer.Id,10308807)==0,"领取前原箱与盒内材料均未提前发放");

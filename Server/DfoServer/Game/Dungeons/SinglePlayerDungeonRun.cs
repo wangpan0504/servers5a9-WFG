@@ -822,6 +822,27 @@ internal sealed partial class SinglePlayerDungeonRun
     internal bool IsConfirmedDeath(PreparedDungeonDeath prepared) => prepared is not null && committedPreparations.Contains(prepared) &&
         deaths.TryGetValue(prepared.Death.EventId, out var accepted) && ReferenceEquals(accepted, prepared.Death);
 
+    // 只查询本Run实际提交的普通演员；合并监控目标须所有已加载实体都死亡，未生成的分支不计存活。
+    internal bool CommittedMonitorDeath(ushort key, out int template, out bool exhausted)
+    {
+        template = 0; exhausted = false;
+        var source = committedPreparations.FirstOrDefault(prepared => prepared.Death.MonsterKey == key && IsConfirmedDeath(prepared) &&
+            prepared.Monster.AiCharacter is null && !prepared.Monster.IsSpecialChild && prepared.Monster.CanReportDeath);
+        if (source is null) return false;
+        template = source.Monster.MonsterId;
+        int target = template;
+        var spawned = allRooms.Where(room => room.Loaded).SelectMany(room => room.Plan.Monsters)
+            .Where(monster => monster.MonsterId == target && monster.AiCharacter is null && !monster.IsSpecialChild && monster.CanReportDeath).ToArray();
+        exhausted = spawned.Length != 0 && spawned.All(monster => committedPreparations.Any(prepared =>
+            prepared.Death.MonsterKey == monster.ObjectKey && prepared.Monster.MonsterId == target && IsConfirmedDeath(prepared)));
+        return true;
+    }
+
+    internal bool HasLivingMonitorTarget(int template) => allRooms.Where(room => room.Loaded)
+        .SelectMany(room => room.Plan.Monsters).Any(monster => monster.MonsterId == template && monster.AiCharacter is null &&
+            !monster.IsSpecialChild && monster.CanReportDeath && !committedPreparations.Any(prepared =>
+                prepared.Death.MonsterKey == monster.ObjectKey && prepared.Monster.MonsterId == template && IsConfirmedDeath(prepared)));
+
     // 过房或结算后仍核对本Run实际确认的具体事件，不以较早epoch替代事实资格。
     internal bool HasCommittedRoomClear(DfoServer.Game.Quests.QuestClearReceipt receipt) =>
         receipt.SourceType == DfoServer.Game.Quests.QuestClearSourceType.MonsterDeath &&

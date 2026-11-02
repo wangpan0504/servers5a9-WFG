@@ -80,6 +80,7 @@ internal static class LukeRaidStartTests
             LukeRaidObjectTests.RunCore(actors.Take(8).ToArray());
             LukeFacilityBridgeTests.RunCore(actors.Take(8).ToArray());
             LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
+            LukeRunClearedEventTests.Run(actors.Take(8).ToArray());
             await LukeRewardRejectionTests.RunAsync(actors[8],root);
             var waitingPosition = landing with { X = 24, Y = 18, Direction = 1 };
             var waitingCharacter = sessions[7].Selected!;

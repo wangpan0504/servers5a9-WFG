@@ -57,6 +57,17 @@ internal static class RaidCombatPackets
         }
     }
 
+    // 584单行已提交事件，不夹带旧参与位置。
+    internal static byte[] RunCleared(uint dungeon, IReadOnlyList<ushort> members)
+    {
+        if (members.Count is < 1 or > 4) throw new ArgumentOutOfRangeException(nameof(members));
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1); writer.Write(dungeon); writer.Write((byte)4); writer.Write(checked((byte)members.Count));
+        foreach (ushort member in members) writer.Write(member);
+        return stream.ToArray();
+    }
+
     internal static byte[] StatusHp(IReadOnlyList<RaidRunDisplay> rows)
     {
         using var stream = new MemoryStream();

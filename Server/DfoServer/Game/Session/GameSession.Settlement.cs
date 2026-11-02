@@ -53,7 +53,11 @@ internal sealed partial class GameSession
     public (FormalDungeonReceipt Receipt, ushort? BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null || dungeon.Run.CurrentAltar is not null || dungeon.Entry.IsDespair || dungeon.Entry.RaidEntry is not null)
+            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null || dungeon.Run.CurrentAltar is not null || dungeon.Entry.IsDespair)
+            return ((FormalDungeonReceipt, ushort?)?)null;
+        // 团本每场Run也需115/31完成演出与结果菜单；许可必须来自全分队已提交的清图，不能借累计圣所Clear。
+        if (dungeon.Entry.RaidEntry is not null && (RaidDungeonResultFocus() is null || raidCombat is not { } raid ||
+            !raid.Battle.HasDungeonContribution(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId)))
             return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;

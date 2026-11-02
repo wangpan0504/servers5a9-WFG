@@ -47,11 +47,23 @@ internal static partial class LukeRaidRunTcpTests
         }
     }
 
-    static void ProductionLiveHp(TcpPeer[] peers, TcpPeer[] members, TcpPeer reporter)
+    static void ProductionLiveHp(TcpPeer[] peers, TcpPeer[] members, TcpPeer reporter,
+        System.Collections.Immutable.ImmutableArray<LukeMonsterMonitor> monitors)
     {
         foreach (var peer in peers) Drain(peer, true);
-        foreach (var values in new uint[][] { [73, 41], [37, 12] })
+        reporter.Send(695, Build(writer =>
         {
+            writer.Write(0x12345678u); writer.Write((byte)(monitors.Length + 1));
+            for (int index = 0; index <= monitors.Length; index++) writer.Write(100u);
+        }));
+        foreach (var peer in new[] { reporter }.Concat(peers.Where(peer => peer != reporter)))
+            That(!Drain(peer, true).Any(packet => packet.Opcode is 634 or 261 or 586 or 601),
+                "已知buff监控长度不符时在Party生成通知前拒绝，不漏发原始错位634");
+        foreach (uint[] pair in new uint[][] { [73, 41], [37, 81] })
+        {
+            var values = Enumerable.Repeat(100u, monitors.Length).ToArray();
+            values[0] = pair[0];
+            if (values.Length > 1) values[1] = pair[1];
             reporter.Send(695, Build(writer =>
             {
                 writer.Write(0x12345678u); writer.Write((byte)values.Length);
@@ -68,9 +80,39 @@ internal static partial class LukeRaidRunTcpTests
             {
                 var frames = Drain(peer, true);
                 Bytes(frames.Single(packet => packet is { Kind: 0, Opcode: 634 }).Body, expected,
-                    "二阶段能源室连续695按原顺序向全团634更新双目标百分比，不要求重开面板");
+                    "二阶段能源室按buff完整目标序列更新，未死目标允许41回血至81，不做全列表min");
                 That(!frames.Any(packet => packet.Opcode is 261 or 596 or 601),
                     "能源HP刷新不重启进度计时、不打开结果入口、不重复结算");
+            }
+        }
+    }
+
+    static void ProductionMonitorRoomHp(TcpPeer[] peers, TcpPeer[] members, TcpPeer reporter,
+        System.Collections.Immutable.ImmutableArray<LukeMonsterMonitor> monitors, HashSet<int> killed)
+    {
+        foreach (var peer in peers) Drain(peer, true);
+        // 每轮真实改变Context及活项，避免把相同634的合法去重误判为丢失；全死房也能验证原序零值。
+        foreach (var report in new (uint Context, uint Value)[] { (0x12345677u, 67u), (0x12345678u, 100u) })
+        {
+            reporter.Send(695, Build(writer =>
+            {
+                writer.Write(report.Context); writer.Write((byte)monitors.Length);
+                foreach (var _ in monitors) writer.Write(report.Value);
+            }));
+            var expected = Build(writer =>
+            {
+                writer.Write((byte)1); writer.Write((ushort)1); writer.Write((byte)members.Length);
+                foreach (var peer in members) writer.Write(peer.Id);
+                writer.Write(0u); writer.Write(report.Context); writer.Write((byte)monitors.Length);
+                foreach (var target in monitors) writer.Write(!target.Passive && killed.Contains(target.Template) ? 0u : report.Value);
+            });
+            foreach (var peer in new[] { reporter }.Concat(peers.Where(peer => peer != reporter)))
+            {
+                var frames = Drain(peer, true);
+                Bytes(frames.Single(packet => packet is { Kind: 0, Opcode: 634 }).Body, expected,
+                    "跨房监控已死项按真实39账本保持0，客户端重报67及100不能复活，活项和物件项可67回血至100，Context保持原值");
+                That(!frames.Any(packet => packet.Opcode is 261 or 586 or 596 or 601),
+                    "监控HP恢复只更新634，不重复清图、时钟、阶段或结果资格");
             }
         }
     }

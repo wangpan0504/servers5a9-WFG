@@ -19,11 +19,28 @@ internal static partial class RaidCombatProjection
                 () => Guard() && context.RaidMoviePrompt != identity && context.RaidMovieCards != identity,
                 () => context.RaidMoviePrompt = identity);
         }
-        bool Cards() => Guard() && context.RaidMovieCards != identity;
+        if (view.Phase == 0)
+        {
+            _ = battle.CompleteLukeFirstMovie(actor, view);
+            if (battle.LukeMovieCardsReady(view)) battle.Publish(view);
+            return true;
+        }
+        return PostLukeMovieCards(context, actor, battle, view);
+    }
+
+    static bool PostLukeMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view)
+    {
+        if (!battle.LukeMovieCardsReady(view) ||
+            battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
+            battle.RewardPolicy(actor, view.Phase) is not { } policy) return true;
+        var identity = RaidCombatDisplayIdentity.Capture(actor, view);
+        bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
+            battle.LukeMovieCardsReady(view) && context.RaidMovieCards != identity;
         // 02396DE0 state4→036D2770→01C99AA0显示翻牌组合对象；第二字节是选项，不是阶段。
         // 这是演出显示推进，Battle仍在Reward，只有实际资产提交确认才能转阶段。
         if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, 0], "raid_movie_cards", Cards)) return false;
-        var offers = battle.RewardPolicy(actor, view.Phase)!.Offers;
+        var offers = policy.Offers;
         for (int index = 0; index < offers.Length; index++)
         {
             var offer = offers[index];

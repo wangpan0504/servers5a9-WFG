@@ -9,6 +9,7 @@ internal sealed record LukeCardSetCatalog(PvfLukeCardSet? Data, ImmutableArray<s
 {
     public const string Path = "etc/raid/luke/lukecardset.etc";
     public bool Ready => Data is not null && Issues.IsEmpty;
+    internal LukeMonsterMonitorCatalog? Monitors { get; init; }
     internal ImmutableHashSet<int> Templates => Data is { } data
         ? data.Cards.Select(card => card.Template).ToImmutableHashSet() : [];
     internal int[] Patterns(int dungeon) => Data is { } data
@@ -33,7 +34,8 @@ internal sealed record LukeCardSetCatalog(PvfLukeCardSet? Data, ImmutableArray<s
                         mazes.Add((dungeon.Id, maze.SourceOrdinal), [.. (maze.MapSpecification ?? [])
                             .SelectMany(map => rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: true).Monsters)
                             .Where(monster => templates.Contains(monster.MonsterId)).Select(monster => monster.MonsterId).Distinct()]);
-            return result with { MazeCards = mazes.ToImmutable() };
+            var monitors = LukeMonsterMonitorCatalog.Load(pvf, dungeons);
+            return result with { MazeCards = mazes.ToImmutable(), Monitors = monitors, Issues = result.Issues.AddRange(monitors.Issues) };
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { return new(null, ["luke-cardset-file-invalid:" + error.GetType().Name]); }

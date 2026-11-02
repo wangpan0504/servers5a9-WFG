@@ -60,9 +60,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (context.Session.RaidCombatView() is not null)
         {
             bool phaseProgress = context.Session.RaidPhaseProgress;
-            if (context.Session.CompleteRaidCombatDungeon(receipt) is { } change)
+            bool formalRaid = context.Session.IsFormalRaidDungeon;
+            var change = formalRaid ? await DungeonSettlementProjection.EnableAsync(context, parsed.BossKey)
+                : context.Session.CompleteRaidCombatDungeon(receipt);
+            if (change is not null)
             {
-                context.Session.PublishRaidCombat();
+                if (!formalRaid) context.Session.PublishRaidCombat();
                 if (phaseProgress)
                 {
                     int phaseSuccess = change.After.Symbols.TryGetValue("[1phase success]", out int success) ? success : -1;
@@ -75,7 +78,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                         Deferred = change.After.Deferred.Count, TimerUnit = "local-seconds" });
                 }
             }
-            await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey), "raid_boss_confirmed");
+            if (!formalRaid)
+                await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey),
+                    "raid_boss_confirmed", () => context.Session.CanPublishDungeonSettlement(receipt));
             return CommandResult.Handled;
         }
         await DungeonSettlementProjection.EnableAsync(context, parsed.BossKey);

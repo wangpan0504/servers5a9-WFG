@@ -54,6 +54,11 @@ internal sealed partial class GameSession
         }
     }
     public Action<AntonRaidBattleView, RaidActor>? RaidBattleNoticeArrived { get; set; }
+    internal Action<AntonRaidBattle.LukeRunCleared, RaidActor>? RaidRunClearedArrived { get; set; }
+
+    internal bool CanPublishLukeRunCleared(RaidActor actor, AntonRaidBattle.LukeRunCleared cleared) => owner.Execute(() =>
+        Ready && actor.IsCurrent && raidCombat is { } raid && raid.Actor == actor &&
+        ReferenceEquals(raid.Battle, cleared.Battle) && raid.Battle.Kind == RaidKind.Luke);
     internal Func<RaidRewardReceipt, Task>? AutomaticRaidRewardArrived { get; set; }
 
     // START在正式开战提交后安装；MAP在安装正式副本后调用BindRaidCombatDungeon。无协议探测状态。
@@ -126,13 +131,13 @@ internal sealed partial class GameSession
         return actor.IsCurrent && ReferenceEquals(binding, Volatile.Read(ref raidCombat)) ? (binding.Battle, view) : null;
     }
 
-    internal (FormalDungeonReceipt Scene, byte Squad)? CaptureAntonHp() =>
-        owner.Execute<(FormalDungeonReceipt, byte)?>(() =>
+    internal (FormalDungeonReceipt Scene, byte Squad, int? MonitorCount)? CaptureAntonHp() =>
+        owner.Execute<(FormalDungeonReceipt, byte, int?)?>(() =>
             Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid &&
             raid.Battle.View is { State: AntonRaidBattleState.Fighting, PhaseExpired: false } view &&
             formalDungeon is { Entry.RaidEntry: { Squad: >= 1 and <= 20 } entry, Run.ClearFact: null } dungeon && entry.Kind == raid.Battle.Kind &&
             entry.InstanceId == raid.Battle.Instance && entry.Phase == view.Phase && CanMoveWithParty()
-                ? (FormalReceipt(), entry.Squad) : null);
+                ? (FormalReceipt(), entry.Squad, raid.Battle.LukeMonitorCount(raid.Actor, dungeon.Run.Snapshot.Identity)) : null);
 
     internal AntonRaidBattleChange? ReportRaidStatusHp(FormalDungeonReceipt scene, Dungeons.AntonHpDisplay display) =>
         owner.Execute(() => CanPublishFormalDungeon(scene) && raidCombat is { Actor.IsCurrent: true } raid
@@ -146,8 +151,9 @@ internal sealed partial class GameSession
     internal AntonRaidBattleChange? RecordLukeNamedDeath(FormalDungeonDeathResult result) => owner.Execute(() =>
         result is { Outcome: DungeonRunOutcome.Accepted, Receipt: { } scene, ReportedTarget: { } target } &&
         CanPublishFormalDungeon(scene) && !scene.Snapshot.LivingMonsters.Contains(result.MonsterKey) &&
+        formalDungeon is { } dungeon && dungeon.Run.CommittedMonitorDeath(result.MonsterKey, out int template, out _) && template == target.MonsterId &&
         raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke } raid
-            ? raid.Battle.RecordLukeNamedDeath(raid.Actor, scene.Snapshot.Identity, target.MonsterId) : null);
+            ? raid.Battle.RecordLukeNamedDeath(raid.Actor, scene.Snapshot.Identity, dungeon.Run, result.MonsterKey) : null);
 
     internal RaidKind? RaidCombatKind() => owner.Execute(() => raidCombat is { Actor.IsCurrent: true } raid ? (RaidKind?)raid.Battle.Kind : null);
 
@@ -220,8 +226,7 @@ internal sealed partial class GameSession
             if (!Ready || raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke } raid ||
                 raid.Battle.View is not { State: AntonRaidBattleState.Reward, PhaseExpired: false, ClockFaulted: false } view ||
                 raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
-                (raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(raid.Actor.Character, view.Phase) :
-                    raid.Battle.LukeEligibility(raid.Actor.Character, view.Phase)) is not { Eligible: true }) return null;
+                !raid.Battle.CanConfirmLukeMovie(raid.Actor, view)) return null;
             return (raid.Actor, raid.Battle, view);
         });
 
@@ -281,7 +286,7 @@ internal sealed partial class GameSession
     }
 
     public RaidRewardReceipt? ClaimRaidReward(byte kind, byte card, IRaidRewardStore store,
-        ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now)
+        ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now, bool automaticLuke = false)
     {
         CommitPendingAntonPhase();
         var capture = owner.Execute(() =>
@@ -297,13 +302,18 @@ internal sealed partial class GameSession
                 return old is not null && (old.Prepared.Card == card || raid.Battle.MatchesAntonCardReplay(old.Prepared, card))
                     ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
+            // 已提交回执仍允许重放；动画未就绪时结果投影另外拒绝提前打开UI。
+            if (raid.Receipts.TryGetValue((phase, kind), out var settled))
+                return settled.Prepared.Card == card || raid.Battle.MatchesAntonCardReplay(settled.Prepared, card)
+                    ? new RaidRewardCapture(raid, character, settled.Prepared, settled.Offer, settled) : null;
+            if (!raid.Battle.CanClaimRaidReward(raid.Actor, phase, automaticLuke)) return null;
             var eligibility = raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar ? raid.Battle.LukeEligibility(character.Id, phase) :
                 raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(character.Id, phase) : null;
             if ((raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
             var offer = raid.Battle.SelectableRewardCards
                 ? raid.Battle.SelectAntonRewardCard(raid.Actor, phase, kind, card,
-                    StartedRaid?.Participants.SingleOrDefault(row => row.Character == character.Id).Squad ?? 0)
+                    StartedRaid?.Participants.SingleOrDefault(row => row.Character == character.Id).Squad ?? 0, automaticLuke)
                 : policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
             if (offer is not null) card = offer.Card;
             if (offer is null) return null;
@@ -331,7 +341,8 @@ internal sealed partial class GameSession
         {
             if (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(raidCombat, capture.Binding) ||
                 !capture.Binding.Actor.IsCurrent || capture.Binding.Battle.View is not { State: AntonRaidBattleState.Reward } view ||
-                view.Phase != capture.Prepared.Phase) return null;
+                view.Phase != capture.Prepared.Phase ||
+                !capture.Binding.Battle.CanClaimRaidReward(capture.Binding.Actor, view.Phase, automaticLuke)) return null;
             var commit = store.CommitRaidReward(owner, capture.Character, capture.Prepared, inventory, now);
             if (commit is null) return null;
             Selected = commit.Character;
@@ -359,7 +370,7 @@ internal sealed partial class GameSession
     {
         if (!CanPublishRaidReward(receipt) || raidCombat is not { Battle.Kind: RaidKind.Luke } raid ||
             raid.Battle.View is not { State: AntonRaidBattleState.Reward, ClockFaulted: false, PhaseExpired: false } view ||
-            view.Phase != receipt.Prepared.Phase || raid.Battle.LukeEligibility(receipt.Prepared.Character, view.Phase) is not { Eligible: true } eligibility ||
+            view.Phase != receipt.Prepared.Phase || !raid.Battle.LukeMovieCardsReady(view) || raid.Battle.LukeEligibility(receipt.Prepared.Character, view.Phase) is not { Eligible: true } eligibility ||
             eligibility.Offers.SingleOrDefault(offer => offer.Kind == receipt.Prepared.Kind &&
                 offer.Card == (raid.Battle.SelectableRewardCards ? 0 : receipt.Prepared.Card)) is not { } offer ||
             !SameLukeResultOffer(offer with { Card = receipt.Prepared.Card }, receipt.Offer)) return null;

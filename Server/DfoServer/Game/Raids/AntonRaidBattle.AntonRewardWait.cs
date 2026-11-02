@@ -13,13 +13,13 @@ internal sealed partial class AntonRaidBattle
             antonCards.MatchesReplay(reward.Phase, reward.Character, requested, reward.Card);
     }
 
-    internal RaidRewardOffer? SelectAntonRewardCard(RaidActor actor, int phase, byte kind, byte requested, byte squad)
+    internal RaidRewardOffer? SelectAntonRewardCard(RaidActor actor, int phase, byte kind, byte requested, byte squad, bool automaticLuke = false)
     {
         lock (gate)
         {
             if (!SelectableRewardCards || !actor.IsCurrent || current.State != AntonRaidBattleState.Reward ||
                 current.Phase != phase || current.ClockFaulted || pendingTransition is not null ||
-                !members.TryGetValue(actor, out var policy) ||
+                !members.TryGetValue(actor, out var policy) || !CanClaimRaidReward(actor, phase, automaticLuke) ||
                 (HasAntonRewards ? AntonEligibility(actor.Character, phase) : LukeEligibility(actor.Character, phase)) is not { Eligible: true } ||
                 policy[phase].Offers.SingleOrDefault(offer => offer.Kind == kind && offer.Card == 0) is not { } frozen)
                 return null;
