@@ -142,6 +142,7 @@ internal static partial class LukeRaidRunTcpTests
                             "正式开团只开放诞生，蔓延和湮灭保留真实未开放状态");
                 }
                 LukeRaidDisconnectCandidate? p1RejoinCandidate = null;
+                long p1RejoinCandidateStamp = 0;
                 var frozenTeamRows = new Dictionary<ushort, byte[]>();
                 if (recovery)
                 {
@@ -152,6 +153,7 @@ internal static partial class LukeRaidRunTcpTests
                     var candidate = fixture.LukeRejoinCandidate(original)!;
                     That(candidate is { Phase: 0, OldOwnerReleased: true }, "P1首次捕获即核实原阶段和旧owner释放");
                     p1RejoinCandidate = candidate;
+                    p1RejoinCandidateStamp = clock.GetTimestamp();
                     leader = Open(fixture, "lkprod1_0", gamePort: port, channelNumber: 20); peers[0] = leader; leader.Select();
                     var notice = Until(leader, 0, 835);
                     That(notice.Body.Length == 7 && U32(notice.Body) == candidate.Key, "同频道835指向原团，不创建新实例");
@@ -539,9 +541,12 @@ internal static partial class LukeRaidRunTcpTests
                 if (recovery)
                 {
                     ushort original = leader.Id;
-                    var previousCandidate = p1RejoinCandidate!;
-                    That(previousCandidate is { Phase: 0, OldOwnerReleased: true } && previousCandidate.Instance.ToString("N") == instance,
-                        "P2比较首次断线冻结的P1原团身份，不要求已重返候选超过五分钟仍有效");
+                    var previousCandidate = p1RejoinCandidate ?? throw new InvalidOperationException("缺少P1原重返候选");
+                    That(previousCandidate is { Phase: 0, OldOwnerReleased: true } &&
+                        previousCandidate.Instance.ToString("N") == instance &&
+                        clock.GetElapsedTime(p1RejoinCandidateStamp) >= TimeSpan.FromSeconds(300) &&
+                        fixture.LukeRejoinCandidate(original) is null,
+                        "P1原候选已过期清理，不能把旧owner释放当作本轮断线完成");
                     leader.Dispose();
                     await WaitAsync(() => fixture.LukeRejoinCandidate(original) is { Phase: 1, OldOwnerReleased: true } current &&
                         current.Instance == previousCandidate.Instance && current.Key == previousCandidate.Key &&

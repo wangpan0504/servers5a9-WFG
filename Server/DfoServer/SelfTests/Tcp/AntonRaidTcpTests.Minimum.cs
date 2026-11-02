@@ -89,8 +89,9 @@ internal static partial class AntonRaidTcpTests
             peer.Send(15, new byte[4]);
             var selected = new List<WirePacket>();
             for (int n = 0; n < 64 && !selected.Any(p => p is { Kind: 0, Opcode: 27 }); n++) selected.Add(peer.Read());
+            // 开团已逐项验证十四图；同实例无状态变化的选图仅发送空增量。
             Bytes(selected.Single(p => p.Opcode == 585).Body, [0, 0, 0, 0, 0, 0],
-                "重复选图585仅发空变化列表和感染索引0，沿用已验初始14图状态");
+                "重复选图585严格保留空变化列表与感染索引0，沿用已验证的开团地图状态");
             Bytes(selected.Single(p => p is { Kind: 1, Opcode: 15 }).Body, [1], "候战室正常打开选图");
             Bytes(selected.Single(p => p.Opcode == 27).Body, new byte[42], "27保留场景合同，地下城状态由585单独提供");
             That(selected.FindIndex(p => p.Opcode == 585) < selected.FindIndex(p => p.Opcode == 27) &&
