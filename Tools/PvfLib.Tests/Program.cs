@@ -1,5 +1,11 @@
 using PvfLib.Tests;
 
+if (args is ["--pcroom-timepoint"])
+{
+    PcRoomTimePointFileTests.Run();
+    Console.WriteLine($"PASS {TestCheck.Count} PvfLib pcroom timepoint assertions");
+    return 0;
+}
 if (args.Length > 0)
 {
     if (args.Length is not (2 or 3) || args[0] != "--benchmark" ||
@@ -40,5 +46,6 @@ EvildomWarFileTests.Run();
 CustomAbilityFileTests.Run();
 TalismanFileTests.Run();
 LukeCardSetFileTests.Run();
+PcRoomTimePointFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

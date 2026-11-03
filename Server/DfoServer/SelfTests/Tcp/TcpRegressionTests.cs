@@ -75,6 +75,16 @@ internal static class TcpRegressionTests
         ("equipment-power-rules", (_, _, _) => { EquipmentPowerScoreTests.RunCore(); return Task.CompletedTask; }),
         ("frame-crc-rules", (_, _, _) => { FrameCrcTests.Run(); return Task.CompletedTask; }),
         ("chat-rate-rules", (_, _, _) => { ChatServiceTests.RunRateRules(); return Task.CompletedTask; }),
+        ("pcroom-timepoint-rules", (_, _, resources) =>
+        {
+            PcRoomTimePointResourceTests.RunCore();
+            PcRoomTimePointResourceTests.Run(resources.Archive, resources.ItemResources.Items);
+            PcRoomTimePointStoreTests.Run();
+            PcRoomTimePointWireTests.RunCore();
+            PcRoomTimePointClockTests.RunCore();
+            return Task.CompletedTask;
+        }),
+        ("pcroom-timepoint", PcRoomTimePointTcpTests.RunAsync),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", async (options, root, _) =>
@@ -585,6 +595,7 @@ internal static class TcpRegressionTests
         ("special-channel-landing", RaidChannelLandingTcpTests.RunSpecialAsync),
         ("xian-village-door", RaidChannelLandingTcpTests.RunXianDoorAsync),
         ("presence", TownPresenceTcpTests.RunAsync),
+        ("gm-events", GmEventTcpTests.RunAsync),
         ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];
 
@@ -608,6 +619,7 @@ internal static class TcpRegressionTests
         "luke-scene-namespace",
         "luke-symbol103-handler",
         "luke-reward-restart",
+        "pcroom-timepoint-rules",
         "class-change-rules",
         "levelup-ticket-rules",
         "levelup-table-rules",

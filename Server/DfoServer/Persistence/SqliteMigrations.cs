@@ -351,6 +351,7 @@ internal static class SqliteMigrations
         new(189, "战令实际点券消费经验与累计余数", BattlePassCeraConsumptionSchema.Upgrade),
         new(190, "角色史诗祈愿清单", static (db, tx) => Execute(db, tx,
             EpicWishSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(191, "账号累计在线日水位与奖励事实", static (db, tx) => Execute(db, tx, PcRoomTimePointSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2039,6 +2040,15 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 228验证分支曾使用v186；精确匹配其三表且尚无正式战令表时，从v185补跑主线。
+        if (version == 186 && current >= 191)
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_battle_pass_seasons'";
+            if (query.ExecuteScalar() is 0L && PcRoomTimePointSchema.Definition
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql)))
+                version = 185;
+        }
         if (current >= 189 && LegacyBattlePassNumbering(db, tx, version) is var legacy && legacy != 0)
         {
             if (legacy == 1) AddAuraCooldown(db, tx, "privilege_until");
@@ -2737,6 +2747,9 @@ internal static class SqliteMigrations
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
         "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision,claimed FROM character_dungeon_card_rewards LIMIT 0",
         "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
+        "SELECT account,day,elapsed_ms,qualified FROM account_pcroom_timepoint_days LIMIT 0",
+        "SELECT account,segment_id,day,total_ms FROM account_pcroom_timepoint_segments LIMIT 0",
+        "SELECT account,kind,day,reward_index,recipient_id,mail_id,item_id,item_count,claimed_at FROM account_pcroom_timepoint_claims LIMIT 0",
         "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",
         "SELECT character_id,account,event_id,before_revision,revision,plan_snapshot,changed_items FROM character_quest_drop_receipts LIMIT 0",
         "SELECT account,quest_id,character_id,acceptance_id,daily_period,answer FROM account_completed_quests LIMIT 0",

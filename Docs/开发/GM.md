@@ -330,3 +330,12 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 ## GM一键创建公会
 
 `guild-create-info <角色名>` 只读返回当前PVF建会费用。`guild-create <角色名> <UTF-8公会名的Base64> <预期金币费用>` 要求账号完全离线，使用拒绝接管租约，按原GuildDirectory规划并原子扣费、建会及写入会长成员。费用与当前PVF不同、名字无效或被占用、金币不足、已有公会或仍在入会冷却均拒绝。地址沿原客户端回退为公会名，不伪造认可人、邀请或第二成员；成功返回实际guildId、guildName、characterId、createCost及余额，重新登录后读取公会。
+## 累积在线得好礼与活动目录
+
+活动228支持`event status/on/off/auto 228`，默认关闭，不支持schedule。
+关闭暂停计时与新领取，保留账号进度；开启后在线客户端即时刷新。
+每日30/60/90/120分钟、累计5/10/15/20合格日的奖励读取当前客户端资源，领取后发送系统邮件。
+历史模板绝对到期日期沿用原期限调试开关，详情见[活动模块](../模块/累积在线得好礼.md)。
+
+GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registered`目录，
+沿现有名称、用途、条件、默认状态和SupportsSchedule提供活动控制能力。

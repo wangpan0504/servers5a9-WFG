@@ -104,6 +104,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] LukeChannelCardsInfo { get; private set; } = [];
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+    public ushort[] ExpectedActiveEvents { get; set; } = [2395];
     public uint? ExpectedBattlePassEnd { get; set; }
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
@@ -1423,11 +1424,13 @@ internal sealed partial class TcpPeer : IDisposable
                 if (ValidateNativePromotionEvents is { } validate)
                     validate(EventInfoPayload);
                 else if (U16(EventInfoPayload, 0) != 3 + ExpectedOpenEvents.Length)
-                    CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents, battlePassEnd: ExpectedBattlePassEnd);
+                    CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents,
+                        activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd);
                 else
                 {
-                    TestCheck.That(length == 148 + 15 * ExpectedOpenEvents.Length + (ExpectedBattlePassEnd.HasValue ? 50 : 0),
-                        ExpectedBattlePassEnd.HasValue && length == 148 + 15 * ExpectedOpenEvents.Length
+                    int expectedLength = 98 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
+                    TestCheck.That(length == expectedLength + (ExpectedBattlePassEnd.HasValue ? 50 : 0),
+                        ExpectedBattlePassEnd.HasValue && length == expectedLength
                             ? "EVENT2520_VALUE_ROW_MISSING" : "无促销页事件正文长度完整");
                     TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
@@ -1440,12 +1443,15 @@ internal sealed partial class TcpPeer : IDisposable
                             writer.Write(0u);
                             writer.Write((byte)0);
                         }
-                        writer.Write((byte)(ExpectedBattlePassEnd.HasValue ? 3 : 2));
+                        writer.Write(checked((byte)(1 + ExpectedActiveEvents.Length + (ExpectedBattlePassEnd.HasValue ? 1 : 0))));
                         writer.Write((ushort)2037);
                         writer.Write(8u);
                         for (int index = 1; index < 12; index++) writer.Write(0u);
-                        writer.Write((ushort)2395);
-                        for (int index = 0; index < 12; index++) writer.Write(0u);
+                        foreach (ushort id in ExpectedActiveEvents)
+                        {
+                            writer.Write(id);
+                            for (int index = 0; index < 12; index++) writer.Write(0u);
+                        }
                         if (ExpectedBattlePassEnd is uint end)
                         {
                             writer.Write((ushort)2520);
