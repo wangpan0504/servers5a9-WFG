@@ -34,8 +34,15 @@ internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId,
         RawValues is [0, 1, -1, -1, 0] && Children.Count == 0;
 }
 internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
-internal sealed record TournamentEnemy(int PartyCount, int Code, int Strength);
-internal sealed record TournamentSource(int PartyCount, IReadOnlyList<TournamentEnemy> Enemies, int OpponentX, int OpponentY, bool HasStartArea);
+internal enum TournamentEnemyKind { Monster, AiCharacter }
+internal sealed record TournamentEnemy(int PartyCount, int Code, int Strength)
+{
+    public DungeonRoomAiCharacter? AiCharacter { get; init; }
+}
+internal sealed record TournamentSource(int PartyCount, IReadOnlyList<TournamentEnemy> Enemies, int OpponentX, int OpponentY, bool HasStartArea)
+{
+    public TournamentEnemyKind Kind { get; init; }
+}
 internal sealed record DungeonRoomNpc(int Id, string Direction, int X, int Y, int Z);
 internal sealed record DungeonRoomDefinition(
     DungeonMap Map,
@@ -347,19 +354,22 @@ internal sealed class DungeonRoomCatalog
         }
     }
 
-    // 实验性（#259，依据来自 Go 项目反汇编，未经 V31 客户端验证）：读取比赛图的 [tournament enemies] 与对手侧 [tournament start area]。
+    // 读取比赛图的对手表与对手侧起点；APC保留独立目录与真实模板，匹配027E911D生成分支。
     public TournamentSource ReadTournamentSource(DungeonMap map)
     {
         string path = PvfArchive.NormalizePath(map.Path);
         if (!path.StartsWith("map/tournament/",StringComparison.Ordinal) || !path.EndsWith(".map",StringComparison.Ordinal) || !archive.Contains(path))
             throw new InvalidDataException("比赛地图路径无效");
-        return ParseTournamentSource(archive.ReadTokens(path),archive.ResolveString,monsters,archive.Contains);
+        return ParseTournamentSource(archive.ReadTokens(path),archive.ResolveString,monsters,archive.Contains,aiCharacters,
+            id => ResolveAiCharacter(new([id,0,0,0,0,0],"[monster]","[normal]")));
     }
 
     internal static TournamentSource ParseTournamentSource(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve,
-        IReadOnlyDictionary<int,string> monsterPaths,Func<string,bool> exists)
+        IReadOnlyDictionary<int,string> monsterPaths,Func<string,bool> exists,
+        IReadOnlyDictionary<int,string>? aiCharacterPaths = null,Func<int,DungeonRoomAiCharacter?>? resolveAiCharacter = null)
     {
         var enemies = new List<TournamentEnemy>();
+        TournamentEnemyKind enemyKind = TournamentEnemyKind.Monster;
         int? partyCount = null; int x = 760, y = 270; bool area = false;
         for (int at = 0; at < tokens.Count; at++)
         {
@@ -372,15 +382,32 @@ internal sealed class DungeonRoomCatalog
                 if (body.Length < 5 || body[0].Type != 0 || body[0].Value is < 1 or > 2 || body[1].Type != 6 || (body.Length - 2) % 3 != 0)
                     throw new InvalidDataException("tournament enemies 头部或记录格式无效");
                 string kind = resolve(body[1].Value);
-                // 123/124 的对手表全部为 [monster]；[apc] 对手（Go 项目有支持）本实现不做，直接拒绝。
-                if (kind != "[monster]") throw new NotSupportedException("unsupported: tournament enemies kind " + kind);
+                enemyKind = kind switch
+                {
+                    "[monster]" => TournamentEnemyKind.Monster,
+                    "[apc]" => TournamentEnemyKind.AiCharacter,
+                    _ => throw new NotSupportedException("unsupported: tournament enemies kind " + kind)
+                };
+                var paths = enemyKind == TournamentEnemyKind.Monster ? monsterPaths : aiCharacterPaths
+                    ?? throw new NotSupportedException("unsupported: tournament APC catalog missing");
                 partyCount = body[0].Value;
                 for (int i = 2; i < body.Length; i += 3)
                 {
                     if (body[i].Type != 0 || body[i + 1].Type != 0 || body[i].Value <= 0 || body[i + 1].Value is < 0 or > ushort.MaxValue ||
-                        !monsterPaths.TryGetValue(body[i].Value,out var monsterPath) || !exists(monsterPath))
+                        !paths.TryGetValue(body[i].Value,out var enemyPath) || enemyPath.Length == 0 || !exists(enemyPath))
                         throw new InvalidDataException("tournament enemy 记录无效");
-                    enemies.Add(new(body[0].Value,body[i].Value,body[i + 1].Value));
+                    DungeonRoomAiCharacter? apc = null;
+                    if (enemyKind == TournamentEnemyKind.AiCharacter)
+                    {
+                        // 034D6210只接模板code；386的level不覆盖AIC自身最低信息等级。
+                        if (body[i].Value > 80000 || resolveAiCharacter is null)
+                            throw new NotSupportedException("unsupported: tournament APC template factory");
+                        apc = resolveAiCharacter(body[i].Value);
+                        if (apc is null || apc.Id != body[i].Value || apc.Path != enemyPath || apc.Level is < 1 or > 255 ||
+                            apc.Faction != "[monster]" || apc.RankKind != "[normal]")
+                            throw new InvalidDataException("比赛APC模板来源或等级无效");
+                    }
+                    enemies.Add(new(body[0].Value,body[i].Value,body[i + 1].Value) { AiCharacter = apc });
                 }
             }
             else if (tag == "[tournament start area]" && body is [{ Type: 0, Value: var count },{ Type: 0, Value: var px },{ Type: 0, Value: var py },{ Type: 0, Value: 2 }]
@@ -391,7 +418,7 @@ internal sealed class DungeonRoomCatalog
         }
         if (partyCount is null || enemies.Select(enemy => enemy.Code).Distinct().Count() != enemies.Count)
             throw new InvalidDataException("tournament enemies 缺失或重复");
-        return new(partyCount.Value,enemies,x,y,area);
+        return new(partyCount.Value,Array.AsReadOnly(enemies.ToArray()),x,y,area) { Kind = enemyKind };
     }
 
     // 为比赛对手构造 monster 房间行（[fixed]，相对基准等级偏移 0）；路径取 monster.lst，缺失则拒绝。

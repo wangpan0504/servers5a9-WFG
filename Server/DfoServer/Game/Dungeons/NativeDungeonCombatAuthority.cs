@@ -105,6 +105,7 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         }
         // Boss通关已向客户端清除的小怪可能随后补报39；作为清场重放收尾，不重新授奖。
         if (run.IsCulledMonster(key)) return new(DungeonRunOutcome.Duplicate);
+        if (!run.CanReportTournamentDeath(key)) return new(DungeonRunOutcome.Rejected);
         // 只额外签发本Run已登记的有限动态演员；Session先分流为零奖励退休，未知key仍不签发。
         if (run.CurrentLivingMonster(key) is null && run.FindCurrentFiendwarDynamic(expectedIdentity, key) is null)
             return new(DungeonRunOutcome.Accepted);

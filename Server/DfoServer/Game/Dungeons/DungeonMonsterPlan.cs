@@ -136,6 +136,64 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     // 实验性（#259）：比赛副本的对阵表与对手；非比赛房间为 null。
     public DungeonTournamentPlan? Tournament { get; init; }
 
+    // 大会对手由386名单冻结；普通地图APC仍按资源语义不阻挡。复验时只根据已冻结的对象身份
+    // 派生大会阻挡属性，并逐项核对来源、类别、等级和品级，避免把任意普通APC提升为大会对手。
+    internal static DungeonMonsterPlan RebuildTournamentBlocking(DungeonMonsterPlan resourcePlan, DungeonMonsterPlan planned)
+    {
+        if (planned.Tournament is not { } tournament)
+            return resourcePlan;
+        if (tournament.Rounds.Count != DungeonTournamentPlan.RoundCount ||
+            tournament.PartyCount is < 1 or > 2 ||
+            tournament.Opponents.Count != DungeonTournamentPlan.RoundCount * tournament.PartyCount ||
+            planned.Monsters.Select(monster => monster.ObjectKey).Distinct().Count() != planned.Monsters.Count ||
+            resourcePlan.Monsters.Select(monster => (monster.SourceOrdinal, monster.AiCharacter is not null)).Distinct().Count() != resourcePlan.Monsters.Count)
+            throw new InvalidDataException("大会对手元数据轮次或人数无效");
+
+        var plannedByKey = planned.Monsters.ToDictionary(monster => monster.ObjectKey);
+        var resourceByOrdinal = resourcePlan.Monsters.ToDictionary(monster =>
+            (monster.SourceOrdinal, monster.AiCharacter is not null));
+        var opponentOrdinals = new HashSet<(int, bool)>();
+        for (int index = 0; index < tournament.Opponents.Count; index++)
+        {
+            var opponent = tournament.Opponents[index];
+            int round = index / tournament.PartyCount;
+            var bracket = tournament.Rounds[round];
+            int player = -1;
+            for (int team = 0; team < bracket.Count; team++)
+            {
+                if (bracket[team].Members.Count != tournament.PartyCount)
+                    throw new InvalidDataException("大会队伍成员数量无效");
+                if (!bracket[team].Player) continue;
+                if (player != -1 || bracket[team].Members.Any(member => member.Code != 0 || member.Strength != 0))
+                    throw new InvalidDataException("大会玩家队身份无效");
+                player = team;
+            }
+            if (bracket.Count != (DungeonTournamentPlan.TeamCount >> round) || player < 0)
+                throw new InvalidDataException("大会对阵队数或玩家队无效");
+            var member = bracket[player ^ 1].Members[index % tournament.PartyCount];
+            var candidate = member.AiCharacter;
+            if (opponent.Round != round + 1 || member.PartyCount != tournament.PartyCount || member.Code != opponent.Code ||
+                !plannedByKey.TryGetValue(opponent.ObjectKey, out var expected) ||
+                expected.MonsterId != opponent.Code || expected.CandidateLevel != opponent.Level ||
+                expected.SpawnType != opponent.Type || !expected.CanReportDeath ||
+                (expected.AiCharacter is null) != (candidate is null) ||
+                candidate is not null && (candidate.Id != member.Code || candidate.Faction != "[monster]" ||
+                    expected.AiCharacter is not { } actor || actor.Path != candidate.Path || actor.Level != candidate.Level) ||
+                expected.IsBoss != (round == DungeonTournamentPlan.RoundCount - 1) ||
+                !opponentOrdinals.Add((expected.SourceOrdinal, expected.AiCharacter is not null)) ||
+                !resourceByOrdinal.TryGetValue((expected.SourceOrdinal, expected.AiCharacter is not null), out var rebuilt) ||
+                rebuilt.MonsterId != expected.MonsterId || rebuilt.CandidateLevel != expected.CandidateLevel ||
+                rebuilt.SpawnType != expected.SpawnType || rebuilt.Source != expected.Source ||
+                rebuilt.AiCharacter != expected.AiCharacter || rebuilt.IsFriendly || !rebuilt.CanReportDeath)
+                throw new InvalidDataException("大会对手元数据与资源演员不一致");
+        }
+
+        var monsters = resourcePlan.Monsters.Select(monster =>
+            opponentOrdinals.Contains((monster.SourceOrdinal, monster.AiCharacter is not null))
+                ? monster with { IsBlocking = true } : monster).ToArray();
+        return resourcePlan with { Monsters = Array.AsReadOnly(monsters) };
+    }
+
     public static DungeonMonsterPlan Create(DungeonRoomCatalog catalog, DungeonMap map, ushort characterId, ushort firstObjectKey,
         int? basisLevel = null, int? playerTeam = null)
         => FromRoom(catalog.Get(map,requirePassiveDefinitions: false), characterId, firstObjectKey, basisLevel, playerTeam: playerTeam);

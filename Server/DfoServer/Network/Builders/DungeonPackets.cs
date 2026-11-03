@@ -255,7 +255,7 @@ internal static class DungeonPackets
         return body;
     }
 
-    // 实验性（#259，布局来自 Go 项目 dungeon_tournament.go 对 DNF.exe 的反汇编注释，未经 V31 客户端验证）：
+    // 匹配ARAD的0238D630已静态核对四轮循环、成员code0及字段宽度；战斗表现仍需实机验收。
     // NOTI386 TOURNAMENT_INFO = dungeonId(u32)、难度(u8)、组队人数(u8)，4 组对阵表（轮次u8、队伍数u8、每队位置u8+成员 code u32/战力 u16），
     // 4 组对手（轮次u8，每名对手 objectKey u16、code u32、level u8、type u8）。
     public static byte[] TournamentInfo(DungeonEntryPlan plan, DungeonTournamentPlan tournament)
