@@ -573,9 +573,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                         current.Snapshot.Identity, RejectReason = context.Session.LastFormalDungeonRejection });
                     var returning = context.Session.ReturnFromFormalDungeon();
                     if (returning is null) return CommandResult.Unhandled;
+                    bool RejectedGuard() => context.Session.CanPublishTravel(returning);
                     await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, (byte)DungeonResultOption.ReturnTown),
-                        "formal_ordinary_retry_return", () => context.Session.CanPublishTravel(returning));
+                        "formal_ordinary_retry_return", RejectedGuard);
                     await town.ReturnFromFormalDungeonAsync(context, returning, "formal_result_town");
+                    // F10 用尽时客户端仍可能亮着（上次成功没收到 550）；回城前补发当前剩余，含 0。
+                    await PublishRetryEnterCountsAsync(context, current.Entry.DungeonId, null, RejectedGuard);
                     return CommandResult.Handled;
                 }
                 if (!current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
@@ -622,6 +625,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
                 await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
                     passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);
+                // 普通限次图 F10 与首次 16 入场一样：扣票后发 14，扣次后发 550，并刷新每周面板 719。
+                // 祭坛分支已走 DungeonEnterCountProjection，不在这里重复。安图恩团本不进入本分支。
+                await PublishRetryEnterCountsAsync(context, retry.Entry.DungeonId, retry, RetryGuard);
             }
             if (!retry.HellConsumedSlots.IsDefaultOrEmpty)
             {
@@ -760,5 +766,33 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = reason,
             returning.Character.Id, returning.Character.Position });
         return CommandResult.Handled;
+    }
+
+    // 普通限次图 F10：成功用入场回执的票/次数；拒绝用当前账本。719 只在有通用 550 时发，不碰祭坛专用投影。
+    async Task PublishRetryEnterCountsAsync(GameConnectionContext context, uint dungeon, FormalDungeonReceipt? retry,
+        Func<bool> guard)
+    {
+        if (retry is not null && !retry.EntryItemConsumedSlots.IsDefaultOrEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
+                InventoryListType.Main, [.. retry.EntryItemConsumedSlots]), "formal_retry_entry_items", guard);
+        DungeonEnterCount[] counts = retry is { EnterCounts.IsDefaultOrEmpty: false }
+            ? [.. retry.EnterCounts]
+            : [.. context.Session.EnterCountsFor(dungeon)];
+        foreach (var count in counts)
+            await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO,
+                DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly),
+                retry is null ? "dungeon_enter_count_after_retry_rejected" : "dungeon_enter_count_after_retry", guard);
+        if (counts.Length == 0) return;
+        try
+        {
+            var rows = context.Session.ReadAdventureWeeklyRoster();
+            await context.Notify(NotiPacketType.WEEKLY_DUNGEON_INFO,
+                AdventurePackets.WeeklyDungeonInfo(context.Channel.ServerIndex, rows),
+                retry is null ? "adventure_weekly_info_after_retry_rejected" : "adventure_weekly_info_after_retry", guard);
+        }
+        catch (Exception error)
+        {
+            log.Write("adventure_weekly_roster_read_failed", new { Connection = context.Id, Error = error.GetType().Name });
+        }
     }
 }

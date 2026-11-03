@@ -298,6 +298,7 @@ internal static class TcpRegressionTests
         ("altar-seeking-entry", FormalDungeonTcpTests.RunAltarSeekingEntryAsync),
         ("lost-land", FormalDungeonTcpTests.RunLostLandAsync),
         ("dungeon-enter-count", FormalDungeonTcpTests.RunEnterCountsAsync),
+        ("dungeon-incount-retry", FormalDungeonTcpTests.RunIncountRetryAsync),
         ("daybreak-entry", FormalDungeonTcpTests.RunDaybreakAsync),
         ("dungeon-despair", FormalDungeonTcpTests.RunDespairAsync),
         ("dungeon-dazzlement", FormalDungeonTcpTests.RunDazzlementAsync),
@@ -665,7 +666,7 @@ internal static class TcpRegressionTests
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
-        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"
+        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost", "dungeon-incount-retry"
     };
     internal static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
     // 同一注册表供执行和机器可读清单使用；不是外部手填组表或覆盖证明。
