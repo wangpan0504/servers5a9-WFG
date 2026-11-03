@@ -415,6 +415,7 @@ internal static class TcpRegressionTests
         ("skill-material", SkillMaterialTcpTests.RunAsync),
         ("gm-progress", CharacterProgressTcpTests.RunAsync),
         ("gm-debug", FormalDungeonTcpTests.RunDebugAsync),
+        ("gm-fatigue-global", FormalDungeonTcpTests.RunFatigueScopeAsync),
         ("special-containers", SpecialContainerTcpTests.RunAsync),
         ("guild-medals", GuildMedalTcpTests.RunAsync),
         ("guild-directory", GuildDirectoryTcpTests.RunAsync),
