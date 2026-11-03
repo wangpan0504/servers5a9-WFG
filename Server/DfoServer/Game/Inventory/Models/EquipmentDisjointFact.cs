@@ -57,9 +57,12 @@ internal sealed record EquipmentDisjointFact(Guid Id, DateTimeOffset PlannedAt, 
             else removed[index] = tool with { Core = tool.Core with { Value = tool.Core.Value - 1 } };
         }
         else if (Request.ToolSlot != -1) return false;
+        // 图鉴writer在同事务中恰递增一版；余额与目录顺序仍按原冻结结果逐项校验。
+        var committedPieces = Before.EpicPieces.Same(After.EpicPieces) ? After.EpicPieces :
+            After.EpicPieces with { Revision = checked(Before.EpicPieces.Revision + 1) };
         if (!Paid.Items.SequenceEqual(removed) || (Paid with { Items = Before.Items, Gold = Before.Gold }) != Before ||
             After.Items.Any(item => item.Uid == Source.Uid) || inventory.Items.Length != After.Items.Length ||
-            !inventory.EpicPieces.Same(After.EpicPieces) ||
+            !inventory.EpicPieces.Same(committedPieces) ||
             Enum.GetValues<CurrencyKind>().Any(kind => CurrencyWallet.Get(inventory, kind) != CurrencyWallet.Get(After, kind))) return false;
         var actual = new InventoryIndex(inventory);
         foreach (var expected in After.Items)

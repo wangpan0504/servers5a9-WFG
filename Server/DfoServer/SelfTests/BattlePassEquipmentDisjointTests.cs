@@ -68,6 +68,23 @@ internal static class BattlePassEquipmentDisjointTests
         That(itemFact.Matches(new(initial, itemAfter, "equipment_disjoint"), actual), "实体产物新UID由原writer赋值且完整core保留");
         That(!itemFact.Matches(new(initial, itemAfter, "equipment_disjoint"), itemAfter) &&
             !itemFact.Matches(new(initial, itemAfter, "equipment_disjoint"), actual with { Items = [other, reward with { Uid = source.Uid }] }), "产物不得保持零UID或重用被分解装备UID");
+        foreach (long revision in new long[] { 0, 7 })
+        {
+            var oldBook = revision == 0 ? EpicPieceBook.Empty : new(revision, new string('A', 64), [40, 9]);
+            var pieceBefore = initial with { EpicPieces = oldBook };
+            var piecePaid = paid with { EpicPieces = oldBook };
+            var pieceAfter = after with { EpicPieces = new(revision, new string('A', 64), [140, 9]) };
+            var pieceFact = EquipmentDisjointFact.Capture(pieceBefore, piecePaid, pieceAfter, request, receipt,
+                DisjointMode.Ordinary, "equipment_disjoint", source, null, at, TimeProvider.System);
+            var piecePlan = new InventoryPlan(pieceBefore, pieceAfter, "equipment_disjoint") { EquipmentDisjoint = pieceFact };
+            var committed = pieceAfter with { EpicPieces = pieceAfter.EpicPieces with { Revision = revision + 1 } };
+            That(pieceFact.Matches(piecePlan, committed), "首次与已有图鉴提交恰递增一版且保留冻结余额");
+            That(!pieceFact.Matches(piecePlan, pieceAfter) && !pieceFact.Matches(piecePlan,
+                committed with { EpicPieces = committed.EpicPieces with { Revision = revision + 2 } }), "碎片变化不接受未递增或跳版");
+            That(!pieceFact.Matches(piecePlan, committed with { EpicPieces = committed.EpicPieces with { OrderHash = new string('B', 64) } }) &&
+                !pieceFact.Matches(piecePlan, committed with { EpicPieces = committed.EpicPieces with { Counts = [140, 10] } }),
+                "完整图鉴顺序与非目标碎片余额仍严格比对");
+        }
         var daily = new BattlePassMission(18, 3, 100, 17, "", -1);
         var weekly = new BattlePassMission(42, 9, 1000, 17, "", -1);
         That(BattlePassEquipmentDisjointSource.Matches(daily) && BattlePassEquipmentDisjointSource.Matches(weekly), "精确原日18及周42定义");
