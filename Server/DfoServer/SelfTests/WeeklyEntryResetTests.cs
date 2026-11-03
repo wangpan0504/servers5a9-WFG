@@ -7,6 +7,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Game.Strongway2019;
 using DfoServer.Game.TagEvildom;
 using DfoServer.Testing;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -186,6 +187,10 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000018") is 3L,
             "再刷一次仍然成功，旧周期行还在");
         RunRewardLimitCore();
+        RunRewardLimitImperialDays(false);
+        RunRewardLimitImperialDays(true);
+        RunRewardLimitMultipleDays();
+        RunRewardLimitUnclaimedChallenges();
         Console.WriteLine($"PASS {Count - before} 地下城入场次数刷新核心断言");
     }
 
@@ -230,6 +235,13 @@ public static class WeeklyEntryResetTests
             INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
               VALUES({id},'other','11111111111111111111111111111111',1,1,0,{week},1,json_object(),json_array(),1);
             """);
+        That(f.Query("PRAGMA foreign_keys") is 1L, "奖励刷新使用真实SQLite外键检查");
+        string beforeFailure = f.Snapshot();
+        f.Execute("CREATE TRIGGER reject_reward_reset BEFORE UPDATE ON character_raid_reward_receipts BEGIN SELECT RAISE(ABORT,'fixture_late_reset'); END");
+        using (var owner = f.Owners.Acquire("other", () => { }))
+            Reject<SqliteException>(() => f.Repository.ResetRewardLimits(owner), "奖励刷新晚期SQL错误必须拒绝");
+        That(f.Snapshot() == beforeFailure, "奖励刷新晚期失败回滚全部玩法周期、父子回执、资产及revision");
+        f.Execute("DROP TRIGGER reject_reward_reset");
         string answer = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
         That(answer.StartsWith("OK ", StringComparison.Ordinal), "奖励限额刷新命令成功: " + answer);
         int end = answer.IndexOf(" 已迁移", StringComparison.Ordinal);
@@ -271,5 +283,125 @@ public static class WeeklyEntryResetTests
         string again = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
         That(again.StartsWith("OK ", StringComparison.Ordinal) && f.Query("SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L,
             "奖励限额刷新可重复执行且不删除历史账本");
+        f.Integrity();
+    }
+
+    static void RunRewardLimitImperialDays(bool playedToday)
+    {
+        using var f = new MailboxPersistenceTests.Fixture();
+        var period = ImperialArenaPeriod.At(DateTimeOffset.UtcNow);
+        int earlierDay = period.Day - 1;
+        f.Execute($"""
+            INSERT INTO account_imperial_arena_days(account,day,mode,hard_round) VALUES
+              ('other',{earlierDay},2,3),('receiver',{period.Day},1,0);
+            INSERT INTO account_imperial_arena_runs(account,instance_id,day,week,mode,first,second,configuration_revision,task_attempt,admitted_at,minimum_clear_ms,team_json,route_json,closed)
+              VALUES('other','11111111111111111111111111111111',{earlierDay},{period.Week},2,{f.Other.Id},{f.Sender.Id},1,1,1,1000,'[1,2,3,4]',json_object(),1),
+                ('receiver','22222222222222222222222222222222',{period.Day},{period.Week},1,{f.Receiver.Id},{f.Sender.Id},1,1,1,1000,'[1,2,3,4]',json_object(),1);
+            INSERT INTO account_imperial_arena_rewards(account,day,monster,instance_id,event_id,reward_json,mail_id)
+              VALUES('other',{earlierDay},1,'11111111111111111111111111111111','33333333333333333333333333333333',json_object('reward',42),7);
+            INSERT INTO account_imperial_arena_challenge_claims(account,week,instance_id,mail_id,reward_json)
+              VALUES('other',{period.Week},'11111111111111111111111111111111',8,json_object('challenge',43));
+            """);
+        if (playedToday)
+            f.Execute($"""
+                INSERT INTO account_imperial_arena_days(account,day,mode,hard_round) VALUES('other',{period.Day},1,0);
+                INSERT INTO account_imperial_arena_runs(account,instance_id,day,week,mode,first,second,configuration_revision,task_attempt,admitted_at,minimum_clear_ms,team_json,route_json,closed)
+                  VALUES('other','44444444444444444444444444444444',{period.Day},{period.Week},1,{f.Other.Id},{f.Sender.Id},1,2,1,1000,'[1,2,3,4]',json_object(),1);
+                INSERT INTO account_imperial_arena_rewards(account,day,monster,instance_id,event_id,reward_json,mail_id)
+                  VALUES('other',{period.Day},1,'44444444444444444444444444444444','55555555555555555555555555555555',json_object('reward',44),9);
+                """);
+        string assetSnapshot = JsonSerializer.Serialize(f.ReadSender());
+        That(f.Query("PRAGMA foreign_keys") is 1L, "帝国旧日父子夹具显式开启外键");
+        var result = f.Repository.ResetRewardLimits(f.OtherOwner);
+        That(result.ImperialDayRows == (playedToday ? 1 : 0) && result.ImperialRunRows == (playedToday ? 2 : 1) &&
+            result.ImperialRewardRows == (playedToday ? 1 : 0) && result.ImperialChallengeRows == 1,
+            "帝国只有本周旧日记录和混合当日记录均可刷新，计数按实际命中行");
+        That(f.Query($"SELECT day FROM account_imperial_arena_runs WHERE account='other' AND instance_id='11111111111111111111111111111111'") is long oldDay && oldDay == earlierDay &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_days WHERE account='other' AND day={earlierDay} AND mode=2 AND hard_round=3") is 1L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_runs WHERE account='other' AND week={period.Week}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_challenge_claims WHERE account='other' AND week={period.Week}") is 0L,
+            "帝国只迁当前周字段，旧日子行仍引用原mode/hard_round父行且周奖励资格恢复");
+        That(f.Query($"SELECT count(*) FROM account_imperial_arena_days WHERE account='other' AND day={period.Day}") is 0L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_rewards WHERE account='other' AND day={period.Day}") is 0L &&
+            f.Query($"SELECT reward_json FROM account_imperial_arena_rewards WHERE account='other' AND day={earlierDay}") is "{\"reward\":42}" &&
+            f.Query($"SELECT mail_id FROM account_imperial_arena_challenge_claims WHERE account='other'") is 8L &&
+            f.Query($"SELECT count(*) FROM account_imperial_arena_runs WHERE account='receiver' AND day={period.Day} AND week={period.Week}") is 1L &&
+            JsonSerializer.Serialize(f.ReadSender()) == assetSnapshot,
+            "帝国当前日额度恢复，历史奖励内容、邮件引用、其他账号及资产完全保留");
+        string after = f.Snapshot();
+        var again = f.Repository.ResetRewardLimits(f.OtherOwner);
+        That(again.ImperialDayRows == 0 && again.ImperialRunRows == 0 && f.Snapshot() == after,
+            "帝国重复刷新不重写归档记录或制造父行");
+        f.Integrity();
+    }
+
+    static void RunRewardLimitMultipleDays()
+    {
+        using var f = new MailboxPersistenceTests.Fixture();
+        var now = DateTimeOffset.UtcNow;
+        var strongway = Strongway2019RewardPeriod.At(now);
+        var tag = TagEvildomPeriod.At(now);
+        int week = WeeklyDungeonPolicy.WeekKey(now);
+        var alternate = f.Repository.Create(f.OtherOwner, new("OtherAlt", new(38, 1, 450, 234, 0), null) { Inventory = new([]) });
+        for (int index = 0; index < 2; index++)
+        {
+            long character = index == 0 ? f.Other.Id : alternate.Id;
+            string instance = new((char)('a' + index), 32);
+            f.Execute($"""
+                INSERT INTO account_strongway2019_rewards(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,mail_id)
+                  VALUES('other','{instance}',{character},1,1,5359,0,{strongway.Day - index},{strongway.Week},1,json_object('reward',{index}),json_object('fact',{index}),{index + 1});
+                INSERT INTO character_strongway2019_completions(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,state,mail_id)
+                  VALUES('other','{instance}',{character},1,1,5359,0,{strongway.Day - index},{strongway.Week},1,json_object(),json_object(),1,{index + 1});
+                INSERT INTO character_strongway2019_match_facts(account,character_id,instance_id,competition_id,bucket,day,week,created_at,state,snapshot_json)
+                  VALUES('other',{character},'{instance}','{new string('c', 32)}',1,{strongway.Day - index},{strongway.Week},1,2,json_object());
+                INSERT INTO account_tag_evildom_clearances(receipt,account,day,week,first,second)
+                  VALUES('{instance}','other',{tag.Day - index},{tag.Week},{f.Other.Id},{alternate.Id});
+                INSERT INTO account_tag_evildom_challenges(account,day,week,team_index,maze_ordinal,dungeon_id,instance_id,first,second,admitted_at,sequence,state)
+                  VALUES('other',{tag.Day - index},{tag.Week},0,0,9608,'{instance}',{f.Other.Id},{alternate.Id},1,{index + 1},1);
+                INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
+                  VALUES({character},'other','{instance}',1,1,0,{week},1,json_object('reward',{index}),json_array({index + 10}),1);
+                """);
+        }
+        string accountCharacters = JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 0)) + JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 1));
+        var result = f.Repository.ResetRewardLimits(f.OtherOwner);
+        That(result.StrongwayRewardRows == 2 && result.StrongwayCompletionRows == 2 && result.StrongwayMatchRows == 2 &&
+            result.TagClearanceRows == 2 && result.TagChallengeRows == 2 && result.RaidReceiptRows == 2,
+            "强者与再战多日账本以及同账号全部角色奖励资格原子刷新");
+        That(f.Query($"SELECT count(*) FROM account_strongway2019_rewards WHERE account='other' AND (day={strongway.Day} OR week={strongway.Week})") is 0L &&
+            f.Query("SELECT day FROM account_strongway2019_rewards WHERE instance_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'") is long archivedDay && archivedDay > 99991231 &&
+            f.Query("SELECT week FROM account_strongway2019_rewards WHERE instance_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'") is long archivedWeek && archivedWeek > 99991231 &&
+            f.Query($"SELECT day FROM account_strongway2019_rewards WHERE instance_id='{new string('b', 32)}'") is long strongwayOld && strongwayOld == strongway.Day - 1 &&
+            f.Query($"SELECT count(*) FROM account_tag_evildom_challenges WHERE account='other' AND (day={tag.Day} OR week={tag.Week})") is 0L &&
+            f.Query($"SELECT day FROM account_tag_evildom_challenges WHERE instance_id='{new string('b', 32)}'") is long tagOld && tagOld == tag.Day - 1,
+            "独立日周字段不压缩多日历史，归档键不可能被未来日切重新计入");
+        That(f.Query("SELECT count(*) FROM account_strongway2019_rewards") is 2L &&
+            f.Query("SELECT count(*) FROM account_tag_evildom_challenges") is 2L &&
+            f.Query("SELECT reward_json FROM account_strongway2019_rewards ORDER BY instance_id LIMIT 1") is "{\"reward\":0}" &&
+            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 0L &&
+            accountCharacters == JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 0)) + JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 1)),
+            "刷新保留各日奖励、全角色原始资产和revision，已发团本回执不删除");
+        string after = f.Snapshot();
+        f.Repository.ResetRewardLimits(f.OtherOwner);
+        That(f.Snapshot() == after, "多日多角色重复刷新保持整库快照");
+        f.Integrity();
+    }
+
+    static void RunRewardLimitUnclaimedChallenges()
+    {
+        using var f = new MailboxPersistenceTests.Fixture();
+        var tag = TagEvildomPeriod.At(DateTimeOffset.UtcNow);
+        for (int index = 0; index < 2; index++)
+        {
+            f.Execute($"""
+                INSERT INTO account_tag_evildom_challenges(account,day,week,team_index,maze_ordinal,dungeon_id,instance_id,first,second,admitted_at,sequence,state)
+                  VALUES('other',{tag.Day},{tag.Week},0,0,9608,'{new string((char)('a' + index), 32)}',1,2,1,{index + 1},0);
+                """);
+            That(f.Repository.ResetRewardLimits(f.OtherOwner).TagChallengeRows == 1,
+                "没有通关父账本的再战挑战在新一轮后仍可再次刷新");
+        }
+        That(f.Query("SELECT count(DISTINCT day) FROM account_tag_evildom_challenges WHERE account='other'") is 2L &&
+            f.Query($"SELECT count(*) FROM account_tag_evildom_challenges WHERE account='other' AND (day={tag.Day} OR week={tag.Week})") is 0L,
+            "归档日键同时避让未通关挑战历史，完整保留两轮记录");
+        f.Integrity();
     }
 }
