@@ -17,7 +17,9 @@ internal static partial class MapGeometryTests
             ("dungeon_monster10_fixed_normal","[monster]","[[0,1],[0,2],[0,3],[0,672],[0,44],[0,10000],[0,6],[0,7],[6,\"[fixed]\"],[6,\"[normal]\"]]"),
             ("dungeon_ai8","[ai character]","[[0,1],[0,672],[0,44],[0,0],[6,\"[enemy]\"],[6,\"[normal]\"],[0,6],[0,7]]"),
             ("dungeon_event_xyz3","[event monster position]","[[0,672],[0,44],[0,0]]"),
-            ("dungeon_special11_single_child","[special passive object]","[[0,8815],[0,672],[0,44],[0,0],[0,1],[6,\"[trap]\"],[0,2211],[0,1],[0,3],[0,4],[0,-1]]")
+            ("dungeon_special11_single_child","[special passive object]","[[0,8815],[0,672],[0,44],[0,0],[0,1],[6,\"[trap]\"],[0,2211],[0,1],[0,3],[0,4],[0,-1]]"),
+            ("dungeon_special11_single_child","[special passive object]","[[0,8815],[0,672],[0,44],[0,0],[0,1],[6,\"[item]\"],[0,2211],[0,1],[0,3],[0,4],[0,-1]]"),
+            ("dungeon_ai10_npc_monster_boss","[ai character]","[[0,1514],[0,672],[0,44],[0,0],[6,\"[monster]\"],[6,\"[NPC]\"],[0,1008],[6,\"[boss]\"],[0,2],[0,0]]")
         })
         {
             const string path = "map/anchor.map";
@@ -46,6 +48,18 @@ internal static partial class MapGeometryTests
             Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,44]","[0,45]",StringComparison.Ordinal))), "锚点Y和身份不得顺便移动");
             Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,671]","[0,895]",StringComparison.Ordinal))), "插列左侧X必须保持");
             Reject<System.IO.InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,896]","[0,897]",StringComparison.Ordinal))), "插列映射必须精确224");
+            if (kind == "dungeon_special11_single_child")
+            {
+                Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,2211]","[0,2212]",StringComparison.Ordinal))), "特殊子记录的全部原参数保持");
+                if (source.Contains("[item]",StringComparison.Ordinal))
+                    Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(to).Replace("[item]","[unknown]",StringComparison.Ordinal)), "未知特殊子类型不得猜同宽度");
+            }
+            if (kind == "dungeon_ai10_npc_monster_boss")
+            {
+                Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(to.Replace("[0,1008]","[0,1009]",StringComparison.Ordinal))), "NPC关联整数必须保持");
+                Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(to).Replace("[boss]","[normal]",StringComparison.Ordinal)), "NPC专用十字段不猜其它rank布局");
+                Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(to).Replace("[NPC]","[normal]",StringComparison.Ordinal)), "NPC专用十字段不猜普通AI布局");
+            }
         }
     }
     private static void RunMetadataRectangleCore()

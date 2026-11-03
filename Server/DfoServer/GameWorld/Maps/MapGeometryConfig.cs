@@ -57,6 +57,7 @@ internal sealed class MapGeometryConfig
         "dungeon_passive4" => (4,1,0),
         "dungeon_monster10_fixed_normal" => (10,3,(1 << 8) | (1 << 9)),
         "dungeon_ai8" => (8,1,(1 << 4) | (1 << 5)),
+        "dungeon_ai10_npc_monster_boss" => (10,1,(1 << 4) | (1 << 5) | (1 << 7)),
         "dungeon_event_xyz3" => (3,0,0),
         "dungeon_special11_single_child" => (11,1,1 << 5),
         _ => default
@@ -82,8 +83,10 @@ internal sealed class MapGeometryConfig
             }
             if (kind == "dungeon_monster10_fixed_normal" && (before[start + 8].Text != "[fixed]" || before[start + 9].Text != "[normal]"))
                 throw new InvalidDataException("World anchor monster tail");
-            if (kind == "dungeon_special11_single_child" && (before[start + 4].Number != 1 || before[start + 5].Text is not ("[trap]" or "[monster]")))
+            if (kind == "dungeon_special11_single_child" && (before[start + 4].Number != 1 || before[start + 5].Text is not ("[trap]" or "[monster]" or "[item]")))
                 throw new InvalidDataException("World anchor special child");
+            if (kind == "dungeon_ai10_npc_monster_boss" && (before[start + 4].Text != "[monster]" || before[start + 5].Text != "[NPC]" || before[start + 7].Text != "[boss]"))
+                throw new InvalidDataException("World anchor NPC AI tail");
         }
     }
     private static void ValidateAnimationAppend(Atom[] before, Atom[] after)
@@ -187,6 +190,7 @@ internal sealed class MapGeometryConfig
                 ("dungeon_passive4", "[passive object]") => 4,
                 ("dungeon_monster10_fixed_normal", "[monster]") => 10,
                 ("dungeon_ai8", "[ai character]") => 8,
+                ("dungeon_ai10_npc_monster_boss", "[ai character]") => 10,
                 ("dungeon_event_xyz3", "[event monster position]") => 3,
                 ("dungeon_special11_single_child", "[special passive object]") => 11,
                 ("dungeon_movable_xywh3", "[dungeon movable area]") => 4,
