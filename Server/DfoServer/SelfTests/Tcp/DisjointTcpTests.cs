@@ -14,6 +14,7 @@ internal static class DisjointTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await BattlePassPiecesAsync(source, root, resources);
         var itemResources = resources.ItemResources;
         That(itemResources.Disjoint.IndependentResults.Count == 338 && itemResources.Disjoint.PieceResults.Count == 1172 &&
             itemResources.Disjoint.EventResults.Count == 4 && itemResources.EpicPieces.Entries.All(entry =>
@@ -279,6 +280,90 @@ internal static class DisjointTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM currency_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT revision,order_hash,counts FROM account_epic_books")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM epic_piece_audit_log"));
+    }
+    static async Task BattlePassPiecesAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var start = new DateTimeOffset(2026, 10, 29, 6, 0, 0, TimeSpan.FromHours(8));
+        var policy = new DfoServer.Game.BattlePass.BattlePassMissionPolicy("disjoint-pieces", start,
+            DfoServer.GameWorld.BattlePass.BattlePassCatalog.Load(resources.Archive));
+        var at = Enumerable.Range(0, policy.Days).Select(day => start.AddDays(day).AddHours(1))
+            .First(time => policy.Active(time).Any(row => DfoServer.Game.BattlePass.BattlePassEquipmentDisjointSource.Matches(row.Definition)));
+        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(at, TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"));
+        var options = source with { BattlePassSeasonKey = policy.SeasonKey, BattlePassSeasonStart = start };
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "disjoint-battle-pass-pieces"),
+            resources: resources, clock: clock, sharedResourcePath: true);
+        var items = resources.ItemResources;
+        var epic = items.EpicPieces.Entries.First(entry => items.Disjoint.PieceResults.ContainsKey(entry.EquipmentId));
+        var repository = new CharacterRepository(fixture.Database);
+        repository.ConfigureBattlePassMissions(policy, clock);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(options.DevelopmentAccount, () => { }))
+        {
+            var current = repository.Create(owner, new("PiecePass", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(9), InventoryRewardGrantService.Create(items.Items.Get(epic.EquipmentId))),
+                    new(0, Bag(10), InventoryRewardGrantService.Create(items.Items.Get(epic.EquipmentId))),
+                    new(0, Bag(11), InventoryRewardGrantService.Create(items.Items.Get(10400)))])
+            });
+            var service = new InventoryDisjointService(items.Items, items.Disjoint, items.GoldLimits, items.EpicPieces, clock: clock);
+            var plan = service.Disjoint(current, new(Bag(9), -1, 0), out _).Plan!;
+            string before = Snapshot();
+            bool rejected = false;
+            try { repository.CommitInventory(owner, current, new(plan.Before, plan.After, plan.Reason, plan.CharacterPrecondition) { EquipmentDisjoint = plan.EquipmentDisjoint! with
+                { Source = plan.EquipmentDisjoint.Source with { Uid = long.MaxValue } } }); }
+            catch (InvalidDataException) { rejected = true; }
+            That(rejected && Snapshot() == before, "伪造分解来源使源、图鉴、钱包、版本与战令整笔回滚");
+        }
+        await fixture.StartAsync();
+        long MissionCount() => fixture.Query("SELECT current_count FROM account_battle_pass_mission_progress WHERE season_key=$p0 AND mission_id IN(18,42)", policy.SeasonKey)
+            .Sum(row => Convert.ToInt64(row[0]));
+        long EventCount() => Convert.ToInt64(fixture.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='equipment_disjoint'")[0][0]);
+        long BookRevision() => fixture.Query("SELECT revision FROM account_epic_books") is { Length: > 0 } rows ? Convert.ToInt64(rows[0][0]) : 0;
+        using (var peer = Open(fixture))
+        {
+            peer.ExpectedOpenEvents = [2532, 266, 2520];
+            peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
+            peer.Select(); peer.Expect(0, 1800); peer.Expect(0, 1801); peer.Expect(0, 1802); peer.Barrier();
+            int targets = policy.Active(at).Count(row => DfoServer.Game.BattlePass.BattlePassEquipmentDisjointSource.Matches(row.Definition));
+            long mission = MissionCount(), events = EventCount();
+            int pieceBalance = 0;
+            foreach (short slot in new short[] { 9, 10, 11 })
+            {
+                long revision = BookRevision();
+                peer.Send(26, Build(writer => { writer.Write(slot); writer.Write((byte)0); writer.Write((short)-1); writer.Write(0); }));
+                byte[] ack = peer.Expect(1, 26).Body;
+                That(ack[0] == 1 && U16(ack, 1) == slot && ack.Length == 7 + ack[6] * 10, "现场同型九字节分解返回完整成功ACK");
+                byte[] delta = peer.Expect(0, 14).Body;
+                That(U32(delta, Entry(delta, slot) + 2) == uint.MaxValue, "ACK后权威差量移除原装备");
+                if (slot != 11)
+                {
+                    int row = Enumerable.Range(0, ack[6]).Select(index => 7 + index * 10).Single(index => U32(ack, index + 2) == epic.PieceId);
+                    byte[] notice = peer.Expect(0, 1152).Body;
+                    int balance = System.Text.Json.JsonSerializer.Deserialize<int[]>((string)fixture.Query("SELECT counts FROM account_epic_books")[0][0])![epic.Index];
+                    pieceBalance = checked(pieceBalance + (int)U32(ack, row + 6));
+                    That(U16(ack, row) == ushort.MaxValue && U32(ack, row + 6) is >= 90 and <= 110 &&
+                        notice[0] == 1 && U32(notice, 1) == 1 && U32(notice, 5) == epic.PieceId && U32(notice, 9) == balance &&
+                        balance == pieceBalance && BookRevision() == revision + 1, "首次与已有图鉴余额恰加ACK增量、版本恰增一、1152同步绝对余额");
+                }
+                else That(BookRevision() == revision, "无碎片分解不递增图鉴版本");
+                peer.Expect(0, 1801); peer.Barrier();
+                mission += targets; events++;
+                That(MissionCount() == mission && EventCount() == events, "每件成功分解只写一个战令来源并各计一次");
+                string saved = Snapshot();
+                Send(peer, slot, -1); peer.Expect(1, 26, [0, 17, 0]); peer.Barrier();
+                That(Snapshot() == saved, "重复已消费源返回有界拒绝ACK，资产和战令不重发且连接继续");
+            }
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "战令碎片分解真实TCP库完整性通过");
+
+        string Snapshot() => fixture.Snapshot("SELECT * FROM characters") + fixture.Snapshot("SELECT * FROM character_inventory_items") +
+            fixture.Snapshot("SELECT * FROM account_epic_books") + fixture.Snapshot("SELECT * FROM epic_piece_audit_log") +
+            fixture.Snapshot("SELECT * FROM account_currency_balances") + fixture.Snapshot("SELECT * FROM inventory_audit_log") +
+            fixture.Snapshot("SELECT * FROM currency_audit_log") + fixture.Snapshot("SELECT * FROM account_battle_pass_source_events") +
+            fixture.Snapshot("SELECT * FROM account_battle_pass_mission_progress") + fixture.Snapshot("SELECT * FROM account_battle_pass_seasons");
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static void Send(TcpPeer peer, short slot, short tool) => peer.Send(26, Build(writer =>
