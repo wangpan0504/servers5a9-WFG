@@ -336,7 +336,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         bool CanSend() => context.Session.CanPublishDungeonSelection(receipt);
         // 正文 u32 为 0 是左侧入口打开选图；非 0 通常已有选图场景，不能再发空列表重开。
-        // 首期5359从城镇直接进入时尚无选图场景，仍需通知27完成场景切换后才能正常加载。
+        // 首期5359/5363从城镇直接进入时尚无选图场景，仍需通知27完成场景切换后才能正常加载。
         uint dungeon = entry.DungeonIndex;
         log.Write("dungeon_entry", new { Connection = context.Id, Accepted = true, Dungeon = dungeon, Reason = dungeon == 0 ? "select-notice" : "dungeon-chosen", receipt.Character.Position, receipt.SelectionId,
             LegendDungeon = legendTarget });
@@ -349,7 +349,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
         }
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector ||
-            dungeon == 5359 && replayBefore.Phase == SessionPhase.Town)
+            (dungeon is 5359 or 5363) && replayBefore.Phase == SessionPhase.Town)
         {
             await RiftDailyProjection.RefreshAsync(context, CanSend);
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);

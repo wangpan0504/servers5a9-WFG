@@ -18,7 +18,7 @@ using static DfoServer.Testing.PartyDungeonTcpTests;
 
 namespace DfoServer.Testing;
 
-internal static class Strongway2019TcpTests
+internal static partial class Strongway2019TcpTests
 {
     // 固定真实模板，不扫描装备正文，也不向Session注入抗魔代理。
     static readonly int[] EquipmentIds = [2747476, 400050102, 400150086, 400100094, 400250092,
@@ -38,6 +38,7 @@ internal static class Strongway2019TcpTests
         var high = Prepare("swtcpfull", "SWFull", equipped: true);
         var low = Prepare("swtcplow", "SWLow", equipped: false);
         var questCharacter = Prepare("swtcpquest", "SWQuest", equipped: false);
+        var hero = PrepareSoloHero(fixture, resources, provider);
         // 仅隔离测试资产：通过正式Grant准备真实兑换材料，不预种8698任务完成位。
         using (var shopOwner = new AccountOwners().Acquire("swtcpquest", () => { }))
         {
@@ -209,6 +210,7 @@ internal static class Strongway2019TcpTests
                 "重连恢复兑换和自选后的真实余额，已领取奖励盒与已开自选盒不复活");
             peer.Barrier();
         }
+        VerifySoloHero(fixture, resources, entry, hero);
         Console.WriteLine($"PASS {Count - before} 强者之路真实TCP准入、活动开关、原Run通关与历史恢复");
 
         void VerifyRewardShop(TcpPeer peer)
