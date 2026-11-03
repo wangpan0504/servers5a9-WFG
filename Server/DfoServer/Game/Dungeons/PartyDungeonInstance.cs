@@ -260,7 +260,8 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         var leaderScene = reporter.CurrentFormalDungeonScene();
         if (leaderScene is null || current.Any(m => m.Actor.Session.CurrentFormalDungeonScene() is not { } scene ||
             scene.Snapshot.CurrentMap != leaderScene.Snapshot.CurrentMap ||
-            !scene.Snapshot.LivingMonsters.SequenceEqual(leaderScene.Snapshot.LivingMonsters))) return [];
+            !scene.Snapshot.LivingMonsters.SequenceEqual(leaderScene.Snapshot.LivingMonsters)) ||
+            current.Any(member => !member.Actor.Session.CanMoveEvildomWarChallengeWithParty(x, y, kind))) return [];
         if (reporter.MoveFormalDungeon(x, y, kind) is not { } first) return [];
         var notices = current.Select(m => new PartyDungeonNotice(PartyDungeonNoticeKind.Move, m, current,
             ReferenceEquals(m.Actor.Session, reporter) ? first : m.Actor.Session.MoveFormalDungeon(x, y, kind) ??

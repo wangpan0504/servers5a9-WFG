@@ -118,11 +118,25 @@ internal sealed partial class GameSession
         return prepared.Run.CanLeaseFiendwarObjectKey(key) && prepared.Ground.HasFreeDynamicKey(key);
     }
 
+    // 英雄沿普通四人Enter安装同一账本；先在首房预租，进入真实召唤房前再由原全组门禁复核ready。
+    internal bool CanBindEvildomWarChallengeKeys(PartyDungeonPreparation token) => owner.Execute(() =>
+        ReferenceEquals(partyPreparation, token) && preparedPartyDungeon is { } prepared &&
+        prepared.Dungeon.EvildomWarChallengeEntry is { } admission && IsCurrentEvildomWarChallengeAdmission(admission) &&
+        prepared.Dungeon.Run.IsEvildomWarChallengeDynamic && prepared.Dungeon.Run.FiendwarObjectKeys is null);
+
+    internal void BindEvildomWarChallengeKeys(PartyDungeonPreparation token, FiendwarObjectKeyLeases keys) => owner.Execute(() =>
+    {
+        if (!CanBindEvildomWarChallengeKeys(token)) throw new InvalidOperationException("英雄动态对象键准备身份已变化");
+        PreparedParty(token).Dungeon.Run.BindFiendwarObjectKeys(keys);
+        return true;
+    });
+
     internal FiendwarKeyLeaseScene? CurrentFiendwarKeyScene(FormalDungeonReceipt receipt, uint serial) => owner.Execute(() =>
     {
         if (serial == 0 || !Ready || Selected?.Id != receipt.Character.Id || receipt.Generation != owner.Generation ||
             receipt.SelectionEpoch != SelectionEpoch || formalDungeon is not { } dungeon || dungeon.Run.FiendwarObjectKeys is null ||
-            dungeon.Entry.RaidEntry?.Kind != RaidKind.Fiendwar || dungeon.Run.Scene.Map != receipt.Snapshot.CurrentMap ||
+            !(dungeon.Entry.RaidEntry?.Kind == RaidKind.Fiendwar || dungeon.Run.IsEvildomWarChallengeDynamic) ||
+            dungeon.Run.Scene.Map != receipt.Snapshot.CurrentMap ||
             dungeon.MapSeed != receipt.MapSeed ||
             !(Phase == SessionPhase.Loading && dungeon.Run.Scene.Identity == receipt.Snapshot.Identity ||
                 Phase == SessionPhase.Dungeon && dungeon.Run.LastLoadingFact is { } loaded &&
@@ -174,7 +188,9 @@ internal sealed partial class GameSession
 
     internal bool CanRecoverFiendwarKeys(Guid run) => formalDungeon is { } dungeon && Ready &&
         dungeon.Run.FiendwarObjectKeys is { RecoveryRequired: true } && dungeon.Run.Scene.Identity.InstanceId == run &&
-        dungeon.Entry.RaidEntry?.Kind == RaidKind.Fiendwar && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Fiendwar } &&
+        (dungeon.Entry.RaidEntry?.Kind == RaidKind.Fiendwar && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Fiendwar } ||
+            dungeon.Run.IsEvildomWarChallengeDynamic && ChannelEntry?.Type == 64 && Selected is { } character &&
+            (dungeon.OrdinaryReturnPosition ?? character.Position) is { Town: 124, Area: 2 }) &&
         Phase is SessionPhase.Loading or SessionPhase.Dungeon;
 
     internal FiendwarKeyLeaseMessage? FiendwarKeyRecoveryMessage() => owner.Execute(() =>

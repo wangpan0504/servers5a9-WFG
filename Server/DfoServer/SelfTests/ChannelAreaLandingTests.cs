@@ -379,7 +379,7 @@ internal static class ChannelAreaLandingTests
         // 47=决斗场无双频道（type 8，33f95e72 接入）、48=帝国竞技场（type 39）同属按频道落点出门，不随普通频道回记住地区。
         // 决斗场普通入口按客户端 etc/pvpchannellist.etc 登记为 101（原 40 已不存在），特殊出口清单随目录取号。
         // 55=自由练习频道（type 5，dc3f551b 接入；222cd1db 起 LOGIN 保留新版 type13），同属决斗类频道，房间出口不随普通频道回记住地区。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 55 };
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 55, 56 };
         That(script.Channels.All(row => row.Number != 49 && row.Type != 40), "退役频道不再发布");
         var retiredEntry = new ChannelEntry(new(2,49),40,"[beast]");
         That(ChannelAreaLanding.Decide(towns,retiredEntry,95,new HashSet<int> {5927}).Spot is null,

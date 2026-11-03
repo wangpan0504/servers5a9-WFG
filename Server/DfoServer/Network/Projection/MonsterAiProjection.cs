@@ -13,15 +13,17 @@ internal static class MonsterAiProjection
     {
         bool counterRoom = receipt.Entry.RaidEntry?.Kind == Game.Raids.RaidKind.Fiendwar &&
             (Game.Titles.FiendwarTitleFacts.IsTeamDungeon(receipt.Entry.DungeonId) || receipt.Entry.DungeonId is >= 5350 and <= 5358);
-        if (receipt.MonsterAi is not { } && !counterRoom) return;
+        bool dynamicRoom = counterRoom || receipt.Entry.DungeonId == EvildomWarChallengeEntryPolicy.DungeonId &&
+            receipt.Entry.Difficulty == 2 && receipt.Entry.PartyMemberCount == 4 && receipt.Entry.RaidEntry is null;
+        if (receipt.MonsterAi is not { } && !dynamicRoom) return;
         var profile = receipt.MonsterAi ?? MonsterAiProfile.Native;
         DungeonMap map = receipt.Snapshot.CurrentMap;
         uint serial = context.NextMonsterAiSerial();
         byte[] body = MonsterAiPackets.Encode(serial, receipt.Entry.DungeonId, checked((uint)map.Id),
             receipt.MapSeed, map.Position, profile);
-        context.FiendwarCounterRoom = counterRoom ? new(serial, receipt) : null;
+        context.FiendwarCounterRoom = dynamicRoom ? new(serial, receipt) : null;
         await context.Sender.Send(0, MonsterAiPackets.Opcode, body, action, canSend);
-        if (counterRoom && context.Session.FiendwarSceneKeyOffer(receipt, serial) is { } offer)
+        if (dynamicRoom && context.Session.FiendwarSceneKeyOffer(receipt, serial) is { } offer)
             await context.Sender.Send(0, FiendwarKeyLeasePackets.Opcode, FiendwarKeyLeasePackets.Build(offer),
                 "fiendwar_key_scene_offer", () => canSend?.Invoke() != false && context.Session.CanPublishFiendwarKeyMessage(offer));
     }

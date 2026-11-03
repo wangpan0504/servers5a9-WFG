@@ -18,6 +18,7 @@ internal sealed partial class GameSession
     bool CanMutatePartyDungeon => (PartyDungeon is null || PartyDungeon.IsExecuting) && formalDungeon?.Run.FiendwarObjectKeys?.RecoveryRequired != true;
 
     internal bool CanBeginPartySelection() => owner.Execute(() => Ready && Selected is not null &&
+        CanUseEvildomWarChallengeEntrance() &&
         Phase is SessionPhase.Town or SessionPhase.MapSelect && pendingRental is null && !HasPendingTownQuestCommit &&
         formalDungeon is null && (HasRaidDungeonAdmission || CurrentDungeonSelection is { IsClassExperience: false } ||
             towns.SelectionReturn(Selected.Position, completed) is not null));
@@ -57,6 +58,14 @@ internal sealed partial class GameSession
 
     internal bool CanCompletePartyLoading() => owner.Execute(() => Ready && formalDungeon is { } dungeon &&
         (Phase == SessionPhase.Loading || dungeon.Run.HasScriptedReturn));
+
+    // 英雄ACT可在活怪房间跨图；共享owner先确认每个投影的相同资源证据，不能推进首成员后才发现另一成员拒绝。
+    internal bool CanMoveEvildomWarChallengeWithParty(byte x, byte y, byte kind) => owner.Execute(() =>
+        formalDungeon is { } dungeon && (dungeon.Entry.DungeonId != EvildomWarChallengeEntryPolicy.DungeonId ||
+            kind == 0 && Phase == SessionPhase.Dungeon && dungeon.Run.CanMove(dungeon.Run.Snapshot.Identity, new(x, y)) &&
+            (x != 12 || y > 1 || Selected is { } character &&
+                dungeon.Run.FiendwarObjectKeys is { RecoveryRequired: false } keys && keys.IsReady(character.Id) &&
+                keys.Available(character.Id) > 0)));
 
     // 此令牌只允许原Session在提交前复核私有准备，不向协调器暴露可写的Run。
     internal sealed record PartyDungeonPreparation(GameSession Session, Character Expected);
@@ -133,6 +142,7 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan)) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
+        if (dungeon.EvildomWarChallengeEntry is { } challenge && !IsCurrentEvildomWarChallengeAdmission(challenge)) return null;
         if (dungeon.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&

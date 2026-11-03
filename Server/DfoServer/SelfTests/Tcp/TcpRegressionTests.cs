@@ -130,6 +130,7 @@ internal static class TcpRegressionTests
         ("tag-evildom", TagEvildomTcpTests.RunAsync),
         ("imperial-arena", ImperialArenaTcpTests.RunAsync),
         ("evildom-war", EvildomWarTcpTests.RunAsync),
+        ("evildom-war-challenge", EvildomWarChallengeTcpTests.RunAsync),
         ("quest-lifecycle", QuestLifecycleTcpTests.RunAsync),
         ("quest-extras", QuestLifecycleTcpTests.RunExtrasAsync),
         ("quest-chains", QuestLifecycleTcpTests.RunChainsAsync),

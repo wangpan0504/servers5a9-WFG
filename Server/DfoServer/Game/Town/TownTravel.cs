@@ -38,6 +38,8 @@ internal static class TownTravel
     {
         if (!ChannelAreaLanding.AllowsFiendwarTown(channel, request.Town))
             return TownTravelPlan.Reject("fiendwar-channel-town-mismatch");
+        if (!ChannelAreaLanding.AllowsEvildomWarChallengeTown(channel, request.Town))
+            return TownTravelPlan.Reject("evildom-war-challenge-channel-town-mismatch");
         if (character.IsPvpPrivate && request.Town != 10) return TownTravelPlan.Reject("pvp-private-town-only");
         if (request.Town == 39 && request.Area is >= 8 and < 38 &&
             (character.Position.Town != 39 || character.Position.Area != request.Area || character.WeddingHall is null))

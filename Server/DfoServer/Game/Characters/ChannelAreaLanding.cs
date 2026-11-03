@@ -27,6 +27,11 @@ internal static class ChannelAreaLanding
 
     // 魔界大战频道类型：ARAD 频道类型名表 03EFBF1D 写入 CHANNEL_EVILDOM_WAR = 0x36（同表 CHANNEL_EVILDOM_WAR_CHALLENGE = 0x40）。
     internal const int EvildomWarType = 0x36;
+    internal const int EvildomWarChallengeType = 0x40;
+    internal const byte EvildomWarChallengeTown = 124;
+
+    internal static bool AllowsEvildomWarChallengeTown(ChannelEntry? channel, byte town) =>
+        town != EvildomWarChallengeTown || channel?.Type == EvildomWarChallengeType;
 
     internal const byte LegacyRetiredTown = 51;
     internal const byte CentralParkTown = 31;
@@ -121,14 +126,16 @@ internal static class ChannelAreaLanding
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
          (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (39, "[tag_tournament]"),
-         (DplPveType, ""), (XianVillageType, "[xian_village]"), (4, "[pvp]"), (5, "[pvp]"), (8, "[pvp]"), (24, "[pvp]")];
+         (DplPveType, ""), (XianVillageType, "[xian_village]"), (EvildomWarChallengeType, "[evildom_war_challenge]"),
+         (4, "[pvp]"), (5, "[pvp]"), (8, "[pvp]"), (24, "[pvp]")];
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
     // 01EB8C02将真实虚表绑定为054946AC；01EB5790比较type39帝国竞技场，对应vt+0x34；再战53为+0x38、魔界大战54为+0x4C。
     // 01EB5800比较type55强者之路，对应vt+0x48；01EB5DE9..5E1B双向比较此位，跨入或离开55不保留快照。
     // 五陵和漩涡类型位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
-    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type));
+    // 01EB5840/vt+0x78独立比较0x40，普通魔界大战的vt+0x4C不能替代它。
+    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp, bool EvildomChallenge) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type), type == EvildomWarChallengeType);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -194,9 +201,10 @@ internal static class ChannelAreaLanding
     {
         if (IsRaidInstanceArea(position)) return false;
         if (channel is null)
-            return true;
+            return position.Town != EvildomWarChallengeTown;
         if (channel.Type == SpecialAreaType) return false;
         if (!AllowsFiendwarTown(channel, position.Town)) return false;
+        if (!AllowsEvildomWarChallengeTown(channel, position.Town)) return false;
         if (channel.Type == FiendwarType && position.Town != FiendwarTown) return false;
         // 决斗城镇有普通地图连接，不能据此把它当作普通频道快照；没有频道历史时按实际地区区分。
         if (IsPvpType(channel.Type)) return position.Town == 10;
@@ -225,7 +233,7 @@ internal static class ChannelAreaLanding
     // 共享房间的返回地区只能落在普通地区：频道起始城镇（只能经频道进入的城镇与安徒恩直达战舰）的街区不参与，
     // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
     internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
-        town is AntonTown or LegacyRetiredTown or PvpTown or XianVillageTown or 48 or 62 ||
+        town is AntonTown or LegacyRetiredTown or PvpTown or XianVillageTown or EvildomWarChallengeTown or 48 or 62 ||
         IsRaidOnlyTown(town) || IsChannelBoundTown(towns, town);
 
     // 卢克频道与普通频道共用32/3入口：团队频道进出该城镇不能覆盖普通返回地区，普通频道仍允许记住32/3。
@@ -235,7 +243,7 @@ internal static class ChannelAreaLanding
     // 选角与城镇切图共用同一返回地区清理规则。旧存档中的团本街区不能继续被当作普通房间出口；
     // 只有共享普通用途的卢克32/3保留合法记忆，丢失的普通来源由共享房间默认地区恢复。
     internal static Location? OrdinaryRoomReturn(Location? saved) => saved is
-        { Town: AntonTown or XianVillageTown or FiendwarTown or PreyRaidTown } ||
+        { Town: AntonTown or XianVillageTown or FiendwarTown or PreyRaidTown or EvildomWarChallengeTown } ||
         saved is not null && IsRaidInstanceArea(saved) ? null : saved;
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
@@ -244,6 +252,9 @@ internal static class ChannelAreaLanding
     // 分组对应的是带 [dungeon gate] 的区域，或 channeluiinfo 城镇号已在目录中的特殊类型。没有这两者的分组不落点。
     static (byte Town, byte Area)? Target(int type, string group)
     {
+        // 03B876C0的0x40独立返回124；门口由124自己的目录求取，分组不能让它退回54的67。
+        if (type == EvildomWarChallengeType)
+            return (EvildomWarChallengeTown, 1);
         if (type == DplPveType)
             return (DplPveTown, 1);
         var name = GroupName(group);

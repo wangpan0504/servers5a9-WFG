@@ -68,6 +68,8 @@ internal static class ChannelPackets
 
     // CHANNEL_EVILDOM_WAR：ARAD 频道类型名表 03EFBF1D 写入 0x36。
     const int EvildomWarType = 0x36;
+    // 0233EF02原样写入0x40，028FA2F0独立判断英雄频道，不能替换为普通战役0x36。
+    const int EvildomWarChallengeType = 0x40;
     // CHANNEL_FIEND_WAR：超时空之战频道 39 [fiendwar]。
     const int FiendWarType = 0x2D;
     // CHANNEL_PREY_RAID：普雷频道 42 [prey]。选角前 03B55580 经 02330DF0 读 +0x1010，cmp 0x32 → 名册 +0x494（tail[41]），为 0 弹 1099 / dstr 32116；
@@ -94,7 +96,7 @@ internal static class ChannelPackets
     // 03EF95B0/028FA230将4纳入普通决斗准入；01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN均保留实际类型。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType or DplPveType ? (byte)channel.Type : (byte)0;
+        channel.Type is 4 or 5 or 8 or 13 or 24 or 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or EvildomWarChallengeType or FiendWarType or PreyRaidType or EvildomGatheringType or DplPveType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {
