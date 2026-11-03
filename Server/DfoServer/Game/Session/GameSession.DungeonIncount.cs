@@ -99,6 +99,16 @@ internal sealed partial class GameSession
         return result;
     });
 
+    // 当前副本所属 [dungeon incount info] 行的全部 NOTI 550 视图（同行共用剩余）。
+    public IReadOnlyList<DungeonEnterCount> EnterCountsFor(uint dungeon) => owner.Execute(() =>
+    {
+        if (incounts is null || Selected is not { } character || IncountRow(dungeon) is not { } row)
+            return (IReadOnlyList<DungeonEnterCount>)[];
+        var usage = repository.LoadDungeonIncount(owner, character.Id, row.CountKey,
+            DungeonIncountPolicy.Period(IncountNow(), incounts.WeeklyResetDay(row.CountKey)));
+        return DungeonIncountPolicy.Views(row, usage).Where(count => count.Dungeon is not (11006 or 11007)).ToArray();
+    });
+
     DungeonEntryCost? EntryCost(Character expected, uint dungeonId, DungeonDefinition definition, EpicPieceCatalog? pieces, bool channelTown,
         out string? rejection, DungeonIncountUsage? usageOverride = null)
     {
