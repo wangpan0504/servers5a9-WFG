@@ -191,14 +191,14 @@ internal static partial class DevelopmentGm
                     prototype = WithAmplify(prototype, amplify);
                     if (unseal) prototype = prototype with { SealFlag = 0 };
                     if (ability >= 0) prototype = prototype with { Durability = (ushort)ability };
-                    if (clearPeriod || customExpire is not null) prototype = prototype with { ExpireTime = clearPeriod ? ClearedExpire(template) : customExpire!.Value };
+                    if (clearPeriod || customExpire is not null) prototype = prototype with { ExpireTime = clearPeriod ? ClearedExpire(template, now) : customExpire!.Value };
                     var attachments = Enumerable.Range(0, prototype.IsStackable ? 1 : count).Select(_ => InventoryRewardGrantService.CreateItem(template, FirstSlot(template), prototype));
                     return DeliverMail(mailbox, request, attachments, "开发GM发放：" + template.Name + " × " + count + Options(upgrade, refinement, amplify), now);
                 }
                 RequireMode(args[4]);
                 if (!InventoryRewardGrantService.Create(template).IsStackable && count > 352)
                     throw new InvalidDataException("单次直接入包非堆叠物品最多352件");
-                int? grantedExpire = clearPeriod ? ClearedExpire(template) : customExpire;
+                int? grantedExpire = clearPeriod ? ClearedExpire(template, DateTimeOffset.UtcNow) : customExpire;
                 var granted = Commit(live, owners, repository, request, true, character => AmplifyNew(character.Inventory, InventoryRewardGrantService.TryGrantBatch(character,
                     [new InventoryReward(template.Id, count, (byte)upgrade, (byte)refinement, Quality: qualitySeed)], resources.Items, resources.GoldLimits, resources.EpicPieces), amplify, unseal, ability < 0 ? null : ability, grantedExpire),
                     "背包空间、堆叠、期限或余额上限不满足，整批未发放");
@@ -303,7 +303,7 @@ internal static partial class DevelopmentGm
                         core = core with { Value = count.Value };
                     }
                     var changed = item with { Core = core };
-                    if (clearPeriod || customExpire is not null) changed = ApplyExpire(changed, clearPeriod ? ClearedExpire(template) : customExpire!.Value);
+                    if (clearPeriod || customExpire is not null) changed = ApplyExpire(changed, clearPeriod ? ClearedExpire(template, DateTimeOffset.UtcNow) : customExpire!.Value);
                     var after = before with { Items = before.Items.Replace(item, changed) };
                     after.Validate();
                     return new(true, 0, new InventoryPlan(before, after, "gm_item_edit"));
@@ -617,9 +617,14 @@ internal static partial class DevelopmentGm
 
     // 脚本带 [usable period] 或 [expiration date] 时，客户端把实例截止 0 减当前时间，剩余秒归零后显示「已超过使用期限」。
     // 协议上限 2147483647（2038-01-19）是这类模板的不过期写法；时装和宠物的 0 在线路上就是永久，不能改成这个上限。
-    static int ClearedExpire(ItemTemplate template) =>
-        template.Kind is ItemKind.Avatar or ItemKind.Creature ? 0
-        : template.Expiration.Days > 0 || template.Expiration.AbsoluteTime > 0 ? int.MaxValue : 0;
+    // ClearedExpire 带 daily/weekly 禁止清 0：period:off 仍可清 usable/absolute，周期删除走 Resolve。
+    static int ClearedExpire(ItemTemplate template, DateTimeOffset now)
+    {
+        if (template.Expiration.DailyDelete == 1 || template.Expiration.WeeklyDeleteDay is >= 0 and <= 6)
+            return template.Expiration.ForClearedPeriod(now);
+        return template.Kind is ItemKind.Avatar or ItemKind.Creature ? 0
+            : template.Expiration.ForClearedPeriod(now);
+    }
 
     static int ParseExpire(string token)
     {

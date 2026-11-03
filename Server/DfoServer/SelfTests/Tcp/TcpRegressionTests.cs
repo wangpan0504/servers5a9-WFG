@@ -564,6 +564,7 @@ internal static class TcpRegressionTests
         ("avatar-preset", AvatarPresetTcpTests.RunAsync),
         ("npc-favor", NpcFavorTcpTests.RunAsync),
         ("fatigue-daily", FatigueDailyResetTcpTests.RunAsync),
+        ("item-daily-expire", ItemDailyExpireTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
@@ -666,7 +667,8 @@ internal static class TcpRegressionTests
         "gift-selection-tcp", "gift-selection-resources", "sea-rage-weapon-gift", "similar-gift-type", "dungeon-entry-plan", "assault-hunt-quest", "hosted-dungeon-eligibility", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
-        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost", "dungeon-incount-retry"
+        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost", "dungeon-incount-retry",
+        "item-daily-expire"
     };
     internal static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
     // 同一注册表供执行和机器可读清单使用；不是外部手填组表或覆盖证明。

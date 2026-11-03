@@ -12,6 +12,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
+using DfoServer;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
@@ -56,6 +57,14 @@ internal static class DailyItemExpirationTests
             "每日截止超出安全范围时钳回最大值，不抛异常、降为永久或溢出");
         That((daily with { Days = 7 }).Resolve(boundary.AddSeconds(-1)) == boundary.ToUnixTimeSeconds(),
             "普通相对期长于每日截止时取更早的每日边界");
+        That(daily.ForClearedPeriod(boundary.AddSeconds(-1)) == boundary.ToUnixTimeSeconds(),
+            "period:off / ClearedExpire 对 daily=1 禁止清 0，改走 Resolve 下一 UTC+8 06:00");
+        That(new ItemExpiration().ForClearedPeriod(boundary) == 0,
+            "无 daily/weekly 字段 period:off 仍为 0");
+        That(new ItemExpiration(Days: 7).ForClearedPeriod(boundary) == int.MaxValue,
+            "仅 usable period 仍可被 period:off 清成协议上限");
+        That(ItemExpiration.Parse(new PvfDocument("[daily delete item]\n14\n")).ForClearedPeriod(boundary) == 0,
+            "daily=14 不是周期删除 1，ClearedExpire 不走 Resolve");
         var template = new ItemTemplate(100, ItemKind.Consumable, 0, 1, 0, 1000, 0, 0, 1, "[trade]", ushort.MaxValue, 0, "每日奖励")
             { Expiration = daily };
         That(InventoryRewardGrantService.Create(template, 10, boundary.AddSeconds(-1)).ExpireTime == boundary.ToUnixTimeSeconds(),
@@ -99,7 +108,21 @@ internal static class DailyItemExpirationTests
         That(InventoryCargoService.AllowsInsert(core, InventoryListType.PersonalCargo, template) &&
             !InventoryCargoService.AllowsInsert(core, InventoryListType.AccountCargo, template),
             "522维持个人仓库准入和账号仓库既有trade资格拒绝");
+        foreach (int id in new[] { 490705058, 490705059, 10096296 })
+        {
+            var dailyTemplate = resources.Items.Get(id);
+            That(dailyTemplate.Expiration.DailyDelete == 1 &&
+                dailyTemplate.Expiration.ForClearedPeriod(now) == dailyTemplate.Expiration.Resolve(now, true, true) &&
+                dailyTemplate.Expiration.ForClearedPeriod(now) == boundary.ToUnixTimeSeconds(),
+                "真实 daily=1 模板 period:off 仍冻结下一 UTC+8 06:00：" + id);
+        }
+        var hammer = resources.Items.Get(2749724);
+        That(hammer.Expiration.DailyDelete == 0 && hammer.Expiration.WeeklyDeleteDay is null &&
+            hammer.Expiration.ForClearedPeriod(now) == 0,
+            "2749724 无 daily/weekly 字段，period:off 仍为永久 0，选角不删");
         Persistence(towns, resources, now, source, ordinary);
+        SortExpiry(resources, now, source, ordinary);
+        SessionExpiry(towns, resources, now, source, ordinary);
     }
 
     static void UnknownCreation(TownCatalog towns, ItemResources resources, DateTimeOffset now)
@@ -229,6 +252,97 @@ internal static class DailyItemExpirationTests
                 "选角清理已到期背包及个人仓库新实例，历史零期限同模板保留");
         }
         finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
+    }
+
+    static void SortExpiry(ItemResources resources, DateTimeOffset now, InventoryItem source, InventoryItem ordinary)
+    {
+        var snapshot = new InventorySnapshot([source, ordinary with { Position = source.Position with { Index = checked((short)(source.Position.Index + 1)) } }]);
+        var sorted = InventorySortService.Plan(snapshot, source.Core.Kind, 0, resources.Items, now.AddSeconds(1).ToUnixTimeSeconds());
+        That(sorted.Accepted && sorted.Plan!.After.Items.All(item => item.ExpireTime == 0) &&
+            sorted.Plan.After.Items.Any(item => item.Core.ItemId == source.Core.ItemId && item.ExpireTime == 0) &&
+            !sorted.Plan.After.Items.Any(item => item.ExpireTime == source.ExpireTime),
+            "CMD20 整理删除已到期 daily 实例，ExpireTime=0 的同模板保留（A 不追溯）");
+    }
+
+    static void SessionExpiry(TownCatalog towns, ItemResources resources, DateTimeOffset now, InventoryItem source, InventoryItem ordinary)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "daily-item-session-expiry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        GameSession? session = null;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("daily-session-expiry", () => { });
+            repository.Create(owner, new("DailyOnline", towns.Room, towns.InitialReturn) { Inventory = new([
+                source with { Uid = 0 }, ordinary with { Uid = 0, Position = new(InventoryListType.Main, 66) }]) });
+            var clock = new DailyBoosterTestClock(now);
+            session = new GameSession(repository, towns, owner, timeProvider: clock, items: resources.Items);
+            session.Select(0);
+            session.MarkReady();
+            That(session.Selected!.Inventory.Items.Count(item => item.ExpireTime == source.ExpireTime) == 1 &&
+                session.ExpireInventory() is { Accepted: true, Plan.Changed: false },
+                "到期前在线清包不删未到期实例，也不追溯 ExpireTime=0");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            var expiry = session.ExpireInventory();
+            That(expiry.Accepted && expiry.Plan!.Changed && expiry.Plan.Reason == "item_expired" &&
+                session.Selected!.Inventory.Items.Single().ExpireTime == 0,
+                "在线跨期限 ExpireInventory 删除已到期实例，历史零期限保留");
+        }
+        finally
+        {
+            session?.End();
+            SqliteConnection.ClearAllPools();
+            TestFiles.DeleteDirectory(root, true);
+        }
+    }
+
+    public static void RunGrant(ItemResources resources, PvfArchive pvf, DfoServer.GameWorld.Quests.QuestCatalog? quests = null)
+    {
+        int before = Count;
+        using var f = new MailboxPersistenceTests.Fixture();
+        f.OtherOwner.Dispose();
+        var mailbox = new DfoServer.Game.Mailbox.MailboxService(f.Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
+        var catalog = new DfoServer.Development.DevelopmentCatalog(pvf, resources, quests);
+        string Answer(string line) => DfoServer.Development.DevelopmentGm.Answer(line, "other", f.Repository, f.Owners,
+            _ => null, mailbox, resources.Items, catalog: catalog);
+        Character Load()
+        {
+            using var lease = f.Owners.Acquire("other", () => { });
+            return f.Repository.LoadCharacter(lease, 0);
+        }
+        bool MatchesCleared(int id, int expire, DateTimeOffset started, DateTimeOffset finished)
+        {
+            var template = resources.Items.Get(id).Expiration;
+            return expire == template.ForClearedPeriod(started) || expire == template.ForClearedPeriod(finished);
+        }
+        foreach (int id in new[] { 490705058, 490705059, 10096296 })
+        {
+            var started = DateTimeOffset.UtcNow;
+            That(Answer($"grant Other {id} 1 0 0 direct period:off").StartsWith("OK "), "GM period:off 直接发放 daily 模板：" + id);
+            var finished = DateTimeOffset.UtcNow;
+            That(MatchesCleared(id, Load().Inventory.Items.Single(item => item.Core.ItemId == id).ExpireTime, started, finished),
+                "ClearedExpire 带 daily 禁止清 0，ExpireTime 为下一 UTC+8 06:00：" + id);
+        }
+        var weeklyStarted = DateTimeOffset.UtcNow;
+        That(Answer("grant Other 10159649 1 0 0 direct period:off").StartsWith("OK "), "GM period:off 直接发放 weekly 模板");
+        var weeklyFinished = DateTimeOffset.UtcNow;
+        That(MatchesCleared(10159649, Load().Inventory.Items.Single(item => item.Core.ItemId == 10159649).ExpireTime, weeklyStarted, weeklyFinished),
+            "ClearedExpire 带 weekly 禁止清 0，ExpireTime 为下一指定星期 UTC+8 06:00");
+        That(Answer("grant Other 2749724 1 0 0 direct period:off").StartsWith("OK ") &&
+            Load().Inventory.Items.Single(item => item.Core.ItemId == 2749724).ExpireTime == 0,
+            "无字段道具 period:off 仍为 0");
+        var mailStarted = DateTimeOffset.UtcNow;
+        That(Answer("grant Other 490705058 1 0 0 mail period:off").StartsWith("OK "), "GM period:off 邮件发放 daily 模板");
+        var mailFinished = DateTimeOffset.UtcNow;
+        int mailed = Convert.ToInt32(f.Query("""
+            SELECT json_extract(i.item_core,'$.ExpireTime') FROM mailbox_attachments a
+            JOIN character_inventory_items i ON i.item_uid=a.item_uid
+            WHERE json_extract(i.item_core,'$.ItemId')=490705058 AND a.claimed=0
+            """));
+        That(MatchesCleared(490705058, mailed, mailStarted, mailFinished),
+            "邮件 period:off 对 daily 同样禁止清 0");
+        Console.WriteLine($"PASS {Count - before} GM ClearedExpire/period:off 周期删除禁止清 0");
     }
 
     // 冻结规划结果后，第一次提交预检仍有效，第二次读取才跨期限，验证真实事务内的复验。

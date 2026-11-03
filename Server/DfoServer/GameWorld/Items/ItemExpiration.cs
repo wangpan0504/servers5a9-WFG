@@ -46,6 +46,13 @@ internal sealed record ItemExpiration(long AbsoluteTime = 0, int Days = 0, int D
         return ordinary > 0 ? Math.Min(ordinary, (int)periodic) : (int)periodic;
     }
 
+    // period:off / ClearedExpire：usable period 与 expiration date 仍可清掉；
+    // 带 [daily delete item] 1 或有效 [weekly delete item] 时禁止清成 0，改走 Resolve。
+    public int ForClearedPeriod(DateTimeOffset now) =>
+        DailyDelete == 1 || WeeklyDeleteDay is >= 0 and <= 6
+            ? Resolve(now, ignoreAbsoluteExpiration: true, ignoreUsablePeriod: true)
+            : Days > 0 || AbsoluteTime > 0 ? int.MaxValue : 0;
+
     // 兼容既有调用，只忽略绝对日期，不覆盖相对天数或永久物品。
     public int ResolveShop(DateTimeOffset now) => Resolve(now, ignoreAbsoluteExpiration: true);
 
