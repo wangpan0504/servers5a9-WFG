@@ -81,6 +81,9 @@ internal static partial class EvildomWarChallengeTests
             ChannelAreaLanding.AllowsEvildomWarChallengeTown(Channel, 124) &&
             ChannelAreaLanding.OrdinaryRoomReturn(new(124, 1, 1, 1)) is null,
             "同64保留独立身份，普通频道拒绝124且旧124返回存档不污染普通地区");
+        That(ChannelAreaLanding.LandsInChannelTown(Channel) &&
+            !ChannelAreaLanding.LandsInChannelTown(new(new(2, 41), 54, "[evildom_war]")),
+            "英雄直接落本频道广场，普通54仍保留共享房间出门合同");
         RunWarpCore();
         RunSpawnCore();
         Console.WriteLine($"PASS evildom war challenge core {Count - before}");
@@ -113,8 +116,11 @@ internal static partial class EvildomWarChallengeTests
             ChannelAreaLanding.IsChannelBoundTown(towns, 124), "英雄城镇124唯一世界图244保持正式独立入口");
         var landing = ChannelAreaLanding.Decide(towns, Channel, 95, none);
         That(landing.Spot is { Town: 124, Area: 1 } && towns.IsPosition(landing.Spot, none) && !towns.IsRoom(landing.Spot, none) &&
-            ChannelAreaLanding.Decide(towns, Channel, 94, none).Spot is null && !ChannelAreaLanding.LandsInChannelTown(Channel),
-            "选角先入共享房间，95级出门取124自己实际门口，94级不能落124");
+            ChannelAreaLanding.Decide(towns, Channel, 94, none).Spot is null && ChannelAreaLanding.LandsInChannelTown(Channel),
+            "英雄选角直接取124自己广场的有效门口，94级不能落124");
+        That(towns.Areas[(124, 1)].Map(none).Npcs.Select(npc => npc.Id).Order().SequenceEqual([400001110u, 400001111u]) &&
+            towns.Areas[(124, 2)].Map(none).Npcs.Select(npc => npc.Id).SequenceEqual([612u]),
+            "英雄广场使用自己的伊奇与莫妮卡，副本门使用修理机，不借普通战役NPC");
         var ordinary = new ChannelEntry(new(2, 10), 22, "[granfloris]");
         var war = new ChannelEntry(new(2, 41), 54, "[evildom_war]");
         That(ChannelAreaLanding.ClientKeepsTownSnapshot(towns, Channel, landing.Spot!) &&
@@ -157,22 +163,33 @@ internal static partial class EvildomWarChallengeTests
                     int index = all.Count;
                     var lease = owners.Acquire("challenge-" + index, () => { });
                     leases.Add(lease);
+                    var origin = index % 4 == 1 ? new Location(67, 1, 656, 154) :
+                        index % 4 == 2 ? towns.Room : towns.InitialReturn;
                     repository.Create(lease, CharacterCreation.Prepare("Challenge" + index, characters.Get(0),
-                        waiting, towns.InitialReturn, learning.Get) with { Level = 95 });
-                    var session = new GameSession(repository, towns, lease, entry: Channel);
+                        origin, towns.InitialReturn, learning.Get) with { Level = 95 });
+                    var history = new ChannelHistory();
+                    history.Record(lease.Account, ChannelAreaLanding.EvildomWarChallengeType);
+                    var session = new GameSession(repository, towns, lease, entry: Channel, channelHistory: history);
                     all.Add(session);
-                    session.Select(0, resumeTown: true);
+                    session.Select(0, resumeTown: index % 4 is 1 or 2);
                     session.MarkReady();
                     session.CurrentParty = () => parties.Current(session);
                     session.HasMultiplePartyMembers = () => parties.HasMultipleMembers(session);
                     return session;
                 }).ToArray();
-                That(team.All(session => session.Selected!.Position.Town == 124 && session.Selected.Position.Area == 2),
-                    "真实成员从124自己的等待区快照开始");
-                That(team[0].BeginDungeonSelection() is null, "单人不能从英雄等待区创建选图票据");
+                That(team.All(session => session.Selected!.Position is { Town: 124, Area: 1 } &&
+                    session.Selected.Return == towns.InitialReturn), "自然选角与同64历史旧67/共享房间均纠正到英雄广场，保留原普通返回地区");
+                var arrival = team[0].Selected!.Position;
+                That(!team[0].Travel(new(124, 2, waiting.X, waiting.Y, 5, 124, 1, 0)) &&
+                    team[0].Selected!.Position == arrival && team[0].TravelReason == "evildom-war-challenge-four-members-required",
+                    "单人从英雄广场走真实门被拒绝，不提前保存等待区位置");
+                That(parties.SetInformation(team[0], 0, PartySettings.Default).Accepted,
+                    "英雄广场沿正式普通队伍创建，不要求54战役NPC或引导绑定");
                 foreach (var member in team.Skip(1))
                     That(parties.Invite(team[0], member, 0).Accepted && parties.Respond(member, team[0].Selected!.Id, 0, true).Accepted,
                         "四真实账号通过正式PartyService邀请加入");
+                That(team.All(session => session.Travel(new(124, 2, waiting.X, waiting.Y, 5, 124, 1, 0)) &&
+                    session.Selected!.Position is { Town: 124, Area: 2 }), "四真实成员沿英雄广场实际有向门进入124等待区");
                 That(service.BeginSelection(team[0]).Length == 4 && team.All(session => session.Phase == SessionPhase.MapSelect),
                     "四人通过原共享选图链建立各自票据");
                 if (changeParty)
@@ -200,6 +217,25 @@ internal static partial class EvildomWarChallengeTests
                             "英雄入场不扣普通战役30疲劳、不借54战役资格：" + index);
                 }
                 foreach (var session in team) { parties.Detach(session); session.End(); }
+            }
+            foreach (int type in new[] { 22, 54, 64 })
+            {
+                var lease = owners.Acquire("challenge-history-" + type, () => { });
+                leases.Add(lease);
+                var spot = ChannelAreaLanding.Decide(towns, Channel, 95, none).Spot!;
+                var role = repository.Create(lease, CharacterCreation.Prepare("History" + type, characters.Get(0),
+                    spot, towns.InitialReturn, learning.Get) with { Level = 95 });
+                var history = new ChannelHistory();
+                history.Record(lease.Account, type);
+                var channel = new ChannelEntry(new(2, (byte)(type == 64 ? 56 : type == 54 ? 41 : 10)), type,
+                    type == 64 ? "[evildom_war_challenge]" : type == 54 ? "[evildom_war]" : "[granfloris]");
+                var session = new GameSession(repository, towns, lease, entry: channel, channelHistory: history);
+                all.Add(session);
+                session.Select(role.Slot, resumeTown: true);
+                That(session.TownSnapshotResumed == (type == 64) && session.Selected!.Position == (type == 64 ? spot : towns.Room) &&
+                    session.Selected.Return == towns.InitialReturn,
+                    "已有同类型历史仍按英雄城镇独占边界复核，只有64恢复124快照：" + type);
+                session.End();
             }
         }
         finally

@@ -246,6 +246,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             bool resumed = resumeTown && !ChannelAreaLanding.IsRaidInstanceArea(character.Position) &&
                 !ChannelAreaLanding.LeavesRetiredTown(character.Position) &&
                 ChannelAreaLanding.AllowsFiendwarTown(ChannelEntry, character.Position.Town) &&
+                ChannelAreaLanding.AllowsEvildomWarChallengeTown(ChannelEntry, character.Position.Town) &&
                 (ChannelEntry is not null && previousType is int previous
                 ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
                 : ChannelAreaLanding.ClientKeepsTownSnapshot(towns, ChannelEntry, character.Position));
@@ -259,6 +260,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 旧版在共享房间下线的TAG角色也须进入本频道准备场景，不能恢复旧错误落点。
             if (ChannelEntry?.Type is 39 or 53 &&
                 character.Position.Town != (ChannelEntry.Type == 39 ? 48 : 62))
+                resumed = false;
+            // 同64历史只能保留英雄城镇；旧共享房间或普通战役67不能借同类型快照绕过落点修复。
+            if (ChannelEntry?.Type == ChannelAreaLanding.EvildomWarChallengeType &&
+                character.Position.Town != ChannelAreaLanding.EvildomWarChallengeTown)
                 resumed = false;
             character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry, previousType);
             TownSnapshotResumed = resumed;

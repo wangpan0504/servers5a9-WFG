@@ -66,8 +66,10 @@ internal static class EvildomWarChallengeTcpTests
                     ushort slot;
                     using (var owner = new AccountOwners().Acquire(account, () => { }))
                     {
+                        var origin = index == 1 ? new DfoServer.GameWorld.Towns.Location(67, 1, 656, 154) :
+                            index == 2 ? resources.Towns.Room : resources.Towns.InitialReturn;
                         var candidate = CharacterCreation.Prepare("Hero" + sequence, resources.Characters.Get(0),
-                            waiting, resources.Towns.InitialReturn, resources.Learning.Get);
+                            origin, resources.Towns.InitialReturn, resources.Learning.Get);
                         var learning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
                         { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning);
                         var repository = new CharacterRepository(fixture.Database);
@@ -80,9 +82,9 @@ internal static class EvildomWarChallengeTcpTests
                     }
                     var peer = Open(fixture, account, gamePort: endpoints[56], channelNumber: 56);
                     peers.Add(peer);
-                    peer.Select(slot, prepared: true, resumeTown: true, room: false);
-                    That(peer.LoginEndpoint[3] == 64 && fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]],
-                        "原生LOGIN64恢复124/2，不发送54或进入67");
+                    peer.Select(slot, prepared: true, room: false);
+                    That(peer.LoginEndpoint[3] == 64 && fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 1L]],
+                        "普通存档、旧67及共享房间自然LOGIN64直接到英雄广场124/1，不借等待区快照");
                     peer.Send(2, Build(writer =>
                     {
                         writer.Write((byte)5); writer.Write(0x0100007fu); writer.Write(0x0100007fu);
@@ -113,6 +115,10 @@ internal static class EvildomWarChallengeTcpTests
                 }
                 var leader = peers[0];
                 All();
+                leader.Send(12, Convert.FromHexString("000304000000000500000000000007"));
+                That(All()[0].Any(packet => packet is { Kind: 0, Opcode: 9 }) &&
+                    fixture.Query("SELECT town,area FROM characters WHERE id=$p0", leader.Id) is [[124L, 1L]],
+                    "英雄广场通过真实CMD12创建普通队伍，不依赖54的NPC创建或开始战役");
                 foreach (var peer in peers.Skip(1))
                 {
                     leader.Send(10, Build(writer => { writer.Write(peer.Id); writer.Write((byte)0); writer.Write(0u); writer.Write(new byte[6]); }));
@@ -120,6 +126,19 @@ internal static class EvildomWarChallengeTcpTests
                     peer.Send(11, Build(writer => { writer.Write(leader.Id); writer.Write((byte)0); writer.Write(0u); }));
                     That(All(peer).Take(peers.IndexOf(peer) + 1).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 9 })),
                         "英雄入口复用正式邀请和加入名册，不伪造四人成员");
+                }
+                foreach (var peer in peers)
+                {
+                    string beforeDoor = fixture.Snapshot();
+                    peer.Send(36, Area(124, 2, waiting.X, waiting.Y, 124, 1));
+                    var moved = All(peer)[peers.IndexOf(peer)];
+                    if (count < 4)
+                        That(!moved.Any(packet => packet is { Kind: 0, Opcode: 24 }) && fixture.Snapshot() == beforeDoor,
+                            "不足四人沿英雄实际门请求不能提前进入等待区：" + count);
+                    else
+                        That(moved.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, 2, ..] }) &&
+                            fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]],
+                            "四真实队员从英雄广场经资源有向门进入124/2");
                 }
                 byte[] selection = Convert.FromHexString("030000000200000000FFFF0000000000000000000000000000");
                 BinaryPrimitives.WriteUInt32LittleEndian(selection, 400000105);
