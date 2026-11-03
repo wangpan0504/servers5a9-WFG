@@ -22,6 +22,11 @@ internal static class ActionConsumableTests
             "动作消费只接现有业务且参数完整的资源，日次数和冷却不硬编码到物品ID");
         That(ActionConsumableDefinition.Parse(file with { Stackable = raw with { ActionDeclaration = new("[add mileage]",[50]) } }, item)
             is { Label: "[add mileage]", Parameters: [50] }, "积分道具按面额注册独立账号货币，不当作点券或租赁点");
+        var book = raw with { ActionDeclaration = new("[story book]", [3108]), HasUseActionPacket = false, DeclaredUseActionPacket = null };
+        That(ActionConsumableDefinition.Parse(file with { Stackable = book }, item) is { Label: "[story book]", Parameters: [3108] } &&
+            new[] { Array.Empty<int>(), new[] { 0 }, new[] { 30000 }, new[] { 3108, 1 } }.All(args =>
+                ActionConsumableDefinition.Parse(file with { Stackable = book with { ActionDeclaration = new("[story book]", args) } }, item) is null),
+            "故事簿复用动作消费定义，只接受一个合法任务号，允许原生默认515入口");
         var clock = new ConsumableUseSessionTests.FakeClock();
         var slot = new InventorySlot(InventoryListType.Main,65);
         var source = new InventoryItem(77,slot,new(9000,ItemKind.Consumable,2));

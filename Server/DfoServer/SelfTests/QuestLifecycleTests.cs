@@ -197,6 +197,7 @@ internal static class QuestLifecycleTests
         }
         RentalProgress(towns, items);
         RankProgress(towns,items);
+        QuestStoryBookTests.Run(items);
         Console.WriteLine($"PASS {Count - checks} 通用任务接取/放弃、赠品原子性与回放/恢复断言");
     }
 

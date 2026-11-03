@@ -85,6 +85,8 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
     {
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, Prepare(context, character), "quest_list_initialize");
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_initialize");
+        // 同连接重新选角也须用空703清除上一角色视图，不能只恢复普通356。
+        await StoryBooksAsync(context, character, includeEmpty: true);
     }
 
     public async Task RefreshAsync(GameConnectionContext context, Character character, Func<bool> canSend, bool restoreCompleted = true)
@@ -95,7 +97,23 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, body, "quest_list_refresh", canSend);
         // 21会重建任务界面列表；先保留场景所需的完成位，再在列表刷新后恢复完成历史。
         if (restoreCompleted)
+        {
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_refresh", canSend);
+            await StoryBooksAsync(context, character, canSend);
+        }
+    }
+
+    public async Task StoryBooksAsync(GameConnectionContext context, Character character, Func<bool>? canSend = null, bool includeEmpty = false)
+    {
+        var completed = QuestEligibility.Completed(character);
+        int[] books = quests.StoryBookQuestIds.Where(completed.Contains).ToArray();
+        // 正常任务业务不撤销已完成故事；切角的空视图在Initialize中明确恢复。
+        if (books.Length == 0 && !includeEmpty) return;
+        var captured = context.Owner.Execute(() => (context.Session.SelectionEpoch, context.Session.Phase));
+        bool Guard() => canSend?.Invoke() != false && context.Owner.Execute(() =>
+            context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase &&
+            ReferenceEquals(context.Session.Selected, character));
+        await context.Notify(NotiPacketType.STORY_BOOK_INFO, QuestPackets.StoryBookInfo(books), "story_book_completed_info", Guard);
     }
 
     private byte[] Prepare(GameConnectionContext context, Character character) => QuestPackets.AvailableList(character.Level,

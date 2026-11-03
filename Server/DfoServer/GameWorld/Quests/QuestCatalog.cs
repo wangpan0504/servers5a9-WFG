@@ -1,4 +1,5 @@
 using PvfLib;
+using System.Collections.Immutable;
 
 namespace DfoServer.GameWorld.Quests;
 
@@ -37,12 +38,14 @@ internal sealed class QuestCatalog
     readonly Dictionary<int, StoryQuest> quests;
     public GameWorld.Creatures.CreatureCatalog? Creatures { get; }
     public GameWorld.Items.ItemCatalog? Items { get; }
+    public ImmutableArray<int> StoryBookQuestIds { get; }
 
-    internal QuestCatalog(Dictionary<int, StoryQuest> quests, GameWorld.Creatures.CreatureCatalog? creatures = null, GameWorld.Items.ItemCatalog? items = null)
-    { this.quests = quests; Creatures = creatures; Items = items; }
+    internal QuestCatalog(Dictionary<int, StoryQuest> quests, GameWorld.Creatures.CreatureCatalog? creatures = null, GameWorld.Items.ItemCatalog? items = null,
+        ImmutableArray<int> storyBookQuestIds = default)
+    { this.quests = quests; Creatures = creatures; Items = items; StoryBookQuestIds = storyBookQuestIds.IsDefault ? [] : storyBookQuestIds; }
     public QuestCatalog WithCreatures(GameWorld.Creatures.CreatureCatalog creatures) =>
-        ReferenceEquals(Creatures, creatures) ? this : new(quests, creatures, Items);
-    public QuestCatalog WithItems(GameWorld.Items.ItemCatalog items) => ReferenceEquals(Items, items) ? this : new(quests, Creatures, items);
+        ReferenceEquals(Creatures, creatures) ? this : new(quests, creatures, Items, StoryBookQuestIds);
+    public QuestCatalog WithItems(GameWorld.Items.ItemCatalog items) => ReferenceEquals(Items, items) ? this : new(quests, Creatures, items, StoryBookQuestIds);
     public IReadOnlyCollection<StoryQuest> All => quests.Values;
     public bool TryGet(int id, out StoryQuest quest) => quests.TryGetValue(id, out quest!);
 
@@ -69,7 +72,7 @@ internal sealed class QuestCatalog
         for (int at = 0; at + 1 < cinematicTokens.Length; at += 2)
             if (cinematicTokens[at].Type == 0 && cinematicTokens[at + 1].Type == 6)
                 cinematics[cinematicTokens[at].Value] = PvfArchive.NormalizePath("cinematic/" + pvf.ResolveString(cinematicTokens[at + 1].Value));
-        return LoadDefinitions(paths, (id,path) =>
+        var catalog = LoadDefinitions(paths, (id,path) =>
         {
             var tokens = pvf.ReadTokens(path);
             var definition = QuestDefinitionReader.Read(id, path, tokens, pvf.ResolveString);
@@ -89,6 +92,24 @@ internal sealed class QuestCatalog
                 definition = Parse(id, path, tokens, pvf.ResolveString, maps, pvf) with { Definition = definition.Definition };
             return definition;
         });
+        const string bookPath = "n_quest/storybookquest.etc";
+        var bookIds = pvf.FindFile(bookPath) is null ? [] : ReadStoryBookQuestIds(new(pvf.ReadTokens(bookPath), pvf.ResolveString));
+        return new(catalog.quests, storyBookQuestIds: bookIds);
+    }
+
+    internal static ImmutableArray<int> ReadStoryBookQuestIds(PvfTokenDocument document)
+    {
+        if (!document.Diagnostics.IsEmpty) throw new InvalidDataException("故事簿目录结构无效");
+        var ids = new HashSet<int>();
+        foreach (var unit in document.Sections.Where(section => section.Name == "story book unit"))
+        {
+            var sequences = unit.Children.Where(section => section.Name == "sequence").ToArray();
+            if (sequences is not [{ Children.Length: 0, Values.Length: > 0 } sequence] ||
+                sequence.Values.Any(value => value.Type != 0 || value.Value is <= 0 or >= 30000))
+                throw new InvalidDataException("故事簿序列需要唯一的合法任务号列表");
+            foreach (var token in sequence.Values) ids.Add(token.Value);
+        }
+        return ids.Order().ToImmutableArray();
     }
 
     internal static QuestCatalog LoadDefinitions(IReadOnlyDictionary<int,string> paths, Func<int,string,StoryQuest> read)

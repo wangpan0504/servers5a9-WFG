@@ -308,13 +308,16 @@ internal static class StackableActionTests
         var expansion = StackableActionCatalog.Parse(new("[avatar inventory expansion]", [1]));
         That(expansion is { Status: StackableActionParseStatus.Parsed, Identity.ClientType: null } && expansion.Arguments!.Parameters is [1],
             "资源解析器注册不要求当前EXE分配动作号，更不要求绑定515");
-        var pending = StackableActionCatalog.Parse(new("[story book]", [123]));
+        var pending = StackableActionCatalog.Parse(new("[open guide book]", [123]));
         That(pending is { Status: StackableActionParseStatus.Parsed, Parser.Business: StackableActionBusinessStatus.Pending } &&
             pending.Declaration!.Parameters is [123] &&
             StackableActionCatalog.Parse(new("[add fatigue]", [10])).Parser?.Business == StackableActionBusinessStatus.ExistingVariants &&
             StackableActionCatalog.Parse(new("[unknown action]", [456])).Status == StackableActionParseStatus.UnknownLabel &&
             StackableActionCatalog.Parse((StackableActionDeclaration?)null).Status == StackableActionParseStatus.Absent,
             "业务待接入、已有受限业务、未知标签及不存在分别报告，原参数不因尚未实现被丢弃");
+        That(StackableActionCatalog.Parse(new("[story book]", [3108])) is
+            { Status: StackableActionParseStatus.Parsed, Identity.ClientType: 139, Parser.Business: StackableActionBusinessStatus.ExistingVariants },
+            "故事簿在统一动作注册中关联139及已接入业务，不影响其它待接入动作");
         That(StackableActionCatalog.ParseFile(new StackableFile(1, "stackable/bad.stk", null, null, null, null, null, null, [])
             { HasActionType = true }).Status == StackableActionParseStatus.InvalidDeclaration,
             "存在但无唯一合法声明的动作不是无动作");

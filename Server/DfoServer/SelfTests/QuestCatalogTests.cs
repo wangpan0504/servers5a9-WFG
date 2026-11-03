@@ -13,6 +13,12 @@ internal static class QuestCatalogTests
     {
         RunClosingTags();
         int checks = TestCheck.Count;
+        string[] bookTags = ["[story book unit]", "[sequence]", "[/sequence]", "[/story book unit]"];
+        PvfToken[] bookTokens = [new(3,0),new(3,1),new(0,3109),new(0,3108),new(3,2),new(3,3)];
+        var bookIds = QuestCatalog.ReadStoryBookQuestIds(new(bookTokens, id => bookTags[id]));
+        TestCheck.That(bookIds.SequenceEqual([3108,3109]), "故事簿章节来自资源sequence，不按play only或文件名猜测");
+        TestCheck.Reject<InvalidDataException>(() => QuestCatalog.ReadStoryBookQuestIds(new(
+            [new(3,0),new(3,1),new(0,30000),new(3,2),new(3,3)], id => bookTags[id])), "故事簿拒绝越界章节");
         var paths = new Dictionary<int,string> { [100] = "valid.qst", [101] = "missing.qst", [102] = "invalid.qst", [103] = "obsolete.qst" };
         var catalog = QuestCatalog.LoadDefinitions(paths, (id,path) => id switch
         {

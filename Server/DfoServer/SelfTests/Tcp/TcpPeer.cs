@@ -56,6 +56,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
+    public int[] CompletedStoryBooks { get; private set; } = [];
     public SkinStorageKey[] RecentSkins { get; private set; } = [];
     public byte[] KnightShieldDeckBody { get; private set; } = [];
     public ushort Id { get; internal set; }
@@ -227,6 +228,24 @@ internal sealed partial class TcpPeer : IDisposable
 
     public WirePacket Read() => ReadCore(channelNumber);
 
+    void ReadStoryBooks(byte[] body)
+    {
+        TestCheck.That(body.Length >= 4, "703故事簿必须保留u32数量");
+        uint count = U32(body);
+        TestCheck.That(count < 30000 && body.Length == 4L + count * 48L, "703原生记录宽度为48字节，不能截断或追加尾部");
+        var ids = new int[count];
+        for (int at = 0; at < ids.Length; at++)
+        {
+            int offset = 4 + at * 48;
+            TestCheck.That(body[offset] == 1 && body.AsSpan(offset + 1, 3).IndexOfAnyExcept((byte)0) < 0 &&
+                body.AsSpan(offset + 8, 40).IndexOfAnyExcept((byte)0) < 0, "完成态703不伪造未读状态和阅读者元数据");
+            ids[at] = checked((int)U32(body, offset + 4));
+        }
+        TestCheck.That(ids.All(id => id is > 0 and < 30000) && ids.Distinct().Count() == ids.Length && ids.SequenceEqual(ids.Order()),
+            "故事簿章节号合法、稳定且不重复");
+        CompletedStoryBooks = ids;
+    }
+
     // 仅显式的跨频道公开查询允许安装目标频道Actor；普通同屏及本人通知仍须匹配本连接频道。
     public WirePacket ExpectOtherPlayerActor(ushort target, byte targetChannel)
     {
@@ -275,6 +294,7 @@ internal sealed partial class TcpPeer : IDisposable
         var packet = new WirePacket(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
         if (packet is { Kind: 1, Opcode: 4, Body.Length: >= 11 } && packet.Body[0] == 1) Id = U16(packet.Body, 9);
         if (packet is { Kind: 0, Opcode: 4, Body.Length: 1 }) staminaPercent = packet.Body[0];
+        if (packet is { Kind: 0, Opcode: 703 }) ReadStoryBooks(packet.Body);
         if (packet is { Kind: 0, Opcode: 127 })
         {
             TestCheck.That(packet.Body.Length == 1 && packet.Body[0] is >= 1 and <= 5 or 100,
@@ -1543,6 +1563,7 @@ internal sealed partial class TcpPeer : IDisposable
             CompletedQuestHistory = Expect(0, 356).Body;
             TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
                 "入城21后恢复同一角色完成历史及月轮山显示标记，空历史也不省略");
+            Expect(0, 703);
             var skins = weaponSkins ?? (Owned: Array.Empty<int>(), Selected: 0);
             Expect(0, 1557, Build(w =>
             {

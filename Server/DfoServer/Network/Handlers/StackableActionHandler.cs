@@ -17,7 +17,7 @@ using DfoServer.Game.Titles;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
+internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCatalog items,QuestProjection projection,ServerLog log,
     CharacterLevelProjection? levelProjection=null,SkillLearningCatalog? skills=null,
     InventoryCreatureSkinService? skinService=null,InventoryProjection? inventoryProjection=null,
     CreatureChangeService? creatureChanges=null,LevelUpTicketHandler? levelUpTickets=null,
@@ -38,6 +38,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     {
         if (!StackableActionRequests.TryUse(packet.Body,out var request))
             return CommandResult.Unhandled;
+        if (request.Action == ActionConsumableDefinition.StoryBookAction)
+            return await UseStoryBookAsync(context, request);
         if (request.Action == 146 && guildEconomy is not null)
             return await guildEconomy.UseGiftAsync(context, request, packet.RequestSerial);
         if (request.Action == 145 && guildExperience is not null)
@@ -347,6 +349,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),"quest_ticket_active",Guard);
         await projection.RefreshAsync(context,receipt.Character,Guard, restoreCompleted: false);
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(receipt.Character),"quest_ticket_completed",Guard);
+        await projection.StoryBooksAsync(context, receipt.Character, Guard);
         return CommandResult.Handled;
     }
 

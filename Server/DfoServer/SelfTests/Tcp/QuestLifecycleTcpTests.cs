@@ -14,7 +14,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class QuestLifecycleTcpTests
+internal static partial class QuestLifecycleTcpTests
 {
     public static async Task RunStageAsync(ServerOptions options,string root,TcpTestResources r)
     {
@@ -132,8 +132,11 @@ internal static class QuestLifecycleTcpTests
     }
 
     // 原 quests 组按互不共享数据库的五段 fixture 拆分，可分片并行；旧组名 "quests" 保留为五段的别名。
-    public static Task RunAsync(ServerOptions options, string root, TcpTestResources resources) =>
-        RunPartAsync(options, root, resources, QuestPart.Lifecycle);
+    public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        await RunPartAsync(options, root, resources, QuestPart.Lifecycle);
+        await RunStoryBookAsync(options, root, resources);
+    }
     public static Task RunExtrasAsync(ServerOptions options, string root, TcpTestResources resources) =>
         RunPartAsync(options, root, resources, QuestPart.Extras);
     public static Task RunChainsAsync(ServerOptions options, string root, TcpTestResources resources) =>

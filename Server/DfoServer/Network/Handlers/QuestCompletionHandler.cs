@@ -131,6 +131,8 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
+        if (projection is not null)
+            await projection.StoryBooksAsync(context, character, Guard);
         if ((commit.GoldMailId is not null || commit.ResourceMailId is not null) && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_mail_arrived", Guard);
         if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)
