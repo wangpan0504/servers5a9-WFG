@@ -90,6 +90,24 @@ internal static class FiendwarChannelTests
         var bare = repo.Create(owner, Role("Fiend95Bare", 95) with { Inventory = InventorySnapshot.Empty });
         var weak = repo.Create(owner, Role("Fiend94", 94));
 
+        foreach (byte source in new byte[] { 27, 28, 29 })
+        foreach (byte destination in new byte[] { 30, 31 })
+        {
+            var actor = role with { Position = new(57, source, 750, 380, 4) };
+            var request = new AreaRequest(57, destination, 0, 0, 5, 57, source, 0);
+            var plan = TownTravel.Plan(actor, request, towns, cleared, fiend, fiendwarActive: true);
+            That(plan.Accepted && plan.Position is { Town: 57, Direction: 4 } point && point.Area == destination &&
+                towns.IsPosition(point, cleared), $"量子站{source}->{destination}原生默认坐标解析为目标图真实可站落点");
+            That(!TownTravel.Plan(actor, request with { PreviousArea = ushort.MaxValue }, towns, cleared, fiend,
+                fiendwarActive: true).Accepted, "量子站不能借默认坐标绕过来源地区校验");
+            if (towns.Entrance(actor.Position, new(57, destination, 0, 0), cleared) is null)
+            {
+                That(!TownTravel.Plan(actor, request, towns, cleared, fiend).Accepted &&
+                    !TownTravel.Plan(actor, request with { PathKind = 255 }, towns, cleared, fiend, fiendwarActive: true).Accepted,
+                    "无反向门的量子默认落点只供活动漩涡原生路径，非活动与未知菜单不获回退");
+            }
+        }
+
         // 22 -> 超时空之战 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门到最后防线 115/0。
         var history = new ChannelHistory();
         var session = new GameSession(repo, towns, owner, entry: fiend, channelHistory: history);

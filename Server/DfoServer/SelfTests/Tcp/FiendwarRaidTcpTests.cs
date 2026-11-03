@@ -89,6 +89,7 @@ internal static partial class FiendwarRaidTcpTests
 
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        FiendwarChannelTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         var clock = new LukeRaidClockTests.Clock();
         DatabaseSchemaTests.FiendwarUpgrade(Path.Combine(root, "fiendwar-schema"));
         DatabaseSchemaTests.RaidGuildContributionUpgrade(Path.Combine(root, "fiendwar-schema"));
