@@ -100,7 +100,7 @@ internal static class AlbertHuntTcpTests
                 "真实父3458请求借当前子3472的maze2，保持正式Boss grid");
             var map = peer.Expect(0,29).Body;
             var keys = new HashSet<ushort>();
-            int targetDeaths = 0, deaths = 0, passiveObjects = 0;
+            int targetDeaths = 0, deaths = 0, passiveObjects = 0, liveUpdates = 0;
             uint scalar = 537;
             for (int roomIndex = 0; roomIndex < Route.Length; roomIndex++)
             {
@@ -131,16 +131,18 @@ internal static class AlbertHuntTcpTests
                     if (template == 70176) scalar -= 512;
                     lastDeath = FormalDungeonTcpTests.Death(key,peer.Id,map[offset+12]);
                     peer.Send(39,lastDeath);
-                    bool notified = false;
+                    int notified = 0;
                     drain(peer,packet =>
                     {
-                        if (packet.Kind != 0 || packet.Opcode != 574) return;
-                        Bytes(packet.Body,Build(writer => { writer.Write(3u); writer.Write((ushort)13040); writer.Write(1636u); writer.Write((ushort)3458); writer.Write(2u);
-                            writer.Write((ushort)3472); writer.Write(scalar); }),"每次实际目标死亡574只推进原子任务通道，父仍等待正式交付");
-                        notified = true;
+                        That(packet is not { Kind: 0, Opcode: 574 },"实际猎杀只更新原活动对象，不用574重建父子与每日槽");
+                        if (packet is not { Kind: 1, Opcode: 33 }) return;
+                        Bytes(packet.Body,Build(writer => { writer.Write((byte)1); writer.Write((ushort)3472); writer.Write(scalar); }),
+                            "每次实际目标死亡33原位安装猎杀子完整打包通道，父与独立每日不变");
+                        notified++;
                     });
+                    liveUpdates += notified;
                     deaths++;
-                    That(notified == (scalar != previous) && Identities() == identities,
+                    That(notified == (scalar != previous ? 1 : 0) && Identities() == identities,
                         "目标到25后饱和、其余怪不减通道，死亡不换原父子接取身份");
                     Progress(scalar);
                     if (roomIndex == 1 && actorIndex == 0) Duplicate(peer,lastDeath,"同房重复65031死亡");
@@ -152,12 +154,12 @@ internal static class AlbertHuntTcpTests
                     peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
                 }
             }
-            That(deaths == 56 && targetDeaths == 34 && passiveObjects == 121 && scalar == 0 && Materials() == 2 &&
+            That(deaths == 56 && targetDeaths == 34 && passiveObjects == 121 && liveUpdates == 26 && scalar == 0 && Materials() == 2 &&
                 fixture.Query("SELECT count(*),count(DISTINCT event_id),count(DISTINCT monster_key),count(DISTINCT instance_id) FROM character_dungeon_growth_receipts WHERE character_id=$p0",created.Id)
                     is [[56L,56L,56L,1L]] &&
                 fixture.Query("SELECT monster_id,count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 GROUP BY monster_id ORDER BY monster_id",created.Id)
                     is [[63512L,3L],[64039L,4L],[65027L,8L],[65028L,6L],[65031L,34L],[70176L,1L]],
-                "全部56真实死亡各提交一次，34只目标不下溢，121普通物件不伪造怪物死亡或提前发碎片");
+                "同一连接未换频道即收到25次目标及Boss清零33；56死亡各提交一次，34只目标不下溢，普通物件不伪造死亡或提前发碎片");
             Duplicate(peer,lastDeath,"Boss完成后迟到死亡");
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]);
             peer.Expect(1,34,Build(writer => { writer.Write((byte)1); writer.Write((ushort)3472); writer.Write((byte)2);
@@ -166,16 +168,16 @@ internal static class AlbertHuntTcpTests
             var balance = peer.Expect(0,14).Body;
             That(balance.Length == 126 && balance[0] == 0 && U16(balance,1) == 1 && U16(balance,3) == rewardSlot &&
                 U32(balance,5) == 10164800 && U32(balance,9) == 4,"猎杀子34之后以完整Main行投影已有2加奖励2的真实碎片4");
-            peer.Expect(0,574,Convert.FromHexString("02000000F03264060000820D01000000")); peer.Expect(0,21);
+            peer.Expect(1,33,Convert.FromHexString("01820D01000000")); peer.Expect(0,21);
             That(peer.Expect(0,356).Body[4+3472] == 1,"正式交付后才发布3472完成位"); peer.Barrier();
             Delivered();
             string delivered = State();
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
             That(State() == delivered,"重复猎杀子34不重复发碎片或关闭父任务");
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[1,145,13,0,0,0,0,0]);
-            peer.Expect(0,574,Convert.FromHexString("03000000F03264060000820D00000000910D00000000"));
+            peer.Expect(1,33,[1,130,13,0,0,0,0]);
             peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
-            That(Materials() == 4 && Completions() is [[1L]],"Boss及猎杀奖励后立即接真实末子，4/3只归零父子条件、不自动消费或领奖");
+            That(Materials() == 4 && Completions() is [[1L]],"同一连接接真实末子后父条件立即由33归零，保持4/3材料、不自动消费或领奖");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             peer.Expect(0,24); drain(peer,null);
             peer.Send(3,[0]); peer.Expect(1,3,[1]); peer.Closed();

@@ -1610,6 +1610,7 @@ internal sealed partial class GameSession
         }
         // 存储异常/结果不明保留同一准备；原key重试只读已提交receipt，不重发资产。
         DungeonPickupCommit commit;
+        var previousQuests = Selected.ActiveMainQuests;
         try { commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!, pieces, items); }
         catch (InventoryQualificationExpiredException)
         {
@@ -1618,7 +1619,8 @@ internal sealed partial class GameSession
         }
         if (!dungeon.Ground.ConfirmPickup(prepared)) throw new InvalidOperationException("已提交拾取不能确认原准备");
         Selected = commit.Character;
-        return new FormalDungeonPickupResult(DungeonRunOutcome.Accepted, FormalReceipt(), original, commit);
+        return new FormalDungeonPickupResult(DungeonRunOutcome.Accepted, FormalReceipt(), original, commit)
+        { PreviousQuests = previousQuests };
     });
 
     public TownTravelReceipt? ReturnFromFormalDungeon() => ReturnFromFormalDungeonCore(false);

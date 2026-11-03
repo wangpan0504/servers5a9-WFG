@@ -247,7 +247,11 @@ internal static partial class FormalDungeonTcpTests
                                 Bytes(ReadUntil(38).Body,[(byte)tail,(byte)(tail>>8),0,0,0,0,255,0,0],
                                     "无尽清首房尾怪39获得完整退场38后才能请求第二房");
                                 if (questId == 5651)
-                                    peer.Barrier(packet => That(ObserveQuestNotification(packet), "清房死亡尾包仅包含已提交的任务材料和进度"));
+                                {
+                                    That(ObserveQuestNotification(peer.Expect(0,14)),"清房死亡先发布已提交的任务材料");
+                                    That(ObserveQuestNotification(peer.Expect(1,33)),"清房死亡再原位发布5651归零");
+                                    peer.Barrier();
+                                }
                                 break;
                             }
                             byte[] deaths = new byte[1 + actors * 2];
@@ -472,19 +476,16 @@ internal static partial class FormalDungeonTcpTests
 
             bool ObserveQuestNotification(WirePacket packet)
             {
-                if (packet is { Kind: 0, Opcode: (ushort)NotiPacketType.ACCEPTED_QUEST })
+                if (packet is { Kind: 1, Opcode: 33 })
                 {
                     That(++huntNotifications == 1 && (id == 11007 || questId == 5651),
-                        "祭坛只在已接任务真实目标条件改变时发送一次活动任务通知");
+                        "祭坛只在已接任务真实目标条件改变时发送一次原位33");
                     var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id)
                         .Select(row => new ActiveMainQuest(Convert.ToByte(row[0]), Convert.ToUInt16(row[1]), Convert.ToUInt32(row[2]))).ToArray();
                     That(active.Single(row => row.QuestId == questId).ConditionState == 0,
                         "祭坛活动任务通知对应数据库已提交目标条件");
-                    Bytes(packet.Body, Build(writer =>
-                    {
-                        writer.Write(active.Length);
-                        foreach (var row in active) { writer.Write(row.QuestId); writer.Write(row.ConditionState); }
-                    }), "祭坛任务通知使用持久归零的完整活动任务列表");
+                    byte[] expected=[1,(byte)questId,(byte)(questId>>8),0,0,0,0];
+                    Bytes(packet.Body,expected,"祭坛原位33只发布目标任务完整零条件，不重建无关活动对象");
                     return true;
                 }
                 if (questId == 5651 && packet is { Kind: 0, Opcode: 14 } && packet.Body.Length == 126 && U32(packet.Body, 5) == 4363)

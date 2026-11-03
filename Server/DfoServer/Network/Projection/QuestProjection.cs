@@ -22,20 +22,32 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         ? context.NotifyNotice(ServerNoticeDisplay.Chat, HellTerrainBypassText, "hell_quest_terrain_bypassed", guard)
         : Task.CompletedTask;
 
-    public async Task PublishDeathConditionsAsync(GameConnectionContext context, Character character,
-        IReadOnlyList<ActiveMainQuest> changed, Func<bool> guard)
+    public static async Task PublishConditionsAsync(GameConnectionContext context,
+        IReadOnlyList<ActiveMainQuest> changed, Func<bool> guard, string action)
     {
-        if (changed.Count == 0) return;
-        if (changed.Any(row => quests.TryGet(row.QuestId,out var quest) && QuestRelationProgress.ClearDialogueChild(quest,quests)))
+        // 574销毁并重建活动对象，不能执行原活动对象的达成回调；条件变化统一用33原位安装。
+        foreach (var row in changed)
+            await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, QuestPackets.ClearTrigger(row.QuestId,row.ConditionState),
+                action,guard);
+    }
+
+    public static async Task ProgressAsync(GameConnectionContext context, IReadOnlyList<ActiveMainQuest> previous,
+        Character character, Func<bool> guard, string action, bool restoreCompleted = true)
+    {
+        var active = character.ActiveMainQuests;
+        bool sameAcceptances = previous.Count == active.Length && active.All(row => previous.Any(old =>
+            old.Slot == row.Slot && old.QuestId == row.QuestId && old.AcceptanceId == row.AcceptanceId));
+        if (sameAcceptances)
         {
-            // 574重建活动对象，会提前启动末子/父对话；33仅原位安装真实条件，结算界面仍按原生时机结束。
-            foreach (var row in changed)
-                await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, QuestPackets.ClearTrigger(row.QuestId,row.ConditionState),
-                    "quest_dungeon_condition",guard);
+            await PublishConditionsAsync(context,active.Where(row => previous.Any(old =>
+                old.Slot == row.Slot && old.AcceptanceId == row.AcceptanceId && old.QuestId == row.QuestId && old.ConditionState != row.ConditionState)).ToArray(),
+                guard,action);
+            return;
         }
-        else
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),
-                "formal_hunt_conditions",guard);
+        // 接取槽增删仍需完整结构；空574会清完成集合，随后恢复同一提交的历史。
+        await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(active),action,guard);
+        if (restoreCompleted)
+            await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(character),action + "_history",guard);
     }
 
     public Task CreatureChangedAsync(GameConnectionContext context, Character before, Character after, Func<bool> canSend) =>

@@ -1463,7 +1463,9 @@ internal static class MetroQuestEntryTcpTests
                         if (packet.Opcode == 31) { Bytes(packet.Body, [], "阵风链结算许可保持空31"); enabled++; }
                         if (packet.Opcode == 115) bossChecks++;
                         if (packet.Opcode == 14) inventoryNotices++;
-                        if (packet.Opcode == 574) conditionNotices++;
+                        if (packet.Kind == 1 && packet.Opcode == 33 && packet.Body.Length == 7 &&
+                            packet.Body[0] == 1 && U16(packet.Body,1) == scenario.Quest && U32(packet.Body,3) == 0)
+                            conditionNotices++;
                     });
                     void RejectFinish()
                     {

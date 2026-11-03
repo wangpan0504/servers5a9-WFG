@@ -132,7 +132,7 @@ internal static class ExpertJobActionTcpTests
             peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); ReadOpen(peer);
             SendEnchant(peer, enchanterId);
             Bytes(peer.Expect(0, 538).Body[22..], [3, 0, 1, 2], "本人附魔升至Lv7同步店铺新增资格");
-            peer.Expect(0, 14); peer.Expect(0, 574); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
+            peer.Expect(0, 14); peer.Expect(1,33,Convert.FromHexString("01012B00000000")); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
             peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(7u); w.Write((uint)recipe.Rarity); }));
             peer.Barrier();
             peer.Send(599, Build(w => w.Write(enchanterId)));
@@ -186,7 +186,7 @@ internal static class ExpertJobActionTcpTests
                 U32(ack, ack.Length - 8) == 999 && U32(ack, ack.Length - 4) == endurance, "235完整源头、实际产物数组、绝对金币与耐久尾部");
             That(Enumerable.Range(0, count).Any(i => U32(ack, 9 + 10 * i) == 2610045 && U32(ack, 13 + 10 * i) == 1),
                 "自用零件在已提交的ACK产物中以增量1出现");
-            if (tutorial) peer.Expect(0, 574);
+            if (tutorial) peer.Expect(1,33,Convert.FromHexString("01252700000000"));
             peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(endurance));
             peer.Barrier();
         }

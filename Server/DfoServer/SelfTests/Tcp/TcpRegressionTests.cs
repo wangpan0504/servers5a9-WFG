@@ -71,6 +71,7 @@ internal static class TcpRegressionTests
             await QuestCompletionPublicationTests.RunStageAsync(resources);
             await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
         }),
+        ("quest-live-progress", QuestLifecycleTcpTests.RunLiveProgressAsync),
         ("settings-snapshot-rules", (_, _, _) => { ClientSettingsSnapshotsTests.Run(); return Task.CompletedTask; }),
         ("equipment-power-rules", (_, _, _) => { EquipmentPowerScoreTests.RunCore(); return Task.CompletedTask; }),
         ("frame-crc-rules", (_, _, _) => { FrameCrcTests.Run(); return Task.CompletedTask; }),

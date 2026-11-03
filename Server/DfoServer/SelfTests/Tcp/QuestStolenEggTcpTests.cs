@@ -44,7 +44,9 @@ internal static class QuestStolenEggTcpTests
                 That(peer.Id == created.Id,"6032 TCP选角对应本条独立角色");
                 var map = FormalDungeonTcpTests.Enter(peer,6032,291100319,information =>
                     That(information[8] == 3 && information[9] == 0,"6032 NOTI28保留基础Boss坐标3,0"),
-                    requestQuestId:ordinary ? (ushort)0 : (ushort)6032);
+                    requestQuestId:ordinary ? (ushort)0 : (ushort)6032,
+                    daybreakRemaining:resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.Any(option => option.DungeonId == 530)
+                        ? (byte)2 : null);
                 string acceptance = (string)fixture.Query(
                     "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=6032",peer.Id)[0][0];
                 int enabled = 0,bossChecks = 0,deaths = 0,navigationPackets = 0;

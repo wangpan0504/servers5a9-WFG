@@ -501,9 +501,7 @@ internal static partial class FormalDungeonTcpTests
                 byte[] packet = peer.Expect(0, 37).Body;
                 if (cleared)
                 {
-                    byte[] conditions = peer.Expect(0,574).Body;
-                    That(conditions.Length == 10 && U32(conditions,0) == 1 && U16(conditions,4) == 3145 && U32(conditions,6) == 0,
-                        "真实清图和猎杀同样投影已提交活动条件，不给3145省略通知");
+                    peer.Expect(1,33,Convert.FromHexString("01490C00000000"));
                 }
                 if (packet[0] != projectedLevel)
                 {
@@ -1582,13 +1580,14 @@ internal static partial class FormalDungeonTcpTests
         peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
     }
     internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null,
-        ushort? requestQuestId = null, bool? incompleteHellQuest = null, Action? beforeMap = null, uint eventValue = 0)
+        ushort? requestQuestId = null, bool? incompleteHellQuest = null, Action? beforeMap = null, uint eventValue = 0,
+        byte? daybreakRemaining = null)
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
         if (accepted[0] == 1) RefreshedQuests(peer);
         else Bytes(accepted,[0,18,0],"重复接取通过通用错误响应，不改变已有副本fixture");
-        SelectMap(peer, incompleteHellQuest: incompleteHellQuest);
+        SelectMap(peer, incompleteHellQuest: incompleteHellQuest, daybreakRemaining: daybreakRemaining);
         var selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requestQuestId ?? questId);
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(21),eventValue);
@@ -1742,11 +1741,24 @@ internal static partial class FormalDungeonTcpTests
         map.HellQuests.Any(quest => !character.CompletedQuests.Contains(quest) && !character.AccountCompletedQuests.Contains(quest));
 
     // 亡者峡谷世界地图同时含悲叹之塔入口；楼层字段随未完成深渊任务名单平移。
-    static void SelectMap(TcpPeer peer, ushort griefLayer = 0, bool? incompleteHellQuest = null)
+    static void SelectMap(TcpPeer peer, ushort griefLayer = 0, bool? incompleteHellQuest = null, byte? daybreakRemaining = null)
     {
         peer.Send(15, new byte[4]);
         peer.Expect(1, 15, [1]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+        if (daybreakRemaining is { } remaining)
+        {
+            // 哈林共享选图先同步黎明次数；独立核对完整映射及成对550，不跳过未知通知。
+            That(peer.AssaultDailyInfo.Length == 5,"黎明选图沿已初始化的强袭日状态");
+            peer.Expect(0,1536,peer.AssaultDailyInfo);
+            var daily = new byte[268];
+            BinaryPrimitives.WriteUInt32LittleEndian(daily,remaining);
+            BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(4),260);
+            BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(12),530);
+            BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(16),2);
+            peer.Expect(0,1545,daily);
+            peer.Expect(0,550,[0x12,0x02,0,0,remaining,0]);
+        }
         byte[] notice = peer.SelectionNoticeBody(griefLayer: griefLayer, incompleteHellQuest: incompleteHellQuest);
         peer.Expect(0, 27, notice);
         That(griefLayer == 0 ? peer.GriefTowerClearInfo.Length == 0 : peer.GriefTowerClearInfo is [0x34, _],

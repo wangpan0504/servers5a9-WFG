@@ -5,6 +5,7 @@ using DfoServer.Game.Session;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -58,8 +59,9 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
                     InventoryPackets.Delta(character.Inventory, InventoryListType.Main, [.. receipt.QuestDropSlots]),
                     "formal_altar_quest_items", () => context.Session.CanPublishDungeonAltar(receipt));
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(character.ActiveMainQuests),
-                "formal_altar_quest_progress",()=>context.Session.CanPublishDungeonAltar(receipt));
+            if (receipt.PreviousQuests is { } previous)
+                await QuestProjection.ProgressAsync(context,previous,character,
+                    ()=>context.Session.CanPublishDungeonAltar(receipt),"formal_altar_quest_progress");
         }
         if (receipt.BattlePassCharacter is not null && receipt.BattlePassMissionClock is {} clock)
         {

@@ -79,6 +79,7 @@ internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, Form
     DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null)
 {
     public bool CapacityRejected { get; init; }
+    public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
 }
 // 结果页杀怪经验明细的一条：客户端用对象键认回自己刷出的演员，再按怪物类型归并显示。
 // Experience 是该怪本次的基础经验，不含任何百分比加成。

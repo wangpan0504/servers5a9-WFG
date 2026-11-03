@@ -159,8 +159,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             InventoryPackets.Delta(receipt.Character.Inventory, InventoryListType.Main, [new(InventoryListType.Main, 1)]),
             "formal_revive_coin_balance", Guard);
         if (receipt.PreviousQuests is { } old && !old.SequenceEqual(receipt.Character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "formal_revive_quest_conditions", Guard);
+            await QuestProjection.ProgressAsync(context,old,receipt.Character,Guard,"formal_revive_quest_conditions");
         if (context.Altar is not null && context.Session.ResumeDungeonAltar() is { } resumed)
             await context.Altar.WakeAsync(resumed);
         return CommandResult.Handled;
@@ -522,8 +521,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(progress.Character.Inventory,
                         InventoryListType.Main,[.. progress.Commit.Plan.Inventory.ChangedSlots]),"formal_passive_quest_items",
                         () => context.Session.CanPublishQuestLifecycle(progress));
-                await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(progress.Character.ActiveMainQuests),
-                    "formal_passive_quest_conditions",() => context.Session.CanPublishQuestLifecycle(progress));
+                await QuestProjection.ProgressAsync(context,progress.Commit.Plan.Expected.ActiveMainQuests,progress.Character,
+                    () => context.Session.CanPublishQuestLifecycle(progress),"formal_passive_quest_conditions");
                 await EnableSettlementAsync(context);
             }
             return CommandResult.Handled;
@@ -730,10 +729,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)).ToArray();
             var hope = changed.SingleOrDefault(row => context.Session.IsOperationHopeQuest(row.QuestId));
             var ordinary = changed.Where(row => row != hope).ToArray();
-            if (quests is not null)
-                await quests.PublishDeathConditionsAsync(context,receipt.Character,ordinary,Guard);
-            else if (ordinary.Length != 0)
-                await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
+            await QuestProjection.PublishConditionsAsync(context,ordinary,Guard,"formal_hunt_conditions");
             // 574先清空再重新接取，不能替代33的原位进度/完成回调；队伍成员也复用本死亡投影。
             if (hope is not null)
                 await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, QuestPackets.ClearTrigger(hope.QuestId, hope.ConditionState),
@@ -751,7 +747,6 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (items is null || pieces is null || !DungeonPickupRequests.TryParseOrdinary(request.Body, out var parsed))
             return CommandResult.Unhandled;
         if (context.Session.PartyDungeon is not null) return await PartyPickupAsync(context, parsed.GroundObjectKey);
-        var previousQuests = context.Owner.Execute(() => context.Session.Selected?.ActiveMainQuests);
         var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces, goldLimits);
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt || result.Commit is not { } commit)
         {
@@ -785,8 +780,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 destination.List, [destination]), "formal_pickup_inventory", Guard);
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
-        if (previousQuests is not null && !previousQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_pickup_quest_conditions", Guard);
+        if (result.PreviousQuests is { } previousQuests)
+            await QuestProjection.ProgressAsync(context,previousQuests,receipt.Character,Guard,"formal_pickup_quest_conditions");
         return CommandResult.Handled;
     }
 

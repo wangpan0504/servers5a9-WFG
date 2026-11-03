@@ -139,8 +139,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (CharacterExperienceNotice.ShouldPublish(previous.Level))
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
         if (!previous.ActiveMainQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "formal_clear_quest_conditions",Guard);
+            await QuestProjection.ProgressAsync(context,previous.ActiveMainQuests,receipt.Character,Guard,"formal_clear_quest_conditions");
         if (previous.Level == receipt.Character.Level && SkillPackets.BindingsChanged(previous.Learning, receipt.Character.Learning))
             await SkillProjection.PublishAsync(context, receipt.Character, "formal_clear_skills", "formal_clear_combo", Guard);
         if (result.Inventory is null)
