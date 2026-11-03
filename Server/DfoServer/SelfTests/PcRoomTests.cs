@@ -87,7 +87,7 @@ internal static class PcRoomTests
         var recovery = session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 490007908);
         var fatigueRecovery = session.Selected.Inventory.Items.Single(item => item.Core.ItemId == 490007909);
         var consumables = new InventoryConsumableUseService(items.RecoveryConsumables, clock);
-        var fatigueConsumables = new FatigueConsumableService(items.Items, resources.Towns, clock);
+        var fatigueConsumables = new FatigueConsumableService(items.Items, clock);
         var burning = session.ChangeFatigueAcceleration(true)!;
         That(burning.Active && session.CanPublishFatigueAcceleration(burning, requireCurrentState: true),
             "有效网吧环境可保存并发布燃烧选择");

@@ -5,21 +5,61 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
+using DfoServer.Game.Titles;
 
 namespace DfoServer.Game.Quests;
 
 internal sealed record QuestEffectPlan(Character Expected,InventoryPlan Inventory,byte EquipmentSlots,byte GrowType,
     CharacterLearningState Learning)
 {
+    public TitleAchievementPlan? Titles { get; init; }
     public bool Changed => Inventory.Changed || EquipmentSlots!=Expected.EquipmentSlotFlags || GrowType!=Expected.GrowType ||
-        !ReferenceEquals(Learning,Expected.Learning);
+        !ReferenceEquals(Learning,Expected.Learning) || Titles?.Changed == true;
 }
 
 // 跳过只兑现任务道具和永久角色状态，不授予普通装备、经验、金币或选择奖励。
 internal sealed class QuestSkipEffects(ItemCatalog items,SkillLearningCatalog skills,
-    GoldLimitCatalog goldLimits,EpicPieceCatalog pieces)
+    GoldLimitCatalog goldLimits,EpicPieceCatalog pieces,TitleAchievementService? titles=null)
 {
+    public TitleCatalog? TitleCatalog => titles?.Catalog;
     public byte ProfessionTarget(Character character,StoryQuest quest) => QuestProfessionReward.Target(character,quest,skills);
+
+    public QuestEffectPlan PrepareAchievementTitles(Character expected,IEnumerable<StoryQuest> scope,InventoryPlan inventory,DateTimeOffset now,
+        IReadOnlyCollection<int> generalQuestIds)
+    {
+        var rewards=new List<InventoryReward>();
+        foreach (var quest in scope)
+        {
+            if (!QuestQuickClearPlan.AchievementTitle(quest)) throw new InvalidDataException("成就券不能兑现范围外任务");
+            foreach (var reward in QuestFixedRewardDefinition.Parse(quest,allowGold:true).ForJob(expected.Job,expected.GrowType))
+            {
+                var template=items.Get(reward.ItemId);
+                if (template.Kind!=ItemKind.Equipment || template.EquipmentSlot!=13)
+                    throw new NotSupportedException("[title]奖励必须引用称号装备: "+quest.Id);
+                rewards.Add(new(reward.ItemId,reward.Count));
+            }
+        }
+        var after=inventory.After;
+        if (rewards.Count!=0)
+        {
+            var grant=InventoryRewardGrantService.TryGrantBatch(expected with { Inventory=after },rewards,items,goldLimits,pieces,now);
+            if (!grant.Accepted) throw new InvalidDataException("称号奖励不能整批放入背包，未消费成就券");
+            after=grant.Plan!.After;
+        }
+        TitleAchievementPlan? titlePlan=null;
+        if (generalQuestIds.Count!=0)
+        {
+            var result=(titles ?? throw new NotSupportedException("general称号发放资源未装配"))
+                .CompleteGeneral(expected with { Inventory=after },generalQuestIds,now);
+            if (!result.Accepted || result.Plan is null) throw new InvalidDataException("general称号不能整组发放，未消费成就券");
+            titlePlan=result.Plan;
+            after=titlePlan.Inventory.After;
+        }
+        long? deadline=after.Items.Where(item=>item.Uid==0 && item.ExpireTime>0).Select(item=>(long?)item.ExpireTime).Min();
+        var combined=new InventoryPlan(expected.Inventory,after,"achievement_quest_ticket",new(expected,deadline));
+        return new(expected,combined,expected.EquipmentSlotFlags,expected.GrowType,expected.Learning)
+            { Titles=titlePlan is null ? null : titlePlan with { Before=expected,Inventory=combined } };
+    }
 
     public QuestEffectPlan Prepare(Character expected,IEnumerable<StoryQuest> scope,InventoryPlan inventory,
         byte slots,byte grow,CharacterLearningState learning,
@@ -41,6 +81,11 @@ internal sealed class QuestSkipEffects(ItemCatalog items,SkillLearningCatalog sk
         }
         if (profession)
             current = current with { Learning=QuestProfessionReward.Prepare(current,current.GrowType,current.Level,current.Learning,skills,DateTimeOffset.UtcNow) };
+        foreach (var quest in definitions.Where(quest => characterState && quest.RewardType=="[tp]"))
+        {
+            if (!QuestCharacterReward.TryTp(quest,out ushort amount)) throw new InvalidDataException("指定券TP奖励形状无效: "+quest.Id);
+            current=current with { Learning=QuestCharacterReward.AddTp(current.Learning,amount) };
+        }
         long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var held=current.Inventory.Items.Where(item=>item.Position.List==InventoryListType.Main && item.Core.Kind==ItemKind.Quest && !item.IsExpired(now))
             .GroupBy(item=>item.Core.ItemId).ToDictionary(group=>group.Key,group=>group.Sum(item=>(long)item.Core.Count));

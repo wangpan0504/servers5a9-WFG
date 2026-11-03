@@ -12,6 +12,7 @@ internal sealed record LevelUpTicketDefinition(int TemplateId, int MinimumLevel,
     public int Levels { get; init; } = 1;
     public int TargetMaximum { get; init; } = CharacterGrowthCatalog.MaximumSupportedLevel;
     public bool SeriaRoomOnly { get; init; }
+    public ImmutableArray<string> Places { get; init; } = [];
     public ImmutableArray<LevelUpAmountWeight> Rolls { get; init; } = [];
     public byte TargetLevel(byte current, int? gainedLevels = null) => checked((byte)Math.Min(TargetMaximum, current + (gainedLevels ?? Levels)));
     public bool AllowsRoll(int levels) => Rolls.IsEmpty ? levels == Levels : Rolls.Any(row => row.Levels == levels && row.Weight > 0);
@@ -36,8 +37,6 @@ internal sealed record LevelUpTicketDefinition(int TemplateId, int MinimumLevel,
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && (raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-                raw.DeclaredActionUsablePlaces.Any(place => place is not ("[village]" or "[seria room]"))) ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null) return null;
         var rolls = ImmutableArray.CreateBuilder<LevelUpAmountWeight>();
         if (raw.HasBoosterInfo)
@@ -52,9 +51,10 @@ internal sealed record LevelUpTicketDefinition(int TemplateId, int MinimumLevel,
             if (rolls.Sum(row => (long)row.Weight) <= 0) return null;
         }
         return new(template.Id, minimum, raw.DeclaredMaximumLevel ?? int.MaxValue, template.Jobs,
-            raw.HasActionUsablePlace, raw.DeclaredCoolTime ?? 0)
+            StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces), raw.DeclaredCoolTime ?? 0)
         { Levels = raw.DeclaredLevelUpRange.Value, TargetMaximum = action.Parameters.Count == 0 ? CharacterGrowthCatalog.MaximumSupportedLevel : action.Parameters[0],
-            SeriaRoomOnly = raw.DeclaredActionUsablePlaces is ["[seria room]"], Rolls = rolls.ToImmutable() };
+            SeriaRoomOnly = StackableUsePlaces.SeriaRoomOnly(raw.DeclaredActionUsablePlaces),
+            Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [], Rolls = rolls.ToImmutable() };
     }
 
     public bool Allows(byte level, byte job) => level >= MinimumLevel && level <= MaximumLevel && job < 16 &&

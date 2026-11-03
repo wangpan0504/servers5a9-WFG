@@ -8,7 +8,7 @@ internal sealed record FatigueConsumableDefinition(ItemTemplate Item, int Amount
 {
     public const uint Action = 58;
     public bool AllowsPlace(string place, bool inAssault) =>
-        !(inAssault && Places.Contains("[dont use assult]")) && (Places.Contains("[all]") || Places.Contains(place));
+        !(inAssault && Places.Contains("[dont use assult]")) && StackableUsePlaces.Allows(Places, place);
 
     public static FatigueConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {
@@ -20,9 +20,6 @@ internal sealed record FatigueConsumableDefinition(ItemTemplate Item, int Amount
             !raw.HasUseActionPacket || raw.DeclaredUseActionPacket != 1 ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces?.Any(place => place is not ("[village]" or "[seria room]" or "[dungeon]" or "[all]" or "[dont use assult]")) == true ||
-            file.DeclaredFields.Contains("action usable server type") ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null or < 0 ||
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null ||
@@ -33,7 +30,7 @@ internal sealed record FatigueConsumableDefinition(ItemTemplate Item, int Amount
                 "usable first growtype" or "dont change grow type" or "impossible jobs"))
             return null;
         return new(item, action.Parameters[0], file.CoolTime ?? 0, file.CoolGroup ?? -item.Id,
-            file.CooltimeMaintenance ?? 0, raw.HasActionUsablePlace ? raw.DeclaredActionUsablePlaces!.ToImmutableArray() : ["[all]"],
+            file.CooltimeMaintenance ?? 0, raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [],
             checked((byte)(file.TotalUsableCount ?? 0)));
     }
 }

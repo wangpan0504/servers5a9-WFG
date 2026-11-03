@@ -42,7 +42,10 @@ internal sealed class AmplificationHandler(InventoryAmplificationService service
                     invalidResource = true;
                     return InventoryResult.Reject(InventoryAmplificationService.Rejection);
                 }
-            }, InventoryAmplificationService.Rejection);
+            }, InventoryAmplificationService.Rejection,
+                effectItem: request.MaterialSlot >= 0 ? new(InventoryListType.Main, request.MaterialSlot) : null,
+                useTarget: packet.Opcode == (ushort)CmdPacketType.INVEST_ITEM_AMPLIFY_OPTION
+                    ? new(InventoryListType.Main, request.TargetSlot) : null);
         // 只在锁外规划内转换资源错误；数据库提交异常沿原链路关闭连接，不伪装为业务失败。
         reason = request is null ? "malformed" : invalidResource ? "resource_invalid" : result.Accepted ? "committed" : "rejected";
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) :

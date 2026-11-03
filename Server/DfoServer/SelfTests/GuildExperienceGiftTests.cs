@@ -7,9 +7,11 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Guilds;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
 using PvfLib;
+using System.Text.Json;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -29,19 +31,83 @@ internal static class GuildExperienceGiftTests
         That(GuildExperienceGiftDefinition.Parse(raw, template) is { Amount: 500 } && GuildExperienceGiftDefinition.Action == 145,
             "公会经验书145只接受本版声明类型1与正经验值");
         That(GuildExperienceGiftDefinition.Parse(raw with { ActionDeclaration = new("[increase guild exp fund]", [0, 500]) }, template) is null &&
-            GuildExperienceGiftDefinition.Parse(raw with { ActionDeclaration = new("[add guildmileage]", [500]) }, template) is null &&
-            GuildExperienceGiftDefinition.Parse(raw with { HasActionUsablePlace = false }, template) is null,
-            "未证基金类型、其它服145积分及缺场所资源不混入公会经验消费");
+            GuildExperienceGiftDefinition.Parse(raw with { ActionDeclaration = new("[add guildmileage]", [500]) }, template) is null,
+            "未证基金类型及其它服145积分不混入公会经验消费");
+        That(GuildExperienceGiftDefinition.Parse(raw with { HasActionUsablePlace = false, DeclaredActionUsablePlaces = null }, template) is not null,
+            "缺省地点不改变公会经验券身份");
         Repository(template);
         Console.WriteLine($"PASS {Count - before} guild experience item assertions");
     }
-    public static void RunResources(ItemCatalog items)
+    public static void RunResources(PvfArchive archive, TownCatalog towns, ItemResources resources)
     {
         int before = Count;
+        var items = resources.Items;
         That(items.GuildExperienceGift(10006240) is { Amount: 500 } && items.GuildExperienceGift(490000177) is { Amount: 2000 },
             "纯净资源两种实际公会经验书按500/2000经验接入");
         That(items.GuildExperienceGift(1200) is null, "公会据点战积分物品1200不是可用经验书");
+        SessionQualifications(towns, resources, new GuildParameterCatalog(archive));
         Console.WriteLine($"PASS {Count - before} guild experience item resource assertions");
+    }
+
+    static void SessionQualifications(TownCatalog towns, ItemResources resources, GuildParameterCatalog parameters)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "guild-gift-qualification-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(path);
+            using var owner = new AccountOwners().Acquire("guild-gift-qualification", static () => { });
+            var book = new InventorySlot(InventoryListType.Main, 68);
+            var bag = new InventorySlot(InventoryListType.Main, 69);
+            var role = repository.Create(owner, new("GiftGate", towns.Room, towns.InitialReturn)
+            {
+                Level = 60,
+                Inventory = new([new(0, book, new(10006240, ItemKind.Consumable, 2)),
+                    new(0, bag, new(10153530, ItemKind.Consumable, 2))])
+            });
+            using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
+            {
+                db.Open(); using var command = db.CreateCommand();
+                command.CommandText = $"""
+                    INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix)
+                    VALUES(1,'资格公会','gift-qualification',{role.Id},1600000000);
+                    INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(1,{role.Id},1,1600000000);
+                    """;
+                command.ExecuteNonQuery();
+            }
+            using var invitations = new GuildInvitations();
+            var management = new GuildManagementService(repository, new(), invitations, new());
+            var experience = new GuildExperienceService(repository, resources.Items, parameters, management);
+            var mileage = new GuildEconomyService(repository, resources.GuildContents, resources.Items, management);
+            string Snapshot() => JsonSerializer.Serialize(repository.List(owner)) +
+                JsonSerializer.Serialize(repository.ReadGuildManagement(owner, role.Id)) +
+                JsonSerializer.Serialize(repository.ReadGuildEconomy(owner, role.Id, experience.Now));
+            var pvp = new GameSession(repository, towns, owner, entry: new(new(2, 55), 13, "[pvp]"), items: resources.Items);
+            pvp.Select(role.Slot); pvp.MarkReady(); pvp.RefreshGuildManagement(repository, 1);
+            var actor = pvp.CaptureGuildManagement()!;
+            That(experience.Prepare(actor, pvp.Selected!, book).Source.Core.ItemId == 10006240 &&
+                mileage.PrepareGift(pvp.Selected!, bag).Source.Core.ItemId == 10153530,
+                "两种真实公会道具可规划完整扣源，资产服务不另解释当前频道地点");
+            string before = Snapshot();
+            That(pvp.UseGuildExperienceGift(book, experience, 1.ToString("x64")) is { Commit.Error: 19, CloseConnection: false } &&
+                pvp.UseGuildMileageGift(bag, mileage, 2.ToString("x64")) is { Commit.Error: 19, CloseConnection: false } &&
+                Snapshot() == before,
+                "同为Town阶段的决斗城镇由统一Session门禁拒绝village公会道具，不扣源、不增加公会资产、不踢线");
+            pvp.End();
+            var town = new GameSession(repository, towns, owner, items: resources.Items);
+            town.Select(role.Slot); town.MarkReady(); town.RefreshGuildManagement(repository, 1);
+            That(town.UseGuildExperienceGift(book, experience, 1.ToString("x64")).Commit.Success &&
+                town.UseGuildMileageGift(bag, mileage, 2.ToString("x64")).Commit.Success &&
+                town.Selected!.Inventory.Find(book)?.Core.Count == 1 && town.Selected.Inventory.Find(bag)?.Core.Count == 1,
+                "同一真实源回普通城镇后各正常消费一件，地点拒绝不占用成功请求身份");
+            before = Snapshot();
+            That(town.UseGuildExperienceGift(book, experience, 1.ToString("x64")).Commit.Replayed &&
+                town.UseGuildMileageGift(bag, mileage, 2.ToString("x64")).Commit.Replayed && Snapshot() == before,
+                "统一资格接入后保留原成功回执重放，不重复扣源或发公会资产");
+            town.End();
+        }
+        finally { SqliteConnection.ClearAllPools(); TestFiles.DeleteDirectory(root, true); }
     }
     static void Repository(ItemTemplate template)
     {

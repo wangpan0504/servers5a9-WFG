@@ -12,6 +12,7 @@ internal sealed partial class GameSession
         if (owner.Execute(() => pendingConsumableUse is not null))
             return new(ConsumableUseOutcome.CloseConnection, "commit-unknown", Guard: capture.Guard);
         if (blocked || capture.Character is not { } expected) return Reject("invalid-state");
+        if (!CanUseStackableItem(expected, expected.Inventory.Find(slot)?.Core.ItemId ?? 0)) return Reject("usable-qualification");
         LegacyStatusConsumablePlan plan;
         try { plan = service.Prepare(expected, slot); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
@@ -24,7 +25,7 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed", Guard: capture.Guard);
             if (!CanUseDungeonItem(plan.Source.Core.ItemId)) return Reject("grief-item-not-allowed-or-exhausted");
             var now = service.Clock.GetUtcNow();
-            if (plan.Definition.VillageOnly && Phase != SessionPhase.Town) return Reject("village-only");
+            if (!CanUseStackableItem(expected, plan.Source.Core.ItemId, places: plan.Definition.Places)) return Reject("usable-qualification");
             if (usedConsumables.TryGetValue(plan.Definition.CoolGroup, out var previous) && previous.EnforceCooldown &&
                 previous.Clock.GetElapsedTime(previous.Timestamp).TotalMilliseconds < plan.Definition.CoolTime)
                 return Reject("cooldown");

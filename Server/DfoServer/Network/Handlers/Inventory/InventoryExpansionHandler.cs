@@ -22,7 +22,8 @@ internal sealed class InventoryExpansionHandler(InventoryExpansionService expans
         try
         {
             result = context.BlocksTownActions ? InventoryResult.Reject(InventoryExpansionService.Rejection) :
-                context.Session.PlanAndCommitInventory(character => expansion.Plan(character, slot), InventoryExpansionService.Rejection);
+                context.Session.PlanAndCommitInventory(character => expansion.Plan(character, slot), InventoryExpansionService.Rejection,
+                    effectItem: slot <= short.MaxValue ? new(InventoryListType.Main, (short)slot) : null);
         }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException)
         {

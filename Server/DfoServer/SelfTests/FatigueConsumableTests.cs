@@ -58,7 +58,7 @@ internal static class FatigueConsumableTests
         var growth = SelfTestCatalogs.Growth(pvf, skills);
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var clock = new ConsumableUseSessionTests.FakeClock();
-        var service = new FatigueConsumableService(items.Items, towns, clock);
+        var service = new FatigueConsumableService(items.Items, clock);
         foreach (var (id, amount, daily) in new[] { (7456, 40, 1), (7518, 10, 0), (7644, 6, 0), (7645, 6, 0), (2682613, 1, 3),
             (8079, 30, 0), (8221, 20, 0), (2600026, 30, 1), (2600413, 30, 0),
             (490001834, 1, 0), (490004967, 50, 1), (490004968, 156, 1), (490009065, 30, 1) })

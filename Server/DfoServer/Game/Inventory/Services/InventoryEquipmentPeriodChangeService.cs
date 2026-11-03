@@ -38,12 +38,10 @@ internal sealed class InventoryEquipmentPeriodChangeService(ItemCatalog catalog,
             return InventoryResult.Reject(19);
         string place = !inTown ? "[dungeon]" : towns?.IsRoom(character.Position, QuestEligibility.Completed(character)) == true
             ? "[seria room]" : "[village]";
-        if (!definition.AllowsPlace(place))
-            return InventoryResult.Reject(19);
         // 制作图本身按源消费（含冷却可用性）；不追加任何材料扣费。
         var consumed = InventoryActionConsumableService.Plan(character, sourceSlot,
             new ActionConsumableDefinition(definition.Item, EquipmentPeriodChangeDefinition.Label, [], 0,
-                definition.Item.Id, 0, 0, EquipmentPeriodChangeDefinition.Places.ToImmutableArray()), place, Clock, now);
+                definition.Item.Id, 0, 0, definition.UsePlaces), place, Clock, now);
         if (!consumed.Accepted)
             return consumed;
         var after = consumed.Plan!.After;

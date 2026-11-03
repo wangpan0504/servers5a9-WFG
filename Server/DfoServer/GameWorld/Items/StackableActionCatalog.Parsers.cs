@@ -33,7 +33,7 @@ internal static partial class StackableActionCatalog
         {
             var business = label switch
             {
-                "[quest clear]" or "[any quest clear]" or "[first awaken clear]" or "[second awaken clear]" or
+                "[quest clear]" or "[achievement quest clear]" or "[side quest clear]" or "[lv clear]" or "[epic quest clear]" or "[all quest clear]" or "[gm quest clear]" or "[quest clear coupon]" or "[any quest clear]" or "[first awaken clear]" or "[second awaken clear]" or
                 "[level up ticket]" or "[jumping lv]" or "[class change]" or "[represent account name change]" or
                 "[upgrade inventory]" or "[open aura skin slot]" or "[open creature skin slot]" or "[add skin storage]" or "[add fatigue]" or
                 "[change creature]" or "[creature growth]" or "[kaleido]" or "[gold kaleido box]" or

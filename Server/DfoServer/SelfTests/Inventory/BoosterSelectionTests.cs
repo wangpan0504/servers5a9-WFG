@@ -127,7 +127,6 @@ internal static class BoosterSelectionTests
             "[/booster select category]\n\n[booster category name]\n`请选择奖励` \n[/booster category name]\n" +
             "\n[item category]\n`event` \n[/item category]\n\n[action usable server type]\n" +
             "`[general server]` \n[/action usable server type]\n";
-        const string general = "[action usable server type]\n`[general server]`\n[/action usable server type]\n";
         void Accept(string text, string message)
         {
             var definition = BoosterCatalog.Parse(text);
@@ -135,36 +134,20 @@ internal static class BoosterSelectionTests
                 selection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } category &&
                 category.Rewards.SequenceEqual(new BoosterChoice[] { new(10305489, 20), new(10305487, 20) }), message);
         }
-        Accept(source, "普通服服务器声明允许真实选择礼盒，保留单选、两个奖励及各20数量");
+        Accept(source, "忽略服务器声明，真实选择礼盒仍保留单选、两个奖励及各20数量");
         string box = source[..source.IndexOf("[action usable server type]", StringComparison.Ordinal)];
-        foreach (string text in new[]
+        Accept(box, "缺席服务器声明不改变原奖励");
+        foreach (string field in new[] { "action usable server type", "usable game server type", "usable server type" })
         {
-            box, general + box,
-            box + "[action usable server type]\n`[general server]` `[event server]`\n[/action usable server type]\n",
-            box + "[action usable server type]\n`[event server]` `[general server]`\n[/action usable server type]\n",
-            box.Replace("`name_10305490`", "`[action usable server type] [/action usable server type]`") + general
-        }) Accept(text, "无服务器声明沿原规则，含普通服的已知组合及引号内标签文字不改变奖励");
-        foreach (string declaration in new[]
-        {
-            "[action usable server type]\n`[event server]`\n[/action usable server type]\n",
-            "[action usable server type]\n`[general server]` `[unknown server]`\n[/action usable server type]\n",
-            "[action usable server type]\n[/action usable server type]\n",
-            "[action usable server type]\n`[general server]` `[general server]`\n[/action usable server type]\n",
-            general + general,
-            "[action usable server type]\n`[general server]`\n",
-            "[/action usable server type]\n", general + "[/action usable server type]\n",
-            "[action usable server type]\n`[general server]`\n[/other]\n",
-            "[action usable server type]\n[general server]\n[/action usable server type]\n",
-            "[action usable server type]\n`[general server]` 1\n[/action usable server type]\n",
-            "[action usable server type]\n`[general server]\n[/action usable server type]\n",
-            "[action usable server type\n`[general server]`\n[/action usable server type]\n"
-        }) That(!BoosterCatalog.Parse(box + declaration).Available,
-            "服务器资格及形态必须完整，专用服、未知、空、重复、残缺或额外值仍整盒拒绝: " + declaration);
-        That(!BoosterCatalog.Parse(box.Replace("[etc]", general + "[etc]")).Available,
-            "选择分类中的服务器限制不能冒充根级声明");
-        foreach (string other in new[] { "usable server type", "usable game server type" })
-            That(!BoosterCatalog.Parse(source + "[" + other + "]\n`[general server]`\n[/" + other + "]\n").Available,
-                "普通服声明不旁路其他尚未支持的服务器限制: " + other);
+            string Block(string values) => "[" + field + "]\n" + values + "\n[/" + field + "]\n";
+            foreach (string values in new[] { "", "`[general server]`", "`[event server]`", "`[starter server]`",
+                "`[unknown server]`", "`[general server]` `[event server]`", "`[general server]` `[general server]`", "1" })
+                Accept(box + Block(values), "服务器标签和值不成为礼盒开启或奖励限制：" + field + ":" + values);
+            Accept(box + Block("`[general server]`") + Block("`[event server]`"),
+                "重复服务器声明不再次拒绝礼盒：" + field);
+        }
+        That(!BoosterCatalog.Parse(box + "[total weekly usable count]\n1\n").Available,
+            "仅忽略服务器限制，不放开尚未实现的每周次数账本");
     }
 
     static void RunCustomAbilityGradeDeclarations()

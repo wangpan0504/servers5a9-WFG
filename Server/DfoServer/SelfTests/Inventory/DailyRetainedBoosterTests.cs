@@ -22,7 +22,8 @@ internal static class DailyRetainedBoosterTests
     public static void Run(TownCatalog towns, ItemResources resources)
     {
         int checks = Count;
-        var now = new DateTimeOffset(2026, 10, 18, 21, 59, 59, TimeSpan.Zero);
+        // 选择未来的06:00边界前一秒，避免真实选角把15天源期限的固定历史夹具当作已过期物品清理。
+        var now = DailyBoosterUsage.NextReset(DateTimeOffset.UtcNow).AddDays(1).AddSeconds(-1);
         var sourceTemplate = resources.Items.Get(Source);
         var source = new InventoryItem(1, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(sourceTemplate, utcNow: now));
         var character = new Character(1, 0, "DailyRule", 0, towns.Room, towns.InitialReturn) { Inventory = new([source]) };
@@ -122,7 +123,10 @@ internal static class DailyRetainedBoosterTests
             var clock = new DailyBoosterTestClock(now);
             var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces, clock: clock);
             string snapshot = Snapshot();
-            var midnightPlan = service.Open(before, new(65, 1), out _).Plan!;
+            var planned = service.Open(before, new(65, 1), out _);
+            That(planned.Accepted && planned.Plan is not null,
+                "跨日提交夹具必须保留未过期源并先成功规划，不能将空计划交给仓储冒充期限拒绝");
+            var midnightPlan = planned.Plan!;
             clock.Advance(TimeSpan.FromSeconds(1));
             bool expired = false;
             try { repository.CommitInventory(owner, before, midnightPlan); }

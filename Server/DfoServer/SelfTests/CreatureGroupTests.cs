@@ -75,8 +75,8 @@ internal static class CreatureGroupTests
             "一级宠物也可按30个成本转换；默认地点允许正式副本，保留完整UID附魔及详情");
         var limited = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(), groups:groups,
             growthItems:_=>book with { TownOnly = true });
-        That(!limited.PlanGroup(character,source.Position,pet.Position,0,false).Accepted,
-            "资源显式仅城镇时仍按地点门禁拒绝");
+        That(limited.PlanGroup(character,source.Position,pet.Position,0,false).Accepted,
+            "宠物资产规划不另用旧TownOnly布尔值阻止使用，地点由统一Session入口校验");
         var same = new CreatureChangeService(Item,_=>null,CreatureSystemTests.Synthetic(), groups:groups,growthItems:_=>selection)
             .PlanGroup(character,source.Position,pet.Position,1,true);
         That(!same.Accepted && same.Plan is null && character.Inventory.Find(source.Position)!.Core.Count == 30,

@@ -14,9 +14,7 @@ internal sealed record InventoryExpansionDefinition(ItemTemplate Item)
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces is not { Count: > 0 } places || !places.Contains("[village]") ||
-            places.Any(place => place is not ("[village]" or "[seria room]")) ||
-            file.DeclaredFields.Any(field => field is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
+            file.DeclaredFields.Any(field => !ItemUseFields.IsSharedTag(field) && field is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
                 "usable job" or "attach type" or "minimum level" or "maximum level" or "icon" or "icon mark" or
                 "stackable type" or "move wav" or "expiration date" or "action type" or "stack limit" or
                 "action usable place" or "usable period" or "impossible contents" or "item category" or

@@ -11,6 +11,7 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
     bool TownOnly, bool SeriaRoomOnly, int CoolTime)
 {
     public const uint JumpingAction = 193;
+    public ImmutableArray<string> Places { get; init; } = [];
 
     public static LevelUpByTableDefinition? Parse(ExperienceConsumableFile file, ItemTemplate template)
     {
@@ -23,9 +24,7 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && (raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
-                places.Any(place => place is not ("[village]" or "[seria room]"))) ||
-            raw.DeclaredActionUsableServerTypes is { Count: > 0 } || !file.ExcludedJobs.IsEmpty ||
+            !file.ExcludedJobs.IsEmpty ||
             raw.DeclaredUsableFirstGrowTypes is not { } growTypes || growTypes.Any(value => value is < 0 or > 5) ||
             raw.DeclaredDontChangeGrowTypes is not { Count: 0 } ||
             file.DeclaredFields.Any(field => field is "booster info" or "hp recovery" or "mp recovery" or "exp up level limit"))
@@ -38,10 +37,10 @@ internal sealed record LevelUpByTableDefinition(ItemTemplate Item, ImmutableArra
                 target is < 2 or > CharacterGrowthCatalog.MaximumSupportedLevel) return null;
             ranges.Add(new(minimum, maximum, (byte)target));
         }
-        bool village = raw.DeclaredActionUsablePlaces?.Contains("[village]") == true;
-        bool room = raw.DeclaredActionUsablePlaces?.Contains("[seria room]") == true;
         return new(template, ranges.ToImmutable(), growTypes.Select(value => (byte)value).ToImmutableArray(),
-            action is not null, village || room, room && !village, raw.DeclaredCoolTime ?? 0);
+            action is not null, StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces),
+            StackableUsePlaces.SeriaRoomOnly(raw.DeclaredActionUsablePlaces), raw.DeclaredCoolTime ?? 0)
+            { Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [] };
     }
 
     // ARAD 按原序匹配第一个包含当前等级的三元组；不排序或合并区间。

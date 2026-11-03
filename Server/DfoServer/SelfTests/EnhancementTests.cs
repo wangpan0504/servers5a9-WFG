@@ -62,8 +62,8 @@ internal static partial class EnhancementTests
         string villageOnly = fixedText.Replace("`[village]` `[seria room]`", "`[village]`", StringComparison.Ordinal);
         string seriaOnly = fixedText.Replace("`[village]` `[seria room]`", "`[seria room]`", StringComparison.Ordinal);
         That(EnhancementCatalog.Parse(coupon, villageOnly) is { Available: true } &&
-            EnhancementCatalog.Parse(coupon, seriaOnly) is { Available: false },
-            "village和village加seria的既有Town入口保留，只有seria时Pending而不扩大地点资格");
+            EnhancementCatalog.Parse(coupon, seriaOnly) is { Available: true },
+            "地点由实际使用入口校验，单独seria声明不影响券身份");
         That(EnhancementCatalog.Parse(coupon, "[name]\n`[equipment amplify reinforcement ticket] 1 1`\n" + fixedText) is { Available: true },
             "名称文字中的伪标签不能覆盖真实券模式");
         foreach (string value in new[] { "0 100 `fixed` -1", "32 100 `fixed` -1", "11 101 `fixed` -1", "11 100 `random` -1", "11 100 `fixed` -2", "1 100 `additional` 128", "11 100 `fixed` -1 999" })

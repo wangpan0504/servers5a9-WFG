@@ -59,9 +59,7 @@ internal sealed record EnhancementPotionDefinition(EnhancementPotionMode Mode, i
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || file.Diagnostics.Length != 0 ||
             file.StructureDiagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
             file.EffectMaintenance is null or 0 || file.CoolTime < 0 ||
-            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 || raw.HasActionType || raw.HasBoosterInfo ||
-            raw.HasActionUsablePlace && (raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
-                places.Any(place => place is not ("[village]" or "[seria room]")))) return null;
+            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 || raw.HasActionType || raw.HasBoosterInfo) return null;
         if (raw.TypeDeclaration is { Parameters: [> 0] } type)
         {
             EnhancementPotionMode? mode = type.Label switch

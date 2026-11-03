@@ -9,6 +9,7 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
 {
     public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
     public bool SeriaRoomOnly { get; init; }
+    public ImmutableArray<string> Places { get; init; } = [];
 
     public static ExperienceConsumableDefinition? Parse(ExperienceConsumableFile file, ItemTemplate template)
     {
@@ -23,11 +24,8 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && (raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
-                places.Any(place => place is not ("[village]" or "[seria room]"))) ||
             file.DeclaredFields.Contains("usable first growtype") && raw.DeclaredUsableFirstGrowTypes is not { Count: > 0 } ||
             raw.DeclaredUsableFirstGrowTypes?.Any(value => value is < 0 or > 5) == true ||
-            raw.DeclaredActionUsableServerTypes is { Count: > 0 } ||
             file.DeclaredFields.Any(field => field is "action type" or "booster info" or "hp recovery" or "mp recovery" or
                 "exp up level limit" or "dont change grow type"))
             return null;
@@ -35,11 +33,11 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
         if (excludedJobs.Any(job => job != "[all]" && !Enumerable.Range(0, 16).Any(index => ItemCatalog.JobTag((byte)index) == job)))
             return null;
         return new(template, effect.Label == "[expPercentUp]", effect.Parameters[0],
-            raw.DeclaredCoolTime ?? 0, file.CoolGroup ?? -template.Id, raw.HasActionUsablePlace, excludedJobs)
+            raw.DeclaredCoolTime ?? 0, file.CoolGroup ?? -template.Id, StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces), excludedJobs)
         {
             FirstGrowTypes = (raw.DeclaredUsableFirstGrowTypes ?? []).Select(value => (byte)value).ToImmutableArray(),
-            SeriaRoomOnly = raw.DeclaredActionUsablePlaces?.Contains("[seria room]") == true &&
-                !raw.DeclaredActionUsablePlaces.Contains("[village]")
+            SeriaRoomOnly = StackableUsePlaces.SeriaRoomOnly(raw.DeclaredActionUsablePlaces),
+            Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? []
         };
     }
 

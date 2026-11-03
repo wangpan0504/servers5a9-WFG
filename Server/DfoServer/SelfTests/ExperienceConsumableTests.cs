@@ -53,8 +53,8 @@ internal static class ExperienceConsumableTests
                 location.SeriaRoomOnly == roomOnly, "经验物品地点按并集解释，单独赛丽亚房间仍保留限制");
         foreach (string[]? places in new string[]?[] { null, [], ["[village]", "[unknown]"], ["[dungeon]"] })
             That(ExperienceConsumableDefinition.Parse(file with { Stackable = raw with
-                { HasActionUsablePlace = true, DeclaredActionUsablePlaces = places } }, template) is null,
-                "地点声明缺失、空白或含未支持条件不能静默放行");
+                { HasActionUsablePlace = true, DeclaredActionUsablePlaces = places } }, template) is not null,
+                "地点声明的类型和数量不改变经验物品身份，使用时按地点匹配");
         var restricted = file with { Stackable = raw with { DeclaredUsableFirstGrowTypes = [3, 4, 5] },
             DeclaredFields = ["increase status type", "usable first growtype"] };
         That(ExperienceConsumableDefinition.Parse(restricted, template) is { } branches &&

@@ -26,13 +26,13 @@ internal sealed partial class GameSession
                 return CommitManualQuestSkip(previous,receipt,retainAnswered:true);
             });
         if (capture.Pending is { Committed:null }) return receipt with { Reason="原任务跳过尚未完成" };
+        if (!CanUseStackableItem(expected, expected.Inventory.Find(slot)?.Core.ItemId ?? 0)) return receipt;
         QuestQuickClearPlan? plan;
         try
         {
             var source = kind == LevelUpConsumableKind.Ticket ? service.Prepare(expected,slot) :
                 service.PrepareTable(expected,slot,kind,selectedGrowType);
-            if (source.TownOnly && capture.Phase!=SessionPhase.Town ||
-                source.SeriaRoomOnly && !towns.IsRoom(expected.Position,QuestEligibility.Completed(expected))) return receipt;
+            if (!CanUseStackableItem(expected, source.Item.Core.ItemId, places: source.Places)) return receipt;
             if (!QuestQuickClearPlan.TryCreateLevelUpTicket(expected,Guid.NewGuid(),quests,source,
                 ImmutableDictionary<int,byte>.Empty,out plan,out string reason,towns)) return receipt with { Reason=reason };
             if (!FreezeQuestEffects(plan!,quests,out string effectsReason)) return receipt with { Reason=effectsReason };

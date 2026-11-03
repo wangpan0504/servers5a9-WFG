@@ -83,11 +83,21 @@ internal static class QuestSpecifiedTicketTests
         foreach (var unsupported in new[] {
             definitions[1] with { Definition=definitions[1].Definition! with { AccountQuest=true } },
             definitions[1] with { Definition=definitions[1].Definition! with { JobChange=1 } },
-            definitions[1] with { RewardType="[tp]",Rewards=[] },
+            definitions[1] with { RewardType="[tp]",Rewards=[new(0,2,null)] },
             definitions[1] with { Condition="[question]" } })
         {
             var restricted=new QuestCatalog(definitions.Select(row=>row.Id==100 ? unsupported : row).ToDictionary(row=>row.Id));
             That(!Create(role,definition,restricted,out _),"指定目标专用事务未具备时整笔不消费: "+unsupported.RewardType);
+        }
+        foreach (var (reward,value,allowed) in new[] {
+            ("[hell challenge]",1,true),("[hell challenge]",0,false),("[hell challenge]",2,false),
+            ("[inferno challenge]",7539,true),("[inferno challenge]",0,false),("[cosmo challenge]",7191,false) })
+        {
+            var target=definitions[1] with { RewardType=reward,Rewards=[new(0,value,null)],Condition="[meet npc]",IntData=[45] };
+            var catalog=new QuestCatalog(definitions.Select(row=>row.Id==100 ? target : row).ToDictionary(row=>row.Id));
+            That(Create(role,definition,catalog,out var hell)==allowed && (!allowed ||
+                hell!.EquipmentSlotFlagsAfter==role.EquipmentSlotFlags && hell.ScopeQuestIds.SequenceEqual([100,600])),
+                "指定券只接受确认的深渊资格标量，不把副本号当物品或解锁装备槽: "+reward+"/"+value);
         }
         Console.WriteLine($"PASS {Count-checks} 指定130券原序、OR前置、槽位、保留状态及限制规划断言");
     }
@@ -125,6 +135,27 @@ internal static class QuestSpecifiedTicketTests
             That(Same(after,f.Session.Selected!),"重选回放指定券后的槽位、实际库存和完成记录: "+template);
         }
         var actual=items.Items.QuestTicket(TicketId); var targetDefinitions=actual.TargetQuestIds.Select(quests.Get).ToArray();
+        int[] hellTickets=[490000708,490000709,490000710,490001888,490001889,490001890,490002876,490002877,
+            490003067,490003130,490003756,490004676,490005733,490006409,490006999,490008087,490008542,490008974,
+            490009356,490009879,490009881,490000719,490000718,490000720,10005122,10006608,10006609,10006610];
+        foreach (int template in hellTickets)
+        {
+            var definition=items.Items.QuestTicket(template);
+            byte job=definition.Jobs==1<<15 ? (byte)15 : (byte)0;
+            var role=new Character(1,0,"HellTicket",0,new(1,0,1,1),null)
+            {
+                Level=95,Job=job,EquipmentSlotFlags=16,Inventory=new([new(10,Bag(),
+                    InventoryRewardGrantService.Create(items.Items.Get(template),2) with { ExpireTime=0 })])
+            };
+            var source=QuestTicketSource.Create(role,Bag(),definition,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            bool created=QuestQuickClearPlan.TryCreateTicket(role,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out var prepared,out _);
+            That(definition.ActionIndex==130 && definition.TargetQuestIds.All(id=>id is 4391 or 4539 or 2002 or 2900 or 10109 or 10110) &&
+                created && prepared!.Interval.Select(row=>row.Id).SequenceEqual(definition.TargetQuestIds),"真实深渊券保留完整原序任务范围: "+template);
+            prepared!.PrepareEffects(new(items.Items,skills,items.GoldLimits,items.EpicPieces),quests);
+            That(prepared.Inventory.After.Find(Bag()) is { Core.Count:1 } && prepared.Inventory.After.Items.Length==1 &&
+                prepared.EquipmentSlotFlagsAfter==16 && prepared.CompletedAfter.SequenceEqual(definition.TargetQuestIds.Order()),
+                "深渊资格参数不是物品奖励，券只记真实完成、不生成物品或额外资格资产: "+template);
+        }
         using (var f=Fixture(TicketId,targetDefinitions,60,15,[]))
         {
             var before=f.Read();
@@ -171,6 +202,68 @@ internal static class QuestSpecifiedTicketTests
         try
         {
             using var log=new ServerLog(logRoot);
+            int[] tpTargets=[2670,2671,2672,2673,2674];
+            using (var f=Fixture(490011396,tpTargets.Select(quests.Get).ToArray(),50,0,
+                tpTargets.Select((id,index)=>Active((byte)index,(ushort)id)).ToArray(),effects:true))
+            {
+                var before=f.Read(); using var output=new ControlledOutput(); using var stop=new CancellationTokenSource();
+                await using var sender=new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_)=>{});
+                var context=Context(f,output,sender,stop); var commands=Registry(f,log);
+                f.Sql("CREATE TRIGGER tp_ticket_abort AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'tp ticket rollback'); END");
+                await RejectAsync<SqliteException>(()=>commands.DispatchAsync(context,Use()));
+                That(Same(before,f.Read()) && output.Frames.Count==0,"2670至2674整组完成、两树TP和源券随末段SQL失败一并回滚");
+                f.Sql("DROP TRIGGER tp_ticket_abort");
+                await commands.DispatchAsync(context,Use());
+                var after=f.Read();
+                That(after.CompletedQuests.SequenceEqual(tpTargets) && after.ActiveMainQuests.Length==0 &&
+                    after.Learning.BonusTp==before.Learning.BonusTp+2 && after.Learning.Trees.All(tree=>
+                        tree.Tp==before.Learning.Trees.Single(old=>old.Context==tree.Context).Tp+2) &&
+                    after.Level==before.Level && after.Learning.Experience==before.Learning.Experience &&
+                    after.Inventory.Find(Bag()) is {Core.Count:1} && after.Inventory.Gold==before.Inventory.Gold,
+                    "真实风云崛起券完整清指定五项，2674按已确认形态增加两树2TP，不发普通经验金币");
+                That(output.Opcodes.SequenceEqual(new ushort[] {515,19,574,21,356}),"指定TP券ACK后用绝对技能快照同步余额，不伪造普通领奖ACK34");
+                output.Frames.Clear(); await commands.DispatchAsync(context,Use());
+                That(Same(after,f.Read()) && !output.Opcodes.Contains((ushort)515) &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts")==1,"TP券重放不重复加点或扣券");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+                That(Same(after,f.Session.Selected!),"重选恢复五项完成、两树TP与原券数量");
+            }
+            int[] hellTargets=[2900,10109,10110];
+            var hellDefinitions=hellTargets.Append(4391).Select(quests.Get).ToArray();
+            using (var f=Fixture(490008974,hellDefinitions,90,0,
+                [Active(0,2900),Active(1,10109),Active(2,10110),Active(3,4391)],effects:true))
+            {
+                var before=f.Read(); using var output=new ControlledOutput(); using var stop=new CancellationTokenSource();
+                await using var sender=new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_)=>{});
+                var context=Context(f,output,sender,stop); var commands=Registry(f,log);
+                f.Sql("CREATE TRIGGER hell_ticket_abort AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'hell ticket rollback'); END");
+                await RejectAsync<SqliteException>(()=>commands.DispatchAsync(context,Use()));
+                That(Same(before,f.Read()) && output.Frames.Count==0,"深渊/裂缝三项完成、活动槽及源券一并回滚，不提前ACK");
+                f.Sql("DROP TRIGGER hell_ticket_abort");
+                await commands.DispatchAsync(context,Use());
+                var after=f.Read();
+                That(output.Opcodes.SequenceEqual(new ushort[] {515,574,21,356}) && after.Revision==before.Revision+1 &&
+                    after.CompletedQuests.SequenceEqual(hellTargets.Order()) && after.ActiveMainQuests.Select(row=>(int)row.QuestId).SequenceEqual([4391]) &&
+                    after.Inventory.Find(Bag()) is { Core.Count:1 } && Assets(before,490008974)==Assets(after,490008974) &&
+                    after.EquipmentSlotFlags==before.EquipmentSlotFlags && JsonSerializer.Serialize(before.Learning)==JsonSerializer.Serialize(after.Learning),
+                    "真实三任务深渊券原子完成并同步客户端历史，保留其它区域任务、不发经验金币或副本号物品");
+                Bytes(output.Frames[0].AsSpan(16),[1,65,0,0,130,0,0,0],"深渊券仍使用公共130消费ACK，不伪造CMD34或专用奖励尾段");
+                output.Frames.Clear();
+                await commands.DispatchAsync(context,Use());
+                That(output.Opcodes.SequenceEqual(new ushort[] {574,21,356}) && Same(after,f.Read()) &&
+                    Scalar(f,"SELECT count(*) FROM character_quest_skip_receipts")==1,"深渊券重复回执不重扣、不重复生成完成记录");
+                f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady(); output.Frames.Clear();
+                await commands.DispatchAsync(context,Use());
+                That(output.Opcodes.SequenceEqual(new ushort[] {515}) && output.Frames[0][16]==0 && Same(after,f.Read()),
+                    "重选保留普通深渊及裂缝完成位，全部已完成后保留剩余券");
+            }
+            foreach (var (template,level,job) in new (int,byte,byte)[] { (490000710,84,0),(490009881,86,0),(490008542,90,0) })
+            using (var f=Fixture(template,items.Items.QuestTicket(template).TargetQuestIds.Select(quests.Get).ToArray(),level,job,[],effects:true))
+            {
+                var before=f.Read();
+                That(f.Session.UseQuestTicket(65,0,f.Catalog,items.Items,130) is {Commit:null} && Same(before,f.Read()),
+                    "深渊券仍检查目标等级、券自身等级及限定职业，不因接入资格奖励放宽: "+template);
+            }
             var slotDefinitions = new[] {674,649,675,650}.Select(quests.Get).ToArray();
             using (var f=Fixture(TicketId,slotDefinitions,65,0,[],extraTemplate:10005390))
             {
@@ -264,8 +357,9 @@ internal static class QuestSpecifiedTicketTests
         Console.WriteLine($"PASS {Count-checks} 指定130券资源、资格、槽位事务、Handler及恢复断言（非主线）");
 
         QuestOrdinaryCompletionTests.Fixture Fixture(int template,StoryQuest[] definitions,byte level,byte job,ActiveMainQuest[] active,
-            int[]? completed=null,int extraTemplate=0) =>
+            int[]? completed=null,int extraTemplate=0,bool effects=false) =>
             new(towns,characters,skills,growth,parameters,items,definitions[0],materialCount:5,definitions:definitions,active:active,
+                questEffects:effects ? new(items.Items,skills,items.GoldLimits,items.EpicPieces) : null,
                 configure:candidate=>
                 {
                     var created=CharacterCreation.Prepare(candidate.Name,characters.Get(job),towns.Room,towns.InitialReturn,skills.Get);

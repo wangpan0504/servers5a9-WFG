@@ -26,11 +26,12 @@ internal static class AuraSkinTests
             { Level = 60, EquipmentSlotFlags = 17, Inventory = new([ticket]) };
         const string action = "[stackable type]\n`[etc]` 1\n[action type]\n`[open aura skin slot]`\n[action usable place]\n`[village]`\n" +
             "[use action packet]\n0\n[cool time]\n1000";
-        That(ItemCatalog.ReadAuraSkinAction(new(action)), "127券需要资源完整声明光环开栏动作、地点及确认发送模式");
-        foreach (string invalid in new[] { action.Replace("aura", "creature"), action.Replace("village", "dungeon"),
+        That(ItemCatalog.ReadAuraSkinAction(new(action)), "127券需要资源完整声明类型、光环开栏动作及确认发送模式");
+        foreach (string invalid in new[] { action.Replace("aura", "creature"),
             action.Replace("\n0\n", "\n1\n"), action + "\n[action type]\n`[open aura skin slot]`",
             action.Replace("`[etc]` 1", "`[material]` 0"), action.Replace("`[etc]` 1", "`[etc]` 0") })
             That(!ItemCatalog.ReadAuraSkinAction(new(invalid)), "未知、缺失或重复127动作声明不能成为可使用券");
+        That(ItemCatalog.ReadAuraSkinAction(new(action.Replace("village", "dungeon"))), "地点由统一使用门禁处理，不改变券身份");
         var open = InventoryCreatureSkinService.PlanUnlock(role, 121, 11, 1000, template);
         That(!InventoryCreatureSkinService.PlanAuraAction(role, 121, 1000, template).Accepted &&
             !InventoryCreatureSkinService.PlanAuraAction(role, 121, 1000,

@@ -63,8 +63,7 @@ internal sealed class AmplificationCatalog
         var document = Document("stackable/" + stackable[itemId]);
         var result = Rules.Materials[(operation, itemId)];
         foreach (string name in new[] { "total usable count", "total weekly usable count", "total accumulated usable count",
-            "use count limit all server item", "usable datetime", "usable first growtype", "action usable server type",
-            "usable game server type", "usable server type" })
+            "use count limit all server item", "usable datetime", "usable first growtype" })
             if (document.Sections.Any(section => section.Name == name)) return null;
         var limits = document.Sections.Where(section => section.Name == "check usable itemlevel").ToArray();
         if (limits.Length > 1) throw new InvalidDataException("增幅道具目标等级限制重复");
@@ -76,13 +75,12 @@ internal sealed class AmplificationCatalog
             result = result with { MinimumItemLevel = rows[0].Level, MaximumItemLevel = rows[0].Weight };
         }
         var places = document.Sections.Where(section => section.Name == "action usable place").ToArray();
-        if (places.Length > 1) throw new InvalidDataException("增幅道具使用地点重复");
-        if (places.Length == 1)
+        if (places.Length > 0)
         {
-            if (!places[0].Children.IsEmpty || places[0].Values.Any(token => token.Type != 6))
-                throw new InvalidDataException("增幅道具使用地点无效");
-            var labels = places[0].Values.Select(token => resolve(token.Value)).ToHashSet(StringComparer.Ordinal);
-            result = result with { Village = labels.Contains("[village]"), SeriaRoom = labels.Contains("[seria room]") };
+            var labels = places.SelectMany(section => section.Values.TakeWhile(token => token.Type == 6))
+                .Select(token => resolve(token.Value)).ToArray();
+            result = result with { Village = StackableUsePlaces.Allows(labels, "[village]"),
+                SeriaRoom = StackableUsePlaces.Allows(labels, "[seria room]") };
         }
         if (operation == AmplificationOperation.GoldInvest)
         {

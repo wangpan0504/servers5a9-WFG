@@ -200,8 +200,8 @@ internal static class AmplificationTests
         That(Plan(damaged, use, out _).Error == 8 && Plan(highRole, twist, out _, twistRule).Error == 18,
             "赋予和转换要求满耐久，普通扭转保持零增幅等级要求");
         var roomOnly = definition with { Village = false, SeriaRoom = true };
-        That(!Plan(role, use, out _, roomOnly).Accepted && Plan(role, use, out _, roomOnly, inRoom: true).Accepted,
-            "仅赛丽亚房间的声明不扩大为所有城镇，也不拒绝合法房间");
+        That(Plan(role, use, out _, roomOnly).Accepted && Plan(role, use, out _, roomOnly, inRoom: true).Accepted,
+            "增幅资产规划不另用旧房间布尔值阻止使用，地点由统一Session入口校验");
         var timed = role with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)now + 10 } }, target]) };
         var timePlan = Plan(timed, use, out _);
         That(timePlan.Accepted && timePlan.Plan!.CharacterPrecondition!.Matches(timed, now + 9) &&

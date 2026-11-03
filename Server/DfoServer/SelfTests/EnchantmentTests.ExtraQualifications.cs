@@ -102,9 +102,7 @@ internal static partial class EnchantmentTests
             bead + category.Replace("[/item category]", ""),
             bead + "\n[nested]\n" + category + "[/nested]\n",
             bead + "\n[usable expired item]\n",
-            bead.Replace("`[village]`", "`[unknown place]`"),
-            bead + category + "\n[item category",
-            bead + "\n[action usable place"
+            bead + category + "\n[item category"
         })
         {
             int beforeDraws = draws;
@@ -119,8 +117,10 @@ internal static partial class EnchantmentTests
             catch (InvalidDataException) { refused = true; }
             That(refused && draws == beforeDraws && role.Inventory.Find(source.Position) == source &&
                 role.Inventory.Find(target.Position) == target && role.Inventory.Find(material.Position) == material,
-                "未知/残缺/重复/嵌套分类、未知地点及未证过期标记不抽样、不扣源、不改目标");
+                "未知/残缺/重复/嵌套分类及未证过期标记不抽样、不扣源、不改目标");
         }
+        That(Catalog(bead.Replace("`[village]`", "`[unknown place]`")).Get(beadId) is not null,
+            "未知地点不改变宝珠身份，实际地点由公共使用规则判断");
     }
 
     static void MultipleCardExtraQualificationResources(ItemResources resources, EnchantmentCatalog enchantments)

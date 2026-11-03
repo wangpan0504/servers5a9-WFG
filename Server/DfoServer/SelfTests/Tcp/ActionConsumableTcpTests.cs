@@ -173,6 +173,21 @@ internal static class ActionConsumableTcpTests
                 "真实515制作图消费一件，产物沿用UID、位置与全部打造，不扣商店材料");
         }
         clock.Advance(TimeSpan.FromSeconds(10));
+        int expiredNotices = 0;
+        peer.Barrier(packet =>
+        {
+            That(packet is { Kind: 0, Opcode: 14 } && ++expiredNotices == 1,
+                "请求前服务日投影只允许一次目标到期清包，不跳过其他业务通知");
+            Bytes(packet.Body, Build(writer =>
+            {
+                writer.Write((byte)0); writer.Write((ushort)1); writer.Write((ushort)10);
+                writer.Write(-1); writer.Write(new byte[117]);
+            }), "在线到期只清除10槽的完整库存行，不清制作图源或9槽永久产物");
+        });
+        That(expiredNotices == 1 && fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 ORDER BY slot_index", role.Id)
+                .Select(row => (long)row[0]).SequenceEqual(new long[] { 9, 66 }) &&
+            fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0 AND action_name='item_expired'", role.Id) is [[1L]],
+            "先核对新基线真实过期清包及审计，保留源和永久产物，再隔离验证制作请求拒绝");
         string before = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
             fixture.Snapshot("SELECT id,revision FROM characters ORDER BY id") + fixture.Snapshot("SELECT * FROM inventory_audit_log");
         Use(peer, 66, 136, 0, 10); peer.Expect(1, 515, [0, 0, 0, 66, 0, 0, 136]); peer.Barrier();

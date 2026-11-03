@@ -22,9 +22,12 @@ internal static class BoosterUsePlacesTests
             That(place.PendingRule is null && place.Dungeon && place.Village == bodyPlace.Contains("[village]") &&
                 place.SeriaRoom == bodyPlace.Contains("[seria room]"), "副本允许位保留独立正向地点，不能补造城镇权限");
         }
-        foreach (string invalid in new[] { "`[dungeon]` `[dungeon]`", "`[dungeon]` `[unknown]`" })
-            That(BoosterCatalog.ParseUsePlaces(open + invalid + close).PendingRule is not null,
-                "新增副本位不放宽重复或未知地点");
+        That(BoosterCatalog.ParseUsePlaces(open + "`[dungeon]` `[dungeon]`" + close) is { Dungeon: true, PendingRule: null },
+            "重复地点不拒绝礼包");
+        That(BoosterCatalog.ParseUsePlaces(open + "`[dungeon]` `[unknown]`" + close) is { Dungeon: true, Village: true, PendingRule: null },
+            "未知地点按参考端回退城镇并保留已声明副本");
+        That(BoosterCatalog.ParseUsePlaces(open + "`[all]`" + close) is { Village: true, Dungeon: true, Pvp: true },
+            "本服既有全场景声明与通用地点规则一致");
         That(BoosterCatalog.ParseUsePlaces(open + "`[dungeon]` `[dont use assult]`" + close) is
             { Dungeon: true, ExcludeAssault: true, Village: false, SeriaRoom: false, PendingRule: null },
             "明确允许副本时仍保留突击排除位，不将其忽略为通用副本许可");
@@ -57,10 +60,14 @@ internal static class BoosterUsePlacesTests
                 { new(hatId, 1, 1), new(490700663, 1, 100), new(490700664, 1, 100), new(490700665, 1, 1) }),
                 "合成十二包保留四奖顺序、权重及原数量 " + sourceId);
         }
-        foreach (string invalid in new[] { "`[dont use assult]`", "`[village]` `[unknown]` `[dont use assult]`",
+        That(BoosterCatalog.ParseUsePlaces(open + "`[dont use assult]`" + close) is { ExclusionOnly: true, PendingRule: null },
+            "仅有排除值保留非空限制，不变成所有地点均可用");
+        foreach (string text in new[] { "`[village]` `[unknown]` `[dont use assult]`",
             "`[village]` `[dont use assult]` `[dont use assult]`" })
-            That(BoosterCatalog.ParseUsePlaces(open + invalid + close).PendingRule is not null,
-                "仅排除位或混入未知地点不能变成通用许可");
+            That(BoosterCatalog.ParseUsePlaces(open + text + close) is { Village: true, PendingRule: null },
+                "未知或重复值不因资源形状拒绝礼包");
+        That(BoosterCatalog.ParseUsePlaces(open + "1 `[village]`" + close) == new BoosterUsePlacesDefinition(),
+            "非字符串终止地点读取，空列表不限制");
         foreach (string allowed in new[] { "`[village]`", "`[seria room]`" })
         {
             var places = BoosterCatalog.ParseUsePlaces(open + allowed + " `[dont use assult]`" + close);
@@ -101,7 +108,7 @@ internal static class BoosterUsePlacesTests
             That(source is { MinimumLevel: 1, MaximumLevel: int.MaxValue, RequiredSkill: 0, UseForbidden: false } &&
                 source.Jobs == jobs && definition.Available && definition.PackageRewards.SequenceEqual(expected) &&
                 !resources.AvatarPackages.Get(sourceId).Recognized &&
-                service.UsePlaces(sourceId) == new BoosterUsePlacesDefinition(true, true),
+                service.UsePlaces(sourceId) == new BoosterUsePlacesDefinition(true, true) { ExcludeAssault = true },
                 "真实十二固定包保留完整四奖、原源资格、固定入口与地点并集 " + sourceId);
             var roles = BoosterNativeSelectionTests.ResourceRoles(towns, characters, source, now).ToArray();
             That(roles.Aggregate(0, (mask, role) => mask | 1 << role.Job) == jobs,

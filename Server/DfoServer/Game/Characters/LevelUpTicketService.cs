@@ -24,6 +24,7 @@ internal sealed record LevelUpTicketSource(InventoryItem Item, InventoryPlan Inv
     public int CoolTime => ByTable?.CoolTime ?? Definition!.CoolTime;
     public bool TownOnly => ByTable?.TownOnly ?? Definition!.VillageOnly;
     public bool SeriaRoomOnly => ByTable?.SeriaRoomOnly == true || Definition?.SeriaRoomOnly == true;
+    public IReadOnlyList<string> Places => ByTable is { } table ? table.Places : Definition!.Places;
     public byte TargetLevel(byte level) => ByTable?.TargetLevel(level) ?? Definition!.TargetLevel(level, GainedLevels);
     public bool Allows(Character character) => (Definition, ByTable) switch
     {

@@ -1,15 +1,15 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
     public InventoryResult UseSkinStorage(InventorySkinStorageService service, InventorySlot position) =>
-        PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town,
-            Phase == SessionPhase.Town && towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))),
-            3, requireTown: false);
+        PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town),
+            3, requireTown: false, effectItem: position);
 
     // 在线日切清包：与选角/CMD20 共用 InventoryExpiryService.Plan，审计 item_expired。
     // 6 点可能没开服 → 必须有登录/选角扫兜底；本方法不能当唯一清理通道。A 不追溯：ExpireTime=0 不会被 Plan 删除。
@@ -130,9 +130,12 @@ internal sealed partial class GameSession
         SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id &&
         ReferenceEquals(Selected, receipt.Character));
 
+    // effectItem/usedItem只标记激活自身效果的源；出售、任务交付、普通成本扣料不得据此推断为使用。
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
-        bool requireTown = true, SessionPhase? requiredPhase = null, InventorySlot? usedItem = null) =>
-        PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem);
+        bool requireTown = true, SessionPhase? requiredPhase = null, InventorySlot? usedItem = null, InventorySlot? effectItem = null,
+        InventorySlot? useTarget = null) =>
+        PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem, effectItem: effectItem,
+            useTarget: useTarget);
 
     public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
         DfoServer.Game.Strongway2019.Strongway2019ShopRules.Handles(shopId) ? InventoryResult.Reject(17) :
@@ -186,11 +189,7 @@ internal sealed partial class GameSession
     public InventoryResult PlanAndCommitBooster(Func<Character, InventoryResult> plan,
         DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places, int itemId = 0) =>
         PlanAndCommitInventory(plan, 19, requireTown: false, allowSettlement: false, additionalGuard: () =>
-            places.PendingRule is null && (!places.Village && !places.SeriaRoom && !places.Dungeon ||
-                places.Dungeon && Phase == SessionPhase.Dungeon && formalDungeon is { } dungeon &&
-                    (!places.ExcludeAssault || dungeon.Assault is null) ||
-                Phase == SessionPhase.Town && (places.Village || places.SeriaRoom && Selected is { } character &&
-                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)))), consumableItemId: itemId);
+            Selected is { } character && places.Allows(CurrentStackableUseContext(character)), consumableItemId: itemId);
 
     public InventoryResult UsePremiumContract(ConsumableUseRequest request, InventoryPremiumContractUseService service) =>
         PlanAndCommitInventory(character => service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds()),
@@ -239,7 +238,7 @@ internal sealed partial class GameSession
 
     InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
         bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
-        int? consumableItemId = null, InventorySlot? usedItem = null)
+        int? consumableItemId = null, InventorySlot? usedItem = null, InventorySlot? effectItem = null, InventorySlot? useTarget = null)
     {
         bool requiresPcRoom = false;
         bool Qualified() => additionalGuard?.Invoke() != false && (!requiresPcRoom || PremiumPcRoom);
@@ -248,12 +247,15 @@ internal sealed partial class GameSession
             return InventoryResult.Reject(invalidStateError);
 
         Character character = capture.Character;
-        // 按实际使用源解析资源，保持锁外；规划和最终提交两次复核同一网吧环境。
-        if (UsedItemId(character) is > 0 and var pcRoomItemId)
+        int? effectSourceId = effectItem is { } effectSlot ? character.Inventory.Find(effectSlot)?.Core.ItemId : UsedItemId(character);
+        // 仅从明确的效果源读取网吧资格，成本材料不因此变成主动使用。
+        if (effectSourceId is > 0 and var pcRoomItemId)
             requiresPcRoom = items?.Get(pcRoomItemId).RequiresPcRoom == true;
         if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom))
             return InventoryResult.Reject(invalidStateError);
-
+        var qualification = EffectRules(character, effectSourceId, useTarget);
+        if (CheckStackableUse(character, capture.Epoch, capture.Phase, qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
+            return InventoryResult.Reject(invalidStateError);
         // 只读资源解析和批量规划不占用所属账号锁；此回调不能写库或修改在线状态。
         var result = plan(character);
         if (result is { Accepted: true, Plan: { } planned } && UsedItemId(character) is > 0 and var usedId &&
@@ -272,6 +274,8 @@ internal sealed partial class GameSession
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
             if (!InventoryPlanIsCurrent(capture, requireTown, allowSettlement, requiredPhase, Qualified, consumableItemId, usedItem))
+                return InventoryResult.Reject(invalidStateError);
+            if (CheckStackableUse(character, capture.Epoch, capture.Phase, qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
                 return InventoryResult.Reject(invalidStateError);
             if (result.Plan?.UnlockSkillTree == true && (HasClassExperienceContext || Selected?.Position is { Town: 10, Area: 4 }))
                 return InventoryResult.Reject(invalidStateError);

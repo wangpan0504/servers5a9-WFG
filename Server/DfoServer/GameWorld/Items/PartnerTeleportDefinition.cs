@@ -34,14 +34,11 @@ internal sealed record PartnerTeleportDefinition(ActionConsumableDefinition Sour
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
-            places.Any(place => place is not ("[village]" or "[seria room]")) ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null or < 0 ||
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null or > 7 ||
             file.DeclaredFields.Contains("total usable count") && file.TotalUsableCount is null or < 0 or > byte.MaxValue ||
-            file.DeclaredFields.Any(field => field is "action usable server type" or "usable game server type" or
-                "usable server type" or "booster info" or "increase status type" or "hp recovery" or "mp recovery" or
+            file.DeclaredFields.Any(field => field is "booster info" or "increase status type" or "hp recovery" or "mp recovery" or
                 "stat change" or "stat change duration" or "effect maintenance" or "total weekly usable count" or
                 "total accumulated usable count" or "use count limit all server item") ||
             raw.DeclaredNeededMaterials is not { } materials || materials.Count % 2 != 0)
@@ -55,6 +52,6 @@ internal sealed record PartnerTeleportDefinition(ActionConsumableDefinition Sour
         // [need material] 是购买价格，仅保留来源；使用时只扣一张券。
         return new(new(item, "[teleport to partner]", [1], file.CoolTime ?? 0,
             file.CoolGroup ?? -item.Id, file.CooltimeMaintenance ?? 0,
-            checked((byte)(file.TotalUsableCount ?? 0)), [.. places]), purchase.ToImmutable());
+            checked((byte)(file.TotalUsableCount ?? 0)), [.. (raw.DeclaredActionUsablePlaces ?? [])]), purchase.ToImmutable());
     }
 }

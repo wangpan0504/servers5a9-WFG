@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Towns;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAmplificationService(ItemCatalog items, AmplificationCatalog amplifications,
-    EnhancementCatalog enhancements, TownCatalog towns, TimeProvider? clock = null)
+    EnhancementCatalog enhancements, TimeProvider? clock = null)
 {
     internal const ushort Rejection = 17;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
@@ -22,8 +22,7 @@ internal sealed class InventoryAmplificationService(ItemCatalog items, Amplifica
         if (definition is null) return InventoryResult.Reject(Rejection);
         return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition, amplifications.Rules,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), enhancements.Allows(target.Core.ItemId, EnhancementMode.Amplify),
-            amplifications.UsesCharacterLevel(target.Core.ItemId), !definition.Village && definition.SeriaRoom &&
-                towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet()),
+            amplifications.UsesCharacterLevel(target.Core.ItemId), false,
             Random.Shared.NextInt64, out receipt, Clock);
     }
 
@@ -45,7 +44,6 @@ internal sealed class InventoryAmplificationService(ItemCatalog items, Amplifica
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind || target.Core.Kind != ItemKind.Equipment ||
             sourceTemplate.UseForbidden ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) ||
-            !(definition.Village || inRoom && definition.SeriaRoom) ||
             (purify ? definition.Operation is not (AmplificationOperation.Purify or AmplificationOperation.Clear or AmplificationOperation.GoldClear) :
                 request.Operation != definition.Operation))
             return InventoryResult.Reject(Rejection);

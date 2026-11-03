@@ -19,6 +19,8 @@ internal sealed partial class GameSession
             return new(new(19), null, Current);
         var replay = service.Store.ReplayGuildExperienceGift(identity, requestId, slot.Index, service.Now);
         if (replay is not null) return new(replay, null, Current);
+        if (!CanUseStackableItem(expected, expected.Inventory.Find(slot)?.Core.ItemId ?? 0))
+            return new(new(19), null, Current);
         GuildExperienceGiftPlan plan;
         try { plan = service.Prepare(identity, expected, slot); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
@@ -27,6 +29,7 @@ internal sealed partial class GameSession
         {
             if (pendingConsumableUse is not null) return new GuildExperienceUseResult(new(19), null, Current, true);
             if (!identity.IsCurrent() || !Current() || !CanUseConsumable()) return new(new(19), null, Current, true);
+            if (!CanUseStackableItem(expected, plan.Source.Core.ItemId)) return new(new(19), null, Current);
             pendingConsumableUse = plan.Inventory;
             GuildExperienceCommit commit;
             try { commit = service.Commit(identity, plan, requestId); }

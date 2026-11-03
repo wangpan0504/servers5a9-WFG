@@ -70,6 +70,7 @@ internal sealed class TitleCatalog
     public bool Fits(int category, int index, int itemId) => Slots.TryGetValue((category, index), out var row) &&
         row.Kind != -1 && (row.QuestId == -1 || row.Items.Contains(itemId)) &&
         (!Sections.TryGetValue(SectionKey(category, index / 10), out var section) || section.LockMessage.Length == 0);
-    public (int Category, int Index)? RewardSlot(int questId, int itemId) => Slots.Where(pair => pair.Value.QuestId == questId && pair.Value.Items.Contains(itemId))
+    public (int Category, int Index)? RewardSlot(int questId, int itemId, int? category = null) => Slots.Where(pair =>
+        (category is null || pair.Key.Category == category) && pair.Value.QuestId == questId && pair.Value.Items.Contains(itemId))
         .Select(pair => ((int Category, int Index)?)pair.Key).FirstOrDefault();
 }

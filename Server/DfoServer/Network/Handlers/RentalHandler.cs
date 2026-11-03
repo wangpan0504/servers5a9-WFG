@@ -18,7 +18,7 @@ internal sealed class RentalHandler(RentalService rental, InventoryProjection pr
             request.List == 0 && request.Slot <= short.MaxValue;
         var position = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
         var result = !valid || context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.PlanAndCommitInventory(character => rental.UsePoints(character, position), 19);
+            context.Session.PlanAndCommitInventory(character => rental.UsePoints(character, position), 19, effectItem: position);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
             context.Session.Phase == before.Phase);

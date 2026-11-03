@@ -165,16 +165,17 @@ internal static partial class EnchantmentTests
         var templates = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         templates.PrefillTemplates(new Dictionary<int, ItemTemplate> { [beadId] = beadTemplate, [titleId] = titleTemplate });
         noDraws = draws;
-        foreach (string extra in new[] { "[action usable place]\n`[unknown place]`\n[/action usable place]",
-            "[item category]\n`restricted`\n[/item category]", "[usable expired item]\n" })
+        foreach (string extra in new[] { "[item category]\n`restricted`\n[/item category]", "[usable expired item]\n" })
         {
             var pending = Catalog(bead + "\n" + extra);
             var service = new InventoryEnchantmentService(templates, pending, random: _ => { draws++; return 0; });
             var rejected = service.Plan(role, request, now);
             That(pending.Get(beadId) is null && !rejected.Accepted && rejected.Plan is null && draws == noDraws &&
                 role.Inventory.Find(source.Position) == source && role.Inventory.Find(target.Position) == target,
-                "多卡地点、分类或材料声明未闭合时，真实服务拒绝且不抽样、不扣源、不改目标");
+                "多卡分类或材料声明未闭合时，真实服务拒绝且不抽样、不扣源、不改目标");
         }
+        That(Catalog(bead + "\n[action usable place]\n`[unknown place]`\n[/action usable place]").Get(beadId) is not null,
+            "未知地点不改变多卡宝珠身份");
         EnchantmentDefinition? mixed = null;
         try { mixed = Load(bead, (_, files) => files["stackable/third.stk"] = card.Replace("[title]", "[wrist]")); }
         catch (InvalidDataException) { }

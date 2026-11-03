@@ -38,7 +38,7 @@ internal sealed class AvatarDyeCatalog
             !script.TryGetInt32("dye type", out int type) || type != 1) return null;
         foreach (string field in new[] { "cooltime maintenance", "effect maintenance", "total usable count", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
-            "action usable server type", "usable game server type", "usable server type", "check usable itemlevel" })
+            "check usable itemlevel" })
             if (script.Has(field)) return null;
         string[] values = script.Block("dye info").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         // 已核对type1的固定颜色/权重对；不将未知类型或多行表当成取首项的随机染色。

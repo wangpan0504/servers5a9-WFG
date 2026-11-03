@@ -1,4 +1,5 @@
 using PvfLib;
+using System.Collections.Immutable;
 
 namespace DfoServer.GameWorld.Items;
 
@@ -7,6 +8,7 @@ internal enum LegacyStatusConsumableKind : byte { ReviveCoins = 13 }
 internal sealed record LegacyStatusConsumableDefinition(ItemTemplate Item, LegacyStatusConsumableKind Kind, int Amount,
     int CoolTime, int CoolGroup, bool VillageOnly)
 {
+    public ImmutableArray<string> Places { get; init; } = [];
     public static bool IsNativeItem(int id) => id is 7180 or 7181;
 
     public static LegacyStatusConsumableDefinition? Parse(ExperienceConsumableFile file, ItemTemplate item)
@@ -26,11 +28,10 @@ internal sealed record LegacyStatusConsumableDefinition(ItemTemplate Item, Legac
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not ["[village]"] ||
-            raw.DeclaredActionUsableServerTypes is { Count: > 0 } ||
             file.DeclaredFields.Any(field => field is "action type" or "booster info" or "hp recovery" or "mp recovery" or
                 "stat change" or "stat change duration" or "levelup range" or "usable first growtype" or "dont change grow type"))
             return null;
-        return new(item, value.Kind, value.Amount, raw.DeclaredCoolTime ?? 0, file.CoolGroup ?? -item.Id, raw.HasActionUsablePlace);
+        return new(item, value.Kind, value.Amount, raw.DeclaredCoolTime ?? 0, file.CoolGroup ?? -item.Id,
+            StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces)) { Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [] };
     }
 }

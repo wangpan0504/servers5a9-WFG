@@ -14,15 +14,19 @@ internal sealed partial class GameSession
         ClassChangeResult Rejected(ushort error, string reason) => new(error, reason, capture.Selected,
             capture.Generation, capture.SelectionEpoch, capture.Phase);
         if (!capture.Allowed || capture.Selected is not { } before) return Rejected(30, "not-ready-town");
+        int useItemId = before.Inventory.Find(new(Game.Inventory.Models.InventoryListType.Main, request.Slot))?.Core.ItemId ?? 0;
+        if (!CanUseStackableItem(before, useItemId)) return Rejected(23, "usable-qualification");
         ClassChangePreparation prepared;
         try { prepared = service.Prepare(before, request, now); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)
         { return Rejected(23, "unsupported-class-resource: " + error.Message[..Math.Min(error.Message.Length, 160)]); }
         if (prepared.Plan is not { } plan) return Rejected(prepared.Error, prepared.Reason);
+        if (!CanUseStackableItem(before, useItemId, places: plan.Places)) return Rejected(23, "usable-qualification");
         return owner.Execute(() =>
         {
             if (!Allowed() || SelectionEpoch != capture.SelectionEpoch || !ReferenceEquals(Selected, before))
                 return Rejected(30, "stale-class-change");
+            if (!CanUseStackableItem(before, useItemId, places: plan.Places)) return Rejected(23, "usable-qualification");
             var committed = repository.CommitClassChange(owner, plan);
             Selected = committed;
             return new ClassChangeResult(0, "committed", committed, owner.Generation, SelectionEpoch, Phase, plan);

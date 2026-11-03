@@ -14,16 +14,35 @@ internal sealed partial class CharacterRepository
     {
         var expected = plan.Expected;
         var scope = plan.ScopeQuestIds.ToHashSet();
-        var removal = QuestQuickClearPlan.RemovalScope(expected,scope,quests);
+        var removal = plan.ActiveRemovalScope(quests);
         var newCompleted = scope.Except(QuestEligibility.Completed(expected)).Order().ToArray();
         bool validIdentity = plan.IsPreparedSkip
             ? plan.OperationId != Guid.Empty && plan.AcceptanceId == Guid.Empty && plan.ParentKey is null && plan.QuestionQuestId is null &&
-                plan.PendingQuestions.Length == 0 && plan.CutoffLevel == (plan.IsTicket ? expected.Level : QuestQuickClearPlan.ManualCutoff(plan.TargetLevel)) &&
+                plan.PendingQuestions.Length == 0 && plan.CutoffLevel == (plan.IsFixedLevelTicket ? plan.MarkingLimit :
+                    plan.IsTicket ? expected.Level : QuestQuickClearPlan.ManualCutoff(plan.TargetLevel)) &&
                 plan.ManualAnswers.Keys.All(scope.Contains)
             : plan.OperationId == plan.AcceptanceId && plan.AcceptanceId != Guid.Empty && plan.Unit.ParentKey >= 0 &&
                 expected.ActiveMainQuests.Contains(plan.ActiveQuestion) && plan.ActiveQuestion.QuestId == plan.Question.Id &&
                 scope.SetEquals(plan.Interval.Concat(plan.AreaQuests).Select(quest => quest.Id).Append(plan.Question.Id).Append(plan.MarkerQuestId));
         var expectedAnswers = plan.IsPreparedSkip ? expected.QuestAnswers.SetItems(plan.ManualAnswers) : expected.QuestAnswers.SetItem(plan.Question.Id,plan.Answer);
+        if (plan.IsAchievementTicket && (plan.Interval.Any(quest=>!QuestQuickClearPlan.AchievementTitle(quest) || quest.MinimumLevel>expected.Level) ||
+            !plan.ManualAnswers.IsEmpty || !plan.SyncedQuestIds.IsEmpty))
+            throw new InvalidDataException("成就券只能提交当前等级内的achievement/title交集");
+        if (plan.IsFixedLevelTicket && (plan.CutoffLevel<1 ||
+            plan.Interval.Any(quest=>quest.MinimumLevel<1 || quest.MinimumLevel>plan.CutoffLevel ||
+                !QuestQuickClearPlan.MarkingGrade(quest,plan.Ticket!.Definition.ActionIndex)) ||
+            !plan.ManualAnswers.IsEmpty || plan.ProfessionGrowType is not null || plan.TargetLevel!=expected.Level ||
+            !SameLearning(plan.TargetLearning,expected.Learning)))
+            throw new InvalidDataException("定级清理券只能登记资源等级内主线及称号，不改变等级职业或技能");
+        var titles=plan.Effects?.Titles;
+        if (!plan.GeneralTitleQuestIds.IsEmpty && (!plan.HasTitleRewards || titles is null ||
+            !ReferenceEquals(titles.Before,expected) || !ReferenceEquals(titles.Inventory,plan.Inventory) ||
+            !titles.Completed.SequenceEqual(plan.GeneralTitleQuestIds) ||
+            !titles.Progress.Where(row=>expected.TitleProgress.GetValueOrDefault(row.Key)!=row.Value)
+                .Select(row=>row.Key).ToHashSet().SetEquals(plan.GeneralTitleQuestIds) ||
+            !titles.Sections.IsSupersetOf(expected.TitleSections) || titles.Sections.Except(expected.TitleSections).Any(key=>key is <0 or >=256)) ||
+            titles is not null && plan.GeneralTitleQuestIds.IsEmpty)
+            throw new InvalidDataException("成就券称号簿奖励必须保持冻结的general范围和同一库存规划");
         if (expected.Id == 0 || !validIdentity ||
             plan.IsOrphanRepair && (!plan.IsManual || scope.Count!=0 || plan.Inventory.Changed || removal.Count==0) ||
             !plan.NewCompletedQuestIds.SequenceEqual(newCompleted) ||
@@ -37,7 +56,7 @@ internal sealed partial class CharacterRepository
             !QuestCycle.SameAnswers(plan.AccountAnswersAfter,expected.AccountQuestAnswers))
             throw new InvalidDataException("无奖励跳过规划必须保留原接取、完整范围及无关任务状态");
         byte slots=expected.EquipmentSlotFlags;
-        foreach(var quest in plan.Interval.Concat(plan.AreaQuests).Where(quest=>plan.NewCompletedQuestIds.Contains(quest.Id)))
+        foreach(var quest in plan.Interval.Concat(plan.AreaQuests).Where(quest=>!plan.IsFixedLevelTicket && plan.NewCompletedQuestIds.Contains(quest.Id)))
             slots=QuestCharacterReward.EquipmentSlots(expected with { EquipmentSlotFlags=slots },quest);
         if(plan.EquipmentSlotFlagsAfter!=slots) throw new InvalidDataException("槽位变化必须来自实际完成任务的合法奖励");
         if (plan.ProfessionGrowType is { } professionGrow && plan.LevelUpTicket?.ProfessionGrowType is null)
@@ -104,6 +123,8 @@ internal sealed partial class CharacterRepository
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             if (source.Item.Core.IsExpired(now)) throw new QuestTicketExpiredException();
+            if (plan.HasTitleRewards && inventory.CharacterPrecondition?.IsExpired(now)==true)
+                throw new QuestTicketExpiredException("称号奖励在提交前已到期");
             if (!source.Definition.Allows(current.Level,current.Job))
                 throw new InvalidOperationException("任务券在提交前资格变化");
         }
@@ -178,6 +199,8 @@ internal sealed partial class CharacterRepository
             command.Parameters.RemoveAt("$quest"); command.Parameters.RemoveAt("$answer");
         }
         WriteAccountSyncMarkers(db,tx,owner.Account,plan.SyncedQuestIds,plan.OperationId);
+        if (titles is not null)
+            WriteTitleRewardsInTransaction(db,tx,owner,expected with { Revision=checked(expected.Revision+1) },titles);
         command.Parameters.AddWithValue("$acceptance",plan.IsPreparedSkip ? DBNull.Value : plan.AcceptanceId.ToString("N"));
         command.Parameters.AddWithValue("$parent",plan.ParentKey is { } parent ? parent : DBNull.Value);
         command.Parameters.AddWithValue("$question",plan.QuestionQuestId is { } question ? question : DBNull.Value);
@@ -207,7 +230,8 @@ internal sealed partial class CharacterRepository
         Character After() => expected with { Revision = checked(expected.Revision+1), ActiveMainQuests = plan.ActiveAfter.ToArray(),
             CompletedQuests = plan.CompletedAfter.ToArray(), AccountCompletedQuests = plan.AccountCompletedAfter.ToArray(), QuestAnswers = plan.AnswersAfter, Inventory = persistedInventory,
             EquipmentSlotFlags=plan.EquipmentSlotFlagsAfter,GrowType=plan.ProfessionGrowType ?? expected.GrowType,
-            Level=plan.TargetLevel,Learning=plan.TargetLearning,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
+            Level=plan.TargetLevel,Learning=plan.TargetLearning,TitleProgress=titles?.Progress ?? expected.TitleProgress,
+            TitleSections=titles?.Sections ?? expected.TitleSections,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
                 plan.TargetLearning.Trees.Single(row=>row.Context==plan.TargetLearning.ActiveContext).Skills.Select(row=>new CharacterSkill(row.Id,row.Level)).OrderBy(row=>row.Id).ToArray() };
 
         bool Matches(Character actual,Character target) => actual.Id == target.Id && actual.Slot == target.Slot &&
@@ -216,6 +240,8 @@ internal sealed partial class CharacterRepository
             actual.AcceptedStoryLevel == target.AcceptedStoryLevel && actual.Position == target.Position && actual.Return == target.Return &&
             actual.DungeonState == target.DungeonState && actual.Skills.SequenceEqual(target.Skills) && SameLearning(actual.Learning,target.Learning) &&
             SameInventory(actual.Inventory,new(target.Inventory,target.Inventory,"quest_skip_comparison")) && actual.ActiveMainQuests.SequenceEqual(target.ActiveMainQuests) &&
-            actual.CompletedQuests.SequenceEqual(target.CompletedQuests) && QuestCycle.Same(actual,target);
+            actual.CompletedQuests.SequenceEqual(target.CompletedQuests) && QuestCycle.Same(actual,target) &&
+            actual.TitleProgress.OrderBy(row=>row.Key).SequenceEqual(target.TitleProgress.OrderBy(row=>row.Key)) &&
+            actual.TitleSections.SetEquals(target.TitleSections);
     });
 }

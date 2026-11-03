@@ -94,9 +94,9 @@ internal static class EquipmentTransferSealTests
             "普通跨界按等级乘稀有度扣多枚石头，移入真实账号仓库并保留完整UID/核心");
         Bytes(CreatureTransportPackets.Ack(request, new(true,0,plan!.Inventory) { Receipt = new(sender with { Inventory = plan.Inventory.After },1,1) }),
             [1,82,0,9,0,4,0,0,0,0], "跨界ACK第四u16为仓库槽而非固定参数");
-        That(service.Plan(sender,null,request,"[village]",out _) == 21 &&
+        That(service.Plan(sender,null,request,"[village]",out _) == 0 &&
             service.Plan(sender with { Inventory = sender.Inventory with { AccountCargo = new() } },null,request,"[seria room]",out _) == 19,
-            "跨界地点和账号仓库容量不满足时整单拒绝");
+            "跨界规划不另按地点字符串拒绝，统一Session门禁负责场景；账号仓库容量不足仍整单拒绝");
         var adjusted = sender with { Inventory = sender.Inventory with
             { Items = sender.Inventory.Items.Replace(target,target with { Core=target.Core with { EmancipateLevel=11 } }) } };
         That(service.Plan(adjusted,null,request,"[seria room]",out var stoneAdjusted)==0 &&

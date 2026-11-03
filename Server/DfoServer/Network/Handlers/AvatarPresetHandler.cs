@@ -140,7 +140,7 @@ internal sealed class AvatarPresetHandler(AvatarPresetService presets, AvatarPre
                 ? InventoryResult.Reject(19)
                 : context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
                     ? presets.PlanCapacity(character, source, definition, before.Phase == SessionPhase.Town)
-                    : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase);
+                    : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase, effectItem: source);
         }
         catch (Exception error) when (error is DbException or InvalidDataException or KeyNotFoundException)
         {

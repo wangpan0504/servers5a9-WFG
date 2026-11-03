@@ -221,8 +221,9 @@ internal static class EquipmentTransferSealTcpTests
             planned.Inventory.After.Find(Bag(9)) is null && planned.Inventory.After.Find(Bag(80))!.Core.Count == 1 &&
             planned.Inventory.After.Find(new(InventoryListType.AccountCargo, 0)) == planned.Transferred,
             "真实481到267沿既有mode0计划保原UID及完整Core、扣1并迁入账号金库");
-        That(service.Plan(role, null, new(80, 9, 0, 0), "[village]", out _) == 21,
-            "真实481的赛丽亚场景限制不放宽到普通城镇");
+        That(service.Plan(role, null, new(80, 9, 0, 0), "[village]", out _) == 0 &&
+            !StackableUsePlaces.Allows(action!.Places, "[village]"),
+            "跨界资产规划不重复拦地点，真实481的仅房间声明仍由统一规则拒绝普通村庄");
         var expiredTarget = role with { Inventory = role.Inventory with
             { Items = role.Inventory.Items.Replace(target, target with { Core = original with { ExpireTime = 1 } }) } };
         var expiredSource = role with { Inventory = role.Inventory with

@@ -29,22 +29,33 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
         }
         EnhancementReceipt? receipt = null;
         bool resourceInvalid = false;
-        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryEnhancementService.Rejection) :
+        InventorySlot? effectSource = null;
+        try
+        {
+            if (capture.Selected is { } sourceCharacter && service.IsEffectSource(sourceCharacter, request))
+                effectSource = new(InventoryListType.Main, request.MaterialSlot);
+        }
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
+        { resourceInvalid = true; }
+        var result = resourceInvalid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryEnhancementService.Rejection) :
             context.Session.PlanAndCommitInventory(character =>
             {
+                if (!ReferenceEquals(character, capture.Selected)) return InventoryResult.Reject(InventoryEnhancementService.Rejection);
                 try
                 {
                     int bonus = guildBenefits?.SuccessPercent(context.Session.CaptureGuildManagement(),
                         request.Mode == EnhancementMode.Amplify ? "equip amplify upgrade buff" : "equip upgrade buff",
                         (character.Inventory.Find(request.Target)?.Core.Upgrade ?? 0) + 1) ?? 0;
-                    return service.Plan(character, request, out receipt, guildSuccessPercent: bonus);
+                    return service.Plan(character, request, out receipt, guildSuccessPercent: bonus,
+                        canUseSource: id => context.Session.CanUseStackableItem(character, id, automatic: true));
                 }
                 catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
                 {
                     resourceInvalid = true;
                     return InventoryResult.Reject(InventoryEnhancementService.Rejection);
                 }
-            }, InventoryEnhancementService.Rejection);
+            }, InventoryEnhancementService.Rejection,
+                effectItem: effectSource);
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) : SameSelection();
         log.Write("enhancement", new { Connection = context.Id, request.Mode, TargetList = request.Target.List,
             TargetSlot = request.Target.Index, request.MaterialSlot, result.Accepted, result.Error,

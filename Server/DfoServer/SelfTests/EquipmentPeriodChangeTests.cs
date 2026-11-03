@@ -33,7 +33,7 @@ internal static class EquipmentPeriodChangeTests
 
     public static void RunCore()
     {
-        var definition = EquipmentPeriodChangeDefinition.Parse(File([SourceWeapon, ProductWeapon]), DesignTemplate)!;
+        var definition = EquipmentPeriodChangeDefinition.Parse(File([SourceWeapon, ProductWeapon], "[village]", "[seria room]"), DesignTemplate)!;
         That(definition.Upgrades.Count == 1 && definition.Upgrades[SourceWeapon] == ProductWeapon,
             "★ 成对声明装配为前项武器到后项哈林史诗的映射");
         That(definition.AllowsPlace("[village]") && definition.AllowsPlace("[seria room]") && !definition.AllowsPlace("[dungeon]"),
@@ -42,11 +42,13 @@ internal static class EquipmentPeriodChangeTests
         {
             (File([SourceWeapon]), "奇数长度"),
             (File([SourceWeapon, ProductWeapon, SourceWeapon, ProductWeapon]), "重复源武器"),
-            (File([SourceWeapon, 0]), "非正输出武器"),
-            (File([SourceWeapon, ProductWeapon], "[dungeon]"), "声明了不支持的地点")
+            (File([SourceWeapon, 0]), "非正输出武器")
         })
             That(EquipmentPeriodChangeDefinition.Parse(invalid, DesignTemplate) is null,
                 "★ " + reason + "的声明整份拒绝，不做猜测性对齐");
+        That(EquipmentPeriodChangeDefinition.Parse(File([SourceWeapon, ProductWeapon]), DesignTemplate)!.AllowsPlace("[dungeon]") &&
+            EquipmentPeriodChangeDefinition.Parse(File([SourceWeapon, ProductWeapon], "[dungeon]"), DesignTemplate)!.AllowsPlace("[dungeon]"),
+            "无地点声明不额外限制，副本声明按实际地点匹配");
 
         var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
@@ -92,8 +94,8 @@ internal static class EquipmentPeriodChangeTests
         That(!service.Plan(character with { Inventory = new([design, shopMaterial,
                 weapon with { Core = weapon.Core with { ItemId = ProductWeapon } }]) },
                 designSlot, weaponSlot, inTown: true).Accepted, "已转换过的目标不再二次制作");
-        That(!service.Plan(character, designSlot, weaponSlot, inTown: false).Accepted,
-            "地下城内不能使用该制作图");
+        That(service.Plan(character, designSlot, weaponSlot, inTown: false).Accepted,
+            "制作资产规划不另设地点阻止，使用场景由统一Session入口检查");
         That(!service.Plan(character with { Inventory = new([design, shopMaterial,
                 weapon with { Core = weapon.Core with { EquipmentLockId = 1 } }]) },
                 designSlot, weaponSlot, inTown: true).Accepted, "安全锁目标不参与制作");

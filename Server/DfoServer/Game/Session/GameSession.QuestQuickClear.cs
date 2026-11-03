@@ -116,9 +116,10 @@ internal sealed partial class GameSession
                         row.Core.Count > 0 && row.Core.EquipmentLockId == 0 && !row.Core.IsExpired(now));
                 if (item is null) return receipt;
                 var source = QuestTicketSource.Create(expected,item.Position,items.QuestTicket((int)templateId),now);
-                if (source.Definition.VillageOnly && capture.Phase!=SessionPhase.Town)
-                    return receipt with {Reason="实际觉醒券声明仅在城镇使用"};
-                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out plan,out string reason,skills,towns))
+                if (!CanUseStackableItem(expected, source.Item.Core.ItemId, places: source.Definition.Places))
+                    return receipt with {Reason="任务券当前地点不符合资源声明"};
+                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out plan,out string reason,skills,towns,
+                    questEffects?.TitleCatalog))
                     return receipt with { Reason = reason };
                 if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
                 pending = null;
@@ -142,6 +143,12 @@ internal sealed partial class GameSession
         if (capture.Character is not { } expected) return null;
         var receipt = new QuestQuickClearReceipt(expected,null,owner.Generation,capture.SelectionEpoch,capture.Phase,capture.Identity,"没有可用任务券");
         var pending = capture.Pending;
+        // 99/181/182/183可直接发送515；成功ACK后有当前源时重新评估范围。
+        // 规划失败不覆盖原回执，源已耗尽或尚未确认的提交仍沿原恢复路径处理。
+        if (action is QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction or QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction &&
+            pending is { Committed:not null,TicketAcknowledged:true } &&
+            list==(byte)InventoryListType.Main && slot<=short.MaxValue && expected.Inventory.Find(new(InventoryListType.Main,(short)slot)) is not null)
+            pending=null;
         // 已确认消费的回执只恢复同一源槽/动作；下一张合法券可替换它，规划失败仍保留原回执。
         if (pending is { Committed: not null, TicketAcknowledged: true } &&
             (pending.Plan.Ticket is not { } prior || prior.Item.Position.List != (InventoryListType)list ||
@@ -151,8 +158,8 @@ internal sealed partial class GameSession
         {
             if (!pending.Plan.IsTicket || !SameManualPending(pending,expected,capture.SelectionEpoch,capture.Phase,capture.Identity) ||
                 pending.Plan.PendingQuestions.Length != 0 || pending.Plan.Ticket!.Definition.ActionIndex != action) return receipt;
-            if (pending.Plan.Ticket.Definition.VillageOnly && capture.Phase!=SessionPhase.Town)
-                return receipt with {Reason="实际觉醒券声明仅在城镇使用"};
+            if (!CanUseStackableItem(expected, pending.Plan.Ticket.Item.Core.ItemId, places: pending.Plan.Ticket.Definition.Places))
+                return receipt with {Reason="任务券当前地点不符合资源声明"};
             if (pending.CommitStarted || pending.Committed is not null)
             {
                 if (pending.Plan.Ticket!.Item.Position.List != (InventoryListType)list || pending.Plan.Ticket.Item.Position.Index != slot) return receipt;
@@ -166,10 +173,12 @@ internal sealed partial class GameSession
                     // 1430只带template；首次真实515才冻结所报slot的实例，不消费准备时借用的另一张。
                     if (expected.Inventory.Find(position) is not { } item || item.Core.ItemId != pending.Plan.Ticket!.Definition.TemplateId) return receipt;
                     var source = QuestTicketSource.Create(expected,position,pending.Plan.Ticket.Definition,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                    if (!QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,source,pending.Plan.ManualAnswers,out var plan,out string reason,skills,towns))
+                    if (!QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,source,pending.Plan.ManualAnswers,out var plan,out string reason,skills,towns,
+                        questEffects?.TitleCatalog))
                         return receipt with { Reason = reason };
                     if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
-                    if (!plan!.ScopeQuestIds.SequenceEqual(pending.Plan.ScopeQuestIds) || !plan.PendingQuestions.IsEmpty ||
+                    if (!plan!.ScopeQuestIds.SequenceEqual(pending.Plan.ScopeQuestIds) ||
+                        !plan.GeneralTitleQuestIds.SequenceEqual(pending.Plan.GeneralTitleQuestIds) || !plan.PendingQuestions.IsEmpty ||
                         !QuestCycle.SameAnswers(plan.AnswersAfter,pending.Plan.AnswersAfter) ||
                         plan.EquipmentSlotFlagsAfter!=pending.Plan.EquipmentSlotFlagsAfter ||
                         plan.ProfessionGrowType!=pending.Plan.ProfessionGrowType)
@@ -190,9 +199,10 @@ internal sealed partial class GameSession
                 if (item is null) return receipt;
                 var source = QuestTicketSource.Create(expected,position,items.QuestTicket(item.Core.ItemId),DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 if (source.Definition.ActionIndex!=action) return receipt with { Reason="515动作与实际券声明不符" };
-                if (source.Definition.VillageOnly && capture.Phase!=SessionPhase.Town)
-                    return receipt with {Reason="实际觉醒券声明仅在城镇使用"};
-                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out var plan,out string reason,skills,towns))
+                if (!CanUseStackableItem(expected, source.Item.Core.ItemId, places: source.Definition.Places))
+                    return receipt with {Reason="任务券当前地点不符合资源声明"};
+                if (!QuestQuickClearPlan.TryCreateTicket(expected,Guid.NewGuid(),quests,source,ImmutableDictionary<int,byte>.Empty,out var plan,out string reason,skills,towns,
+                    questEffects?.TitleCatalog))
                     return receipt with { Reason = reason };
                 if(!FreezeQuestEffects(plan!,quests,out string effectReason)) return receipt with { Reason=effectReason };
                 if (plan!.PendingQuestions.Length != 0) return receipt with { Reason = "任务券问题尚未准备回答" };
@@ -263,7 +273,8 @@ internal sealed partial class GameSession
         bool created = pending.Plan.LevelUpTicket is { } levelUp
             ? QuestQuickClearPlan.TryCreateLevelUpTicket(expected,pending.Plan.OperationId,quests,levelUp,choices,out plan,out reason,towns)
             : pending.Plan.Ticket is { } ticket
-                ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out plan,out reason,towns:towns)
+                ? QuestQuickClearPlan.TryCreateTicket(expected,pending.Plan.OperationId,quests,ticket,choices,out plan,out reason,towns:towns,
+                    titles:questEffects?.TitleCatalog)
                 : QuestQuickClearPlan.TryCreateManual(expected,pending.Plan.OperationId,quests,choices,out plan,out reason,towns);
         if (!created)
             return receipt with { Reason = reason };

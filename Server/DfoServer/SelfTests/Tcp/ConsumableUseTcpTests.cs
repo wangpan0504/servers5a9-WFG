@@ -34,12 +34,17 @@ internal static partial class ConsumableUseTcpTests
             { Experience = growth.GetLevelStartExperience(20) }, resources.Learning);
             var created = repository.Create(owner, candidate with { Level = 20, InitialLearning = learning,
                 Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+                    .Add(new(0, new(InventoryListType.Main, 9), candidate.Inventory.Find(new(InventoryListType.Equipment, 12))!.Core))
                     .Add(new(0, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1108), 3)))
                     .Add(new(0, new(InventoryListType.Main, 66), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1113), 2)))
                     .Add(new(0, new(InventoryListType.Main, 67), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1016), 2)))
                     .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(6001), 2)))
                     .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2)))
-                    .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2600021), 2))) } });
+                    .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2600021), 2)))
+                    .Add(new(0, new(InventoryListType.Main, 73), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10095684), 1) with { ExpireTime = 0 }))
+                    .Add(new(0, new(InventoryListType.Main, 74), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10000949), 1) with { ExpireTime = 0 }))
+                    .Add(new(0, new(InventoryListType.Main, 75), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10153528), 1) with { ExpireTime = 0 }))
+                    .Add(new(0, new(InventoryListType.Main, 76), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2601000), 1) with { ExpireTime = 0 })) } });
             activeId = created.Id;
             repository.Create(owner, candidate with { Name = "DungeonDose", Level = 20, InitialLearning = learning,
                 Inventory = candidate.Inventory with { Gold = checked((uint)resources.ItemResources.DevilContracts.RecoveryPrices[19]), Items = candidate.Inventory.Items
@@ -47,7 +52,8 @@ internal static partial class ConsumableUseTcpTests
                     .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(6001), 2)))
                     .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2)))
                     .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10), 1)))
-                    .Add(new(0, new(InventoryListType.Main, 71), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1114), 2))) } });
+                    .Add(new(0, new(InventoryListType.Main, 71), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1114), 2)))
+                    .Add(new(0, new(InventoryListType.Main, 72), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490003900), 1) with { ExpireTime = 0 })) } });
         }
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -155,6 +161,32 @@ internal static partial class ConsumableUseTcpTests
             peer.Send(692, Name("OtherName")); peer.Expect(1, 692, [1]);
             That(Assets() == before, "未选角完整失败ACK收尾后连接继续，数量/审计不变");
             peer.Select();
+            foreach (var item in new[] { (Slot: (ushort)73, Id: 10095684, Action: 0u), (Slot: (ushort)74, Id: 10000949, Action: 60u) })
+            {
+                before = Assets();
+                Use(peer, item.Slot, 22, item.Id); Refused(peer, 22, item.Id);
+                peer.Send(515, Build(w => { w.Write(item.Slot); w.Write((byte)0); w.Write(0u); w.Write(item.Action); w.Write(0u); w.Write(0u); }));
+                peer.Expect(1, 515, [0, 0, 0, (byte)item.Slot, 0, 0, (byte)item.Action]); peer.Barrier();
+                That(Assets() == before && Count((short)item.Slot) == 1,
+                    "真实dont-open/竞技大赛资源在城镇经44/515拒绝，不扣源或写奖励/冷却：" + item.Id);
+            }
+            before = Assets();
+            Use(peer,75,23,10153528); Refused(peer,23,10153528);
+            peer.Send(515,Build(w => { w.Write((ushort)75);w.Write((byte)0);w.Write(0u);w.Write(0u);w.Write(0u);w.Write(0u); }));
+            peer.Expect(1,515,[0,0,0,75,0,0,0]); peer.Barrier();
+            That(Count(75)==1 && Assets()==before,"真实guildmember资源在44/515效果分发前拒绝无公会角色，不消费或建立效果");
+            peer.Send(272,Build(w => { w.Write((byte)0);w.Write((ushort)76);w.Write((byte)3);w.Write((ushort)12);w.Write(0u); }));
+            peer.Expect(1,272,[0,23,0]);peer.Barrier();
+            That(Count(76)==1 && Assets()==before,"fair宝珠不能作用于common装备，在附魔效果分发前拒绝且保留完整资产");
+            peer.Send(601, Build(w => { w.Write(peer.Id); w.Write(0u); w.Write((byte)2); w.Write((byte)0);
+                w.Write((ushort)9); w.Write((byte)0); w.Write((ushort)76); }));
+            peer.Expect(1, 601, [0, 23, 0]); peer.Barrier();
+            That(Count(76) == 1 && Assets() == before, "同一fair宝珠不能经本人601绕过世界兼容限制，不借卡片材料路径消费");
+            peer.Send(22,Build(w => { w.Write((byte)0);w.Write((short)75);w.Write(1);w.Write(1);w.Write(2);w.Write(153); }));
+            var sale = peer.Expect(1,22);
+            That(sale.Body.Length==12 && sale.Body[0]==1,"同一guildmember物品仍可出售，使用资格不变成持有或售卖资格");
+            peer.Barrier(packet => That(packet.Kind==0 && packet.Opcode==14,"出售只沿原库存差量发布，不触发道具效果"));
+            That(Count(75)==0,"无公会角色卖出此前不能使用的物品，真实源删除而非假成功");
             foreach (var item in new[] { (Slot: (ushort)68,Id: 6001), (Slot: (ushort)69,Id: 1073) })
             {
                 before = Assets(); Use(peer,item.Slot,0,item.Id); Refused(peer,0,item.Id); peer.Barrier();
@@ -209,6 +241,13 @@ internal static partial class ConsumableUseTcpTests
             string before = Assets(); Use(peer, 65, 6, 1113); Refused(peer, 6, 1113); peer.Barrier();
             That(Assets() == before, "正式Loading阶段拒绝药剂，完整失败收尾后仍可加载");
             FormalDungeonTcpTests.Load(peer);
+            That(!StackableUsePlaces.Allows(resources.ItemResources.Items.StackableUsePlaces(490003900), "[dungeon]"),
+                "测试券的真实PVF地点不允许副本");
+            before = Assets();
+            Use(peer, 72, 17, 490003900); Refused(peer, 17, 490003900);
+            peer.Send(515, Build(w => { w.Write((ushort)72); w.Write((byte)0); w.Write(0u); w.Write(119u); w.Write(0u); w.Write(0u); }));
+            peer.Expect(1, 515, [0, 0, 0, 72, 0, 0, 119]); peer.Barrier();
+            That(Assets() == before, "真实CMD44和515在动作分发前按地点拒绝，回复各自协议且不消费源");
             byte[] depositOwlCargo = Build(w =>
             {
                 w.Write((byte)0); w.Write((short)71); w.Write(1114); w.Write(1);
@@ -249,6 +288,21 @@ internal static partial class ConsumableUseTcpTests
             That(fixture.Query("SELECT stamina_until,gold FROM characters WHERE id=$p0", peer.Id) is [[0L,0L]],
                 "CMD9恢复清除持久虚弱并实扣当前等级价格，不用免费契约兜底扣费");
         }
+
+        // 屏障只保证网络回应已送达，不保证后台日志已落盘；正常停服完成日志收尾后核对入口。
+        await fixture.StopAsync();
+        var placeReplies = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "send" &&
+                row.GetProperty("Detail").TryGetProperty("Action", out var action) && action.GetString() == "stackable_place_rejected")
+            .Select(row => row.GetProperty("Detail").GetProperty("Body").GetString()).ToArray();
+        foreach (string body in new[] { "007B000016000000440C9A00", "00000049000000", "007B000016000000359A9800", "0000004A00003C" })
+            That(placeReplies.Count(reply => reply == body) == 1,
+                "四份完整失败包各由公共地点入口发送一次，不以动作未实现拒绝冒充地点门禁");
+        var events = fixture.Events();
+        foreach (var (action,opcode,count) in new[] { ("stackable_condition_rejected",44,1), ("stackable_condition_rejected",515,1), ("stackable_world_rejected",272,1), ("stackable_world_rejected",601,1) })
+            That(events.Count(row => row.GetProperty("Kind").GetString()=="send" &&
+                row.GetProperty("Detail").TryGetProperty("Action",out var value) && value.GetString()==action &&
+                row.GetProperty("Detail").GetProperty("Opcode").GetInt32()==opcode)==count,
+                "资格拒绝来自公共分发门禁，不以原效果未实现或目标错误冒充支持："+action+":"+opcode);
 
         Character Read(ushort id)
         {

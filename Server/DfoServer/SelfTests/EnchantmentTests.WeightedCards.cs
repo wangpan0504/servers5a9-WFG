@@ -81,9 +81,9 @@ internal static partial class EnchantmentTests
             valid + "\n[monster card id drop prob]\n990123 1\n[/monster card id drop prob]\n",
             valid + "\n[usable expired item]\n",
             valid.Replace("[/monster card id drop prob]", ""),
-            valid.Replace("[bead limited usable item]\n990124\n[/bead limited usable item]", ""),
-            valid.Replace("`[village]`", "`[dungeon]`")
-        }) That(Rejected(text), "冲突奖池、重复、未闭合、未知过期标记、缺白名单和未证地点不能放行");
+            valid.Replace("[bead limited usable item]\n990124\n[/bead limited usable item]", "")
+        }) That(Rejected(text), "冲突奖池、重复、未闭合、未知过期标记及缺白名单不能放行");
+        That(!Rejected(valid.Replace("`[village]`", "`[dungeon]`")), "地点不改变权重宝珠的身份和奖池");
     }
 
     static void WeightedCardResourcePlans(ItemResources resources)

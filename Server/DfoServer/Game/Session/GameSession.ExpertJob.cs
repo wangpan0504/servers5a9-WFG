@@ -2,6 +2,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
@@ -121,6 +122,31 @@ internal sealed partial class GameSession
             { Phase = Phase, PreviousQuests = current.ActiveMainQuests, PreviousSkillSwitchInventory = current.SkillSwitchInventory }
         };
     });
+
+    public InventoryResult UseExpertJobBead(Character expected, InventoryEnchantmentService enchantments,
+        ExpertJobScriptCatalog scripts, EnchantmentRequest request, QuestCatalog tutorialQuests)
+    {
+        var capture = owner.Execute(() => (Allowed: CanUseExpertJob() && ReferenceEquals(Selected, expected), SelectionEpoch, Phase));
+        if (!capture.Allowed) return InventoryResult.Reject(19);
+        var source = expected.Inventory.Find(request.Source);
+        // 只接原宝珠服务，卡片配方及职业扣料保持各自业务路径。
+        if (source is null || enchantments.Definition(source.Core.ItemId) is null)
+            return InventoryResult.Reject(InventoryEnchantmentService.Rejection);
+        var qualification = EffectRules(expected, source.Core.ItemId, request.Target);
+        if (CheckStackableUse(expected, capture.SelectionEpoch, capture.Phase, qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
+            return InventoryResult.Reject(InventoryEnchantmentService.Rejection);
+        if (!ExpertJobCraft.TryPlanEnchant(expected, enchantments, scripts, (byte)request.Target.List, (ushort)request.Target.Index,
+            (byte)request.Source.List, (ushort)request.Source.Index, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            out var inventory, out int experience, out ushort error))
+            return InventoryResult.Reject(error == 0 ? (ushort)19 : error);
+        return owner.Execute(() =>
+        {
+            if (!CanUseExpertJob() || CheckStackableUse(expected, capture.SelectionEpoch, capture.Phase,
+                qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
+                return InventoryResult.Reject(InventoryEnchantmentService.Rejection);
+            return CommitExpertJobCraft(inventory, experience, tutorialQuests, enchanting: true);
+        });
+    }
 
     public Character? CommitExpertJobExperience(int experience) => owner.Execute(() =>
     {

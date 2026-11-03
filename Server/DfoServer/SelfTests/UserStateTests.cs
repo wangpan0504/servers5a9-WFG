@@ -4,6 +4,8 @@ using DfoServer.Game.Caching;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Game.Town;
+using DfoServer.Game.Guild;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network;
 using DfoServer.Network.Protocol;
@@ -118,6 +120,27 @@ internal static class UserStateTests
                 pvp.ReturnToRoster();
                 That(pvp.Mode == UserMode.Pvp && pvp.GetState() == UserState.CharacterSelect,
                     "返回选角只清角色上下文，不改变本连接绑定的决斗频道模式");
+            }
+            using (var qualificationOwner = owners.Acquire("qualification-state", () => { }))
+            {
+                repository.Create(qualificationOwner,new("QualRole",point,point));
+                var qualification = new GameSession(repository,towns,qualificationOwner);
+                qualification.Select(0);qualification.MarkReady();
+                var noGuild = qualification.Selected!;
+                var masterRules = new StackableUseRules([], ["[guildmaster]"], "[etc]");
+                That(qualification.CheckStackableUse(noGuild,qualification.SelectionEpoch,qualification.Phase,masterRules) == StackableUseRejection.Condition,
+                    "统一使用资格读取当前角色快照，无公会角色不能使用会长道具");
+                var membership = new GuildMembership(1,"QualificationGuild",1,1,"QualRole","",0,0) { Grade=1 };
+                var installed = qualification.InstallGuildMembership(noGuild.Id,membership)!;
+                That(qualification.CheckStackableUse(installed.Character,qualification.SelectionEpoch,qualification.Phase,masterRules) == StackableUseRejection.None &&
+                    qualification.CheckStackableUse(noGuild,qualification.SelectionEpoch,qualification.Phase,masterRules) == StackableUseRejection.Condition,
+                    "成员投影安装后实际会长可用，旧角色引用不能借新资格发布结果");
+                var demoted = qualification.InstallGuildMembership(noGuild.Id,membership with { Grade=2 })!;
+                That(qualification.CheckStackableUse(demoted.Character,qualification.SelectionEpoch,qualification.Phase,masterRules) == StackableUseRejection.Condition &&
+                    qualification.CheckStackableUse(demoted.Character,qualification.SelectionEpoch,qualification.Phase,
+                        new StackableUseRules([], ["[guildmember]"], "[etc]")) == StackableUseRejection.None,
+                    "降为副会长后会长资格立即失效，公会成员资格仍保留，不按权限位冒充会长");
+                qualification.End();
             }
             online.Register(owner, session);
             That(online.Snapshot().Length == 0, "诊断查询不把未选角连接伪装成在线角色");

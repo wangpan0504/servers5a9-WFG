@@ -55,9 +55,10 @@ internal static class CreatureSkinTests
 
         const string declaration = "[action type]\n`[open creature skin slot]`\n[action usable place]\n`[village]`\n[use action packet]\n0";
         That(ItemCatalog.ReadCreatureSkinTicket(new(declaration)), "开栏券按动作、使用地点及发包模式解释，不依赖名字或单一物品号");
-        foreach (string invalid in new[] { declaration.Replace("skin", "unknown"), declaration.Replace("village", "dungeon"),
+        foreach (string invalid in new[] { declaration.Replace("skin", "unknown"),
             declaration.Replace("\n0", "\n1"), declaration + "\n[action type]\n`[open creature skin slot]`" })
             That(!ItemCatalog.ReadCreatureSkinTicket(new(invalid)), "未知或重复开栏声明不能成为合法消费券");
+        That(ItemCatalog.ReadCreatureSkinTicket(new(declaration.Replace("village", "dungeon"))), "地点由统一使用门禁处理，不改变券身份");
 
         var ticket = new InventoryItem(91, new(InventoryListType.Main, 65), new(490703887, ItemKind.Consumable, 2)
             { SortLockFlag = 1, ExpireTime = int.MaxValue });

@@ -24,9 +24,11 @@ internal static class EnhancementPotionTests
             typed with { Diagnostics = ["duplicate stackable type"] }, typed with { EffectMaintenance = 0 },
             typed with { StatChangeDuration = new(1800000, "party", null) },
             typed with { Stackable = typed.Stackable with { HasActionType = true } },
-            typed with { Stackable = typed.Stackable with { HasUseActionPacket = true, DeclaredUseActionPacket = 1 } },
-            typed with { Stackable = typed.Stackable with { HasActionUsablePlace = true, DeclaredActionUsablePlaces = ["[dungeon]"] } }
+            typed with { Stackable = typed.Stackable with { HasUseActionPacket = true, DeclaredUseActionPacket = 1 } }
         }) That(EnhancementPotionDefinition.Read(bad) is null, "非法或异形强化声明不能创建持久概率加成");
+        That(EnhancementPotionDefinition.Read(typed with { Stackable = typed.Stackable with
+            { HasActionUsablePlace = true, DeclaredActionUsablePlaces = ["[dungeon]"] } }) is not null,
+            "地点不用于判断强化药身份");
         foreach (int id in EnhancementPotionDefinition.LegacyReinforcementItems)
         {
             var legacy = File(id, "[expert town potion]", [0]);

@@ -29,9 +29,6 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
             raw.HasCreatureMinimumLevel && raw.DeclaredCreatureMinimumLevel is not (>= 1 and <= 255) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces is { } places &&
-                (!places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]"))) ||
             raw.DeclaredActionLimitIndexes is not { } limits || limits.Any(id => id <= 0) ||
             raw.DeclaredActionResultLimitIndexes is not { } results || results.Count % 3 != 0)
             return null;
@@ -68,7 +65,7 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
         return new(template.Id, random ? -1 : source, raw.DeclaredMinimumLevel ?? 1, raw.DeclaredMaximumLevel ?? int.MaxValue,
             raw.DeclaredCreatureMinimumLevel ?? 1,
             random ? candidates.Select(row => row.ItemId).Append(source).ToImmutableHashSet() : limits.ToImmutableHashSet(), candidates.ToImmutable())
-            { TownOnly = raw.DeclaredActionUsablePlaces is not null, Random = random,
+            { TownOnly = StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces), Random = random,
                 MakePermanent = !random && source > 0 && action.Parameters[3] == -1 };
     }
 

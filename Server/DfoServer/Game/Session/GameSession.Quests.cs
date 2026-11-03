@@ -38,7 +38,7 @@ internal sealed partial class GameSession
 
     public QuestFinishResult FinishQuest(ushort questId, ushort selector, QuestCatalog quests, QuestRewardParameterCatalog parameters,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ushort multiplier = 1,
-        ExpertJobScriptCatalog? expertJobs = null)
+        ExpertJobScriptCatalog? expertJobs = null, ushort? couponSlot = null)
     {
         var captured = owner.Execute(() =>
         {
@@ -55,14 +55,15 @@ internal sealed partial class GameSession
             var pending = pendingQuestCompletion;
             bool samePending = pending is not null && ReferenceEquals(pending.Plan.Expected, Selected) &&
                 pending.SelectionEpoch == SelectionEpoch && pending.Phase == Phase && pending.DungeonIdentity == identity &&
-                pending.Plan.QuestId == questId && pending.Plan.RewardSelector == selector && pending.Plan.Multiplier == multiplier;
+                pending.Plan.QuestId == questId && pending.Plan.RequestedSelector == selector && pending.Plan.Multiplier == multiplier &&
+                pending.Plan.Coupon?.Item.Position.Index == couponSlot;
             // 提交已发生但返回值丢失时，Selected仍是原旧快照；先以原计划查receipt，不能先用旧revision重读活动槽。
             bool completedParentChild = quests.TryGet(questId,out var target) &&
                 QuestRelationProgress.CompletedParentChild(Selected,target,quests) is not null;
             // 不同请求不能用旧revision读取或替换未决领奖；同请求继续使用冻结清图凭据。
-            var clear = (pending is null || samePending) && !Selected.CompletedQuests.Contains(questId) && !completedParentChild
+            var clear = couponSlot is null && (pending is null || samePending) && !Selected.CompletedQuests.Contains(questId) && !completedParentChild
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
-            var terminalClear = samePending ? pending!.Plan.TerminalClear : pending is null && target is not null &&
+            var terminalClear = samePending ? pending!.Plan.TerminalClear : couponSlot is null && pending is null && target is not null &&
                 QuestRelationProgress.TerminalClearDialogue(target,quests) is { } terminal && !Selected.CompletedQuests.Contains(terminal.Id)
                     ? ReadClearedQuest(checked((ushort)terminal.Id))?.Clear : null;
             return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion,
@@ -82,7 +83,7 @@ internal sealed partial class GameSession
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
-        if ((quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null &&
+        if (couponSlot is null && (quest.Condition == "[clear map]" || dungeonClear) && captured.Clear is null &&
             QuestRelationProgress.CompletedParentChild(expected,quest,quests) is null)
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
@@ -90,8 +91,8 @@ internal sealed partial class GameSession
         // 带NPC的末清图子任务保留到结算后对话；原生34可转向父任务，父子在一个领奖事务中关闭。
         // 顺序父及其末清图子在副本/结算交付时沿父CompleteNpc；城镇NPC须同时出现在当前MAP，否则拒绝。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
-        bool clearDialogue = QuestRelationProgress.ClearDialogueChild(quest,quests) ||
-            QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null;
+        bool clearDialogue = couponSlot is null && (QuestRelationProgress.ClearDialogueChild(quest,quests) ||
+            QuestRelationProgress.TerminalClearDialogue(quest,quests) is not null);
         if (clearDialogue && captured.Phase != SessionPhase.Town && !captured.CardsFinished)
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "清图对话任务须先完成本实例结算和免费翻牌" };
@@ -104,7 +105,7 @@ internal sealed partial class GameSession
         // 末清图子归档推进的是父任务；交付场景沿父声明，子任务的对话NPC不能给无NPC父任务另加城镇门禁。
         var deliveryQuest = QuestRelationProgress.ClearDialogueChild(quest,quests)
             ? quests.Get(quest.MainQuest!.Value) : quest;
-        if ((QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && deliveryQuest.CompleteNpc > 0 &&
+        if (couponSlot is null && (QuestRelationProgress.SequentialParent(quest,quests) || clearDialogue) && deliveryQuest.CompleteNpc > 0 &&
             captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
         {
             int resolved = QuestClientSceneProgress.ResolveNpc(expected,deliveryQuest.CompleteNpc,deliveryQuest);
@@ -126,7 +127,8 @@ internal sealed partial class GameSession
         if (QuestAntonUnlockEntry.Supports(quest) && (captured.Phase != SessionPhase.Town || !QuestAntonUnlockEntry.AtTown(expected, towns)))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "安徒恩解锁任务须在真实城镇地图交付" };
-        if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector ||
+        if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RequestedSelector != selector ||
+            incomplete.Plan.Coupon?.Item.Position.Index != couponSlot ||
             incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
             incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
@@ -134,14 +136,34 @@ internal sealed partial class GameSession
         QuestCompletionPreparation preparation;
         if (captured.Pending is { } pending && pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase &&
             pending.DungeonIdentity == captured.Identity && ReferenceEquals(pending.Plan.Expected, expected) &&
-            pending.Plan.AuthoritativeClear == captured.Clear && pending.Plan.RewardSelector == selector && pending.Plan.Multiplier == multiplier)
+            pending.Plan.AuthoritativeClear == captured.Clear && pending.Plan.RequestedSelector == selector && pending.Plan.Multiplier == multiplier &&
+            pending.Plan.Coupon?.Item.Position.Index == couponSlot)
             preparation = new(QuestCompletionOutcome.Accepted, pending.Plan, "原领奖计划精确重试");
         else
         {
+            QuestTicketSource? coupon=null;
+            if (couponSlot is { } slot)
+            {
+                try
+                {
+                    if (slot>short.MaxValue || multiplier!=1 || selector!=ushort.MaxValue)
+                        throw new InvalidDataException("单任务券需要原生单次34请求与Main源槽");
+                    var position=new DfoServer.Game.Inventory.Models.InventorySlot(DfoServer.Game.Inventory.Models.InventoryListType.Main,(short)slot);
+                    var source=expected.Inventory.Find(position) ?? throw new InvalidDataException("单任务券源槽为空");
+                    coupon=QuestTicketSource.Create(expected,position,items.QuestTicket(source.Core.ItemId),DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    if (coupon.Definition.ActionIndex!=QuestTicketDefinition.CouponAction || !CanUseStackableItem(expected,source.Core.ItemId,places:coupon.Definition.Places))
+                        throw new InvalidDataException("源不是110单任务券或当前使用条件不符");
+                }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
+                {
+                    return new(QuestFinishOutcome.Rejected,RejectionReceipt:rejection)
+                        {Failure=QuestCompletionFailure.EligibilityChanged,Reason=error.Message};
+                }
+            }
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
-                growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
-                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
-                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest);
+                growth, coupon is null ? DateTimeOffset.UtcNow : DateTimeOffset.FromUnixTimeSeconds(coupon.UtcSeconds), captured.Clear, multiplier,contracts?.Growth, coupon is null ? stageGraph : null,
+                coupon is not null || stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
+                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest,coupon:coupon);
             if (preparation.Plan is { } planned) planned.PvpRating = rank;
             if (strongwayQuest && preparation.Plan is { } strongwayPlan)
                 strongwayPlan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
@@ -156,6 +178,9 @@ internal sealed partial class GameSession
                     preparation.Failure == QuestCompletionFailure.InventoryCapacity
                     ? QuestFinishOutcome.InsufficientSpace : QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = preparation.Failure, Reason = preparation.Reason };
             var plan = preparation.Plan;
+            if (plan.Coupon is { } coupon && !CanUseStackableItem(expected,coupon.Item.Core.ItemId,places:coupon.Definition.Places))
+                return new QuestFinishResult(QuestFinishOutcome.Rejected,RejectionReceipt:rejection)
+                    {Failure=QuestCompletionFailure.EligibilityChanged,Reason="单任务券提交前使用条件已变化"};
             if (strongwayQuest && captured.Pending is null && (!IsCurrentStrongway2019QuestSchedule(strongwaySchedule) ||
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
@@ -163,7 +188,14 @@ internal sealed partial class GameSession
             plan.BattlePassCompletion ??= DfoServer.Game.BattlePass.BattlePassQuestCompletion.Prepare(plan, timeProvider ?? TimeProvider.System);
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);
-            var commit = repository.CommitQuestCompletion(owner, plan);
+            DfoServer.Game.Quests.QuestCompletionCommit commit;
+            try { commit = repository.CommitQuestCompletion(owner, plan); }
+            catch (QuestTicketExpiredException error) when (plan.Coupon is not null)
+            {
+                pendingQuestCompletion=null;
+                return new QuestFinishResult(QuestFinishOutcome.Rejected,RejectionReceipt:rejection)
+                    {Failure=QuestCompletionFailure.EligibilityChanged,Reason=error.Message};
+            }
             var result = new QuestFinishResult(QuestFinishOutcome.Committed,
                 new(commit, owner.Generation, captured.SelectionEpoch, captured.Identity)
                 { Phase = captured.Phase, BattlePassMissionAt = (timeProvider ?? TimeProvider.System).GetUtcNow() });

@@ -149,18 +149,16 @@ internal sealed partial class GameSession
 
     /// <summary>
     /// 喇叭扣费：从主背包指定槽位扣 1 个，并校验该槽物品就是对应喇叭（36 服务器 / 37 频道）。
-    /// 扣减走既有 <see cref="MutateInventory"/> 提交路径（<see cref="InventoryDeleteService"/> 规划 + 同一写事务），
-    /// 不手写 SQL、不绕过 revision 复核。PVF 里两种喇叭的 <c>[action usable place]</c> 只有
-    /// <c>[village]</c>/<c>[seria room]</c>，因此只允许城镇阶段。
+    /// 扣减走既有 <see cref="PlanAndCommitInventory"/> 提交路径（<see cref="InventoryDeleteService"/> 规划 + 同一写事务），
+    /// 地点由公共使用门禁读取源STK，不按当前资源的城镇声明另写阶段限制。
     /// 槽位空、物品不符、库存不足、阶段不符或提交失败都返回拒绝，调用方据此不广播。
     /// </summary>
-    public InventoryResult UseChatMegaphone(ushort slot, int expectedItemId) => MutateInventory(character =>
+    public InventoryResult UseChatMegaphone(ushort slot, int expectedItemId) => slot > short.MaxValue ? InventoryResult.Reject() :
+        PlanAndCommitInventory(character =>
     {
-        if (slot > short.MaxValue)
-            return InventoryResult.Reject();
         var position = new InventorySlot(InventoryListType.Main, (short)slot);
         if (character.Inventory.Find(position) is not { } item || item.Core.ItemId != expectedItemId)
             return InventoryResult.Reject();
         return InventoryDeleteService.Plan(character.Inventory, position, expectedItemId, 1);
-    });
+    }, requireTown: false, effectItem: new(InventoryListType.Main, (short)slot));
 }

@@ -9,11 +9,11 @@ namespace DfoServer.Game.Characters;
 internal sealed record FatigueConsumablePlan(Character Expected, InventoryItem Source, FatigueConsumableDefinition Definition,
     InventoryPlan Inventory, CharacterFatigueState Fatigue);
 
-internal sealed class FatigueConsumableService(ItemCatalog items, TownCatalog towns, TimeProvider? clock = null)
+internal sealed class FatigueConsumableService(ItemCatalog items, TimeProvider? clock = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
-    public FatigueConsumablePlan Prepare(Character expected, InventorySlot slot, bool inDungeon = false, bool inAssault = false)
+    public FatigueConsumablePlan Prepare(Character expected, InventorySlot slot)
     {
         var now = Clock.GetUtcNow();
         var source = expected.Inventory.Find(slot);
@@ -24,9 +24,6 @@ internal sealed class FatigueConsumableService(ItemCatalog items, TownCatalog to
         var definition = items.FatigueConsumable(source.Core.ItemId);
         if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
             throw new InvalidDataException("疲劳药剂资源、等级或职业资格不符");
-        string place = inDungeon ? "[dungeon]" : towns.IsRoom(expected.Position, QuestEligibility.Completed(expected)) ? "[seria room]" : "[village]";
-        if (!definition.AllowsPlace(place, inAssault))
-            throw new InvalidDataException("疲劳药剂不能在当前场景使用");
         if (expected.Inventory.ConsumableStates.Any(state => state.Kind == ConsumableStateKind.Cooldown &&
             state.CoolGroup == definition.CoolGroup && state.Active(now.ToUnixTimeMilliseconds())))
             throw new InvalidDataException("疲劳药剂的持久冷却尚未结束");

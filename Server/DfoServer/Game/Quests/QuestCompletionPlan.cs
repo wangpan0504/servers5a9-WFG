@@ -27,7 +27,7 @@ internal sealed record QuestCurrencyReward(CurrencyKind Kind,int ItemId,int Coun
 }
 
 // 没有在线状态或提交能力；原角色、稳定clear和全部奖励候选由同一Session/Repository事务接管。
-internal sealed class QuestCompletionPlan
+internal sealed partial class QuestCompletionPlan
 {
     QuestCompletionPlan(Character expected, ActiveMainQuest active, StoryQuest quest, ushort selector,
         QuestExperienceReward experience, InventoryPlan inventory, CharacterGrowthPlan? growth,
@@ -37,7 +37,7 @@ internal sealed class QuestCompletionPlan
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
         int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null,
         ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null, QuestMailPlan? resourceMail = null,
-        QuestClearReceipt? terminalClear = null)
+        QuestClearReceipt? terminalClear = null, QuestTicketSource? coupon = null)
     {
         ResourceMail = resourceMail;
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
@@ -45,6 +45,10 @@ internal sealed class QuestCompletionPlan
         StagePlan = stagePlan;
         AuthoritativeClear = clear;
         ConditionType = QuestTargetRules.CompletionType(quest, quests);
+        Coupon=coupon;
+        CouponActive=coupon is null ? null : active;
+        // 券授权完成不制造副本事实；持久回执沿已有的非清图类型，真实资源类型保留在快照中。
+        if (coupon is not null) ConditionType=4;
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
         if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
         RewardSelector = selector;
@@ -86,6 +90,9 @@ internal sealed class QuestCompletionPlan
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
             ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
             AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (coupon is not null)
+            Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
+                Coupon=coupon, CouponActive=active, ResourceConditionType=QuestTargetRules.CompletionType(quest,quests) });
         if (ResourceMail is not null)
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
@@ -234,7 +241,7 @@ internal sealed class QuestCompletionPlan
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
         GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false,
         ExpertJobScriptCatalog? expertJobs = null, int? pvpGrade = null, QuestClearReceipt? terminalClear = null,
-        bool strongway2019Active = false)
+        bool strongway2019Active = false, QuestTicketSource? coupon = null)
     {
         try
         {
@@ -244,13 +251,14 @@ internal sealed class QuestCompletionPlan
                 QuestLifecyclePlan.ValidSeeking(quest) && quest.RewardType == "[item]"))
                 throw new InvalidDataException("交付倍数只适用于具有实际材料的普通重复寻物任务");
             var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
+            if (coupon is not null) active=PrepareCouponActive(expected,quest,quests,coupon,now);
             var completedParent = QuestRelationProgress.CompletedParentChild(expected,quest,quests);
             // 地区每日上限只约束分配；同日原接取不因后续升级失去领奖资格，其余资格与目标仍逐项复验。
             if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(expected,quest) || active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
                 QuestEligibility.InspectResource(quest, strongway2019Active).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
-                completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests,
+                coupon is null && completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests,
                     allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest), strongway2019Active: strongway2019Active).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
             if (completedParent is not null)
@@ -267,7 +275,7 @@ internal sealed class QuestCompletionPlan
             bool parent = QuestRelationProgress.SequentialParent(quest,quests) || threshold || listParent;
             StoryQuest? terminalSeeking = null;
             ActiveMainQuest? completedChild = null;
-            if (QuestRelationProgress.TerminalSeeking(quest,quests) is { } terminal &&
+            if (coupon is null && QuestRelationProgress.TerminalSeeking(quest,quests) is { } terminal &&
                 !expected.CompletedQuests.Contains(terminal.Id) &&
                 quest.IntData.Where(id => id != terminal.Id).All(expected.CompletedQuests.Contains))
             {
@@ -278,7 +286,7 @@ internal sealed class QuestCompletionPlan
                     throw new InvalidDataException("顺序末子任务需要原接取、已达成条件及全部前序完成记录");
                 terminalSeeking = terminal;
             }
-            if (QuestRelationProgress.TerminalClearDialogue(quest,quests) is { } finalClear &&
+            if (coupon is null && QuestRelationProgress.TerminalClearDialogue(quest,quests) is { } finalClear &&
                 !expected.CompletedQuests.Contains(finalClear.Id) &&
                 quest.IntData.Where(id => id != finalClear.Id).All(expected.CompletedQuests.Contains))
             {
@@ -312,99 +320,102 @@ internal sealed class QuestCompletionPlan
                 throw new NotSupportedException("任务交付附属声明未支持: send postal");
             if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
                 throw new InvalidDataException("每日任务交付需要当前游戏日快照");
-            if (quest.Condition == "[clear map]")
+            if (coupon is null)
             {
-                if (!QuestClearEligibility.IsSingleMap(quest) || clear is null || !MatchesClearedActiveQuest(expected, clear) ||
-                    clear.QuestId != quest.Id || !QuestClearEligibility.MatchesClearMap(quest, clear) ||
-                    quest.DungeonIndex is >= 0 && clear.DungeonId != quest.DungeonIndex)
-                    throw new InvalidDataException("清图交付必须使用当前接取及目标地图的权威凭据");
+                if (quest.Condition == "[clear map]")
+                {
+                    if (!QuestClearEligibility.IsSingleMap(quest) || clear is null || !MatchesClearedActiveQuest(expected, clear) ||
+                        clear.QuestId != quest.Id || !QuestClearEligibility.MatchesClearMap(quest, clear) ||
+                        quest.DungeonIndex is >= 0 && clear.DungeonId != quest.DungeonIndex)
+                        throw new InvalidDataException("清图交付必须使用当前接取及目标地图的权威凭据");
+                }
+                else if (dungeonClear)
+                {
+                    if (clear is null || !MatchesClearedActiveQuest(expected,clear) || clear.QuestId != quest.Id ||
+                        !QuestDungeonClearProgress.ContainsDungeon(quest,clear.DungeonId) || clear.MapId <= 0)
+                        throw new InvalidDataException("条件通关交付需要当前接取次数归零及最后达成的权威凭据");
+                }
+                else if (clear is not null) throw new InvalidDataException("此任务条件不能使用清图凭据");
+                else if (QuestStateProgress.Type(quest) is not null)
+                {
+                    if (active.ConditionState != 0 || QuestStateProgress.Scalar(expected,quest,pvpGrade) != 0)
+                        throw new InvalidDataException("角色实际状态或本次接取事实尚未满足目标");
+                }
+                else if (quest.Condition == "[meet npc]")
+                {
+                    if (active.ConditionState != 0 || quest.IntData.Count != 1 || quest.IntData[0] <= 0)
+                        throw new InvalidDataException("会面尚未由当前场景完成");
+                }
+                else if (quest.Condition == "[question]")
+                {
+                    if (!QuestQuestionProgress.OrdinaryChoice(quest,active.ConditionState,quests))
+                        throw new InvalidDataException("回答尚未从当前NPC选定，或选项需要专用跳过入口");
+                }
+                else if (quest.Condition is "[hunt enemy]" or "[hunt monster]")
+                {
+                    if (active.ConditionState != 0 || !QuestHuntProgress.TryTargets(quest,out _))
+                        throw new InvalidDataException("猎杀尚未由本次接取的权威死亡事实达成");
+                }
+                else if (quest.Condition == "[quest clear]")
+                {
+                    if (!parent || completedChild is null && (active.ConditionState != 0 ||
+                        (listParent ? QuestRelationProgress.ListScalar(quest, QuestEligibility.Completed(expected)) != 0 : !quest.IntData.All(expected.CompletedQuests.Contains))))
+                        throw new InvalidDataException("父任务必须具有全部真实子任务完成记录");
+                }
+                else if (quest.Condition == "[clear multi quest]")
+                {
+                    if (!threshold || active.ConditionState != 0 ||
+                        QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) != 0)
+                        throw new InvalidDataException("阈值父任务必须达到真实子任务完成数量");
+                }
+                else if (DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest))
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("本次接取的训练通道尚未全部完成");
+                }
+                else if (QuestDazzlementStorage.Matches(quest))
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("贮藏箱尚未在任务NPC所在城镇开启");
+                }
+                else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
+                    QuestClientSceneProgress.DungeonCinematic(quest))
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
+                }
+                else if (QuestEpicProductionProgress.Supports(quest))
+                {
+                    if (active.ConditionState!=0) throw new InvalidDataException("史诗加工尚未由本次接取后的成功事务达成");
+                }
+                else if (rental)
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("租赁任务需要本次接取的已提交租赁事实");
+                }
+                else if (expertTutorial)
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("副职业教程需要本次接取的已提交商店事实");
+                }
+                else if (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest) || QuestClientObservation.Supports(quest))
+                {
+                    if (active.ConditionState != 0) throw new InvalidDataException("实际业务事件尚未使本次接取完成");
+                }
+                else if (quest.TargetKind == QuestTargetKind.EquippedItem)
+                {
+                    if (active.ConditionState != 0 || quests.Items is not { } facts || !QuestItemProgress.Equipped(expected.Inventory, quest, facts, now.ToUnixTimeSeconds()))
+                        throw new InvalidDataException("当前穿戴没有满足任务的部位、品级、等级或克隆条件");
+                }
+                else if (quest.TargetKind == QuestTargetKind.CheckItem)
+                {
+                    if (active.ConditionState != 0 || !QuestLifecyclePlan.HasMaterials(expected, quest, now.ToUnixTimeSeconds(), quests.Items))
+                        throw new InvalidDataException("持有条件没有满足，不能凭客户端归零领奖");
+                }
+                else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
+                    throw new NotSupportedException("此交付条件尚未接入权威事件");
+                else if (quest.Condition == "[seek n meet npc]" && active.ConditionState != 0)
+                    throw new InvalidDataException("寻物会面必须同时满足实际材料和会面通道");
             }
-            else if (dungeonClear)
-            {
-                if (clear is null || !MatchesClearedActiveQuest(expected,clear) || clear.QuestId != quest.Id ||
-                    !QuestDungeonClearProgress.ContainsDungeon(quest,clear.DungeonId) || clear.MapId <= 0)
-                    throw new InvalidDataException("条件通关交付需要当前接取次数归零及最后达成的权威凭据");
-            }
-            else if (clear is not null) throw new InvalidDataException("此任务条件不能使用清图凭据");
-            else if (QuestStateProgress.Type(quest) is not null)
-            {
-                if (active.ConditionState != 0 || QuestStateProgress.Scalar(expected,quest,pvpGrade) != 0)
-                    throw new InvalidDataException("角色实际状态或本次接取事实尚未满足目标");
-            }
-            else if (quest.Condition == "[meet npc]")
-            {
-                if (active.ConditionState != 0 || quest.IntData.Count != 1 || quest.IntData[0] <= 0)
-                    throw new InvalidDataException("会面尚未由当前场景完成");
-            }
-            else if (quest.Condition == "[question]")
-            {
-                if (!QuestQuestionProgress.OrdinaryChoice(quest,active.ConditionState,quests))
-                    throw new InvalidDataException("回答尚未从当前NPC选定，或选项需要专用跳过入口");
-            }
-            else if (quest.Condition is "[hunt enemy]" or "[hunt monster]")
-            {
-                if (active.ConditionState != 0 || !QuestHuntProgress.TryTargets(quest,out _))
-                    throw new InvalidDataException("猎杀尚未由本次接取的权威死亡事实达成");
-            }
-            else if (quest.Condition == "[quest clear]")
-            {
-                if (!parent || completedChild is null && (active.ConditionState != 0 ||
-                    (listParent ? QuestRelationProgress.ListScalar(quest, QuestEligibility.Completed(expected)) != 0 : !quest.IntData.All(expected.CompletedQuests.Contains))))
-                    throw new InvalidDataException("父任务必须具有全部真实子任务完成记录");
-            }
-            else if (quest.Condition == "[clear multi quest]")
-            {
-                if (!threshold || active.ConditionState != 0 ||
-                    QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) != 0)
-                    throw new InvalidDataException("阈值父任务必须达到真实子任务完成数量");
-            }
-            else if (DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest))
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("本次接取的训练通道尚未全部完成");
-            }
-            else if (QuestDazzlementStorage.Matches(quest))
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("贮藏箱尚未在任务NPC所在城镇开启");
-            }
-            else if (QuestClientSceneProgress.TownRange(quest) || QuestClientSceneProgress.Cinematic(quest,out _,out _) ||
-                QuestClientSceneProgress.DungeonCinematic(quest))
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
-            }
-            else if (QuestEpicProductionProgress.Supports(quest))
-            {
-                if (active.ConditionState!=0) throw new InvalidDataException("史诗加工尚未由本次接取后的成功事务达成");
-            }
-            else if (rental)
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("租赁任务需要本次接取的已提交租赁事实");
-            }
-            else if (expertTutorial)
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("副职业教程需要本次接取的已提交商店事实");
-            }
-            else if (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest) || QuestClientObservation.Supports(quest))
-            {
-                if (active.ConditionState != 0) throw new InvalidDataException("实际业务事件尚未使本次接取完成");
-            }
-            else if (quest.TargetKind == QuestTargetKind.EquippedItem)
-            {
-                if (active.ConditionState != 0 || quests.Items is not { } facts || !QuestItemProgress.Equipped(expected.Inventory, quest, facts, now.ToUnixTimeSeconds()))
-                    throw new InvalidDataException("当前穿戴没有满足任务的部位、品级、等级或克隆条件");
-            }
-            else if (quest.TargetKind == QuestTargetKind.CheckItem)
-            {
-                if (active.ConditionState != 0 || !QuestLifecyclePlan.HasMaterials(expected, quest, now.ToUnixTimeSeconds(), quests.Items))
-                    throw new InvalidDataException("持有条件没有满足，不能凭客户端归零领奖");
-            }
-            else if (quest.Condition is not ("[seeking]" or "[seek n meet npc]") || !QuestLifecyclePlan.ValidSeeking(quest))
-                throw new NotSupportedException("此交付条件尚未接入权威事件");
-            else if (quest.Condition == "[seek n meet npc]" && active.ConditionState != 0)
-                throw new InvalidDataException("寻物会面必须同时满足实际材料和会面通道");
 
             InventoryPlan? reclaim = null;
             ImmutableArray<ActiveMainQuest> closedChildren = [];
-            if (threshold)
+            if (threshold && coupon is null)
             {
                 var closure = QuestLifecyclePlan.CloseThresholdChildren(expected,quest,quests,now);
                 reclaim = closure.Inventory;
@@ -412,6 +423,7 @@ internal sealed class QuestCompletionPlan
             }
             // 先关闭未选子任务并回收其任务物品，再规划父奖励，避免回收刚发的同ID奖励。
             var paid = reclaim?.After ?? expected.Inventory;
+            if (coupon is not null) paid=coupon.Inventory.After;
             var consumed = ImmutableArray.CreateBuilder<QuestConsumedItem>();
             if(DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest))
             {
@@ -426,7 +438,7 @@ internal sealed class QuestCompletionPlan
                 consumed.Add(new(manual.Position,manual.Uid,manual.Core.ItemId,1));
             }
             var materialQuest = terminalSeeking ?? quest;
-            if (materialQuest.Condition is "[seeking]" or "[seek n meet npc]")
+            if (coupon is null && materialQuest.Condition is "[seeking]" or "[seek n meet npc]")
             {
                 var wanted = new Dictionary<int, long>();
                 for (int at = 0; at < QuestLifecyclePlan.MaterialLength(materialQuest); at += 2)
@@ -464,6 +476,7 @@ internal sealed class QuestCompletionPlan
             if (terminalSeeking is not null && !QuestRelationProgress.ZeroRewardChild(terminalSeeking))
                 requested.AddRange(QuestFixedRewardDefinition.Parse(terminalSeeking).ForJob(expected.Job,expected.GrowType));
             var selected = QuestFixedRewardDefinition.Parse(quest with { Rewards = quest.Definition!.SelectRewards }).ForJob(expected.Job,expected.GrowType);
+            if (coupon is not null) selector=selected.IsEmpty ? ushort.MaxValue : (ushort)0;
             if (selected.Length == 0 ? selector != ushort.MaxValue : selector >= selected.Length)
                 throw new InvalidDataException("选择奖励索引不属于当前职业候选");
             if (selected.Length != 0) requested.Add(selected[selector]);
@@ -589,7 +602,7 @@ internal sealed class QuestCompletionPlan
                     gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
                     QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage,
                     expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking, resourceMail: resourceMail,
-                    terminalClear: terminalClear);
+                    terminalClear: terminalClear,coupon:coupon);
             }
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");

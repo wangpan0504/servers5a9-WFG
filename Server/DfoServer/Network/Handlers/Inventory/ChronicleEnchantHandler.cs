@@ -28,7 +28,8 @@ internal sealed class ChronicleEnchantHandler(InventoryChronicleEnchantService s
                 try { return service.Plan(character, request, out receipt); }
                 catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or ArgumentException or OverflowException)
                 { resourceInvalid = true; return InventoryResult.Reject(InventoryChronicleEnchantService.Rejection); }
-            }, InventoryChronicleEnchantService.Rejection);
+            }, InventoryChronicleEnchantService.Rejection,
+                effectItem: request.MaterialSlot >= 0 ? new(InventoryListType.Main, request.MaterialSlot) : null);
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) : SameSelection();
         log.Write("chronicle_enchant", new { Connection = context.Id, request?.MaterialItemId, request?.MaterialSlot,
             request?.TargetItemId, request?.Target, request?.Number, result.Accepted, result.Error, receipt?.Succeeded,

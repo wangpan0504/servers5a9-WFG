@@ -11,8 +11,8 @@ internal sealed record EquipmentPeriodChangeDefinition(ItemTemplate Item, Frozen
     public const string Label = "[equipment item period change]";
     public static readonly ImmutableArray<string> Places = ["[village]", "[seria room]"];
 
-    // 客户端在[action usable place]声明村庄与赛丽亚房间；任一命中即可使用。
-    public bool AllowsPlace(string place) => Places.Contains(place);
+    public ImmutableArray<string> UsePlaces { get; init; } = Places;
+    public bool AllowsPlace(string place) => StackableUsePlaces.Allows(UsePlaces, place);
 
     public bool AllowsSource(int itemId) => Upgrades.ContainsKey(itemId);
 
@@ -27,8 +27,6 @@ internal sealed record EquipmentPeriodChangeDefinition(ItemTemplate Item, Frozen
             action is not { Label: Label } declaration || declaration.Parameters.Count == 0 ||
             declaration.Parameters.Count % 2 != 0 ||
             declaration.Parameters.Any(id => id <= 0) ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces?.Any(place => !Places.Contains(place)) == true ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
@@ -40,6 +38,6 @@ internal sealed record EquipmentPeriodChangeDefinition(ItemTemplate Item, Frozen
             if (!upgrades.TryAdd(declaration.Parameters[index], declaration.Parameters[index + 1]))
                 return null;
         }
-        return new(item, upgrades.ToFrozenDictionary());
+        return new(item, upgrades.ToFrozenDictionary()) { UsePlaces = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [] };
     }
 }

@@ -11,8 +11,7 @@ internal sealed record AdventureNameTicketDefinition(int TemplateId, int Minimum
             StackableActionCatalog.Arguments(raw) is not { Label: "[represent account name change]", Parameters.Count: 0 } ||
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 0 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||
-            raw.DeclaredUsableJobs is not ["[all]"] || template.Jobs != ushort.MaxValue ||
-            raw.DeclaredActionUsablePlaces is not ["[village]", "[dont use assult]"])
+            raw.DeclaredUsableJobs is not ["[all]"] || template.Jobs != ushort.MaxValue)
             return null;
         return new(template.Id, minimum, raw.DeclaredMaximumLevel ?? int.MaxValue, template.Jobs);
     }
