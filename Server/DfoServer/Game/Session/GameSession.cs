@@ -40,6 +40,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     GameWorld.Dungeons.Strongway2019Catalog? strongway2019Catalog = null,
     Func<Character, int>? strongway2019AntiEvil = null, Game.Events.ServerEventService? serverEvents = null,
     GoldLimitCatalog? directPickupGoldLimits = null,
+    DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
@@ -176,7 +177,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             {
                 Invalidate("session-ended", notices, publishExpertJob: false);
             }
-            finally { gameCache.Dispose(); }
+            finally { ReleasePcRoomTimePoint(); gameCache.Dispose(); }
         }
         catch (Exception error) { failure = error; throw; }
         finally { notices.Publish(failure); }
@@ -295,6 +296,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 throw new InvalidOperationException("No selected character");
             if (Ready || Phase != SessionPhase.Unselected)
                 throw new InvalidOperationException("入城就绪只能由当前未完成的选角初始化推进");
+            // 活动初值读取失败时保留未就绪状态，允许同一次入城请求正常重试。
+            StartPcRoomTimePoint();
             Ready = true;
             // 窗口只随选角入城开启；副本返回城镇不重开，避免把城镇内的真实卸装当成复述。
             loginWearRestatementUntil = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds() +
@@ -371,6 +374,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     void Invalidate(string reason, DepartureNotices notices, bool publishExpertJob = true)
     {
         ResetStrongway2019Matching();
+        CheckpointPcRoomTimePoint();
         bool warPersistenceFailed = false;
         try { if (owner.IsCurrent) DisconnectEvildomWar(); }
         catch (Exception error)

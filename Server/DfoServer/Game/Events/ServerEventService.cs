@@ -17,6 +17,7 @@ internal sealed record ServerEventSchedule(ushort EventId, long Revision = 0, lo
 }
 
 internal sealed record ServerEventState(ServerEventSchedule Schedule, bool Active);
+internal sealed record ServerEventChange(ServerEventState State, DateTimeOffset At, long Timestamp);
 internal sealed record ServerEventInitialization(ServerEventState State, bool Initialized);
 
 internal interface IServerEventStore
@@ -31,8 +32,10 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort NolanVisibilityId = 2532;
     public const ushort MileageShopId = 266;
     public const ushort Strongway2019Id = 312;
+    public const ushort PcRoomTimePointId = 228;
+    public static IReadOnlyList<ServerEventDefinition> Definitions => ServerEventDefinition.Registered;
+    readonly object updates = new();
     public const ushort BattlePassId = 2520;
-    public event Action<ushort>? Changed;
     ServerEventSchedule battlePassSchedule = new(BattlePassId);
     DateTimeOffset? battlePassStart, battlePassEnd;
     bool battlePassDefaultEnabled, battlePassMissionsPrepared;
@@ -61,12 +64,17 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public void NotifyPromotionChanged()
     {
         Interlocked.Increment(ref promotionRevision);
-        Changed?.Invoke(10999);
-
+        Changed?.Invoke(new(new(new(10999), true), time.GetUtcNow(), time.GetTimestamp()));
     }
     readonly TimeProvider time = clock ?? TimeProvider.System;
     long strongway2019DisplayRevision;
     internal long Strongway2019DisplayRevision => Volatile.Read(ref strongway2019DisplayRevision);
+    public event Action<ServerEventChange>? Changed;
+
+    public static bool IsRegistered(ushort eventId) => ServerEventDefinition.Find(eventId) is not null;
+    public static ServerEventDefinition Definition(ushort eventId) => ServerEventDefinition.Find(eventId)
+        ?? throw new InvalidDataException("尚未登记该服务端活动；公告编号不能作为活动开关");
+    internal T SynchronizeClock<T>(Func<T> action) { lock (updates) return action(); }
 
     public ServerEventState Read(ushort eventId)
     {
@@ -100,14 +108,13 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
             if (actual.Schedule == initial) throw;
             return new(actual, false);
         }
-        PublishChanged(eventId);
-        return new(State(committed), true);
+        return new(PublishChanged(committed), true);
     }
 
     public ServerEventState Schedule(ushort eventId, DateTimeOffset start, DateTimeOffset end)
     {
         RequireRegistered(eventId);
-        if (ServerEventDefinition.Find(eventId)?.SupportsSchedule != true)
+        if (Definition(eventId).SupportsSchedule != true)
             throw new InvalidDataException("该活动只支持开关，不支持设置起止时间");
         return Update(eventId,
             value => value with { StartsAt = start.ToUnixTimeSeconds(), EndsAt = end.ToUnixTimeSeconds(), OverrideActive = null });
@@ -115,32 +122,30 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 
     ServerEventState Update(ushort eventId, Func<ServerEventSchedule, ServerEventSchedule> edit)
     {
-        var before = Read(eventId).Schedule;
-        var desired = edit(before);
-        if (desired.OverrideActive != false) RequireBattlePassPrepared(eventId);
-        desired.Validate();
-        var committed = store.Save(before, desired);
-        if (committed != before)
-            PublishChanged(eventId);
-        return State(committed);
+        lock (updates)
+        {
+            var before = Read(eventId).Schedule;
+            var desired = edit(before);
+            if (desired.OverrideActive != false) RequireBattlePassPrepared(eventId);
+            desired.Validate();
+            var committed = store.Save(before, desired);
+            return committed != before ? PublishChanged(committed) : State(committed);
+        }
     }
 
-    void PublishChanged(ushort eventId)
+    ServerEventState PublishChanged(ServerEventSchedule schedule)
     {
-        if (eventId == BattlePassId) Volatile.Write(ref battlePassSchedule, store.Read(eventId));
+        ushort eventId = schedule.EventId;
+        if (eventId == BattlePassId) Volatile.Write(ref battlePassSchedule, schedule);
         if (eventId == Strongway2019Id) Interlocked.Increment(ref strongway2019DisplayRevision);
-        Changed?.Invoke(eventId);
+        var state = State(schedule);
+        Changed?.Invoke(new(state, time.GetUtcNow(), time.GetTimestamp()));
+        return state;
     }
 
     ServerEventState State(ServerEventSchedule schedule) => new(schedule,
         schedule.EventId == BattlePassId ? battlePassMissionsPrepared && IsBattlePassActive(time.GetUtcNow()) :
         schedule.EventId == NolanVisibilityId ? schedule.OverrideActive ?? true : schedule.IsActive(time.GetUtcNow()));
 
-
-    public static void RequireRegistered(ushort eventId)
-    {
-        if (ServerEventDefinition.Find(eventId) is null)
-            throw new InvalidDataException("尚未登记该服务端活动；请读取当前活动目录，公告74不是活动开关");
-
-    }
+    public static void RequireRegistered(ushort eventId) => _ = Definition(eventId);
 }

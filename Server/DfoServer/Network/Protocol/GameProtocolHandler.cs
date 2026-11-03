@@ -54,6 +54,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Strongway2019.Strongway2019MatchingService? strongwayMatching = null,
     Strongway2019Projection? strongwayProjection = null,
     DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null,
+    DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
@@ -132,7 +133,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
-            directPickupGoldLimits: goldLimits, riftNamedEpics: riftNamedEpics);
+            directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
@@ -167,6 +168,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
+        if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -452,6 +454,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             mailbox?.Alarm(context,invitation);
                         }
                         await dailyFatigue.RefreshAsync();
+                        if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
                         await revival.RefreshAsync();
                         await disguise.RefreshAsync();
                         await tagRevival.RefreshAsync();
@@ -485,6 +488,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         {
             if (tradeParticipant is { } departing) trade?.Release(departing);
             nativeRegistration?.Dispose();
+            if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.DisposeAsync();
             await dailyFatigue.DisposeAsync();
             await revival.DisposeAsync();
             await disguise.DisposeAsync();
@@ -525,7 +529,16 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
             projection.Remove(context);
             context.Activity?.Reset();
-            session.End();
+            try
+            {
+                await SqliteBusyRetry.ExecuteAsync(() =>
+                {
+                    session.FlushPcRoomTimePoint();
+                    return Task.FromResult(true);
+                }, CancellationToken.None);
+            }
+            catch (InvalidOperationException error) when (error.Message == "Stale account generation") { }
+            finally { session.End(); }
             // 随后的 await using 先停止发送泵，再由 login 释放精确 owner。
         }
         }

@@ -23,7 +23,9 @@ internal sealed record ServerEventDefinition(ushort Id, string Name, string Purp
         new(2395, "红尾乔纳森显示", "显示或隐藏红尾乔纳森NPC。",
             "仅改变NPC显示，不改变时空石商店的交易资格。", false, "默认显示"),
         new(2532, "诺兰显示", "显示或隐藏诺兰NPC。",
-            "仅控制NPC显示，不会补齐未实现的节日玩法；不支持设置起止时间。", false, "默认显示")
+            "仅控制NPC显示，不会补齐未实现的节日玩法；不支持设置起止时间。", false, "默认显示"),
+        new(228, "累积在线得好礼", "按当前客户端资源累计在线并通过系统邮件发放每日和累计奖励。",
+            "活动关闭时暂停计时但保留账号进度；奖励按账号幂等领取。", false, "默认关闭")
     ];
 
     public static ServerEventDefinition? Find(int id) => Registered.FirstOrDefault(entry => entry.Id == id);

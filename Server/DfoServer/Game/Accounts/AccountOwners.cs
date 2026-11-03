@@ -91,6 +91,8 @@ internal sealed class AccountOwners
                     return false;
                 }
 
+                // 旧租约仍为Current时结清在线段；失败不交出owner，也不执行断线或网络回调。
+                old?.BeforeReplacement?.Invoke();
                 lock (registryGate)
                     next = new(this, state, account, checked(++generation), disconnect);
                 Volatile.Write(ref state.Current, next);
@@ -248,6 +250,8 @@ internal sealed class AccountOwners
                 if (ordered.Any(m => !m.Owner.IsCurrent)) throw new InvalidOperationException("组合成员租约已失效");
             }
         }
+
+        internal Action? BeforeReplacement { get; set; }
 
         internal void Disconnect() => disconnect();
         public T Execute<T>(Func<T> action)

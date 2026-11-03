@@ -62,13 +62,15 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
         bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
         // 关闭只阻止新购买和新发放；保留原入口供已付费红包领取、退款和查询。
-        openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
         if (jonathan) openEvents = [JonathanVisibleEvent, .. openEvents];
+        openEvents = [GuildHongbaoPackets.OpenEvent, .. openEvents];
         bool nolanVisible = events?.Read(ServerEventService.NolanVisibilityId).Active == true;
         if (nolanVisible)
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
+        bool onlineEnabled = context.PcRoomTimePoint is not null && events?.Read(ServerEventService.PcRoomTimePointId).Active == true;
+        if (onlineEnabled) openEvents = [.. openEvents, ServerEventService.PcRoomTimePointId];
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
@@ -90,6 +92,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         }
         List<ushort> activeEvents = [];
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
+        if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (battlePass) activeEvents.Add(BattlePassEventId);
         byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents,
             activeEvents: activeEvents,
@@ -102,6 +105,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);
         else
             await context.NotifyProtected(NotiPacketType.EVENT_INFO, eventInfo, action, publish);
+        if (publish?.Invoke() != false) context.PcRoomTimePoint?.EventsPublished(onlineEnabled);
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);

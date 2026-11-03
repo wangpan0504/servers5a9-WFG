@@ -36,12 +36,12 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         events.Changed += Changed;
         worker = RunAsync();
     }
-    void Changed(ushort id)
+    void Changed(DfoServer.Game.Events.ServerEventChange change)
     {
+        ushort id = change.State.Schedule.EventId;
         if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId or
             ServerEventService.BattlePassId or ServerEventService.SeriaLuckId or ServerEventService.GuildHongbaoId or
             ServerEventService.JonathanVisibilityId or 10999)
-
             pending.Writer.TryWrite(true);
     }
     internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||

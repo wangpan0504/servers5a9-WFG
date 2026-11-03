@@ -178,8 +178,9 @@ internal static partial class CashShopTcpTests
         => AssertPromotionNativeEvents(payload, (long?)count, (bool?)disabled, extraEvents);
 
     internal static void AssertPromotionNativeEvents(byte[] payload, long? count, bool? disabled, IReadOnlyList<ushort> extraEvents,
-        long? unavailableCount = null, uint? battlePassEnd = null)
+        long? unavailableCount = null, IReadOnlyList<ushort>? activeEvents = null, uint? battlePassEnd = null)
     {
+        activeEvents ??= [2395];
         using var input = new MemoryStream(payload);
         using var reader = new BinaryReader(input, Encoding.UTF8);
         string Text()
@@ -262,9 +263,9 @@ internal static partial class CashShopTcpTests
         That(cursor == tokens.Length, "原生正文全部消费，不吞未知控件或尾部token");
         That(reader.ReadByte() == 1, "原生活动可见位完整");
         byte stateCount = reader.ReadByte();
-        That(stateCount == (battlePassEnd.HasValue ? 3 : 2),
-            battlePassEnd.HasValue && stateCount == 2 ? "EVENT2520_VALUE_ROW_MISSING" : "原状态尾段项数完整");
-        foreach (ushort id in new ushort[] { 2037, 2395 })
+        That(stateCount == 1 + activeEvents.Count + (battlePassEnd.HasValue ? 1 : 0),
+            battlePassEnd.HasValue && stateCount == 1 + activeEvents.Count ? "EVENT2520_VALUE_ROW_MISSING" : "原状态尾段项数完整");
+        foreach (ushort id in (ushort[])[2037, .. activeEvents])
         {
             That(reader.ReadUInt16() == id, "原active tail活动身份未丢失");
             for (int index = 0; index < 12; index++)
