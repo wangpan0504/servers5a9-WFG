@@ -39,8 +39,10 @@ internal static partial class DungeonSpecificCardRewardsTests
             checked((ushort)(bounds.Y + bounds.Height / 2)));
         foreach (var (activeQuest, tired) in new[] { (false, false), (true, false), (false, true) })
         {
+            var (missions, clock) = DungeonBattlePassRegression.Schedule(pvf);
             using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-                done.ToArray(), position: position, fatigueRemaining: tired ? (ushort)1 : null);
+                done.ToArray(), position: position, fatigueRemaining: tired ? (ushort)1 : null, timeProvider: clock);
+            DungeonBattlePassRegression.Enable(fixture, missions, clock);
             if (activeQuest)
             {
                 var candidate = quests.All.OrderBy(row => row.Id).First(row => row.Id < 30000 &&

@@ -53,7 +53,7 @@ internal static partial class BattlePassMissionTests
             var session = new GameSession(repository, towns, owner, timeProvider: clock);
             session.Select(0);
             session.MarkReady();
-            var before = repository.ReadBattlePassMissions(owner, clock.GetUtcNow())!;
+            var before = repository.ReadBattlePassMissions(owner, clock.GetUtcNow());
 
             using var stop = new CancellationTokenSource();
             using var output = new MemoryStream();
@@ -71,7 +71,7 @@ internal static partial class BattlePassMissionTests
 
             await battlePass.ReadyAsync(context).WaitAsync(TimeSpan.FromSeconds(5));
             await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            That(starting ? !before.Active && sent.IsEmpty : before.Active && sent.Count == 1 &&
+            That(starting ? before is null && sent.IsEmpty : before is { Active: true } && sent.Count == 1 &&
                 sent.Single().SequenceEqual(before.ToPayload()),
                 "Ready已实际完成旧期任务页，开季前则没有虚构1801：" + name);
             int prior = sent.Count;
@@ -81,7 +81,7 @@ internal static partial class BattlePassMissionTests
             clock.Set(boundary);
             var expected = repository.ReadBattlePassMissions(owner, boundary)!;
             That(expected.Active && expected.ToPayload().Length == 156 &&
-                (starting || !expected.ToPayload().SequenceEqual(before.ToPayload())),
+                (starting || before is not null && !expected.ToPayload().SequenceEqual(before.ToPayload())),
                 "边界产生完整且可辨识的新期任务页：" + name);
             await context.CommandGate.WaitAsync();
             try
@@ -97,9 +97,12 @@ internal static partial class BattlePassMissionTests
             finally { context.CommandGate.Release(); }
 
             var restored = repository.ReadBattlePassMissions(owner, boundary)!;
-            That(restored.Season.Revision == before.Season.Revision &&
-                restored.Season.TotalExperience == before.Season.TotalExperience &&
-                restored.Season.PassType == before.Season.PassType && restored.Season.Claims.SetEquals(before.Season.Claims) &&
+            That(restored.Active && restored.Season.SeasonKey == season &&
+                (starting ? restored.Season.Revision == 0 && restored.Season.TotalExperience == 0 &&
+                    restored.Season.PassType == 0 && restored.Season.Claims.IsEmpty :
+                    before is not null && restored.Season.Revision == before.Season.Revision &&
+                    restored.Season.TotalExperience == before.Season.TotalExperience &&
+                    restored.Season.PassType == before.Season.PassType && restored.Season.Claims.SetEquals(before.Season.Claims)) &&
                 restored.ToPayload().SequenceEqual(expected.ToPayload()) &&
                 SourceCount() == sourceCount, "跨期投影不增加登录来源、经验或领取记录：" + name);
 

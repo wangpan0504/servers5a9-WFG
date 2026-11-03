@@ -369,9 +369,11 @@ internal static class HellPartyEntryTests
         // ===== 时空裂缝「再次挑战」=====
         // 修复前 RetryFormalDungeon 固定按非深渊重开，时空裂缝被自己的准入否掉返回 null，结算页收不到 ACK 就停住，
         // 后续的「选择其他地图」和「回城」也发不出去。这里验证同一条 Run 清完并结算后能按深渊模式重开新尝试。
+        var (riftMissions, riftClock) = DungeonBattlePassRegression.Schedule(pvf);
         using (var riftRetry = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-            riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 60)]))
+            riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 60)], timeProvider: riftClock))
         {
+            DungeonBattlePassRegression.Enable(riftRetry, riftMissions, riftClock);
             var first = riftRetry.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true)!;
             int riftId = riftRetry.Read().Id;
             That(first.Entry.IsInfernoParty && riftRetry.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count) == 30,
@@ -404,6 +406,11 @@ internal static class HellPartyEntryTests
             That(riftLoaded.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement, "时空裂缝终点死亡后进入结算阶段");
             var settled = riftRetry.Session.SettleFormalDungeon((ushort)riftId, 99, 99, [1, 2, 3], dungeons, riftClear, growth);
             That(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null, "时空裂缝结算提交");
+            DungeonBattlePassRegression.FormalClearOnce(riftRetry);
+            var afterClear = riftRetry.Read();
+            That(riftRetry.Session.SettleFormalDungeon((ushort)riftId, 99, 99, [1, 2, 3], dungeons, riftClear, growth).Outcome == DungeonRunOutcome.Duplicate &&
+                QuestCompletionRepositoryTests.Same(afterClear, riftRetry.Read()), "时空裂缝重复报告不重复经验或奖励");
+            DungeonBattlePassRegression.FormalClearOnce(riftRetry);
             var settledReceipt = settled.Receipt!;
             var retried = riftRetry.Session.RetryFormalDungeon(settledReceipt, dungeons, rooms, riftDrops, items.Items, items.EpicPieces);
             That(retried is not null && retried.Entry.IsInfernoParty && retried.Entry.HellParty is null &&

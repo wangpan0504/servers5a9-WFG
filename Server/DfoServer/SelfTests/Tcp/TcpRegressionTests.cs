@@ -329,6 +329,22 @@ internal static class TcpRegressionTests
             TayberrsCardRewardTests.RunResources(resources.Archive, resources.ItemResources);
             return Task.CompletedTask;
         }),
+        ("dungeon-clear-battle-pass", (_, _, resources) =>
+        {
+            DungeonSettlementTests.RunBattlePassTayberrsCore();
+            DungeonSettlementTests.RunBattlePassFormalClearCore();
+            DungeonSettlementTests.RunBattlePassDazzlementClearCore();
+            DungeonSettlementTests.RunBattlePassBossRushRewardCore();
+            DungeonSettlementTests.RunBattlePassDungeonActivityCore();
+            DungeonSettlementTests.RunBattlePassHellCosmoCompletionCore();
+            DungeonBattlePassRegression.RunResources(resources);
+            HellPartyEntryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+            RiftMaterialDropTests.RunResources(resources);
+            DungeonSpecificCardRewardsTests.RunCosmoResources(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+            DungeonSpecificCardRewardsTests.RunOrdinarySelectionResources(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+            DungeonSpecificCardRewardsTests.RunTayberrsResources(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources, resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonItemDropCatalogTests.RunCore();

@@ -79,8 +79,10 @@ internal static partial class DungeonSpecificCardRewardsTests
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
+        var (missions, clock) = DungeonBattlePassRegression.Schedule(pvf);
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-            [.. done.Order()], position: position, items: [(10158964, 1)]);
+            [.. done.Order()], position: position, items: [(10158964, 1)], timeProvider: clock);
+        DungeonBattlePassRegression.Enable(fixture, missions, clock);
         byte entryDifficulty = (byte)Enumerable.Range(0, 5).First(value => dungeons.Get(representative).AllowsDifficulty((byte)value, false));
         var receipt = fixture.Session.EnterFormalDungeon(representative, 0, entryDifficulty, dungeons, rooms, pieces: items.EpicPieces)!;
         That(receipt is not null, "泰波尔斯翻牌回归沿真实入场票、前置任务和疲劳准入：" + fixture.Session.LastFormalDungeonRejection);
