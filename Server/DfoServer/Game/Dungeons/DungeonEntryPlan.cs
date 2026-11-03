@@ -448,6 +448,12 @@ internal sealed record DungeonEntryPlan(
             quest.Definition is { Diagnostics.Length: 0 } declared && declared.Dungeons.Any(row => row.DungeonId == dungeonId) &&
             definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+        // 二觉等清图任务可能只声明MAP；仅借用确实包含该目标的无连接路线，不忽略已有dungeon info限制。
+        if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null && QuestClearEligibility.IsSingleMap(quest) &&
+            quest.Definition is { Diagnostics.Length: 0, Dungeons.Length: 0 } &&
+            definition.Mazes.All(maze => maze.QuestConnectionTokens.Count == 0))
+            candidates = definition.Mazes.Where(maze => (maze.MapSpecification ?? []).Concat(maze.LayeredMaps)
+                .Concat(maze.ConditionalMaps).Concat(maze.StoryStages).Any(map => map.Id == quest.IntData[0])).ToArray();
         // 收集和猎杀目标不决定地图结构；没有本任务专用连接时沿普通迷宫，目标匹配由进度和掉落规则判断。
         if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null &&
             CanUseOrdinaryQuestRoute(definition,character,quest,dungeonId,questId,difficulty))

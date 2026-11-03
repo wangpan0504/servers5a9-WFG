@@ -284,6 +284,7 @@ internal static class TcpRegressionTests
         ("experience-bonuses", FormalDungeonTcpTests.RunExperienceBonusesAsync),
         ("hosted-dungeon-eligibility", HostedDungeonEligibilityTcpTests.RunAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("contaminated-timegate", FormalDungeonTcpTests.RunContaminatedTimegateAsync),
         ("dungeon-growth", async (_, _, resources) =>
         {
             DungeonGrowthRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters);
