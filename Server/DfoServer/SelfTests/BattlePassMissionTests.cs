@@ -19,6 +19,7 @@ internal static partial class BattlePassMissionTests
         NativeShopVisitPersistence();
         CompletionPersistence();
         WriterClockPersistence();
+        EquipmentDisjointPersistence();
         Console.WriteLine($"PASS BattlePassMissionTests core ({Count - before} checks)");
     }
 
@@ -68,12 +69,18 @@ internal static partial class BattlePassMissionTests
             "本服高级日第4槽用资源3倍经验，真实远征日周定义在指定有界组激活");
     }
 
-    static BattlePassCatalog Catalog(int weeklyGroups = 15, bool dailyLogin = false, bool completion = false, bool shopVisit = false)
+    static BattlePassCatalog Catalog(int weeklyGroups = 15, bool dailyLogin = false, bool completion = false, bool shopVisit = false, bool disjoint = false)
     {
         var source = new List<object> { "[ui path]", "UI/MissionCoreFixture.xui" };
         for (int id = 1; id <= 70; id++)
         {
             bool complete = completion && id is (54 or 55);
+            if (disjoint && id is (18 or 42))
+            {
+                source.AddRange(new object[] { "[mission]", id, id == 18 ? 3 : 9, id == 18 ? 100 : 1000,
+                    17, "装备分解夹具", -1, "[/mission]" });
+                continue;
+            }
             int target = complete ? id == 54 ? 150 : 30 : dailyLogin && id == 43 ? 3 : dailyLogin && id == 56 ? 50 : id == 38 ? 3 : id == 51 ? 2_000_000_000 : 1;
             int experience = complete ? 1600 : dailyLogin && id == 43 ? 1000 : dailyLogin && id == 56 ? 1600 : id == 38 ? 1000 : 100;
             source.AddRange(new object[] { "[mission]", id, target, experience, shopVisit && id == 11 ? 11 : complete ? 36 : dailyLogin && id is (43 or 56) ? 30 : id is 12 or 38 ? 12 : 777,
@@ -86,11 +93,11 @@ internal static partial class BattlePassMissionTests
             58 => shopVisit ? new object[] { 1, 11, 3, 4 } : new object[] { 1, 12, 3, 4 },
             59 => shopVisit ? new object[] { 11, 2, 3, 4 } : new object[] { 12, 2, 3, 4 },
             99 => shopVisit ? new object[] { 11, 2, 3, 4 } : new object[] { 1, 2, 3, 4 },
-            _ => new object[] { 1, 2, 3, 4 }
+            _ => disjoint ? new object[] { 1, 18, 3, 4 } : new object[] { 1, 2, 3, 4 }
         });
         source.AddRange(new object[] { "[/daily mission]", "[weekly mission]" });
         for (int week = 0; week < weeklyGroups; week++) source.AddRange(dailyLogin ? new object[] { 25, 26, 43, 28 } : week == 8 ?
-            new object[] { 25, 26, 38, 28 } : new object[] { 25, 26, 27, 28 });
+            new object[] { 25, 26, 38, 28 } : disjoint ? new object[] { 25, 26, 42, 28 } : new object[] { 25, 26, 27, 28 });
         source.AddRange(new object[] { "[/weekly mission]", "[season mission]" });
         source.AddRange(Enumerable.Range(51, 18).Cast<object>());
         source.Add("[/season mission]");
