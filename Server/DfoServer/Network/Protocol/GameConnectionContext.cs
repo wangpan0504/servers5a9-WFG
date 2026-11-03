@@ -50,6 +50,10 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarMonsters { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
     internal (Guid Instance, long Sequence)? FiendwarSupportDisplay { get; set; }
+    // 仅当前实例的五个原生影片符号和实际区域；FIFO写帧成功后才确认事件代。
+    internal Guid FiendwarEventDisplayInstance { get; set; }
+    internal Dictionary<int, long> FiendwarMovieDisplays { get; } = [];
+    internal Dictionary<int, long> FiendwarWarningDisplays { get; } = [];
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal Dictionary<DfoServer.GameWorld.Raids.RaidTimer, DfoServer.Network.Projection.LukeTimerDisplay> LukeTimerDisplays { get; } = [];
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }

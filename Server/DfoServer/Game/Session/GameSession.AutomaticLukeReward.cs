@@ -27,7 +27,8 @@ internal sealed partial class GameSession
         var before = Selected;
         var target = before?.Id == eligibility.Character ? before : load(owner, eligibility.Character);
         if (target is null) return (false, (InventoryResult?)null, (PreparedRaidReward?)null);
-        var identity = new LukeRewardRecoveryTarget(target.Id, eligibility.Instance, eligibility.Phase, offer.Kind, offer.Card);
+        var identity = new LukeRewardRecoveryTarget(target.Id, eligibility.Instance, eligibility.Phase, offer.Kind, offer.Card)
+            { RaidType = eligibility.RaidType };
         var committed = LukeRewardRecovery.Claim(owner, target, identity, eligibility.Event, eligibility.Anchor, store,
             () => (items, gold, pieces), now);
         var prepared = store.ReadLukeRewardRecovery(owner, committed.Character, identity).Prepared;

@@ -11,7 +11,7 @@ internal sealed partial class AntonRaidBattle
 
     // P2全员无资格时也须先播放成功演出，不能直接把业务Completed当成原生翻牌state4。
     // 有资格的P2仍沿原个人电影/选牌合同，不增加全团选牌前置条件。
-    bool HasLukeMovieBarrierLocked() => HasLukeFirstMovieLocked() && current.Phase == 0 ||
+    bool HasLukeMovieBarrierLocked() => HasFiendwarMovieBarrierLocked() || HasLukeFirstMovieLocked() && current.Phase == 0 ||
         Kind == RaidKind.Luke && lukeFlow is not null && current.Phase == 1 &&
         lukePhaseCommits.TryGetValue(1, out var committed) && committed.Members.All(member => !member.Eligible);
 
@@ -54,6 +54,11 @@ internal sealed partial class AntonRaidBattle
         {
             if (HasAntonRewards) return actor.IsCurrent && members.ContainsKey(actor) && current.Phase == phase &&
                 current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired && current.AntonCardsReady;
+            if (Kind == RaidKind.Fiendwar)
+                return actor.IsCurrent && members.ContainsKey(actor) && current.Phase == phase &&
+                    current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired &&
+                    HasFiendwarMovieBarrierLocked() && (LukeMovieBarrierReadyLocked() ||
+                        automaticLuke && LukeRewardRemainingLocked() == TimeSpan.Zero);
             if (!HasLukeFirstMovieLocked() || phase != 0) return true;
             if (!actor.IsCurrent || !members.ContainsKey(actor) || current.Phase != phase ||
                 current.State != AntonRaidBattleState.Reward || current.ClockFaulted || current.PhaseExpired) return false;
@@ -64,7 +69,7 @@ internal sealed partial class AntonRaidBattle
 
     void LeaveLukeFirstMovieLocked(RaidActor actor, bool disconnected)
     {
-        if (disconnected || Kind != RaidKind.Luke || !HasLukeMovieBarrierLocked() ||
+        if (disconnected || Kind is not (RaidKind.Luke or RaidKind.Fiendwar) || !HasLukeMovieBarrierLocked() ||
             !lukeSettlements.TryGetValue(current.Phase, out var settlement) || !settlement.Members.Any(member =>
                 member.Character == actor.Character && member.Present)) return;
         bool before = LukeMovieBarrierReadyLocked();

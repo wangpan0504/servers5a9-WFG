@@ -285,7 +285,8 @@ internal sealed partial class GameSession
         };
         if (!canExit)
             return null;
-        if (kind == PartyDungeonExitKind.ResultSelection && dungeon.Entry.IsCosmo) return null;
+        if (kind == PartyDungeonExitKind.ResultSelection &&
+            (dungeon.Entry.IsCosmo || dungeon.Entry.RaidEntry?.Kind == DfoServer.Game.Raids.RaidKind.Fiendwar)) return null;
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var after = kind is PartyDungeonExitKind.HellSelection or PartyDungeonExitKind.FiendwarKeyRecovery ? character.Inventory :
             StaminaRecoveryService.ApplyDungeonRetreat(character, dungeon.Entry, dungeon.Run.Phase, now, PremiumPcRoom);

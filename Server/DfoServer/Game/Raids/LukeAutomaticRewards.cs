@@ -22,6 +22,7 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
             foreach (var (account, eligibility) in battle.DueLukeRewards())
                 foreach (var offer in eligibility.Offers.GroupBy(row => row.Kind).Select(group => group.OrderBy(row => row.Card).First()))
                 {
+                    var selectedOffer = offer with { Card = battle.AutomaticFiendwarCard(eligibility.Character, offer.Card) };
                     if (battle.HasConfirmedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind)) continue;
                     // 原660已提交但ACK丢失时直接确认精确原回执，不能改用最低Card0重放而卡住非零牌。
                     if (battle.SubmittedLukeReward(eligibility.Character, eligibility.Phase, offer.Kind) is { } submitted)
@@ -35,11 +36,11 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                         try
                         {
                             if (session.Selected?.Id == eligibility.Character && session.RaidCombatView()?.Instance == battle.Instance)
-                                receipt = session.ClaimRaidReward(offer.Kind, offer.Card, store, items, gold, pieces, clock.GetUtcNow(), automaticLuke: true);
+                                receipt = session.ClaimRaidReward(selectedOffer.Kind, selectedOffer.Card, store, items, gold, pieces, clock.GetUtcNow(), automaticLuke: true);
                             else
                             {
                                 receipt = null;
-                                recovered = session.ClaimAutomaticLukeRecovery(eligibility, offer, store, load, items, gold, pieces, clock.GetUtcNow());
+                                recovered = session.ClaimAutomaticLukeRecovery(eligibility, selectedOffer, store, load, items, gold, pieces, clock.GetUtcNow());
                             }
                         }
                         finally { session.CommandGate.Release(); }
@@ -66,7 +67,8 @@ internal sealed class LukeAutomaticRewards(ILukeRewardRecoveryStore store, Accou
                     {
                         var character = load(lease!, eligibility.Character);
                         if (character is null) continue;
-                        var target = new LukeRewardRecoveryTarget(character.Id, eligibility.Instance, eligibility.Phase, offer.Kind, offer.Card);
+                        var target = new LukeRewardRecoveryTarget(character.Id, eligibility.Instance, eligibility.Phase, selectedOffer.Kind, selectedOffer.Card)
+                            { RaidType = eligibility.RaidType };
                         var commit = LukeRewardRecovery.Claim(lease!, character, target, eligibility.Event, eligibility.Anchor, store,
                             () => (items, gold, pieces), clock.GetUtcNow());
                         var prepared = store.ReadLukeRewardRecovery(lease!, commit.Character, target).Prepared;

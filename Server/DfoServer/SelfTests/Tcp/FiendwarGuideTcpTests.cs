@@ -102,6 +102,8 @@ internal static class FiendwarGuideTcpTests
         int dynamicSpawnRooms = 0;
         int guideDeaths = 0, guideBossDeaths = 0;
         bool rollbackChecked = false, writerDeadlineChecked = false;
+        bool inDungeonScene = false, returnedToField = false, resultShown = false, victoryShown = false, cardsShown = false;
+        var cardChoices = new HashSet<byte>();
         Select();
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
@@ -110,6 +112,8 @@ internal static class FiendwarGuideTcpTests
         That(clears.Count == 4 && clears[2] == (0u, 0u), "初次登录四类团本次数初始化为真实零记录");
         for (int route = 0; route < (battlePass ? 1 : 2); route++)
         {
+            resultShown = victoryShown = cardsShown = false;
+            cardChoices.Clear();
             peer.Send(1426); Read();
             Create(true);
             Move(1, 2, accepted: false);
@@ -149,7 +153,29 @@ internal static class FiendwarGuideTcpTests
                     }
                     return;
                 }
-                peer.Send(42); Read();
+                if (next == 35)
+                {
+                    string Ledger() => fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY character_id,raid_type") +
+                        fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY character_id,kind") +
+                        fixture.Snapshot("SELECT * FROM guild_contribution_events ORDER BY character_id,event_id") +
+                        fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts ORDER BY character_id,event_id");
+                    string before = Ledger();
+                    peer.Send(72, [1, 2]);
+                    var returned = Read();
+                    int ack = returned.FindIndex(row => row is { Kind: 1, Opcode: 72, Body: [1, 1, 2] });
+                    int town = returned.FindIndex(row => row is { Kind: 0, Opcode: 24, Body: [57, ..] });
+                    That(ack >= 0 && town > ack && !returned.Any(row => row is { Kind: 0, Opcode: 15 or 27 or 28 or 29 }),
+                        "引导真实非终局清房菜单返回先ACK72再24回原战场，不打开普通选图");
+                    That(before == Ledger(), "引导清房菜单返回不重复原通关、次数、奖励或死亡账本");
+                    peer.Send(72, [1, 2]);
+                    That(!Read().Any(row => row is { Kind: 1, Opcode: 72, Body: [1, ..] } or
+                        { Kind: 0, Opcode: 24 or 15 or 27 or 28 or 29 }) && before == Ledger(),
+                        "引导旧清房菜单重放不重复退场或原账本");
+                }
+                else
+                {
+                    peer.Send(42); Read();
+                }
                 if (battlePass && dungeon == 5356)
                 {
                     var observer = new CharacterRepository(fixture.Database);
@@ -175,10 +201,37 @@ internal static class FiendwarGuideTcpTests
             var adventure = Read().Single(row => row is { Kind: 1, Opcode: 1403 }).Body;
             That(adventure[0] == 1 && U32(adventure, 19 + 32) == (uint)route + 1,
                 "引导两条原路线从同一真实终局账本投影冒险团累计，不随日周期清零");
+            That(resultShown && victoryShown, "引导真实24返城后接收601及1523成功电影，不套587");
+            string beforeSkip = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
+            peer.Send(659, [0]);
+            var skipped = Read();
+            That(skipped.Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }) &&
+                skipped.Any(row => row is { Kind: 0, Opcode: 599, Body.Length: 0 }) &&
+                !skipped.Any(row => row is { Kind: 0, Opcode: 600 } or { Kind: 0, Opcode: 1523, Body: [4, ..] }),
+                "引导659零值只请求跳过并收到599，不能提前打开牌面");
+            peer.Send(660, [1, 3]);
+            That(!Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && beforeSkip ==
+                fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                "引导跳过尚未真实确认，提前660拒绝且资产收据不变");
+            peer.Send(659, [1]);
+            var completedMovie = Read();
+            That(completedMovie.Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }) && cardsShown &&
+                cardChoices.SetEquals(new byte[] { 1, 0 }), "引导真实电影完成后1523四及两种600空选择表开放翻牌");
             foreach (byte kind in new byte[] { 1, 0 })
             {
-                peer.Send(660, [kind, 0]);
-                That(Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }), "引导独立原奖励实际领取成功");
+                peer.Send(660, [kind, 3]);
+                var claimed = Read();
+                int ack = claimed.FindIndex(row => row is { Kind: 1, Opcode: 660, Body: [1] });
+                var display = claimed.SingleOrDefault(row => row is { Kind: 0, Opcode: 600 });
+                That(ack >= 0 && display is not null && claimed.IndexOf(display) < ack && display.Body[0] == kind &&
+                    display.Body[1] == 1 && U16(display.Body, 2) == peer.Id && display.Body[4] == 3 &&
+                    display.Body[5] > 0 && display.Body.Length == 6 + 16 * display.Body[5],
+                    "引导独立原奖励非零卡位实际领取，原16B产物展示先于660成功");
+                string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
+                peer.Send(660, [kind, 3]);
+                That(Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && receipts ==
+                    fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                    "引导重复660只重放原卡位，不重复资产或收据");
             }
             peer.Send(665, BitConverter.GetBytes(peer.Id)); Read();
             if (route == 0)
@@ -445,6 +498,28 @@ internal static class FiendwarGuideTcpTests
         List<WirePacket> Read()
         {
             var rows = AntonTcpProbe.Barrier(peer, "fiendwar guide");
+            foreach (var row in rows)
+            {
+                That(row is not { Kind: 0, Opcode: 587 }, "引导仅使用原生1523状态合同");
+                if (row is { Kind: 0, Opcode: 29 }) { inDungeonScene = true; returnedToField = false; }
+                if (row is { Kind: 0, Opcode: 24, Body: [57, ..] }) { inDungeonScene = false; returnedToField = true; }
+                if (row is { Kind: 0, Opcode: 601, Body.Length: 10 })
+                {
+                    That(!inDungeonScene && returnedToField, "引导终局实际24返城先于601，避免旧副本场景清掉演出");
+                    resultShown = true;
+                }
+                if (row is { Kind: 0, Opcode: 1523, Body: [3, 0, 0] })
+                {
+                    That(resultShown, "引导601结果先于1523成功电影");
+                    victoryShown = true;
+                }
+                if (row is { Kind: 0, Opcode: 1523, Body: [4, 0, 0] }) cardsShown = true;
+                if (row is { Kind: 0, Opcode: 600, Body: [byte kind, 0] })
+                {
+                    That(cardsShown, "引导1523四先于600空选择表");
+                    cardChoices.Add(kind);
+                }
+            }
             foreach (var roster in rows.Where(row => row is { Kind: 0, Opcode: 9, Body.Length: > 11 } && row.Body[9] == 0))
             {
                 That(U16(roster.Body) == 1 && U16(roster.Body, 2) == 9999 && U16(roster.Body, 4) != 0 &&

@@ -30,6 +30,16 @@ internal static class TcpRegressionTests
         ("battle-pass-anton-death-prepare-retry", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1, "prepare-retry")),
         ("battle-pass-anton-death-writer", (options, root, resources) => AntonRaidMapEntryTcpTests.RunBattlePassDeathAsync(options, root, resources, 1, "writer")),
         ("fiendwar-recovery", FiendwarRecoveryTests.RunAsync),
+        ("fiendwar-recovery-movie", (_, root, resources) =>
+        {
+            FiendwarRecoveryTests.RunMovieResources(Path.Combine(root, "fiendwar-recovery-movie"), resources);
+            return Task.CompletedTask;
+        }),
+        ("fiendwar-shared-limits", (_, root, resources) =>
+        {
+            FiendwarSharedLimitTests.Run(Path.Combine(root, "fiendwar-shared-limits"), resources);
+            return Task.CompletedTask;
+        }),
         ("fiendwar-reward-rules", (_, _, resources) =>
         {
             FiendwarRewardClosureTests.Run(resources);
@@ -635,6 +645,8 @@ internal static class TcpRegressionTests
     {
         "otherverse-drop-rules",
         "fiendwar-reward-rules",
+        "fiendwar-recovery-movie",
+        "fiendwar-shared-limits",
         "fiendwar-quota-consumption",
         "settings-snapshot-rules",
         "equipment-power-rules",

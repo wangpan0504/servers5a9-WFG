@@ -37,6 +37,10 @@ internal sealed record FiendwarFieldState(Guid Instance, long Revision, DateTime
     internal bool FacilitiesDestroyed { get; init; }
     // 原生基地危险检查6/7/8区域的敌军容器；区域倒计时Warning不是此判据。
     internal bool BaseThreatened { get; init; }
+    // 原生影片与遭遇预警是执行事件；每个符号/区域只保留最后代次，不积累历史队列。
+    internal long EventSequence { get; init; }
+    internal ImmutableDictionary<int, long> MovieEvents { get; init; } = ImmutableDictionary<int, long>.Empty;
+    internal ImmutableDictionary<int, long> WarningEvents { get; init; } = ImmutableDictionary<int, long>.Empty;
 }
 internal sealed record FiendwarFieldEvent(FiendwarOp? Kind = null, int Id = 0, string? Key = null);
 internal sealed record FiendwarFieldChange(FiendwarFieldState State, ImmutableArray<FiendwarInstruction> Effects);
@@ -190,6 +194,7 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
         }
         void Symbol(string key, int value)
         {
+            MovieEvent(key);
             if (value == 1 && key is "[radar state]" or "[battery state]")
                 state = state with { FacilitiesDestroyed = true };
             if (state.Symbols.GetValueOrDefault("[movie command center on]") == 1 && value == 1 &&
@@ -199,6 +204,13 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
             if (key == "[movie command center on]" && value == 1)
                 state = state with { Timers = state.Timers.RemoveRange(state.Timers.Keys.Where(k => k.Kind.EndsWith("_restore_center", StringComparison.Ordinal))) };
             pending.Enqueue(new(FiendwarOp.SymbolChanged, Key: key));
+        }
+        void MovieEvent(string key)
+        {
+            // 00D2A460的121–125不读value；真实SET 0及同值再次SET也各是新事件。
+            if (!script.Script.Symbols.TryGetValue(key, out int id) || id is < 121 or > 125) return;
+            long sequence = checked(state.EventSequence + 1);
+            state = state with { EventSequence = sequence, MovieEvents = state.MovieEvents.SetItem(id, sequence) };
         }
         void Area(int id, FiendwarAreaState value)
         {
@@ -264,7 +276,11 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
                     state = state with { Timers = state.Timers.Remove(new("move_enemy", a.A)).Remove(new("warning_enemy", a.A)) };
                     break;
                 case FiendwarOp.DeleteMonster: Area(a.A, state.Areas[a.A] with { Monster = null }); break;
-                case FiendwarOp.WarningEnemy: Area(a.A, state.Areas[a.A] with { Warning = true }); break;
+                case FiendwarOp.WarningEnemy:
+                    long sequence = checked(state.EventSequence + 1);
+                    state = state with { EventSequence = sequence, WarningEvents = state.WarningEvents.SetItem(a.A, sequence) };
+                    Area(a.A, state.Areas[a.A] with { Warning = true });
+                    break;
                 case FiendwarOp.DeleteAllEnemy:
                     foreach (int id in areaIds) Area(id, state.Areas[id] with { Enemy = null, Warning = false });
                     state = state with { Timers = state.Timers.RemoveRange(state.Timers.Keys.Where(k => k.Kind.Contains("enemy", StringComparison.Ordinal))) };
@@ -289,8 +305,14 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
                     break;
                 case FiendwarOp.Clear: state = state with { Cleared = true }; break;
                 case FiendwarOp.Fail: state = state with { Failed = true }; break;
-                case FiendwarOp.BossPatternInit or FiendwarOp.MovieRadar or FiendwarOp.MovieBatteryOn or
-                    FiendwarOp.MovieBatteryOff or FiendwarOp.MovieCommandCenter or FiendwarOp.KillAllCharacters:
+                case FiendwarOp.MovieRadar or FiendwarOp.MovieBatteryOn or FiendwarOp.MovieBatteryOff or FiendwarOp.MovieCommandCenter:
+                    MovieEvent(a.Op switch
+                    {
+                        FiendwarOp.MovieRadar => "[movie radar on]", FiendwarOp.MovieBatteryOn => "[movie battery on]",
+                        FiendwarOp.MovieBatteryOff => "[movie battery off]", _ => "[movie command center on]"
+                    });
+                    effects.Add(a); break;
+                case FiendwarOp.BossPatternInit or FiendwarOp.KillAllCharacters:
                     effects.Add(a); break;
                 default: throw new InvalidOperationException("漩涡动作未实现：" + a.Op);
             }

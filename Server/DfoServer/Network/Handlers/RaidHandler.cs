@@ -1,4 +1,4 @@
-using DfoServer.Game.Characters;
+﻿using DfoServer.Game.Characters;
 using DfoServer.Game.Raids;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Raids;
@@ -80,39 +80,142 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         try { key = RaidRequests.Rejoin(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
-        if (lukeRejoin is not null && rejoin?.Peek(actor.Character)?.Luke is not null)
+        if (lukeRejoin is not null && rejoin?.Peek(actor.Character) is { Luke: { } reservation })
         {
             var before = registry.Find(key, actor.Channel);
-            var restored = lukeRejoin.Restore(actor, key, callerCommandHeld: true);
-            log.Write("luke_raid_rejoin", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
-                restored.Accepted, restored.Reason, Phase = restored.Battle?.Phase, Contract = "waiting-room-rejoin" });
-            if (restored is { Accepted: true, Raid: { } raid, Battle: { } view })
+            // Restore会立即把新actor加入战场，必须先拦截该连接Notice；迁城及落位也会产生新revision。
+            // 该连接Notice必须排在重返START之后，避免断线前事件先进入空缓存。
+            var rejoinBattle = reservation.Battle.Kind == RaidKind.Fiendwar ? reservation.Battle : null;
+            Action<AntonRaidBattleView, RaidActor>? previousBattleNotice = null;
+            Action<AntonRaidBattleView, RaidActor>? heldBattleNotice = null;
+            int battleNoticeHeld = 0;
+            if (rejoinBattle is { Kind: RaidKind.Fiendwar })
             {
-                var travel = town is null ? null : context.Session.ReturnLukeRejoinToWaiting(actor);
-                if (travel is null)
+                previousBattleNotice = context.Session.RaidBattleNoticeArrived;
+                heldBattleNotice = (noticeView, noticeActor) =>
                 {
-                    await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_travel_failed", () => actor.IsCurrent);
-                    return CommandResult.Handled;
-                }
-                await town!.TravelAsync(context, travel);
-                // 漩涡落位会原子更新区域占用及revision；后续发布必须使用落位后的真实快照。
-                view = context.Session.CurrentRaidBattle(actor)!.View;
-                if (before is not null) registry.Publish(new(before, raid));
-                if (restored.Party is { } squad)
-                    parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
-                        member, Party: squad)));
-                bool Current() => actor.IsCurrent && actor.Session.CanPublishRaid(actor, raid) && actor.Session.CanPublishRaidBattle(actor, view);
-                context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
-                    [], "raid_rejoin_prepare", Current);
-                if (raid.Type == 2)
-                    context.Sender.Post(0, (ushort)NotiPacketType.START_FIEND_WAR, [], "fiendwar_rejoin_started", Current,
-                        () => context.FiendwarTimers = context.FiendwarTimers.Clear());
-                // 卢克重返替换了全团view，补齐其它连接被旧view守卫过滤的排队展示。
-                if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle) battle.Publish(view);
-                else RaidCombatProjection.Notice(context, view, actor);
-                await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
+                    if (Volatile.Read(ref battleNoticeHeld) != 0 && noticeActor == actor) return;
+                    previousBattleNotice?.Invoke(noticeView, noticeActor);
+                };
+                context.Owner.Execute(() =>
+                {
+                    Volatile.Write(ref battleNoticeHeld, 1);
+                    context.Session.RaidBattleNoticeArrived = heldBattleNotice;
+                    return true;
+                });
             }
-            else await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_rejected", () => actor.IsCurrent);
+            void ReleaseBattleNotice(bool publishCurrent)
+            {
+                if (Interlocked.Exchange(ref battleNoticeHeld, 0) == 0) return;
+                // 旧owner不能再执行会话操作；清除拦截标记后，遗留包装委托也只会转发。
+                if (!context.Owner.IsCurrent) return;
+                context.Owner.Execute(() =>
+                {
+                    if (ReferenceEquals(context.Session.RaidBattleNoticeArrived, heldBattleNotice))
+                        context.Session.RaidBattleNoticeArrived = previousBattleNotice;
+                    return true;
+                });
+                if (publishCurrent && rejoinBattle is { Kind: RaidKind.Fiendwar } &&
+                    actor.IsCurrent && context.Session.CurrentRaidBattle(actor) is { } currentBattle &&
+                    ReferenceEquals(currentBattle, rejoinBattle))
+                    RaidCombatProjection.Notice(context, currentBattle.View, actor);
+            }
+            try
+            {
+                var restored = lukeRejoin.Restore(actor, key, callerCommandHeld: true);
+                log.Write("luke_raid_rejoin", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+                    restored.Accepted, restored.Reason, Phase = restored.Battle?.Phase, Contract = "waiting-room-rejoin" });
+                if (restored is { Accepted: true, Raid: { } raid, Battle: { } view })
+                {
+                    var travel = town is null ? null : context.Session.ReturnLukeRejoinToWaiting(actor);
+                    if (travel is null)
+                    {
+                        ReleaseBattleNotice(false);
+                        await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_travel_failed", () => actor.IsCurrent);
+                        return CommandResult.Handled;
+                    }
+                    await town!.TravelAsync(context, travel);
+                    // 漩涡落位会原子更新区域占用及revision；后续发布必须使用落位后的真实快照。
+                    if (context.Session.CurrentRaidBattle(actor) is not { } landedBattle ||
+                        rejoinBattle is { } expectedBattle && !ReferenceEquals(landedBattle, expectedBattle))
+                    {
+                        ReleaseBattleNotice(false);
+                        await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_travel_stale", () => actor.IsCurrent);
+                        return CommandResult.Handled;
+                    }
+                    view = landedBattle.View;
+                    if (before is not null) registry.Publish(new(before, raid));
+                    if (restored.Party is { } squad)
+                        parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
+                            member, Party: squad)));
+                    bool RejoinCurrent()
+                    {
+                        bool current = actor.IsCurrent && registry.Find(actor) is { Type: 2, Started: { } started } currentRaid &&
+                            currentRaid.Key == raid.Key && currentRaid.Channel == raid.Channel &&
+                            rejoinBattle is { Kind: RaidKind.Fiendwar } && started.InstanceId == rejoinBattle.Instance &&
+                            actor.Session.CurrentRaidBattle(actor) is { } active &&
+                            ReferenceEquals(active, rejoinBattle) && active.Instance == rejoinBattle.Instance;
+                        if (!current) ReleaseBattleNotice(false);
+                        return current;
+                    }
+                    bool Current() => rejoinBattle is { Kind: RaidKind.Fiendwar } ? RejoinCurrent() :
+                        actor.IsCurrent && actor.Session.CanPublishRaid(actor, raid) && actor.Session.CanPublishRaidBattle(actor, view);
+                    context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
+                        [], "raid_rejoin_prepare", Current);
+                    if (raid.Type == 2)
+                    {
+                        // 释放共享/本人命令门禁后，由原reader等待真实START；补Notice可能读SQL，
+                        // 不得放进发送泵的written/afterWritten回调。
+                        context.AfterDispatch = async () =>
+                        {
+                            try
+                            {
+                                bool written = await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.START_FIEND_WAR,
+                                    [], "fiendwar_rejoin_started", RejoinCurrent);
+                                bool ready = written && context.Owner.Execute(() =>
+                                {
+                                    if (!RejoinCurrent()) return false;
+                                    context.FiendwarTimers = context.FiendwarTimers.Clear();
+                                    // 仅捕获的历史水位被抑制；排队后新事件仍由最新Notice正常发布。
+                                    var field = view.Fiendwar!;
+                                    context.FiendwarEventDisplayInstance = field.Instance;
+                                    context.FiendwarMovieDisplays.Clear();
+                                    context.FiendwarWarningDisplays.Clear();
+                                    foreach (var row in field.MovieEvents) context.FiendwarMovieDisplays[row.Key] = row.Value;
+                                    foreach (var row in field.WarningEvents) context.FiendwarWarningDisplays[row.Key] = row.Value;
+                                    return true;
+                                });
+                                if (!ready)
+                                {
+                                    ReleaseBattleNotice(false);
+                                    if (context.Owner.IsCurrent && !context.Stop.IsCancellationRequested)
+                                        await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(),
+                                            "fiendwar_rejoin_start_stale", () => actor.IsCurrent);
+                                    return;
+                                }
+                                ReleaseBattleNotice(true);
+                                await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", RejoinCurrent);
+                            }
+                            finally { ReleaseBattleNotice(false); }
+                        };
+                        return CommandResult.Handled;
+                    }
+                    // 卢克重返替换了全团view，补齐其它连接被旧view守卫过滤的排队展示。
+                    if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle) battle.Publish(view);
+                    else if (rejoinBattle is not { Kind: RaidKind.Fiendwar }) RaidCombatProjection.Notice(context, view, actor);
+                    await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
+                }
+                else
+                {
+                    ReleaseBattleNotice(false);
+                    await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_rejected", () => actor.IsCurrent);
+                }
+            }
+            catch
+            {
+                ReleaseBattleNotice(false);
+                throw;
+            }
             return CommandResult.Handled;
         }
         if (rejoin is not { Enabled: true })

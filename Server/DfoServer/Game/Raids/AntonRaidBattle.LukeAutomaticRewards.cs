@@ -8,7 +8,8 @@ internal sealed partial class AntonRaidBattle
     // 原资源四段演出最长65秒；统一再留120秒选牌，不猜四列与阶段的映射。
     TimeSpan? LukeRewardRemainingLocked()
     {
-        if (lukeFlow is null || current.ClockFaulted || current.State != AntonRaidBattleState.Reward) return null;
+        if (lukeFlow is null && !(Kind == RaidKind.Fiendwar && HasFiendwarMovieBarrierLocked()) ||
+            current.ClockFaulted || current.State != AntonRaidBattleState.Reward) return null;
         if (lukeRewardPhase != current.Phase)
         { lukeRewardPhase = current.Phase; lukeRewardAnchor = lukeClock.GetTimestamp(); }
         int movie = script.Headers.Single(row => row.Tag == "[movie end time]").Values.Max(row => row.Number);
@@ -31,7 +32,7 @@ internal sealed partial class AntonRaidBattle
         {
             byte kind = prepared.Kind;
             if (rewards.Contains((eligibility.Character, eligibility.Phase, kind))) return;
-            if (Kind != RaidKind.Luke || current.State != AntonRaidBattleState.Reward || eligibility.Instance != Instance ||
+            if (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) || current.State != AntonRaidBattleState.Reward || eligibility.Instance != Instance ||
                 eligibility.Phase != current.Phase || LukeEligibility(eligibility.Character, eligibility.Phase) is not { } actual ||
                 !SameLukeEligibility(actual, eligibility) || !actual.Eligible ||
                 prepared.Instance != Instance || prepared.RaidType != Kind || prepared.Phase != eligibility.Phase ||

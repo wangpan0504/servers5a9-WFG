@@ -26,7 +26,6 @@ internal static partial class RaidCombatProjection
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Fiendwar } fiendwar)
         {
             PostFiendwarSnapshot(context, fiendwar, view, Guard);
-            context.LukePhaseExit?.Notice(view, actor);
         }
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
         {
@@ -48,6 +47,8 @@ internal static partial class RaidCombatProjection
             PostStatus(context, statusBattle, view, Guard);
             PostRetryEligibility(context, Guard);
         }
+        else if (context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Fiendwar)
+            PostRetryEligibility(context, Guard);
         if (view.PhaseExpired)
         {
             return;
@@ -76,7 +77,9 @@ internal static partial class RaidCombatProjection
         // 261只控制按钮资格。必须有全分队已提交的清图事实，不能借HP0、战况Clear或普通结果页推定。
         context.Sender.Post(0, (ushort)NotiPacketType.EPLP_RECHALLENGE,
             DungeonSettlementPackets.RetryEligibility(available), "raid_result_retry_eligibility",
-            () => current() && context.Session.CanPublishDungeonSettlement(receipt) &&
+            // 261只携带资格位；称号等合法提交会替换角色快照，写帧时重捕获同一真实清图实例，
+            // 不拿排队前的资产receipt去触发结算快照异常，也不能给后来进入的新实例发旧按钮。
+            () => current() &&
                 context.Session.RaidDungeonResultFocus()?.Snapshot.Identity.InstanceId == display.Run &&
                 context.Session.CanRetryRaidResultDungeon() == available && context.RaidRetryDisplay != display,
             () => context.RaidRetryDisplay = display);

@@ -21,13 +21,17 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
     bool disposed;
     internal Task Completion { get { lock (gate) return pending; } }
 
+    internal bool FiendwarReturnPending(Guid instance)
+    { lock (gate) return running && scheduled is { } exit && exit.Instance == instance; }
+
     internal void Notice(AntonRaidBattleView view, RaidActor actor)
     {
         var battle = context.Session.CurrentRaidBattle(actor);
         var reason = view.PhaseExpired ? ExitReason.PhaseExpired : ExitReason.Energy;
         Guid? run = view.PhaseExpired ? null : battle?.LukeEnergyReturnRun(actor);
         if (!view.PhaseExpired && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } currentRun &&
-            view.FiendwarExpiredRuns.Contains(currentRun)) { run = currentRun; reason = ExitReason.Encounter; }
+            (view.FiendwarExpiredRuns.Contains(currentRun) || battle?.Kind == RaidKind.Fiendwar && view.Fiendwar is { Cleared: true }))
+        { run = currentRun; reason = ExitReason.Encounter; }
         if (!view.PhaseExpired && battle?.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase) == true)
         {
             run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
@@ -58,6 +62,20 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                 requested = null;
             }
             await ExitAsync(request);
+            bool finished;
+            lock (gate)
+            {
+                finished = requested is null;
+                if (finished) running = false;
+            }
+            // Departure中的24已真正经原发送队列完成；此前同步Reward通知均由pending守卫拦住。
+            // 无需重复退场或重提交终结，补发的只是当前原Battle展示。
+            if (finished)
+            {
+                if (request.Actor.IsCurrent && context.Session.CurrentRaidBattle(request.Actor) is { Kind: RaidKind.Fiendwar })
+                    context.Session.PublishRaidCombat();
+                return;
+            }
         }
     }
 
@@ -85,7 +103,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                             (exitReason == ExitReason.PhaseCompleted
                                 ? !battle.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase)
                                 : run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||
-                                battle.Kind == RaidKind.Fiendwar && battle.View.FiendwarExpiredRuns.Contains(runId) &&
+                                battle.Kind == RaidKind.Fiendwar && (battle.View.FiendwarExpiredRuns.Contains(runId) ||
+                                    battle.View.Fiendwar is { Cleared: true }) &&
                                 context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) : !battle.View.PhaseExpired)) return;
                         originalBattle = battle;
                         prefix = battle.Kind.ToString().ToLowerInvariant();
