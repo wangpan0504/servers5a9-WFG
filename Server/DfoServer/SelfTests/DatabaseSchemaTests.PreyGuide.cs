@@ -29,7 +29,7 @@ internal static partial class DatabaseSchemaTests
                 {
                     string instance = new string((char)('a' + type), 32);
                     Execute(db, $"INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'prey-old','{instance}',{type},'old',1,0)");
-                    Execute(db, $"INSERT INTO character_raid_reward_receipts VALUES(1,'prey-old','{instance}',0,0,0,20261029,0,'{{}}','[]',1,{type})");
+                    Execute(db, $"INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type) VALUES(1,'prey-old','{instance}',0,0,0,20261029,0,'{{}}','[]',1,{type})");
                 }
                 if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
                 if (scenario == "newer") Execute(db, $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}");
@@ -50,7 +50,7 @@ internal static partial class DatabaseSchemaTests
                     Query(db, "SELECT revision||':'||gold FROM characters") is "7:123",
                     "162升级保留安徒恩、卢克历史收据和资产");
                 Execute(db, "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'prey-old','cccccccccccccccccccccccccccccccc',3,'prey',2,1)");
-                Execute(db, "INSERT INTO character_raid_reward_receipts VALUES(1,'prey-old','cccccccccccccccccccccccccccccccc',0,0,0,20261029,0,'{}','[]',2,3)");
+                Execute(db, "INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type) VALUES(1,'prey-old','cccccccccccccccccccccccccccccccc',0,0,0,20261029,0,'{}','[]',2,3)");
                 Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                     "升级后普雷类型可写且外键和完整性保持");
             }

@@ -23,20 +23,21 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
         command.Parameters.Add("$id", SqliteType.Integer); command.Parameters.Add("$account", SqliteType.Text);
         command.Parameters.Add("$receipt", SqliteType.Text); command.Parameters.Add("$state", SqliteType.Integer);
         command.Parameters.Add("$clear", SqliteType.Integer);
+        command.Parameters.Add("$entryEpoch", SqliteType.Integer);
         var result = ImmutableArray.CreateBuilder<RaidPhaseEligibility>(candidate.Members.Length);
         foreach (var member in candidate.Members)
         {
             command.Parameters["$id"].Value = member.Character; command.Parameters["$account"].Value = member.Account;
-            command.CommandText = $"SELECT state,source,{prefix}_receipt,phase0_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=0";
+            command.CommandText = $"SELECT state,source,entry_epoch,{prefix}_receipt,phase0_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=0";
             int state;
             using (var reader = command.ExecuteReader())
             {
                 if (!reader.Read() || reader.GetString(1) != member.Policy.Source)
                     throw new InvalidDataException("安徒恩阶段缺少原666身份或来源已变化");
-                state = reader.GetInt32(0);
-                if (!reader.IsDBNull(2))
+                state = reader.GetInt32(0); command.Parameters["$entryEpoch"].Value = reader.GetInt64(2);
+                if (!reader.IsDBNull(3))
                 {
-                    var previous = JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(2))
+                    var previous = JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(3))
                         ?? throw new InvalidDataException("安徒恩阶段回执为空");
                     if (previous.Instance != candidate.Instance || previous.RaidType != RaidKind.Anton || previous.Phase != candidate.Phase ||
                         previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
@@ -46,12 +47,12 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
                         throw new InvalidDataException("安徒恩阶段重放改变原事件或奖励");
                     result.Add(previous); continue;
                 }
-                if (candidate.Phase == 1 && reader.IsDBNull(3)) throw new InvalidDataException("安徒恩最终通关缺少阶段0回执");
+                if (candidate.Phase == 1 && reader.IsDBNull(4)) throw new InvalidDataException("安徒恩最终通关缺少阶段0回执");
             }
             bool eligible = !candidate.TimedOut && state == 0;
             if (eligible && candidate.Phase == 1)
             {
-                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=0 AND state=2 AND clear_week=$week AND instance_id<>$instance";
+                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=0 AND state=2 AND clear_week=$week AND entry_epoch=$entryEpoch AND instance_id<>$instance";
                 eligible = Convert.ToInt32(command.ExecuteScalar()) < RaidRewardRules.WeeklyClearLimit;
             }
             bool counts = eligible && candidate.Phase == 1;

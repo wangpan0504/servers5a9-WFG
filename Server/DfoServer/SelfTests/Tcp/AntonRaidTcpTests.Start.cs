@@ -11,7 +11,8 @@ internal static partial class AntonRaidTcpTests
         var members = Enumerable.Range(0, 20).Select(i =>
         {
             var peer = Open(fixture, "antonmember" + i, gamePort: port, channelNumber: 19);
-            cleanup.Add(peer); peer.Select(); return peer;
+            // 仅成员6刚从普通频道跨类型返回；其余同频道重连保留客户端城镇快照。
+            cleanup.Add(peer); peer.Select(resumeTown: i != 6); return peer;
         }).ToArray();
         foreach (var peer in members) Drain(peer);
         Drain(observer);

@@ -13,11 +13,14 @@ internal sealed partial class CharacterRepository : IRaidStartStore
     {
         if (!actor.IsCurrent) throw new InvalidOperationException("漩涡引导原会话已变化");
         using var db = database.Open();
-        using var query = db.CreateCommand();
-        query.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=2 AND state=2 AND clear_week=$week";
+        using var tx = db.BeginRead();
+        var quota = ReadRaidQuotaEpochs(db, tx, actor.Owner.Account, RaidKind.Fiendwar);
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=2 AND state=2 AND clear_week=$week AND entry_epoch=$entry";
         query.Parameters.AddWithValue("$id", actor.Character);
         query.Parameters.AddWithValue("$account", actor.Owner.Account);
         query.Parameters.AddWithValue("$week", FiendwarRewards.Cycle.Key(now));
+        query.Parameters.AddWithValue("$entry", quota.Entry);
         return Math.Min(1, Convert.ToInt32(query.ExecuteScalar()));
     });
 
@@ -60,18 +63,21 @@ internal sealed partial class CharacterRepository : IRaidStartStore
         command.Parameters.AddWithValue("$source", admission.Source);
         command.Parameters.AddWithValue("$at", admission.At.ToUnixTimeSeconds());
         command.Parameters.Add("$id", SqliteType.Integer); command.Parameters.Add("$account", SqliteType.Text);
+        command.Parameters.Add("$entryEpoch", SqliteType.Integer); command.Parameters.Add("$rewardEpoch", SqliteType.Integer);
         if ((admission.Week is null) != (admission.WeeklyLimit is null) || admission.Week is <= 0 || admission.WeeklyLimit is <= 0)
             throw new InvalidDataException("卢克入场周资格策略不完整");
         command.Parameters.AddWithValue("$week", (object?)admission.Week ?? DBNull.Value);
         foreach (var row in rows)
         {
+            var quota = ReadRaidQuotaEpochs(db, tx, row.Actor.Owner.Account, kind);
             var membership = ReadDungeonGuildMembership(db, tx, row.Expected.Id);
             command.Parameters["$id"].Value = row.Expected.Id; command.Parameters["$account"].Value = row.Actor.Owner.Account;
             command.Parameters.AddWithValue("$guild", membership.GuildId);
             command.Parameters.AddWithValue("$joined", membership.JoinedAtUnix);
             if (admission.WeeklyLimit is { } limit)
             {
-                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week";
+                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week AND entry_epoch=$entryEpoch";
+                command.Parameters["$entryEpoch"].Value = quota.Entry;
                 int completed = Convert.ToInt32(command.ExecuteScalar());
                 if (completed >= limit)
                     throw new RaidLifecycleRejectedException(kind.ToString().ToLowerInvariant() + "-weekly-clear-limit");
@@ -80,17 +86,16 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             }
             if (admission.FiendwarGuideRoute is not null)
             {
-                // 名额与门票、入场生命周期共用事务，失败既不扣票也不占新槽。
-                command.CommandText = "DELETE FROM account_fiendwar_guides WHERE account=$account AND week<>$week";
-                command.ExecuteNonQuery();
-                command.CommandText = "SELECT EXISTS(SELECT 1 FROM account_fiendwar_guides WHERE account=$account AND character_id=$id AND week=$week)";
+                // 名额与门票、入场生命周期共用事务；历史世代绑定保留。
+                command.CommandText = "SELECT EXISTS(SELECT 1 FROM account_fiendwar_guides WHERE account=$account AND character_id=$id AND week=$week AND entry_epoch=$entryEpoch)";
+                command.Parameters["$entryEpoch"].Value = quota.Entry;
                 if (Convert.ToInt32(command.ExecuteScalar()) == 0)
                 {
-                    command.CommandText = "SELECT count(*) FROM account_fiendwar_guides WHERE account=$account AND week=$week";
+                    command.CommandText = "SELECT count(*) FROM account_fiendwar_guides WHERE account=$account AND week=$week AND entry_epoch=$entryEpoch";
                     int bound = Convert.ToInt32(command.ExecuteScalar());
                     if (bound >= 2) throw new RaidLifecycleRejectedException("fiendwar-guide-account-weekly-bind-limit");
                     command.Parameters.AddWithValue("$slot", bound);
-                    command.CommandText = "INSERT INTO account_fiendwar_guides(account,slot,week,character_id) VALUES($account,$slot,$week,$id)";
+                    command.CommandText = "INSERT INTO account_fiendwar_guides(account,slot,week,entry_epoch,character_id) VALUES($account,$slot,$week,$entryEpoch,$id)";
                     command.ExecuteNonQuery();
                     command.Parameters.RemoveAt("$slot");
                 }
@@ -101,21 +106,23 @@ internal sealed partial class CharacterRepository : IRaidStartStore
                 // 沿本服业务日UTC+8 06:00；失败和中途离团也已真实入场，不退回日次数。
                 long day = new DateTimeOffset(admission.At.UtcDateTime.AddHours(2).Date.AddHours(-2), TimeSpan.Zero).ToUnixTimeSeconds();
                 command.Parameters.AddWithValue("$day", day);
-                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE account=$account AND raid_type=$type AND admitted_at >= $day AND admitted_at < $day+86400";
+                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE account=$account AND raid_type=$type AND admitted_at >= $day AND admitted_at < $day+86400 AND entry_epoch=$entryEpoch";
+                command.Parameters["$entryEpoch"].Value = quota.Entry;
                 if (Convert.ToInt32(command.ExecuteScalar()) >= daily)
                     throw new RaidLifecycleRejectedException(kind.ToString().ToLowerInvariant() + "-daily-account-enter-limit");
                 if (kind == RaidKind.Fiendwar)
                 {
-                    command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND COALESCE(phase0_anchor,0) >= $day AND COALESCE(phase0_anchor,0) < $day+86400";
+                    command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND entry_epoch=$entryEpoch AND COALESCE(phase0_anchor,0) >= $day AND COALESCE(phase0_anchor,0) < $day+86400";
                     if (Convert.ToInt32(command.ExecuteScalar()) >= 1) throw new RaidLifecycleRejectedException("fiendwar-daily-character-clear-limit");
                 }
                 command.Parameters.RemoveAt("$day");
             }
             command.CommandText = """
                 UPDATE character_raid_runs SET state=1 WHERE character_id=$id AND account=$account AND raid_type=$type AND state=0 AND instance_id<>$instance;
-                INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,guild_id,guild_joined_at)
-                SELECT id,account,$instance,$type,$source,$at,0,$guild,$joined FROM characters WHERE id=$id AND account=$account;
+                INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,guild_id,guild_joined_at,entry_epoch,reward_epoch)
+                SELECT id,account,$instance,$type,$source,$at,0,$guild,$joined,$entryEpoch,$rewardEpoch FROM characters WHERE id=$id AND account=$account;
                 """;
+            command.Parameters["$entryEpoch"].Value = quota.Entry; command.Parameters["$rewardEpoch"].Value = quota.Reward;
             command.ExecuteNonQuery();
             command.CommandText = "SELECT COUNT(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance";
             if (Convert.ToInt32(command.ExecuteScalar()) != 1) throw new InvalidDataException("卢克入场角色归属已变化");

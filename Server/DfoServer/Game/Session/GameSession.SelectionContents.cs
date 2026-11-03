@@ -6,7 +6,7 @@ using DfoServer.Game.Quests;
 namespace DfoServer.Game.Session;
 
 internal sealed record SelectionContentsReceipt(CharacterRosterSnapshot Roster, byte? Index, int Day,
-    int GameDay, SelectionTowerCounts Towers, SelectionContents? Contents, ImmutableArray<byte> WeeklySlots);
+    int GameDay, SelectionTowerCounts Towers, SelectionContents? Contents, ImmutableArray<byte> WeeklySlots, long QuotaDisplayRevision = 0);
 
 internal sealed partial class GameSession
 {
@@ -18,13 +18,13 @@ internal sealed partial class GameSession
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var state = repository.ReadSelectionContents(owner, entry, now);
         return new SelectionContentsReceipt(roster, index, ShopPurchaseCount.Today(now), QuestCycle.Day(now), rules.Towers(state),
-            entry is null ? null : rules.Character(state, entry.Id, now), repository.ReadAdventureWeeklyConfig(owner));
+            entry is null ? null : rules.Character(state, entry.Id, now), repository.ReadAdventureWeeklyConfig(owner), quotaDisplayRevision);
     });
 
     public bool CanPublishSelectionContents(SelectionContentsReceipt receipt) => owner.Execute(() =>
     {
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
-        return CheckState(UserState.CharacterSelect) && ReferenceEquals(publishedRoster, receipt.Roster) && MatchesRoster(receipt.Roster) &&
+        return CheckState(UserState.CharacterSelect) && quotaDisplayRevision == receipt.QuotaDisplayRevision && ReferenceEquals(publishedRoster, receipt.Roster) && MatchesRoster(receipt.Roster) &&
             receipt.Day == ShopPurchaseCount.Today(now) && receipt.GameDay == QuestCycle.Day(now);
     });
 }

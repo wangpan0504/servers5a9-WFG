@@ -129,7 +129,7 @@ internal static class PcRoomTimePointStoreTests
         f.Sql("INSERT INTO account_skin_storage(account,state_json) VALUES('online-owner','{\"Owned\":[]}'); DROP TABLE account_pcroom_timepoint_claims; DROP TABLE account_pcroom_timepoint_segments; DROP TABLE account_pcroom_timepoint_days; PRAGMA user_version=190");
         string before = f.Snapshot();
         var upgraded = new CharacterRepository(f.Path);
-        That(f.Query("PRAGMA user_version") is 191L && f.Query("SELECT state_json FROM account_skin_storage WHERE account='online-owner'") is "{\"Owned\":[]}" &&
+        That(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT state_json FROM account_skin_storage WHERE account='online-owner'") is "{\"Owned\":[]}" &&
             JsonSerializer.Serialize(upgraded.LoadCharacter(f.Owner, f.Character.Slot)) == character && f.Snapshot() == before,
             "190到191只追加三个空活动表，保角色库存与旧账号皮肤数据");
         before = f.Snapshot();
@@ -146,7 +146,7 @@ internal static class PcRoomTimePointStoreTests
         f.Sql("PRAGMA user_version=186");
         before = f.Snapshot();
         upgraded = new CharacterRepository(f.Path);
-        That(f.Query("PRAGMA user_version") is 191L && f.Snapshot() == before &&
+        That(f.Query("PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && f.Snapshot() == before &&
             upgraded.Read(f.Owner, day, f.Catalog) == reward.Snapshot,
             "旧228验证v186补跑正式战令和祈愿迁移，保在线水位、已领奖邮件及资产");
         f.Integrity();

@@ -46,9 +46,13 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
             }
         }
         command.Parameters.AddWithValue("$week", week);
+        var runQuota = ReadRaidRunQuotaEpochs(db, tx, owner.Account, expected.Id, prepared.Instance, prepared.RaidType);
+        if (runQuota is null && (prepared.RaidType != RaidKind.Anton || prepared.Source == AntonResourceRewards.Source)) return null;
+        long rewardEpoch = runQuota?.Reward ?? ReadRaidQuotaEpochs(db, tx, owner.Account, prepared.RaidType).Reward;
+        command.Parameters.AddWithValue("$rewardEpoch", rewardEpoch);
         // 产品规格KB-20261026T064659-c2fb533dc5：每角色每周2次，周四06:00。
         // 用完最终奖励次数后，另一实例的第一阶段也不能继续领奖；同一实例的后续牌种不再占一次。
-        command.CommandText = "SELECT COUNT(DISTINCT instance_id) FROM character_raid_reward_receipts WHERE character_id=$id AND week_key=$week AND final_phase=1 AND instance_id<>$instance";
+        command.CommandText = "SELECT COUNT(DISTINCT instance_id) FROM character_raid_reward_receipts WHERE character_id=$id AND week_key=$week AND reward_epoch=$rewardEpoch AND final_phase=1 AND instance_id<>$instance";
         if (prepared.RaidType == RaidKind.Anton)
         {
             command.CommandText += " AND raid_type=0";
@@ -80,9 +84,9 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
                 eligibility.Instance != prepared.Instance || eligibility.RaidType != prepared.RaidType || eligibility.Phase != prepared.Phase ||
                 eligibility.Event == Guid.Empty || eligibility.Event.ToString("N") != eligibilityRow.GetString(1) ||
                 eligibility.Anchor != eligibilityRow.GetInt64(2) || eligibility.Offers.IsDefault ||
-                prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source && prepared.Card > 3 ||
+                (prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source || prepared.RaidType == RaidKind.Fiendwar) && prepared.Card > 3 ||
                 eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card ==
-                    (prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source ? 0 : prepared.Card)) is not { } authorized ||
+                (((prepared.RaidType == RaidKind.Luke && prepared.Source == LukeResourceRewards.Source) || prepared.RaidType == RaidKind.Fiendwar) ? 0 : prepared.Card)) is not { } authorized ||
                 !authorized.Grants.SequenceEqual(prepared.Grants)) return null;
         }
         if (inventory.AccountMaterialRaidWeek is { } materialWeek &&
@@ -99,8 +103,8 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
             mailIds.Add(checked((uint)Convert.ToInt64(command.ExecuteScalar())));
         }
         command.CommandText = """
-            INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type)
-            VALUES($id,$account,$instance,$phase,$kind,$card,$week,$final,$plan,$mails,$now,$type)
+            INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type,reward_epoch)
+            VALUES($id,$account,$instance,$phase,$kind,$card,$week,$final,$plan,$mails,$now,$type,$rewardEpoch)
             """;
         command.Parameters.AddWithValue("$card", prepared.Card); command.Parameters.AddWithValue("$final", prepared.FinalPhase ? 1 : 0);
         command.Parameters.AddWithValue("$plan", plan); command.Parameters.AddWithValue("$mails", JsonSerializer.Serialize(mailIds.ToImmutable()));

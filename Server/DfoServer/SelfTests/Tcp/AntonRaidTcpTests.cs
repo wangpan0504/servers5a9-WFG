@@ -286,7 +286,7 @@ internal static partial class AntonRaidTcpTests
 
             using (var reconnected = Open(fixture, "antonmember5", gamePort: endpoints[19], channelNumber: 19))
             {
-                reconnected.Select(); Drain(reconnected);
+                reconnected.Select(resumeTown: true); Drain(reconnected);
                 var membersBeforeReconnectReward = Information(observer, key, 1).Members;
                 string beforeReconnectReward = fixture.Snapshot();
                 for (int repeat = 0; repeat < 2; repeat++)

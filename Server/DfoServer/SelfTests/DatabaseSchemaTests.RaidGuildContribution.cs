@@ -15,6 +15,9 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 Execute(db, """
+                    DROP INDEX character_raid_entry_clear;
+                    ALTER TABLE character_raid_runs DROP COLUMN reward_epoch;
+                    ALTER TABLE character_raid_runs DROP COLUMN entry_epoch;
                     ALTER TABLE character_raid_runs DROP COLUMN guild_joined_at;
                     ALTER TABLE character_raid_runs DROP COLUMN guild_id;
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)

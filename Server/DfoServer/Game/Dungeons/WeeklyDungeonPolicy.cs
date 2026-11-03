@@ -56,16 +56,23 @@ internal static class WeeklyDungeonPolicy
 // 与尝试号预留同一事务写入，重复提交不会多计。
 internal sealed record WeeklyDungeonEntry(int Week, int Slot);
 
-// GM 刷新账号地下城入场次数的结果：按存储分类统计清零的行数。
+// GM刷新入场结果；RaidRows表示退出当前额度的历史实例数，原实例行不修改。
 // Week 是冒险团面板当前周；各玩法的周期键按各自规则计算（日键/周键/自定义游戏日）。
 internal sealed record DungeonEntryResetResult(string Account, int Week,
     int PanelRows, int CharacterDailyRows, int CharacterWeeklyRows, int AccountRows, int AssaultRows,
     int DazzlementRows, int GriefAccountRows, int GriefCharacterRows, int SpecialEntryRows, int DespairRows,
-    int RaidRows, int TagClearanceRows, int TagChallengeRows);
+    int RaidRows, int TagClearanceRows, int TagChallengeRows)
+{
+    public int RaidEpochsAdvanced { get; init; }
+    public int RaidGuideBindingsArchived { get; init; }
+}
 
-// GM 刷新账号奖励限额的结果。历史回执和已发资产永远保留；这里只迁移当前周期的资格/状态行。
+// GM刷新奖励限额；RaidRows/RaidReceiptRows表示退出当前额度的事实数，原历史行不修改。
 internal sealed record RewardLimitResetResult(string Account, int Day, int Week,
     int StrongwayRewardRows, int StrongwayCompletionRows, int StrongwayMatchRows,
     int ImperialDayRows, int ImperialRunRows, int ImperialRewardRows, int ImperialChallengeRows,
     int TagClearanceRows, int TagChallengeRows, int GriefAccountRows, int GriefCharacterRows,
-    int SpecialEntryRows, int DespairRows, int RaidRows, int RaidReceiptRows);
+    int SpecialEntryRows, int DespairRows, int RaidRows, int RaidReceiptRows)
+{
+    public int RaidEpochsAdvanced { get; init; }
+}

@@ -25,6 +25,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
         command.Parameters.Add("$id", SqliteType.Integer); command.Parameters.Add("$account", SqliteType.Text);
         command.Parameters.Add("$receipt", SqliteType.Text); command.Parameters.Add("$state", SqliteType.Integer);
         command.Parameters.Add("$clear", SqliteType.Integer);
+        command.Parameters.Add("$entryEpoch", SqliteType.Integer); command.Parameters.Add("$rewardEpoch", SqliteType.Integer);
         command.CommandText = "SELECT EXISTS(SELECT 1 FROM character_raid_reward_receipts WHERE instance_id=$instance AND raid_type<>$type)";
         if (Convert.ToInt32(command.ExecuteScalar()) != 0) throw new InvalidDataException("卢克终结不能覆盖其它类型实例");
         var result = ImmutableArray.CreateBuilder<RaidPhaseEligibility>(candidate.Members.Length);
@@ -32,18 +33,20 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
         {
             var frozenRewards = candidate.RewardsFor(member.Character);
             command.Parameters["$id"].Value = member.Character; command.Parameters["$account"].Value = member.Account;
-            command.CommandText = $"SELECT state,source,{prefix}_event,{prefix}_anchor,{prefix}_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type";
+            command.CommandText = $"SELECT state,source,entry_epoch,reward_epoch,{prefix}_event,{prefix}_anchor,{prefix}_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type";
             int state = -1; string? source = null;
+            long entryEpoch = 0, rewardEpoch = 0;
             using (var reader = command.ExecuteReader())
             {
                 if (reader.Read())
                 {
-                    state = reader.GetInt32(0); source = reader.GetString(1);
-                    if (!reader.IsDBNull(4))
+                    state = reader.GetInt32(0); source = reader.GetString(1); entryEpoch = reader.GetInt64(2); rewardEpoch = reader.GetInt64(3);
+                    command.Parameters["$entryEpoch"].Value = entryEpoch; command.Parameters["$rewardEpoch"].Value = rewardEpoch;
+                    if (!reader.IsDBNull(6))
                     {
-                        var previous = JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(4))
+                        var previous = JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(6))
                             ?? throw new InvalidDataException("卢克已提交阶段回执为空");
-                        if (source != candidate.Source || reader.GetString(2) != candidate.Event.ToString("N") || reader.GetInt64(3) != candidate.Anchor.ToUnixTimeSeconds() ||
+                        if (source != candidate.Source || reader.GetString(4) != candidate.Event.ToString("N") || reader.GetInt64(5) != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Instance != candidate.Instance || previous.RaidType != candidate.RaidType || previous.Phase != candidate.Phase ||
                             previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Character != member.Character || previous.Week != candidate.Week || previous.Source != frozenRewards.Source ||
@@ -59,7 +62,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 !present ? "admission-abandoned" : "eligible";
             if (counts)
             {
-                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week AND instance_id<>$instance";
+                command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week AND entry_epoch=$entryEpoch AND instance_id<>$instance";
                 if (Convert.ToInt32(command.ExecuteScalar()) >= candidate.WeeklyClearLimit)
                 { counts = false; present = false; reason = "weekly-clear-limit"; }
             }
@@ -68,7 +71,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
             { eligible = false; reason = "phase-participation"; }
             if (eligible)
             {
-                command.CommandText = $"SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND instance_id<>$instance AND json_extract({prefix}_receipt,'$.Eligible')=1 AND json_extract({prefix}_receipt,'$.Week')=$week";
+                command.CommandText = $"SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND instance_id<>$instance AND reward_epoch=$rewardEpoch AND json_extract({prefix}_receipt,'$.Eligible')=1 AND json_extract({prefix}_receipt,'$.Week')=$week";
                 if (Convert.ToInt32(command.ExecuteScalar()) >= candidate.Policy.WeeklyEligibilityLimit)
                 { eligible = false; reason = "phase-eligibility-limit"; }
             }

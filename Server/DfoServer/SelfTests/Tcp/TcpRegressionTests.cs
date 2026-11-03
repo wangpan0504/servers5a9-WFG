@@ -35,6 +35,11 @@ internal static class TcpRegressionTests
             FiendwarRewardClosureTests.Run(resources);
             return Task.CompletedTask;
         }),
+        ("fiendwar-quota-consumption", (_, root, resources) =>
+        {
+            RaidQuotaConsumptionTests.Run(resources, root);
+            return Task.CompletedTask;
+        }),
         ("prey-guide", async (options, root, resources) =>
         {
             await PreyGuideTests.RunAsync(options, root, resources);
@@ -630,6 +635,7 @@ internal static class TcpRegressionTests
     {
         "otherverse-drop-rules",
         "fiendwar-reward-rules",
+        "fiendwar-quota-consumption",
         "settings-snapshot-rules",
         "equipment-power-rules",
         "frame-crc-rules",

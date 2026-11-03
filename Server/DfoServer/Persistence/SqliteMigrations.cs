@@ -352,6 +352,7 @@ internal static class SqliteMigrations
         new(190, "角色史诗祈愿清单", static (db, tx) => Execute(db, tx,
             EpicWishSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(191, "账号累计在线日水位与奖励事实", static (db, tx) => Execute(db, tx, PcRoomTimePointSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(192, "团本入场与奖励额度双世代", RaidQuotaSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2561,8 +2562,9 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
-            ("character_raid_runs",RaidGuildContributionSchema.Definition),
-            ("character_raid_reward_receipts",RaidLifecycleSchema.FiendwarRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_raid_runs",RaidQuotaSchema.RunsDefinition),
+            ("account_raid_quota_epochs",RaidQuotaSchema.EpochTable),
+            ("character_raid_reward_receipts",RaidQuotaSchema.RewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
@@ -2611,7 +2613,7 @@ internal static class SqliteMigrations
             ("evildom_war_battles",EvildomWarRecoverySchema.Battles.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
-            ("account_fiendwar_guides",RaidLifecycleSchema.FiendwarGuideBindings),
+            ("account_fiendwar_guides",RaidLifecycleSchema.CurrentFiendwarGuideBindings),
             ("character_fiendwar_recovery",FiendwarRecoverySchema.Definition),
             ("character_fiendwar_title_facts",FiendwarTitleFactsSchema.Definition),
             ("character_fiendwar_counter_stream",FiendwarCounterSchema.Definition),
@@ -2649,6 +2651,7 @@ internal static class SqliteMigrations
         }
         PvpRatingSchema.ValidateIndex(db, tx);
         AccountMaterialSchema.ValidateIndex(db, tx);
+        RaidQuotaSchema.ValidateIndexes(db, tx);
         PvpTotalRatingSchema.ValidateIndex(db, tx);
         using var constraints = db.CreateCommand();
         constraints.Transaction = tx;
