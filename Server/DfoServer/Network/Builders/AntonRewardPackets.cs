@@ -26,7 +26,7 @@ internal static class AntonRewardPackets
     internal static byte[] Choices(byte kind) => kind is 0 or 1 ? [kind, 0]
         : throw new InvalidDataException("安徒恩600类别无效");
 
-    // 023CA1B0普通团：2+Σ(4+16M)，仅供完整显式字段编码；有值不自动证明来源合法。
+    // 023CA1B0普通20人团：2+Σ(4+16M)，仅供完整显式字段编码；有值不自动证明来源合法。
     internal static byte[] Result(byte kind, IReadOnlyList<AntonRewardDisplayRow> rows)
     {
         if (kind is not (0 or 1) || rows.Count > byte.MaxValue || rows.Any(row =>
