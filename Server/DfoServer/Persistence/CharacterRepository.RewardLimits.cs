@@ -12,7 +12,7 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     // 奖励上限刷新只迁移当前周期的资格/状态键，保留所有奖励回执、通关事实和已发邮件。
-    // 各表使用账号范围内的 MAX+1 作为历史键，避开唯一键冲突，也不会伪造当前周期记录。
+    // 各表使用账号范围内的 MAX+1 作为历史键，避开唯一键冲突；归档键超过合法日期，防止未来日切重新计入。
     public RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) => owner.Execute(() =>
     {
         var now = DateTimeOffset.UtcNow;
@@ -26,13 +26,25 @@ internal sealed partial class CharacterRepository
         using var write = db.BeginWrite("CharacterRepository.ResetRewardLimits");
         using var tx = write.Transaction;
 
-        int strongwayDay = NextKey(db, tx, "account_strongway2019_rewards", "day", owner.Account, strongway.Day);
-        int strongwayWeek = NextKey(db, tx, "account_strongway2019_rewards", "week", owner.Account, strongway.Week);
-        int strongwayReward = ExecuteReward(db, tx, "UPDATE account_strongway2019_rewards SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        // 待投递完成和未消费匹配事实也预留归档键，不能只避让已投递账本。
+        string[] strongwayTables = ["account_strongway2019_rewards", "character_strongway2019_completions", "character_strongway2019_match_facts"];
+        int strongwayDay = strongwayTables.Max(table => NextKey(db, tx, table, "day", owner.Account, strongway.Day));
+        int strongwayWeek = strongwayTables.Max(table => NextKey(db, tx, table, "week", owner.Account, strongway.Week));
+        // 日、周资格分别迁移；周内旧日不能合并到同一归档日，否则会破坏外键与每日唯一约束。
+        int strongwayReward = ExecuteReward(db, tx, "UPDATE account_strongway2019_rewards SET day=CASE WHEN day=$day THEN $newDay ELSE day END,week=CASE WHEN week=$week THEN $newWeek ELSE week END WHERE account=$account AND (day=$day OR week=$week)",
             ("$newDay", strongwayDay), ("$newWeek", strongwayWeek), ("$account", owner.Account), ("$day", strongway.Day), ("$week", strongway.Week));
-        int strongwayCompletion = ExecuteReward(db, tx, "UPDATE character_strongway2019_completions SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        int strongwayCompletion = ExecuteReward(db, tx, "UPDATE character_strongway2019_completions SET day=CASE WHEN day=$day THEN $newDay ELSE day END,week=CASE WHEN week=$week THEN $newWeek ELSE week END WHERE account=$account AND (day=$day OR week=$week)",
             ("$newDay", strongwayDay), ("$newWeek", strongwayWeek), ("$account", owner.Account), ("$day", strongway.Day), ("$week", strongway.Week));
-        int strongwayMatch = ExecuteReward(db, tx, "UPDATE character_strongway2019_match_facts SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        // JSON中的Period只是同一资格键的镜像；同步它以保留离线胜者恢复，冻结事实和完整附件均不改。
+        int strongwayMatch = ExecuteReward(db, tx, """
+            UPDATE character_strongway2019_match_facts
+            SET snapshot_json=json_set(snapshot_json,
+                  '$.Completion.Period.Day',CASE WHEN day=$day THEN $newDay ELSE day END,
+                  '$.Completion.Period.Week',CASE WHEN week=$week THEN $newWeek ELSE week END),
+                day=CASE WHEN day=$day THEN $newDay ELSE day END,
+                week=CASE WHEN week=$week THEN $newWeek ELSE week END
+            WHERE account=$account AND (day=$day OR week=$week)
+            """,
             ("$newDay", strongwayDay), ("$newWeek", strongwayWeek), ("$account", owner.Account), ("$day", strongway.Day), ("$week", strongway.Week));
 
         int imperialDay = NextKey(db, tx, "account_imperial_arena_days", "day", owner.Account, imperial.Day);
@@ -43,7 +55,7 @@ internal sealed partial class CharacterRepository
             SELECT account,$newDay,mode,hard_round FROM account_imperial_arena_days
             WHERE account=$account AND day=$day
             """, ("$newDay", imperialDay), ("$account", owner.Account), ("$day", imperial.Day));
-        int imperialRuns = ExecuteReward(db, tx, "UPDATE account_imperial_arena_runs SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        int imperialRuns = ExecuteReward(db, tx, "UPDATE account_imperial_arena_runs SET day=CASE WHEN day=$day THEN $newDay ELSE day END,week=CASE WHEN week=$week THEN $newWeek ELSE week END WHERE account=$account AND (day=$day OR week=$week)",
             ("$newDay", imperialDay), ("$newWeek", imperialWeek), ("$account", owner.Account), ("$day", imperial.Day), ("$week", imperial.Week));
         int imperialRewards = ExecuteReward(db, tx, "UPDATE account_imperial_arena_rewards SET day=$newDay WHERE account=$account AND day=$day",
             ("$newDay", imperialDay), ("$account", owner.Account), ("$day", imperial.Day));
@@ -52,20 +64,22 @@ internal sealed partial class CharacterRepository
         ExecuteReward(db, tx, "DELETE FROM account_imperial_arena_days WHERE account=$account AND day=$day",
             ("$account", owner.Account), ("$day", imperial.Day));
 
-        int tagDay = NextKey(db, tx, "account_tag_evildom_clearances", "day", owner.Account, tag.Day);
+        // 未通关挑战没有clearance行，其归档日也必须参与避让，否则下一轮刷新会撞历史主键。
+        int tagDay = Math.Max(NextKey(db, tx, "account_tag_evildom_clearances", "day", owner.Account, tag.Day),
+            NextKey(db, tx, "account_tag_evildom_challenges", "day", owner.Account, tag.Day));
         int tagWeek = NextKey(db, tx, "account_tag_evildom_clearances", "week", owner.Account, tag.Week);
-        int tagClearance = ExecuteReward(db, tx, "UPDATE account_tag_evildom_clearances SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        int tagClearance = ExecuteReward(db, tx, "UPDATE account_tag_evildom_clearances SET day=CASE WHEN day=$day THEN $newDay ELSE day END,week=CASE WHEN week=$week THEN $newWeek ELSE week END WHERE account=$account AND (day=$day OR week=$week)",
             ("$newDay", tagDay), ("$newWeek", tagWeek), ("$account", owner.Account), ("$day", tag.Day), ("$week", tag.Week));
-        int tagChallenge = ExecuteReward(db, tx, "UPDATE account_tag_evildom_challenges SET day=$newDay,week=$newWeek WHERE account=$account AND (day=$day OR week=$week)",
+        int tagChallenge = ExecuteReward(db, tx, "UPDATE account_tag_evildom_challenges SET day=CASE WHEN day=$day THEN $newDay ELSE day END,week=CASE WHEN week=$week THEN $newWeek ELSE week END WHERE account=$account AND (day=$day OR week=$week)",
             ("$newDay", tagDay), ("$newWeek", tagWeek), ("$account", owner.Account), ("$day", tag.Day), ("$week", tag.Week));
 
         int griefAccount = ExecuteReward(db, tx, "UPDATE account_grief_tower SET game_day=1,used=0 WHERE account=$account AND (used<>0 OR game_day=$day)",
             ("$account", owner.Account), ("$day", griefDay));
         int griefCharacter = ExecuteReward(db, tx, "UPDATE character_grief_tower SET game_day=1,cleared=0 WHERE account=$account AND (cleared<>0 OR game_day=$day)",
             ("$account", owner.Account), ("$day", griefDay));
-        int specialDay = NextKey(db, tx, "dungeon_special_entry_receipts", "service_day", owner.Account, day);
-        int special = ExecuteReward(db, tx, "UPDATE dungeon_special_entry_receipts SET service_day=$newDay WHERE account=$account AND service_day=$day",
-            ("$newDay", specialDay), ("$account", owner.Account), ("$day", day));
+        // service_day是DayNumber而非yyyyMMdd，沿入场刷新使用合法旧日1，不改变回执身份。
+        int special = ExecuteReward(db, tx, "UPDATE dungeon_special_entry_receipts SET service_day=1 WHERE account=$account AND service_day=$day",
+            ("$account", owner.Account), ("$day", day));
         int despair = ExecuteReward(db, tx, "UPDATE dungeon_despair_progress SET last_clear_day=0 WHERE account=$account AND last_clear_day=$day",
             ("$account", owner.Account), ("$day", day));
 
@@ -85,8 +99,8 @@ internal sealed partial class CharacterRepository
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = $"SELECT COALESCE(MAX({column}),$minimum)+1 FROM {table} WHERE account=$account";
-        command.Parameters.AddWithValue("$minimum", Math.Max(current, 20000000));
+        command.CommandText = $"SELECT MAX(COALESCE(MAX({column}),0),$minimum)+1 FROM {table} WHERE account=$account";
+        command.Parameters.AddWithValue("$minimum", Math.Max(current, 100000000));
         command.Parameters.AddWithValue("$account", account);
         return checked(Convert.ToInt32(command.ExecuteScalar()));
     }

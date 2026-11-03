@@ -66,6 +66,45 @@ internal static partial class Strongway2019RewardTests
             f.Scalar("SELECT created_at FROM account_strongway2019_rewards") is long created && created == at.ToUnixTimeSeconds(),
             "跨06点、周切与新attempt恢复仍保原周期、时间及完整附件");
         MatchingCompletionRecovery();
+        CompletionResetRecovery();
+    }
+
+    static void CompletionResetRecovery()
+    {
+        using var f = new Fixture();
+        var at = DateTimeOffset.UtcNow;
+        var period = Strongway2019RewardPeriod.At(at);
+        var plans = new List<Strongway2019RewardPlan>();
+        foreach (var character in new[] { f.First, f.Second })
+        {
+            var plan = f.Clear(character.Slot, 5359, 490012735, at);
+            Freeze(f.Repository, [(f.Owner, plan)]);
+            plans.Add(plan);
+            f.Repository.ResetRewardLimits(f.Owner);
+            That(f.Repository.ReadStrongway2019RewardState(f.Owner, period, Strongway2019RewardBucket.Challenge) == new Strongway2019RewardState(0, 0),
+                "未投递原奖在账号刷新后移出当前额度，第二角色仍能获得新完成资格");
+        }
+        That(f.Scalar("SELECT count(DISTINCT day) FROM character_strongway2019_completions WHERE state=0") is 2L &&
+            f.Scalar("SELECT count(*) FROM account_strongway2019_rewards") is 0L,
+            "两角色两次刷新在尚无已投递账本时仍分配不同归档日");
+        var stale = f.Owner;
+        f.Owner = f.Owners.Acquire(Fixture.Account, () => { });
+        Reject<InvalidOperationException>(() => Recover(new CharacterRepository(f.Path), stale, f.First.Id),
+            "账号刷新后旧owner仍不能补投已冻结原奖");
+        foreach (var plan in plans)
+        {
+            var restored = new CharacterRepository(f.Path);
+            var recovered = restored.RecoverStrongway2019Completion(f.Owner, plan.Expected.Id);
+            That(recovered.MailIds.Length == 1 && restored.RecoverStrongway2019Completion(f.Owner, plan.Expected.Id).MailIds.IsEmpty,
+                "不同归档日的原奖重开库后各补投一次，不撞每日唯一键");
+            var mail = restored.LoadMailbox(f.Owner, plan.Expected.Id, at.ToUnixTimeSeconds()).Entries.Single();
+            That(System.Text.Json.JsonSerializer.Serialize(mail.Attachments.Single().Item with { Uid = 0 }) == System.Text.Json.JsonSerializer.Serialize(plan.Item),
+                "奖励刷新及离线恢复保留原完整附件，不重新抽奖或变更期限");
+        }
+        That(f.Scalar("SELECT count(*) FROM account_strongway2019_rewards") is 2L &&
+            f.Scalar("SELECT count(*) FROM character_strongway2019_completions WHERE state=1") is 2L &&
+            f.Repository.ReadStrongway2019RewardState(f.Owner, period, Strongway2019RewardBucket.Challenge) == new Strongway2019RewardState(0, 0),
+            "已归档的两角色旧奖补投后仍不占刷新后的当前额度");
     }
 
     static void MatchingCompletionRecovery()

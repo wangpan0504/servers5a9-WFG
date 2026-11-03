@@ -22,6 +22,7 @@ internal static partial class Strongway2019RewardTests
         try
         {
             var clock = new Strongway2019MatchingTests.Clock();
+            clock.Advance(DateTimeOffset.UtcNow - clock.GetUtcNow());
             var at = clock.GetUtcNow();
             var rows = new List<(AccountOwners.Lease Owner, Strongway2019RewardPlan Plan)>();
             for (int i = 0; i < 8; i++)
@@ -66,11 +67,23 @@ internal static partial class Strongway2019RewardTests
                 (long)f.Scalar("SELECT created_at FROM character_strongway2019_match_facts LIMIT 1")!));
             That(f.Repository.ReadStrongway2019RewardState(newWinner, oldPeriod, Strongway2019RewardBucket.Matching) == new Strongway2019RewardState(1, 1),
                 "共享checkpoint中的未消费权益也预留原日周额度");
+            string originalSnapshot = (string)f.Scalar("SELECT snapshot_json FROM character_strongway2019_match_facts WHERE account='" + newWinner.Account + "'")!;
+            f.Sql("CREATE TRIGGER reset_checkpoint_fail BEFORE UPDATE ON character_strongway2019_match_facts BEGIN SELECT RAISE(ABORT,'reset checkpoint rollback'); END");
+            Reject<SqliteException>(() => f.Repository.ResetRewardLimits(newWinner), "真实匹配检查点刷新SQL失败必须回滚");
+            That(f.Scalar("SELECT snapshot_json FROM character_strongway2019_match_facts WHERE account='" + newWinner.Account + "'") is string failedSnapshot && failedSnapshot == originalSnapshot &&
+                f.Repository.ReadStrongway2019RewardState(newWinner, oldPeriod, Strongway2019RewardBucket.Matching) == new Strongway2019RewardState(1, 1),
+                "匹配刷新失败不改变冻结JSON、表周期或原资格");
+            f.Sql("DROP TRIGGER reset_checkpoint_fail");
             ushort[] ids = rows.Take(4).Select(row => row.Plan.Expected.Id).ToArray();
             rows.Clear();
             for (int i = 0; i < 4; i++)
             {
                 var owner = i == 0 ? newWinner : i == 1 ? newReporter : leases[i];
+                string frozen = (string)f.Scalar("SELECT json_remove(snapshot_json,'$.Completion.Period') FROM character_strongway2019_match_facts WHERE account='" + owner.Account + "'")!;
+                f.Repository.ResetRewardLimits(owner);
+                That(f.Scalar("SELECT json_remove(snapshot_json,'$.Completion.Period') FROM character_strongway2019_match_facts WHERE account='" + owner.Account + "'") is string afterReset && afterReset == frozen &&
+                    f.Repository.ReadStrongway2019RewardState(owner, oldPeriod, Strongway2019RewardBucket.Matching) == new Strongway2019RewardState(0, 0),
+                    "离线匹配胜者刷新只迁资格Period，保留原终局、收件人、附件和统计快照");
                 var recovery = typeof(CharacterRepository).GetMethod("RecoverStrongway2019Completion");
                 That(recovery is not null, "恢复结果必须明确统计是否变化，不能只以邮件数量判断");
                 var repo = new CharacterRepository(f.Path);
