@@ -166,17 +166,18 @@ internal sealed partial class GameSession
     // 战况表在图内提交C2S72 `01 02`（回到城镇）：只允许当前正式团本单图仍在Dungeon阶段且无待提交死亡/结算/地面操作，
     // 复用42同一分队退场事务；不扣DGN HP、不产生ClearFact，也不代表`01 01`（进入地下城）已实现。
     internal bool CanReturnFromRaidDungeonBoard() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid &&
+        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar } raid &&
         formalDungeon is { Entry.RaidEntry: not null } dungeon &&
         dungeon.Entry.RaidEntry.Kind == raid.Battle.Kind && dungeon.Entry.RaidEntry.InstanceId == raid.Battle.Instance &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene);
 
     internal FormalDungeonReceipt? RaidDungeonResultFocus() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid &&
+        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar } raid &&
         formalDungeon is { Entry.RaidEntry: not null, Run.ClearFact: not null } dungeon &&
         dungeon.Entry.RaidEntry.Kind == raid.Battle.Kind && dungeon.Entry.RaidEntry.InstanceId == raid.Battle.Instance &&
-        (raid.Battle.Kind != RaidKind.Luke || raid.Battle.HasDungeonContribution(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId)) &&
+        (raid.Battle.Kind is not (RaidKind.Luke or RaidKind.Fiendwar) ||
+            raid.Battle.HasDungeonContribution(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId)) &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene
             ? FormalReceipt() : null);
@@ -227,6 +228,7 @@ internal sealed partial class GameSession
                 raid.Battle.View is not { State: AntonRaidBattleState.Reward, PhaseExpired: false, ClockFaulted: false } view ||
                 raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
                 !(raid.Battle.HasAntonRewards ? raid.Battle.CanConfirmAntonMovie(raid.Actor, view) :
+                    raid.Battle.Kind == RaidKind.Fiendwar ? raid.Battle.CanConfirmFiendwarMovie(raid.Actor, view) :
                     raid.Battle.CanConfirmLukeMovie(raid.Actor, view))) return null;
             return (raid.Actor, raid.Battle, view);
         });

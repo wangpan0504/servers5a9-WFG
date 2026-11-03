@@ -17,8 +17,8 @@ internal sealed partial class PartyService
             var old = captured.Select(member => Find(member!)).OfType<PartySnapshot>().DistinctBy(party => party.Id).ToArray();
             if (old.Any(party => party.FiendwarBattleId != battle || party.Members.Any(member =>
                 !actors.Any(actor => ReferenceEquals(actor.Session, member.Actor.Session))))) return null;
-            if (old is [var existing] && existing.Members.Length == actors.Length &&
-                ReferenceEquals(existing.Members.Single(member => member.Slot == existing.Leader).Actor.Session, actors[0].Session))
+            // 同一批遭遇成员的重复入口不能因请求者不同而拆队重建；选图仍由原队长授权。
+            if (old is [var existing] && existing.Members.Length == actors.Length)
                 return (existing, []);
             if (AllocateId() == ushort.MaxValue) return null;
             var notices = new List<PartyNotice>();

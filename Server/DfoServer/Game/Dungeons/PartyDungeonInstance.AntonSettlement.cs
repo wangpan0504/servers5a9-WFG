@@ -14,7 +14,9 @@ internal sealed partial class PartyDungeonInstance
         bool complete = current.Length == party.Members.Length &&
             current.All(m => party.Members.Any(original => original.Actor == m.Actor));
         // 再挑战先结束全分队原Run；调用方沿正式Select/Enter建立新Run，成功后才回复option0。
-        bool select = complete && (option == 1 || option == 0 && current.All(m => m.Actor.Session.CanRetryRaidResultDungeon()));
+        // 漩涡在战场候战区独立移动，不进入普通选图场景；清房菜单沿原Run退回当前战场区域。
+        bool fiendwar = current.Any(m => m.Actor.Session.RaidCombatKind() == Game.Raids.RaidKind.Fiendwar);
+        bool select = !fiendwar && complete && (option == 1 || option == 0 && current.All(m => m.Actor.Session.CanRetryRaidResultDungeon()));
         var result = PartyDungeonService.Exit(store, current,
             select ? PartyDungeonExitKind.ResultSelection : PartyDungeonExitKind.ResultReturn);
         if (result.Length == 0) return [];

@@ -28,6 +28,11 @@ internal static partial class RaidCombatProjection
             if (battle.CompleteAntonMovie(actor, view)) battle.Publish(battle.View);
             return true;
         }
+        if (battle.Kind == RaidKind.Fiendwar)
+        {
+            if (battle.CompleteFiendwarMovie(actor, view)) battle.Publish(battle.View);
+            return true;
+        }
         if (view.Phase == 0 || battle.LukeEligibility(actor.Character, view.Phase) is { Eligible: false })
         {
             bool changed = battle.CompleteLukeFirstMovie(actor, view);
@@ -57,6 +62,26 @@ internal static partial class RaidCombatProjection
             // 尚未选择时不登记本人owner：600有本人行会写控件已选哨兵，阻止660自然发送。
             if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST, [offer.Kind, 0], "raid_card_choices", Cards,
                 index == offers.Length - 1 ? () => context.RaidMovieCards = identity : null)) return false;
+        }
+        return true;
+    }
+
+    static bool PostFiendwarMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view)
+    {
+        if (!battle.FiendwarMovieCardsReady(view) || battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
+            battle.RewardPolicy(actor, view.Phase) is not { Offers.IsEmpty: false } policy) return true;
+        var identity = RaidCombatDisplayIdentity.Capture(actor, view);
+        bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
+            battle.FiendwarMovieCardsReady(view) && context.RaidMovieCards != identity;
+        // 00D30460读取byte2并传给036D2770→01C99AA0；0沿原生普通开牌分支，清014926D0的特殊展示状态。
+        // 1523必须保留三字节，不能把587的阶段字节误当此布尔参数。
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.FIEND_WAR_STATE, [4, 0, 0], "fiendwar_movie_cards", Cards)) return false;
+        for (int index = 0; index < policy.Offers.Length; index++)
+        {
+            var offer = policy.Offers[index];
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST, [offer.Kind, 0], "fiendwar_card_choices", Cards,
+                index == policy.Offers.Length - 1 ? () => context.RaidMovieCards = identity : null)) return false;
         }
         return true;
     }

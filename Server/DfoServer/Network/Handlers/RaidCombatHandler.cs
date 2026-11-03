@@ -143,7 +143,7 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                     receipt.Prepared.Kind, Reason = "anton-general600-tail1-unverified", MissingFields = missing });
         }
         if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
-            await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer),
+            await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer, receipt.Prepared.RaidType),
                 "prey_reward_display", DisplayGuard);
         bool sent = false;
         await context.Reply(CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "raid_reward_selected", () => sent = Guard());

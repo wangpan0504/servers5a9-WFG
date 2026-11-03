@@ -24,28 +24,40 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
         command.Parameters.AddWithValue("$phase", target.Phase); command.Parameters.AddWithValue("$kind", target.Kind);
         string prefix = target.Phase == 0 ? "phase0" : "phase1";
         // 精确一行、单只读快照；不扫描历史、不建默认行、不写state或资格。
-        command.CommandText = $"SELECT {prefix}_receipt,{prefix}_event,{prefix}_anchor FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=1 AND length({prefix}_receipt)<=262144";
+        command.CommandText = $"SELECT {prefix}_receipt,{prefix}_event,{prefix}_anchor,source FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$raidType AND length({prefix}_receipt)<=262144";
+        command.Parameters.AddWithValue("$raidType", (byte)target.RaidType);
         RaidPhaseEligibility eligibility;
         using (var row = command.ExecuteReader())
         {
             if (!row.Read() || row.IsDBNull(0)) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
             eligibility = DecodeLukeEligibility(row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1),
-                row.IsDBNull(2) ? null : row.GetInt64(2), target.Instance, target.Phase, character.Id);
+                row.IsDBNull(2) ? null : row.GetInt64(2), target.Instance, target.Phase, character.Id, raidType: target.RaidType);
+            if (target.RaidType == RaidKind.Fiendwar && (eligibility.Source != row.GetString(3) || eligibility.Week <= 0))
+                throw new InvalidDataException("漩涡历史资格来源或周期不属于原开战实例");
             if (!eligibility.Eligible) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
         }
-        var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == target.Kind && x.Card == target.Card)
+        var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == target.Kind &&
+            x.Card == (target.RaidType == RaidKind.Fiendwar ? 0 : target.Card))
             ?? throw new InvalidDataException("原资格没有该牌面");
         if (offer.Grants.IsDefaultOrEmpty || offer.Grants.Length > 32 || offer.Grants.Any(x => x is null))
             throw new InvalidDataException("原奖励计划损坏");
         var prepared = new PreparedRaidReward(target.Instance, target.Phase, target.Kind, target.Card, character.Id,
-            eligibility.Source, offer.Grants, target.Phase == 1, eligibility.Week) { RaidType = RaidKind.Luke };
+            eligibility.Source, offer.Grants, target.RaidType == RaidKind.Fiendwar || target.Phase == 1, eligibility.Week)
+            { RaidType = target.RaidType };
         command.CommandText = "SELECT plan_json,mail_ids,account,raid_type FROM character_raid_reward_receipts WHERE character_id=$id AND instance_id=$instance AND phase=$phase AND kind=$kind";
         bool claimed = false; ImmutableArray<uint> mails = [];
         using (var row = command.ExecuteReader())
             if (row.Read())
             {
+                if (target.RaidType == RaidKind.Fiendwar)
+                {
+                    if (row.GetString(0).Length > 262144 || Decode<PreparedRaidReward>(row.GetString(0)) is not { Card: <= 3 } selected)
+                        throw new InvalidDataException("漩涡原领取卡位损坏");
+                    // 只恢复同kind真实已提交的展示卡位；其余字段仍逐字段严格匹配原资格。
+                    prepared = prepared with { Card = selected.Card };
+                }
                 if (row.GetString(0).Length > 262144 || row.GetString(1).Length > 65536 ||
-                    row.GetString(2) != owner.Account || row.GetInt32(3) != (int)RaidKind.Luke ||
+                    row.GetString(2) != owner.Account || row.GetInt32(3) != (int)target.RaidType ||
                     !RecoveryPlanMatches(row.GetString(0), prepared))
                     throw new InvalidDataException("该权益已选其它牌面或原领取回执不一致");
                 mails = Decode<ImmutableArray<uint>>(row.GetString(1));
@@ -123,10 +135,10 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
     });
 
     static RaidPhaseEligibility DecodeLukeEligibility(string json, string? savedEvent, long? savedAnchor,
-        Guid instance, int phase, ushort character, bool validateAllGrants = false)
+        Guid instance, int phase, ushort character, bool validateAllGrants = false, RaidKind raidType = RaidKind.Luke)
     {
         var eligibility = Decode<RaidPhaseEligibility>(json);
-        if (eligibility.Instance != instance || eligibility.Character != character || eligibility.RaidType != RaidKind.Luke ||
+        if (eligibility.Instance != instance || eligibility.Character != character || eligibility.RaidType != raidType ||
             eligibility.Phase != phase || eligibility.Event == Guid.Empty || eligibility.Event.ToString("N") != savedEvent ||
             eligibility.Anchor != savedAnchor || string.IsNullOrWhiteSpace(eligibility.Source) ||
             eligibility.Offers.IsDefaultOrEmpty || eligibility.Offers.Length > 32 || eligibility.Offers.Any(x => x is null) ||
@@ -138,7 +150,7 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
 
     static bool RecoveryPlanMatches(string json, PreparedRaidReward prepared)
     {
-        try { return RaidRewardPlanMatches(json, JsonSerializer.Serialize(prepared), RaidKind.Luke); }
+        try { return RaidRewardPlanMatches(json, JsonSerializer.Serialize(prepared), prepared.RaidType); }
         catch (JsonException ex) { throw new InvalidDataException("历史领取回执JSON损坏", ex); }
     }
 

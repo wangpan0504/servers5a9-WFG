@@ -12,7 +12,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class FiendwarBattlefieldTests
+internal static partial class FiendwarBattlefieldTests
 {
     internal static void RunResources(FiendwarScript script)
     {
@@ -161,5 +161,6 @@ internal static class FiendwarBattlefieldTests
             That(expired.Count == 0, "排队期间真实deadline到期不续时、不猜发终局清理包");
         }
         Console.WriteLine($"PASS {Count - before} 漩涡双模式原生总计时投影断言");
+        await RunEventProjectionAsync(team, guide);
     }
 }

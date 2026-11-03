@@ -5,7 +5,8 @@ namespace DfoServer.Game.Raids;
 internal sealed partial class AntonRaidBattle
 {
     readonly AntonRewardCards antonCards = new();
-    internal bool SelectableRewardCards => HasAntonRewards || Kind == RaidKind.Luke && lukeResourceRewards is not null;
+    internal bool SelectableRewardCards => HasAntonRewards || Kind == RaidKind.Luke && lukeResourceRewards is not null ||
+        Kind == RaidKind.Fiendwar && lukeCompletion is not null;
 
     internal bool MatchesAntonCardReplay(PreparedRaidReward reward, byte requested)
     {
@@ -23,6 +24,14 @@ internal sealed partial class AntonRaidBattle
                 (HasAntonRewards ? AntonEligibility(actor.Character, phase) : LukeEligibility(actor.Character, phase)) is not { Eligible: true } ||
                 policy[phase].Offers.SingleOrDefault(offer => offer.Kind == kind && offer.Card == 0) is not { } frozen)
                 return null;
+            if (Kind == RaidKind.Fiendwar)
+            {
+                if (requested > 3) return null;
+                // 漩涡为每角色冻结的原牌面；只改变客户端展示位置，不改变物品或资格。
+                if (!fiendwarRewardCards.TryGetValue(actor.Character, out byte selected))
+                    fiendwarRewardCards.Add(actor.Character, selected = requested);
+                return frozen with { Card = selected, Display = frozen.Display.Select(row => row with { Card = selected }).ToImmutableArray() };
+            }
             if (antonCards.Select(phase, actor.Character, squad, requested) is not { } card) return null;
             // 只移动已冻结Card0产物的展示位置，不重抽、不改未知code/flag。
             return frozen with { Card = card, Display = frozen.Display.Select(row => row with { Card = card }).ToImmutableArray() };

@@ -11,14 +11,23 @@ internal static partial class RaidCombatProjection
     {
         context.Owner.Execute(() =>
         {
+            // 完成态不再播放成功电影；资产提交、奖励展示和到期收尾仍沿原事务通知。
+            if (view.State == AntonRaidBattleState.Completed) return true;
+            var battle = context.Session.CurrentRaidBattle(actor);
+            bool SceneReady() => view.State != AntonRaidBattleState.Reward ||
+                context.Session.Phase == Game.Session.SessionPhase.Town && context.Session.PartyDungeon is null &&
+                context.LukePhaseExit?.FiendwarReturnPending(view.Instance) != true;
+            if (!SceneReady()) return false;
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);
-            bool Show() => current() && context.RaidDisplay != identity;
+            bool Show() => current() && SceneReady() && context.RaidDisplay != identity;
             if (view.State == AntonRaidBattleState.Reward && context.Session.RaidCombatResult(view) is { } result)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result), "fiendwar_result", Show);
             // 00D30460的3与587的3调用相同胜利窗口；type2必须走1523，不能重装其它团本状态。
-            byte state = view.PhaseExpired ? (byte)5 : view.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed ? (byte)3 : (byte)2;
+            byte state = view.PhaseExpired ? (byte)5 : view.State == AntonRaidBattleState.Reward ? (byte)3 : (byte)2;
             context.Sender.Post(0, (ushort)NotiPacketType.FIEND_WAR_STATE, FiendwarPackets.State(state, 0),
                 "fiendwar_state", Show, () => context.RaidDisplay = identity);
+            if (view.State == AntonRaidBattleState.Reward && battle is { Kind: RaidKind.Fiendwar })
+                _ = PostFiendwarMovieCards(context, actor, battle, view);
             return true;
         });
     }
@@ -48,9 +57,21 @@ internal static partial class RaidCombatProjection
                 .Concat(view.FiendwarPositions.OrderBy(row => row.Key)
                     .Select(row => new FiendwarUserRow(1, checked((byte)row.Value), row.Key, 0))).ToArray()),
             "fiendwar_users", Guard, allowShorter: true, written: () => context.FiendwarUsers = view.FiendwarPositions);
-        context.Sender.Post(0, (ushort)NotiPacketType.FIEND_WAR_BOARD_WARNING,
-            FiendwarPackets.Warnings(field.Areas.OrderBy(row => row.Key).Select(row =>
-                (checked((byte)row.Key), row.Value.Warning ? (byte)1 : (byte)0)).ToArray()), "fiendwar_warnings", Guard);
+        KeyValuePair<int, long>[] warnings = [];
+        context.Sender.PostPrepared(0, (ushort)NotiPacketType.FIEND_WAR_BOARD_WARNING, 1 + field.Areas.Count * 2,
+            () =>
+            {
+                // 00D2CB00忽略第二字节；0也重启六秒预警，不能把布尔快照当清除命令。
+                warnings = field.WarningEvents.Where(row => field.Areas[row.Key].Warning &&
+                    (context.FiendwarEventDisplayInstance != field.Instance ||
+                        context.FiendwarWarningDisplays.GetValueOrDefault(row.Key) != row.Value)).OrderBy(row => row.Value).ToArray();
+                return warnings.Length == 0 ? null : FiendwarPackets.Warnings(warnings
+                    .Select(row => (checked((byte)row.Key), (byte)1)).ToArray());
+            }, "fiendwar_warnings", Guard, allowShorter: true, written: () =>
+            {
+                RecordEventInstance();
+                foreach (var row in warnings) context.FiendwarWarningDisplays[row.Key] = row.Value;
+            });
         foreach (bool enemy in new[] { false, true })
         {
             var units = field.Areas.Where(row => (enemy ? row.Value.Enemy : row.Value.Monster) is not null)
@@ -75,15 +96,40 @@ internal static partial class RaidCombatProjection
             () => FiendwarPackets.Merchant(checked((byte)(field.Merchant?.Area ?? 0)),
                 checked((uint)Math.Max(0, Math.Ceiling((field.Merchant?.End - battle.FiendwarNow)?.TotalSeconds ?? 0)))),
             "fiendwar_merchant", Guard);
-        context.Sender.Post(0, (ushort)NotiPacketType.FIEND_WAR_SET_SYMBOL,
-            FiendwarPackets.Symbols(battle.SymbolSnapshot(view).Select(row => (checked((uint)row.Id), unchecked((uint)row.Value))).ToArray()),
-            "fiendwar_symbols", Guard);
+        (int Id, int Value)[] symbols = [];
+        context.Sender.PostPrepared(0, (ushort)NotiPacketType.FIEND_WAR_SET_SYMBOL,
+            1 + battle.SymbolSnapshot(view).Length * 8, () =>
+            {
+                var snapshot = battle.SymbolSnapshot(view);
+                // 状态保留零值；121–125仅按真实事件代发布，off事件的0同样必须送达。
+                symbols = snapshot.Where(row => row.Id is < 121 or > 125)
+                    .Concat(snapshot.Where(row => row.Id is >= 121 and <= 125 &&
+                        field.MovieEvents.TryGetValue(row.Id, out long sequence) &&
+                        (context.FiendwarEventDisplayInstance != field.Instance ||
+                            context.FiendwarMovieDisplays.GetValueOrDefault(row.Id) != sequence))
+                        .OrderBy(row => field.MovieEvents[row.Id])).ToArray();
+                return symbols.Length == 0 ? null : FiendwarPackets.Symbols(symbols
+                    .Select(row => (checked((uint)row.Id), unchecked((uint)row.Value))).ToArray());
+            }, "fiendwar_symbols", Guard, allowShorter: true, written: () =>
+            {
+                RecordEventInstance();
+                foreach (var row in symbols)
+                    if (field.MovieEvents.TryGetValue(row.Id, out long sequence)) context.FiendwarMovieDisplays[row.Id] = sequence;
+            });
         if (view.FiendwarSupport is { } support)
         {
             var identity = (support.Instance, support.Sequence);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_SITUATION_NOTICE, FiendwarPackets.SupportNotice(support.Lane),
                 "fiendwar_support_notice", () => Guard() && context.FiendwarSupportDisplay != identity &&
                     context.Session.CanPublishFiendwarSupport(support), () => context.FiendwarSupportDisplay = identity);
+        }
+
+        void RecordEventInstance()
+        {
+            if (context.FiendwarEventDisplayInstance == field.Instance) return;
+            context.FiendwarMovieDisplays.Clear();
+            context.FiendwarWarningDisplays.Clear();
+            context.FiendwarEventDisplayInstance = field.Instance;
         }
     }
 

@@ -105,7 +105,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             {
                 if (IsStopped) return;
                 bool changed;
-                if (Battle.Kind == RaidKind.Luke && owner.settleRewards is { } settle && Battle.DueLukeRewards().Length != 0)
+                if (Battle.Kind is RaidKind.Luke or RaidKind.Fiendwar && owner.settleRewards is { } settle &&
+                    (Battle.DueLukeRewards().Length != 0 || Battle.FiendwarRewardExpired))
                 {
                     var beforeReward = Battle.View;
                     try { await settle(Battle); }
