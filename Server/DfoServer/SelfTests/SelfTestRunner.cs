@@ -21,6 +21,7 @@ internal static class SelfTestRunner
         await MapGeometryBatchHttpTests.RunCoreAsync();
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         await AntonSymbolProjectionTests.RunAsync();
+        AntonRaidEventLedgerTests.Run();
         CinematicDeathRulesTests.Run();
         await GmWebServerTests.RunClientPagesAsync();
         CharacterRenameCardTests.RunCore();

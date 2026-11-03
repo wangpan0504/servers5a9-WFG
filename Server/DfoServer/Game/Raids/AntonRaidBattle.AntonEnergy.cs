@@ -26,6 +26,13 @@ internal sealed partial class AntonRaidBattle
                 current.Dungeons.GetValueOrDefault(218) != RaidDungeonState.Open ||
                 !current.Symbols.TryGetValue("[black volcano barrier]", out int barrier)) return false;
             if (run.AntonEnergyConfirmed) return true;
+            var eventKey = new AntonRaidEventKey(Instance, run.Id, run.Generation, run.Phase, 218, 1);
+            if (antonEvents.Contains(eventKey, AntonRaidEventKind.EnergySettled))
+            {
+                run.AntonEnergyConfirmed = true;
+                return true;
+            }
+            if (!antonEvents.Activate(eventKey) || !antonEvents.TryCommit(eventKey, AntonRaidEventKind.EnergySettled)) return false;
             var before = current;
             int remaining = Math.Max(0, barrier - 3000);
             if (remaining == 0 && barrier != 0 && antonChargeAnchor is null) antonChargeAnchor = lukeClock.GetTimestamp();

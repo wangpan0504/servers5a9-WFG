@@ -59,6 +59,7 @@ internal sealed partial class AntonRaidBattle
     readonly RaidScript script;
     sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, RaidDungeonRun? Run = null);
     readonly Dictionary<(Guid Run, ushort Character), DungeonBinding> entries = [];
+    readonly AntonRaidEventLedger antonEvents = new();
     readonly Dictionary<RaidActor, ImmutableArray<RaidPhaseRewardPolicy>> members = [];
     readonly Dictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>> originalLukePolicies = [];
     readonly LukeResourceRewards? lukeResourceRewards;
