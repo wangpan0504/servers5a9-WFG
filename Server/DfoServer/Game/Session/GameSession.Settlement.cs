@@ -249,12 +249,14 @@ internal sealed partial class GameSession
         if (dungeon.Entry.DungeonId is 5097 or 5098 && !dungeon.Entry.IsPractice && dungeon.Entry.IsOrdinary)
             prepared.Pending.FreezeEkernDay(ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()));
         var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
-        prepared.Pending.FreezeBattlePassTayberrsClear(contributionDefinition, dungeon.Entry, timeProvider ?? TimeProvider.System);
+        // 入场扣费重基及剧情终点调整会替换Run的不可变计划；战令来源须绑定签发清图事实的当前计划。
+        var completionEntry = dungeon.Run.Entry;
+        prepared.Pending.FreezeBattlePassTayberrsClear(contributionDefinition, completionEntry, timeProvider ?? TimeProvider.System);
         byte finalRankGrade = dungeon.Settlement?.Presentation.RankGrade ?? rewards.GradeForPoint(rankPoint);
-        prepared.Pending.FreezeBattlePassFormalClear(contributionDefinition, dungeon.Entry, dungeon.ReviveCoinsSpent, timeProvider ?? TimeProvider.System,
+        prepared.Pending.FreezeBattlePassFormalClear(contributionDefinition, completionEntry, dungeon.ReviveCoinsSpent, timeProvider ?? TimeProvider.System,
             finalRankGrade, rewards.MinimumSRankGrade);
-        prepared.Pending.FreezeBattlePassDazzlementClear(contributionDefinition, dungeon.Entry, dungeon.Dazzlement, timeProvider ?? TimeProvider.System);
-        prepared.Pending.FreezeBattlePassBossRushReward(contributionDefinition, dungeon.Entry, dungeon.BossRush, timeProvider ?? TimeProvider.System);
+        prepared.Pending.FreezeBattlePassDazzlementClear(contributionDefinition, completionEntry, dungeon.Dazzlement, timeProvider ?? TimeProvider.System);
+        prepared.Pending.FreezeBattlePassBossRushReward(contributionDefinition, completionEntry, dungeon.BossRush, timeProvider ?? TimeProvider.System);
         GuildContributionSource? contributionSource = null;
         if (dungeon.Entry.IsOrdinary && !dungeon.Entry.IsPractice && !dungeon.Entry.DisableClearReward)
         {

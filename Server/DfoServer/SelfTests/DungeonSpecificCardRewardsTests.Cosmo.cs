@@ -36,13 +36,14 @@ internal static partial class DungeonSpecificCardRewardsTests
             items.Items, items.GoldLimits, items.EpicPieces, prices: Testing.SelfTestCatalogs.CardPrices(pvf));
         foreach (int bossRoll in new[] { 0, 45, 90 })
             VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, bossRoll, candidates, ResolveDropItem);
+        VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, 0, candidates, ResolveDropItem, submitReport: true);
         VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, 90, candidates, ResolveDropItem, strongBuff: true);
         That(ReferenceEquals(items.Items.Get(original.Id), original), "历史期限fixture不污染共享物品目录");
     }
 
     static void VerifyCosmoExit(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills, DungeonCardRewardPolicy cards, int bossRoll,
-        DungeonItemDropCatalog candidates, Func<int, ItemTemplate> resolveDropItem, bool strongBuff = false)
+        DungeonItemDropCatalog candidates, Func<int, ItemTemplate> resolveDropItem, bool strongBuff = false, bool submitReport = false)
     {
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
@@ -57,12 +58,14 @@ internal static partial class DungeonSpecificCardRewardsTests
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
-        var now = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
+        var (missions, clock) = DungeonBattlePassRegression.Schedule(pvf);
+        var now = clock.GetUtcNow();
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
             done.ToArray(), position: position, items: bossRoll == 90 ? [(490705255, 1), (3330, 40), (10305821, 4)] :
                 bossRoll == 45 ? [(490705255, 2)] : [(3330, 40), (10305821, 4)],
             fatigueRemaining: bossRoll == 0 ? (ushort)8 : (ushort)16,
-            timeProvider: new Testing.Inventory.DailyBoosterTestClock(now));
+            timeProvider: clock);
+        DungeonBattlePassRegression.Enable(fixture, missions, clock);
         if (bossRoll == 90)
         {
             var before = fixture.Read();
@@ -282,7 +285,7 @@ internal static partial class DungeonSpecificCardRewardsTests
             That(eligibility.AsSpan(16).SequenceEqual(DungeonSettlementPackets.RetryEligibility(bossRoll != 0)),
                 "超星空按剩余票据和疲劳发布单字节再挑战资格");
             // 两个分支覆盖未收到46，以及收到普通46并重复的情况。
-            if (bossRoll != 0)
+            if (bossRoll != 0 || submitReport)
             {
                 byte[] body = new byte[53]; body[3] = 1;
                 BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4), receipt.Character.Id);
@@ -300,12 +303,16 @@ internal static partial class DungeonSpecificCardRewardsTests
                     fixture.Sql("DROP TRIGGER cosmo_settlement_fail");
                 }
                 await Dispatch(46, body);
+                That(Convert.ToInt64(fixture.Query("SELECT COUNT(*) FROM account_battle_pass_source_events WHERE source_kind='formal_dungeon_clear'")) == 1,
+                    "三个领主真实46结算在原事务内确认同Run来源，入场重基不触发断线");
                 var settled = fixture.Session.SettleFormalDungeon(receipt.Character.Id, 99, 99, body, dungeons, clear, growth, cards);
                 That(settled is { Outcome: DungeonRunOutcome.Duplicate, Card: null, Options: null, BlackDiamond: null },
                     "真实46处理器已提交经验，且未生成普通、付费或黑钻牌");
                 var before = fixture.Read();
                 await Dispatch(46, body);
-                That(QuestCompletionRepositoryTests.Same(before, fixture.Read()), "超星空报告重放不重复结算或发奖");
+                That(QuestCompletionRepositoryTests.Same(before, fixture.Read()) &&
+                    Convert.ToInt64(fixture.Query("SELECT COUNT(*) FROM account_battle_pass_source_events WHERE source_kind='formal_dungeon_clear'")) == 1,
+                    "超星空报告重放不重复结算、发奖或增加战令通关来源");
                 var current = fixture.Session.FormalDungeonResultFocus()!;
                 That(fixture.Session.AdvanceFormalDungeonCards(false) is null && fixture.Session.AdvanceFormalDungeonCards(true) is null &&
                     fixture.Session.SelectFormalDungeonFreeCard(0, 0) is null && fixture.Session.FormalCardState(current) is null,

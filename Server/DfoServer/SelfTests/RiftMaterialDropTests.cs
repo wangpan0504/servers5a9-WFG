@@ -29,9 +29,11 @@ internal static class RiftMaterialDropTests
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
+        var (missions, clock) = DungeonBattlePassRegression.Schedule(pvf);
         using var fixture = new QuestSceneTests.Fixture(towns, resources.Characters, resources.Learning, growth,
             resources.Quests, false, 95, done.Order().ToArray(), position: position,
-            items: [(DungeonRiftEpicDropPolicy.RefinedTerraniumId, 20)]);
+            items: [(DungeonRiftEpicDropPolicy.RefinedTerraniumId, 20)], timeProvider: clock);
+        DungeonBattlePassRegression.Enable(fixture, missions, clock);
         var rifts = new DungeonRiftEpicDropPolicy(items.DungeonDropItems,
             DungeonHellEpicCatalog.Load(pvf).Pool(54, 2, items.Items.Get), items.EpicPieceDrops.Pool(85, 90),
             items.Items.Get(DungeonRiftEpicDropPolicy.RefinedTerraniumId), new() { RefinedTerraniumPermille = 1000 });
@@ -103,7 +105,15 @@ internal static class RiftMaterialDropTests
         That(rewardedDeaths == 1 && picked == 6 && faultedTables.Count == 2 && Stones() == initialStone + 1 &&
             fixture.Read().Inventory.EpicPieces.Counts.Sum(value => (long)value) == initialBook + 5,
             "整条魔界路线仅一份材料，五片写入史诗图鉴且一颗精炼石入背包");
-        Console.WriteLine($"PASS {Count - before} 魔界裂缝材料真实死亡、拾取及事务回滚断言");
+        var clear = SelfTestCatalogs.ClearExperience(pvf);
+        var settled = fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [1, 2, 3], dungeons, clear, growth);
+        That(settled is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null }, "魔界裂缝战令开启后正式通关不抛异常");
+        DungeonBattlePassRegression.FormalClearOnce(fixture);
+        var afterClear = fixture.Read();
+        That(fixture.Session.SettleFormalDungeon(afterClear.Id, 99, 99, [1, 2, 3], dungeons, clear, growth).Outcome == DungeonRunOutcome.Duplicate &&
+            QuestCompletionRepositoryTests.Same(afterClear, fixture.Read()), "魔界裂缝重复通关不重发经验或奖励");
+        DungeonBattlePassRegression.FormalClearOnce(fixture);
+        Console.WriteLine($"PASS {Count - before} 魔界裂缝材料真实死亡、拾取、战令结算及事务回滚断言");
 
         int Stones() => fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == DungeonRiftEpicDropPolicy.RefinedTerraniumId)
             .Sum(row => row.Core.Count);
