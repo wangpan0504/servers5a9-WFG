@@ -60,7 +60,7 @@ internal static class CharacterSelection
                 character = repository.Save(owner, character, character.Position,
                     towns.ResolveRoomReturn(towns.Room, OrdinaryDistrict(character.Return), character.Level, completed));
         }
-        // 安徒恩、决斗、帝国竞技场及再战魔界直接落专属地区；其余频道仍由共享房间出门。
+        // 安徒恩、决斗、帝国竞技场、再战魔界及英雄魔界大战直接落专属地区；其余频道仍由共享房间出门。
         else if (channel is not null && ChannelAreaLanding.LandsInChannelTown(channel) &&
                  ChannelAreaLanding.Place(towns, channel, character.Level, completed) is { } landing)
         {

@@ -67,7 +67,8 @@ internal static class ChannelAreaLanding
     internal const int AntonRaidType = 0x17;
 
     // 进入频道（选角或不保留快照的换频道）时是否直接落到频道地区；其余频道出生赛丽亚房间。
-    internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type is AntonRaidType or 39 or 53 || IsPvpType(channel.Type);
+    internal static bool LandsInChannelTown(ChannelEntry channel) =>
+        channel.Type is AntonRaidType or 39 or 53 or EvildomWarChallengeType || IsPvpType(channel.Type);
 
     // 01EB55E0 调用 03EF95B0；决斗频道与普通频道的快照谓词不同，不能恢复普通城镇。
     internal static bool IsPvpType(int type) => type is 4 or 5 or 8 or 13 or 24;
