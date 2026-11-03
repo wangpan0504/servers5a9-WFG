@@ -88,6 +88,7 @@ internal static class SelfTestRunner
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
         EvildomWarBattleTests.RunCore();
+        EvildomWarChallengeTests.RunCore();
         EvildomWarHiddenTests.RunCore();
         EvildomWarRewardTests.RunCore();
         EvildomWarRewardSchemaTests.RunCore();
@@ -549,6 +550,7 @@ internal static class SelfTestRunner
         await Strongway2019HandlerTests.RunNormalTimeoutResourcesAsync(pvf, towns, itemResources);
         await Strongway2019HandlerTests.RunReconnectAfterAutomaticReturnResourcesAsync(pvf, towns, itemResources);
         EvildomWarChannelTests.Run(towns, pvf, characters, itemResources);
+        EvildomWarChallengeTests.RunResources(towns, pvf, characters, itemResources);
         RaidCreateFlowTests.RunResources(pvf, itemResources.Items);
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);

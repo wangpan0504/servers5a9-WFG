@@ -121,6 +121,8 @@ internal sealed partial class GameSession
         if (pendingRental is not null || HasPendingTownQuestCommit) return null;
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");
+        if (!CanUseEvildomWarChallengeEntrance() ||
+            Selected.Position.Town == Characters.ChannelAreaLanding.EvildomWarChallengeTown && !partyAdmission) return null;
         if (HasRaidDungeonAdmission) return BeginRaidDungeonSelection(partyAdmission);
         // 团队候战区不能落入普通选图；开团后的选图由原Battle授权建立。
         if (ChannelEntry?.Type is 23 or 32 or 45 or 50 && StartedRaid is null) return null;

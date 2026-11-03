@@ -8,7 +8,8 @@ internal readonly record struct FiendwarSpawnReport(uint Serial, uint Dungeon, u
         ParentKey is > 0 and <= ushort.MaxValue && ObjectKey is > 0 and < ushort.MaxValue &&
         ParentKey != ObjectKey &&
         (MonsterId is 107013155 or 107013156 or >= 107013169 and <= 107013176 or 107013188 or
-            109008114 or 109008115 or >= 109008120 and <= 109008123 or 109008139);
+            109008114 or 109008115 or >= 109008120 and <= 109008123 or 109008139 or
+            407000557 or 407000559);
 
     internal bool Matches(FormalDungeonReceipt room) => Valid && Dungeon == room.Entry.DungeonId &&
         Map == room.Snapshot.CurrentMap.Id && Seed == room.MapSeed &&

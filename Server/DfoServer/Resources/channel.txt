@@ -72,4 +72,5 @@
 51 `<channel_info_cname_501>` 4 `[pvp]` 0 0 29 0 0 50 95 0 0 0 0 ``
 55 `<channel_info_cname_505>` 13 `[pvp]` 0 0 29 0 0 50 95 0 0 0 0 ``
 50 `<chn_channel_info_059>` 55 `[none]` 0 0 0 0 0 95 95 0 0 0 0 ``
+56 `<chn_channel_info_063>` 64 `[evildom_war_challenge]` 0 0 0 0 0 95 95 0 0 0 0 ``
 [/server]

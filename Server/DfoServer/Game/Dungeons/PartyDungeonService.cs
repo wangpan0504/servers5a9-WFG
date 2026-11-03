@@ -209,6 +209,13 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
             return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
             {
                 if (!parties.IsCurrent(party) || fiendwarPrepared is { Active: false }) return [];
+                if (dungeon == EvildomWarChallengeEntryPolicy.DungeonId)
+                {
+                    if (prepared.Count != 4 || prepared.Any(row => !row.Member.Actor.Session.CanBindEvildomWarChallengeKeys(row.Preparation)))
+                        return [];
+                    var keys = new FiendwarObjectKeyLeases(instance.Id);
+                    foreach (var row in prepared) row.Member.Actor.Session.BindEvildomWarChallengeKeys(row.Preparation, keys);
+                }
                 var reservations = prepared.Select(p => p.Member.Actor.Session.ReservePartyDungeon(p.Preparation)).ToArray();
                 if (reservations.Any(r => r is null) || !leader.IsPartyAdmissionDayCurrent(prepared[0].Preparation)) return [];
                 using var raidRun = GameSession.ReserveRaidPartyRun(prepared.Select(row => row.Preparation).ToArray(), out bool raidRequired);

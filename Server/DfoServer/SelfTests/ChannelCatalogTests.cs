@@ -69,10 +69,14 @@ internal static class ChannelCatalogTests
                 ChannelPackets.LoginChannelType(embedded.Entry(55)) == 13 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 13,
                 "自由练习场追加本服55/type13（新版集成自由练习场），使用自由练习名称且LOGIN保留真实类型");
-            That(embedded.Channels[^1].Number == 50 && embedded.Channels[^1].Type == 55 &&
-                embedded.Channels[^1].NameReference == "<chn_channel_info_059>" &&
+            That(embedded.Channels[^2].Number == 50 && embedded.Channels[^2].Type == 55 &&
+                embedded.Channels[^2].NameReference == "<chn_channel_info_059>" &&
                 ChannelPackets.LoginChannelType(embedded.Entry(50)) == 55,
                 "强者之路追加独立50号/type55原生入口，使用本版名称059并保留既有频道端口顺序");
+            That(embedded.Channels[^1].Number == 56 && embedded.Channels[^1].Type == 64 &&
+                embedded.Channels[^1].NameReference == "<chn_channel_info_063>" &&
+                embedded.Channels[^1].Group == "[evildom_war_challenge]" && ChannelPackets.LoginChannelType(embedded.Entry(56)) == 64,
+                "英雄频道独立56号/type64只追加在原末尾，不改变旧频道端口顺序");
             foreach (int number in new[] { 101, 47, 51, 55 })
             {
                 string channelRow = embedded.SourceText.Split('\n').Single(line => line.StartsWith(number + " ", StringComparison.Ordinal));

@@ -73,6 +73,13 @@ internal sealed partial class GameSession
             return null;
         }
         var fiendwar = raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar } binding ? binding : null;
+        if (plan.Position is { Town: Characters.ChannelAreaLanding.EvildomWarChallengeTown, Area: 2 } &&
+            (ChannelEntry?.Type != Characters.ChannelAreaLanding.EvildomWarChallengeType ||
+                !HasCurrentEvildomWarChallengeSeat(CurrentParty?.Invoke())))
+        {
+            TravelReason = "evildom-war-challenge-four-members-required";
+            return null;
+        }
         if (plan.Position is { Town: 57, Area: >= 2 } && fiendwar is null)
         {
             // 624先将已创建的团送到625候战，随后才发666；候战与开战后的战场资格不同。

@@ -77,8 +77,10 @@ internal sealed partial class GameSession
             formalDungeon is not { } dungeon || dungeon.Run.Scene.Identity != receipt.Snapshot.Identity ||
             dungeon.Run.Scene.Map != receipt.Snapshot.CurrentMap || dungeon.MapSeed != receipt.MapSeed ||
             dungeon.HasPendingFatigue || dungeon.Ground.HasPendingOperation || HasPendingFormalCard ||
-            !CanMoveWithParty() || raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Fiendwar } raid ||
-            !raid.Battle.CanRegisterFiendwarSpawn(raid.Actor, dungeon.Run))
+            !CanMoveWithParty() || !(dungeon.Run.IsEvildomWarChallengeDynamic &&
+                ChannelEntry?.Type == 64 && HasCurrentEvildomWarChallengeSeat(CurrentParty?.Invoke()) ||
+                raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Fiendwar } raid &&
+                    raid.Battle.CanRegisterFiendwarSpawn(raid.Actor, dungeon.Run)))
             return DungeonRunOutcome.Rejected;
         var outcome = dungeon.Run.CanRegisterFiendwarDynamic(receipt.Snapshot.Identity, spawn);
         if (outcome == DungeonRunOutcome.Accepted && !dungeon.Ground.HasFreeDynamicKey(spawn.ObjectKey))

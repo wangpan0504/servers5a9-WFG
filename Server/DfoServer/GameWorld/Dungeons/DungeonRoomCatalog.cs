@@ -57,6 +57,8 @@ internal sealed record DungeonRoomDefinition(
     public DungeonScriptedLayerReturn? ScriptedLayerReturn { get; init; }
     public DungeonCinematicBossEvidence? BossDeathLayerChange { get; init; }
     public IReadOnlyList<DungeonLostLandWarp> LostLandWarps { get; init; } = [];
+    public DungeonEvildomWarChallengeWarp? EvildomWarChallengeWarp { get; init; }
+    public DungeonEvildomWarChallengeSpawn? EvildomWarChallengeSpawn { get; init; }
 }
 
 internal sealed class DungeonRoomCatalog
@@ -144,7 +146,13 @@ internal sealed class DungeonRoomCatalog
         {
             CinematicLayerReturn = ReadCinematicLayerReturn(room,tokens),
             ScriptedLayerReturn = room.Map.Kind == "layered" ? ReadScriptedLayerReturn(room) : null,
-            BossDeathLayerChange = room.Map.Kind == "boss" ? ReadBossDeathLayerChange(room) : null
+            BossDeathLayerChange = room.Map.Kind == "boss" ? ReadBossDeathLayerChange(room) : null,
+            EvildomWarChallengeWarp = room.Map.Id is 400000524 or 400000525
+                ? DungeonEvildomWarChallengeWarpRules.Read(room, file => archive.Contains(file) ? archive.ReadTokens(file) : [], archive.ResolveString)
+                : null,
+            EvildomWarChallengeSpawn = room.Map.Id is 400000524 or 400000525
+                ? DungeonEvildomWarChallengeSpawnRules.Read(room, file => archive.Contains(file) ? archive.ReadTokens(file) : [],
+                    archive.ResolveString, id => monsters.GetValueOrDefault(id)) : null
         };
     }
 

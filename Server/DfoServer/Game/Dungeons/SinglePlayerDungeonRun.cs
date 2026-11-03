@@ -684,8 +684,12 @@ internal sealed partial class SinglePlayerDungeonRun
     internal bool CanMove(DungeonRunIdentity expected, DungeonPoint target) =>
         scriptedReturn is null && !HasPendingDeath && Matches(expected) &&
         Phase == SinglePlayerDungeonPhase.Dungeon && CanAdvance() &&
-        current.Elevator is not { Completed: false } && (entry.LostLand is not null || current.Cleared) &&
-        !HasPendingLayer() && CanMoveHopeOrOrdinary(target) && rooms.ContainsKey(target);
+        current.Elevator is not { Completed: false } &&
+        !HasPendingLayer() && rooms.ContainsKey(target) &&
+        (CanEvildomWarChallengeWarp(target) ||
+            (entry.DungeonId != EvildomWarChallengeEntryPolicy.DungeonId ||
+                current.Plan.Room.Map.Position.Y == 0 && target.Y == 0) &&
+            (entry.LostLand is not null || current.Cleared) && CanMoveHopeOrOrdinary(target));
 
     // 亡命杀镇普通迷宫的出口直接上报kind0有向目标；不能借此放行条件Boss替换或任务骑乘。
     private bool CanBorderTownWarp(DungeonPoint target) => entry.DungeonId == 291100268 && entry.IsOrdinary &&

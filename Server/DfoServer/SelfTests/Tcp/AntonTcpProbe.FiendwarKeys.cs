@@ -112,6 +112,13 @@ internal static partial class AntonTcpProbe
 
     internal static ushort TakeFiendwarKey(TcpPeer peer)
     {
+        _ = PeekFiendwarKey(peer);
+        return keyLeases.GetOrCreateValue(peer).Available.Dequeue();
+    }
+
+    // 预期拒绝的生成只观察已授键，不提前消耗本地信用；合法报告才由Take取走。
+    internal static ushort PeekFiendwarKey(TcpPeer peer)
+    {
         var state = keyLeases.GetOrCreateValue(peer);
         if (state.Header.Length != 80) throw new InvalidOperationException("尚无真实对象键租约");
         if (state.Available.Count == 0)
@@ -123,7 +130,7 @@ internal static partial class AntonTcpProbe
             _ = Barrier(peer, "fiendwar real key refill");
         }
         That(state.Available.Count > 0, "后续召唤也必须先收到服务端真实grant");
-        return state.Available.Dequeue();
+        return state.Available.Peek();
     }
 
     internal static ulong FiendwarLease(TcpPeer peer) => keyLeases.TryGetValue(peer, out var state) && state.Header.Length == 80

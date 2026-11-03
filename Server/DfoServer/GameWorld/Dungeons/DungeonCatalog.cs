@@ -156,6 +156,15 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         [{ Tokens: [{ Type: 0, Value: > 0 }] }];
     // 独立模式声明残缺时也不能落回普通入场，绕过任务和双材料消耗。
     public bool RequiresCosmoEntryContract => Id == DungeonCosmoRewardCatalog.DungeonId || RawSections.Any(row => row.Tag == "cosmo dungeon");
+    // 英雄模式是独立正式副本，畸形标签或路径不能降级为普通魔界大战战役。
+    public bool RequiresEvildomWarChallengeContract => Id == 400000105 ||
+        Path.StartsWith("dungeon/gcontents/200114_theevildomwar_challenge/", StringComparison.OrdinalIgnoreCase) ||
+        RawSections.Any(row => row.Tag == "evildom war challenge dungeon");
+    public bool IsEvildomWarChallenge => Id == 400000105 &&
+        Path.Equals("dungeon/gcontents/200114_theevildomwar_challenge/400000105_eastharlem.dgn", StringComparison.OrdinalIgnoreCase) &&
+        RawSections.Where(row => row.Tag == "evildom war challenge dungeon").ToArray() is [{ Tokens.Count: 0 }];
+    public int? MinimumPartyCount => RawSections.Where(row => row.Tag == "min party count").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: >= 1 and <= 4 } count] }] ? count.Value : null;
     public bool IsCosmoDungeon => Id == DungeonCosmoRewardCatalog.DungeonId &&
         RawSections.Where(row => row.Tag == "cosmo dungeon").ToArray() is [{ Tokens.Count: 0 }];
     // 时空裂缝（[inferno dungeon]）：整条路线本身就是深渊场地，没有 [seal door] 密门，只能按深渊派对模式进入。

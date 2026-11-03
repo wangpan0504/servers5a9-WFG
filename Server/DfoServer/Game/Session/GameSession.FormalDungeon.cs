@@ -62,6 +62,7 @@ internal sealed partial class GameSession
         public DfoServer.Game.ImperialArena.ImperialArenaDeathPlan? PendingImperialArenaReward { get; set; }
         public (byte Ordinal, DfoServer.Game.TagEvildom.TagEvildomLifeResult Result)? PendingImperialArenaDefeat { get; set; }
         public EvildomWarAdmission? EvildomWarEntry { get; init; }
+        public EvildomWarChallengeAdmission? EvildomWarChallengeEntry { get; init; }
         public long? TagEvildomStartedTimestamp { get; set; }
         public TagEvildomClearPreparation? PendingTagEvildomClear { get; set; }
         public DfoServer.Game.TagEvildom.TagEvildomRewardSelection? TagEvildomRewardSelection { get; set; }
@@ -230,6 +231,15 @@ internal sealed partial class GameSession
             return RejectFormal("evildom-war-start-and-selection-required");
         if (war is { Charged: false } && owner.Execute(() => EvildomWarCostRejection(expected, war.Catalog)) is { } warCostReason)
             return RejectFormal("evildom-war-" + warCostReason);
+        EvildomWarChallengeAdmission? challenge = null;
+        if (dungeonId <= int.MaxValue && catalog.DungeonPath((int)dungeonId) is not null &&
+            catalog.Get((int)dungeonId) is { RequiresEvildomWarChallengeContract: true } challengeDefinition)
+        {
+            challenge = owner.Execute(() => PrepareEvildomWarChallengeAdmission(challengeDefinition, expected, epoch, selection,
+                difficulty, partyMemberCount, partyAdmission,
+                questId != 0 || retry is not null || hellParty || hellLegend || sealDoor || practice || classExperience));
+            if (challenge is null) return null;
+        }
         if (dungeonId is 9608 or 400000095 && (tagEntry is null || questId != 0 || difficulty != 0 || retry is not null ||
             practice || classExperience || hellParty || hellLegend || sealDoor || partyAdmission)) return RejectFormal("tag-evildom-selection-required");
         var hope = dungeonId == 8523 ? CurrentHopeAdmission(expected,epoch) : null;
@@ -602,7 +612,7 @@ internal sealed partial class GameSession
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, ImperialArenaEntry = imperialEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
-                Strongway2019Admission = strongway,
+                Strongway2019Admission = strongway, EvildomWarChallengeEntry = challenge,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
@@ -933,6 +943,7 @@ internal sealed partial class GameSession
 
     FormalDungeonReceipt? InstallFormalDungeon(PreparedFormalDungeon prepared)
     {
+        if (prepared.Dungeon.EvildomWarChallengeEntry is not null) return null;
         if (HasMultiplePartyMembers?.Invoke() == true) return null;
         if (HasPendingTownQuestCommit || !Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
         if (!CanInstallRaidDungeon(prepared.Dungeon.Entry)) return null;
