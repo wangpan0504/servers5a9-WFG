@@ -196,6 +196,7 @@ internal static class GuildCargoTcpTests
                 peer.Expect(0, 390);
                 peer.Expect(0, 21);
                 peer.Expect(0, 356);
+                peer.Expect(0, 703);
                 for (int skin = 0; skin < 4; skin++)
                 {
                     peer.Expect(0, 1557);

@@ -6,6 +6,7 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Label, ImmutableArray<int> Parameters,
     int CoolTime, int CoolGroup, byte Maintenance, byte DailyLimit, ImmutableArray<string> Places)
 {
+    public const uint StoryBookAction = 139;
     public int EffectMilliseconds { get; init; }
     public byte EffectMaintenance { get; init; }
     public ImmutableHashSet<int> AllowedTargets { get; init; } = [];
@@ -21,6 +22,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             action is not ({ Label: "[rent point]" or "[add mileage]" or "[use favor point]", Parameters: [> 0] } or
                 { Label: "[repair coupon]" or "[repair equipment]", Parameters.Count: 0 } or
                 { Label: "[add dimension dungeon enter count]", Parameters: [> 0 and <= 5] } or
+                { Label: "[story book]", Parameters: [> 0 and < 30000] } or
                 // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。
                 { Label: "[add avatar preset]", Parameters.Count: 0 } or
                 { Label: "[character name change]", Parameters.Count: 0 } or

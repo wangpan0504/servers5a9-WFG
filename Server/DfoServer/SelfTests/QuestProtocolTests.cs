@@ -12,6 +12,12 @@ internal static class QuestProtocolTests
     public static void Run()
     {
         int checks = 0;
+        Check(QuestPackets.StoryBookInfo([]).SequenceEqual(new byte[4]), "空703明确清除旧故事簿视图");
+        var story = QuestPackets.StoryBookInfo([3108]);
+        Check(story.Length == 52 && story[0] == 1 && story[4] == 1 && story[8] == 36 && story[9] == 12 &&
+            story.AsSpan(12).IndexOfAnyExcept((byte)0) < 0, "703数量头和48字节完成态记录的字段偏移独立核对");
+        Reject(() => QuestPackets.StoryBookInfo([3108,3108]), "703拒绝重复章节");
+        Reject(() => QuestPackets.StoryBookInfo([0]), "703不能把无任务标记投影为故事");
         Check(QuestPackets.Finish(100,3,0,[],0,[],1).SequenceEqual(Convert.FromHexString("016400030000000001010000")),
             "首次转职mode1携带实际分支与两树页空计数，完整12B");
         Check(QuestPackets.Finish(100,4,30,[],101,[],5).SequenceEqual(Convert.FromHexString("016400041E00000001050000")),

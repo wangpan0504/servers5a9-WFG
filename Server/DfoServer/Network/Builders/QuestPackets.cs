@@ -9,6 +9,23 @@ namespace DfoServer.Network.Builders;
 // 这些codec不选择业务错误/成功头或提交奖励；ACK34生产成功入口必须另有完整资格与头字段合同。
 internal static class QuestPackets
 {
+    // 0239E5B0按u32数量读取48B原生记录；0201F080取记录首字节作为章节完成态。
+    public static byte[] StoryBookInfo(IReadOnlyList<int> completed)
+    {
+        if (completed.Count >= 30000 || completed.Any(id => id is <= 0 or >= 30000) || completed.Distinct().Count() != completed.Count)
+            throw new InvalidDataException("故事簿完成记录的任务号无效或重复");
+        byte[] body = new byte[checked(4 + completed.Count * 48)];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, (uint)completed.Count);
+        for (int at = 0; at < completed.Count; at++)
+        {
+            int offset = 4 + at * 48;
+            body[offset] = 1;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset + 4), (uint)completed[at]);
+            // 当前只投影已完成章节；未读归属用于另一条正在阅读分支，不伪造阅读者信息。
+        }
+        return body;
+    }
+
     public static byte[] AvailableList(byte level, IReadOnlyList<int> ids)
     {
         if (level is < 1 or > 95 || ids.Count > 29999 || ids.Any(id => id is <= 0 or >= 30000) || ids.Distinct().Count() != ids.Count)
