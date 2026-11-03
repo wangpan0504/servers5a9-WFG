@@ -111,7 +111,18 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         // ACK18按本次消耗量扣减材料；重复发送NOTI14会触发获得物品提示。
         var acknowledgedSlots = request.Items.Where(item => item.Type is 2 or 3)
             .Select(item => new InventorySlot(request.List, item.Slot)).ToHashSet();
-        await projection.RefreshAsync(context, result, acknowledgedSlots);
+        try
+        {
+            await projection.RefreshAsync(context, result, acknowledgedSlots);
+            if (result.Accepted && result.Plan?.ColorlessSkill is { } skill &&
+                (result.Receipt is not { } committed || context.Session.CanPublishInventory(committed)))
+                await DfoServer.Network.Projection.BattlePassMissionProjection.RefreshAsync(context, skill.Clock.GetUtcNow());
+        }
+        catch (System.Data.Common.DbException error) when (result.Accepted && result.Plan?.ColorlessSkill is not null)
+        {
+            // 扣晶块与任务已提交，后置读取失败不能重放本次施法消耗。
+            throw new IOException("Committed colorless skill publication failed", error);
+        }
         return CommandResult.Handled;
     }
 

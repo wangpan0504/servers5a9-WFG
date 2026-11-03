@@ -18,7 +18,11 @@ internal static class PvfItemCompatTests
         That(resources.Items.Get(100400000).EquipmentSlot == 34, "护石按独立槽位 34 加载");
         That(resources.Items.Get(100360001).EquipmentSlot == 35, "符咒按独立槽位 35 加载");
         That(resources.Items.Get(0).Id == 0, "编号 0 的金币占位可以加载");
-        That(resources.Items.Get(490008569).QualityBox is { MinimumPercent: 100, MaximumPercent: 100 }, "黄金品级箱取最高品级");
+        That(resources.Items.Get(490008569).QualityBox is { MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: null, RejectTitle: false },
+            "黄金品级箱取最高品级且不按稀有度或称号收窄");
+        foreach (var (id, rarity) in new[] { (10150860, 2), (10150861, 3), (10150863, 4), (10150903, 5), (10150862, 6) })
+            That(resources.Items.Get(id).QualityBox is { MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: var actual, RejectTitle: true } &&
+                actual == rarity, "大师级品级箱按自身稀有度取最高品级并拒绝称号: " + id);
         That(resources.Items.Get(10004946).ShopPrice.Limit is { AccountWide: true, Count: 2 }, "trade 限购按账号上限读取");
         That(resources.Items.Get(10094768) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountBoundAfterTrade: true, AccountCargoForbidden: false,
             AttachType.Length: 0, StackableType: "[enchant waste] 0" }, "现场宝珠10094768的限次交易后账号绑定声明进入真实物品模板");

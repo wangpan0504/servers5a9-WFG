@@ -46,6 +46,7 @@ internal sealed class InventoryPlan
     public MonsterCardUpgradeFact? MonsterCardUpgrade { get; init; }
     public EquipmentDisjointFact? EquipmentDisjoint { get; init; }
     public NpcMaterialConsumeFact? NpcMaterialConsume { get; init; }
+    public ColorlessSkillFact? ColorlessSkill { get; init; }
     public BoosterSongAcquisition? BoosterSongAcquisition { get; init; }
     public CashShopPaymentFact? CashShopPayment { get; init; }
     public DfoServer.Game.PcRoom.PcRoomDailyClaim? PcRoomClaim { get; set; }
@@ -100,6 +101,7 @@ internal sealed class InventoryPlan
         MonsterCardUpgrade = MonsterCardUpgrade,
         EquipmentDisjoint = EquipmentDisjoint,
         NpcMaterialConsume = NpcMaterialConsume,
+        ColorlessSkill = ColorlessSkill,
         BoosterSongAcquisition = BoosterSongAcquisition,
         CashShopPayment = CashShopPayment,
         PcRoomClaim = PcRoomClaim,

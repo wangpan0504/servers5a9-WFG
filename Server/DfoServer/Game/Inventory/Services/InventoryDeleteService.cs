@@ -39,8 +39,12 @@ internal static class InventoryDeleteService
         }
         string reason = request.Items.Any(item => item.Type == 3) ? "delete_equipment_material" :
             request.Items.Any(item => item.Type == 2) ? "delete_skill_material" : "delete_item";
+        var clock = TimeProvider.System;
         return new(true, 0, new InventoryPlan(before, after, reason)
-            { PreserveMaterials = preserveMaterials });
+        {
+            PreserveMaterials = preserveMaterials,
+            ColorlessSkill = ColorlessSkillFact.Capture(before, after, request, preserveMaterials, clock.GetUtcNow(), clock)
+        });
     }
     public static bool CanGmDelete(InventorySnapshot before, InventoryItem item) =>
         item.Position.List != InventoryListType.Equipment &&
