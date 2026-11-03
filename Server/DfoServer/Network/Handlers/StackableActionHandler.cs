@@ -26,7 +26,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
     AvatarPresetHandler? avatarPresets=null,GuildEconomyHandler? guildEconomy=null,
     GuildExperienceHandler? guildExperience=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
-    DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null) : IGameCommandModule
+    DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null,
+    GuildDungeonScrollHandler? guildDungeonScroll=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -41,6 +42,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return await guildEconomy.UseGiftAsync(context, request, packet.RequestSerial);
         if (request.Action == 145 && guildExperience is not null)
             return await guildExperience.UseAsync(context, request, packet.RequestSerial);
+        if (request.Action == 167 && guildDungeonScroll is not null)
+            return await guildDungeonScroll.UseAsync(context, request, packet.RequestSerial);
         // 这两类由原提交回执识别重放：源可能已耗尽，不能用当前空槽否认原操作。
         // 首次消费的动作身份仍由任务券/成长定义校验，原owner与回执门禁保持不变。
         if (request.Action is QuestTicketDefinition.Action or QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction or QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction or QuestTicketDefinition.SpecifiedAction or

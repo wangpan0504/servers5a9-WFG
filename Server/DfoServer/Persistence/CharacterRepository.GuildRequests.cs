@@ -7,7 +7,7 @@ internal static class GuildRequestSchema
     public const string Sql = """
         CREATE TABLE IF NOT EXISTS guild_request_claims(
             request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
-            kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 6),
+            kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 7),
             account TEXT NOT NULL,
             character_id INTEGER NOT NULL
         );

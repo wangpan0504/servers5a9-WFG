@@ -16,6 +16,8 @@ internal sealed class GuildNpcCatalog
     // 匹配客户端00527500的个人公会硬币计数；与公共公会结晶是不同资产。
     public const int MemberCoinItem = 490011648;
     public const uint Guardian = 400001060;
+    public const uint Spirit = 400001061;
+    public const uint Alchemist = 400001065;
     readonly FrozenDictionary<uint, GuildNpcDefinition> definitions;
     readonly GuildNpcContractDefinition[] contracts;
     public IReadOnlyCollection<GuildNpcDefinition> Definitions => definitions.Values;

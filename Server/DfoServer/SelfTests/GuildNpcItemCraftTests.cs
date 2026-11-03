@@ -84,7 +84,8 @@ internal static class GuildNpcItemCraftTests
         Sql("DROP TRIGGER craft_receipt_fail");
         var start = Change(1);
         That(start.Success && start.State!.Individual is [{ BenefitId: 7001, Deadline: now + 60 }] &&
-            Number("SELECT gold FROM characters WHERE id=" + character.Id) == 900, "炼金开始真实扣费并恢复个人生产倒计时");
+            Number("SELECT gold FROM characters WHERE id=" + character.Id) == 900 &&
+            Number("SELECT count(*) FROM character_guild_npc_craft_weeks") == 0, "炼金开始真实扣费并恢复个人生产倒计时，不占守护精灵周次");
         unchanged = Snapshot();
         That(Change(1).Replayed && Snapshot() == unchanged && !Change(2).Success && Snapshot() == unchanged,
             "炼金重放不重复扣款，同NPC已有生产拒绝另一委托");
@@ -102,9 +103,10 @@ internal static class GuildNpcItemCraftTests
         Sql("DROP TRIGGER craft_mail_fail; DELETE FROM guild_members; DELETE FROM guilds");
         var reopened = new CharacterRepository(path);
         var completed = reopened.CompleteGuildNpcItemCrafts(now + 60);
-        That(completed is [{ Management: null, Mail.Accepted: true }] && Number("SELECT count(*) FROM mailbox_messages WHERE expires_at IS NULL") == 1 &&
+        That(completed is [{ Management: null, Mail.Accepted: true }] &&
+            Number("SELECT count(*) FROM mailbox_messages WHERE expires_at IS NULL AND sender_name='公会炼金术师'") == 1 &&
             Number("SELECT sum(json_extract(i.item_core,'$.Value')) FROM mailbox_attachments a JOIN character_inventory_items i ON i.item_uid=a.item_uid") == 30,
-            "重开、退会及解散后仍向付款角色发永久邮件，完整30份产物不丢失");
+            "重开、退会及解散后仍向付款角色发永久邮件，发件人为公会炼金术师，完整30份产物不丢失");
         That(reopened.CompleteGuildNpcItemCrafts(now + 61).Length == 0 && Number("SELECT count(*) FROM mailbox_messages") == 1,
             "重复完成不重复发产物或邮件");
         That(Number("SELECT count(*) FROM pragma_foreign_key_check") == 0, "炼金完成后外键完整");

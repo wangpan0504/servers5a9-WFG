@@ -32,7 +32,9 @@ internal static partial class DatabaseSchemaTests
         DROP TABLE IF EXISTS guild_contribution_settlements;
         DROP TABLE IF EXISTS guild_contribution_events;
         DROP TABLE IF EXISTS guild_npc_training_receipts;
+        DROP TABLE IF EXISTS character_guild_npc_craft_weeks;
         DROP TABLE IF EXISTS character_guild_npc_item_crafts;
+        DROP TABLE IF EXISTS guild_dungeon_scroll_receipts;
         DROP TABLE IF EXISTS character_guild_npc_benefits;
         DROP TABLE IF EXISTS guild_npc_common_benefits;
         DROP TABLE IF EXISTS guild_npc_receipts;

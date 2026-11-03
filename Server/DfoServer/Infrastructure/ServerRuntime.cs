@@ -349,6 +349,8 @@ internal static class ServerRuntime
         var guildNpcProjection = new GuildNpcProjection(guildNpcService, guildNpcBenefitService);
         var guildExperienceHandler = new GuildExperienceHandler(new Game.Guild.GuildExperienceService(repository,
             itemResources.Items, guildParameters, guildManagement, clock), inventoryProjection, log);
+        var guildDungeonScrollHandler = new GuildDungeonScrollHandler(new Game.Guild.GuildDungeonScrollService(repository,
+            itemResources.Items, guildDungeons, guildManagement, clock), inventoryProjection, log);
         var guildTeleportService = new Game.Guild.GuildTeleportService(repository, parties, towns, guildManagement, clock,
             error => log.Write("guild_teleport_failed", new { Error = error.Message }));
         var guildTeleportHandler = new GuildTeleportHandler(guildTeleportService, projection, log);
@@ -931,7 +933,8 @@ internal static class ServerRuntime
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler, guildEconomyHandler, guildExperienceHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
                 new DimensionEntryTicketService(itemResources.Items, clock),
-                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log)),
+                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log),
+                guildDungeonScrollHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,
