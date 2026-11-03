@@ -273,6 +273,17 @@ internal static partial class FiendwarRaidTcpTests
                     return;
                 }
                 foreach (var peer in first) { peer.Send(42); Drain(peer); }
+                if (camp != 29)
+                {
+                    // 后返回成员的23仍会广播给先返回成员；先收齐本轮全队退场再隔离拒绝请求。
+                    foreach (var peer in first) Drain(peer);
+                    var before = first.Select(peer => peer.SavedTownPosition()).ToArray();
+                    first[0].Send(36, Area(57, 30, 0, 0, 57, checked((ushort)camp)));
+                    var rejected = first.Select(Drain).ToArray();
+                    That(first.Select(peer => peer.SavedTownPosition()).SequenceEqual(before) &&
+                        rejected.All(rows => !rows.Any(row => row is { Kind: 0, Opcode: 23 or 27 or 28 or 29 or FiendwarKeyLeaseRequests.Opcode })),
+                        "三兵营未全破时，量子站默认坐标不绕过解锁、不改全队位置或准备进图");
+                }
             }
             That(symbols[(first[0].Id, 125)] == 1, "三座兵营真实清图锁存Boss入口");
             That(count != 1 || counterRollbackChecked, "单人团队沿真实兵营终房完成一次破招生产者晚SQL回滚和重新入场");
@@ -880,7 +891,9 @@ internal static partial class FiendwarRaidTcpTests
                 foreach (var member in team)
                 {
                     if (member.SavedTownPosition().Area == next) continue;
-                    member.Send(36, Area(57, checked((byte)next), checked((ushort)arrival.X), checked((ushort)arrival.Y), 57, checked((ushort)origin)));
+                    // 量子确认缺少反向门时原生写0,0，不能预补Spawn坐标掩盖正式旅行解析缺口。
+                    member.Send(36, Area(57, checked((byte)next), next is 30 or 31 ? (ushort)0 : arrival.X,
+                        next is 30 or 31 ? (ushort)0 : arrival.Y, 57, checked((ushort)origin)));
                     for (int index = 0; index < team.Length; index++) moved[index].AddRange(Drain(team[index]));
                 }
                 That(team.All(peer => peer.SavedTownPosition().Area == next), "真实36提交并保存全部本次同区成员位置");

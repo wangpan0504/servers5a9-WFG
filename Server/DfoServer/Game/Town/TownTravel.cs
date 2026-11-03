@@ -129,8 +129,15 @@ internal static class TownTravel
         // 目标地图没有回连来源的门时客户端发 0,0（实测五陵 117/0 → 1/1）；0,0 不可站时按 PVF 入口解析落点。
         if (request.X == 0 && request.Y == 0 && !towns.IsPosition(target, completed))
         {
-            if (towns.Entrance(character.Position, target, completed) is not { } arrival)
-                return TownTravelPlan.Reject("arrival-unavailable");
+            var arrival = towns.Entrance(character.Position, target, completed);
+            // 量子站原生确认可沿无反向门的区域记录写入0,0；暗/白图各自
+            // 只回连一座兵营，其它兵营的默认落点按目标图真实可走区域解析。
+            // 来源门已通过上方Admission，解锁与占位仍由原Battle移动预留校验。
+            if (arrival is null && fiendwarActive && channel?.Type == ChannelAreaLanding.FiendwarType &&
+                character.Position is { Town: 57, Area: >= 27 and <= 29 } &&
+                target is { Town: 57, Area: 30 or 31 } && request is { PathKind: 0, TargetNpc: 0 })
+                arrival = towns.Spawn(target, completed);
+            if (arrival is null) return TownTravelPlan.Reject("arrival-unavailable");
             target = arrival with { Direction = character.Position.Direction };
         }
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
