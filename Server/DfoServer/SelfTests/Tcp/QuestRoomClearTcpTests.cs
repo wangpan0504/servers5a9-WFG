@@ -301,7 +301,7 @@ internal static class QuestRoomClearTcpTests
             That(zeroPublished && enabled == 0 && bossChecks == 0 && fixture.Query(
                 "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id) is [[0L]] &&
                 fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3753",peer.Id).Length == 0,
-                "61273的普通count0完整39推进3753并发布574归零，保持手动交付及原终点");
+                "61273的普通count0完整39推进3753并原位33归零，保持手动交付及原终点");
             var clear = fixture.Query("""
                 SELECT r.acceptance_id,r.quest_slot,r.dungeon_id,r.map_id,r.epoch,g.epoch,g.quest_id,
                   r.instance_id,g.instance_id,r.task_attempt,g.task_attempt,g.monster_id
@@ -346,11 +346,9 @@ internal static class QuestRoomClearTcpTests
             {
                 if (packet.Opcode == 31) enabled++;
                 if (packet.Opcode == 115) bossChecks++;
-                if (packet.Opcode != 574) return;
-                var body = packet.Body;
-                That(body.Length >= 4 && body.Length == 4+6*U32(body,0),"3753完整活动条件通知574");
-                for (int at = 4; at < body.Length; at += 6)
-                    if (U16(body,at) == 3753 && U32(body,at+2) == 0) zeroPublished = true;
+                if (packet is not { Kind: 1, Opcode: 33 } || U16(packet.Body,1) != 3753) return;
+                Bytes(packet.Body,Convert.FromHexString("01A90E00000000"),"3753原位33保留成功头与完整零条件");
+                zeroPublished = true;
             });
             void KillRoom()
             {

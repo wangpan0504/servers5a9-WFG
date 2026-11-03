@@ -47,8 +47,6 @@ internal sealed class ExperienceConsumableHandler(ExperienceConsumableService se
                 CharacterExperienceDisplay.Ordinary), "experience_consumable_growth", Guard);
         if (plan.Expected.Level == character.Level && SkillPackets.BindingsChanged(plan.Expected.Learning, character.Learning))
             await SkillProjection.PublishAsync(context, character, "experience_consumable_skills", "experience_consumable_combo", Guard);
-        if (!plan.Expected.ActiveMainQuests.SequenceEqual(character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "experience_consumable_quests", Guard);
         await levels.RefreshAsync(context, character, plan.Expected.Level, "experience_consumable_level", Guard,
             previousLearning: plan.Expected.Learning);
         return CommandResult.Handled;

@@ -82,7 +82,6 @@ internal sealed partial class InventoryProjection
                     "certificate_card_membership_resync", () => CanSend() && context.Session.CanPublishCardMembership(membership));
         }
         if (committed.PreviousQuests is { } previous && !previous.SequenceEqual(character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests),
-                "certificate_quest_resync", CanSend);
+            await QuestProjection.ProgressAsync(context,previous,character,CanSend,"certificate_quest_resync");
     }
 }

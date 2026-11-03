@@ -79,9 +79,10 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
         if (plan.Inventory.ChangedSlots.Length != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 DfoServer.Game.Inventory.Models.InventoryListType.Main, plan.Inventory.ChangedSlots.ToArray()), "quest_lifecycle_inventory", Guard);
-        if (action == QuestLifecycleAction.Giveup && plan.Expected.ActiveMainQuests.Length - plan.ActiveAfter.Length > 1 ||
-            plan.ActiveAfter.Any(row => plan.Expected.ActiveMainQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "quest_giveup_children", Guard);
+        // ACK31/32已经安装或删除本次接取；其余原接取的条件仍须原位回调，不能重建父子对象。
+        var acknowledged = plan.Expected.ActiveMainQuests.Where(row => row.QuestId != questId)
+            .Concat(action == QuestLifecycleAction.Accept ? receipt.Character.ActiveMainQuests.Where(row => row.QuestId == questId) : []).ToArray();
+        await QuestProjection.ProgressAsync(context,acknowledged,receipt.Character,Guard,"quest_lifecycle_conditions",restoreCompleted: false);
         if (projection is not null)
             await projection.RefreshAsync(context, receipt.Character, Guard, restoreCompleted: false);
         // 放弃父子任务产生空574时同样会清客户端完成集合，空存档也须恢复显示标记。

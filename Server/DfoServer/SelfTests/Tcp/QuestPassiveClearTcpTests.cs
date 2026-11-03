@@ -198,7 +198,11 @@ internal static class QuestPassiveClearTcpTests
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             byte[] information = [];
-            var map = FormalDungeonTcpTests.Enter(peer,questId,dungeonId,row => information=row);
+            var area = resources.Towns.Areas[(entrance.Position.Town,entrance.Position.Area)];
+            byte? daybreakRemaining = area.DungeonWorldMap is { } world && resources.Towns.DungeonMaps[world].Options
+                .Any(option => option.DungeonId == 530) ? (byte)2 : null;
+            var map = FormalDungeonTcpTests.Enter(peer,questId,dungeonId,row => information=row,
+                daybreakRemaining:daybreakRemaining);
             var maze = dungeons.Get(checked((int)dungeonId)).Mazes.Single(row => row.SourceOrdinal == information[7]);
             var route = maze.MapSpecification!;
             var actualRooms = route.Select(row => rooms.Get(row,requirePassiveDefinitions:false)).ToArray();
@@ -398,7 +402,7 @@ internal static class QuestPassiveClearTcpTests
                 peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
                 That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
             }
-            peer.Send(39,passive); peer.Expect(0,574); peer.Expect(0,31,[]); enabled++; Drain();
+            peer.Send(39,passive); peer.Expect(0,31,[]); enabled++; Drain();
             That(enabled == 1 && bossChecks == 0 && Scalar() is [[long sceneScalar]] && sceneScalar == (early ? 0 : 1) && fixture.Query(
                 "SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
                 is [["PassiveObject",193L,70487L,69292L,long sceneDeaths,0L]] && sceneDeaths == deaths,
@@ -542,10 +546,6 @@ internal static class QuestPassiveClearTcpTests
             RejectPassive(wrongChecksum,"终点错误摘要不保存场景清图或许可结算");
             RejectPassive(PassiveDeath(69292),"终点错误模板不能借用本房69291资格");
             peer.Send(39,passive);
-            var conditions = peer.Expect(0,574).Body;
-            That(conditions.Length >= 4 && conditions.Length == 4+6*U32(conditions,0) &&
-                Enumerable.Range(0,checked((int)U32(conditions,0))).Any(at => U16(conditions,4+6*at) == 3842 && U32(conditions,6+6*at) == 0),
-                "场景事务提交后先发布完整574，保留猎杀任务实际归零状态");
             peer.Expect(0,31,[]);
             enabled++;
             Drain();
@@ -673,13 +673,13 @@ internal static class QuestPassiveClearTcpTests
             var corrupted = passive.ToArray(); corrupted[^1]^=1;
             peer.Send(39,corrupted); Drain();
             That(State()==before && enabled==0,"终点错误摘要不能保存空死亡scene或发布31");
-            peer.Send(39,passive); peer.Expect(0,574,Convert.FromHexString("02000000ED3264060000770D00000000")); peer.Expect(0,31,[]); enabled++;
+            peer.Send(39,passive); peer.Expect(1,33,Convert.FromHexString("01770D00000000")); peer.Expect(0,31,[]); enabled++;
             Drain();
             That(enabled==1 && bossChecks==0 && fixture.Query(
                 "SELECT source_type,dungeon_id,map_id,template_id,length(death_events),typeof(death_events) FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
                 is [["PassiveObject",7156L,70185L,69292L,0L,"blob"]] && fixture.Query(
                     "SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
-                "74B真实形状按原scene保存empty BLOB与精确零growth，574后只发空31而无115");
+                "74B真实形状按原scene保存empty BLOB与精确零growth，3447原位33后只发空31而无115");
             before=State(); peer.Send(39,passive); Drain();
             That(State()==before && enabled==1,"零击杀物件精确重放不再次保存scene或推进任务");
             var report = DungeonSettlementProtocolTests.Report(peer.Id,99);

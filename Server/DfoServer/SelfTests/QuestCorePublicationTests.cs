@@ -282,7 +282,9 @@ internal static class QuestCorePublicationTests
                     "会面33只满足真实场景条件，物品空数组子仍等待普通34，不提前写完成");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Finish(100)) == CommandResult.Handled &&
-                    output.Opcodes.SequenceEqual(new ushort[] {34,574,21,356}),"实际完成一个子34后发布父阈值和真实完成表");
+                    output.Opcodes.SequenceEqual(new ushort[] {34,33,21,356}),"实际完成一个子34后原位发布父阈值和真实完成表");
+                That(output.Frames[1][0] == 1,"父阈值使用原位条件回复");
+                Bytes(output.Frames[1].AsSpan(16),Convert.FromHexString("01C80000000000"),"父200条件归零，未选子101不额外发布");
                 var childCompleted = f.Read();
                 That(childCompleted.CompletedQuests.SequenceEqual([100]) && childCompleted.ActiveMainQuests is
                     [{ QuestId:200,ConditionState:0 },{ QuestId:101,ConditionState:1 }] && f.Receipts == 1,

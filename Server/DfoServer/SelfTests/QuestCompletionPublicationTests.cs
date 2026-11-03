@@ -245,6 +245,7 @@ internal static partial class QuestCompletionPublicationTests
         int before = TestCheck.Count;
         var computer = new CharacterStatComputer(characters);
         var resources = new QuestCompletionRepositoryTests.Resources(pvf, items);
+        await RunProgressAsync(towns,characters,resources);
         foreach (var identity in new (byte Job, byte Grow, int Weapon)[] { (15, 0, 116000005), (14, 0, 108000198), (0, 0x21, 101010438) })
             await ClassClearAndAwardAsync(identity.Job, identity.Grow, identity.Weapon);
         await StorageFailureAsync(false);

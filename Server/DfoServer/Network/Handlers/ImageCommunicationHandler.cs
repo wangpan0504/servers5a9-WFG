@@ -2,6 +2,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
@@ -29,8 +30,8 @@ internal sealed class ImageCommunicationHandler(ImageCommunicationCatalog catalo
         await context.Reply(CmdPacketType.IMAGE_COMMUNICATION_EQUIPMENT_USE,
             ImageCommunicationPackets.Used(receipt.Character.Inventory.Gold), "quest_communication_paid", Guard);
         if (receipt.Commit is { } commit && !commit.Plan.Expected.ActiveMainQuests.SequenceEqual(commit.Plan.ActiveAfter))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "quest_communication_currency_condition", Guard);
+            await QuestProjection.ProgressAsync(context,commit.Plan.Expected.ActiveMainQuests,receipt.Character,Guard,
+                "quest_communication_currency_condition");
         return CommandResult.Handled;
     }
 }

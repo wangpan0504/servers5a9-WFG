@@ -107,7 +107,8 @@ internal static class ExpertJobCompoundTutorialTcpTests
         void Success(TcpPeer peer, byte type, int product, int count, bool tutorial)
         {
             peer.Expect(0, 14);
-            if (tutorial) peer.Expect(0, 574);
+            if (tutorial) peer.Expect(1,33,Build(writer =>
+            { writer.Write((byte)1); writer.Write(type == 2 ? (ushort)11015 : (ushort)11018); writer.Write(0u); }));
             peer.Expect(0, 2); peer.Expect(0, 205, Info(type));
             peer.Expect(1, 238, Build(writer =>
             { writer.Write((byte)1); writer.Write((byte)1); writer.Write(product); writer.Write(count); writer.Write(1u); writer.Write(0u); writer.Write((byte)0); }));

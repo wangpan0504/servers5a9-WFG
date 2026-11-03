@@ -56,8 +56,9 @@ internal sealed class GrowUpChangeHandler(GrowUpChangeService service, Character
             }
         };
         await inventory.RefreshAsync(context, changed, suppressMainNotice: true);
-        if (!plan.Expected.ActiveMainQuests.SequenceEqual(character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "growup_change_quest_progress", Guard);
+        // 免费变更没有库存差量，公共库存投影会直接返回；仍须同步被完成前置关闭的任务槽。
+        if (!plan.Inventory.Changed)
+            await QuestProjection.ProgressAsync(context,plan.Expected.ActiveMainQuests,character,Guard,"growup_change_quest_progress");
         await quests.RefreshAsync(context, character, Guard);
         await context.Reply(CmdPacketType.RE_GROWUP_CHANGE, GrowUpChangePackets.Committed(result.Count), "growup_change_committed", Guard);
         context.Owner.Execute(() =>

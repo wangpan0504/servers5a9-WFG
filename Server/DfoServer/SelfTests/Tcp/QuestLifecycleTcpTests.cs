@@ -143,6 +143,18 @@ internal static class QuestLifecycleTcpTests
     public static Task RunMetroAsync(ServerOptions options, string root, TcpTestResources resources) =>
         RunPartAsync(options, root, resources, QuestPart.Metro);
 
+    internal static async Task RunLiveProgressAsync(ServerOptions options,string root,TcpTestResources resources)
+    {
+        await QuestCompletionPublicationTests.RunProgressAsync(resources);
+        var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
+        AlbertRequestTests.Run(resources.Towns,resources.Characters,resources.ItemResources,resources.Quests,
+            resources.Learning,growth,SelfTestCatalogs.QuestRewardParameters(resources.Archive));
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"quest-live-progress"),gm:true,resources:resources);
+        await fixture.StartAsync();
+        VerifyAlbertRequest(fixture,resources,growth);
+        AlbertHuntTcpTests.Verify(fixture,resources,growth,DrainNotifications);
+    }
+
     enum QuestPart { Lifecycle, Extras, Chains, ChainSettlement, Metro }
 
     static async Task RunPartAsync(ServerOptions options, string root, TcpTestResources resources, QuestPart part)
@@ -365,7 +377,7 @@ internal static class QuestLifecycleTcpTests
                 peer.Send(33,Convert.FromHexString("210028750000")); peer.Expect(1,33,Convert.FromHexString("01287500000000"));
                 peer.Barrier();
                 peer.Send(34,Convert.FromHexString("22002875FFFF0100FFFF")); Finished(peer,[1,40,117,4,0,0,0,0,0,0]);
-                peer.Expect(0,574); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+                peer.Expect(1,33,Convert.FromHexString("01277501000000")); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests") is [[29991L,1L]] &&
                     f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id=29992") is [[1L]],
                     "零物品占位会面33保留对话，真实子34归档并推进父剩余为1，不发经验或金币");
@@ -473,10 +485,12 @@ internal static class QuestLifecycleTcpTests
                     That(f.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10165055") is [[long held]] && held == at + 1 &&
                         f.Query("SELECT count(*) FROM character_quest_drop_receipts") is [[long facts]] && facts == at + 1,
                         "TCP任务物品核心与每条真实死亡的持久掉落回执同步");
-                    byte[] states = peer.Expect(0,574).Body;
-                    That(states.Length == 22 && U32(states,0) == 3 && U16(states,10) == 29994 && U32(states,12) == 1 - at &&
-                        U16(states,16) == 29987 && U32(states,18) == 1-at,
-                        "同一权威死亡同事务推进分类6/2，并完整574投影两项真实剩余次数");
+                    peer.Expect(1,33,Build(writer => { writer.Write((byte)1); writer.Write((ushort)29994); writer.Write(checked((uint)(1-at))); }));
+                    peer.Expect(1,33,Build(writer => { writer.Write((byte)1); writer.Write((ushort)29987); writer.Write(checked((uint)(1-at))); }));
+                    peer.Barrier();
+                    That(f.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE quest_id IN(29994,29987) ORDER BY quest_id")
+                        is [[29987L,long monster],[29994L,long enemy]] && monster == 1-at && enemy == 1-at,
+                        "同一连接权威死亡以两条33原位推进分类6/2到真实剩余次数，不发574重建原活动对象");
                     before = State();
                     peer.Send(39,death); peer.Barrier();
                     That(State() == before, "重复死亡没有额外任务推进、XP或revision");
@@ -677,7 +691,7 @@ internal static class QuestLifecycleTcpTests
                     // 原生产者+41C返回的默认值为1；这个u32不是对象flags或物件实例key。
                     BinaryPrimitives.WriteUInt32LittleEndian(passiveDeath.AsSpan(42),1);
                     FormalDungeonTcpTests.SealDeath(passiveDeath);
-                    peer.Send(39,passiveDeath); peer.Expect(0,574); peer.Barrier();
+                    peer.Send(39,passiveDeath); peer.Expect(1,33,[1,85,12,0,0,0,0]); peer.Barrier();
                     That(extra.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=2 ORDER BY quest_id") is
                         [[3146L,2L],[3157L,0L]], "原生39附加值1按真实唯一物件推进子任务，父任务等待实际交付");
                     var passiveState = extra.Query("SELECT revision,experience FROM characters WHERE id=2");
@@ -953,7 +967,7 @@ internal static class QuestLifecycleTcpTests
             That(State(created.Id) == blocked,"58级与持有碎片都不能跳过3472正式交付、提前接3473或领取父奖励");
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,Reward(3472,2,0,2));
             Balance(peer,4);
-            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
+            peer.Expect(1,33,Convert.FromHexString("01820D01000000")); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(Materials(created.Id) == 4 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",created.Id)
                 is [[3458L,1L]],"真实3472 ACK34只发碎片2、父2→1，未自动接或交付3473");
@@ -966,8 +980,12 @@ internal static class QuestLifecycleTcpTests
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(created.Id) == once,"3472重复34拒绝且不重复奖励");
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000"));
-            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("02000000820D00000000910D00000000")); peer.Expect(0,21);
+            peer.Expect(1,33,[1,130,13,0,0,0,0]); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",created.Id)
+                is [[3458L,0L],[3473L,0L]] &&
+                fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id) == acceptance,
+                "未换频道接取末子后立即33安装父0，不用574替换原父对象或接取身份");
             held = State(created.Id);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
             CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("02000000820D00000000910D00000000"));
@@ -1676,13 +1694,18 @@ internal static class QuestLifecycleTcpTests
             That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                 "黄金矿洞真实物件69291未销毁前，40次猎杀和友方退场不能提前46结算");
             var passive = QuestPassiveClearTcpTests.PassiveDeath(69291);
-            peer.Send(39,passive); peer.Expect(0,574); peer.Expect(0,31,[]);
+            peer.Send(39,passive); peer.Expect(0,31,[]);
             int bossChecks = 0;
-            DrainNotifications(peer,packet => { if (packet.Opcode == 115) bossChecks++; });
+            DrainNotifications(peer,packet =>
+            {
+                if (packet.Opcode == 115) bossChecks++;
+                That(packet.Opcode != 574 && !(packet.Kind == 1 && packet.Opcode == 33),
+                    "物件不改变已归零猎杀条件时，不重建活动对象或重复触发达成回调");
+            });
             That(bossChecks == 0 && fixture.Query(
                 "SELECT source_type,map_id,template_id,length(death_events)/16 FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
                 is [["PassiveObject",70107L,69291L,40L]],
-                "黄金矿洞唯一真实52B物件来源提交后574→空31，不伪造115或额外怪物死亡");
+                "黄金矿洞唯一真实52B物件来源提交后空31，不伪造任务变更、115或额外怪物死亡");
             string sceneState = fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",peer.Id) +
                 fixture.Snapshot("SELECT * FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id);
             peer.Send(39,passive); DrainNotifications(peer);

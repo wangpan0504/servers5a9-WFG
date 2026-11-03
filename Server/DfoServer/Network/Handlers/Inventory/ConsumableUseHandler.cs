@@ -96,8 +96,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
                         committed.Character.Learning.ExpertContractExpiresAt, contracts.Clock.GetUtcNow().ToUnixTimeSeconds()),
                         "expert_contract_committed", Guard);
                 if (committed.PreviousQuests is { } previous && !previous.SequenceEqual(committed.Character.ActiveMainQuests))
-                    await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(committed.Character.ActiveMainQuests),
-                        "premium_contract_quest_conditions", Guard);
+                    await QuestProjection.ProgressAsync(context,previous,committed.Character,Guard,"premium_contract_quest_conditions");
             }
             return CommandResult.Handled;
         }
@@ -148,8 +147,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         // 保留实际库存事务更新的寻物任务条件；修炼场无库存变更，不虚构任务进度。
         if (result.Inventory?.Receipt is { } receipt && receipt.PreviousQuests is { } old &&
             !old.SequenceEqual(receipt.Character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "consumable_quest_conditions", CanSend);
+            await QuestProjection.ProgressAsync(context,old,receipt.Character,CanSend,"consumable_quest_conditions");
         return CommandResult.Handled;
     }
 }

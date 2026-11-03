@@ -21,6 +21,7 @@ internal sealed record DungeonAltarReceipt(long Generation, long SelectionEpoch,
     public DungeonAltarResultReceipt? Result { get; init; }
     public DfoServer.Game.Town.TownTravelReceipt? Returned { get; init; }
     public Character? QuestCharacter { get; init; }
+    public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     public ImmutableArray<InventorySlot> QuestDropSlots { get; init; } = [];
     public TimeProvider? BattlePassMissionClock { get; init; }
     public Character? BattlePassCharacter { get; init; }
@@ -29,7 +30,8 @@ internal sealed record DungeonAltarReceipt(long Generation, long SelectionEpoch,
 internal sealed partial class GameSession
 {
     // 仅保留当前实例尚未发送的已提交投影；任务权威仍为Selected与数据库。
-    (Guid Instance, Character Character, ImmutableArray<InventorySlot> Slots, TimeProvider? BattlePassClock)? altarQuestProjection;
+    (Guid Instance, Character Character, ImmutableArray<InventorySlot> Slots, TimeProvider? BattlePassClock,
+        IReadOnlyList<ActiveMainQuest> PreviousQuests)? altarQuestProjection;
     (Guid Instance, Character Character, TimeProvider Clock)? altarBattlePassProjection;
     public bool HasDungeonAltar => owner.Execute(() => formalDungeon?.Run.CurrentAltar is not null);
 
@@ -155,13 +157,15 @@ internal sealed partial class GameSession
                     if (huntChanged) pending.FreezeBattlePassAltarQuestTarget(dungeon.Run, Selected, questCatalog, timeProvider ?? TimeProvider.System);
                     else pending.FreezeBattlePassAltarNonTarget(dungeon.Run, Selected, questCatalog, timeProvider ?? TimeProvider.System);
                 }
+                var previousQuests = altarQuestProjection is { } unsent && unsent.Instance == dungeon.Run.Snapshot.Identity.InstanceId
+                    ? unsent.PreviousQuests : Selected.ActiveMainQuests;
                 var committed = repository.CommitDungeonGrowth(owner, Selected, dungeon.Run, pending,
                     DungeonKillExperiencePolicy.PlanAltarQuestDeath(dungeon.Run, pending), growth, questDrops: questDrop);
                 Selected = committed.Character;
                 var slots = altarQuestProjection is { } previous && previous.Instance == dungeon.Run.Snapshot.Identity.InstanceId
                     ? previous.Slots : [];
                 altarQuestProjection = (dungeon.Run.Snapshot.Identity.InstanceId, committed.Character,
-                    slots.Concat(questDrop?.Inventory.ChangedSlots ?? []).Distinct().ToImmutableArray(), pending.BattlePassActivity?.Clock);
+                    slots.Concat(questDrop?.Inventory.ChangedSlots ?? []).Distinct().ToImmutableArray(), pending.BattlePassActivity?.Clock,previousQuests);
             }
             else if (questCatalog is not null && repository is DfoServer.Game.BattlePass.IBattlePassAltarDeathStore store)
             {
@@ -230,7 +234,7 @@ internal sealed partial class GameSession
             altarQuestProjection is {} target && target.Instance==receipt.InstanceId &&
             target.Character.Id==receipt.BattlePassCharacter.Id && ReferenceEquals(target.BattlePassClock,receipt.BattlePassMissionClock))
         {
-            altarQuestProjection=(target.Instance,target.Character,target.Slots,null);
+            altarQuestProjection=(target.Instance,target.Character,target.Slots,null,target.PreviousQuests);
             return true;
         }
         return false;
@@ -254,6 +258,7 @@ internal sealed partial class GameSession
         {
             DisplayRound = dungeon.Run.CompletedAltarRounds + state.Round,
             QuestCharacter = projection?.Character,
+            PreviousQuests = projection?.PreviousQuests,
             QuestDropSlots = projection?.Slots ?? [],
             BattlePassCharacter = altarBattlePassProjection is {} battlePassCharacter && battlePassCharacter.Instance==dungeon.Run.Snapshot.Identity.InstanceId &&
                 battlePassCharacter.Character.Id==Selected?.Id ? battlePassCharacter.Character :

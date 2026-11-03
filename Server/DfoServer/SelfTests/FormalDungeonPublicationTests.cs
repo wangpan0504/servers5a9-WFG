@@ -293,7 +293,9 @@ internal static class FormalDungeonPublicationTests
             var death = new Packet(1, 39, Death(boss.ObjectKey, receipt.Character.Id, checked((byte)boss.CandidateLevel)));
             await RejectAsync(typeof(IOException), () => commands.DispatchAsync(context, death), "末次清图NOTI31写入失败传播");
             var committed = f.Read();
-            var expectedOpcodes = new List<ushort> { 38, 37, 574 };
+            var expectedOpcodes = new List<ushort> { 38, 37, 33 };
+            Check(stream.Frames[2][0] == 1 && stream.Frames[2].AsSpan(16).SequenceEqual(Convert.FromHexString("01490C00000000")),
+                "清图条件只原位发布3145归零，不重建活动对象");
             if (committed.Level != selected.Level) expectedOpcodes.AddRange([2, 19]);
             else if (SkillPackets.BindingsChanged(selected.Learning, committed.Learning)) expectedOpcodes.Add(19);
             expectedOpcodes.Add(115);
@@ -478,12 +480,12 @@ internal static class FormalDungeonPublicationTests
                     BinaryPrimitives.ReadUInt16LittleEndian(observerStream.Frames[0].AsSpan(32)) == ushort.MaxValue,
                     "组队旁观者仅移除地面对象，不接收拾取者钱包、额度、虚假实体或ACK，不修改自己的资产");
             }
-            ushort[] expected = party ? [39, 563, 1460, 1461, 43, 574] : [39, 563, 1460, 1461, 43];
+            ushort[] expected = [39, 563, 1460, 1461, 43];
             Check(stream.Opcodes.SequenceEqual(expected) &&
                 stream.Frames[0].Length == 35 && BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[0].AsSpan(32)) == ushort.MaxValue &&
                 stream.Frames[1].AsSpan(16).SequenceEqual(Convert.FromHexString("0001C74C9D0003000000")) &&
                 stream.Frames[4].AsSpan(16).SequenceEqual(new byte[] { 1 }),
-                "账号材料依次发布无实体拾取、563余额、两级额度和ACK，组队保留574任务尾包：" + string.Join(',', stream.Opcodes));
+                "账号材料依次发布无实体拾取、563余额、两级额度和ACK，未变任务不发布进度：" + string.Join(',', stream.Opcodes));
             var committed = f.Read();
             Check(committed.Inventory.Items.SequenceEqual(original.Inventory.Items) &&
                 committed.Inventory.AccountWallet.Material(10308807) is { Balance: 3, RaidEarned: 0 } &&

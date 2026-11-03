@@ -114,9 +114,9 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary, display),
                 "quest_reward_experience", Guard);
         }
-        if (commit.PreviousQuests.Count - character.ActiveMainQuests.Length > 1 ||
-            character.ActiveMainQuests.Any(row => commit.PreviousQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "quest_reward_conditions", Guard);
+        // ACK34已经删除交付的任务；剩余父任务及其他库存任务按原接取同步条件。
+        await QuestProjection.ProgressAsync(context,commit.PreviousQuests.Where(row => row.QuestId != request.QuestId).ToArray(),
+            character,Guard,"quest_reward_conditions",restoreCompleted: false);
         if (!profession && !expertJob && character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType &&
             (commit.TpAmount != 0 || commit.PreviousLearning is { } previousLearning &&
             SkillPackets.BindingsChanged(previousLearning, character.Learning)))

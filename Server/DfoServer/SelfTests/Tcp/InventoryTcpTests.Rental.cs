@@ -137,7 +137,7 @@ internal static partial class InventoryTcpTests
                 "充值1002/余额988不会冒充租赁成功推进任务");
             byte[] request = Convert.FromHexString("F5733BD78025074D18EB476300470B52180E000000");
             peer.Send(1001,request);
-            peer.Expect(1,1001,[1,0,0,0,0]);peer.Expect(0,988);peer.Expect(0,14);peer.Expect(0,574);peer.Barrier();
+            peer.Expect(1,1001,[1,0,0,0,0]);peer.Expect(0,988);peer.Expect(0,14);peer.Expect(1,33,Convert.FromHexString("01852100000000"));peer.Barrier();
             That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=8581",peer.Id)
                 is [[0L,var savedAcceptance]] && Equals(savedAcceptance,acceptance) &&
                 fixture.Query("SELECT quest_id,action FROM character_quest_lifecycle_receipts WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id)

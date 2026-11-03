@@ -49,8 +49,6 @@ internal sealed class ClassChangeHandler(ClassChangeService service, CharacterLe
             }
         };
         await inventory.RefreshAsync(context, changed, suppressMainNotice: true);
-        if (!plan.Expected.ActiveMainQuests.SequenceEqual(character.ActiveMainQuests))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "class_change_quest_progress", Guard);
         await quests.RefreshAsync(context, character, Guard);
         await context.Reply(CmdPacketType.USE_RIGHT_OF_CHANGE_GROW_TYPE, ClassChangePackets.Result(0), "class_change_committed", Guard);
         context.Owner.Execute(() =>

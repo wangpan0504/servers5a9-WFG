@@ -219,8 +219,8 @@ internal sealed partial class DungeonHandler
                 if (progress.Commit.Plan.Inventory.ChangedSlots.Length > 0)
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(progress.Character.Inventory,
                         InventoryListType.Main,[.. progress.Commit.Plan.Inventory.ChangedSlots]),"party_passive_items",Guard);
-                await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(progress.Character.ActiveMainQuests),
-                    "party_passive_quests",Guard);
+                await QuestProjection.ProgressAsync(context,progress.Commit.Plan.Expected.ActiveMainQuests,progress.Character,
+                    Guard,"party_passive_quests");
                 await DungeonSettlementProjection.EnableAsync(context);
             }
             return;
@@ -454,7 +454,7 @@ internal sealed partial class DungeonHandler
                 destination.List, [destination]), "party_pickup_inventory", Guard);
         if (scene.Character.Id == notice.Peer)
             await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "party_pickup_ack", Guard);
-        if (picked.Character.ActiveMainQuests.Length > 0)
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(picked.Character.ActiveMainQuests), "party_pickup_quests", Guard);
+        if (result.PreviousQuests is { } previousQuests)
+            await QuestProjection.ProgressAsync(context,previousQuests,picked.Character,Guard,"party_pickup_quests");
     }
 }

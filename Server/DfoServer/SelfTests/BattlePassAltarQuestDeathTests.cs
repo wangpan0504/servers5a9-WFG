@@ -333,7 +333,7 @@ internal static class BattlePassAltarQuestDeathTests
                         targetKilled = true;
                         if (mixedOrder!=0)
                         {
-                            PublishProgressAsync(linked,current,clock).GetAwaiter().GetResult();
+                            PublishProgressAsync(linked,current,clock,questId,512).GetAwaiter().GetResult();
                             That(linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey),growth) is not null &&
                                 linked.Repository.ReadBattlePassMissions(linked.Owner,clock.GetUtcNow())!.Season.Revision==mission.Season.Revision,
                                 "目标先或非目标先的单255混合批次原来源不重复，任务条件只推进一次");
@@ -342,7 +342,7 @@ internal static class BattlePassAltarQuestDeathTests
                         That(current.QuestCharacter is not null && linked.Session.CanPublishDungeonAltar(current),
                             "同一原对象SQL重试成功后提供已提交任务投影并可确认发送");
                         // 先沿真实Handler发送任务及累计BP页并双标记，再验证255没有待补投影。
-                        PublishProgressAsync(linked,current,clock).GetAwaiter().GetResult();
+                        PublishProgressAsync(linked,current,clock,questId,0).GetAwaiter().GetResult();
                         long revision = afterDeath.Revision;
                         long missionRevision = mission.Season.Revision;
                         That(linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth) is not null &&
@@ -381,7 +381,7 @@ internal static class BattlePassAltarQuestDeathTests
                     Convert.ToInt64(linked.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='altar_quest_target_monster_death'"))==2 &&
                     Convert.ToInt64(linked.Query("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='altar_non_target_monster_death'"))==confirmedDeaths-2,
                     "7344两真实任务目标分别计原目标来源，混合非目标保独立来源，双通道最终归零");
-                PublishProgressAsync(linked,completed,clock).GetAwaiter().GetResult();
+                PublishProgressAsync(linked,completed,clock,questId,0).GetAwaiter().GetResult();
             }
             That(linked.Session.ReturnFromFormalDungeon() is not null &&
                 linked.Repository.LoadCharacter(linked.Owner,0).ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == 0,
@@ -418,20 +418,22 @@ internal static class BattlePassAltarQuestDeathTests
         NativeDungeonDeathObservation Observation(ushort key) => new(key, 1, 0x111, 1, 600, 1, 0, 70, 0, 650, 1,
             true, new string('A',64));
     }
-    static async Task PublishProgressAsync(QuestSceneTests.Fixture linked,DungeonAltarReceipt receipt,TimeProvider clock)
+    static async Task PublishProgressAsync(QuestSceneTests.Fixture linked,DungeonAltarReceipt receipt,TimeProvider clock,
+        ushort questId,uint scalar)
     {
         using var stop=new CancellationTokenSource();
         using var output=new MemoryStream();
-        var sent=new List<(ushort Opcode,byte[] Body)>();
+        var sent=new List<(byte Kind,ushort Opcode,byte[] Body)>();
         await using var sender=new DfoServer.Network.GameConnectionSender(linked.Owner,output,stop,0,
-            (_,opcode,_,body,_)=>sent.Add((opcode,body.ToArray())));
+            (kind,opcode,_,body,_)=>sent.Add((kind,opcode,body.ToArray())));
         var context=new DfoServer.Network.Protocol.GameConnectionContext(new(1,System.Net.IPAddress.Loopback,output,stop),
             linked.Owner,linked.Session,sender);
         byte[] expected=linked.Repository.ReadBattlePassMissions(linked.Owner,clock.GetUtcNow())!.ToPayload();
         await DfoServer.Network.Handlers.DungeonHandler.PublishAltarProgressAsync(context,receipt);
-        That(sent.Count==2 && sent[0].Opcode==(ushort)DfoServer.Network.NotiPacketType.ACCEPTED_QUEST &&
-            sent[1].Opcode==(ushort)DfoServer.Network.NotiPacketType.BATTLE_PASS_INFO_MISSION && sent[1].Body.SequenceEqual(expected),
-            "目标死亡及单255两种混合顺序都沿原任务通知后发布一次累计1801");
+        byte[] condition=[1,(byte)questId,(byte)(questId>>8),(byte)scalar,(byte)(scalar>>8),(byte)(scalar>>16),(byte)(scalar>>24)];
+        That(sent.Count==2 && sent[0].Kind==1 && sent[0].Opcode==33 && sent[0].Body.SequenceEqual(condition) &&
+            sent[1].Kind==0 && sent[1].Opcode==(ushort)DfoServer.Network.NotiPacketType.BATTLE_PASS_INFO_MISSION && sent[1].Body.SequenceEqual(expected),
+            "目标死亡及单255混合顺序都先原位33发布独立预期条件，再发布一次累计1801");
         That(!linked.Session.MarkDungeonAltarQuestsPublished(receipt) && !linked.Session.MarkDungeonAltarBattlePassPublished(receipt),
             "原任务与独立BP投影均实际发送后标记，重复不补旧页");
     }
