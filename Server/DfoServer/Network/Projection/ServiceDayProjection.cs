@@ -51,6 +51,16 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             if (plan.Changed) log.Write("server_item_cycle", new { Connection = context.Id, Character = committed.Character.Id,
                 Day = committed.Character.Inventory.ServerItems.RefillDay, committed.Character.Revision, MailCount = plan.DailyItemMails.Length });
         }
+        // 每次发布都扫一次过期：覆盖 06:00 唤醒和冷启动后首次补跑。无变化则 Commit 是空操作。
+        // 6 点可能没开服 → 本钩子不能当唯一手段，选角仍必扫。A 不追溯：ExpireTime=0 不动。
+        var expiry = context.Session.ExpireInventory();
+        if (expiry is { Accepted: true, Plan.Changed: true })
+        {
+            if (inventory is not null) await inventory.RefreshAsync(context, expiry);
+            if (expiry.Receipt is { } expired)
+                log.Write("item_expired", new { Connection = context.Id, Character = expired.Character.Id,
+                    expired.Character.Revision, Slots = expiry.Plan.ChangedSlots.Length });
+        }
         await BossSelectionBuffProjection.PostAsync(context);
         town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();

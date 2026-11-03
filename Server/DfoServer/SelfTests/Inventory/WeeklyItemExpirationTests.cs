@@ -29,8 +29,9 @@ internal static class WeeklyItemExpirationTests
             That(weekly.WeeklyDeleteDay == day && weekly.SupportsCreation &&
                 weekly.Resolve(boundary.AddSeconds(-1)) == boundary.ToUnixTimeSeconds() &&
                 weekly.Resolve(boundary) == boundary.AddDays(7).ToUnixTimeSeconds() &&
-                weekly.Resolve(boundary.AddSeconds(1)) == boundary.AddDays(7).ToUnixTimeSeconds(),
-                "0周日及1..6星期枚举在06前/恰06/后严格取下一有效边界");
+                weekly.Resolve(boundary.AddSeconds(1)) == boundary.AddDays(7).ToUnixTimeSeconds() &&
+                weekly.ForClearedPeriod(boundary.AddSeconds(-1)) == boundary.ToUnixTimeSeconds(),
+                "0周日及1..6星期枚举在06前/恰06/后严格取下一有效边界，period:off 禁止清 0");
             foreach (bool absolute in new[] { false, true })
             foreach (bool relative in new[] { false, true })
                 That(weekly.Resolve(boundary.AddSeconds(-1), absolute, relative) == boundary.ToUnixTimeSeconds(),
@@ -40,8 +41,9 @@ internal static class WeeklyItemExpirationTests
         That(zero.Resolve(sunday.AddDays(-2)) == sunday.ToUnixTimeSeconds() &&
             zero.Resolve(sunday.AddDays(-3).ToOffset(TimeSpan.Zero)) == sunday.ToUnixTimeSeconds(),
             "跨年/跨周及传入UTC表示仍使用本服UTC+8指定星期的06:00");
-        That(ItemExpiration.Parse(new PvfDocument("")).WeeklyDeleteDay is null && new ItemExpiration().Resolve(sunday) == 0,
-            "缺字段与明确0不同，原无期限物品保持永久");
+        That(ItemExpiration.Parse(new PvfDocument("")).WeeklyDeleteDay is null && new ItemExpiration().Resolve(sunday) == 0 &&
+            new ItemExpiration().ForClearedPeriod(sunday) == 0,
+            "缺字段与明确0不同，原无期限物品保持永久，period:off 仍为 0");
         var now = sunday.AddDays(-2);
         That((zero with { Days = 1 }).Resolve(now) == now.AddDays(1).ToUnixTimeSeconds() &&
             (zero with { Days = 10 }).Resolve(now) == sunday.ToUnixTimeSeconds() &&
@@ -114,7 +116,10 @@ internal static class WeeklyItemExpirationTests
             InventoryRewardGrantService.Create(duplicateTemplate, utcNow: now).ExpireTime == boundary.AddDays(4).ToUnixTimeSeconds(),
             "真实强化器两次同值weekly4按原模板创建有限周四截止，不按ID补永久或忽略字段");
         var template = resources.Items.Get(10159649);
-        That(template.Expiration.WeeklyDeleteDay == 0, "当前PVF卢克门票明确每周日删除，不混每日/通关计数");
+        That(template.Expiration.WeeklyDeleteDay == 0 &&
+            template.Expiration.ForClearedPeriod(now) == template.Expiration.Resolve(now, true, true) &&
+            template.Expiration.ForClearedPeriod(now) == boundary.ToUnixTimeSeconds(),
+            "当前PVF卢克门票明确每周日删除，period:off 仍冻结本次周日 06:00");
         var core = InventoryRewardGrantService.Create(template, utcNow: now);
         short first = ItemSlotBoundService.Range(template.Kind, InventorySnapshot.Empty).Start;
         var currentSlot = new InventorySlot(ItemSlotBoundService.List(template.Kind), first);

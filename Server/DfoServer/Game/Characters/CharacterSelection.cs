@@ -85,6 +85,7 @@ internal static class CharacterSelection
         // 空间不足只延后迁移，旧分类与原位置都不改；不能为新增玩法阻止已有角色登录。
         if (kindCompatibility.Accepted)
             character = InventoryService.Commit(repository, owner, character, kindCompatibility);
+        // 6 点可能没开服 → 必须有登录/选角扫兜底。A 不追溯：RepairZeroPeriod 不给 daily/weekly 的 ExpireTime=0 补戳。
         character = InventoryService.Commit(repository, owner, character,
             InventoryExpiryService.RepairZeroPeriod(character.Inventory, items));
         character = InventoryService.Commit(repository, owner, character,

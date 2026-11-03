@@ -10,6 +10,13 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town,
             Phase == SessionPhase.Town && towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))),
             3, requireTown: false);
+
+    // 在线日切清包：与选角/CMD20 共用 InventoryExpiryService.Plan，审计 item_expired。
+    // 6 点可能没开服 → 必须有登录/选角扫兜底；本方法不能当唯一清理通道。A 不追溯：ExpireTime=0 不会被 Plan 删除。
+    public InventoryResult ExpireInventory() =>
+        PlanAndCommitInventory(character => InventoryExpiryService.Plan(character.Inventory,
+            (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()), 0, requireTown: false);
+
     public void InitializeDevilContract(DevilContractService service, DateTimeOffset now)
     {
         var captured = owner.Execute(() =>
