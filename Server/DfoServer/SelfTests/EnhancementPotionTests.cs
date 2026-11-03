@@ -114,6 +114,10 @@ internal static class EnhancementPotionTests
     {
         That(definitions.TryGetValue(490004594, out var reinforce) && reinforce is
             { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 }, "正式资源强化秘药明确保留1000参数");
+        That(definitions.TryGetValue(490001533, out var guildReinforce) && guildReinforce is
+            { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 } &&
+            guildReinforce.IsFamilyItem(490004594),
+            "公会商店永恒的强化的秘密按强化秘药接入同族");
         foreach (var (id, bonus) in new[] { (10004688,5000), (10004745,3000), (490001534,1000), (490010213,500), (490012609,500) })
             That(definitions.TryGetValue(id, out var amplify) && amplify is
                 { Mode: EnhancementPotionMode.Amplify } && amplify.SuccessBonusWeight == bonus &&

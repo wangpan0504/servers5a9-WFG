@@ -209,7 +209,7 @@ internal sealed partial class CharacterRepository
             // 活动婚约已由删除事务显式拒绝；历史聚合不外键角色，不能随删角清账。
             "marriage_active_members", "character_guild_hongbao_purchases",
             // 个人NPC福利由角色外键级联清理，公共福利及请求历史不随单个成员删除。
-            "character_guild_npc_benefits", "character_guild_npc_item_crafts"])
+            "character_guild_npc_benefits", "character_guild_npc_item_crafts", "character_guild_npc_craft_weeks"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;

@@ -63,6 +63,14 @@ internal static class GuildNpcBenefitCatalogTests
             "正式五种炼金配方各30份、24小时、NPC等级与双币费用从资源读取");
         int before = Count;
         var catalog = new GuildNpcBenefitCatalog(pvf);
+        var teranium = catalog.Definitions.Where(row => row.Effect == "purified teranium craft").OrderBy(row => row.Id).ToArray();
+        That(teranium.Length == 5 && teranium.All(row => !row.Common && row.NpcId == 400001061 &&
+            row.DurationSeconds == 86400 && row.FirstCurrency == "member coins" && row.FirstAmount == 400 &&
+            row.SecondCurrency == "none" && row.Parameters is [10158964, > 0, 1]) &&
+            teranium.Select(row => row.Id).SequenceEqual(new uint[] { 2001, 2003, 2005, 2007, 2009 }) &&
+            teranium.Select(row => row.Level).SequenceEqual(new[] { 1, 2, 3, 4, 5 }) &&
+            teranium.Select(row => row.Parameters[1]).SequenceEqual(new[] { 4, 6, 8, 12, 16 }),
+            "正式五种时空石配方各400会员币、1日、每周一次，满级2009产出16份");
         That(catalog.Definitions.Count == 92 && catalog.TrainingIntervalSeconds == 180 &&
             Enumerable.Range(1, 5).All(level => catalog.GuardianBuff(level) == 1275u + (uint)level) &&
             catalog.Find(1023) is { DurationSeconds: 0, Parameters: [1280, 120] },

@@ -1670,7 +1670,7 @@ CREATE TABLE guild_teleport_receipts(
 
 CREATE TABLE guild_request_claims(
     request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
-    kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 6),
+    kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 7),
     account TEXT NOT NULL,
     character_id INTEGER NOT NULL
 );
@@ -1745,6 +1745,23 @@ CREATE TABLE guild_growth_item_receipts(
   after_level INTEGER NOT NULL CHECK(after_level BETWEEN 1 AND 10),
   created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 1 AND 2147483647),
   CHECK(after_experience=before_experience+amount)
+);
+
+CREATE TABLE guild_dungeon_scroll_receipts(
+  request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+  account TEXT NOT NULL,character_id INTEGER NOT NULL,
+  guild_id INTEGER NOT NULL CHECK(guild_id>0),joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  source_uid INTEGER NOT NULL CHECK(source_uid>0),source_slot INTEGER NOT NULL CHECK(source_slot>=0),
+  item_id INTEGER NOT NULL CHECK(item_id>0),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 1 AND 4294967295),
+  increment INTEGER NOT NULL CHECK(increment>0),
+  before_clears INTEGER NOT NULL CHECK(before_clears BETWEEN 0 AND 4294967295),
+  after_clears INTEGER NOT NULL CHECK(after_clears BETWEEN 0 AND 4294967295),
+  before_units INTEGER NOT NULL CHECK(before_units BETWEEN 0 AND 4294967295),
+  after_units INTEGER NOT NULL CHECK(after_units BETWEEN 0 AND 4294967295),
+  created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 1 AND 2147483647),
+  CHECK(after_clears>=before_clears),
+  CHECK(after_units>=before_units)
 );
 
 CREATE TABLE guild_npc_crafts(
@@ -2023,8 +2040,8 @@ CREATE TABLE character_guild_npc_item_crafts(
   craft_id TEXT PRIMARY KEY CHECK(length(craft_id)=64),
   character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
   guild_id INTEGER NOT NULL,joined_at INTEGER NOT NULL CHECK(joined_at>=0),
-  npc_id INTEGER NOT NULL CHECK(npc_id=400001065),
-  benefit_id INTEGER NOT NULL CHECK(benefit_id BETWEEN 7001 AND 7005),
+  npc_id INTEGER NOT NULL CHECK(npc_id IN(400001065,400001061)),
+  benefit_id INTEGER NOT NULL CHECK(benefit_id>0),
   deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647),
   item_core TEXT NOT NULL CHECK(json_valid(item_core)),
   state INTEGER NOT NULL DEFAULT 0 CHECK(state IN(0,1,2)),
@@ -2033,6 +2050,13 @@ CREATE TABLE character_guild_npc_item_crafts(
 );
 CREATE UNIQUE INDEX guild_npc_item_craft_active ON character_guild_npc_item_crafts(character_id,npc_id) WHERE state=0;
 CREATE INDEX guild_npc_item_craft_due ON character_guild_npc_item_crafts(deadline) WHERE state=0;
+CREATE TABLE character_guild_npc_craft_weeks(
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  npc_id INTEGER NOT NULL CHECK(npc_id=400001061),
+  week_start INTEGER NOT NULL CHECK(week_start BETWEEN 1 AND 2147483647),
+  craft_id TEXT NOT NULL CHECK(length(craft_id)=64),
+  PRIMARY KEY(character_id,npc_id,week_start)
+);
 
 CREATE TABLE character_beast_dungeon_reservations(
             character_id INTEGER NOT NULL,

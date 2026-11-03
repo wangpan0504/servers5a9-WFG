@@ -14,8 +14,8 @@ internal static class GuildNpcItemCraftSchema
           craft_id TEXT PRIMARY KEY CHECK(length(craft_id)=64),
           character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
           guild_id INTEGER NOT NULL,joined_at INTEGER NOT NULL CHECK(joined_at>=0),
-          npc_id INTEGER NOT NULL CHECK(npc_id=400001065),
-          benefit_id INTEGER NOT NULL CHECK(benefit_id BETWEEN 7001 AND 7005),
+          npc_id INTEGER NOT NULL CHECK(npc_id IN(400001065,400001061)),
+          benefit_id INTEGER NOT NULL CHECK(benefit_id>0),
           deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647),
           item_core TEXT NOT NULL CHECK(json_valid(item_core)),
           state INTEGER NOT NULL DEFAULT 0 CHECK(state IN(0,1,2)),
@@ -27,6 +27,19 @@ internal static class GuildNpcItemCraftSchema
         """;
 }
 
+internal static class GuildNpcItemCraftWeekSchema
+{
+    internal const string Sql = """
+        CREATE TABLE IF NOT EXISTS character_guild_npc_craft_weeks(
+          character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          npc_id INTEGER NOT NULL CHECK(npc_id=400001061),
+          week_start INTEGER NOT NULL CHECK(week_start BETWEEN 1 AND 2147483647),
+          craft_id TEXT NOT NULL CHECK(length(craft_id)=64),
+          PRIMARY KEY(character_id,npc_id,week_start)
+        );
+        """;
+}
+
 internal sealed partial class CharacterRepository
 {
     public GuildNpcBenefitCommit ChangeGuildNpcItemCraft(GuildManagementIdentity actor, Character expected,
@@ -34,9 +47,8 @@ internal sealed partial class CharacterRepository
         ItemCore? reward, Func<Character, InventoryPlan?> prepare) => actor.Owner.Execute<GuildNpcBenefitCommit>(() =>
     {
         if (!actor.IsCurrent() || expected.Id != actor.CharacterId || !GuildEconomyService.ValidRequestId(requestId) ||
-            action is not (4 or 5) || now is <= 0 or > int.MaxValue || definition.Effect != "crafting item" ||
-            definition.Common || definition.NpcId != 400001065 || definition.Parameters is not [> 0, > 0] ||
-            definition.DurationSeconds <= 0 || npcs.Find(definition.NpcId) is not { } npc) return new(14);
+            action is not (4 or 5) || now is <= 0 or > int.MaxValue ||
+            !GuildNpcBenefitService.IndividualItemCraft(definition) || npcs.Find(definition.NpcId) is not { } npc) return new(14);
         long deadline = now + definition.DurationSeconds;
         if (deadline > int.MaxValue || action == 4 && (reward is null || !reward.IsStackable ||
             reward.ItemId != definition.Parameters[0] || reward.Count != definition.Parameters[1] || reward.IsExpired(deadline))) return new(14);
@@ -62,6 +74,16 @@ internal sealed partial class CharacterRepository
             if (progress.Level < definition.Level || progress.UpgradeUntil > 0 || npc.Contract && progress.ContractUntil <= now) return new(14);
             command.CommandText = "SELECT 1 FROM character_guild_npc_item_crafts WHERE character_id=$id AND npc_id=$npc AND state=0";
             if (command.ExecuteScalar() is not null) return new(14);
+            if (GuildNpcBenefitService.WeeklyItemCraft(definition))
+            {
+                long week = GuildContributionRules.WeekStart(now);
+                command.CommandText = """
+                    SELECT 1 FROM character_guild_npc_craft_weeks
+                    WHERE character_id=$id AND npc_id=$npc AND week_start=$week
+                    """;
+                command.Parameters.AddWithValue("$week", week);
+                if (command.ExecuteScalar() is not null) return new(14);
+            }
             var current = Require(db, tx, actor.Owner.Account, actor.Name);
             if (current.Revision != expected.Revision || current.Id != expected.Id || current.Position != expected.Position) return new(14);
             inventory = prepare(current);
@@ -75,6 +97,14 @@ internal sealed partial class CharacterRepository
                 VALUES($craft,$id,$guild,$joined,$npc,$benefit,$deadline,$core)
                 """;
             command.ExecuteNonQuery();
+            if (GuildNpcBenefitService.WeeklyItemCraft(definition))
+            {
+                command.CommandText = """
+                    INSERT INTO character_guild_npc_craft_weeks(character_id,npc_id,week_start,craft_id)
+                    VALUES($id,$npc,$week,$craft)
+                    """;
+                command.ExecuteNonQuery();
+            }
         }
         else
         {
@@ -109,19 +139,21 @@ internal sealed partial class CharacterRepository
         foreach (string key in keys)
         {
             using var command = ManagementCommand(db, tx, """
-                SELECT character_id,guild_id,deadline,item_core FROM character_guild_npc_item_crafts
+                SELECT character_id,guild_id,deadline,item_core,npc_id FROM character_guild_npc_item_crafts
                 WHERE craft_id=$key AND state=0 AND deadline<=$now
                 """, ("$key", key), ("$now", now));
-            ushort characterId; uint guild; long deadline; ItemCore core;
+            ushort characterId; uint guild; long deadline; ItemCore core; uint npcId;
             using (var reader = command.ExecuteReader())
             {
                 if (!reader.Read()) continue;
                 characterId = checked((ushort)reader.GetInt32(0)); guild = checked((uint)reader.GetInt64(1));
                 deadline = reader.GetInt64(2);
-                core = JsonSerializer.Deserialize<ItemCore>(reader.GetString(3)) ?? throw new InvalidDataException("公会炼金产物核心缺失");
+                core = JsonSerializer.Deserialize<ItemCore>(reader.GetString(3)) ?? throw new InvalidDataException("公会NPC产物核心缺失");
+                npcId = checked((uint)reader.GetInt64(4));
             }
-            var recipient = FindMailRecipientById(db, tx, characterId) ?? throw new InvalidDataException("公会炼金生产缺少收件人");
-            var delivery = new MailboxDelivery("guild-npc-item:" + key, recipient, "公会炼金术师", "委托生产已完成，请领取产物。", 0,
+            var recipient = FindMailRecipientById(db, tx, characterId) ?? throw new InvalidDataException("公会NPC生产缺少收件人");
+            string sender = npcId == GuildNpcCatalog.Spirit ? "公会守护精灵" : "公会炼金术师";
+            var delivery = new MailboxDelivery("guild-npc-item:" + key, recipient, sender, "委托生产已完成，请领取产物。", 0,
                 [new(0, new(InventoryListType.Main, 0), core)], deadline);
             var mailed = DeliverMailInTransaction(db, tx, delivery);
             if (mailed.Error != MailboxError.None) throw new InvalidDataException("公会炼金产物邮件提交失败");

@@ -353,6 +353,17 @@ internal static class SqliteMigrations
             EpicWishSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(191, "账号累计在线日水位与奖励事实", static (db, tx) => Execute(db, tx, PcRoomTimePointSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(192, "团本入场与奖励额度双世代", RaidQuotaSchema.Upgrade),
+        new(193, "公会守护精灵时空石生产与净化卷轴", static (db, tx) =>
+        {
+            ReplaceTableConstraint(db, tx, "character_guild_npc_item_crafts",
+                "CHECK(npc_id=400001065)", "CHECK(npc_id IN(400001065,400001061))");
+            ReplaceTableConstraint(db, tx, "character_guild_npc_item_crafts",
+                "CHECK(benefit_id BETWEEN 7001 AND 7005)", "CHECK(benefit_id>0)");
+            ReplaceTableConstraint(db, tx, "guild_request_claims",
+                "CHECK(kind BETWEEN 1 AND 6)", "CHECK(kind BETWEEN 1 AND 7)");
+            Execute(db, tx, GuildNpcItemCraftWeekSchema.Sql);
+            Execute(db, tx, GuildDungeonScrollSchema.Sql);
+        }),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2637,6 +2648,8 @@ internal static class SqliteMigrations
             ("character_guild_npc_benefits",GuildNpcBenefitSchema.Sql.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_npc_training_receipts",GuildNpcBenefitSchema.Sql.Split(';')[2].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_npc_item_crafts",GuildNpcItemCraftSchema.Sql.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_guild_npc_craft_weeks",GuildNpcItemCraftWeekSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_dungeon_scroll_receipts",GuildDungeonScrollSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_pcroom_claims",PcRoomSchema.Definition.Split(';')[0]),
             ("character_pcroom_claims",PcRoomSchema.Definition.Split(';')[1]),
@@ -2701,6 +2714,8 @@ internal static class SqliteMigrations
         "SELECT character_id,guild_id,joined_at,effect,benefit_id,remaining,deadline,selected FROM character_guild_npc_benefits LIMIT 0",
         "SELECT request_id,selection FROM guild_npc_training_receipts LIMIT 0",
         "SELECT craft_id,character_id,guild_id,joined_at,npc_id,benefit_id,deadline,item_core,state,mail_id FROM character_guild_npc_item_crafts LIMIT 0",
+        "SELECT character_id,npc_id,week_start,craft_id FROM character_guild_npc_craft_weeks LIMIT 0",
+        "SELECT request_id,account,character_id,guild_id,joined_at_unix,source_uid,source_slot,item_id,dungeon_id,increment,before_clears,after_clears,before_units,after_units,created_at_unix FROM guild_dungeon_scroll_receipts LIMIT 0",
         "SELECT request_id,account,character_id,guild_id,joined_at_unix,source_uid,source_slot,item_id,amount,before_experience,after_experience,before_level,after_level,created_at_unix FROM guild_growth_item_receipts LIMIT 0",
         "SELECT guild_id,member_limit FROM guild_economy LIMIT 0",
         "SELECT guild_id,type,value,expires_unix FROM guild_benefits LIMIT 0",

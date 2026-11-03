@@ -278,6 +278,7 @@ internal static class SelfTestRunner
         GuildNpcBenefitCatalogTests.RunCore();
         GuildNpcBenefitPersistenceTests.RunCore();
         GuildNpcItemCraftTests.RunCore();
+        GuildNpcTeraniumCraftTests.RunCore();
         GuildNpcBenefitWireTests.RunCore();
         GuildNpcPassiveBuffTests.RunCore();
         GuildTrainingTests.RunCore();
@@ -285,6 +286,7 @@ internal static class SelfTestRunner
         DfoServer.Testing.Inventory.GuildNpcEnhancementBonusTests.RunCore();
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunCore();
         GuildExperienceGiftTests.RunCore();
+        GuildDungeonScrollTests.RunCore();
         GuildTeleportTests.RunCore();
         GuildPermitTests.RunCore();
         GuildPermitHandlerTests.Run();
@@ -728,6 +730,7 @@ internal static class SelfTestRunner
         GuildDungeonProgressTests.RunResources(pvf);
         GuildRankingTests.RunResources(pvf);
         GuildExperienceGiftTests.RunResources(pvf, towns, itemResources);
+        GuildDungeonScrollTests.RunResources(itemResources.Items);
         GuildCreationTests.Run(towns, characters, itemResources, pvf);
         CollectBoxTests.RunResources(towns, itemResources);
         PromotionConsumerValidationTests.RunResources(itemResources);

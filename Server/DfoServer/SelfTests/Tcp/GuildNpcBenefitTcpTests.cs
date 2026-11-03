@@ -37,7 +37,7 @@ internal static class GuildNpcBenefitTcpTests
             VALUES(98,'福利测试','g-benefits',$p0,1600000000,1000000);
             INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(98,$p0,1,1600000000);
             INSERT INTO guild_npc_progress(guild_id,npc_id,level,contract_until)
-            VALUES(98,400001062,2,$p1),(98,400001064,2,$p1),(98,400001065,4,$p1);
+            VALUES(98,400001061,5,$p1),(98,400001062,2,$p1),(98,400001064,2,$p1),(98,400001065,4,$p1);
             """, id, now + 3600);
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -139,12 +139,30 @@ internal static class GuildNpcBenefitTcpTests
             peer.SendAtSequence(1738, 62001, craftRequest);
             peer.Expect(1, 1738, [1, 4, 0, 0, 0, 0, 0, 0, 0]); Drain(peer);
             That(fixture.Query("SELECT gold FROM characters WHERE id=$p0", id) is [[1200000L]], "炼金生产原序号重放不重复扣费");
+            peer.Send(1738, Request(4, 0, 2009));
+            peer.Expect(1, 1738, [1, 4, 0, 0, 0, 0, 0, 0, 0]);
+            var teranium = Drain(peer);
+            That(teranium.Any(packet => packet.Opcode == 1773 && Enumerable.Range(0, 50)
+                    .Any(at => U32(packet.Body, 480 + at * 12) == 2009 && U32(packet.Body, 488 + at * 12) > now)) &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0", id) is [[1200000L]] &&
+                fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490011648", id) is [[699L]] &&
+                fixture.Query("SELECT count(*) FROM character_guild_npc_item_crafts WHERE state=0") is [[2L]] &&
+                fixture.Query("SELECT count(*) FROM character_guild_npc_craft_weeks") is [[1L]],
+                "真实满级守护精灵2009扣400会员币不扣金币，与炼金并行并占本周");
+            peer.Send(1738, Request(4, 0, 2009));
+            peer.Expect(1, 1738, [1, 4, 0, 0, 0, 14, 0, 0, 0]); Drain(peer);
+            That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490011648", id) is [[699L]],
+                "同周第二次时空石生产回错误14且不扣费");
         }
         using (var peer = Open(fixture))
         {
             Enter(peer);
-            That(Drain(peer).Any(packet => packet.Opcode == 1773 && Enumerable.Range(0, 50)
-                .Any(at => U32(packet.Body, 480 + at * 12) == 7005)), "真实重连恢复炼金委托倒计时");
+            var restoredCrafts = Drain(peer);
+            That(restoredCrafts.Any(packet => packet.Opcode == 1773 && Enumerable.Range(0, 50)
+                    .Any(at => U32(packet.Body, 480 + at * 12) == 7005)) &&
+                restoredCrafts.Any(packet => packet.Opcode == 1773 && Enumerable.Range(0, 50)
+                    .Any(at => U32(packet.Body, 480 + at * 12) == 2009)),
+                "真实重连恢复炼金与时空石委托倒计时");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&

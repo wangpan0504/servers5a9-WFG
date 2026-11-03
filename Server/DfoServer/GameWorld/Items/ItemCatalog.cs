@@ -467,6 +467,8 @@ internal sealed partial class ItemCatalog
         StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildMileageGiftDefinition.Parse(raw, Get(id)) : null;
     public GameWorld.Guilds.GuildExperienceGiftDefinition? GuildExperienceGift(int id) =>
         StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildExperienceGiftDefinition.Parse(raw, Get(id)) : null;
+    public GameWorld.Guilds.GuildDungeonClearScrollDefinition? GuildDungeonClearScroll(int id) =>
+        StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildDungeonClearScrollDefinition.Parse(raw, Get(id)) : null;
 
     readonly ConcurrentDictionary<int, Lazy<PartnerTeleportDefinition?>> partnerTeleports = new();
     public PartnerTeleportDefinition? PartnerTeleport(int id)

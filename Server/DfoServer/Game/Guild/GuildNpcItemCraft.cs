@@ -18,8 +18,17 @@ internal partial interface IGuildNpcBenefitStore
 
 internal sealed partial class GuildNpcBenefitService
 {
-    public bool ItemCraft(uint benefitId) => catalog.Find(benefitId) is { Effect: "crafting item", Common: false,
-        NpcId: 400001065, Parameters: [> 0, > 0], DurationSeconds: > 0 };
+    public bool ItemCraft(uint benefitId) => catalog.Find(benefitId) is { } row && IndividualItemCraft(row);
+
+    public static bool IndividualItemCraft(GuildNpcBenefitDefinition definition) =>
+        definition is { Common: false, DurationSeconds: > 0, Parameters: [> 0, > 0, ..] } &&
+        (definition.Effect == "crafting item" && definition.NpcId == GuildNpcCatalog.Alchemist &&
+            definition.Parameters.Length == 2 ||
+         definition.Effect == "purified teranium craft" && definition.NpcId == GuildNpcCatalog.Spirit &&
+            definition.Parameters.Length >= 2 && (definition.Parameters.Length == 2 || definition.Parameters[2] is 0 or 1));
+
+    public static bool WeeklyItemCraft(GuildNpcBenefitDefinition definition) =>
+        IndividualItemCraft(definition) && definition.Parameters is [_, _, 1, ..];
 
     public GuildNpcBenefitCommit Craft(GuildManagementIdentity actor, Character expected, uint benefitId,
         uint action, string requestId)
@@ -30,7 +39,7 @@ internal sealed partial class GuildNpcBenefitService
         ItemCore? core = action == 4 ? InventoryRewardGrantService.Create(items.Get(definition.Parameters[0]),
             definition.Parameters[1], DateTimeOffset.FromUnixTimeSeconds(now + definition.DurationSeconds)) : null;
         if (core is not null && (!core.IsStackable || core.IsExpired(now + definition.DurationSeconds)))
-            throw new InvalidDataException("公会炼金生产需要有效堆叠产物");
+            throw new InvalidDataException("公会NPC个人生产需要有效堆叠产物");
         return store.ChangeGuildNpcItemCraft(actor, expected, npcs, definition, action, requestId, now, core,
             character => PreparePayment(character, definition, now));
     }

@@ -917,6 +917,8 @@ internal static partial class SessionPlanningTests
                   VALUES({{id}},65000,1,'guild trainer attack raid buff',5001,0,0,1);
                 INSERT INTO character_guild_npc_item_crafts(craft_id,character_id,guild_id,joined_at,npc_id,benefit_id,deadline,item_core)
                     VALUES(printf('%064d',{{id}}),{{id}},65000,1,400001065,7001,2000000000,'{}');
+                INSERT INTO character_guild_npc_craft_weeks(character_id,npc_id,week_start,craft_id)
+                    VALUES({{id}},400001061,2000000000,printf('%064d',{{id}}));
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
                 INSERT INTO character_prey_normal_progress VALUES({{id}},'planning',20261031,3,4);
                 INSERT INTO character_anton_normal_progress VALUES({{id}},'planning',20261031,3,4);
