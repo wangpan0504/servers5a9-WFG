@@ -12,6 +12,8 @@ internal static partial class TournamentSettlementTests
 {
     public static void Run()
     {
+        VerifyExperienceMarkers();
+        VerifyRoundDeaths();
         var gold = new DungeonCardReward(1600, null, "fixture", "fixture/tournament.dgn", 0);
         var empty = gold with { Gold = 0 };
         var material = gold with { Gold = 0, Item = new(3323, ItemKind.Material, 3) };

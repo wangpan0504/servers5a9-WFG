@@ -252,7 +252,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool DisablePaidCard => RawSections.Where(row => row.Tag == "gold card use").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 0 }] }];
     public bool DisableMonsterAndClearExperience => Marker("no experience monster and result") ||
-        IsWeddingCouple && Marker("disable exp");
+        (IsWeddingCouple || IsTournament) && Marker("disable exp");
     public bool DeclaresStartFatigue => RawSections.Any(row => row.Tag == "use fatigue only start dungeon");
     // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
     public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is

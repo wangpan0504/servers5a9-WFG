@@ -2,8 +2,7 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-// 实验性（#259）：比赛副本（魂·黄龙/青龙大会）对阵表与对手计划。
-// 依据来自 Go 项目 dungeon_tournament.go（注释称反汇编 90 项目 DNF.exe），未经 V31 客户端验证：
+// 比赛副本对阵表与对手计划；黑龙对手由匹配客户端027E911D的独立APC分支生成。
 // 4 轮 16 队；对手从地图 [tournament enemies] 随机取，按战力升序，最弱者与玩家同组；每轮对手 = 玩家对阵位置的另一队；最后一轮当 Boss。
 internal sealed record TournamentTeam(IReadOnlyList<TournamentEnemy> Members, bool Player);
 internal sealed record TournamentOpponent(int Round, ushort ObjectKey, int Code, byte Level, byte Type);
@@ -14,28 +13,56 @@ internal sealed record DungeonTournamentPlan(int PartyCount, IReadOnlyList<IRead
     public const int RoundCount = 4;
     public const int TeamCount = 16;
 
-    // 返回含对手的房间计划：对手以 [fixed] monster 追加在原房间怪物之后，按轮次顺序，首轮最先。
+    // 对手保留monster/APC各自来源数组；386/387生成大会演员，不借用原MAP的普通APC通知索引。
     public static DungeonMonsterPlan CreateRoomPlan(DungeonRoomCatalog rooms, DungeonRoomDefinition room, TournamentSource source,
         uint seed, ushort characterId, ushort firstObjectKey, int basisLevel, int? playerTeam)
     {
         var bracket = PlanBracket(source,seed);
+        bool apc = source.Kind switch
+        {
+            TournamentEnemyKind.Monster => false,
+            TournamentEnemyKind.AiCharacter => true,
+            _ => throw new NotSupportedException("unsupported: tournament enemy kind")
+        };
         var synthetic = new List<DungeonRoomMonster>();
+        var syntheticApcs = new List<DungeonRoomAiCharacter>();
         for (int round = 0; round < RoundCount; round++)
             foreach (var member in OpponentOf(bracket[round]).Members)
-                synthetic.Add(rooms.TournamentMonster(member.Code,source.OpponentX,source.OpponentY,round == RoundCount - 1));
-        var extended = room with { Monsters = [.. room.Monsters, .. synthetic] };
+                if (apc)
+                {
+                    var actor = member.AiCharacter ?? throw new InvalidDataException("比赛APC模板来源缺失");
+                    if (actor.Id != member.Code || actor.Faction != "[monster]")
+                        throw new InvalidDataException("比赛APC模板来源不一致");
+                    syntheticApcs.Add(actor with
+                    {
+                        RawValues = Array.AsReadOnly(new[] { member.Code,source.OpponentX,source.OpponentY,0,0,0 }),
+                        RankKind = round == RoundCount - 1 ? "[boss]" : "[normal]"
+                    });
+                }
+                else
+                    synthetic.Add(rooms.TournamentMonster(member.Code,source.OpponentX,source.OpponentY,round == RoundCount - 1));
+        var extended = room with
+        {
+            Monsters = [.. room.Monsters, .. synthetic],
+            AiCharacters = [.. room.AiCharacters, .. syntheticApcs]
+        };
         var plan = DungeonMonsterPlan.FromRoom(extended,characterId,firstObjectKey,basisLevel,playerTeam: playerTeam);
         var opponents = new List<TournamentOpponent>();
         int index = 0;
         for (int round = 0; round < RoundCount; round++)
             foreach (var member in OpponentOf(bracket[round]).Members)
             {
-                var planned = plan.Monsters.Single(monster => monster.SourceOrdinal == room.Monsters.Count + index && monster.AiCharacter is null);
+                int sourceOrdinal = (apc ? room.AiCharacters.Count : room.Monsters.Count) + index;
+                var planned = plan.Monsters.Single(monster => monster.SourceOrdinal == sourceOrdinal && (monster.AiCharacter is not null) == apc);
                 if (planned.MonsterId != member.Code) throw new InvalidDataException("比赛对手计划与对阵表不一致");
                 opponents.Add(new(round + 1,planned.ObjectKey,member.Code,checked((byte)planned.CandidateLevel),planned.SpawnType));
                 index++;
             }
-        return plan with { Tournament = new(source.PartyCount,bracket,opponents) };
+        var tournamentPlan = plan with
+        {
+            Tournament = new(source.PartyCount,bracket,Array.AsReadOnly(opponents.ToArray()))
+        };
+        return DungeonMonsterPlan.RebuildTournamentBlocking(tournamentPlan, tournamentPlan);
     }
 
     static TournamentTeam OpponentOf(IReadOnlyList<TournamentTeam> bracket)

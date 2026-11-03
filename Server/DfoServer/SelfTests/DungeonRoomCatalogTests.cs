@@ -7,7 +7,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-internal static class DungeonRoomCatalogTests
+internal static partial class DungeonRoomCatalogTests
 {
     public static void RunCore()
     {
@@ -23,6 +23,7 @@ internal static class DungeonRoomCatalogTests
                 "MOB精英限制尊重非零声明，歧义只禁止强化，不删除原演员：" + tag);
         }
         AltarResources(fixture);
+        TournamentApcResources(fixture);
         That(fixture.Parse([fixture.Tag("type"),fixture.String("[boss]")]).DeclaredType == "[boss]" &&
             fixture.Parse(fixture.Monster()).DeclaredType is null,
             "MAP真实类型独立保留，迷宫身份不补造缺失类型");

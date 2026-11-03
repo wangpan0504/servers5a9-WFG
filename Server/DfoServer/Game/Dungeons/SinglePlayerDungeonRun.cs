@@ -505,6 +505,14 @@ internal sealed partial class SinglePlayerDungeonRun
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
                     companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                if (plan.Tournament is not null)
+                {
+                    if (!entry.IsTournament || plan.Room.Map != entry.StartMap || entry.StartMap != entry.BossMap ||
+                        !plan.Room.Map.Path.StartsWith("map/tournament/", StringComparison.Ordinal) ||
+                        !plan.Room.Map.Path.EndsWith(".map", StringComparison.Ordinal))
+                        throw new InvalidDataException("大会上下文不能用于普通房间或非大会起终点");
+                    resourcePlan = DungeonMonsterPlan.RebuildTournamentBlocking(resourcePlan, plan);
+                }
             }
             catch (Exception error) when (error is NotSupportedException or InvalidDataException or DungeonObjectKeyOverflowException)
             {
@@ -828,7 +836,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (!Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
             HasPendingSettlement || committedAltarSettlement is not null || committedDespairClear is not null || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
-            CurrentLivingMonster(confirmed.MonsterKey) is null)
+            CurrentLivingMonster(confirmed.MonsterKey) is null || !CanReportTournamentDeath(confirmed.MonsterKey))
             return new(DungeonRunOutcome.Rejected);
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
         bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&

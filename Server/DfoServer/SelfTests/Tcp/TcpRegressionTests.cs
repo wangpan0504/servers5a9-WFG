@@ -115,6 +115,7 @@ internal static class TcpRegressionTests
         ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
         ("monster-battle-level", FormalDungeonTcpTests.RunBattleLevelsAsync),
         ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
+        ("dungeon-tournament", FormalDungeonTcpTests.RunTournamentAsync),
         ("party-dungeon-modes", PartyDungeonTcpTests.RunQuestAndHellAsync),
         ("social", SocialTcpTests.RunAsync),
         ("trade", TradeTcpTests.RunAsync),

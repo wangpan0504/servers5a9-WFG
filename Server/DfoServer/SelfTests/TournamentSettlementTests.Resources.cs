@@ -18,6 +18,8 @@ internal static partial class TournamentSettlementTests
 {
     public static void RunResources(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items)
     {
+        VerifyResourceExperiencePolicies(pvf);
+        VerifyResourceRounds(pvf);
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
         var rooms = SelfTestCatalogs.Rooms(pvf);
         var skills = SelfTestCatalogs.SkillLearning(pvf);
