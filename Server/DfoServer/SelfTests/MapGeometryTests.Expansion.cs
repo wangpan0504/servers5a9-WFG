@@ -9,10 +9,82 @@ internal static partial class MapGeometryTests
 {
     private static void RunAdditionalExpansionCore()
     {
+        RunSingleColumnCore();
         RunThreeColumnCore();
         RunAnimationAppendCore();
         RunVirtualInsertionCore();
         RunFourVirtualAppendCore();
+    }
+
+    private static void RunSingleColumnCore()
+    {
+        const string map = "map/single/room.map", source = "map/single/floor.til";
+        string[] references = Enumerable.Range(0,5).Select(index => $"displaycompat/column{index}.til").ToArray();
+        var aliases = new JsonObject();
+        var passes = new List<JsonObject>();
+        foreach (string reference in references)
+        {
+            string alias = "map/single/" + reference;
+            aliases[alias] = source;
+            passes.Add(GeometryRule("pass-" + passes.Count,alias,"tile_pass14","[pass type]",
+                GeometryAtoms(Enumerable.Repeat(2,14)),GeometryAtoms(Enumerable.Repeat(2,14))));
+        }
+        var tiles = GeometryRule("tiles",map,"dungeon_tiles1","[tile]",GeometryStrings("floor.til"),GeometryStrings(references));
+        string Document(JsonObject? tileRule = null, JsonObject? aliasRows = null, IEnumerable<JsonObject>? extra = null) =>
+            GeometryDocument(new[] { tileRule ?? tiles }.Concat(passes).Concat(extra ?? []),aliasRows ?? aliases);
+        var config = MapGeometryConfig.Parse(Document());
+        string[] pool = ["[tile]","floor.til","[/tile]","[map name]","unchanged"];
+        PvfToken[] raw = [new(3,0),new(6,1),new(3,2),new(3,3),new(6,4)];
+        string Resolve(int id) => config.ResolveString(id,index => pool[index]);
+        var output = config.Apply(map,raw,index => pool[index]);
+        That(output.Length == raw.Length + 4 && output.Skip(1).Take(5).All(token => token.Type == 6) &&
+            output.Skip(1).Take(5).Select(token => Resolve(token.Value)).SequenceEqual(references) && output.Skip(6).SequenceEqual(raw.Skip(2)),
+            "单列精确派生五个私有别名并保持其他原始段");
+        That(config.Apply(map,output,index => pool[index]).SequenceEqual(output) && raw[1] == new PvfToken(6,1),
+            "单列共同目标幂等且不写源token");
+        That(config.SignatureKind(map) == "DCG2" && !MapGeometrySignature.ComputeDungeon(map,raw,index => pool[index]).SequenceEqual(
+            MapGeometrySignature.ComputeDungeon(map,output,Resolve)), "单列五块进入既有DCG2完整几何签名");
+        var common = (JsonObject)tiles.DeepClone();
+        foreach (string endpoint in new[] { "from", "to" }) common[endpoint] = new JsonObject { ["all"] = tiles[endpoint]!["800"]!.DeepClone() };
+        var commonConfig = MapGeometryConfig.Parse(Document(tileRule:common));
+        That(commonConfig.Apply(map,raw,index => pool[index]).Select(token => (token.Type,Value:token.Type == 6 ? commonConfig.ResolveString(token.Value,index => pool[index]) : token.Value.ToString())).SequenceEqual(
+            output.Select(token => (token.Type,Value:token.Type == 6 ? Resolve(token.Value) : token.Value.ToString()))), "单列all端点与三个完整比例端点等效");
+        foreach (string profile in new[] { "800", "1067", "960" })
+        {
+            var wrongSource = (JsonObject)tiles.DeepClone(); wrongSource["from"]![profile]![0]![1] = "other.til";
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:wrongSource)), "每个比例的单列源必须等于全部五个别名源");
+            var wrongWidth = (JsonObject)tiles.DeepClone(); ((JsonArray)wrongWidth["from"]![profile]!).Add(new JsonArray(6,"floor.til"));
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:wrongWidth)), "单列源不能伪装成多列");
+            var wrongType = (JsonObject)tiles.DeepClone(); wrongType["from"]![profile]![0] = new JsonArray(0,1);
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:wrongType)), "单列源必须是字符串token");
+        }
+        for (int slot = 0; slot < 5; ++slot)
+        {
+            var wrongAliases = (JsonObject)aliases.DeepClone(); wrongAliases["map/single/" + references[slot]] = "map/single/other.til";
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(aliasRows:wrongAliases)), "全部五个别名均须保留唯一原始源");
+            var unguarded = (JsonObject)tiles.DeepClone();
+            foreach (string profile in new[] { "800", "1067", "960" }) unguarded["to"]![profile]![slot]![1] = "floor.til";
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:unguarded)), "目标五列不能夹带未经私有别名守卫的原始引用");
+            var mixed = output.ToArray(); mixed[slot + 1] = raw[1];
+            Reject<InvalidDataException>(() => config.Apply(map,mixed,index => pool[index]), "运行时拒绝五列中混入原始引用的部分应用状态");
+        }
+        var shortTarget = GeometryRule("tiles",map,"dungeon_tiles1","[tile]",GeometryStrings("floor.til"),GeometryStrings(references[..4]));
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:shortTarget)), "单列目标必须精确五列");
+        var wrongTargetType = (JsonObject)tiles.DeepClone();
+        foreach (string profile in new[] { "800", "1067", "960" }) wrongTargetType["to"]![profile]![0] = new JsonArray(0,1);
+        Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(tileRule:wrongTargetType)), "单列目标必须全部字符串token");
+        Reject<InvalidDataException>(() => config.Apply(map,[..raw,..raw],index => pool[index]), "单列必须唯一主段");
+        Reject<InvalidDataException>(() => config.Apply(map,[raw[0],new(0,1),..raw.Skip(2)],index => pool[index]), "运行时单列源类型不匹配拒绝");
+        foreach (int columns in new[] { 3,4 })
+        {
+            var files = GeometryRule("files",map,"dungeon_ext_tilefiles","[tile files]",
+                new JsonArray(new JsonArray(0,0),new JsonArray(6,"floor.til")),
+                new JsonArray(new JsonArray(0,0),new JsonArray(6,"floor.til"),new JsonArray(0,1),new JsonArray(6,references[0])));
+            int[] before = Enumerable.Repeat(0,columns).ToArray();
+            int[] after = Enumerable.Repeat(0,columns - 1).Concat(Enumerable.Repeat(1,6 - columns)).ToArray();
+            var matrix = GeometryRule("matrix",map,columns == 3 ? "dungeon_ext_tilemap3" : "dungeon_ext_tilemap","[tile map]",GeometryAtoms(before),GeometryAtoms(after));
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Document(extra:[files,matrix])), "单列根不得借用三列或四列扩展矩阵");
+        }
     }
 
     private static void RunFourVirtualAppendCore()

@@ -181,6 +181,7 @@ internal sealed class MapGeometryConfig
                 ("tile_pass14", "[pass type]") => 14,
                 ("dungeon_tiles", "[tile]") => 1,
                 ("dungeon_tiles3", "[tile]") => 1,
+                ("dungeon_tiles1", "[tile]") => 1,
                 ("dungeon_ext_tilefiles", "[tile files]") => 2,
                 ("dungeon_ext_tilefiles_repair", "[tile files]") => 2,
                 ("dungeon_ext_tilemap", "[tile map]") => 1,
@@ -203,7 +204,7 @@ internal sealed class MapGeometryConfig
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
             bool anchor = AnchorLayout(kind).Stride != 0, metadata = kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append";
-            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append";
+            bool dungeon = kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1" or "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair" or "dungeon_ext_tilemap" or "dungeon_ext_tilemap3" or "dungeon_animation5_append";
             if ((metadata || anchor || gate || tile || dungeon) && occurrence != 0)
                 throw new InvalidDataException("World dungeon/grid adapter requires the unique first record");
             if ((metadata || anchor || gate || dungeon) && !path.EndsWith(".map",StringComparison.Ordinal) ||
@@ -229,15 +230,15 @@ internal sealed class MapGeometryConfig
                     }
                     continue;
                 }
-                if (kind is "dungeon_tiles" or "dungeon_tiles3")
+                if (kind is "dungeon_tiles" or "dungeon_tiles3" or "dungeon_tiles1")
                 {
-                    int columns = kind == "dungeon_tiles3" ? 3 : 4;
+                    int columns = kind == "dungeon_tiles1" ? 1 : kind == "dungeon_tiles3" ? 3 : 4;
                     if (before.Length != columns || to[0].Length != 5 || before.Concat(to[0]).Any(atom => atom.Kind != 6) ||
                         !before.Take(columns - 1).SequenceEqual(to[0].Take(columns - 1)) ||
                         to[0].Skip(columns - 1).Any(atom => !aliases.ContainsKey(ResolveReference(path,atom.Text!))))
                         throw new InvalidDataException("World dungeon tile recipe");
-                    if (columns == 3 && to[0].Skip(2).Any(atom => aliases[ResolveReference(path,atom.Text!)] != ResolveReference(path,before[2].Text!)))
-                        throw new InvalidDataException("World three-column tile aliases must preserve terminal source");
+                    if (columns is 1 or 3 && to[0].Skip(columns - 1).Any(atom => aliases[ResolveReference(path,atom.Text!)] != ResolveReference(path,before[columns - 1].Text!)))
+                        throw new InvalidDataException("World narrow tile aliases must preserve terminal source");
                     continue;
                 }
                 if (kind is "dungeon_ext_tilefiles" or "dungeon_ext_tilefiles_repair")
