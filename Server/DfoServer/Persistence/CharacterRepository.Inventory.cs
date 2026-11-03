@@ -440,6 +440,7 @@ internal sealed partial class CharacterRepository
         ApplyBattlePassMonsterCardUpgrade(db, transaction, owner.Account, plan, inventory);
         ApplyBattlePassEquipmentDisjoint(db, transaction, owner.Account, plan, inventory);
         ApplyBattlePassNpcMaterialConsume(db, transaction, owner.Account, plan, inventory);
+        ApplyBattlePassColorlessSkill(db, transaction, owner.Account, plan, inventory);
         ApplyBattlePassCeraConsumption(db, transaction, owner.Account, current.Id, plan, inventory);
         ApplyBattlePassUndefeatedSongBooster(db, transaction, owner.Account, current.Id, current.Revision, plan);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。

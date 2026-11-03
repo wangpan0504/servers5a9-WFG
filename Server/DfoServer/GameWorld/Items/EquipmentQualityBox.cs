@@ -4,7 +4,8 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercent, ImmutableArray<byte> EquipmentSlots)
+internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercent, ImmutableArray<byte> EquipmentSlots,
+    int? RequiredRarity = null, bool RejectTitle = false)
 {
     public bool Fixed => MinimumPercent >= 0;
 
@@ -15,7 +16,9 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
         bool fixedRange = raw?.Label == "[fixed probability kaleido]";
         bool gold = action?.Label == "[gold kaleido box]";
         // 本版旧商城15/897没有action type；活动版本由PVF动作声明识别。黄金箱说明是取最高品级。
-        if (!fixedRange && !gold && action?.Label != "[kaleido]" && !(id is 15 or 897 && !script.Has("action type"))) return null;
+        // 大师级调整箱同样没有 kaleido 动作，只声明 [variable need material] 指向旧箱 15/897。
+        if (!fixedRange && !gold && action?.Label != "[kaleido]" && !(id is 15 or 897 && !script.Has("action type")))
+            return Master(script);
         var arguments = action?.Parameters;
         if (fixedRange && (arguments is not { Count: 2 } || arguments[0] < 1 || arguments[1] > 100 || arguments[0] > arguments[1]))
             throw new InvalidDataException("品级调整箱固定范围无效");
@@ -29,8 +32,24 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
         return new(fixedRange ? arguments![0] : -1, fixedRange ? arguments![1] : -1, slots);
     }
 
+    // 稀有/神器/传说/史诗/勇者大师箱：材料对是 15 与 897 的同一正数，品级和展示属性取 100，不改魔法封印。
+    static EquipmentQualityBox? Master(PvfDocument script)
+    {
+        if (!script.Has("variable need material") ||
+            !Regex.IsMatch(script.Section("stackable type"), @"^\s*`\[etc\]`\s+0\s*$")) return null;
+        int[] count = PvfScript.Integers(script.Section("material count"));
+        int[] materials = PvfScript.Integers(script.Section("materials"));
+        if (count is not [1] || materials is not [15, var grade, 897, var echoed] || grade != echoed || grade <= 0)
+            return null;
+        int[] rarity = PvfScript.Integers(script.Section("rarity"));
+        if (rarity is not [>= 0 and <= 6]) throw new InvalidDataException("品级调整箱稀有度无效");
+        return new(100, 100, [], rarity[0], true);
+    }
+
     public bool Allows(ItemTemplate equipment) => equipment.Kind == ItemKind.Equipment &&
-        equipment.EquipmentSlot is >= 12 and <= 25 && (EquipmentSlots.IsEmpty || EquipmentSlots.Contains(equipment.EquipmentSlot));
+        equipment.EquipmentSlot is >= 12 and <= 25 && (EquipmentSlots.IsEmpty || EquipmentSlots.Contains(equipment.EquipmentSlot)) &&
+        (RequiredRarity is not int rarity || equipment.Rarity == rarity) &&
+        !(RejectTitle && equipment.EquipmentSlot == 13);
 
     /// <summary>
     /// 品级百分比 → 实例品级种子。客户端 03FA9900/03FA9940 的固定映射：1..99 用 999999893+p，

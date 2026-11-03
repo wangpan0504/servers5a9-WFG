@@ -21,6 +21,9 @@ internal static class EquipmentQualityTcpTests
             That(items.Items.Get(id).QualityBox is { Fixed: false }, "普通箱按本版旧ID及PVF动作解析: " + id);
         foreach (int id in new[] { 490012190, 490012048, 490012353, 490013009, 490014203, 490705117, 490704426, 490704958 })
             That(items.Items.Get(id).QualityBox is { MinimumPercent: 80, MaximumPercent: 99 }, "耀银各版本按PVF80..99解析: " + id);
+        foreach (var (id, rarity) in new[] { (10150860, 2), (10150861, 3), (10150863, 4), (10150903, 5), (10150862, 6) })
+            That(items.Items.Get(id).QualityBox is { Fixed: true, MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: var actual, RejectTitle: true } &&
+                actual == rarity, "真实大师级品级箱按稀有度固定最高品级并拒绝称号: " + id);
         var silver = items.Items.Get(490014203).QualityBox!;
         That(silver.Roll(_ => 0) == 0x3B9AC9E5 && silver.Roll(max => max - 1) == 0x3B9AC9F8 &&
             (silver with { MinimumPercent = 100, MaximumPercent = 100 }).Roll(_ => 0) == 999999998,

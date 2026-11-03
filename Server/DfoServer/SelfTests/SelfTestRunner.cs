@@ -36,6 +36,7 @@ internal static class SelfTestRunner
         await BattlePassMissionTests.RunOnlineReadyPeriodAsync();
         BattlePassEnhancementTests.RunCore();
         BattlePassRepairTests.RunCore();
+        BattlePassColorlessSkillTests.RunCore();
         BattlePassCeraConsumptionTests.RunCore();
         DungeonSettlementTests.RunBattlePassTayberrsCore();
         DungeonSettlementTests.RunBattlePassFormalClearCore();
@@ -81,6 +82,7 @@ internal static class SelfTestRunner
         ChronicleInvestmentTests.RunCore();
         DimensionEnergyInvestmentTests.RunCore();
         EquipmentQualityInvestmentTests.RunCore();
+        DfoServer.Testing.Inventory.MasterQualityBoxTests.RunCore();
         await CharacterScoreNoticeTests.RunCore();
         await SelfCharacterScoreTests.RunCore();
         await MachineCharacterScoreTests.RunCore();
