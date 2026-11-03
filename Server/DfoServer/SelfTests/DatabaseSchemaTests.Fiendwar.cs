@@ -28,7 +28,7 @@ internal static partial class DatabaseSchemaTests
                 {
                     string instance = new string((char)('a' + type), 32);
                     Execute(db, $"INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'fiend-old','{instance}',{type},'old',1,0)");
-                    Execute(db, $"INSERT INTO character_raid_reward_receipts VALUES(1,'fiend-old','{instance}',0,0,0,20261029,0,'{{}}','[]',1,{type})");
+                    Execute(db, $"INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type) VALUES(1,'fiend-old','{instance}',0,0,0,20261029,0,'{{}}','[]',1,{type})");
                 }
                 if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
                 if (scenario == "collision") Execute(db, "ALTER TABLE account_fiendwar_guides ADD COLUMN unknown INTEGER");
@@ -51,7 +51,7 @@ internal static partial class DatabaseSchemaTests
                     INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,
                       phase0_event,phase0_anchor,phase0_receipt,clear_week)
                     VALUES(1,'fiend-old','eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',2,'fiend',2,2,'ffffffffffffffffffffffffffffffff',3,'{}',20261029);
-                    INSERT INTO character_raid_reward_receipts VALUES(1,'fiend-old','eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',0,0,0,20261029,1,'{}','[]',3,2);
+                    INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type) VALUES(1,'fiend-old','eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',0,0,0,20261029,1,'{}','[]',3,2);
                     """);
                 Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L &&
                     Query(db, "SELECT state FROM character_raid_runs WHERE raid_type=2") is 2L, "漩涡单阶段通关与最终领奖收据可持久化");

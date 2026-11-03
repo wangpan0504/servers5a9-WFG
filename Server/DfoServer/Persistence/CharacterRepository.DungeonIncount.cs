@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Raids;
 using DfoServer.Game.TagEvildom;
 using DfoServer.GameWorld.Dungeons;
 using Microsoft.Data.Sqlite;
@@ -142,7 +143,7 @@ internal sealed partial class CharacterRepository
     // 强袭日次数只清当前周期。退役玩法的历史表不参与重置。
     // 魔界塔（ dazzle）只清本周已绑角色的当日入场；悲叹塔清账号日额度与角色当日通关锁，楼层进度保留；
     // 祭坛（血/究极）与绝望的当日入场回执把 service_day 挪到 1，绝望的当日通关日一并清零，楼层进度保留；
-    // 卢克团本删本周（含上一周，周键依赖 PVF 周期）的已通关记录，再战魔界的本周通关回执挪到 1/1 周并丢掉跨日未完成尝试。
+    // 四类团本推进入场额度世代并保留历史；再战魔界本周通关回执挪到1/1周并丢掉跨日未完成尝试。
     // 次元裂缝的日通关数与卢克奖励回执只决定奖励进度、不限制入场，不在刷新范围；
     // character_dungeon_incount_extra 是买来的额外次数（额度），清零等于没收玩家已买的次数，也不在范围。
     // 在线内存不缓存已用次数，下次入场重新读库。
@@ -156,7 +157,6 @@ internal sealed partial class CharacterRepository
         int dazzlementWeek = DazzlementTowerAdmission.At(now).Week;
         int griefDay = QuestCycle.Day(now);
         var tagPeriod = TagEvildomPeriod.At(now);
-        int raidWeekFloor = RaidWeekFloor(now);
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.ResetDungeonEntries");
         using var tx = write.Transaction;
@@ -198,13 +198,9 @@ internal sealed partial class CharacterRepository
             UPDATE dungeon_despair_progress SET last_clear_day=0
             WHERE account=$account AND last_clear_day=$day
             """, ("$account", owner.Account), ("$day", calendarDay));
-        // 卢克团本：周通关上限按 clear_week 计数，把本周已通关记录挪到第 1 周即不计入本周。
-        // 保留行本身：阶段回执还在里面，删了会丢未领取奖励的恢复链。周键由 PVF 周期决定，
-        // 这里按日期回退 8 天兜底（最多连带上一周的历史行，它们本来也不计入本周）。
-        int raid = Execute(db, tx, """
-            UPDATE character_raid_runs SET clear_week=1
-            WHERE account=$account AND raid_type=1 AND state=2 AND clear_week>=$floor
-            """, ("$account", owner.Account), ("$floor", raidWeekFloor));
+        // 四类团本仅推进入场轴，历史时间、阶段资格、奖励轴和引导绑定原样保留。
+        var raidAdvances = AdvanceRaidQuotaEpochs(db, tx, owner.Account, RaidQuotaAxis.Entry, FiendwarRewards.Cycle.Key(now));
+        int raid = raidAdvances.Sum(row => row.ArchivedRuns);
         // 再战魔界：周内通关 3 次上限按本周通关回执计数，回执挪到 1/1 周即不计入本周；
         // 跨日未完成的尝试原本也占本周次数，一并删掉。回执行本身保留给通关记录引用。
         int tag = Execute(db, tx, """
@@ -217,16 +213,9 @@ internal sealed partial class CharacterRepository
             """, ("$account", owner.Account), ("$week", tagPeriod.Week), ("$day", tagPeriod.Day));
         tx.Commit();
         return new DungeonEntryResetResult(owner.Account, panelWeek, panel, daily, weekly, account, assault,
-            dazzlement, griefAccount, griefCharacter, special, despair, raid, tag, tagChallenge);
+            dazzlement, griefAccount, griefCharacter, special, despair, raid, tag, tagChallenge)
+        { RaidEpochsAdvanced = raidAdvances.Length, RaidGuideBindingsArchived = raidAdvances.Sum(row => row.ArchivedGuideBindings) };
     });
-
-    // 卢克周键是「本周起点日期」的 yyyyMMdd（起点由 PVF 周期决定，最多早于现在 7 天）。
-    // 回退 8 天取整做下限：一定包含本周，最多连带上一周的历史行。
-    static int RaidWeekFloor(DateTimeOffset now)
-    {
-        var day = now.ToOffset(TimeSpan.FromHours(8)).Date.AddDays(-8);
-        return day.Year * 10000 + day.Month * 100 + day.Day;
-    }
 
     // 账号次数一账号一副本一行，周期键可能是日键或任意周起点的周键；按当前可能命中的周期键一次清零。
     static int ClearAccountEntries(SqliteConnection db, SqliteTransaction tx, string account, int[] periods)

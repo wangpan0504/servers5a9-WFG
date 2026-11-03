@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Raids;
 using DfoServer.Game.ImperialArena;
 using DfoServer.Game.Strongway2019;
 using DfoServer.Game.TagEvildom;
@@ -83,16 +84,14 @@ internal sealed partial class CharacterRepository
         int despair = ExecuteReward(db, tx, "UPDATE dungeon_despair_progress SET last_clear_day=0 WHERE account=$account AND last_clear_day=$day",
             ("$account", owner.Account), ("$day", day));
 
-        int raidWeek = NextKey(db, tx, "character_raid_runs", "clear_week", owner.Account, week);
-        int raid = ExecuteReward(db, tx, "UPDATE character_raid_runs SET clear_week=$newWeek WHERE account=$account AND clear_week=$week",
-            ("$newWeek", raidWeek), ("$account", owner.Account), ("$week", week));
-        int raidReceiptWeek = NextKey(db, tx, "character_raid_reward_receipts", "week_key", owner.Account, week);
-        int raidReceipts = ExecuteReward(db, tx, "UPDATE character_raid_reward_receipts SET week_key=$newWeek WHERE account=$account AND week_key=$week",
-            ("$newWeek", raidReceiptWeek), ("$account", owner.Account), ("$week", week));
+        // 四类团本只推进奖励轴；未领取及迟到阶段仍归原run世代，不改原JSON和周期。
+        var raidAdvances = AdvanceRaidQuotaEpochs(db, tx, owner.Account, RaidQuotaAxis.Reward, FiendwarRewards.Cycle.Key(now));
+        int raid = raidAdvances.Sum(row => row.ArchivedRuns);
+        int raidReceipts = raidAdvances.Sum(row => row.ArchivedRewardReceipts);
         tx.Commit();
         return new RewardLimitResetResult(owner.Account, day, week, strongwayReward, strongwayCompletion, strongwayMatch,
             imperialDays, imperialRuns, imperialRewards, imperialChallenges, tagClearance, tagChallenge,
-            griefAccount, griefCharacter, special, despair, raid, raidReceipts);
+            griefAccount, griefCharacter, special, despair, raid, raidReceipts) { RaidEpochsAdvanced = raidAdvances.Length };
     });
 
     static int NextKey(SqliteConnection db, SqliteTransaction tx, string table, string column, string account, int current)

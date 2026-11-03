@@ -20,7 +20,7 @@ public static class WeeklyEntryResetTests
     public static void RunCore()
     {
         int before = Count;
-        using var f = new MailboxPersistenceTests.Fixture();
+        using var f = RaidQuotaEpochTests.CreateFixture();
         f.OtherOwner.Dispose();
         f.ReceiverOwner.Dispose();
 
@@ -97,7 +97,7 @@ public static class WeeklyEntryResetTests
 
         string answer = DevelopmentGm.Answer("account other weekly-entry-reset", "sender", f.Repository, f.Owners, _ => null);
         That(answer.StartsWith("OK ", StringComparison.Ordinal), "入场次数刷新命令成功: " + answer);
-        using var document = JsonDocument.Parse(answer[3..answer.IndexOf(" 已清零", StringComparison.Ordinal)]);
+        using var document = JsonDocument.Parse(answer[3..answer.IndexOf(" 已恢复", StringComparison.Ordinal)]);
         var cleared = document.RootElement;
         That(cleared.GetProperty("Account").GetString() == "other" &&
             cleared.GetProperty("Week").GetInt32() == panelWeek &&
@@ -142,7 +142,7 @@ public static class WeeklyEntryResetTests
             cleared.GetProperty("GriefCharacterRows").GetInt32() == 1 &&
             cleared.GetProperty("SpecialEntryRows").GetInt32() == 2 &&
             cleared.GetProperty("DespairRows").GetInt32() == 1 &&
-            cleared.GetProperty("RaidRows").GetInt32() == 1 &&
+            cleared.GetProperty("RaidRows").GetInt32() == 3 &&
             cleared.GetProperty("TagClearanceRows").GetInt32() == 1 &&
             cleared.GetProperty("TagChallengeRows").GetInt32() == 1,
             "新增覆盖的玩法按存储分类只统计本账号当前周期的行");
@@ -165,12 +165,12 @@ public static class WeeklyEntryResetTests
             Scalar($"SELECT next_layer FROM dungeon_despair_progress WHERE character_id={otherId}") == 2 &&
             Scalar($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={receiverId}") == serviceDay,
             "绝望清当日通关日，楼层进度与其他账号不动");
-        That(Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='66666666666666666666666666666666'") == 1 &&
+        That(Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='66666666666666666666666666666666'") == panelWeek &&
             Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='77777777777777777777777777777777'") == 20180215 &&
             Scalar($"SELECT state FROM character_raid_runs WHERE instance_id='88888888888888888888888888888888'") == 0 &&
             Scalar($"SELECT count(*) FROM character_raid_runs WHERE account='other'") == 3 &&
             Scalar($"SELECT clear_week FROM character_raid_runs WHERE instance_id='99999999999999999999999999999999'") == panelWeek,
-            "卢克本周通关挪到旧周，行本身、在途副本与其他账号保留");
+            "卢克历史周、在途副本与其他账号保留；入场额度由世代隔离");
         That(Scalar($"SELECT day FROM account_tag_evildom_clearances WHERE receipt='r-other-this'") == 1 &&
             Scalar($"SELECT week FROM account_tag_evildom_clearances WHERE receipt='r-other-this'") == 1 &&
             Scalar($"SELECT week FROM account_tag_evildom_clearances WHERE receipt='r-other-old'") == 20180212 &&
@@ -191,12 +191,14 @@ public static class WeeklyEntryResetTests
         RunRewardLimitImperialDays(true);
         RunRewardLimitMultipleDays();
         RunRewardLimitUnclaimedChallenges();
+        RaidQuotaEpochTests.RunCore();
+        RaidQuotaSessionTests.RunCore();
         Console.WriteLine($"PASS {Count - before} 地下城入场次数刷新核心断言");
     }
 
     static void RunRewardLimitCore()
     {
-        using var f = new MailboxPersistenceTests.Fixture();
+        using var f = RaidQuotaEpochTests.CreateFixture();
         f.OtherOwner.Dispose();
         f.ReceiverOwner.Dispose();
         int day = ShopPurchaseCount.Today(DateTimeOffset.UtcNow);
@@ -237,14 +239,14 @@ public static class WeeklyEntryResetTests
             """);
         That(f.Query("PRAGMA foreign_keys") is 1L, "奖励刷新使用真实SQLite外键检查");
         string beforeFailure = f.Snapshot();
-        f.Execute("CREATE TRIGGER reject_reward_reset BEFORE UPDATE ON character_raid_reward_receipts BEGIN SELECT RAISE(ABORT,'fixture_late_reset'); END");
+        f.Execute("CREATE TRIGGER reject_reward_reset BEFORE INSERT ON account_raid_quota_epochs BEGIN SELECT RAISE(ABORT,'fixture_late_reset'); END");
         using (var owner = f.Owners.Acquire("other", () => { }))
             Reject<SqliteException>(() => f.Repository.ResetRewardLimits(owner), "奖励刷新晚期SQL错误必须拒绝");
         That(f.Snapshot() == beforeFailure, "奖励刷新晚期失败回滚全部玩法周期、父子回执、资产及revision");
         f.Execute("DROP TRIGGER reject_reward_reset");
         string answer = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
         That(answer.StartsWith("OK ", StringComparison.Ordinal), "奖励限额刷新命令成功: " + answer);
-        int end = answer.IndexOf(" 已迁移", StringComparison.Ordinal);
+        int end = answer.IndexOf(" 已恢复", StringComparison.Ordinal);
         using var document = JsonDocument.Parse(answer[3..end]);
         var result = document.RootElement;
         That(result.GetProperty("StrongwayRewardRows").GetInt32() == 1 &&
@@ -275,11 +277,11 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT cleared FROM character_grief_tower WHERE character_id={id}") is 0L &&
             f.Query($"SELECT count(*) FROM dungeon_special_entry_receipts WHERE account='other' AND service_day={day}") is 0L &&
             f.Query($"SELECT last_clear_day FROM dungeon_despair_progress WHERE character_id={id}") is 0L &&
-            f.Query($"SELECT count(*) FROM character_raid_runs WHERE account='other' AND clear_week={week}") is 0L,
+            f.Query($"SELECT count(*) FROM character_raid_runs WHERE account='other' AND clear_week={week}") is 1L,
             "奖励刷新保留历史回执与通关事实但移出当前资格周期");
         That(f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other'") is 1L &&
-            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 0L,
-            "团本奖励回执保留但当前周资格键迁移");
+            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 1L,
+            "团本奖励原周键保留，由奖励世代排除旧额度");
         string again = DevelopmentGm.Answer("account other reward-limit-reset", "sender", f.Repository, f.Owners, _ => null);
         That(again.StartsWith("OK ", StringComparison.Ordinal) && f.Query("SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L,
             "奖励限额刷新可重复执行且不删除历史账本");
@@ -288,7 +290,7 @@ public static class WeeklyEntryResetTests
 
     static void RunRewardLimitImperialDays(bool playedToday)
     {
-        using var f = new MailboxPersistenceTests.Fixture();
+        using var f = RaidQuotaEpochTests.CreateFixture();
         var period = ImperialArenaPeriod.At(DateTimeOffset.UtcNow);
         int earlierDay = period.Day - 1;
         f.Execute($"""
@@ -337,7 +339,7 @@ public static class WeeklyEntryResetTests
 
     static void RunRewardLimitMultipleDays()
     {
-        using var f = new MailboxPersistenceTests.Fixture();
+        using var f = RaidQuotaEpochTests.CreateFixture();
         var now = DateTimeOffset.UtcNow;
         var strongway = Strongway2019RewardPeriod.At(now);
         var tag = TagEvildomPeriod.At(now);
@@ -377,7 +379,7 @@ public static class WeeklyEntryResetTests
         That(f.Query("SELECT count(*) FROM account_strongway2019_rewards") is 2L &&
             f.Query("SELECT count(*) FROM account_tag_evildom_challenges") is 2L &&
             f.Query("SELECT reward_json FROM account_strongway2019_rewards ORDER BY instance_id LIMIT 1") is "{\"reward\":0}" &&
-            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 0L &&
+            f.Query($"SELECT count(*) FROM character_raid_reward_receipts WHERE account='other' AND week_key={week}") is 2L &&
             accountCharacters == JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 0)) + JsonSerializer.Serialize(f.Repository.LoadCharacter(f.OtherOwner, 1)),
             "刷新保留各日奖励、全角色原始资产和revision，已发团本回执不删除");
         string after = f.Snapshot();
@@ -388,7 +390,7 @@ public static class WeeklyEntryResetTests
 
     static void RunRewardLimitUnclaimedChallenges()
     {
-        using var f = new MailboxPersistenceTests.Fixture();
+        using var f = RaidQuotaEpochTests.CreateFixture();
         var tag = TagEvildomPeriod.At(DateTimeOffset.UtcNow);
         for (int index = 0; index < 2; index++)
         {

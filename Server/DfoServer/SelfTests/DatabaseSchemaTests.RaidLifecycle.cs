@@ -9,6 +9,13 @@ internal static partial class DatabaseSchemaTests
     internal static void RewindRaidLifecycle(SqliteConnection db)
     {
         RemovePcRoomSchema(db);
+        Execute(db, "DROP INDEX IF EXISTS character_raid_reward_epoch");
+        if (Query(db, "SELECT count(*) FROM pragma_table_info('character_raid_reward_receipts') WHERE name='reward_epoch'") is 1L)
+        {
+            if (Query(db, "SELECT count(*) FROM character_raid_reward_receipts WHERE reward_epoch<>0") is not 0L)
+                throw new InvalidOperationException("旧库夹具不能丢弃已刷新团本奖励世代");
+            Execute(db, "ALTER TABLE character_raid_reward_receipts DROP COLUMN reward_epoch");
+        }
         if (Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_raid_runs'") is 1L)
         {
             if (Query(db, "SELECT count(*) FROM character_raid_runs") is not 0L)

@@ -1799,6 +1799,7 @@ CREATE TABLE IF NOT EXISTS character_raid_reward_receipts(
     mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids) AND json_type(mail_ids)='array'),
     created_at INTEGER NOT NULL CHECK(created_at>=0),
     raid_type INTEGER NOT NULL DEFAULT 0 CHECK(raid_type IN(0,1,2,3)),
+    reward_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reward_epoch)='integer' AND reward_epoch>=0),
     PRIMARY KEY(character_id,instance_id,phase,kind),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
@@ -1815,6 +1816,8 @@ CREATE TABLE character_raid_runs(
     clear_week INTEGER,
     guild_id INTEGER CHECK(guild_id BETWEEN 0 AND 4294967295),
     guild_joined_at INTEGER CHECK((guild_id IS NULL AND guild_joined_at IS NULL) OR (guild_id IS NOT NULL AND guild_joined_at IS NOT NULL AND ((guild_id=0 AND guild_joined_at=0) OR (guild_id>0 AND guild_joined_at>=0)))),
+    entry_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(entry_epoch)='integer' AND entry_epoch>=0),
+    reward_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reward_epoch)='integer' AND reward_epoch>=0),
     PRIMARY KEY(character_id,instance_id),
     CHECK((phase0_event IS NULL AND phase0_anchor IS NULL AND phase0_receipt IS NULL) OR
         (phase0_event IS NOT NULL AND phase0_anchor IS NOT NULL AND phase0_receipt IS NOT NULL AND length(phase0_event)=32 AND phase0_anchor>=0 AND json_valid(phase0_receipt) AND json_type(phase0_receipt)='object')),
@@ -1827,6 +1830,8 @@ CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,ra
 CREATE INDEX character_raid_clear_week ON character_raid_runs(character_id,raid_type,clear_week) WHERE state=2;
 CREATE INDEX character_raid_account_admission ON character_raid_runs(account,raid_type,admitted_at);
 CREATE INDEX character_raid_rewards_type_week ON character_raid_reward_receipts(character_id,raid_type,week_key,final_phase,instance_id);
+CREATE INDEX character_raid_entry_clear ON character_raid_runs(account,raid_type,entry_epoch,clear_week) WHERE state=2;
+CREATE INDEX character_raid_reward_epoch ON character_raid_reward_receipts(account,raid_type,reward_epoch,week_key,final_phase,instance_id);
 
 CREATE TABLE character_evildom_war_rewards(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
@@ -1848,9 +1853,16 @@ CREATE TABLE character_evildom_war_hidden_rewards(
 
 CREATE TABLE account_fiendwar_guides(
   account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
-  week INTEGER NOT NULL CHECK(week>0),character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
-  PRIMARY KEY(account,slot),UNIQUE(account,character_id),
+  week INTEGER NOT NULL CHECK(week>0),entry_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(entry_epoch)='integer' AND entry_epoch>=0),
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  PRIMARY KEY(account,week,entry_epoch,slot),UNIQUE(account,week,entry_epoch,character_id),
   FOREIGN KEY(account) REFERENCES accounts(account_id));
+
+CREATE TABLE account_raid_quota_epochs(
+  account TEXT NOT NULL,raid_type INTEGER NOT NULL CHECK(raid_type BETWEEN 0 AND 3),
+  entry_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(entry_epoch)='integer' AND entry_epoch>=0),
+  reward_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reward_epoch)='integer' AND reward_epoch>=0),
+  PRIMARY KEY(account,raid_type),FOREIGN KEY(account) REFERENCES accounts(account_id));
 
 CREATE TABLE account_evildom_war_guides(
   account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),

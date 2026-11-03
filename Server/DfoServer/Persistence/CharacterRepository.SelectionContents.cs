@@ -61,7 +61,12 @@ internal sealed partial class CharacterRepository
                         new(reader.GetInt32(5), reader.GetInt32(7))));
                 }
             query.Parameters.AddWithValue("$oldestWeek", QuestCycle.Day(now.AddDays(-8)));
-            query.CommandText = "SELECT raid_type,clear_week,count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND state=2 AND clear_week>=$oldestWeek GROUP BY raid_type,clear_week";
+            query.CommandText = """
+                SELECT r.raid_type,r.clear_week,count(*) FROM character_raid_runs r
+                WHERE r.character_id=$id AND r.account=$account AND r.state=2 AND r.clear_week>=$oldestWeek
+                  AND r.entry_epoch=COALESCE((SELECT q.entry_epoch FROM account_raid_quota_epochs q WHERE q.account=r.account AND q.raid_type=r.raid_type),0)
+                GROUP BY r.raid_type,r.clear_week
+                """;
             using var raidReader = query.ExecuteReader();
             while (raidReader.Read())
                 if (raidReader.GetInt32(0) is >= 0 and < 4) raids.Add(new(raidReader.GetInt32(0), raidReader.GetInt32(1), raidReader.GetInt32(2)));

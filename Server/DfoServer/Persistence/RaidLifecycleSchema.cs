@@ -13,6 +13,15 @@ internal static class RaidLifecycleSchema
           PRIMARY KEY(account,slot),UNIQUE(account,character_id),
           FOREIGN KEY(account) REFERENCES accounts(account_id));
         """;
+    // 192之后的当前结构：世代列使GM刷新保留历史绑定，并允许新世代复用两槽。
+    internal const string CurrentFiendwarGuideBindings = """
+        CREATE TABLE account_fiendwar_guides(
+          account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
+          week INTEGER NOT NULL CHECK(week>0),entry_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(entry_epoch)='integer' AND entry_epoch>=0),
+          character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+          PRIMARY KEY(account,week,entry_epoch,slot),UNIQUE(account,week,entry_epoch,character_id),
+          FOREIGN KEY(account) REFERENCES accounts(account_id));
+        """;
     internal const string TypeColumn = "raid_type INTEGER NOT NULL DEFAULT 0 CHECK(raid_type IN(0,1))";
     internal static string RewardDefinition => RaidRewardSchema.Definition.Split(';')[0]
         .Replace("    PRIMARY KEY(character_id,instance_id,phase,kind)", "    " + TypeColumn + ",\n    PRIMARY KEY(character_id,instance_id,phase,kind)", StringComparison.Ordinal);
