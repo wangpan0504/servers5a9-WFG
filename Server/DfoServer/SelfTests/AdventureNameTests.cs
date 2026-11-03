@@ -66,9 +66,10 @@ internal static class AdventureNameTests
         That(AdventureNameTicketDefinition.Parse(raw, template) is { TemplateId: 2000 } ticket && ticket.Allows(1, 15),
             "券资格来自完整动作和使用地点，不按名称、图标或物品ID猜测");
         That(AdventureNameTicketDefinition.Parse(raw with { ActionDeclaration = new("[quest clear]", []) }, template) is null &&
-            AdventureNameTicketDefinition.Parse(raw with { ActionDeclaration = new("[represent account name change]", [1]) }, template) is null &&
-            AdventureNameTicketDefinition.Parse(raw with { DeclaredActionUsablePlaces = ["[village]"] }, template) is null,
-            "其他动作、未确认参数和未闭合场景声明不取得改名资格");
+            AdventureNameTicketDefinition.Parse(raw with { ActionDeclaration = new("[represent account name change]", [1]) }, template) is null,
+            "其他动作和未确认参数不取得改名资格");
+        That(AdventureNameTicketDefinition.Parse(raw with { DeclaredActionUsablePlaces = ["[village]"] }, template) is not null,
+            "地点数量不参与改名券身份识别");
     }
 
     static void Persistence()

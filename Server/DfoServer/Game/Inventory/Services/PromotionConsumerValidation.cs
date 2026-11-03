@@ -352,7 +352,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             {
                 if (template.Kind != ItemKind.Consumable || template.UseForbidden || golden.Count <= 0 ||
                     golden.Operation != AmplificationOperation.GoldInvest || golden.Option is < 1 or > 5 ||
-                    golden.MinimumItemLevel > golden.MaximumItemLevel || !(golden.Village || golden.SeriaRoom) ||
+                    golden.MinimumItemLevel > golden.MaximumItemLevel ||
                     golden.Levels.IsEmpty || golden.Levels.Any(row => row.Level > 31 || row.Weight < 0) ||
                     !golden.Levels.Any(row => row.Weight > 0))
                     throw new InvalidDataException("golden_amplification_definition");
@@ -363,8 +363,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             {
                 if (amplify.PendingRule is not null || template.UseForbidden ||
                     !new ItemCore(template.Id, template.Kind, 1).IsStackable ||
-                    ItemSlotBoundService.List(template.Kind) != InventoryListType.Main ||
-                    !(amplify.Village || amplify.SeriaRoom))
+                    ItemSlotBoundService.List(template.Kind) != InventoryListType.Main)
                     throw new InvalidDataException(amplify.PendingRule ?? "amplify_source_definition");
                 _ = amplifyUpgrades.Rules;
                 switch (amplify.Kind)

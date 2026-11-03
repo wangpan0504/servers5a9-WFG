@@ -116,8 +116,7 @@ internal sealed class AvatarPackageCatalog
             "total usable count", "total weekly usable count", "total accumulated usable count", "use count limit all server item",
             "usable datetime", "random box", "random box removal items", "raid booster item",
             "convert boost item", "check usable itemlevel", "set disjoint instance type", "set epic exchange instance type",
-            "random option unseal", "custom ability grade", "daybreak drop item", "battle royal", "action usable server type",
-            "usable game server type", "usable server type", "booster select custom ability info" })
+            "random option unseal", "custom ability grade", "daybreak drop item", "battle royal", "booster select custom ability info" })
             if (Fields(text, tag).Count != 0) return Reject(tag);
         if (!int.TryParse(Scalar(text, "booster selection num").Trim(), out int selection) || selection < 0)
             return Reject("装扮选择数量无效");

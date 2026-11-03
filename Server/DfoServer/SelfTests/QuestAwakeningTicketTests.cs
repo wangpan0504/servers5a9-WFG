@@ -44,13 +44,18 @@ internal static class QuestAwakeningTicketTests
             "匹配非空[1]/[0]觉醒券参数、stage与真实tag1保留");
         foreach(var invalid in new[] { raw with { DeclaredUseActionPacket=0 },raw with { HasUseActionPacket=false },
             raw with { ActionDeclaration=new("[first awaken clear]",[]) },raw with { ActionDeclaration=new("[first awaken clear]",[1,2]) },
-            raw with { ActionDeclaration=new("[second awaken clear]",[1]) },raw with {DeclaredActionUsablePlaces=null},
-            raw with {DeclaredActionUsablePlaces=["[dungeon]"]} })
+            raw with { ActionDeclaration=new("[second awaken clear]",[1]) } })
             DfoServer.Testing.TestCheck.Reject<NotSupportedException>(()=>QuestTicketDefinition.Parse(invalid,template),
                 "不猜造空参数旧券或不同use-action-packet形状");
         That(QuestTicketDefinition.Parse(raw with { ActionDeclaration = new("[first awaken clear]", [1,1]) },template).AwakeningStage == 1 &&
             QuestTicketDefinition.Parse(raw with { ActionDeclaration = new("[second awaken clear]", [0,1]) },template).AwakeningStage == 2,
             "含自我觉醒标志的双参数券沿现有职业任务、CHR赠技与原子提交，不凭标志直接改职业");
+        var mixed = QuestTicketDefinition.Parse(raw with { DeclaredActionUsablePlaces=["[village]","[seria room]","[village]"] },template);
+        That(mixed.Places.SequenceEqual(new[] { "[village]", "[seria room]", "[village]" }) &&
+            StackableUsePlaces.Allows(mixed.Places,"[village]") && StackableUsePlaces.Allows(mixed.Places,"[seria room]") &&
+            !StackableUsePlaces.Allows(mixed.Places,"[dungeon]"),"觉醒券保留多地点及重复声明，按实际地点匹配");
+        That(QuestTicketDefinition.Parse(raw with { DeclaredActionUsablePlaces=[] },template).Places.IsEmpty,
+            "空地点列表不因数量拒绝觉醒券定义");
         foreach(byte job in Enumerable.Range(0,16).Select(value=>(byte)value))
             That(first.Allows(50,job) && second.Allows(75,job) && !first.Allows(49,job) && !second.Allows(74,job),
                 "真实all职业及50/75边界 "+job);
@@ -66,6 +71,12 @@ internal static class QuestAwakeningTicketTests
         var first=items.Items.QuestTicket(FirstTicket); var second=items.Items.QuestTicket(SecondTicket);
         That(first is {ActionIndex:119,AwakeningStage:1,MinimumLevel:50,VillageOnly:true} && second is {ActionIndex:122,AwakeningStage:2,MinimumLevel:75,VillageOnly:true},
             "两张匹配PVF非空参数有效券装载");
+        foreach (var (id, action) in new[] { (490003900, 119u), (490003901, 122u) })
+        {
+            var actual = items.Items.QuestTicket(id);
+            That(actual.ActionIndex == action && actual.Places.Contains("[village]") && actual.Places.Contains("[seria room]") &&
+                StackableUsePlaces.Allows(actual.Places, "[village]"), "真实双地点觉醒券可按城镇资格装载 " + id);
+        }
         var jobs=new HashSet<byte>(); var unavailable=new List<string>(); int combinations=0;
         foreach(byte job in Enumerable.Range(0,16).Select(value=>(byte)value))
         foreach(byte branch in (job is 9 or 10 ? new byte[] {0} : new byte[] {1,2,3,4,5}))

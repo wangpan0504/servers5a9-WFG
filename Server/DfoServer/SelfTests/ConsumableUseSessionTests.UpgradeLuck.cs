@@ -83,7 +83,7 @@ internal static partial class ConsumableUseSessionTests
             InventoryRewardGrantService.Create(r.Items.Get(10005312), 2) with { ExpireTime = 0 });
         var normal = actor with { Inventory = new([target with { Core = target.Core with { Attr = 0xE9 } }, portable]) };
         var normalService = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements,
-            r.Disjoint, r.GoldLimits, r.EpicPieces, towns, rng, clock, r.RecoveryConsumables);
+            r.Disjoint, r.GoldLimits, r.EpicPieces, rng, clock, r.RecoveryConsumables);
         int failure = r.AmplifyUpgrades.ReinforceRules.Steps[9].FailureWeight;
         That(failure is > 0 and < 100000, "普通强化选择真实normal表成功失败两区间");
         rng.Value = failure - 1;

@@ -87,6 +87,15 @@ internal sealed partial class CharacterRepository
             if (update.ExecuteNonQuery() != 1) throw new InvalidOperationException("称号角色版本失配");
             current = current with { Revision = current.Revision + 1 };
         }
+        WriteTitleRewardsInTransaction(db, tx, owner, current, plan);
+        ApplyFiendwarTitleFacts(db, tx, owner, expected.Id, plan.FiendwarFacts);
+        return current with { TitleProgress = plan.Progress, TitleSections = plan.Sections };
+    }
+
+    void WriteTitleRewardsInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, Character current, TitleAchievementPlan plan)
+    {
+        var expected = plan.Before;
         using var command = db.CreateCommand(); command.Transaction = tx;
         foreach (var (id, value) in plan.Progress)
         {
@@ -121,7 +130,5 @@ internal sealed partial class CharacterRepository
             var (postalError, _) = DeliverMailInTransaction(db, tx, delivery);
             if (postalError != MailboxError.None) throw new InvalidOperationException("称号奖励邮件无法提交：" + postalError);
         }
-        ApplyFiendwarTitleFacts(db, tx, owner, expected.Id, plan.FiendwarFacts);
-        return current with { TitleProgress = plan.Progress, TitleSections = plan.Sections };
     }
 }

@@ -38,7 +38,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         var stackable = StackableFile.Parse(id, path, tokens, resolve);
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
             if (!(duplicate.Key is "stackable type" && stackable.TypeDeclaration is not null ||
-                duplicate.Key is "action usable place" && stackable.DeclaredActionUsablePlaces is not null ||
+                ItemUseFields.IsSharedTag(duplicate.Key) ||
                 CompleteIntegerScalars(duplicate) && AllowsRepeatedScalar(duplicate.Key, duplicate)))
                 errors.Add("重复恢复物品字段：" + duplicate.Key);
         int? Scalar(string name)

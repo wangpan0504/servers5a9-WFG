@@ -488,7 +488,8 @@ internal static class AvatarPresetTests
         That(fifth.Accepted && fifth.Plan!.After.AvatarPresets.Capacity == 6, "容量5升到上限6");
         That(!service.PlanCapacity(character, source, definition with { Label = "[add mileage]", Parameters = [10] }, true).Accepted,
             "标签不是装扮预设扩展券时拒绝");
-        That(!service.PlanCapacity(character, source, definition, inTown: false).Accepted, "副本内不能使用城镇扩展券");
+        That(service.PlanCapacity(character, source, definition, inTown: false).Accepted,
+            "橱窗资产规划不再另设地点阻止，实际使用由统一Session门禁校验");
 
         Character Role(params InventoryItem[] rows) => new(1, 0, "Preset", 0, new(0, 0, 0, 0), null)
         {

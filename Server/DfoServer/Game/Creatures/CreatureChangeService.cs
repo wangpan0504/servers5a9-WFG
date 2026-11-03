@@ -42,7 +42,7 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
         {
             definition = resolve(source, target);
             if (definition is null || definition.ItemId != source.Core.ItemId ||
-                definition.ConsumeCount <= 0 || source.Core.Count < definition.ConsumeCount || definition.TownOnly && !inTown ||
+                definition.ConsumeCount <= 0 || source.Core.Count < definition.ConsumeCount ||
                 character.Level < definition.MinimumLevel || character.Level > definition.MaximumLevel ||
                 target.Creature.Level < definition.CreatureMinimumLevel ||
                 definition.SourceItemId > 0 && definition.SourceItemId != target.Core.ItemId ||

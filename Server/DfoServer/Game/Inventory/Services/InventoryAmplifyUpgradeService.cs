@@ -8,11 +8,15 @@ using DfoServer.GameWorld.Towns;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyUpgradeCatalog upgrades, EnhancementCatalog enhancements,
-    DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TownCatalog towns,
+    DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, TimeProvider? clock = null, RecoveryConsumableCatalog? consumables = null)
 {
     const ushort RejectCode = InventoryEnhancementService.Rejection;
-    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
+    public bool IsEffectSource(int itemId) => upgrades.Get(itemId) is
+        { PendingRule: null, Kind: AmplifyUseKind.Portable or AmplifyUseKind.Lucky };
+
+    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0,
+        Func<int, bool>? canUseSource = null)
     {
         receipt = null;
         var before = character.Inventory;
@@ -111,7 +115,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
                 if (upgrades.Get(candidate.Core.ItemId) is { Kind: AmplifyUseKind.Protection } rule && rule.Reinforce == reinforce)
                 {
                     if (rule.PendingRule is not null) { unresolvedProtection = true; continue; }
-                    if (AllowsUse(rule, character, target, template) && !items.Get(candidate.Core.ItemId).UseForbidden)
+                    if (AllowsUse(rule, character, target, template) && !items.Get(candidate.Core.ItemId).UseForbidden &&
+                        canUseSource?.Invoke(candidate.Core.ItemId) != false)
                     { protection = candidate; protectionRule = rule; break; }
                 }
             if (protection is null && unresolvedProtection) return InventoryResult.Reject(RejectCode);
@@ -204,8 +209,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         target.Core.Upgrade >= use.MinimumUpgrade && target.Core.Upgrade <= use.MaximumUpgrade &&
         template.MinimumLevel >= use.MinimumItemLevel && template.MinimumLevel <= use.MaximumItemLevel &&
         (!use.SealedOnly || target.Core.SealFlag != 0) &&
-        (use.Rarities is not { Count: > 0 } rarities || rarities.Contains(template.Rarity)) && AllowsPart(template.EquipmentSlot, use.SlotClass) &&
-        (use.Village || use.SeriaRoom && towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet()));
+        (use.Rarities is not { Count: > 0 } rarities || rarities.Contains(template.Rarity)) && AllowsPart(template.EquipmentSlot, use.SlotClass);
 
     static ImmutableArray<EnhancementRefund> RefundRows(InventorySnapshot before, InventorySnapshot after, IReadOnlyList<InventoryReward> rewards)
     {

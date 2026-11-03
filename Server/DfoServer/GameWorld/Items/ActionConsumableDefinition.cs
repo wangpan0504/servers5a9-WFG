@@ -10,16 +10,12 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
     public byte EffectMaintenance { get; init; }
     public ImmutableHashSet<int> AllowedTargets { get; init; } = [];
     // [village] 覆盖整座城镇（含赛丽亚房间），与强化/宠物地点判定同一口径；[seria room] 仍只限房间。
-    public bool AllowsPlace(string place) => Places.IsEmpty || Places.Contains("[all]") || Places.Contains(place) ||
-        place == "[seria room]" && Places.Contains("[village]");
+    public bool AllowsPlace(string place) => StackableUsePlaces.Allows(Places, place);
 
     public static ActionConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {
         var raw = file.Stackable;
         var action = StackableActionCatalog.Arguments(raw);
-        bool generalTransport = action?.Label is "[cargo transport stone]" or "[avatar transport stone]" or
-            "[flag transport stone]" or "[emblem transport stone]" or "[creature transport stone]" &&
-            raw.DeclaredActionUsableServerTypes is ["[general server]"];
         if (raw.TemplateId != item.Id || item.Kind != ItemKind.Consumable || item.UseForbidden ||
             file.StructureDiagnostics.Length != 0 || raw.TypeDeclaration is null ||
             action is not ({ Label: "[rent point]" or "[add mileage]" or "[use favor point]", Parameters: [> 0] } or
@@ -43,16 +39,12 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces?.Any(place => place is not ("[village]" or "[seria room]" or "[dungeon]" or "[all]") &&
-                !(action.Label == "[character name change]" && place == "[dont use assult]")) == true ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null or < 0 ||
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null ||
             file.DeclaredFields.Contains("total usable count") && file.TotalUsableCount is null or < 0 or > byte.MaxValue ||
             file.DeclaredFields.Contains("effect maintenance") && (action.Label != "[creature effect]" || file.EffectMaintenance is null) ||
-            file.DeclaredFields.Any(field => field == "action usable server type" && !generalTransport || field is "usable game server type" or "usable server type" or
-                "booster info" or "increase status type" or "hp recovery" or "mp recovery" or "stat change" or "stat change duration" or
+            file.DeclaredFields.Any(field => field is "booster info" or "increase status type" or "hp recovery" or "mp recovery" or "stat change" or "stat change duration" or
                 "total weekly usable count" or "total accumulated usable count" or "use count limit all server item"))
             return null;
         bool extension = action.Label == "[extend item period]";

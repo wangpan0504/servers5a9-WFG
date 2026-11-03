@@ -33,27 +33,32 @@ internal static class AmplifyUpgradeTests
             Reinforcement("[protect equipment]") is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:0 } &&
             Reinforcement("[new protect equipment]",10) is { Kind:AmplifyUseKind.Protection, Reinforce:true, RetainLevel:10 },
             "便携强化及保护声明保留独立强化模式，不能套用增幅概率或消费增幅保护券");
+        string serverField = "action usable server type";
         string ResolvePortable(int index) => index switch { -1 => "[action type]", -2 => "[new portable amplify]",
-            -3 => "[/action type]", -4 => "[portable amplify]", -5 => "[action usable server type]",
-            -6 => "[/action usable server type]", -7 => "[general server]", -8 => "[event server]",
+            -3 => "[/action type]", -4 => "[portable amplify]", -5 => "[" + serverField + "]",
+            -6 => "[/" + serverField + "]", -7 => "[general server]", -8 => "[event server]",
             -9 => "[unknown server]", -10 => "[extra]", -11 => "[/extra]", _ => throw new InvalidOperationException() };
         AmplifyUse? Portable(bool boosted, params int[] values) => AmplifyUpgradeCatalog.ParseUse(new(
             [new(3,-1), new(6,boosted ? -2 : -4), .. values.Select(value => new PvfLib.PvfToken(0,value)), new(3,-3)],
             ResolvePortable), ResolvePortable);
         AmplifyUse? ServerUse(params PvfLib.PvfToken[] suffix) => AmplifyUpgradeCatalog.ParseUse(new(
             [new(3,-1),new(6,-4),new(0,0),new(0,30),new(3,-3),..suffix], ResolvePortable), ResolvePortable);
-        That(ServerUse(new(3,-5),new(6,-7),new(3,-6)) is { PendingRule:null, MaximumUpgrade:30 } &&
-            ServerUse(new(3,-5),new(6,-7),new(6,-8),new(3,-6)) is { PendingRule:null },
-            "普通服增幅器接受唯一完整且包含general server的声明，保留原升级范围");
-        foreach (var suffix in new PvfLib.PvfToken[][]
+        foreach (string field in new[] { "action usable server type", "usable game server type", "usable server type" })
         {
-            [new(3,-5),new(6,-8),new(3,-6)], [new(3,-5),new(6,-9),new(3,-6)],
-            [new(3,-5),new(6,-7),new(6,-7),new(3,-6)], [new(3,-5),new(3,-6)],
-            [new(3,-5),new(0,0),new(3,-6)], [new(3,-5),new(6,-7)],
-            [new(3,-5),new(6,-7),new(3,-6),new(3,-5),new(6,-7),new(3,-6)],
-            [new(3,-10),new(3,-5),new(6,-7),new(3,-6),new(3,-11)]
-        }) That(ServerUse(suffix) is { PendingRule:not null },
-            "活动专服、未知、重复、空、坏类型、残缺及嵌套的服务器资格不能被当作普通服放行");
+            serverField = field;
+            That(ServerUse(new(3,-5),new(6,-7),new(3,-6)) is { PendingRule:null, MaximumUpgrade:30 } &&
+                ServerUse(new(3,-5),new(6,-7),new(6,-8),new(3,-6)) is { PendingRule:null },
+                "服务器声明不改变增幅器的原升级范围：" + field);
+            foreach (var suffix in new PvfLib.PvfToken[][]
+            {
+                [new(3,-5),new(6,-8),new(3,-6)], [new(3,-5),new(6,-9),new(3,-6)],
+                [new(3,-5),new(6,-7),new(6,-7),new(3,-6)], [new(3,-5),new(3,-6)],
+                [new(3,-5),new(0,0),new(3,-6)], [new(3,-5),new(6,-7)],
+                [new(3,-5),new(6,-7),new(3,-6),new(3,-5),new(6,-7),new(3,-6)],
+                [new(3,-10),new(3,-5),new(6,-7),new(3,-6),new(3,-11)]
+            }) That(ServerUse(suffix) is { PendingRule:null, MinimumUpgrade:0, MaximumUpgrade:30, SuccessBonusWeight:0 },
+                "忽略专用服、未知、重复、空值及其他服务器声明形态，不提高等级范围或成功率：" + field);
+        }
         That(Portable(true,0,14,30000) is { Kind:AmplifyUseKind.Portable, MinimumUpgrade:0, MaximumUpgrade:14, SuccessBonusWeight:30000 } &&
             Portable(false,0,50) is { Kind:AmplifyUseKind.Portable, MaximumUpgrade:50, SuccessBonusWeight:0 } &&
             Portable(true,0,14,0) is { SuccessBonusWeight:0 }, "新便携动作保留三个整数，旧动作及零加成不扩大基础成功率");
@@ -143,7 +148,7 @@ internal static class AmplifyUpgradeTests
         { Job = 2, Level = 75, Inventory = new([target, source], Gold: 100_000_000) };
         var request = new EnhancementRequest(EnhancementMode.Amplify, MainSlot(9), 31440, 121, -1, ReadOnlyMemory<byte>.Empty, -1, -1);
         var rng = new FixedRandom(99999);
-        var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, rng);
+        var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, rng);
         var luckySource = new InventoryItem(3, MainSlot(65), InventoryRewardGrantService.Create(r.Items.Get(10007406), 2) with { ExpireTime = 0 });
         var reinforcement = target with { Core = core with { Attr = 0xEE, AmplifyType = 0, AmplifyValue = 0 } };
         var luckyRole = role with { Inventory = new([reinforcement, luckySource], Gold: 0) };
@@ -253,7 +258,7 @@ internal static class AmplifyUpgradeTests
         var guaranteed = new PvfLib.PvfTokenDocument([new(3,-1),new(6,-2),new(0,0),new(0,14),new(0,int.MaxValue),new(3,-3)],GuaranteedResolve);
         var guaranteedCatalog = new AmplifyUpgradeCatalog(path => path == "stackable/guaranteed.stk" ? guaranteed :
             new(resources.Archive.ReadTokens(path),GuaranteedResolve),GuaranteedResolve,new Dictionary<int,string> { [10007839] = "guaranteed.stk" });
-        var guaranteedService = new InventoryAmplifyUpgradeService(r.Items,guaranteedCatalog,r.Enhancements,r.Disjoint,r.GoldLimits,r.EpicPieces,resources.Towns,rng);
+        var guaranteedService = new InventoryAmplifyUpgradeService(r.Items,guaranteedCatalog,r.Enhancements,r.Disjoint,r.GoldLimits,r.EpicPieces,rng);
         var guaranteedRole = full with { Inventory = full.Inventory with { Gold = 0, Items = full.Inventory.Items.Add(boostedSource with { Uid = 90 }) } };
         calls = rng.Calls;
         result = guaranteedService.Plan(guaranteedRole,request with { MaterialSlot = 65 },out receipt);
@@ -280,11 +285,15 @@ internal static class AmplifyUpgradeTests
             new(resources.Archive.ReadTokens(path), Resolve), Resolve, new Dictionary<int, string> { [10005313] = "protection.stk" });
         var withProtection = high with { Inventory = high.Inventory with { Items = [.. high.Inventory.Items,
             new(3, MainSlot(65), InventoryRewardGrantService.Create(r.Items.Get(10005313), 2) with { ExpireTime = 0 })] } };
-        var protectedService = new InventoryAmplifyUpgradeService(r.Items, testCatalog, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, rng);
+        var protectedService = new InventoryAmplifyUpgradeService(r.Items, testCatalog, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, rng);
         result = protectedService.Plan(withProtection, request, out receipt);
         That(result.Accepted && receipt is { OutcomeCode: 2, NewLevel: 7, TerminalSlot: 65, TerminalRemaining: 1, Refunds.IsEmpty: true } &&
             result.Plan!.After.Find(MainSlot(9))!.Core == core with { Attr = 0xE7 } && result.Plan.After.Find(MainSlot(9))!.Uid == 1,
             "合成保护声明在毁装失败时消耗一张、保留配置等级与原UID，不发销毁补偿；不是当前PVF实机资格");
+        result = protectedService.Plan(withProtection, request, out receipt, canUseSource: _ => false);
+        That(result.Accepted && receipt is { OutcomeCode: 3, TerminalSlot: -1 } &&
+            result.Plan!.After.Find(MainSlot(65))!.Core.Count == 2,
+            "自动保护券也通过统一使用资格筛选，场景禁止时不扣券、不冒充已保护");
         rng.Value = 99999;
         result = protectedService.Plan(withProtection, request, out receipt);
         That(result.Accepted && receipt is { OutcomeCode: 0, NewLevel: 12, TerminalSlot: -1 } &&
@@ -295,7 +304,7 @@ internal static class AmplifyUpgradeTests
             "取消兑换价格门禁不扩大为忽略其他未实现的使用次数限制");
         var pendingCatalog = new AmplifyUpgradeCatalog(path => path == "stackable/protection.stk" ? pending :
             new(resources.Archive.ReadTokens(path), PendingResolve), PendingResolve, new Dictionary<int, string> { [10005313] = "protection.stk" });
-        var pendingService = new InventoryAmplifyUpgradeService(r.Items, pendingCatalog, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, rng);
+        var pendingService = new InventoryAmplifyUpgradeService(r.Items, pendingCatalog, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, rng);
         calls = rng.Calls;
         That(!pendingService.Plan(withProtection, request, out _).Accepted && rng.Calls == calls,
             "存在未实现使用资格的保护券时仍在随机前拒绝，不能静默跳过保护后销毁装备");
@@ -322,7 +331,7 @@ internal static class AmplifyUpgradeTests
             "强化独立normal表的保级、降三级及销毁政策，不混入amplify或活动表");
         var random = new FixedRandom(0);
         var upgrading = new InventoryAmplifyUpgradeService(r.Items,r.AmplifyUpgrades,r.Enhancements,r.Disjoint,
-            r.GoldLimits,r.EpicPieces,resources.Towns,random,consumables:r.RecoveryConsumables);
+            r.GoldLimits,r.EpicPieces,random,consumables:r.RecoveryConsumables);
         var service = new InventoryEnhancementService(r.Items,r.Enhancements,r.MedalUpgrades,random,amplification:upgrading);
         var target = seed.Inventory.Find(request.Target)!;
         var source = new InventoryItem(3,MainSlot(65),InventoryRewardGrantService.Create(r.Items.Get(10005312),2) with { ExpireTime=0 });
@@ -388,7 +397,7 @@ internal static class AmplifyUpgradeTests
             "增幅金币仍两段，不吃强化等级倍率");
         var random = new FixedRandom(0);
         var upgrading = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint,
-            r.GoldLimits, r.EpicPieces, resources.Towns, random);
+            r.GoldLimits, r.EpicPieces, random);
         var service = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, random, amplification: upgrading);
         var target = seed.Inventory.Find(request.Target)!;
         var gear = r.Items.Get(target.Core.ItemId);
@@ -463,7 +472,7 @@ internal static class AmplifyUpgradeTests
         var clock = new ConsumableUseSessionTests.FakeClock();
         var random = new FixedRandom(0);
         var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements,
-            r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, random, clock, r.RecoveryConsumables);
+            r.Disjoint, r.GoldLimits, r.EpicPieces, random, clock, r.RecoveryConsumables);
         var target = seed.Inventory.Find(request.Target)!;
         var actor = seed with { Inventory = seed.Inventory with { Items = seed.Inventory.Items.Replace(target,
             target with { Core = target.Core with { Attr = 0xE9 } }) } };

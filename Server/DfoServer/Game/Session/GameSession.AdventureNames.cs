@@ -16,11 +16,16 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() => (Allowed: CanPlan(), Selected, SelectionEpoch, Phase,
             Snapshot: repository.ReadAdventure(owner, service.Catalog, now)));
         if (!capture.Allowed) return new(false, initial ? (ushort)3 : (ushort)19);
+        int sourceId = !initial && capture.Selected is { } sourceCharacter
+            ? sourceCharacter.Inventory.Find(new(InventoryListType.Main, unchecked((short)slot)))?.Core.ItemId ?? 0 : 0;
+        if (!initial && capture.Selected is { } character && !CanUseStackableItem(character, sourceId)) return new(false, 19);
         var prepared = service.Prepare(capture.Snapshot, capture.Selected, name, initial, slot, mode, now);
         if (prepared.Plan is not { } plan) return new(false, prepared.Error);
         return owner.Execute(() =>
         {
             if (!CanPlan() || !ReferenceEquals(Selected, capture.Selected) || SelectionEpoch != capture.SelectionEpoch || Phase != capture.Phase)
+                return new AdventureNameResult(false, 19);
+            if (!initial && capture.Selected is { } current && !CanUseStackableItem(current, sourceId))
                 return new AdventureNameResult(false, 19);
             var committed = repository.CommitAdventureName(owner, plan, service.Catalog, now);
             if (!committed.Accepted) return new(false, committed.Error);

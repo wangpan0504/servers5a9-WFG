@@ -165,9 +165,11 @@ internal static class ConsumableUseTests
             "随机中级倍率不借固定百分百合同放行");
         foreach (var invalid in new[] { epicRaw with { EffectMaintenance = null }, epicRaw with { EffectMaintenance = 0 },
             epicRaw with { StatChangeDuration = new(600000, "party", null) }, epicRaw with { StatChangeDuration = null },
-            epicRaw with { Diagnostics = ["invalid field"] }, epicRaw with { Stackable = epicRaw.Stackable with
-                { DeclaredActionUsablePlaces = ["[dungeon]"] } } })
-            That(RecoveryConsumableCatalog.Read(invalid, epicBuff: epic) is null, "固定史诗药剂拒绝坏持续时间、维护位、使用场景或声明");
+            epicRaw with { Diagnostics = ["invalid field"] } })
+            That(RecoveryConsumableCatalog.Read(invalid, epicBuff: epic) is null, "固定史诗药剂拒绝坏持续时间、维护位或声明");
+        That(RecoveryConsumableCatalog.Read(epicRaw with { Stackable = epicRaw.Stackable with
+            { DeclaredActionUsablePlaces = ["[dungeon]"] } }, epicBuff: epic) is not null,
+            "使用地点不改变史诗药剂身份");
         var effectInventory = InventorySnapshot.Empty with { ConsumableStates = [
             new(ConsumableStateKind.Effect, 490000413, 9999999, 15, 253),
             new(ConsumableStateKind.Cooldown, 490000413, 9999999, 7, 253),
@@ -217,10 +219,13 @@ internal static class ConsumableUseTests
             villageRaw with { EffectMaintenance = 0, CooltimeMaintenance = 0 },
             villageRaw with { StatChangeDuration = new(300000, "party", null) },
             villageRaw with { StatChangeDuration = null },
-            villageRaw with { Diagnostics = ["invalid field"] },
-            villageRaw with { Stackable = villageRaw.Stackable with { DeclaredActionUsablePlaces = ["[dungeon]"] } } })
+            villageRaw with { Diagnostics = ["invalid field"] } })
             That(RecoveryConsumableCatalog.Read(invalid, villageSpeedBuff: village) is null,
-                "城镇移速药剂拒绝坏持续时间、维护位、使用场景或声明");
+                "城镇移速药剂拒绝坏持续时间、维护位或效果声明");
+        That(RecoveryConsumableCatalog.Read(villageRaw with { Stackable = villageRaw.Stackable with
+            { DeclaredActionUsablePlaces = ["[dungeon]"] } }, villageSpeedBuff: village) is
+            { VillageMoveSpeedBuff.Percent:20, Places:["[dungeon]"] },
+            "地点声明不改变已支持的药剂身份，使用资格交给统一门禁与实际效果入口");
         var villageInventory = InventorySnapshot.Empty with { ConsumableStates = [
             new(ConsumableStateKind.Effect, 10306776, 9999999, 7, -10306776),
             new(ConsumableStateKind.Cooldown, 10306776, 9999999, 7, -10306776),

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
@@ -29,6 +30,15 @@ internal static class DailyRetainedBoosterDefinition
         {
             string key = token.Groups[2].Value;
             bool closing = token.Groups[1].Length != 0;
+            if (ItemUseFields.IsIgnoredServerType(key) || stack.Count == 0 && ItemUseFields.IsSharedTag(key))
+            {
+                if (stack.Count == 0 && current is not null)
+                {
+                    fields[current] = (start, token.Index);
+                    current = null;
+                }
+                continue;
+            }
             if (stack.Count != 0)
             {
                 if (closing)

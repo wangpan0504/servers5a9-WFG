@@ -31,8 +31,8 @@ internal static class ActionConsumableTests
             paid.Plan.After.DailyBoosterUses.Length == 1 && character.Inventory.Find(slot)!.Core.Count == 2,
             "只读规划同时扣一件、保存冷却与日次数，不修改原快照");
         That(!InventoryActionConsumableService.Plan(character with { Inventory = paid.Plan!.After },slot,definition,"[village]",clock).Accepted &&
-            !InventoryActionConsumableService.Plan(character,slot,definition,"[dungeon]",clock).Accepted,
-            "重复冷却和错误地点都拒绝，不额外消费");
+            InventoryActionConsumableService.Plan(character,slot,definition,"[dungeon]",clock).Accepted,
+            "重复冷却仍拒绝；资产规划不再另设地点阻止，地点只由统一Session门禁检查");
         var crossed = ConsumableStatePolicy.CrossBoundary(paid.Plan.After,ConsumableMaintenance.Reselect,clock.GetUtcNow().ToUnixTimeMilliseconds());
         That(crossed.ConsumableStates.IsEmpty && crossed.DailyBoosterUses.Length == 1,
             "不保留的会话冷却在重选清理，但日额度不能被重选重置");

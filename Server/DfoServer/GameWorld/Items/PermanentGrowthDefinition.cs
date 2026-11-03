@@ -1,4 +1,5 @@
 using PvfLib;
+using System.Collections.Immutable;
 
 namespace DfoServer.GameWorld.Items;
 
@@ -12,6 +13,7 @@ internal enum PermanentGrowthKind : byte
 internal sealed record PermanentGrowthDefinition(ItemTemplate Item, PermanentGrowthKind Kind, int Amount,
     int CoolTime, int CoolGroup, bool VillageOnly)
 {
+    public ImmutableArray<string> Places { get; init; } = [];
     public static bool IsNativeItem(int id) => id is 1031 or 1038 or >= 1039 and <= 1046 or 1204 or 1205;
 
     public static PermanentGrowthDefinition? Parse(ExperienceConsumableFile file, ItemTemplate template)
@@ -41,12 +43,11 @@ internal sealed record PermanentGrowthDefinition(ItemTemplate Item, PermanentGro
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } || file.ExcludedJobs.Length != 0 ||
             raw.HasCoolTime && raw.DeclaredCoolTime is null || raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not ["[village]"] ||
-            raw.DeclaredActionUsableServerTypes is { Count: > 0 } ||
             file.DeclaredFields.Any(field => field is "action type" or "booster info" or "hp recovery" or "mp recovery" or
                 "levelup range" or "usable first growtype" or "dont change grow type"))
             return null;
         return new(template, value.Kind, value.Amount, raw.DeclaredCoolTime ?? 0,
-            file.CoolGroup ?? -template.Id, raw.HasActionUsablePlace);
+            file.CoolGroup ?? -template.Id, StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces))
+            { Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [] };
     }
 }

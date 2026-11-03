@@ -13,6 +13,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Game.Creatures;
 using DfoServer.GameWorld.Creatures;
+using DfoServer.Game.Titles;
 
 namespace DfoServer.Network.Handlers;
 
@@ -42,7 +43,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return await guildExperience.UseAsync(context, request, packet.RequestSerial);
         // 这两类由原提交回执识别重放：源可能已耗尽，不能用当前空槽否认原操作。
         // 首次消费的动作身份仍由任务券/成长定义校验，原owner与回执门禁保持不变。
-        if (request.Action is QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
+        if (request.Action is QuestTicketDefinition.Action or QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction or QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction or QuestTicketDefinition.SpecifiedAction or
             QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction)
             return await UseQuestTicketAsync(context, request);
         if (request.Action == LevelUpByTableDefinition.JumpingAction)
@@ -103,7 +104,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
                     ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection)
                     : context.Session.PlanAndCommitInventory(character => skinService.PlanAuraAction(character,
                         request.Slot,request.List,request.Action,skinService.Clock.GetUtcNow().ToUnixTimeSeconds()),
-                        InventoryCreatureSkinService.Rejection);
+                        InventoryCreatureSkinService.Rejection, effectItem: new(InventoryListType.Main, (short)request.Slot));
             }
             catch (DbException error)
             {
@@ -249,7 +250,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         var result = !valid || context.BlocksTownActions ? InventoryResult.Reject(19) :
             context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
                 ? periodChanges!.Plan(character, source, target, before.Phase == Game.Session.SessionPhase.Town)
-                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase);
+                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase, effectItem: source);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
             context.Session.Phase == before.Phase);
@@ -271,7 +272,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     {
         if (context.Activity?.BlocksTownActions == true) return CommandResult.Unhandled;
         if (request.Reserved != 0 || request.FirstArgument != 0 || request.SecondArgument != 0 ||
-            request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or
+            request.Action is not (QuestTicketDefinition.Action or QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction or QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction or QuestTicketDefinition.SpecifiedAction or
                 QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction))
         {
             await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Rejected(request),"quest_ticket_unsupported");
@@ -281,7 +282,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishQuestQuickClear(receipt);
         log.Write("quest_ticket_use",new { Connection = context.Id,request.Slot,request.List,request.Action,receipt.Reason,
-            receipt.Commit?.Duplicate,receipt.Commit?.Plan.OperationId,receipt.TicketAcknowledged });
+            receipt.Commit?.Duplicate,receipt.Commit?.Plan.OperationId,receipt.TicketAcknowledged,
+            GeneralTitles=receipt.Commit?.Plan.GeneralTitleQuestIds.Length });
         if (receipt.Commit is null)
         {
             await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Rejected(request),"quest_ticket_rejected",Guard);
@@ -296,9 +298,29 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,StackableActionPackets.Used(request),"quest_ticket_used",Guard);
             context.Session.MarkQuestTicketAcknowledged(receipt);
         }
+        if (receipt.Commit.Plan.ProfessionGrowType is null &&
+            !ReferenceEquals(receipt.Commit.Plan.Expected.Learning,receipt.Commit.Plan.TargetLearning))
+            await SkillProjection.PublishSkillsAsync(context,receipt.Character,"quest_ticket_permanent_skills",Guard);
         var added=receipt.Commit.Plan.Inventory.ChangedSlots.Where(slot=>receipt.Commit.Plan.Inventory.Before.Find(slot)?.Core.Kind==ItemKind.Quest ||
             receipt.Character.Inventory.Find(slot)?.Core.Kind==ItemKind.Quest).ToArray();
-        if(added.Length>0)
+        if (receipt.Commit.Plan.HasTitleRewards)
+        {
+            var source=receipt.Commit.Plan.Ticket!.Item;
+            var changed=receipt.Commit.Plan.Inventory.ChangedSlots.Where(slot=>!TitleBookService.IsBook(slot.List) &&
+                (slot!=source.Position || receipt.Character.Inventory.Find(slot) is { } replacement && replacement.Core.ItemId!=source.Core.ItemId));
+            foreach (var group in changed.GroupBy(slot=>slot.List))
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,group.Key,group.ToArray()),
+                    "quest_ticket_title_rewards",Guard);
+            if (receipt.Commit.Plan.Effects?.Titles is { } titles)
+            {
+                // 称号簿走完整列表，不把专用容器伪装成NOTI14背包增量，也不重放逐项获得弹窗。
+                await context.Notify(NotiPacketType.ACHIEVEMENT_LIST,TitlePackets.Progress(receipt.Character),"quest_ticket_title_progress",Guard);
+                await TitleProjection.BooksAsync(context,receipt.Character.Inventory,Guard);
+                if (!titles.Postals.IsEmpty)
+                    await context.Notify(NotiPacketType.MAILBOX_ALARM,MailboxPackets.Alarm(),"quest_ticket_title_mail",Guard);
+            }
+        }
+        else if(added.Length>0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,InventoryListType.Main,added),"quest_ticket_special_items",Guard);
         await SkillSwitchInventoryProjection.RefreshStateAsync(
             context,
@@ -347,7 +369,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             result = !validWire || context.BlocksTownActions ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection) :
             context.Session.PlanAndCommitInventory(character => skinService.PlanUnlock(character, (short)request.Slot,
                 InventoryCreatureSkinService.TargetSlot, skinService.Clock.GetUtcNow().ToUnixTimeSeconds()),
-                    InventoryCreatureSkinService.Rejection);
+                    InventoryCreatureSkinService.Rejection, effectItem: new(InventoryListType.Main, (short)request.Slot));
         }
         catch (DbException error)
         {

@@ -31,7 +31,7 @@ internal sealed class CreatureHandler(CreatureService service, CreatureProjectio
             request.List == 0 && request.Slot <= short.MaxValue;
         var result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
             context.Session.PlanAndCommitInventory(character => service.UseEffect(character, position,
-                before.Phase == SessionPhase.Town), 19, requireTown: false);
+                before.Phase == SessionPhase.Town), 19, requireTown: false, effectItem: position);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
             context.Session.Phase == before.Phase);
@@ -67,7 +67,8 @@ internal sealed class CreatureHandler(CreatureService service, CreatureProjectio
         var selected = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(0) :
             context.Session.PlanAndCommitInventory(character => service.Rename(character, request.Card, request.Name,
-                service.Clock.GetUtcNow().ToUnixTimeSeconds()), 0, requireTown: false);
+                service.Clock.GetUtcNow().ToUnixTimeSeconds()), 0, requireTown: false,
+                effectItem: request.Card);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, selected.Selected) &&
                 context.Session.SelectionEpoch == selected.SelectionEpoch && context.Session.Phase == selected.Phase);

@@ -325,8 +325,10 @@ internal static class Strongway2019ShopTests
         var futurePlan = skins.Add(futureCharacter, future.Position, town: true);
         That(futurePlan.Accepted && futurePlan.Plan!.CharacterPrecondition?.QualificationExpiresAt == future.ExpireTime,
             "新券仍将自身到期时间附于原提交前提");
-        That(!skins.Add(futureCharacter, future.Position, town: false).Accepted,
-            "本次永久规则保留真实village场景限制");
+        var useRules = resources.Items.StackableUseRules(future.Core.ItemId);
+        That(useRules.Check(new(StackableUsePlace.Village)) == StackableUseRejection.None &&
+            useRules.Check(new(StackableUsePlace.Dungeon)) == StackableUseRejection.Place,
+            "真实边框券在统一使用资格中保留village放行、副本拒绝");
 
         That(session.PlanAndCommitInventory(character => inventory.Grant(character, [new(490013316, 1), new(490013318, 1)])).Accepted,
             "普通Grant同ID保持无活动来源");
@@ -362,7 +364,8 @@ internal static class Strongway2019ShopTests
 
         GameSession Reconnect()
         {
-            var connected = new GameSession(new CharacterRepository(fixture.Path), towns, fixture.Owner, timeProvider: clock);
+            var connected = new GameSession(new CharacterRepository(fixture.Path), towns, fixture.Owner, timeProvider: clock,
+                items: resources.Items);
             connected.Select(fixture.Current.Slot, resumeTown: true); connected.MarkReady();
             return connected;
         }

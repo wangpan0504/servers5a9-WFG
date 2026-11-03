@@ -11,7 +11,7 @@ using DfoServer.GameWorld.Towns;
 namespace DfoServer.Game.Quests;
 
 internal readonly record struct QuestSkipAnswer(uint QuestId, uint Answer);
-internal sealed class QuestTicketExpiredException() : InvalidOperationException("任务券在提交前已到期") { }
+internal sealed class QuestTicketExpiredException(string message="任务券在提交前已到期") : InvalidOperationException(message) { }
 internal sealed record QuestTicketSource(InventoryItem Item,QuestTicketDefinition Definition,InventoryPlan Inventory,long UtcSeconds)
 {
     public static QuestTicketSource Create(Character expected,InventorySlot slot,QuestTicketDefinition definition,long now)
@@ -27,7 +27,7 @@ internal sealed record QuestTicketSource(InventoryItem Item,QuestTicketDefinitio
 }
 
 // 主线跳过只核算特殊任务物品；槽位/觉醒由专用券授权，不拥有在线角色状态。
-internal sealed class QuestQuickClearPlan
+internal sealed partial class QuestQuickClearPlan
 {
     readonly QuestConnectionUnit? unit;
     readonly ActiveMainQuest? activeQuestion;
@@ -55,7 +55,7 @@ internal sealed class QuestQuickClearPlan
             .Except(expected.AccountCompletedQuests).ToImmutableArray();
         AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
-        var removal = RemovalScope(expected,scope,quests);
+        var removal = ActiveRemovalScope(quests);
         RemovedActive = expected.ActiveMainQuests.Where(row => removal.Contains(row.QuestId)).ToImmutableArray();
         var remaining = QuestRelationProgress.Refresh(expected.ActiveMainQuests.Where(row => !removal.Contains(row.QuestId)).ToArray(),
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(),quests);
@@ -109,7 +109,7 @@ internal sealed class QuestQuickClearPlan
             .Except(expected.AccountCompletedQuests).ToImmutableArray();
         AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
-        var removal = RemovalScope(expected,ScopeQuestIds.ToHashSet(),quests);
+        var removal = ActiveRemovalScope(quests);
         RemovedActive = expected.ActiveMainQuests.Where(row => removal.Contains(row.QuestId)).ToImmutableArray();
         var retained = expected.ActiveMainQuests.Where(row => !removal.Contains(row.QuestId)).ToArray();
         if (ticket is not null) retained = QuestInventoryProgress.Refresh(retained,ticket.Inventory.After,quests,ticket.UtcSeconds).ToArray();
@@ -174,8 +174,23 @@ internal sealed class QuestQuickClearPlan
     public byte TargetLevel => LevelUpTicket?.Growth.TargetLevel ?? Expected.Level;
     public bool IsLevelUpTicket => LevelUpTicket is not null;
     public bool IsTicket => Ticket is not null;
+    public bool IsAchievementTicket => Ticket?.Definition.ActionIndex is QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction;
+    public bool IsLevelClearTicket => Ticket?.Definition.ActionIndex == QuestTicketDefinition.LevelAction;
+    public bool IsFixedLevelTicket => Ticket?.Definition.ActionIndex is QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction;
+    public int MarkingLimit => Ticket!.Definition.ActionIndex switch
+    {
+        QuestTicketDefinition.GmAction => int.MaxValue,
+        QuestTicketDefinition.AllAction => Expected.Level,
+        _ => Ticket.Definition.CompletionLevel ?? Expected.Level
+    };
+    public bool HasTitleRewards => IsAchievementTicket || IsLevelClearTicket || Ticket?.Definition.ActionIndex==QuestTicketDefinition.AllAction;
+    public ImmutableArray<int> GeneralTitleQuestIds { get; private set; } = [];
     public bool IsPreparedSkip => IsManual || IsTicket || IsLevelUpTicket;
     public string OperationKind => IsTicket || IsLevelUpTicket ? "Ticket" : IsManual ? "Manual" : "QuickClear";
+    internal HashSet<int> ActiveRemovalScope(QuestCatalog? quests) => IsAchievementTicket
+        ? ScopeQuestIds.ToHashSet() : RemovalScope(Expected,ScopeQuestIds.ToHashSet(),quests);
+
+    internal static bool AchievementTitle(StoryQuest quest) => quest.Grade == "[achievement]" && quest.RewardType == "[title]";
     // 清理范围与完成/奖励范围分开：合法父链已结束的活动子槽不能继续弹出，也不能借修复补领奖。
     internal static HashSet<int> RemovalScope(Character expected,IReadOnlySet<int> scope,QuestCatalog? quests)
     {
@@ -229,9 +244,17 @@ internal sealed class QuestQuickClearPlan
     public void PrepareEffects(QuestSkipEffects? effects,QuestCatalog quests)
     {
         Inventory = Ticket?.Inventory ?? LevelUpTicket?.Inventory ?? new(Expected.Inventory,Expected.Inventory,"quest_skip");
-        if (effects is null) return;
+        if (effects is null)
+        {
+            if (HasTitleRewards) throw new NotSupportedException("任务券称号发放资源未装配");
+            return;
+        }
         var ordered=IsPreparedSkip ? Interval : Interval.Prepend(Question).Concat(AreaQuests).Append(quests.Get(MarkerQuestId)).ToImmutableArray();
-        Effects = effects.Prepare(Expected with { Level=TargetLevel },ordered.Where(quest=>NewCompletedQuestIds.Contains(quest.Id)),Inventory,EquipmentSlotFlagsAfter,
+        var newlyCompleted = ordered.Where(quest=>NewCompletedQuestIds.Contains(quest.Id));
+        Effects = HasTitleRewards ? effects.PrepareAchievementTitles(Expected,newlyCompleted.Where(AchievementTitle),Inventory,
+            DateTimeOffset.FromUnixTimeSeconds(Ticket!.UtcSeconds),GeneralTitleQuestIds) :
+            IsFixedLevelTicket ? new(Expected,Inventory,Expected.EquipmentSlotFlags,Expected.GrowType,Expected.Learning) :
+            effects.Prepare(Expected with { Level=TargetLevel },newlyCompleted,Inventory,EquipmentSlotFlagsAfter,
             ProfessionGrowType ?? Expected.GrowType,TargetLearning,
             characterState:Ticket?.Definition.ActionIndex is QuestTicketDefinition.SpecifiedAction or QuestTicketDefinition.FirstAwakeningAction or QuestTicketDefinition.SecondAwakeningAction);
         Inventory=Effects.Inventory; EquipmentSlotFlagsAfter=Effects.EquipmentSlots;
@@ -243,7 +266,8 @@ internal sealed class QuestQuickClearPlan
             DateTimeOffset.UtcNow.ToUnixTimeSeconds()),current,quests);
         if (Effects.Changed)
             Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(Snapshot),
-                Effects=new { InventoryAfter=Inventory.After,EquipmentSlotFlagsAfter,ProfessionGrowType,TargetLearning } });
+                Effects=new { InventoryAfter=Inventory.After,EquipmentSlotFlagsAfter,ProfessionGrowType,TargetLearning,
+                    Titles=Effects.Titles is { } titles ? new { titles.Progress,titles.Sections,titles.Completed,titles.Postals,titles.PostalItems } : null } });
     }
 
     // Full03手册确认窗：Lv90..94截止89，Lv95截止94，其余截止实际等级减一。
@@ -258,12 +282,17 @@ internal sealed class QuestQuickClearPlan
         => TryCreateRange(expected,operationId,quests,answers,null,out plan,out reason,towns,source);
 
     public static bool TryCreateTicket(Character expected,Guid operationId,QuestCatalog quests,QuestTicketSource ticket,
-        ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,SkillLearningCatalog? skills=null,TownCatalog? towns=null)
+        ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,SkillLearningCatalog? skills=null,TownCatalog? towns=null,
+        TitleCatalog? titles=null)
     {
         if (ticket.Definition.AwakeningStage!=0)
             return TryCreateAwakeningTicket(expected,operationId,quests,ticket,answers,skills,out plan,out reason);
         if (ticket.Definition.ActionIndex==QuestTicketDefinition.SpecifiedAction)
             return TryCreateSpecifiedTicket(expected,operationId,quests,ticket,answers,out plan,out reason);
+        if (ticket.Definition.ActionIndex is QuestTicketDefinition.AchievementAction or QuestTicketDefinition.SideAction)
+            return TryCreateAchievementTicket(expected,operationId,quests,ticket,answers,out plan,out reason,titles);
+        if (ticket.Definition.ActionIndex is QuestTicketDefinition.LevelAction or QuestTicketDefinition.EpicAction or QuestTicketDefinition.AllAction or QuestTicketDefinition.GmAction)
+            return TryCreateLevelClearTicket(expected,operationId,quests,ticket,answers,out plan,out reason,titles);
         if (ticket.Definition.ActionIndex==QuestTicketDefinition.Action)
             return TryCreateRange(expected,operationId,quests,answers,ticket,out plan,out reason,towns);
         plan=null; reason="任务券动作尚未接入"; return false;
@@ -359,6 +388,68 @@ internal sealed class QuestQuickClearPlan
             throw new InvalidDataException("觉醒券寻物声明不完整: "+quest.Id);
     }
 
+    static bool TryCreateAchievementTicket(Character expected,Guid operationId,QuestCatalog quests,QuestTicketSource ticket,
+        ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason,TitleCatalog? titles)
+    {
+        plan=null;
+        try
+        {
+            if (expected.Id==0 || operationId==Guid.Empty || expected.Level is <1 or >95 || !answers.IsEmpty ||
+                !ReferenceEquals(ticket.Inventory.Before,expected.Inventory) || expected.Inventory.Find(ticket.Item.Position)!=ticket.Item)
+                throw new InvalidDataException("成就券需要原角色、真实源实例及独立操作身份");
+            var completed=QuestEligibility.Completed(expected);
+            var scope=new List<StoryQuest>();
+            var candidates=quests.All.Where(quest=>AchievementTitle(quest) && quest.MinimumLevel<=expected.Level).ToArray();
+            int snapshotCount=-1;
+            int[] completedSnapshot=[];
+            bool progressed;
+            do
+            {
+                progressed=false;
+                foreach (var quest in candidates)
+                {
+                    if (completed.Contains(quest.Id)) continue;
+                    try
+                    {
+                        QuestCoverage.RequireOrdinaryDeclarations(quest);
+                        if (!QuestCoverage.HasRequiredReferences(quest,quests) || QuestAccountPolicy.SharedCompletion(quest) ||
+                            quest.Definition is not { AccountQuest:false,JobChange:0,SelectRewards.Length:0 } || QuestCycle.Daily(quest) ||
+                            QuestCycle.Repeat(quest) || quest.Condition=="[question]" || quest.Definition.Has("casecade clear")) continue;
+                        _=QuestFixedRewardDefinition.Parse(quest,allowGold:true);
+                    }
+                    catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)
+                    { continue; }
+                    if (snapshotCount!=scope.Count)
+                    {
+                        completedSnapshot=expected.CompletedQuests.Concat(scope.Select(row=>row.Id)).ToArray();
+                        snapshotCount=scope.Count;
+                    }
+                    var current=expected with
+                    {
+                        CompletedQuests=completedSnapshot,
+                        ActiveMainQuests=expected.ActiveMainQuests.Where(row=>row.QuestId!=quest.Id && !completed.Contains(row.QuestId)).ToArray()
+                    };
+                    if (!QuestEligibility.Evaluate(current,quest,quests).Eligible) continue;
+                    completed.Add(quest.Id); scope.Add(quest); progressed=true;
+                }
+            } while (progressed);
+            var general = titles?.Slots.Where(row=>row.Key.Category==0 && row.Value.Kind!=-1 && row.Value.QuestId>0)
+                .OrderBy(row=>row.Key.Index).Select(row=>row.Value.QuestId).Distinct()
+                .Where(id=>expected.TitleProgress.GetValueOrDefault(id)?.Remaining.Complete!=true).ToImmutableArray() ?? [];
+            if (scope.Count==0 && general.IsEmpty)
+                throw new InvalidDataException("当前等级没有可完成的achievement/title任务，general称号簿也无待发奖励");
+            plan=new(expected,operationId,expected.Level,scope.ToImmutableArray(),ImmutableDictionary<int,byte>.Empty,[],quests,ticket);
+            plan.GeneralTitleQuestIds=general;
+            plan.Snapshot=JsonSerializer.Serialize(new { State=JsonSerializer.Deserialize<JsonElement>(plan.Snapshot),
+                Action=ticket.Definition.ActionIndex,GeneralTitleQuestIds=general,
+                TitleProgressBefore=expected.TitleProgress,TitleSectionsBefore=expected.TitleSections });
+            reason="成就券的achievement/title交集、general称号簿及真实源消费已冻结";
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)
+        { reason=error.Message; return false; }
+    }
+
     public static bool TryCreateSpecifiedTicket(Character expected,Guid operationId,QuestCatalog quests,QuestTicketSource ticket,
         ImmutableDictionary<int,byte> answers,out QuestQuickClearPlan? plan,out string reason)
     {
@@ -382,11 +473,21 @@ internal sealed class QuestQuickClearPlan
                 if (!QuestCoverage.HasRequiredReferences(quest,quests) || QuestAccountPolicy.SharedCompletion(quest) || quest.Definition is not { AccountQuest:false,JobChange:0 } ||
                     QuestCycle.Daily(quest) || QuestCycle.Repeat(quest) || quest.Condition=="[question]")
                     throw new NotSupportedException("指定券目标需要尚未接入的引用、账号、周期、职业或问题事务: "+id);
-                if (quest.RewardType is not (null or "[item]" or "[slot expansion]") || quest.Definition.Has("casecade clear"))
+                if (quest.RewardType is not (null or "[item]" or "[slot expansion]" or "[hell challenge]" or "[inferno challenge]" or "[tp]") ||
+                    quest.Definition.Has("casecade clear"))
                     throw new NotSupportedException("指定券目标的专用状态或级联尚未接入: "+id);
                 if (quest.RewardType=="[slot expansion]")
                 {
                     if (!QuestCharacterReward.TryScalar(quest,out _)) throw new InvalidDataException("指定券槽位奖励形状无效: "+id);
+                }
+                else if (quest.RewardType=="[tp]")
+                {
+                    if (!QuestCharacterReward.TryTp(quest,out _)) throw new InvalidDataException("指定券TP奖励形状无效: "+id);
+                }
+                else if (quest.RewardType is "[hell challenge]" or "[inferno challenge]")
+                {
+                    // 资格由真实完成记录驱动；1和副本号是专用参数，不按物品奖励解析或发放。
+                    if (!QuestCharacterReward.TryHellChallenge(quest)) throw new InvalidDataException("指定券深渊资格奖励形状无效: "+id);
                 }
                 else _=QuestFixedRewardDefinition.Parse(quest,allowGold:true);
                 _=QuestFixedRewardDefinition.Parse(quest with { Rewards=quest.Definition.SelectRewards });
@@ -429,7 +530,7 @@ internal sealed class QuestQuickClearPlan
                     GrowType=levelUpTicket.ProfessionGrowType ?? expected.GrowType,
                     Inventory=levelUpTicket.Inventory.After };
             }
-            // external consumable_clear.go:25-29明确普通券包含当前等级的epic/normal；手册只到低一级。
+            // 普通券包含当前等级的epic/normal/mission；手册仍只处理低一级主线。
             int cutoff = ticket is null ? ManualCutoff(expected.Level) : expected.Level;
             if (expected.Id == 0 || operationId == Guid.Empty || expected.Job >= 16 || expected.Level is < 1 or > 95 ||
                 ticket is null && expected.Level < 2 || ticket is not null &&
@@ -449,7 +550,7 @@ internal sealed class QuestQuickClearPlan
                 foreach (var quest in ordered)
                 {
                     bool areaQuest = access.Contains(quest.Id);
-                    if (!(quest.Grade == "[epic]" || ticket is not null && quest.Grade is (null or "" or "[normal]")) ||
+                    if (!(quest.Grade == "[epic]" || ticket is not null && quest.Grade is (null or "" or "[normal]" or "[mission]")) ||
                         quest.MainQuest is not null || quest.MinimumLevel is < 1 ||
                         quest.MinimumLevel > Math.Min(expected.Level,cutoff) || completed.Contains(quest.Id) ||
                         quest.Definition is not { ExposedByNpc: true }) continue;

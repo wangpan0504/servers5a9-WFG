@@ -10,7 +10,10 @@ namespace DfoServer.Game.Characters;
 
 internal readonly record struct ClassChangeRequest(short Slot, byte Target, bool Confirmed, bool HasConfirmation = true);
 internal sealed record ClassChangePlan(Character Expected, ClassChangeRequest Request, byte GrowType,
-    InventoryPlan Inventory, CharacterLearningState Learning, ImmutableArray<int> Completed, long SourceUid);
+    InventoryPlan Inventory, CharacterLearningState Learning, ImmutableArray<int> Completed, long SourceUid)
+{
+    public ImmutableArray<string> Places { get; init; } = [];
+}
 internal sealed record ClassChangePreparation(ushort Error, string Reason, ClassChangePlan? Plan = null);
 internal sealed record GrowBranchPlan(byte GrowType, CharacterLearningState Learning, ImmutableArray<int> Completed);
 internal readonly record struct GrowBranchPreparation(ushort Error, string Reason, GrowBranchPlan? Plan = null);
@@ -46,7 +49,8 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
         var afterBook = before.Inventory with { Items = before.Inventory.Items
             .Select(item => item.Position == source.Position ? remaining : item).OfType<InventoryItem>().ToImmutableArray() };
         var inventory = new InventoryPlan(before.Inventory, afterBook, "class_change");
-        return new(0, "prepared", new(before, request, planned.GrowType, inventory, planned.Learning, planned.Completed, source.Uid));
+        return new(0, "prepared", new ClassChangePlan(before, request, planned.GrowType, inventory, planned.Learning, planned.Completed, source.Uid)
+            { Places = ticket.Places });
     }
 
     // 同一基础职业内改分支的共用规划：活动转职/觉醒任务、目标分支、两树技能和穿戴资格。

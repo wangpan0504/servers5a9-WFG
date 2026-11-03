@@ -49,9 +49,11 @@ internal static class CreatureChangeTests
             Raw with { ActionDeclaration = new("[change creature]", [-1,0,1,15]) },
             Raw with { ActionDeclaration = new("[change creature]", [-1,-1,2]) },
             Raw with { HasMaximumLevel = true }, Raw with { HasCreatureMinimumLevel = true },
-            Raw with { HasUsableJobs = true }, Raw with { HasActionUsablePlace = true, DeclaredActionUsablePlaces = null },
-            Raw with { DeclaredActionUsablePlaces = [] }, Raw with { DeclaredActionUsablePlaces = ["[unknown]"] }
+            Raw with { HasUsableJobs = true }
         }) That(CreatureChangeDefinition.Parse(raw, Book) is null, "畸形声明和未确认参数变体不猜测成功语义");
+        That(CreatureChangeDefinition.Parse(Raw with { HasActionUsablePlace = true, DeclaredActionUsablePlaces = [] }, Book) is { TownOnly: false } &&
+            CreatureChangeDefinition.Parse(Raw with { DeclaredActionUsablePlaces = ["[unknown]"] }, Book) is { TownOnly: true },
+            "空地点不限制，未知地点按参考端回退城镇");
         var fixedDefinition = CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature]", [7001,7002,1,-1]),
             DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [] }, Book);
         That(fixedDefinition is { SourceItemId: 7001 } && fixedDefinition.Select(0) == 7002,
@@ -150,8 +152,8 @@ internal static class CreatureChangeTests
         clock.Advance(TimeSpan.FromMilliseconds(1000));
         That(timed.Plan(afterTimed, book.Position, nextPet.Position, false).Accepted && timedDraws == 2,
             "独立冷却到期后恢复转换，不能永久拦截源");
-        That(!service.Plan(character, book.Position, pet.Position, false).Accepted,
-            "显式城镇限制仍拦截图内转换");
+        That(service.Plan(character, book.Position, pet.Position, false).Accepted,
+            "资产规划不再按旧TownOnly重复拦截，真实地点由统一Session门禁负责");
         That(StackableActionRequests.TryUse(Convert.FromHexString("4A000000000000400000000700000008000000"), out var request) &&
             request == new StackableActionUseRequest(74,0,0,64,7,8), "实收19B转换请求解析为源74、目标Pet槽8，不当作五个i32");
         Bytes(StackableActionPackets.Used(request), [1,74,0,0,64,0,0,0], "成功515仅8B，不追加私有目标字段");

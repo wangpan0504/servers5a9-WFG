@@ -26,15 +26,17 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
     private async Task<CommandResult> FinishAsync(GameConnectionContext context, Packet packet)
     {
         if (!QuestRequests.TryFinish(packet.Body, out var request) ||
-            request is not { Reserved: ushort.MaxValue } ||
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
-        if (context.Session.IsOperationHopeQuest(request.QuestId))
+        if (request.Reserved==ushort.MaxValue && context.Session.IsOperationHopeQuest(request.QuestId))
             return await FinishHopeAsync(context,request);
         var previous = context.Owner.Execute(() => context.Session.Selected);
-        var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier, expertJobs);
+        // 02123900的单任务券确认仍发34；末尾u16为Main源槽，普通领奖为FFFF。
+        var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier, expertJobs,
+            couponSlot:request.Reserved==ushort.MaxValue ? null : request.Reserved);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
             Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(), RejectReason = result.Reason,
+            CouponSlot=request.Reserved==ushort.MaxValue ? (ushort?)null : request.Reserved,
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
             result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate,
             result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId, result.Receipt?.Commit.ResourceMailId });

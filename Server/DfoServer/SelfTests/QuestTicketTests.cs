@@ -27,7 +27,7 @@ using static DfoServer.QuestCompletionRepositoryTests;
 
 namespace DfoServer;
 
-internal static class QuestTicketTests
+internal static partial class QuestTicketTests
 {
     const int TicketId = 10006007;
     static InventorySlot Bag(short slot) => new(InventoryListType.Main,slot);
@@ -84,6 +84,7 @@ internal static class QuestTicketTests
             answered!.ScopeQuestIds.SequenceEqual([100,102]) && !answered.CompletedAfter.Contains(101) &&
             answered.OperationId == first.OperationId && ReferenceEquals(answered.Ticket,source),"零基答案沿原操作和source，只完成真实选择分支");
         Console.WriteLine($"PASS {Count-checks} 普通77券协议、等级范围、问题和实例消费规划断言");
+        RunAchievementCore();
     }
 
     public static async Task RunAsync(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items,
@@ -92,6 +93,11 @@ internal static class QuestTicketTests
         int checks = Count;
         var skills = sharedSkills ?? global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills); var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        await RunAchievementAsync(towns,characters,items,skills,growth,parameters);
+        await RunGeneralTitlesAsync(towns,pvf,characters,items,skills,growth,parameters);
+        await RunMissionTicketAsync(towns,pvf,characters,items,skills,growth,parameters);
+        await RunFixedLevelTicketAsync(towns,pvf,characters,items,skills,growth,parameters);
+        await RunBatchAndCouponAsync(towns,pvf,characters,items,skills,growth,parameters);
         var definition = items.Items.QuestTicket(TicketId);
         That(definition is { MinimumLevel:0,MaximumLevel:84,Jobs:ushort.MaxValue } && definition.Expiration == items.Items.Get(TicketId).Expiration,
             $"匹配10006007真实普通77券，保留当前资源实际期限及0..84/all范围；实际min={definition.MinimumLevel},max={definition.MaximumLevel},jobs={definition.Jobs},absolute={definition.Expiration.AbsoluteTime}");

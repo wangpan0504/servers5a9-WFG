@@ -20,7 +20,8 @@ internal sealed partial class CharacterRepository
     {
         var expected = plan.Expected; var clear = plan.AuthoritativeClear; var reward = plan.ExperienceReward;
         uint? goldMailId = null, resourceMailId = null;
-        var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
+        var accepted = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
+        var active = accepted ?? plan.CouponActive;
         var closed = plan.ClosedChildren.Select(row => row.AcceptanceId).ToHashSet();
         if (plan.CompletedChild is { } terminalChild) closed.Add(terminalChild.AcceptanceId);
         var newCompleted = new[] { (int)plan.QuestId }.Concat(plan.CascadeMarkerQuestId is { } marker ? new[] { marker } : [])
@@ -47,7 +48,7 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
             if (!DfoServer.GameWorld.Quests.QuestTargetTypes.IsNative(plan.ConditionType) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
-            plan.ConditionType is not (0 or 42) && active.ConditionState != 0 && !(plan.CompletedChild is not null && active.ConditionState == 1) ||
+            plan.Coupon is null && plan.ConditionType is not (0 or 42) && active.ConditionState != 0 && !(plan.CompletedChild is not null && active.ConditionState == 1) ||
             plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||
             plan.GrowthPlan is { } growth && (growth.CharacterId != expected.Id || growth.Revision != expected.Revision) ||
             (plan.ConditionType is 1 or 3 or 45) != (clear is not null) ||
@@ -62,6 +63,14 @@ internal sealed partial class CharacterRepository
                 plan.TargetEquipmentSlotFlags != expected.EquipmentSlotFlags || plan.TpAmount != 0 || plan.CascadeMarkerQuestId is not null))
             throw new InvalidDataException("任务交付需要已确认类型、权威条件与一致成长规划");
         ValidateInventoryPlan(expected, plan.Inventory);
+        if (plan.Coupon is { } coupon)
+        {
+            var verified=QuestTicketSource.Create(expected,coupon.Item.Position,coupon.Definition,coupon.UtcSeconds);
+            if (coupon.Definition.ActionIndex!=DfoServer.GameWorld.Items.QuestTicketDefinition.CouponAction ||
+                verified.Item!=coupon.Item || plan.ConditionType!=4 || plan.Multiplier!=1 || plan.AuthoritativeClear is not null ||
+                plan.Consumed.Length!=0 || !SameInventory(coupon.Inventory.After,new(verified.Inventory.After,verified.Inventory.After,"quest_coupon_source")))
+                throw new InvalidDataException("单任务券只能消费真实110源并完成一项主线");
+        }
         using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.CommitQuestCompletion", deferred: true);
         using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, expected.Name);
@@ -140,6 +149,9 @@ internal sealed partial class CharacterRepository
         if (plan.RequiredEvent is { } required &&
             !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
             throw new InvalidOperationException("任务活动领奖的原时间表已变化或已停用");
+        if (plan.Coupon is { } source && (source.Item.Core.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) ||
+            !source.Definition.Allows(current.Level,current.Job)))
+            throw new QuestTicketExpiredException("单任务券提交前到期或使用资格变化");
         VerifyQuestPvpRating(db,tx,owner.Account,expected.Id,plan.PvpRating);
         if (current.Revision != expected.Revision || current.Level != expected.Level || current.Job != expected.Job ||
             current.GrowType != expected.GrowType || current.Position != expected.Position || current.AcceptedStoryLevel != expected.AcceptedStoryLevel ||
@@ -196,7 +208,7 @@ internal sealed partial class CharacterRepository
             WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         command.Parameters.AddWithValue("$slot", plan.QuestSlot);
         command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance";
-        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("原接取活动任务不能原子清槽");
+        if (command.ExecuteNonQuery() != (accepted is null ? 0 : 1)) throw new InvalidOperationException("原接取活动任务不能原子清槽");
         foreach (var child in plan.ClosedChildren.Concat(plan.CompletedChild is { } completed ? new[] { completed } : []))
         {
             command.Parameters.AddWithValue("$childSlot",child.Slot);
@@ -299,7 +311,7 @@ internal sealed partial class CharacterRepository
                 GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId, ResourceMailId = resourceMailId,
                 GainedExperience = gained, StagePlan = plan.StagePlan, OrdinaryExperience = plan.OrdinaryExperience,
                 ContractExperience = plan.ContractExperience, TotalRequestedExperience = plan.TotalRequestedExperience, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
-                ReplacedRewardSlots = plan.ConditionType is 0 or 25 ? [] : rows.Where(row => plan.Inventory.BeforeIndex.Find(row.Item.Position) is { } old &&
+                ReplacedRewardSlots = plan.Coupon is null && plan.ConditionType is 0 or 25 ? [] : rows.Where(row => plan.Inventory.BeforeIndex.Find(row.Item.Position) is { } old &&
                     old.Uid != row.Item.Uid).Select(row => row.Item.Position).Distinct().ToImmutableArray(),
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
                     .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main,slot!.Value)))

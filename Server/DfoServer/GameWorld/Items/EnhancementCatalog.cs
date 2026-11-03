@@ -103,7 +103,7 @@ internal sealed partial class EnhancementCatalog
         EnhancementDefinition Pending(string reason) => definition with { PendingRule = reason };
         foreach (string name in new[] { "enchant random", "target item id", "cooltime maintenance", "effect maintenance",
             "total usable count", "total weekly usable count", "total accumulated usable count", "use count limit all server item",
-            "usable datetime", "usable first growtype", "action usable server type", "usable game server type", "usable server type",
+            "usable datetime", "usable first growtype",
             "reinforcement usable rarity", "reinforcement usable equipment type" })
             if (Fields(text, name).Count != 0) return Pending("尚未闭合的券资格或附加消费: " + name);
         int min = 0, max = byte.MaxValue;
@@ -126,13 +126,6 @@ internal sealed partial class EnhancementCatalog
                     return Pending("目标装备清单无效");
                 allowed.Add(value);
             }
-        var places = Blocks(text, "action usable place");
-        if (Fields(text, "action usable place").Count != places.Count || places.Count > 1) return Pending("使用地点限制未闭合");
-        if (places.Count == 1 && !Regex.IsMatch(Value(text, places[0]), @"^\s*(?:`\[(?:village|seria room)\]`\s*)+$"))
-            return Pending("尚未闭合的使用地点限制");
-        if (places.Count == 1 && !Regex.Matches(Value(text, places[0]), "`([^`]*)`")
-            .Any(place => place.Groups[1].Value == "[village]"))
-            return Pending("仅赛丽亚房间的使用限制尚未接入，不能放宽成所有Town");
         return definition with { MinimumItemLevel = min, MaximumItemLevel = max, AllowedItems = allowed.ToImmutable() };
     }
 

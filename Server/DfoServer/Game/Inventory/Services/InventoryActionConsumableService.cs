@@ -16,7 +16,7 @@ internal static class InventoryActionConsumableService
             source.Core.ItemId != definition.Item.Id || count <= 0 || source.Core.Count < count || source.Core.EquipmentLockId != 0 ||
             source.IsExpired(now.ToUnixTimeSeconds()) || !ItemSlotBoundService.Allows(character.Inventory, position, source.Core.Kind) ||
             !definition.Item.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, definition.Item) ||
-            !definition.AllowsPlace(place) || !ignoreCooldown && character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
+            !ignoreCooldown && character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
                 row.CoolGroup == definition.CoolGroup && row.Active(now.ToUnixTimeMilliseconds())))
             return InventoryResult.Reject(19);
         var removed = InventoryDeleteService.Plan(character.Inventory, position, source.Core.ItemId, count);

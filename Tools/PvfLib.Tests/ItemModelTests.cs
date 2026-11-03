@@ -115,8 +115,8 @@ internal static class ItemModelTests
             "ticket raw village declaration is retained");
         ticket = StackableFile.Parse(100,"stackable/ticket.stk",
             [new(3,9),new(6,10),new(6,12),new(3,11),new(3,9),new(6,12),new(6,10),new(3,11)],TicketResolve);
-        That(ticket.DeclaredActionUsablePlaces!.Order().SequenceEqual(new[] { "[seria room]", "[village]" }) &&
-            !ticket.UnsupportedFields.Contains("action usable place"), "完整且等价的重复使用地点不因顺序不同失去资格");
+        That(ticket.DeclaredActionUsablePlaces!.SequenceEqual(new[] { "[village]", "[seria room]", "[seria room]", "[village]" }) &&
+            !ticket.UnsupportedFields.Contains("action usable place"), "重复使用地点按原顺序追加而非因数量或重复拒绝");
         string NestedResolve(int index) => index switch { 0 => "[stackable type]", 1 => "[waste]",
             2 => "[booster info]", 3 => "[/booster info]", _ => throw new ArgumentOutOfRangeException(nameof(index)) };
         That(StackableFile.Parse(1,"stackable/a.stk",
@@ -124,13 +124,51 @@ internal static class ItemModelTests
             .TypeDeclaration is null, "嵌套块中的堆叠类型不得覆盖根级声明");
         ticket = StackableFile.Parse(100,"stackable/ticket.stk",[],TicketResolve);
         That(!ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,"missing usable place has no implicit village restriction");
-        foreach (PvfToken[] values in new PvfToken[][]
-            { [new(3,9),new(0,1)], [new(3,9),new(6,10),new(3,11),new(3,9),new(6,12),new(3,11)],
-                [new(3,9),new(6,10),new(3,9),new(6,10)] })
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",[new(3,9),new(0,1),new(6,10)],TicketResolve);
+        That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is { Count: 0 },
+            "非字符串终止当前地点列表，不升级成资源拒绝");
+        ticket = StackableFile.Parse(100,"stackable/ticket.stk",
+            [new(3,9),new(6,10),new(3,11),new(3,9),new(6,12),new(3,11)],TicketResolve);
+        That(ticket.DeclaredActionUsablePlaces!.SequenceEqual(new[] { "[village]", "[seria room]" }),
+            "不同地点的重复声明按资源顺序追加");
+        string[] qualificationStrings = ["[action usable condition]", "[guildmember]", "[/action usable condition]",
+            "[guildmaster]", "[privatePvpChar]", "[usable world]", "[common]", "[fair]", "[/usable world]", "[unknown]"];
+        string QualificationResolve(int index) => qualificationStrings[index];
+        PvfToken[] qualificationTokens = [new(3,0),new(6,1),new(6,9),new(3,2),new(3,0),new(6,3),new(6,4),new(3,2),
+            new(3,5),new(6,6),new(3,8),new(3,5),new(6,7),new(3,8)];
+        var qualifications = StackableFile.Parse(100,"stackable/use.stk",qualificationTokens,QualificationResolve);
+        That(qualifications.DeclaredActionUsableConditions!.SequenceEqual(new[] { "[guildmember]", "[unknown]", "[guildmaster]", "[privatePvpChar]" }) &&
+            qualifications.DeclaredUsableWorlds!.SequenceEqual(new[] { "[fair]" }),
+            "条件重复段追加且保留未知原值，世界重复段先清空再读取最后一段");
+        That(ItemUseFields.ActionConditions([new(3,0),new(0,1),new(6,1)],QualificationResolve) is { Count: 0 } &&
+            ItemUseFields.UsableWorlds([],QualificationResolve) is null &&
+            ItemUseFields.UsableWorlds([new(3,5),new(0,1)],QualificationResolve) is { Count: 0 },
+            "非字符串结束当前声明，不把缺席、空声明或声明数量升级为解析失败");
+        var worldParent = new PvfDocument("[usable world]\n`[fair]`\n[/usable world]");
+        That(ItemUseFields.UsableWorlds(new PvfDocument("[name]\n`child`",worldParent))!.SequenceEqual(new[] { "[fair]" }) &&
+            ItemUseFields.UsableWorlds(new PvfDocument("[usable world]\n[/usable world]",worldParent)) is { Count: 0 } &&
+            ItemUseFields.UsableWorlds(new PvfDocument("[usable world]\n`[common]`\n[/usable world]\n[usable world]\n`[fair]` 1 `[common]`\n[/usable world]"))!
+                .SequenceEqual(new[] { "[fair]" }),
+            "世界读取保留装备父模板继承、子层显式清空及最后声明的连续字符串边界");
+        That(RecoveryConsumableFile.Parse(100,"stackable/use.stk",qualificationTokens,QualificationResolve).Diagnostics.Length == 0,
+            "公共使用声明不被恢复物品的局部重复字段守卫再次拒绝");
+        That(ExperienceConsumableFile.Parse(100,"stackable/use.stk",qualificationTokens,QualificationResolve).Diagnostics.IsEmpty,
+            "公共使用条件追加、物品世界覆盖不被经验物品的局部重复字段守卫拒绝");
+        That(ExperienceConsumableFile.Parse(100,"stackable/use.stk",
+            [new(3,0),new(6,1),new(3,0),new(6,2)],
+            index=>new[] {"[action usable place]","[village]","[dungeon]"}[index]).Diagnostics.IsEmpty,
+            "经验物品允许重复地点段，地点并集只由统一规则解释");
+        foreach (string field in new[] { "action usable server type", "usable game server type", "usable server type" })
         {
-            ticket = StackableFile.Parse(100,"stackable/ticket.stk",values,TicketResolve);
-            That(ticket.HasActionUsablePlace && ticket.DeclaredActionUsablePlaces is null,
-                "损坏、未闭合或互相冲突的重复地点不得成为无限制缺省值");
+            string[] names = ["[" + field + "]", "[/" + field + "]", "[event server]"];
+            string ServerResolve(int index) => names[index];
+            PvfToken[] declarations = [new(3,0),new(6,2),new(3,1),new(3,0),new(0,-1),new(3,1)];
+            var recovery = RecoveryConsumableFile.Parse(100,"stackable/use.stk",declarations,ServerResolve);
+            var serverExperience = ExperienceConsumableFile.Parse(100,"stackable/use.stk",declarations,ServerResolve);
+            That(ItemUseFields.IsSharedTag(field) && recovery.DeclaredFields.Contains(field) &&
+                recovery.Diagnostics.IsEmpty && serverExperience.Diagnostics.IsEmpty &&
+                !recovery.Stackable.UnsupportedFields.Contains(field),
+                "服务器限用声明保留元数据，专用服和重复异值不成为局部解析拒绝：" + field);
         }
         Reject<InvalidDataException>(() => PvfItemIndex.Equipment([new(0, 0), new(6, 4)], Resolve, _ => true));
         string[] classStrings = ["[need material]", "[/need material]", "[dont change grow type]", "[/dont change grow type]",

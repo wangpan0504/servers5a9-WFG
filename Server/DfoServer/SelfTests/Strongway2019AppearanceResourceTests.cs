@@ -9,6 +9,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -16,7 +17,7 @@ namespace DfoServer;
 // 定向真实资源回归；边框历史正控不代表当前墙钟可使用。
 internal static class Strongway2019AppearanceResourceTests
 {
-    public static void RunResources(TownCatalog towns, ItemResources resources)
+    public static void RunResources(PvfArchive archive, TownCatalog towns, ItemResources resources)
     {
         int before = Count;
         int[] tokens = [490013039, 490013040, 490013041];
@@ -54,15 +55,37 @@ internal static class Strongway2019AppearanceResourceTests
         {
             var repository = new CharacterRepository(path);
             using var owner = new AccountOwners().Acquire("strongway-appearance", () => { });
-            var role = repository.Create(owner, new("StrongArt", towns.Room, towns.InitialReturn) { Level = 95 });
+            var role = repository.Create(owner, new("StrongArt", towns.Room, towns.InitialReturn)
+                { Level = 95, DungeonState = CharacterDungeonState.NewOrdinary });
             var sibling = repository.Create(owner, new("StrongArtTwo", towns.Room, towns.InitialReturn) { Level = 95 });
             var inventory = new InventoryService(resources.Items, resources.GoldLimits, resources.EpicPieces);
             role = InventoryService.Commit(repository, owner, role,
                 inventory.Grant(role, [new(tokens[0], 1), new(tokens[1], 1), new(tokens[2], 1), new(490013316, 1)]));
-            var session = new GameSession(repository, towns, owner);
+            var session = new GameSession(repository, towns, owner, items: resources.Items);
             session.Select(role.Slot, resumeTown: true); session.MarkReady();
             var service = new InventorySkinStorageService(resources.Items, resources.Skins, resources.GoldLimits,
                 resources.EpicPieces, resources.Contracts);
+            That(session.LeaveRoom() && session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                "插图券地点回归沿真实旅行到副本入口：" + session.TravelReason);
+            That(session.BeginDungeonSelection() is not null, "插图券地点回归沿正式入口选图");
+            That(session.EnterFormalDungeon(3, 0, 0, Testing.SelfTestCatalogs.Dungeons(archive),
+                    Testing.SelfTestCatalogs.Rooms(archive)) is not null,
+                "插图券地点回归建立正式副本：" + session.LastFormalDungeonRejection);
+            That(session.CompleteFormalDungeonLoading() is not null,
+                "插图券地点回归完成加载，不借保存的城镇坐标判断地点");
+            var dungeonCharacter = session.Selected!;
+            string dungeonBefore = JsonSerializer.Serialize(repository.List(owner));
+            foreach (int tokenId in tokens)
+            {
+                var source = dungeonCharacter.Inventory.Items.Single(item => item.Core.ItemId == tokenId);
+                That(service.Add(dungeonCharacter, source.Position, town: false).Accepted &&
+                    !session.UseSkinStorage(service, source.Position).Accepted &&
+                    ReferenceEquals(session.Selected, dungeonCharacter) &&
+                    JsonSerializer.Serialize(repository.List(owner)) == dungeonBefore,
+                    "资产规划不重复检查地点；真实village插图券经统一Session门禁在已加载副本拒绝，不扣券、登记外观或推进revision：" + tokenId);
+            }
+            That(session.ReturnFromFormalDungeon() is not null && session.Phase == SessionPhase.Town,
+                "正式退图后恢复城镇上下文，后续使用仍由同一Session判定");
             for (int index = 0; index < tokens.Length; index++)
             {
                 var source = session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == tokens[index]);
@@ -71,8 +94,6 @@ internal static class Strongway2019AppearanceResourceTests
                 foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
                     That(service.Add(session.Selected! with { Job = job }, source.Position, town: true).Accepted,
                         "真实插图券对全部职业保留合法入库：" + tokens[index] + ":" + job);
-                That(!service.Add(session.Selected!, source.Position, town: false).Accepted,
-                    "真实village声明在副本上下文拒绝");
                 if (index == 0)
                 {
                     var saved = session.Selected!;
@@ -104,7 +125,7 @@ internal static class Strongway2019AppearanceResourceTests
             var restored = new CharacterRepository(path).LoadCharacter(owner, role.Slot);
             That(JsonSerializer.Serialize(restored) == JsonSerializer.Serialize(session.Selected),
                 "新Repository完整恢复已消费库存、三个账号永久插图及角色选择");
-            var other = new GameSession(new CharacterRepository(path), towns, owner);
+            var other = new GameSession(new CharacterRepository(path), towns, owner, items: resources.Items);
             other.Select(sibling.Slot, resumeTown: true); other.MarkReady();
             That(other.Selected!.Inventory.Skins.Cutscenes.IsEmpty &&
                 other.Selected!.Inventory.AccountSkins.Cutscenes.Select(row => row.SkinId).SequenceEqual(skins) &&
@@ -144,7 +165,8 @@ internal static class Strongway2019AppearanceResourceTests
                 var clock = new HistoricalClock(new(2020, 11, 27, 6, 0, 0, TimeSpan.FromHours(8)));
                 var historicalService = new InventorySkinStorageService(resources.Items, resources.Skins, resources.GoldLimits,
                     resources.EpicPieces, resources.Contracts, clock);
-                var historicalSession = new GameSession(repository, towns, historicalOwner);
+                var historicalSession = new GameSession(repository, towns, historicalOwner, timeProvider: clock,
+                    items: resources.Items);
                 historicalSession.Select(historical.Slot, resumeTown: true); historicalSession.MarkReady();
                 var source = historicalSession.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 490013318);
                 That(historicalSession.UseSkinStorage(historicalService, source.Position).Accepted &&

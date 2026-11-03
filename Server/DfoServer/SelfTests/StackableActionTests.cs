@@ -1,4 +1,8 @@
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -62,8 +66,161 @@ internal static class StackableActionTests
         return total;
     }
 
+    static void RunUsePlaces()
+    {
+        foreach (var (places, current, expected) in new (string[], StackableUseContext, bool)[]
+        {
+            ([], new(StackableUsePlace.Dungeon), true),
+            (["[village]", "[seria room]", "[village]"], new(StackableUsePlace.Village), true),
+            (["[village]"], new(StackableUsePlace.SeriaRoom), true),
+            (["[seria room]"], new(StackableUsePlace.Village), false),
+            (["[village]"], new(StackableUsePlace.Dungeon), false),
+            (["[unknown]", "[dungeon]"], new(StackableUsePlace.Village), true),
+            (["[tournament]", "[dungeon]"], new(StackableUsePlace.Village), false),
+            (["[tournament]"], new(StackableUsePlace.Dungeon), false),
+            (["[tournament]"], new(StackableUsePlace.Tournament), true),
+            (["[pvp]"], new(StackableUsePlace.Tournament), false),
+            (["[tournament]"], new(StackableUsePlace.Pvp), false),
+            (["[pvp]"], new(StackableUsePlace.Pvp), true),
+            (["[village]"], new(StackableUsePlace.Pvp), false),
+            (["[dont open]", "[village]", "[dungeon]", "[pvp]", "[all]"], new(StackableUsePlace.Village), false),
+            (["[dont open]"], new(StackableUsePlace.Dungeon), false),
+            (["[dont use exercise]"], new(StackableUsePlace.Village), false),
+            (["[dungeon]", "[dont use exercise]"], new(StackableUsePlace.Dungeon), true),
+            (["[dungeon]", "[dont use exercise]"], new(StackableUsePlace.Dungeon, IsPractice: true), false),
+            (["[dungeon]"], new(StackableUsePlace.Dungeon, IsPractice: true), true),
+            (["[dont use assult]"], new(StackableUsePlace.Village), false),
+            (["[village]", "[dont use assult]"], new(StackableUsePlace.Village), true),
+            (["[dungeon]", "[dont use assult]"], new(StackableUsePlace.Dungeon), true),
+            (["[dungeon]", "[dont use assult]"], new(StackableUsePlace.Dungeon, IsAssault: true), false),
+            (["[all]"], new(StackableUsePlace.Tournament), true),
+            (["[all]", "[dont use exercise]"], new(StackableUsePlace.Dungeon, IsPractice: true), false),
+            (["[all]"], new(StackableUsePlace.None), false)
+        })
+        {
+            That(StackableUsePlaces.Allows(places, current) == expected,
+                "原生地点许可和排除项不互相覆盖：" + string.Join(',', places) + ":" + current);
+            That(BoosterCatalog.ParseUsePlaces(places).Allows(current) == expected,
+                "礼包保留全部地点与禁用语义，不另造两态匹配：" + current);
+        }
+        foreach (var state in Enum.GetValues<UserState>())
+        {
+            var expected = state switch
+            {
+                UserState.Town => StackableUsePlace.SeriaRoom,
+                UserState.PvpTown or UserState.PvpRoom or UserState.PvpBattle => StackableUsePlace.Pvp,
+                UserState.Dungeon or UserState.TutorialDungeon => StackableUsePlace.Dungeon,
+                _ => StackableUsePlace.None
+            };
+            That(StackableUsePlacePolicy.Context(state, seriaRoom: true).Place == expected,
+                "场所来自UserState，选角、入城、选图与未实现状态不能冒充村庄/副本：" + state);
+        }
+        foreach (var state in new[] { UserState.PvpTown, UserState.PvpRoom, UserState.PvpBattle })
+            That(StackableUsePlacePolicy.Context(state, tournamentChannel: true).Place == StackableUsePlace.Tournament,
+                "竞技大赛频道在城镇、候场及战斗均不混成普通PvP：" + state);
+        That(!StackableUsePlaces.TownOnly(["[tournament]"]) &&
+            !StackableUsePlaces.TownOnly(["[dungeon]", "[dont use exercise]"]) &&
+            StackableUsePlaces.SeriaRoomOnly(["[seria room]", "[dont use exercise]"]),
+            "目录的城镇/房间资格不再将比赛或练习排除值映射为村庄");
+    }
+
+    static void RunUseQualifications()
+    {
+        var town = new StackableUseContext(StackableUsePlace.Village);
+        foreach (var (conditions, context, allowed) in new (string[], StackableUseContext, bool)[]
+        {
+            ([],town,true), ([],town with { IsPvpPrivate=true },false),
+            (["[guildmember]"],town,false), (["[guildmember]"],town with { InGuild=true },true),
+            (["[guildmaster]"],town,false), (["[guildmaster]"],town with { InGuild=true },false),
+            (["[guildmaster]"],town with { IsGuildMaster=true },false),
+            (["[guildmaster]","[guildmember]"],town with { InGuild=true,IsGuildMaster=true },true),
+            (["[privatePvpChar]"],town,true), (["[privatePvpChar]"],town with { IsPvpPrivate=true },true),
+            (["[guildmember]","[privatePvpChar]"],town with { IsPvpPrivate=true },false),
+            (["[guildmember]","[privatePvpChar]"],town with { IsPvpPrivate=true,InGuild=true },true),
+            (["[unknown]"],town,true), (["[unknown]"],town with { IsPvpPrivate=true },false)
+        })
+            That(new StackableUseRules([], [..conditions], "[waste]").Check(context) ==
+                (allowed ? StackableUseRejection.None : StackableUseRejection.Condition),
+                "使用资格按实际公会和角色身份判断，许可与限制不互相覆盖：" + string.Join(',',conditions) + ":" + context);
+        foreach (string type in new[] { "[only effect]", "[booster random]", "[couple room item]" })
+            That(new StackableUseRules([], StackableType:type).Check(town with { IsPvpPrivate=true }) == StackableUseRejection.None,
+                "保留本版ARAD专用角色的13/16/39原生例外：" + type);
+        That(new StackableUseRules([],StackableType:"[etc]").Check(town with { IsPvpPrivate=true },directUse:false) == StackableUseRejection.None &&
+            new StackableUseRules([], ["[guildmaster]"], "[etc]").Check(town with { IsPvpPrivate=true },directUse:false) == StackableUseRejection.Condition,
+            "自动保护仍检查显式资格，但不把主动使用的缺省专用角色许可规则扩展成额外毁装风险");
+        foreach (var (source,target,allowed) in new (ItemWorlds,ItemWorlds,bool)[]
+        {
+            (ItemWorlds.Common,ItemWorlds.Common,true), (ItemWorlds.Fair,ItemWorlds.Fair,true),
+            (ItemWorlds.Common|ItemWorlds.Fair,ItemWorlds.Common|ItemWorlds.Fair,true),
+            (ItemWorlds.Common,ItemWorlds.Fair,false), (ItemWorlds.Fair,ItemWorlds.Common,false),
+            (ItemWorlds.Common|ItemWorlds.Fair,ItemWorlds.Common,false), (ItemWorlds.Common,ItemWorlds.Common|ItemWorlds.Fair,false),
+            (ItemWorlds.None,ItemWorlds.Common,false), (ItemWorlds.None,ItemWorlds.None,true)
+        })
+            That(new StackableUseRules([],Worlds:source).Check(town,target) ==
+                (allowed ? StackableUseRejection.None : StackableUseRejection.World),
+                "源与目标世界按双向包含匹配，不用交集或频道名代替：" + source + ":" + target);
+        That(StackableUseRules.ParseWorlds(null) == ItemWorlds.Common && StackableUseRules.ParseWorlds([]) == ItemWorlds.None &&
+            StackableUseRules.ParseWorlds(["[fair]","[unknown]","[common]"]) == ItemWorlds.Fair &&
+            new StackableUseRules([],Worlds:ItemWorlds.Fair).Check(town) == StackableUseRejection.None,
+            "缺省为common，显式空不补默认，未知值终止世界读取；无目标的使用不伪造当前频道世界门禁");
+        var costCatalog = new EnhancementCatalog(_ => "[stackable type]\n`[material]` 0\n[action usable condition]\n`[guildmaster]`\n[/action usable condition]",
+            new Dictionary<int,string> { [100]="cost.stk" },new Dictionary<int,string>());
+        var costService = new InventoryEnhancementService(null!,costCatalog,null!);
+        var role = new Character(1,0,"Cost",0,new(1,0,1,1),null) { Inventory=new([
+            new(1,new(InventoryListType.Main,65),new(100,ItemKind.Material,10)),
+            new(2,new(InventoryListType.Equipment,12),new(101,ItemKind.Equipment,1))]) };
+        var request = new EnhancementRequest(EnhancementMode.Reinforce,new(InventoryListType.Equipment,12),101,65,-1,default,-1,-1);
+        That(!costService.IsEffectSource(role,request),
+            "普通NPC材料即使声明会长使用资格也只是成本，不因扣数量进入道具效果门禁");
+    }
+
+    static void RunIgnoredServerTypes()
+    {
+        var item = new ItemTemplate(100, ItemKind.Consumable, 0, 1, 0, 100, 0, 0, 1, "account", ushort.MaxValue, 0, "Use");
+        var raw = new StackableFile(100, "stackable/use.stk", new("[waste]", [0]), 100, 0, 0, 1, null, [])
+        {
+            ActionDeclaration = new("[add fatigue]", [30]), HasUseActionPacket = true, DeclaredUseActionPacket = 1,
+            DeclaredActionUsableServerTypes = ["[event server]"], DeclaredNeededMaterials = [],
+            DeclaredUsableFirstGrowTypes = [], DeclaredDontChangeGrowTypes = []
+        };
+        foreach (string field in new[] { "action usable server type", "usable game server type", "usable server type" })
+        {
+            var file = new RecoveryConsumableFile(100, raw.ScriptPath, raw, 0, null, null, null, [field], []);
+            That(FatigueConsumableDefinition.Parse(file, item) is { Amount: 30 } &&
+                ActionConsumableDefinition.Parse(file with { Stackable = raw with { ActionDeclaration = new("[add mileage]", [7]) } }, item) is
+                    { Label: "[add mileage]", Parameters: [7] },
+                "疲劳药和动作道具忽略服务器字段，不改变效果参数：" + field);
+            var expRaw = raw with { TypeDeclaration = new("[etc]", [0]), ActionDeclaration = null, DeclaredUseActionPacket = 0 };
+            var experience = new ExperienceConsumableFile(expRaw, new("[expUp]", [50]), null, [], [field], []);
+            That(ExperienceConsumableDefinition.Parse(experience, item) is { Amount: 50 } &&
+                LevelUpByTableDefinition.Parse(experience with { Effect = new("[levelUpByTable]", [1, 49, 50]) }, item) is not null,
+                "经验与等级表不因服务器字段丢失已实现效果：" + field);
+            That(InventoryExpansionDefinition.Parse(file with { Stackable = expRaw with
+                { ActionDeclaration = new("[upgrade inventory]", []) } }, item) is not null,
+                "严格字段白名单同样忽略服务器声明：" + field);
+            That(PartnerTeleportDefinition.Parse(file with { Stackable = raw with
+                { ActionDeclaration = new("[teleport to partner]", [1]), DeclaredUseActionPacket = 0 } }, item) is not null,
+                "伙伴传送不按服务器字段拒绝，保留购买成本与使用边界：" + field);
+            That(PermanentGrowthDefinition.Parse(experience with { Stackable = expRaw with
+                { TemplateId = 1039, ScriptPath = "stackable/stone_str.stk", TypeDeclaration = new("[etc]", [1]) }, Effect = null },
+                item with { Id = 1039 }) is { Amount: 50 } &&
+                LegacyStatusConsumableDefinition.Parse(experience with { Stackable = expRaw with
+                { TemplateId = 7180, ScriptPath = "stackable/event/newyear/coin_newyear.stk", TypeDeclaration = new("[waste]", [0]) }, Effect = null },
+                item with { Id = 7180 }) is { Amount: 1 },
+                "原生属性石及复活币道具忽略服务器声明，不改原效果：" + field);
+            string daily = "[stackable type]\n`[booster]` 0\n[total usable count]\n1\n[impossible contents]\n`delete booster`\n[/impossible contents]\n";
+            string server = "[" + field + "]\n`[event server]`\n[/" + field + "]\n";
+            That(DailyRetainedBoosterDefinition.TryParse(server + daily + server, out byte limit) && limit == 1 &&
+                DailyRetainedBoosterDefinition.TryParse(daily.Replace("[impossible contents]", server + "[impossible contents]"), out limit) && limit == 1,
+                "每日保留礼盒忽略重复服务器声明，原每日上限仍为1：" + field);
+        }
+    }
+
     public static void RunCore()
     {
+        RunUsePlaces();
+        RunUseQualifications();
+        RunIgnoredServerTypes();
         int checks = Count;
         That(StackableActionCatalog.ClientTypes.Count == 194 &&
             StackableActionCatalog.ClientTypes.Values.Distinct().Count() == 194,

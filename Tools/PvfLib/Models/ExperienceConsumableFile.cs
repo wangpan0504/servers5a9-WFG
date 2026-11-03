@@ -10,7 +10,8 @@ public sealed record ExperienceConsumableFile(StackableFile Stackable, Stackable
     {
         var document = new PvfTokenDocument(tokens, resolve);
         var errors = document.Diagnostics.ToList();
-        foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
+        foreach (var duplicate in document.Sections.GroupBy(section => section.Name)
+            .Where(group => group.Count() != 1 && !ItemUseFields.IsSharedTag(group.Key)))
             errors.Add("重复经验物品字段：" + duplicate.Key);
         var effects = document.Sections.Where(section => section.Name == "increase status type").ToArray();
         StackableTypeDeclaration? effect = null;

@@ -28,6 +28,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool UsableExpired { get; init; }
     public ImmutableArray<int> PartSetIds { get; init; } = [];
     public decimal ExperiencePercent { get; init; }
+    public ItemWorlds UsableWorlds { get; init; } = ItemWorlds.Common;
     public ImmutableHashSet<string> ExperienceForbiddenModules { get; init; } = ImmutableHashSet<string>.Empty;
     public bool CreatureEgg { get; init; }
     public int WeaponSubType { get; init; } = -1;

@@ -515,11 +515,9 @@ internal static class SelfTestRunner
         AntiEvilUpgradeTests.RunMemberSetCompatibilityResources(itemResources);
         AntiEvilUpgradeTests.RunEquipmentBaseTailResources(itemResources);
         Strongway2019ShopTests.RunResources(towns, itemResources);
-        Strongway2019ShopTests.RunFrameCompatibility(towns, itemResources);
-        Strongway2019ShopTests.RunFrameTransferResources(towns, itemResources);
         Strongway2019RewardTests.RunFullInventoryResources(itemResources);
         AuraSkinTests.RunEventTicketResources(towns, itemResources);
-        Strongway2019AppearanceResourceTests.RunResources(towns, itemResources);
+        Strongway2019AppearanceResourceTests.RunResources(pvf, towns, itemResources);
         Strongway2019TailResourceTests.RunResources(pvf, towns, characters, itemResources);
         Strongway2019EquipmentBoxResourceTests.RunResources(towns, itemResources);
         Strongway2019AdmissionSessionTests.RunResources(towns);
@@ -727,7 +725,7 @@ internal static class SelfTestRunner
         GuildNpcBenefitCatalogTests.RunResources(pvf);
         GuildDungeonProgressTests.RunResources(pvf);
         GuildRankingTests.RunResources(pvf);
-        GuildExperienceGiftTests.RunResources(itemResources.Items);
+        GuildExperienceGiftTests.RunResources(pvf, towns, itemResources);
         GuildCreationTests.Run(towns, characters, itemResources, pvf);
         CollectBoxTests.RunResources(towns, itemResources);
         PromotionConsumerValidationTests.RunResources(itemResources);

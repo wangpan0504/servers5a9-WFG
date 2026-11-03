@@ -144,7 +144,6 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             parsed.Second <= int.MaxValue && parsed.Fifth <= short.MaxValue && parsed.Seventh <= short.MaxValue)
             return await TradeStoreAsync(context, parsed.First, 1, candidate => cardEnchanting?.Plan(candidate,
                 (int)parsed.Second, new(InventoryListType.Main, (short)parsed.Fifth), new(InventoryListType.Main, (short)parsed.Seventh)));
-        ushort error = 19;
         ExpertJobActionPlan? action = null;
         InventoryResult committed;
         // 本人路径与跨玩家店主路径必须区分；不能把客人的卡/金币当成店主操作结算。
@@ -157,11 +156,10 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             action = cardPlan;
             committed = context.Session.CommitExpertJobAction(cardPlan, quests);
         }
-        else if (enchantments is not null && ExpertJobCraft.TryPlanEnchant(current, enchantments, scripts,
-            parsed.Fourth, parsed.Fifth, parsed.Sixth, parsed.Seventh, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            out var beadPlan, out int experience, out error))
-            committed = context.Session.CommitExpertJobCraft(beadPlan, experience, quests, enchanting: true);
-        else committed = InventoryResult.Reject(error == 0 ? (ushort)19 : error);
+        else if (enchantments is not null)
+            committed = context.Session.UseExpertJobBead(current, enchantments, scripts,
+                new(new(InventoryListType.Main, (short)parsed.Seventh), new(InventoryListType.Main, (short)parsed.Fifth), 0), quests);
+        else committed = InventoryResult.Reject(19);
         if (!committed.Accepted || committed.Receipt is not { } craftedReceipt)
         {
             await context.Reply(CmdPacketType.USE_ENCHANT_STORE, ExpertJobPackets.Fail(committed.Error), "expert_job_enchant_rejected");

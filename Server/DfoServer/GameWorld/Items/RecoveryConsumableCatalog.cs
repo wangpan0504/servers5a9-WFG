@@ -11,6 +11,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public ushort Jobs { get; init; } = ushort.MaxValue;
     public bool UseForbidden { get; init; }
     public bool RequiresDungeon { get; init; }
+    public ImmutableArray<string> Places { get; init; } = [];
     public bool EffectsAfterAcknowledgement { get; init; }
     public int ExpBonusPermille { get; init; }
     public int QuestExpBonusPermille { get; init; }
@@ -125,9 +126,7 @@ internal sealed class RecoveryConsumableCatalog
             file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
         if ((bossBuff is not null || epicBuff is not null || hellLegendBuff is not null || villageSpeedBuff is not null) &&
-            (file.StructureDiagnostics.Length != 0 ||
-            raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
-            !places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]")))) return null;
+            file.StructureDiagnostics.Length != 0) return null;
         if (epicBuff is not null && (bossBuff is not null || hellLegendBuff is not null || villageSpeedBuff is not null ||
             epicBuff.BuffId <= 0 || epicBuff.Percent != 100 ||
             file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 } ||
@@ -164,6 +163,7 @@ internal sealed class RecoveryConsumableCatalog
         return new(file.TemplateId, raw.DeclaredMinimumLevel ?? 0, file.CoolTime ?? 0, file.CoolGroup ?? -file.TemplateId,
             SummonsApc: file.DeclaredFields.Contains("summon apc"))
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
+            Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [],
             BossSelectionBuff = bossBuff,
             EpicDropBuff = epicBuff,
             HellLegendEpicDropBuff = hellLegendBuff,

@@ -141,10 +141,10 @@ internal static class BoosterQualificationTests
             "仅房间声明不能放宽成整个Town");
         That(!session.PlanAndCommitBooster(Noop, BoosterCatalog.ParseUsePlaces(open + "`[dungeon]`" + close)).Accepted,
             "仅副本声明不能意外在城镇开放");
-        foreach (string bad in new[] { open, open + "`[village]`", open + "`[unknown]`" + close,
+        foreach (string declaration in new[] { open, open + "`[village]`", open + "`[unknown]`" + close,
             open + "`[village]` 1" + close, open + "`[village]` `[village]`" + close,
-            open + "`[village]`" + close + open + "`[seria room]`" + close,
-            "[nested]\n" + open + "`[village]`" + close + "\n[/nested]" })
-            That(BoosterCatalog.ParseUsePlaces(bad).PendingRule is not null, "未知、重复、嵌套及未闭合地点安全Pending");
+            open + "`[village]`" + close + open + "`[seria room]`" + close })
+            That(BoosterCatalog.ParseUsePlaces(declaration).Allows(new(StackableUsePlace.Village)),
+                "地点按连续字符串及重复段读取，不再因类型、数量或闭合形状拒绝合法村庄许可");
     }
 }

@@ -9,6 +9,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Channels;
 using PvfLib;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
@@ -19,6 +20,7 @@ internal static partial class ConsumableUseSessionTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
+        RunUsePlaces(towns, characters, archive);
         RunDungeonRestrictions(towns, characters, archive);
         RunTimedStates(towns, characters, archive);
         RunStaminaVariant(towns, characters, archive);
@@ -69,6 +71,8 @@ internal static partial class ConsumableUseSessionTests
                 "实际消费提交后安装库存，冷却开始且回执为真实UID/revision/phase");
             That(f.Use().Outcome == ConsumableUseOutcome.CloseConnection && f.Count == 2,
                 "原完整请求在成功冷却窗口重复不重发成功或失败ACK，不二次扣件");
+            That(f.Session.MustHandleConsumableReplay(f.Request) && !f.Session.MustHandleConsumableReplay(f.Request with { OpaqueCheck = 7 }),
+                "统一地点分发不得抢先应答原成功token的重放歧义，其他请求仍继续地点检查");
             That(f.Session.UseConsumable(f.Request, f.Service, activityBlocked: true).Outcome == ConsumableUseOutcome.CloseConnection &&
                 f.Session.UseConsumable(f.Request with { OpaqueCheck = 7 }, f.Service, activityBlocked: true).Outcome == ConsumableUseOutcome.Rejected,
                 "活动门禁不能解除已消费token歧义，不同请求仍按非法场景完整拒绝");
@@ -176,6 +180,55 @@ internal static partial class ConsumableUseSessionTests
                 "成功后进入MapSelect不能让旧完整请求改发failureACK，新非法场景请求仍正常拒绝");
             That(!f.Session.CanPublishConsumable(old), "正式回城使旧实例消费回执失效");
         }
+    }
+
+    static void RunUsePlaces(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        foreach (int type in new[] { 4, 20 })
+        {
+            using var pvp = new Fixture(towns, characters, entry: new(new(2, 101), type, "[pvp]"),
+                hp: ConsumableUseTests.Hp with { Places = [type == 20 ? "[tournament]" : "[pvp]"] });
+            pvp.Select();
+            var pvpRole = pvp.Session.Selected!;
+            bool Allows(string place) => pvp.Session.CanUseStackablePlace(pvpRole, pvp.Session.SelectionEpoch, pvp.Session.Phase, [place]);
+            That(pvp.Session.GetState() == UserState.PvpTown && Allows(type == 20 ? "[tournament]" : "[pvp]") &&
+                !Allows(type == 20 ? "[pvp]" : "[tournament]") && !Allows("[village]") && !Allows("[dont open]"),
+                "真实PvP会话以UserState和原频道区分普通决斗/竞技大赛，不借角色城镇位置放行：" + type);
+            That(pvp.Use().Outcome == ConsumableUseOutcome.Committed && pvp.Count == 2,
+                "统一地点放行后实际消费成功，不被下游城镇/副本两态判断再次阻止：" + type);
+        }
+        using var f = new Fixture(towns, characters, hp: ConsumableUseTests.Hp with
+            { Places = ["[dungeon]", "[dont use exercise]", "[dont use assult]"] });
+        f.Select();
+        var roleInRoom = f.Session.Selected!;
+        long epoch = f.Session.SelectionEpoch;
+        That(f.Session.CanUseStackablePlace(roleInRoom, epoch, SessionPhase.Town, ["[seria room]"]) &&
+            f.Use().Outcome == ConsumableUseOutcome.Rejected && f.Count == 3,
+            "房间地点来自实际城镇目录，副本药的排除项不产生房间许可");
+        That(f.Session.LeaveRoom() && !f.Session.CanUseStackablePlace(f.Session.Selected!, epoch,
+            SessionPhase.Town, ["[seria room]"]) && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+            "离开房间后仅房间许可随原UserState和真实位置失效");
+        That(f.Session.BeginDungeonSelection() is not null &&
+            !f.Session.CanUseStackablePlace(f.Session.Selected!, epoch, SessionPhase.MapSelect, ["[dungeon]"]),
+            "选图UserState不是正在地下城中，不能仅凭非Town分支授予副本许可");
+        That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+            global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive), practice: true) is not null &&
+            f.Session.CompleteFormalDungeonLoading() is not null, "地点回归通过正式入口建立练习实例");
+        var role = f.Session.Selected!;
+        string before = JsonSerializer.Serialize(f.Read());
+        That(f.Session.GetState() == UserState.Dungeon &&
+            f.Session.CanUseStackablePlace(role, epoch, SessionPhase.Dungeon, ["[dungeon]"]) &&
+            !f.Session.CanUseStackablePlace(role, epoch, SessionPhase.Dungeon, ["[dungeon]", "[dont use exercise]"]) &&
+            !f.Session.CanUseStackablePlace(role, epoch + 1, SessionPhase.Dungeon, ["[dungeon]"]) &&
+            f.Use().Outcome == ConsumableUseOutcome.Rejected && JsonSerializer.Serialize(f.Read()) == before,
+            "原练习实例触发通用排除，不扣源、不设冷却且旧epoch不能借地点许可使用");
+        bool planned = false;
+        InventoryResult Noop(Character current) { planned = true; return new(true, 0, new(current.Inventory, current.Inventory, "place_probe")); }
+        That(!f.Session.PlanAndCommitBooster(Noop, BoosterCatalog.ParseUsePlaces(["[dungeon]", "[dont use exercise]"])).Accepted &&
+            !planned && f.Session.PlanAndCommitBooster(Noop, BoosterCatalog.ParseUsePlaces(["[dungeon]"])).Accepted,
+            "礼包和普通药共用练习排除，拒绝在规划前发生，普通副本许可仍保留");
+        That(f.Session.UseConsumable(new(new(InventoryListType.Main, 66), 3, 1114, 0), f.Service).Outcome == ConsumableUseOutcome.Committed,
+            "地点拒绝后同会话仍能使用无此排除的合法物品，不把整个练习实例禁用");
     }
 
     public static void RunQualificationExpiry(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
@@ -753,7 +806,7 @@ internal static partial class ConsumableUseSessionTests
         public InventoryConsumableUseService Service { get; }
         public ConsumableUseRequest Request { get; }
         public Fixture(TownCatalog towns, CharacterCatalog characters, bool lost = false, RecoveryConsumableDefinition? hp = null,
-            RecoveryConsumableCatalog? consumables = null, byte level = 16)
+            RecoveryConsumableCatalog? consumables = null, byte level = 16, ChannelEntry? entry = null)
         {
             hp ??= ConsumableUseTests.Hp;
             Request = new(new(InventoryListType.Main, 65), 0, hp.ItemId, 0);
@@ -768,7 +821,7 @@ internal static partial class ConsumableUseSessionTests
             _ = consumables.HellLegendEpicDropBuffs;
             _ = consumables.VillageMoveSpeedBuffs;
             Session = new(store is null ? Repository : store, towns, Owner,
-                timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables);
+                timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables, entry: entry);
             Service = new(consumables, Clock);
         }
         public void Select() { Session.Select(0); Session.MarkReady(); }

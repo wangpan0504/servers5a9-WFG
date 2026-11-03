@@ -36,8 +36,7 @@ internal sealed class ChronicleEnchantCatalog
         var file = Effective("stackable/" + path, "stackable/");
         // 未接入的独立限用账本不凭客户端检查放行；need material是商店成本，不属于使用费。
         if (file.DeclaredFields.Overlaps(new[] { "total usable count", "total weekly usable count", "total accumulated usable count",
-            "use count limit all server item", "usable datetime", "usable first growtype", "action usable server type",
-            "usable game server type", "usable server type", "check usable itemlevel", "action usable place" })) return null;
+            "use count limit all server item", "usable datetime", "usable first growtype", "check usable itemlevel" })) return null;
         return file.Type is { } type && file.Probability is { } rates && !file.Skills.IsEmpty && stackable.ContainsKey(1254 + type)
             ? new(type, rates.First, rates.Second, file.Skills) : null;
     }

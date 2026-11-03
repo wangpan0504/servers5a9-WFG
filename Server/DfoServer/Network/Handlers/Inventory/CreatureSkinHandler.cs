@@ -30,7 +30,8 @@ internal sealed class CreatureSkinHandler(InventoryCreatureSkinService service, 
         }
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryCreatureSkinService.Rejection) :
             context.Session.PlanAndCommitInventory(character => service.PlanUnlock(character, request.SourceSlot, request.Target,
-                service.Clock.GetUtcNow().ToUnixTimeSeconds()), InventoryCreatureSkinService.Rejection);
+                service.Clock.GetUtcNow().ToUnixTimeSeconds()), InventoryCreatureSkinService.Rejection,
+                effectItem: request.SourceSlot >= 0 ? new(InventoryListType.Main, request.SourceSlot) : null);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : SameSelection();
         log.Write("creature_skin_unlock", new { Connection = context.Id, Slot = request.SourceSlot, request.Target,
             result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });

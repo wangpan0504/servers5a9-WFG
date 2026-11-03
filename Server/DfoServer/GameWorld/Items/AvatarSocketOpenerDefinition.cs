@@ -37,7 +37,7 @@ internal sealed record AvatarSocketOpenerDefinition(ItemTemplate Item, int Mode)
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             file.DeclaredFields.Contains("add socket limited avatar") && targets is not { Count: > 0 } ||
-            file.DeclaredFields.Any(field => field is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
+            file.DeclaredFields.Any(field => !ItemUseFields.IsSharedTag(field) && field is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
                 "usable job" or "attach type" or "minimum level" or "maximum level" or "weight" or "icon" or "icon mark" or
                 "stackable type" or "move wav" or "action type" or "stack limit" or "expiration date" or "usable period" or
                 "impossible contents" or "item category" or "need material" or "purchase limit" or "use action packet" or

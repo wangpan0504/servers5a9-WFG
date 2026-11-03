@@ -7,6 +7,7 @@ internal sealed record ClassChangeTicketDefinition(int TemplateId, int MinimumLe
     byte? FixedTarget, ImmutableHashSet<(byte Job, byte Grow)> Forbidden,
     ImmutableHashSet<byte> SourceGrowTypes, bool AllowUntransferred)
 {
+    public ImmutableArray<string> Places { get; init; } = [];
     public static ClassChangeTicketDefinition? Parse(StackableFile raw, ItemTemplate template)
     {
         var action = StackableActionCatalog.Arguments(raw);
@@ -17,10 +18,6 @@ internal sealed record ClassChangeTicketDefinition(int TemplateId, int MinimumLe
             raw.DeclaredMinimumLevel is not { } minimum || minimum < 1 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < minimum ||
             raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces is not { } places || !places.Contains("[village]") ||
-            places.Any(place => place is not ("[village]" or "[seria room]" or "[dont use assult]")) ||
-            raw.DeclaredActionUsableServerTypes is not { } servers || !servers.Contains("[general server]") ||
-            servers.Any(server => server is not ("[general server]" or "[event server]" or "[starter server]")) ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
             raw.DeclaredDontChangeGrowTypes is not { } forbidden || forbidden.Count % 2 != 0 ||
             raw.DeclaredUsableFirstGrowTypes is not { } sources || sources.Any(value => value is < 0 or > 5) ||
@@ -33,6 +30,7 @@ internal sealed record ClassChangeTicketDefinition(int TemplateId, int MinimumLe
         }
         return new(template.Id, minimum, raw.DeclaredMaximumLevel ?? int.MaxValue, template.Jobs,
             action.Parameters.Count == 0 ? null : (byte)action.Parameters[0], bans.ToImmutable(),
-            sources.Select(value => (byte)value).ToImmutableHashSet(), raw.ClassChangeGrowTypeCheckOff);
+            sources.Select(value => (byte)value).ToImmutableHashSet(), raw.ClassChangeGrowTypeCheckOff)
+            { Places = raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [] };
     }
 }

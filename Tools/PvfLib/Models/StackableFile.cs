@@ -21,6 +21,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
     public bool HasUsableJobs { get; init; }
     public IReadOnlyList<string>? DeclaredActionUsablePlaces { get; init; }
     public bool HasActionUsablePlace { get; init; }
+    public IReadOnlyList<string>? DeclaredActionUsableConditions { get; init; }
+    public IReadOnlyList<string>? DeclaredUsableWorlds { get; init; }
     public IReadOnlyList<string>? DeclaredActionUsableServerTypes { get; init; }
     // 商店兑换价格，不是使用道具时的附加成本。
     public IReadOnlyList<int>? DeclaredNeededMaterials { get; init; }
@@ -101,26 +103,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             else fields.Unsupported("usable job");
         }
         bool hasMaximum = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[maximum level]");
-        IReadOnlyList<string>? places = null;
-        if (fields.TryGet("action usable place", out values))
-        {
-            if (values.ToArray().All(token => token.Type == 6))
-                places = Array.AsReadOnly(values.ToArray().Select(token => resolve(token.Value)).ToArray());
-            else fields.Unsupported("action usable place");
-        }
-        else
-        {
-            var declarations = RepeatedSections("action usable place");
-            if (declarations.Length > 1 && declarations.All(section => section.IsBlock && section.Values.Length > 0 &&
-                section.Values.All(token => token.Type == 6)))
-            {
-                var last = declarations[^1].Values.Select(token => resolve(token.Value)).ToArray();
-                var expected = last.ToHashSet(StringComparer.Ordinal);
-                // 仅接受同一个地点集合的重复书写，不猜测冲突集合的覆盖关系。
-                if (declarations.All(section => expected.SetEquals(section.Values.Select(token => resolve(token.Value)))))
-                    places = Array.AsReadOnly(last);
-            }
-        }
+        var places = ReadActionUsablePlaces(tokens, resolve);
         bool hasUseAction = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[use action packet]");
         int? maximum = fields.Scalar("maximum level"), useAction = fields.Scalar("use action packet");
         IReadOnlyList<int>? Integers(string name)
@@ -149,7 +132,7 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
         }
         int? accountInventory = fields.Scalar("stack in account inventory");
         if (accountInventory is not (null or 0 or 1)) fields.Unsupported("stack in account inventory");
-        var unsupported = fields.UnsupportedFields.Where(name => !(name == "stackable type" && type is not null ||
+        var unsupported = fields.UnsupportedFields.Where(name => !ItemUseFields.IsIgnoredServerType(name) && !(name == "stackable type" && type is not null ||
             name == "action usable place" && places is not null)).ToArray();
         return new(templateId, path, type, limit, price, sellPrice, minimum, group, Array.AsReadOnly(unsupported))
         {
@@ -161,6 +144,8 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             DeclaredUseActionPacket = useAction, HasUseActionPacket = hasUseAction, DeclaredUsableJobs = jobs,
             HasUsableJobs = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[usable job]"),
             DeclaredActionUsablePlaces = places,
+            DeclaredActionUsableConditions = ItemUseFields.ActionConditions(tokens, resolve),
+            DeclaredUsableWorlds = ItemUseFields.UsableWorlds(tokens, resolve),
             HasActionUsablePlace = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[action usable place]"),
             DeclaredActionUsableServerTypes = servers,
             DeclaredNeededMaterials = Integers("need material"),
@@ -176,6 +161,21 @@ public sealed record StackableFile(int TemplateId, string ScriptPath,
             HasCoolTime = tokens.Any(token => token.Type == 3 && resolve(token.Value) == "[cool time]"),
             HasBoosterInfo = hasBooster, DeclaredBoosterEtc = boosterEtc
         };
+    }
+
+    /// <summary>按资源顺序读取各次地点声明中的连续字符串；没有声明与空声明分别保留。</summary>
+    public static IReadOnlyList<string>? ReadActionUsablePlaces(PvfToken[] tokens, Func<int, string> resolve)
+    {
+        List<string>? places = null;
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (tokens[i].Type != 3 || resolve(tokens[i].Value) != "[action usable place]") continue;
+            places ??= [];
+            // df_game_r 的 ScanStr 遇到非字符串即结束本次读取；重复声明继续追加。
+            while (i + 1 < tokens.Length && tokens[i + 1].Type == 6)
+                places.Add(resolve(tokens[++i].Value));
+        }
+        return places is null ? null : Array.AsReadOnly(places.ToArray());
     }
 
     static StackableTypeDeclaration? ReadType(ReadOnlySpan<PvfToken> values, Func<int, string> resolve)

@@ -17,6 +17,8 @@ internal sealed partial class GameSession
         });
         if (capture.Character is not { } character || capture.Recipient is not { } recipient)
             return new(InventoryResult.Reject(7));
+        int sourceId = character.Inventory.Find(new(InventoryListType.Main, unchecked((short)request.StoneSlot)))?.Core.ItemId ?? 0;
+        if (!CanUseStackableItem(character, sourceId)) return new(InventoryResult.Reject(21));
         string place = towns.IsRoom(character.Position, QuestEligibility.Completed(character)) ? "[seria room]" : "[village]";
         ushort error = service.Plan(character, recipient, request, place, out var plan);
         if (error != 0) return new(InventoryResult.Reject(error));
@@ -27,6 +29,7 @@ internal sealed partial class GameSession
                 currentRoster.Generation != owner.Generation || request.RecipientIndex >= currentRoster.Entries.Length ||
                 currentRoster.Entries[(int)request.RecipientIndex] != recipient)
                 return new CreatureTransportResult(InventoryResult.Reject(7));
+            if (!CanUseStackableItem(character, sourceId)) return new CreatureTransportResult(InventoryResult.Reject(21));
             var committed = service.Commit(owner, plan!);
             Selected = committed.Character;
             return new CreatureTransportResult(new(true, 0, plan!.Inventory)

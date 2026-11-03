@@ -14,6 +14,8 @@ internal sealed partial class GameSession
         if (owner.Execute(() => pendingConsumableUse is not null))
             return new(ConsumableUseOutcome.CloseConnection, "commit-unknown", capture.Guard);
         if (blocked || capture.Character is not { } expected) return Reject("invalid-state");
+        int sourceId = expected.Inventory.Find(slot)?.Core.ItemId ?? 0;
+        if (!CanUseStackableItem(expected, sourceId)) return Reject("usable-place");
         DungeonIncountTicketPlan plan;
         try { plan = service.Prepare(expected, slot); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
@@ -22,6 +24,7 @@ internal sealed partial class GameSession
         {
             if (pendingConsumableUse is not null || !CanPublishConsumable(capture.Guard) || !CanUseConsumable() || Phase != SessionPhase.Town)
                 return new DungeonIncountTicketResult(ConsumableUseOutcome.CloseConnection, "state-changed", capture.Guard);
+            if (!CanUseStackableItem(expected, sourceId)) return Reject("usable-place");
             var now = service.Clock.GetUtcNow();
             if (plan.Period != DungeonIncountPolicy.Period(now, plan.WeeklyResetDay) ||
                 plan.Source.IsExpired(now.ToUnixTimeSeconds()) || plan.Inventory.CharacterPrecondition!.IsExpired(now.ToUnixTimeSeconds()))

@@ -73,10 +73,7 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         if (position.List != InventoryListType.Main || token is null ||
             token.Core.Kind != ItemKind.Consumable || token.Core.EquipmentLockId != 0 || token.IsExpired(now.ToUnixTimeSeconds()) ||
             skins.Token(token.Core.ItemId) is not { } definition ||
-            !items.Get(token.Core.ItemId).AllowsUse(character.Level, character.Job) ||
-            !definition.Places.IsEmpty && !definition.Places.Contains("[all]") &&
-                !definition.Places.Contains(town ? "[village]" : "[dungeon]") &&
-                !(town && seriaRoom && definition.Places.Contains("[seria room]")))
+            !items.Get(token.Core.ItemId).AllowsUse(character.Level, character.Job))
             return InventoryResult.Reject(3) with { RejectReason = "invalid_skin_token_or_context" };
         if (token.Core is { ItemId: 490013318, Strongway2019FrameOrigin: { Version: 1 } } &&
             definition is { Type: PartyFrameType, AccountWide: false, SkinId: 420000004 } &&

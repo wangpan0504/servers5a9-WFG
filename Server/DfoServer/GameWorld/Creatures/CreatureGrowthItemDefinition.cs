@@ -20,11 +20,10 @@ internal sealed record CreatureGrowthItemDefinition(int ItemId, int ViewMode, in
             raw.DeclaredMaximumLevel < raw.DeclaredMinimumLevel ||
             raw.HasCreatureMinimumLevel && raw.DeclaredCreatureMinimumLevel is not (>= 1 and <= 255) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
-            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not ["[village]"])
+            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0)
             return null;
         return new(template.Id, action.Parameters[0], action.Parameters[1], action.Parameters.Skip(2).ToImmutableArray(),
             raw.DeclaredMinimumLevel.Value, raw.DeclaredMaximumLevel ?? int.MaxValue, raw.DeclaredCreatureMinimumLevel ?? 1,
-            raw.HasActionUsablePlace);
+            StackableUsePlaces.TownOnly(raw.DeclaredActionUsablePlaces));
     }
 }

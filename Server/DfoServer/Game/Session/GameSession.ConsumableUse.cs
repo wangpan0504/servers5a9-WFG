@@ -52,13 +52,15 @@ internal sealed partial class GameSession
     public ConsumableUseResult UseConsumable(ConsumableUseRequest request, InventoryConsumableUseService service, bool activityBlocked = false)
     {
         var captured = owner.Execute(() => (Guard: UseGuard(), Character: CanUseConsumable() ? Selected : null,
-            Close: ClosedUse(service, request)));
+            Close: ClosedUse(request)));
         if (captured.Close is { } closed) return closed;
         ConsumableUseResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, Guard: captured.Guard);
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
+        int useItemId = character.Inventory.Find(request.Position)?.Core.ItemId ?? request.ItemId;
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
         bool requiresPcRoom = items?.Get(request.ItemId).RequiresPcRoom == true;
         if (requiresPcRoom && !owner.Execute(() => PremiumPcRoom)) return Reject("pcroom-required");
+        if (!CanUseStackableItem(character, useItemId, places: definition.Places)) return Reject("usable-qualification");
         if (definition.BossSelectionBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("boss-potion-requires-town");
         if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
@@ -78,10 +80,11 @@ internal sealed partial class GameSession
         var preliminary = service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {
-            if (ClosedUse(service, request) is { } repeated) return repeated;
+            if (ClosedUse(request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
             if (requiresPcRoom && !PremiumPcRoom) return Reject("pcroom-required");
+            if (!CanUseStackableItem(character, useItemId, places: definition.Places)) return Reject("usable-qualification");
             if (!CanUseDungeonItem(request.ItemId, definition.AllowedDungeons))
                 return Reject("grief-item-not-allowed-or-exhausted");
             if (definition.AllowedDungeons is { } allowed &&
@@ -159,7 +162,9 @@ internal sealed partial class GameSession
         });
     }
 
-    ConsumableUseResult? ClosedUse(InventoryConsumableUseService service, ConsumableUseRequest request)
+    internal bool MustHandleConsumableReplay(ConsumableUseRequest request) => owner.Execute(() => ClosedUse(request) is not null);
+
+    ConsumableUseResult? ClosedUse(ConsumableUseRequest request)
     {
         if (pendingConsumableUse is not null) return new(ConsumableUseOutcome.CloseConnection, "commit-unknown");
         // 成功token的歧义不因过房、活动门禁或模板变化消失，必须在任何普通拒绝ACK之前核对。

@@ -52,10 +52,10 @@ internal static class CreatureTransportTests
             plan.Inventory.After.Find(source.Position)!.Core.Count == 1 && plan.Inventory.After.ConsumableStates.Length == 1 &&
             character.Inventory.Find(pet.Position) == pet && !plan.Inventory.CharacterPrecondition!.Matches(character, pet.ExpireTime),
             "绑定及有限期成宠可专用跨界，规划保留原实例并同笔扣石头和冷却，最早到期时不可提交");
-        That(service.Plan(character, recipient, request, "[village]", out _) == 21 &&
+        That(service.Plan(character, recipient, request, "[village]", out _) == 0 &&
             service.Plan(character, recipient with { Id = character.Id }, request, "[seria room]", out _) == 7 &&
             service.Plan(character, recipient, request with { Mode = 0 }, "[seria room]", out _) == 7,
-            "错误地点、自身及非宠物跨界模式不消费");
+            "跨界规划不另按字符串拦地点，地点由Session统一检查；自身及非宠物模式仍拒绝");
         foreach (var invalid in new[] { pet with { Position = new(InventoryListType.Equipment,26) },
             pet with { Core = pet.Core with { EquipmentLockId = 1 } }, pet with { Core = pet.Core with { IsRental = true } },
             pet with { Core = pet.Core with { SortLockFlag = 1 } },

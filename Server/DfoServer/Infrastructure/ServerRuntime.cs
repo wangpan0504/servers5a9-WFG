@@ -370,8 +370,8 @@ internal static class ServerRuntime
             marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices);
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
-        var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
-        var commands = new GameCommandRegistry();
+        var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);
+        var commands = new GameCommandRegistry(itemResources.Items);
         var tagEvildomProjection = new TagEvildomProjection(repository, stats, log, clock, learning, projection, itemResources.Items);
         var imperialArenaProjection = new ImperialArenaProjection(repository, repository, repository, new ImperialArenaCatalog(pvf, itemResources.Items),
             stats, log, learning, itemResources.Items, projection, clock);
@@ -874,11 +874,11 @@ internal static class ServerRuntime
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements,
                 itemResources.MedalUpgrades, clock: clock, consumables: itemResources.RecoveryConsumables,
                 amplification: new InventoryAmplifyUpgradeService(itemResources.Items, itemResources.AmplifyUpgrades, itemResources.Enhancements,
-                    itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, towns, clock: clock,
+                    itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock,
                     consumables: itemResources.RecoveryConsumables)), inventoryProjection, log,
                 guildNpcBenefitService, upgradeAnnouncements),
             new AmplificationHandler(new InventoryAmplificationService(itemResources.Items, itemResources.Amplifications,
-                itemResources.Enhancements, towns, clock), inventoryProjection, log),
+                itemResources.Enhancements, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             creatureHandler,
@@ -926,7 +926,7 @@ internal static class ServerRuntime
                 new Game.Creatures.CreatureChangeService(itemResources.Items.Get, itemResources.Items.CreatureChange,
                     itemResources.Creatures, clock, groups: itemResources.CreatureGroups,
                     growthItems: itemResources.Items.CreatureGrowthItem, actionItems: itemResources.Items.ActionConsumable),levelUpItems,weaponSkinHandler,
-                new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
+                new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler, guildEconomyHandler, guildExperienceHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,

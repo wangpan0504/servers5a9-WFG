@@ -14,6 +14,17 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
 {
     public TitleCatalog Catalog => titles;
 
+    // 成就券单独授权general全组；不复用GM的逐项降级，任一奖励无效即整批拒绝。
+    public TitleAchievementResult CompleteGeneral(Character character, IReadOnlyCollection<int> questIds, DateTimeOffset now)
+    {
+        var general = titles.Slots.Where(row => row.Key.Category == 0 && row.Value.Kind != -1 && row.Value.QuestId > 0)
+            .Select(row => row.Value.QuestId).ToHashSet();
+        if (questIds.Any(id => !general.Contains(id) || !titles.Quests.ContainsKey(id))) return TitleAchievementResult.Reject(0);
+        var updates = questIds.Distinct().Where(id => character.TitleProgress.GetValueOrDefault(id)?.Remaining.Complete != true)
+            .Select(id => (id, default(TitleCounters))).ToArray();
+        return PrepareRewards(character, updates, 0, now, category: 0);
+    }
+
     // 绝望称号只由原实例真实通关事实驱动；不接受客户端累计数或GM完成入口代替楼层证明。
     public TitleAchievementResult DespairClear(Character character, Dungeons.DungeonClearFact fact,
         GameWorld.Dungeons.TowerOfDespairFloor floor, DateTimeOffset now)
@@ -137,10 +148,13 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         { return TitleAchievementResult.Reject(requested); }
     }
 
-    TitleAchievementResult PrepareRewards(Character character, IReadOnlyList<(int QuestId, TitleCounters Remaining)> updates, int requested, DateTimeOffset now)
+    TitleAchievementResult PrepareRewards(Character character, IReadOnlyList<(int QuestId, TitleCounters Remaining)> updates, int requested, DateTimeOffset now,
+        int? category = null)
     {
         var progress = character.TitleProgress.ToBuilder();
         var inventory = character.Inventory;
+        var owned = category is null ? null : inventory.Items.Where(item => !item.IsExpired(now.ToUnixTimeSeconds()))
+            .Select(item => item.Core.ItemId).ToHashSet();
         var completed = ImmutableArray.CreateBuilder<int>();
         var postals = ImmutableArray.CreateBuilder<TitlePostal>();
         var postalItems = ImmutableArray.CreateBuilder<InventoryItem>();
@@ -154,7 +168,7 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             var rewards = QuestFixedRewardDefinition.Parse(quest).ForJob(character.Job, character.GrowType);
             foreach (var reward in rewards)
             {
-                if (titles.RewardSlot(id, reward.ItemId) is { } slot)
+                if (titles.RewardSlot(id, reward.ItemId, category) is { } slot)
                 {
                     if (reward.Count != 1 || items.Get(reward.ItemId).EquipmentSlot != 13) return TitleAchievementResult.Reject(requested);
                     var position = TitleBookService.Slot(slot.Category, slot.Index);
@@ -163,10 +177,13 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
                         // 存量实体保持全部属性，不重造或覆盖已有称号。
                         if (stored.Core.ItemId != reward.ItemId) return TitleAchievementResult.Reject(requested);
                     }
-                    else inventory = inventory with { Items = inventory.Items.Add(new(0, position, InventoryRewardGrantService.Create(items.Get(reward.ItemId), utcNow: now))) };
+                    // 全组领取保留已穿戴或仍在其他容器中的实体，不因称号簿空格再造同一称号。
+                    else if (owned is null || owned.Add(reward.ItemId))
+                        inventory = inventory with { Items = inventory.Items.Add(new(0, position, InventoryRewardGrantService.Create(items.Get(reward.ItemId), utcNow: now))) };
                 }
                 else
                 {
+                    if (category is not null) return TitleAchievementResult.Reject(requested);
                     var granted = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory }, [new(reward.ItemId, reward.Count)], items, goldLimits, pieces, now);
                     if (!granted.Accepted) return TitleAchievementResult.Reject(requested);
                     inventory = granted.Plan!.After;
@@ -185,6 +202,7 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         IEnumerable<KeyValuePair<int, TitleSectionDefinition>> candidates = completed.Count != 0 || requested == 0 ? titles.Sections : [];
         foreach (var (key, section) in candidates)
         {
+            if (category is { } selected && section.Category != TitleCatalog.Categories[selected]) continue;
             if (sections.Contains(key)) continue;
             var required = titles.SectionQuests.GetValueOrDefault(key, []);
             if (required.Length == 0 || required.Any(id => progress.GetValueOrDefault(id)?.Remaining.Complete != true)) continue;

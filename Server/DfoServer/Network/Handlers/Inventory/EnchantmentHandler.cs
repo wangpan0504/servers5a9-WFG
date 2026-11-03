@@ -32,7 +32,7 @@ internal sealed class EnchantmentHandler(InventoryEnchantmentService service, In
                 service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds(), definition) :
                 InventoryResult.Reject(InventoryEnchantmentService.Rejection),
                 InventoryEnchantmentService.Rejection, requireTown: false,
-                requiredPhase: definition.VillageOnly ? SessionPhase.Town : null);
+                requiredPhase: capture.Phase, effectItem: request.Source, useTarget: request.Target);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);

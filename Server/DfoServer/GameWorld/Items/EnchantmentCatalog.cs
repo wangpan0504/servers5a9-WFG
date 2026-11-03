@@ -135,7 +135,7 @@ internal sealed partial class EnchantmentCatalog
             return null; // 普通卡片、收集箱使用和其他券入口不在CMD272消费。
         foreach (string field in new[] { "cooltime maintenance", "effect maintenance", "total usable count", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
-            "action usable server type", "usable game server type", "usable server type", "check usable itemlevel" })
+            "check usable itemlevel" })
             if (Fields(bead, field).Count != 0) return null; // 额外资格和次数账本尚未闭合，不能只消费普通源。
         var restrictions = Fields(bead, "bead limited usable item");
         if (restrictions.Count > 1) throw new InvalidDataException("宝珠适用物品清单重复");
@@ -188,13 +188,11 @@ internal sealed partial class EnchantmentCatalog
         if (weighted || cardIds.Count > 1)
         {
             if (Fields(bead, "usable expired item").Count != 0 ||
-                !TryRootBlock(bead, "action usable place", out string? places) ||
                 !TryRootBlock(bead, "item category", out string? category) ||
-                weighted && places is null ||
-                places is not null && !Regex.IsMatch(places, @"^\s*`\[village\]`(?:\s+`\[seria room\]`)?\s*$") ||
                 category is not null && !Regex.IsMatch(category, @"^\s*`event`\s*$"))
-                return null; // 未证过期标记、地点或分类不能因普通卡片可解析而放行。
-            villageOnly = places is not null;
+                return null; // 未证过期标记或分类不能因普通卡片可解析而放行。
+            var places = BoosterCatalog.ParseUsePlaces(bead);
+            villageOnly = (places.Village || places.SeriaRoom) && !places.Dungeon && !places.Pvp;
             // need material 属于模板的NPC购买价，使用宝珠不再次收费。
         }
         int index = Scalar(bead, "enchant index", optional: true);

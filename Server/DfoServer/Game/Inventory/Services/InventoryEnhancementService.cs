@@ -11,7 +11,14 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
-    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
+    // 普通NPC和勋章材料只是成本；强化券、便携工具及幸运券才激活源物品效果。
+    public bool IsEffectSource(Character character, EnhancementRequest request) =>
+        character.Inventory.Find(request.Target)?.Core.Kind != ItemKind.GuildMedal &&
+        character.Inventory.Find(new(InventoryListType.Main, request.MaterialSlot)) is { } source &&
+        (enhancements.Get(source.Core.ItemId) is { Available: true } || amplification?.IsEffectSource(source.Core.ItemId) == true);
+
+    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0,
+        Func<int, bool>? canUseSource = null)
     {
         receipt = null;
         var source = character.Inventory.Find(new(InventoryListType.Main, request.MaterialSlot));
@@ -29,12 +36,12 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         // 不绑定列表38槽位：勋章页任意槽、快捷栏与穿戴槽32都属于合法位置。
         if (target.Core.Kind == ItemKind.GuildMedal) return PlanMedal(character, request, out receipt);
         if (request.Mode == EnhancementMode.LuckyAmplify)
-            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent, canUseSource) ?? InventoryResult.Reject(Rejection);
         var definition = enhancements.Get(source.Core.ItemId);
         if (request.Mode == EnhancementMode.Reinforce && definition is { Available: false })
-            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent, canUseSource) ?? InventoryResult.Reject(Rejection);
         if (definition is null && request.Mode is EnhancementMode.Amplify or EnhancementMode.Reinforce)
-            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent, canUseSource) ?? InventoryResult.Reject(Rejection);
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
         var now = Clock.GetUtcNow();
         EnhancementSuccessBonus bonus = default;

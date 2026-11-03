@@ -156,6 +156,24 @@ internal static class AmplificationTcpTests
             That(fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid") ==
                 uidsForTargets, "两条成功请求保留三个目标的原UID");
             clock.Advance(TimeSpan.FromSeconds(10));
+            int cleared = 0;
+            peer.Barrier(packet =>
+            {
+                That(packet is { Kind: 0, Opcode: 14 } && ++cleared == 1,
+                    "共享时钟到期后只接受一次已知清包通知，不跳过其它协议输出");
+                Bytes(packet.Body, Build(writer =>
+                {
+                    writer.Write((byte)0); writer.Write((ushort)2);
+                    foreach (short slot in new short[] { 10, 65 })
+                    {
+                        writer.Write(slot); writer.Write(-1); writer.Write(new byte[117]);
+                    }
+                }), "到期清包只删除10槽有限期装备和65槽剩余源，永久目标不变");
+            });
+            That(cleared == 1 && fixture.Query("SELECT slot_index FROM character_inventory_slots WHERE list_type=0 ORDER BY slot_index")
+                    .Select(row => (long)row[0]).SequenceEqual(new long[] { 9, 11 }) &&
+                fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name='item_expired'") is [[2L]],
+                "原生到期清理与两项审计先完成，再隔离验证205拒绝的零额外变化");
             string before = Snapshot();
             peer.Send(205, [0, 11, 0, 0xD0, 0x7A, 0, 0, 65, 0, 0xA0, 4, 0, 0, 0]);
             peer.Expect(1, 205, [0, 17, 0]); peer.Barrier();

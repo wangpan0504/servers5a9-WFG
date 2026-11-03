@@ -42,7 +42,7 @@ IReadOnlyDictionary<int, string> characters = PvfScript.List(text);
 
 - [PvfItemIndex](Models/PvfItemIndex.cs) 读取装备或堆叠物品列表，检查 ID、路径及资源类型。堆叠列表允许 ID 0；列表归属不取决于文件扩展名。资源身份不代表游戏中允许创建该物品实例。
 - [EquipmentFile](Models/EquipmentFile.cs) 和 [StackableFile](Models/StackableFile.cs) 的 `Parse` 读取单份脚本的原始声明，保留类型参数和显式零值。缺失、重复或尚未支持的声明记入 `UnsupportedFields`，不补业务默认值；堆叠物品明确声明的单值价格、上限、等级若不是非负整数，解析失败。模型不会保留整个 token 数组。
-- `StackableFile` 对全部形状完整的根级重复 `stackable type` 按客户端顺序取最后一次；重复 `action usable place` 仅接受完整闭合且地点集合相同的声明。`RecoveryConsumableFile` 的重复冷却标量取最后完整值，重复 `total usable count` 仅接受相同的完整整数。冲突日限、冲突地点、畸形或嵌套声明不因兼容规则变成无限制默认值，其他字段维持原有重复拒绝规则。
+- `StackableFile` 对全部形状完整的根级重复 `stackable type` 按客户端顺序取最后一次；`action usable place` 与 `action usable condition` 按资源顺序读取每段连续字符串，重复段追加；`usable world`重复段清空后取最后一段。缺席保留null，显式空保留空列表，非字符串结束当前段，不按数量添加拒绝；世界枚举与使用资格由GameWorld解释。装备世界读取复用`PvfDocument`父模板与显式覆盖。三类服务器限用标签`action usable server type`、`usable game server type`、`usable server type`仅作元数据，不因其值、空值或重复声明生成使用资格拒绝；其他字段的重复及格式检查保持原规则。`RecoveryConsumableFile`认可这三类公共声明的重复规则，重复冷却标量取最后完整值，重复 `total usable count` 仅接受相同的完整整数；其他字段维持原有重复拒绝规则。
 - [PvfDocument](Scripting/PvfDocument.cs) 一次索引行首标签，`Has` / `Section` 按标签查找，`Block` 读取成对标签。标签忽略大小写，同名 Section 取首个声明，重复完整 Block 拒绝读取。它是字段视图，不是完整的嵌套语法树；精确数值与复杂引用仍应从原始 token 解释。
 - `EquipmentFile.ReadScript` 返回合并导入后的 `PvfDocument`。导入路径相对 `equipment/`；子脚本优先，与导入标签的位置无关。父模板只补未声明字段，显式空字段、空块和零值均覆盖父模板。重复导入、循环、缺失或畸形引用直接失败。
 

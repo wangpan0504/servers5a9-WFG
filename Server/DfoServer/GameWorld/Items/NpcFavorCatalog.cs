@@ -84,8 +84,8 @@ internal sealed record NpcFavorItemDefinition(ActionConsumableDefinition Source,
         var file = RecoveryConsumableFile.Parse(id, path, tokens, resolve);
         if (ActionConsumableDefinition.Parse(file, item) is not { Label: "[use favor point]", Parameters: [> 0] } source ||
             file.Stackable.TypeDeclaration is not { Label: "[waste]", Parameters: [1] } ||
-            document.Diagnostics.Length != 0 || document.Sections.GroupBy(field => field.Name).Any(group => group.Count() != 1) ||
-            document.Sections.Any(field => field.Name is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
+            document.Diagnostics.Length != 0 || document.Sections.GroupBy(field => field.Name).Any(group => group.Count() != 1 && !ItemUseFields.IsSharedTag(group.Key)) ||
+            document.Sections.Any(field => !ItemUseFields.IsSharedTag(field.Name) && field.Name is not ("name" or "explain" or "flavor text" or "grade" or "rarity" or
                 "usable job" or "attach type" or "minimum level" or "maximum level" or "icon" or "icon mark" or
                 "stackable type" or "move wav" or "expiration date" or "action type" or "stack limit" or
                 "action usable place" or "usable period" or "use action packet" or "npc select category" or

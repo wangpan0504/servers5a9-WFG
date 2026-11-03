@@ -34,6 +34,7 @@ internal sealed partial class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<InventoryExpansionDefinition?>> inventoryExpansions = new();
     readonly ConcurrentDictionary<int, Lazy<EquipmentPeriodChangeDefinition?>> periodChanges = new();
     readonly ConcurrentDictionary<int, Lazy<StackableFile>> stackableDefinitions = new();
+    readonly ConcurrentDictionary<int, Lazy<StackableUseRules>> stackableUseRules = new();
     readonly ConcurrentDictionary<int, Lazy<SharedEffectConsumableDefinition?>> sharedEffects = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpByTableDefinition?>> levelUpTables = new();
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
@@ -506,6 +507,24 @@ internal sealed partial class ItemCatalog
             SharedEffectConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString)))).Value;
     }
 
+    public ImmutableArray<string> StackableUsePlaces(int id) => StackableUseRules(id).Places;
+
+    public StackableUseRules StackableUseRules(int id)
+    {
+        if (!stackable.TryGetValue(id, out string? path)) return GameWorld.Items.StackableUseRules.Unrestricted;
+        return stackableUseRules.GetOrAdd(id, _ => new(() =>
+        {
+            var tokens = pvf.ReadTokens("stackable/" + path);
+            var template = Get(id);
+            return new(StackableFile.ReadActionUsablePlaces(tokens, pvf.ResolveString)?.ToImmutableArray() ?? [],
+                ItemUseFields.ActionConditions(tokens, pvf.ResolveString)?.ToImmutableArray() ?? [],
+                Regex.Match(template.StackableType, @"^\[[^\]]+\]").Value, template.UsableWorlds);
+        })).Value;
+    }
+
+    public ItemWorlds UsableWorlds(int id) => equipment.ContainsKey(id) || stackable.ContainsKey(id)
+        ? Get(id).UsableWorlds : ItemWorlds.Common;
+
     StackableFile? StackableDefinition(int id)
     {
         if (!stackable.TryGetValue(id, out var path)) return null;
@@ -538,18 +557,16 @@ internal sealed partial class ItemCatalog
     internal static int ReadCreatureSubType(PvfDocument document) =>
         document.TryGetInt32("sub type", out int subtype) && subtype is >= 0 and <= byte.MaxValue ? subtype : -1;
 
-    // 仅接入已核对的城镇使用动作；未知地点和发包模式不按同名券推定。
+    // 身份只按动作和发包模式确认；实际地点由使用入口统一校验。
     internal static bool ReadCreatureSkinTicket(PvfDocument document) =>
         StackableActionDeclaration.TryRead(document, out var action) &&
         StackableActionCatalog.Arguments(action) is { Label: "[open creature skin slot]", Parameters.Count: 0 } &&
-        document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
     internal static bool ReadAuraSkinAction(PvfDocument document) =>
         Regex.IsMatch(document.Section("stackable type").Trim(), @"^`\[etc\]`\s+1$") &&
         StackableActionDeclaration.TryRead(document, out var action) &&
         StackableActionCatalog.Arguments(action) is { Label: "[open aura skin slot]", Parameters.Count: 0 } &&
-        document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
     ItemTemplate Load(int id, PvfDocument? parsed)
@@ -670,6 +687,7 @@ internal sealed partial class ItemCatalog
                     pvf.ResolveString, "equipment/" + path) : 0,
             UsableExpired = isEquipment && text.Has("usable expired item"),
             PartSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [],
+            UsableWorlds = GameWorld.Items.StackableUseRules.ParseWorlds(ItemUseFields.UsableWorlds(text)),
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
             AcquisitionAccountCargo = acquisitionCargo.GetValueOrDefault(id),

@@ -12,6 +12,21 @@ internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool Ser
 {
     public bool Dungeon { get; init; }
     public bool ExcludeAssault { get; init; }
+    public bool Pvp { get; init; }
+    public bool ExclusionOnly { get; init; }
+    public bool Tournament { get; init; }
+    public bool DontOpen { get; init; }
+    public bool ExcludePractice { get; init; }
+
+    public bool Allows(StackableUseContext context)
+    {
+        var flags = (Village ? StackableUsePlaceFlags.Village : 0) |
+            (SeriaRoom ? StackableUsePlaceFlags.SeriaRoom : 0) | (Dungeon ? StackableUsePlaceFlags.Dungeon : 0) |
+            (Pvp ? StackableUsePlaceFlags.Pvp : 0) | (Tournament ? StackableUsePlaceFlags.Tournament : 0) |
+            (ExcludeAssault ? StackableUsePlaceFlags.ExcludeAssault : 0) |
+            (ExcludePractice ? StackableUsePlaceFlags.ExcludePractice : 0) | (DontOpen ? StackableUsePlaceFlags.DontOpen : 0);
+        return PendingRule is null && !(ExclusionOnly && flags == 0) && StackableUsePlaces.Allows(flags, context);
+    }
 }
 internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewards)
 {
@@ -61,7 +76,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     readonly ConcurrentDictionary<int, BoosterDefinition> definitions = new();
     readonly ConcurrentDictionary<int, BoosterUsePlacesDefinition> usePlaces = new();
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => usePlaces.GetOrAdd(itemId, id =>
-        stackable.TryGetValue(id, out string? path) ? ParseUsePlaces(archive.ReadText("stackable/" + path)) :
+        stackable.TryGetValue(id, out string? path) ? ParseUsePlaces(StackableFile.ReadActionUsablePlaces(
+            archive.ReadTokens("stackable/" + path), archive.ResolveString)) :
             new(PendingRule: "非礼包源物品"));
     readonly Lazy<FrozenSet<int>> dailyRetainedTemplateIds = new(() => stackable.Select(row =>
         (row.Key, Text: archive.ReadText("stackable/" + row.Value)))
@@ -253,7 +269,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         foreach (string tag in new[] { "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime",
             "random box", "random box removal items", "convert boost item", "check usable itemlevel",
-            "battle royal", "usable game server type", "usable server type" })
+            "battle royal" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
         // 团本标记描述门票来源，购买材料与购买次数由商店负责；开启仍校验完整奖池及使用限制。
@@ -284,23 +300,6 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 declaration.Value != "[daybreak drop item]" || !IsRootDeclaration(tags, declaration.Index) ||
                 text[start..(end < 0 ? text.Length : end)].Trim() != "1")
                 return new([], "daybreak drop item");
-        }
-        var serverDeclarations = Regex.Matches(tags,
-            @"\[\s*/?\s*action\s+usable\s+server\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
-        if (serverDeclarations.Count != 0)
-        {
-            if (text.Count(value => value == '`') % 2 != 0 || serverDeclarations.Count != 2 ||
-                serverDeclarations[0].Value != "[action usable server type]" ||
-                serverDeclarations[1].Value != "[/action usable server type]" ||
-                !IsRootDeclaration(tags, serverDeclarations[0].Index))
-                return new([], "action usable server type");
-            int start = serverDeclarations[0].Index + serverDeclarations[0].Length;
-            string serverBody = text[start..serverDeclarations[1].Index];
-            if (!Regex.IsMatch(serverBody, @"^\s*(?:`\[(?:general|event) server\]`\s*)+$"))
-                return new([], "action usable server type");
-            var servers = Regex.Matches(serverBody, "`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
-            if (!servers.Contains("[general server]") || servers.Length != servers.Distinct().Count())
-                return new([], "action usable server type");
         }
         // 品级声明由艾肯产物创建消费；其他装备不借这个字段启用斗气能力。
         var gradeDeclarations = Regex.Matches(tags,
@@ -541,21 +540,29 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
 
     internal static BoosterUsePlacesDefinition ParseUsePlaces(string text)
     {
-        string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
-        var declarations = Regex.Matches(tags, @"\[\s*/?\s*action\s+usable\s+place[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
-        if (declarations.Count == 0) return new();
-        if (text.Count(value => value == '`') % 2 != 0 || declarations.Count != 2 ||
-            declarations[0].Value != "[action usable place]" || declarations[1].Value != "[/action usable place]" ||
-            !IsRootDeclaration(tags, declarations[0].Index)) return new(PendingRule: "礼包使用地点声明未闭合或不唯一");
-        int start = declarations[0].Index + declarations[0].Length;
-        string body = text[start..declarations[1].Index];
-        if (!Regex.IsMatch(body, @"^\s*(?:`\[(?:village|seria room|dungeon|dont use assult)\]`\s*)+$"))
-            return new(PendingRule: "礼包使用地点包含未支持声明");
-        var values = Regex.Matches(body, "`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
-        if (values.Length != values.Distinct().Count()) return new(PendingRule: "礼包使用地点重复");
-        bool village = values.Contains("[village]"), seriaRoom = values.Contains("[seria room]"), dungeon = values.Contains("[dungeon]");
-        if (!village && !seriaRoom && !dungeon) return new(PendingRule: "礼包使用地点缺少允许地点");
-        return new(village, seriaRoom) { Dungeon = dungeon, ExcludeAssault = dungeon && values.Contains("[dont use assult]") };
+        var values = new List<string>();
+        foreach (Match section in Regex.Matches(text, @"(?im)^\[action usable place\][^\S\r\n]*(?:\r?\n|$)"))
+        {
+            int end = text.IndexOf("\n[", section.Index + section.Length, StringComparison.Ordinal);
+            string body = end < 0 ? text[(section.Index + section.Length)..] : text[(section.Index + section.Length)..end];
+            foreach (Match value in Regex.Matches(body, @"\G\s*`([^`]*)`")) values.Add(value.Groups[1].Value);
+        }
+        return ParseUsePlaces(values);
+    }
+
+    internal static BoosterUsePlacesDefinition ParseUsePlaces(IReadOnlyList<string>? values)
+    {
+        if (values is null || values.Count == 0) return new();
+        var flags = StackableUsePlaces.Parse(values);
+        bool all = (flags & StackableUsePlaceFlags.All) != 0;
+        bool Has(StackableUsePlaceFlags flag) => all || (flags & flag) != 0;
+        bool village = Has(StackableUsePlaceFlags.Village), room = Has(StackableUsePlaceFlags.SeriaRoom),
+            dungeon = Has(StackableUsePlaceFlags.Dungeon), pvp = Has(StackableUsePlaceFlags.Pvp), tournament = Has(StackableUsePlaceFlags.Tournament);
+        return new(village, room) { Dungeon = dungeon, Pvp = pvp, Tournament = tournament,
+            ExcludeAssault = (flags & StackableUsePlaceFlags.ExcludeAssault) != 0,
+            ExcludePractice = (flags & StackableUsePlaceFlags.ExcludePractice) != 0,
+            DontOpen = (flags & StackableUsePlaceFlags.DontOpen) != 0,
+            ExclusionOnly = !village && !room && !dungeon && !pvp && !tournament };
     }
 
     internal static bool IsRootDeclaration(string tags, int declarationIndex)

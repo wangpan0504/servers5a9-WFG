@@ -31,10 +31,12 @@ internal static class InventoryExpansionTests
         var definition = InventoryExpansionDefinition.Parse(raw, Template)!;
         That(definition is not null, "背包券允许村庄与赛丽亚的并集，商城兑换价不是使用成本");
         foreach (var bad in new[] { raw with { Stackable = raw.Stackable with { ActionDeclaration = new("[upgrade inventory]", [8]) } },
-            raw with { Stackable = raw.Stackable with { DeclaredActionUsablePlaces = ["[dungeon]"] } },
             raw with { Stackable = raw.Stackable with { HasUseActionPacket = true, DeclaredUseActionPacket = 1 } },
             raw with { DeclaredFields = ["usable first growtype"] }, raw with { StructureDiagnostics = ["invalid"] } })
-            That(InventoryExpansionDefinition.Parse(bad, Template) is null, "未知参数、地点、发包模式和额外使用资格不能被忽略");
+            That(InventoryExpansionDefinition.Parse(bad, Template) is null, "未知参数、发包模式和额外使用资格不能被忽略");
+        That(InventoryExpansionDefinition.Parse(raw with { Stackable = raw.Stackable with
+            { DeclaredActionUsablePlaces = ["[dungeon]", "[unknown]"] } }, Template) is not null,
+            "地点类型和数量不用于判断扩展券身份");
         That(InventoryExpansionRequests.Read([65, 0]) == 65 && InventoryExpansionRequests.Read([255, 255]) == 65535,
             "430严格读取u16，不将未知付费哨兵当作真实源槽");
         foreach (int length in new[] { 0, 1, 3, 19 })

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -44,6 +45,7 @@ internal static class BoosterSelectionTcpTests
         int[] all = [100300855, 100312548, 100322438, 100344654, 100352921];
         int[] imported = [100050791, 100100692, 100150661];
         byte[][] importedEntries = [];
+        ushort firstCharacter;
         await fixture.StartAsync();
         SetExpirationDebug(fixture, false);
         using (var peer = Open(fixture))
@@ -51,6 +53,7 @@ internal static class BoosterSelectionTcpTests
             SendSelect(peer, 3, [10000871]);
             peer.Expect(1, 160, [0, 19, 0]);
             peer.Select();
+            firstCharacter = peer.Id;
             string before = Snapshot();
             foreach (var ids in new int[][] { [], [1106], [10000871, 10000871], [10000871, 10000872] })
             {
@@ -169,6 +172,7 @@ internal static class BoosterSelectionTcpTests
             That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[16L, 16L]],
                 "four stackable and eleven complete equipment instances persist once");
         }
+        await WaitForInitialDisconnectAsync(fixture, firstCharacter);
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single(character => character.Name == "SelectTcp");
@@ -503,6 +507,33 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
+    static async Task WaitForInitialDisconnectAsync(TcpTestFixture fixture, ushort characterId)
+    {
+        // 客户端Dispose不代表服务端已释放owner；disconnected在协议收尾和在线时长结算完成后记录。
+        var elapsed=Stopwatch.StartNew();
+        while (elapsed.Elapsed<TimeSpan.FromSeconds(5))
+        {
+            var events=fixture.Events();
+            var selected=events.Where(row=>row.GetProperty("Kind").GetString()=="selected" &&
+                row.GetProperty("Detail").GetProperty("Character").GetUInt16()==characterId).ToArray();
+            if (selected.Length==1)
+            {
+                int connection=selected[0].GetProperty("Detail").GetProperty("Connection").GetInt32();
+                if (events.Any(row=>row.GetProperty("Kind").GetString()=="disconnected" &&
+                    row.GetProperty("Detail").GetProperty("Connection").GetInt32()==connection))
+                {
+                    That(!events.Any(row=>row.GetProperty("Kind").GetString()=="closed" &&
+                        row.GetProperty("Detail").GetProperty("Connection").GetInt32()==connection &&
+                        row.GetProperty("Detail").GetProperty("Message").GetString()=="累计在线角色快照已失效"),
+                        "离线补物品前旧连接正常完成在线时长检查点，不以失败退出冒充完成");
+                    return;
+                }
+            }
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("等待选择礼盒旧连接完成退出超时，未执行离线写库");
+    }
+
     static (byte[] Body, bool EarlyMail) ReadDailyNotice(Func<WirePacket> read)
     {
         var first = read();
@@ -541,8 +572,8 @@ internal static class BoosterSelectionTcpTests
         var items = resources.ItemResources.Items; var repo = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var now = DateTimeOffset.UtcNow;
         int sourceExpiry = items.Get(sourceId).Expiration.Resolve(now, ignoreAbsoluteExpiration: true);
-        That(items.Get(sourceId).StackLimit == 1 && sourceExpiry > now.ToUnixTimeSeconds() && items.Get(3242).StackLimit >= 37,
-            "逐项扩展礼盒保持真实堆叠上限1并显式准备未过期源，哨兵数量37在真实模板上限内");
+        That(items.Get(sourceId).StackLimit == 1 && (sourceExpiry == 0 || sourceExpiry > now.ToUnixTimeSeconds()) && items.Get(3242).StackLimit >= 37,
+            "逐项扩展礼盒保持真实堆叠上限1，永久或未来期限均为未过期源，哨兵数量37在真实模板上限内");
         InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot),
             InventoryRewardGrantService.Create(items.Get(id), count, now, shopExpiration: id == sourceId));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))

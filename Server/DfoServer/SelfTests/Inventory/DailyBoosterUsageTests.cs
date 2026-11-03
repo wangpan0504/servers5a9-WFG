@@ -20,8 +20,27 @@ internal static class DailyBoosterUsageTests
         foreach (string count in new[] { "", "0", "-1", "256", "1 2", "`1`", "1\n[total usable count]\n1" })
             That(!BoosterCatalog.Parse(Retained.Replace("[total usable count]\n1", "[total usable count]\n" + count)).Available,
                 "每日保留次数拒绝缺失、非法、溢出及重复值 " + count);
-        foreach (string extra in new[] { "[unknown count group]\n1", "[total weekly usable count]\n1", "[action usable place]\n`[village]`\n[/action usable place]" })
-            That(!BoosterCatalog.Parse(Retained + extra).Available, "未知共享组、周次数及地点声明保持Pending");
+        foreach (string extra in new[] { "[unknown count group]\n1", "[total weekly usable count]\n1" })
+            That(!BoosterCatalog.Parse(Retained + extra).Available, "未知共享组和周次数仍保持Pending");
+        foreach (var (field,body) in new (string,string)[]
+        {
+            ("action usable place","`[village]` `[seria room]`"),
+            ("action usable condition","`[guildmember]` `[guildmaster]`"),
+            ("usable world","`[fair]`"),
+            ("action usable server type","`[unknown server]`"),
+            ("usable game server type","-1"),
+            ("usable server type","")
+        })
+        {
+            string shared="["+field+"]\n"+body+"\n[/"+field+"]\n";
+            foreach (string text in new[] {shared+Retained+shared,Retained.Replace("[impossible contents]",shared+"[impossible contents]")})
+            {
+                var definition=BoosterCatalog.Parse(text);
+                That(definition is {Available:true,DailyRetainedLimit:1} &&
+                    JsonSerializer.Serialize(definition.Pools)==JsonSerializer.Serialize(BoosterCatalog.Parse(Retained).Pools),
+                    "公共使用字段不改变每日保留资格、原上限或完整奖池："+field);
+            }
+        }
         That(!BoosterCatalog.Parse(Retained.Replace("`delete booster`", "`not delete booster`")).Available &&
             !BoosterCatalog.Parse(Retained.Replace("[/impossible contents]", "")).Available,
             "保留源必须来自唯一完整块的精确token");

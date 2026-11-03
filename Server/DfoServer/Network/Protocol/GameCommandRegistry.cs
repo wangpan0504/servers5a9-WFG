@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Protocol;
 
@@ -17,7 +18,7 @@ internal interface IGameCommandModule
     void Register(GameCommandRegistry commands);
 }
 
-internal sealed class GameCommandRegistry
+internal sealed class GameCommandRegistry(ItemCatalog? items = null)
 {
     sealed record Registration(string Source, GameCommandHandler Handler, UserStateRequirement MinimumState, GameCommandGate? SharedGate);
     readonly Dictionary<ushort, Registration> registrations = [];
@@ -82,7 +83,8 @@ internal sealed class GameCommandRegistry
             if (command is not null && context.Session.CheckState(command.MinimumState))
             {
                 if (context.Creatures is { } creatures) await creatures.BeforeCommandAsync(request);
-                result = await command.Handler(context, request);
+                result = items is not null && await StackableUseGate.RejectAsync(items, context, request)
+                    ? CommandResult.Handled : await command.Handler(context, request);
             }
             // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
             context.Owner.Execute(() => true);

@@ -171,9 +171,8 @@ internal sealed class AmplifyUpgradeCatalog
             Require(name is "[amplify protect equipment]" or "[protect equipment]" ? values!.Count == 0 : values is [>= 0 and <= 30]);
             result = result with { RetainLevel = values!.Count == 1 ? values[0] : 0 };
         }
-        if (!AllowsGeneralServer(document, resolve)) return result with { PendingRule = "action usable server type" };
         foreach (string unsupported in new[] { "total usable count", "total weekly usable count", "total accumulated usable count",
-            "usable datetime", "usable first growtype", "usable server type", "usable game server type", "use count limit all server item" })
+            "usable datetime", "usable first growtype", "use count limit all server item" })
             if (document.Sections.Any(row => row.Name == unsupported)) return result with { PendingRule = unsupported };
         var limits = document.Sections.Where(row => row.Name == "check usable itemlevel").ToArray();
         Require(limits.Length <= 1);
@@ -194,31 +193,14 @@ internal sealed class AmplifyUpgradeCatalog
             result = result with { SlotClass = slot, SealedOnly = seal == 1, Rarities = rarities.Select(token => token.Value).ToImmutableHashSet() };
         }
         var places = document.Sections.Where(row => row.Name == "action usable place").ToArray();
-        Require(places.Length <= 1);
-        if (places.Length == 1)
+        if (places.Length > 0)
         {
-            Require(places[0].Children.IsEmpty && places[0].Values.All(token => token.Type == 6));
-            var labels = places[0].Values.Select(token => resolve(token.Value)).ToHashSet();
-            Require(labels.All(label => label is "[village]" or "[seria room]" or "[dont use assult]"));
-            result = result with { Village = labels.Contains("[village]"), SeriaRoom = labels.Contains("[seria room]") };
+            var labels = places.SelectMany(section => section.Values.TakeWhile(token => token.Type == 6))
+                .Select(token => resolve(token.Value)).ToArray();
+            result = result with { Village = StackableUsePlaces.Allows(labels, "[village]"),
+                SeriaRoom = StackableUsePlaces.Allows(labels, "[seria room]") };
         }
         return result;
-    }
-
-    static bool AllowsGeneralServer(PvfTokenDocument document, Func<int, string> resolve)
-    {
-        const string field = "action usable server type";
-        bool Nested(IEnumerable<PvfTokenSection> sections) => sections.Any(section =>
-            section.Children.Any(child => child.Name == field) || Nested(section.Children));
-        var declarations = document.Sections.Where(section => section.Name == field).ToArray();
-        if (Nested(document.Sections)) return false;
-        if (declarations.Length == 0) return true;
-        // 本服按普通服资格消费；活动专服、未知或残缺声明仍保持不可用。
-        if (!document.Diagnostics.IsEmpty || declarations is not
-            [{ IsBlock:true, Children.Length:0, Values.Length:>0 } section] || section.Values.Any(token => token.Type != 6)) return false;
-        var servers = section.Values.Select(token => resolve(token.Value)).ToArray();
-        return servers.Contains("[general server]") && servers.Length == servers.Distinct().Count() &&
-            servers.All(server => server is "[general server]" or "[event server]");
     }
 
     static ImmutableDictionary<int, float> Named(IEnumerable<PvfTokenSection> fields, string name, Func<int, string> resolve)
