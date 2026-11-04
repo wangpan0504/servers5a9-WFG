@@ -15,7 +15,7 @@ internal static partial class AntonRaidGapTcpTests
             """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
         Create(fixture, resources, "antoncards", "AntonCards", 2, pcroom: true);
         using var peer = Open(fixture, "antoncards", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
-        peer.Select(); AntonRaidTcpTests.Drain(peer);
+        peer.Select(premiumPcRoom: true); AntonRaidTcpTests.Drain(peer);
         Denied([1, 0], "没有Battle不能以660生成奖励");
 
         var report = AntonTcpProbe.Play(peer, Catalog(resources), "reward");
