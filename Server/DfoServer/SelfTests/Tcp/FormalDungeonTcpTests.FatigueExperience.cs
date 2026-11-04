@@ -13,13 +13,17 @@ namespace DfoServer.Testing;
 
 internal static partial class FormalDungeonTcpTests
 {
-    public static async Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources)
+    public static Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources) =>
+        RunFatigueAccelerationExperienceAsync(options, root, resources, false);
+
+    public static async Task RunFatigueAccelerationExperienceAsync(ServerOptions options, string root, TcpTestResources resources, bool endlessAdventure)
     {
         FatigueAccelerationTests.RunCore();
         ExperienceBonusTests.RunCore();
         GrowthCubeContractTests.RunCore();
         DungeonSettlementProtocolTests.Run();
-        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "fatigue-experience"), gm: true, resources: resources);
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, endlessAdventure ? "endless-fatigue-experience" : "fatigue-experience"),
+            gm: true, resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var candidate = CharacterCreation.Prepare("BurnStory", resources.Characters.Get(9), resources.Towns.Room,
@@ -43,6 +47,17 @@ internal static partial class FormalDungeonTcpTests
             reply == "OK {\"premiumPcRoom\":true}", "隔离服务开启网吧资格");
         using var peer = Open(fixture);
         peer.Select(character.Slot, prepared: true, combos: StoredCombos(fixture, character.Id), premiumPcRoom: true);
+        string fatigueBefore = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
+        if (endlessAdventure)
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "event on 2257", out var enabled) && enabled.StartsWith("OK ", StringComparison.Ordinal),
+                "真实通关前开启无尽大冒险");
+            peer.Expect(0, 108); peer.Expect(0, 13, [44, 0, 0]); peer.Expect(0, 13, [45, 0, 0]); peer.Expect(0, 639);
+            var progress = peer.Expect(0, 1103).Body;
+            That(progress.Length == 152 && U32(progress, 0) == 2257 && U32(progress, 4) == 0,
+                "原生入口开启后从真实零产币进度开始");
+            peer.Expect(0, 706); peer.Barrier();
+        }
         // 初始冒险团没有通关加成，显式准备资源中首个有加成的等级来复现基数差异。
         int preparedAdventureLevel = resources.Adventure.Benefits.OrderBy(row => row.Key)
             .First(row => row.Value.Growth.GetValueOrDefault("clear result exp up") > 0).Key;
@@ -68,7 +83,10 @@ internal static partial class FormalDungeonTcpTests
         for (int room = 0; room < route.Length; room++)
         {
             That(U32(map, 14) == route[room].Id, "3146房间沿真实资源顺序进入");
-            Load(peer, pcRoom: true);
+            Load(peer, pcRoom: true, fatigue: false);
+            var fatigue = peer.Expect(0, 36).Body;
+            That(fatigue.Length == 10 && U16(fatigue, 0) == 0 && U16(fatigue, 6) == U16(fatigue, 2),
+                "正常剧情加载后同步原五WORD疲劳，无限模式仍显示满额");
             if (room == 0)
             {
                 peer.Send(31, [31, 0, 238, 11]); peer.Expect(1, 31, [1, 238, 11, 1, 0, 0, 0, 0]);
@@ -119,6 +137,24 @@ internal static partial class FormalDungeonTcpTests
         byte[] result = DungeonSettlementProtocolTests.Report(character.Id, 99);
         peer.Send(46, result);
         var settled = PartyDungeonTcpTests.Drain(peer);
+        if (endlessAdventure)
+        {
+            int earned = Math.Min(200, route.Select(room => room.Id).Distinct().Count() * 2);
+            That(settled.Any(packet => packet is { Kind: 0, Opcode: 563 }) &&
+                settled.Single(packet => packet is { Kind: 0, Opcode: 1103 }).Body is { Length: 152 } progress &&
+                U32(progress, 4) == earned && fixture.Query("SELECT balance FROM account_material_balances WHERE account=$p0 AND item_id=490011740",
+                    fixture.Options.DevelopmentAccount) is [[long balance]] && balance == earned,
+                "真实剧情清图及C46使应耗燃烧硬币、账号钱包和原生进度同额到账");
+            var obtained = settled.Single(packet => packet is { Kind: 0, Opcode: 14, Body: [45, ..] }).Body;
+            That(obtained.Length == 126 && U16(obtained, 1) == 1 && U16(obtained, 3) == 0 &&
+                U32(obtained, 5) == 490011740 && U32(obtained, 9) == earned &&
+                obtained.AsSpan(13).IndexOfAnyExcept((byte)0) == -1 && !settled.Any(packet => packet is { Kind: 0, Opcode: 502 }) &&
+                Array.FindIndex(settled, packet => packet is { Kind: 0, Opcode: 563 }) <
+                Array.FindIndex(settled, packet => packet is { Kind: 0, Opcode: 14, Body: [45, ..] }),
+                "563实际到账后用原生14同步日历余额和右上角获得提示，无502完整获得窗口");
+            That(fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id") == fatigueBefore,
+                "无限疲劳全程保持真实余额，应耗仍参与活动产币");
+        }
         var clearNotice = settled.Single(packet => packet is { Kind: 0, Opcode: 37 }).Body;
         var cards = settled.Single(packet => packet is { Kind: 0, Opcode: 35 }).Body;
         experience += checked(clear.TotalExperience + adventure + pcRoomBonus + clear.BaseExperience);
@@ -129,6 +165,9 @@ internal static partial class FormalDungeonTcpTests
             "真实46冒险团单列41槽且只发一次，网吧20%与燃烧100%只取原基础，35与37分项和SQL到账一致");
         peer.Send(46, result);
         var repeated = PartyDungeonTcpTests.Drain(peer);
+        if (endlessAdventure)
+            That(!repeated.Any(packet => packet is { Kind: 0, Opcode: 563 or 1103 or 502 } or { Kind: 0, Opcode: 14, Body: [45, ..] }),
+                "重复C46不再次发币、发布进度或重放获得提示");
         That(Experience(fixture, character.Id) == experience && repeated.Where(packet => packet is { Kind: 0, Opcode: 35 })
             .All(packet => U32(packet.Body, 0) == clear.BaseExperience && U32(packet.Body, 41) == adventure &&
                 U32(packet.Body, 53) == clear.BaseExperience && U32(packet.Body, 77) == monsterBurning),

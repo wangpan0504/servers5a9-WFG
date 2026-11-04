@@ -277,14 +277,27 @@ internal static partial class PartyDungeonTcpTests
             {
                 ushort key = U16(map, offset + 6);
                 byte[] report = FormalDungeonTcpTests.Death(key, alpha.Id, map[offset + 12]);
+                var experienceBefore = participants.ToDictionary(peer => peer,
+                    peer => (long)fixture.Query("SELECT experience FROM characters WHERE id=$p0", peer.Id)[0][0]!);
                 alpha.Send(39, report);
-                var deaths = All(alpha).ToDictionary(row => row.Key,
+                var reported = All(alpha);
+                foreach (var (peer, packets) in reported)
+                {
+                    byte[] experience = packets.Single(packet => packet is { Kind: 0, Opcode: 37 }).Body;
+                    uint basis = checked((uint)(long)fixture.Query(
+                        "SELECT amount FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key)[0][0]!);
+                    That(experience.Length == 91 && BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(1)) == (ulong)experienceBefore[peer] + basis &&
+                        U32(experience, 9) == basis - basis / (uint)count && U32(experience, 25) == 0 &&
+                        U32(experience, 34) == 0 && U32(experience, 42) == 0,
+                        "真实多人击杀按PVF拆出队伍播报，累计经验仍与原奖励账本相同，不串入契约或疲劳分量");
+                }
+                var deaths = reported.ToDictionary(row => row.Key,
                     row => row.Value.Single(p => p is { Kind: 0, Opcode: 38 } && U16(p.Body) == key));
                 That(deaths.Count == count, "同步同一怪物的死亡事实，每人携带自己的掉落集合");
                 That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE monster_key=$p0", key) is [[long receipts]] && receipts == count,
                     "共享击杀分别提交所有角色的真实经验账本");
                 beta.Send(39, report);
-                That(All(beta).Values.All(rows => !rows.Any(p => p is { Kind: 0, Opcode: 38 })) &&
+                That(All(beta).Values.All(rows => !rows.Any(p => p is { Kind: 0, Opcode: 38 or 37 })) &&
                     fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE monster_key=$p0", key) is [[long unchanged]] && unchanged == count,
                     "另一连接重复报告不再发奖或重新抽掉落");
                 foreach (var (peer, loot) in deaths)
@@ -453,6 +466,12 @@ internal static partial class PartyDungeonTcpTests
                     alpha.Expect(0, 26, [0]);
                     alpha.Expect(1, 37, [1]); alpha.Expect(0, 30);
                     Drain(alpha);
+                    byte[] soloMap = result[alpha].Single(packet => packet is { Kind: 0, Opcode: 29 }).Body;
+                    int soloTarget = Enumerable.Range(0, soloMap[18]).Select(index => 19 + index * 22)
+                        .First(offset => soloMap[offset + 13] != 9 && soloMap[offset + 14] == 0);
+                    alpha.Send(39, FormalDungeonTcpTests.Death(U16(soloMap, soloTarget + 6), alpha.Id, soloMap[soloTarget + 12]));
+                    var soloKill = Drain(alpha).Single(packet => packet is { Kind: 0, Opcode: 37 }).Body;
+                    That(U32(soloKill, 9) == 0, "队员离场后单人击杀不沿用入场时人数或旧队伍分量");
                     alpha.Send(42);
                     That(Drain(alpha).Any(p => p is { Kind: 1, Opcode: 42, Body: [1] }), "队员掉线后剩余成员可正常退场");
                 }

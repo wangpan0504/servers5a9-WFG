@@ -139,7 +139,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
     public PartyDungeonNotice[] BeginSelection(GameSession leader, uint? evildomDungeon = null)
     {
         var party = parties.Current(leader);
-        if (party is null || party.Members.Length < 2 && evildomDungeon is null ||
+        bool soloPartyContext = party?.Members.Length == 1 && leader.ChannelEntry?.Type is 55 or 64;
+        if (party is null || party.Members.Length < 2 && evildomDungeon is null && !soloPartyContext ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader))) return [];
         return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
         {
@@ -168,7 +169,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null)
     {
         var party = fiendwarPrepared?.Party ?? parties.Current(leader);
-        if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
+        bool soloHeroEntry = party?.Members.Length == 1 && dungeon is 5363 or 400000105;
+        if (party is null || party.Members.Length < 2 && !soloHeroEntry && leader.PartyDungeon is null &&
             leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
@@ -211,7 +213,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 if (!parties.IsCurrent(party) || fiendwarPrepared is { Active: false }) return [];
                 if (dungeon == EvildomWarChallengeEntryPolicy.DungeonId)
                 {
-                    if (prepared.Count != 4 || prepared.Any(row => !row.Member.Actor.Session.CanBindEvildomWarChallengeKeys(row.Preparation)))
+                    if (!EvildomWarChallengeEntryPolicy.AllowsPartyCount(prepared.Count) ||
+                        prepared.Any(row => !row.Member.Actor.Session.CanBindEvildomWarChallengeKeys(row.Preparation)))
                         return [];
                     var keys = new FiendwarObjectKeyLeases(instance.Id);
                     foreach (var row in prepared) row.Member.Actor.Session.BindEvildomWarChallengeKeys(row.Preparation, keys);

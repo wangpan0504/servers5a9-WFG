@@ -11,6 +11,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public DungeonCardReward? Card { get; init; }
     public DfoServer.Game.Inventory.Models.InventoryPlan? Inventory { get; init; }
     public uint? MailId { get; init; }
+    public uint DailyAttendanceMailId { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public uint GainedExperience { get; init; }
@@ -24,6 +25,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
     public BossRushClearReward? BossRushReward { get; init; }
+    public int EndlessAdventureAmount { get; init; }
 }
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。
@@ -34,6 +36,14 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
 {
     private readonly byte[] report = reportBody.ToArray();
     public Guid EventId { get; } = Guid.NewGuid();
+    public DfoServer.Game.Events.EndlessAdventureClear? EndlessAdventure { get; private set; }
+    bool endlessAdventureFrozen;
+    public void FreezeEndlessAdventure(DfoServer.Game.Events.EndlessAdventureClear? reward)
+    {
+        if (endlessAdventureFrozen) return;
+        EndlessAdventure = reward;
+        endlessAdventureFrozen = true;
+    }
     public DungeonClearFact Fact { get; } = fact;
     public ReadOnlySpan<byte> ReportBody => report;
     public DungeonClearExperienceReward Reward { get; } = reward;
@@ -43,6 +53,14 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
     public BossRushClearReward? BossRush { get; } = bossRush;
+    public DfoServer.Game.Events.DailyAttendancePlan? DailyAttendance { get; private set; }
+    bool dailyAttendanceFrozen;
+    public void FreezeDailyAttendance(DfoServer.Game.Events.DailyAttendancePlan? plan)
+    {
+        if (dailyAttendanceFrozen) return;
+        DailyAttendance = plan;
+        dailyAttendanceFrozen = true;
+    }
     public DungeonTournamentReward? Tournament { get; private set; }
     public void FreezeTournament(DungeonTournamentReward? reward)
     {

@@ -25,16 +25,34 @@ internal static class DungeonItemDropCatalogTests
             catalog.Pool(ItemKind.Equipment, 1, 1, 1).Entries.IsEmpty,
             "类别、grade区间和稀有度完整过滤，不借另一类别或rarity0补空池");
         var referenceStack = catalog.ReferencePool(false, 1, 1, 0);
-        That(referenceStack.TotalWeight == 3 && Enumerable.Range(0, 3).Select(roll => referenceStack.Select(roll).Id)
-            .SequenceEqual(new[] { 100, 101, 102 }), "参考堆叠品候选兼容消耗品和材料，正creation rate只决定资格，选择等权");
-        That(catalog.ReferencePool(true, 5, 7, 1).Select(10).Id == 103 &&
+        That(referenceStack.TotalWeight == 12 && Enumerable.Range(0, 12).Select(roll => referenceStack.Select(roll).Id)
+            .SequenceEqual(new[] { 100, 100, 101, 101, 101, 102, 102, 102, 102, 102, 102, 102 }),
+            "通用堆叠品也按creation rate覆盖权重区间，不将消耗品和材料改成等权");
+        That(catalog.ReferencePool(true, 5, 7, 1).Entries.IsEmpty &&
             catalog.ReferencePool(true, 1, 1, 6).Entries.IsEmpty,
-            "参考装备可回退最近较低grade，真实空池不能借堆叠品补造装备");
+            "空装备池不借最近低grade、白装或堆叠品补位");
         source[0] = source[0] with { CreationRate = 99 };
         var mixed = DungeonItemDropCatalog.Create([.. source, Template(104, ItemKind.Profession, 1, 0, 9),
-            Template(105, ItemKind.Consumable, 2, 0, 1)]).ReferencePool(false, 1, 2, 6);
-        That(mixed.Entries.Select(row => row.Template.Id).SequenceEqual(new[] { 100, 101, 102, 104, 105 }) && mixed.TotalWeight == 5,
-            "跨等级及稀有度回退保留消耗品、材料、副职业材料的原候选顺序和等权区间");
+            Template(105, ItemKind.Consumable, 2, 0, 1)]).ReferencePool(false, 1, 2, 0);
+        That(mixed.Entries.Select(row => row.Template.Id).SequenceEqual(new[] { 100, 101, 102, 104, 105 }) && mixed.TotalWeight == 119,
+            "跨grade保留消耗品、材料、副职业材料的原候选顺序和权重");
+        var bounds = DungeonItemDropCatalog.Create(new[] { 200, 201, 254, 255, 256 }
+            .Select(grade => Template(grade, ItemKind.Equipment, grade, 2, grade - 199)));
+        foreach (int grade in new[] { 200, 201, 254, 255 })
+            That(bounds.ReferencePool(true, grade, grade, 2).Select(0).Id == grade &&
+                bounds.Pool(ItemKind.Equipment, grade, grade, 2).Select(0).Grade == grade,
+                "通用候选grade边界真实可选 " + grade);
+        That(bounds.ReferencePool(true, 255, 300, 2).Entries is [{ Template.Grade: 255 }] &&
+            bounds.ReferencePool(true, 201, 254, 1).Entries.IsEmpty &&
+            bounds.ReferencePool(false, 1, 2, 6).Entries.IsEmpty &&
+            bounds.AltarPool(false, 255, 255, 2).Select(0).Id == 255,
+            "255以上不借位，稀有度与类别空池不降级，祭坛共用grade上界");
+        var levels = DungeonItemDropCatalog.Create([
+            Template(900,ItemKind.Equipment,255,1,1), Template(901,ItemKind.Equipment,1,1,1) with { MinimumLevel = 255 }]);
+        That(levels.ReferencePool(true,255,255,1).Select(0).Id == 900 &&
+            levels.EquipmentLevelPool(255,255,1).Select(0).Id == 901,
+            "普通grade与深渊minimum level保持不同含义，两者查询均支持255");
+        Reject<ArgumentOutOfRangeException>(() => bounds.Pool(ItemKind.Equipment,1,256,2), "显式grade查询拒绝表外256");
         That(pool.TotalWeight == 5 && pool.Entries[0].Template.CreationRate == 2,
             "源集合替换不能改变已准备的权重和模板");
         Reject<ArgumentOutOfRangeException>(() => pool.Select(5), "抽样上界拒绝，不回退到最后候选");
@@ -209,7 +227,7 @@ internal static class DungeonItemDropCatalogTests
         int candidates = 0;
         foreach (var kind in new[] { ItemKind.Equipment, ItemKind.Consumable, ItemKind.Material })
         for (int rarity = 0; rarity <= 6; rarity++)
-            candidates += catalog.Pool(kind, 1, 200, rarity).Entries.Length;
+            candidates += catalog.Pool(kind, 1, DungeonItemDropCatalog.MaximumCandidateLevel, rarity).Entries.Length;
         That(candidates > 0, "匹配资源正creation rate候选已完整装配，目录存在不代表随机计算已接入");
         Console.WriteLine($"PASS 匹配资源掉落候选{candidates}项（完整模板解析，不代表客户端验收）");
     }

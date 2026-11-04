@@ -24,6 +24,7 @@ internal static class BoosterSelectionTests
 {
     public static void RunCore()
     {
+        BoosterSelectionResourceTests.RunCore();
         BoosterCooldownTests.RunCore();
         BoosterEpicExchangeTests.RunCore();
         BoosterDisjointInstanceTests.RunCore();

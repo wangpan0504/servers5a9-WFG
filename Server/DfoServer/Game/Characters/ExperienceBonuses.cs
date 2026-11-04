@@ -20,6 +20,20 @@ internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<Experienc
         Parts.Select(part => part with { Amount = checked(part.Amount * multiplier) }).ToImmutableArray())
         { GuildEntitlement = GuildEntitlement };
 
+    // df_game_r sumGainedEachExp：组队分量为本人份额减去除人数倍率后的基础，不再额外发一遍经验。
+    // 只拆本次击杀的普通份额；装备、契约、秘药、公会等来源仍保留自己的分类和计算基数。
+    public ExperienceBonuses SplitPartyDisplay(float multiplier)
+    {
+        if (!float.IsFinite(multiplier) || multiplier < 0)
+            throw new InvalidDataException("组队经验显示倍率无效");
+        if (multiplier <= 1 || Ordinary == 0) return this;
+        if (Parts.Any(part => part.Source == ExperienceBonusSource.Party))
+            throw new InvalidDataException("组队经验分量不能重复提供");
+        uint basis = (uint)((double)Ordinary / multiplier);
+        return this with { Ordinary = basis, Parts = Parts.Add(new(ExperienceBonusSource.Party, Ordinary - basis))
+            .OrderBy(part => part.Source).ToImmutableArray() };
+    }
+
     // 封顶只分配实际到账，先基础后按固定来源顺序分配；所有显示分量之和不超过本次实际经验。
     public ExperienceBonuses Applied(uint gained)
     {
@@ -39,6 +53,8 @@ internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<Experienc
     {
         var actual = Applied(gained);
         uint A(ExperienceBonusSource source) => actual.Amount(source);
+        // 仅映射匹配ARAD已证的独立分量；Equipment/BlackDiamond/Avatar/Creature等仍在基础余项中。
+        // Bonuses的ID由客户端角色Buff目录解释，不是物品ID或dstr号；不能用它伪造装备、活动或师徒标签。
         return CharacterExperienceDisplay.Ordinary with
         {
             GrowthContractExperience = A(ExperienceBonusSource.GrowthContract),
@@ -90,7 +106,7 @@ internal sealed record ExperienceBonusContext
     public GuildExperienceEntitlement? GuildEntitlement { get; init; }
 }
 
-// 后续组队、公会、冒险团及活动owner在原奖励规划时提供不可变资格快照。
+// 公会及后续其他系统在原奖励规划时提供不可变资格快照；组队击杀分量由正式实例拆分，不重复提供比例。
 // 禁止在这里消费费用、随机、写库或等待网络；空快照不授予任何资格。
 internal interface IExperienceBonusProvider
 {

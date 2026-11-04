@@ -3,7 +3,8 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record AccountMaterialDefinition(int HoldingLimit, int WeeklyAccountLimit = 0, int WeeklyCharacterLimit = 0);
+internal sealed record AccountMaterialDefinition(int HoldingLimit, int WeeklyAccountLimit = 0, int WeeklyCharacterLimit = 0,
+    bool CommonInventory = false);
 
 internal sealed partial class ItemCatalog
 {
@@ -12,15 +13,17 @@ internal sealed partial class ItemCatalog
 
     AccountMaterialDefinition? ReadAccountMaterial(int id, bool equipment, ItemKind kind, PvfDocument text, int stackLimit)
     {
-        if (equipment || !text.Has("stack in account inventory")) return null;
+        if (equipment || !text.Has("stack in account inventory") && !text.Has("stack in account common item inventory")) return null;
         var raw = StackableDefinition(id) ?? throw new InvalidDataException("账号材料缺少堆叠物品声明");
-        if (raw.UnsupportedFields.Contains("stack in account inventory") || raw.DeclaredStackInAccountInventory is not (0 or 1))
+        bool common = text.Has("stack in account common item inventory");
+        // 共通声明按标记存在启用，不要求正文为空；list45与普通账号材料list44共用账号余额事务。
+        if (!common && (raw.UnsupportedFields.Contains("stack in account inventory") || raw.DeclaredStackInAccountInventory is not (0 or 1)))
             throw new InvalidDataException("账号材料容器声明无效：" + id);
-        if (raw.DeclaredStackInAccountInventory == 0) return null;
+        if (!common && raw.DeclaredStackInAccountInventory == 0) return null;
         if (kind != ItemKind.Material || text.Section("attach type").Trim('`', ' ', '\r', '\n') != "[account]")
             throw new InvalidDataException("账号材料类型或归属声明无效：" + id);
         var limits = accountMaterialLimits.Value.GetValueOrDefault(id);
-        return new(stackLimit, limits?.WeeklyAccountLimit ?? 0, limits?.WeeklyCharacterLimit ?? 0);
+        return new(stackLimit, limits?.WeeklyAccountLimit ?? 0, limits?.WeeklyCharacterLimit ?? 0, common);
     }
 
     static ImmutableDictionary<int, AccountMaterialDefinition> ReadAccountMaterialLimits(PvfArchive archive)

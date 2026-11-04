@@ -41,7 +41,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     Func<Character, int>? strongway2019AntiEvil = null, Game.Events.ServerEventService? serverEvents = null,
     GoldLimitCatalog? directPickupGoldLimits = null,
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
-    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null)
+    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
+    DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
+    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 

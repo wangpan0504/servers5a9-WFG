@@ -77,16 +77,12 @@ public sealed class PvfArchive : IDisposable
             throw new InvalidDataException("PVF 文件长度无效或超过 512 MiB");
         chunks = new(options.ChunkCacheBytes, value => value.LongLength);
         texts = new(options.TextCacheBytes, value => 24L + value.Length * 2L);
-        byte[] header = source.Read(0, 48);
-        for (int i = 24; i < 28; i++)
-            header[i] ^= 0x55;
-        Crypt(header, "HeaD", false);
-        if (U32(header, 0) != 0x69706B6E)
+        byte[] rawHeader = source.Read(0, 48);
+        if (!TryDecodeHeader(rawHeader, source.Length, false, true, out byte[] header) &&
+            !TryDecodeHeader(rawHeader, source.Length, false, false, out header))
         {
-            header = source.Read(0, 48);
-            Crypt(header, "hEAd", true);
-            if (U32(header, 0) != 0x69706B6E)
-                throw new InvalidDataException("不支持的 PVF 格式");
+            if (!TryDecodeHeader(rawHeader, source.Length, true, false, out header))
+                throw new InvalidDataException("不支持的 PVF 格式或头范围无效");
             protectedFormat = true;
         }
 
@@ -141,6 +137,26 @@ public sealed class PvfArchive : IDisposable
             string fileName = canonical ? name : path![(slash + 1)..];
             entries.TryAdd(new(canonicalDirectory, fileName), new(type, size, group, start));
         }
+    }
+
+    private static bool TryDecodeHeader(byte[] rawHeader, long fileLength, bool protectedKey, bool guard, out byte[] header)
+    {
+        header = (byte[])rawHeader.Clone();
+        if (guard)
+            for (int i = 24; i < 28; i++)
+                header[i] ^= 0x55;
+        Crypt(header, protectedKey ? "hEAd" : "HeaD", protectedKey);
+        if (U32(header, 0) != 0x69706B6E)
+            return false;
+        // guard只影响文件数，magic相同；全部声明和区段边界合法后才能选定格式。
+        foreach (int offset in new[] { 24, 32, 36, 40, 44 })
+        {
+            int size = I32(header, offset);
+            if (size is < 0 or > MaxBytes)
+                return false;
+        }
+        long body = 48L + I32(header, 24) * 24L + I32(header, 40) + I32(header, 44) + I32(header, 36) * 8L;
+        return body + I32(header, 32) <= fileLength;
     }
 
     public static string NormalizePath(string path) => PvfPath.Normalize(path);

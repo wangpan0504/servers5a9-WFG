@@ -62,6 +62,9 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                     expired.Character.Revision, Slots = expiry.Plan.ChangedSlots.Length });
         }
         await BossSelectionBuffProjection.PostAsync(context);
+        await EndlessAdventureProjection.PublishAsync(context);
+        if (context.Session.NeedsEndlessAdventureRefresh) return false;
+        if (context.DailyAttendance is { } attendance) await attendance.RefreshAsync();
         town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;
@@ -75,7 +78,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         }
         if (!await PublishBattlePassAsync(now)) return false;
         if (localPublished is { } local && local.Epoch == selectedEpoch && local.Day < localDay)
-            await town.AssaultServiceDayAsync(context);
+            await town.RefreshAssaultDailyAsync(context);
         if (legacyPublished is not { } oldLegacy || oldLegacy.Epoch != selectedEpoch || oldLegacy.Day <= legacyDay)
             legacyPublished = (selectedEpoch, legacyDay);
         if (localPublished is not { } oldLocal || oldLocal.Epoch != selectedEpoch || oldLocal.Day <= localDay)
@@ -87,6 +90,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
     async Task<bool> PublishBattlePassAsync(DateTimeOffset now)
     {
         if (town.BattlePassMissions is not { } policy || policy.Active(now).IsEmpty) return true;
+        // 日切先到开始边界时也沿事件入口完整初始化，避免先单发1801、随后整组再发1801。
+        if (context.ServerEvents is { } events) await events.PublishBattlePassOpeningAsync();
         int day = BattlePassDay(policy, now);
         if (BattlePassPublished(policy, day)) return true;
         var current = context.Session.ReadBattlePassMissionState(now);

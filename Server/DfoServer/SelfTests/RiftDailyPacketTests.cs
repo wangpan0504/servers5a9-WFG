@@ -22,16 +22,19 @@ internal static class RiftDailyPacketTests
         That(hell.Length == 4 + RiftDailyPackets.ParticularHellTailBytes &&
             hell[0] == RiftDailyPackets.ParticularHellLimit && hell.Skip(1).All(b => b == 0),
             "魔界裂缝次数包是上限 u32 加 0x104 个原读者仍会读走的字节");
-        var daybreak = RiftDailyPackets.Daybreak(1, RiftDailyPackets.DaybreakLimit);
-        That(daybreak.Length == 8 + RiftDailyPackets.DaybreakTailBytes &&
-            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak) == 1 &&
-            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(4)) == RiftDailyPackets.DaybreakTailBytes &&
-            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(8)) == 0 &&
-            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(12)) == RiftDailyPackets.DaybreakDungeonId &&
-            System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(16)) == RiftDailyPackets.DaybreakLimit &&
-            daybreak.AsSpan(20).ToArray().All(value => value == 0),
-            "黎明次数包同时携带当前剩余与530/2上限映射");
-        Console.WriteLine("rift-daily count checks passed particular-hell limit 3 tail 0x104 daybreak remaining+530/2");
+        foreach (uint used in new uint[] { 0, 1, 2 })
+        {
+            var daybreak = RiftDailyPackets.Daybreak(2, used);
+            uint total = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak);
+            uint consumed = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(16));
+            That(daybreak.Length == 8 + RiftDailyPackets.DaybreakTailBytes && total == 2 && consumed == used &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(4)) == 260 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(8)) == 0 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(daybreak.AsSpan(12)) == 530 &&
+                daybreak.AsSpan(20).ToArray().All(value => value == 0) && total - consumed == 2 - used,
+                "黎明1545与原生读取及减法一致，按已用0/1/2分别显示2/2、1/2、0/2");
+        }
+        Console.WriteLine("rift-daily count checks passed particular-hell limit 3 tail 0x104 daybreak total-minus-used");
     }
 
     public static void RunResources(PvfArchive pvf)

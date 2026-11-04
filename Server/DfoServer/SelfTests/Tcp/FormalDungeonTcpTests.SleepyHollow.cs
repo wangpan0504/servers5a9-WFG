@@ -35,7 +35,7 @@ internal static partial class FormalDungeonTcpTests
         }
         using var peer = Open(fixture);
         peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
-        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, character));
+        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, character), daybreakRemaining: 2);
         var request = new byte[25];
         BinaryPrimitives.WriteUInt32LittleEndian(request, 7322);
         request[9] = request[10] = byte.MaxValue;
@@ -53,7 +53,7 @@ internal static partial class FormalDungeonTcpTests
                 var move = new byte[100]; move[0] = (byte)route[room].X; move[1] = (byte)route[room].Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
             }
-            Load(peer); peer.Expect(0, 36);
+            Load(peer, fatigue: false); peer.Expect(0, 36);
             foreach (int offset in Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
                 .Where(offset => map[offset + 13] != 9 && map[offset + 14] == 0).OrderBy(offset => map[offset + 13] == 3))
             {
@@ -80,7 +80,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 31, []);
                 }
                 junk += dropJunk; seeds += dropSeeds;
-                PickupResourceDrops(fixture, peer, death, 0);
+                PickupResourceDrops(fixture, peer, death, 0, resources);
                 string saved = fixture.Snapshot();
                 peer.Send(39, report); peer.Barrier();
                 That(fixture.Snapshot() == saved, "真实socket重复39不能重发材料，重复43由共用拾取断言覆盖");

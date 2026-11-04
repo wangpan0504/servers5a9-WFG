@@ -91,7 +91,7 @@ internal static class Strongway2019AdmissionSessionTests
                 scenes = entered.Select(notice => notice.Scene!).ToArray();
             }
             That(team.All(session => session.Phase == SessionPhase.Loading) &&
-                scenes.All(scene => scene is { Entry.DungeonId: 5363, Entry.DisableMonsterAndClearExperience: true }) &&
+                scenes.All(scene => scene is { Entry.DungeonId: 5363, Entry.DisableMonsterAndClearExperience: true, Entry.CoinLimit: 4 }) &&
                 ReferenceEquals(f.Parties.Current(team[0]), originalParty),
                 "英雄一人及四人入场保留原队伍与完整资源规则");
             foreach (var scene in scenes) AssertNoItemDrops(scene, dungeons);

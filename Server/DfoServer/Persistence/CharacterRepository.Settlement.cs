@@ -170,6 +170,7 @@ internal sealed partial class CharacterRepository
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
         {
+            RecordWeeklyAttendanceClear(db, tx, owner);
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$id", expected.Id);
             command.Parameters.AddWithValue("$account", owner.Account);
@@ -238,6 +239,7 @@ internal sealed partial class CharacterRepository
         var guildContribution = CommitGuildDungeonContribution(db, tx, owner, prepared, guildReward.Contribution);
         var guildDungeon = CommitGuildDungeonProgress(db, tx, prepared, guildNow);
         CommitGuildRankingParty(db, tx, prepared);
+        int endlessAdventureAmount = GrantEndlessAdventure(db, tx, owner, expected, prepared);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -271,12 +273,16 @@ internal sealed partial class CharacterRepository
             new DungeonLuckyStarGrant(false, ReadAccountWallet(db, owner.Account, tx).RentalPoints);
         if (luckyStar.Granted)
             committed = committed with { Inventory = committed.Inventory with { AccountWallet = ReadAccountWallet(db, owner.Account, tx) } };
+        uint attendanceMail = prepared.DailyAttendance is { } attendance
+            ? ApplyDailyAttendance(db, tx, owner.Account, committed, attendance, claim: false).MailId : 0;
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
+            DailyAttendanceMailId = attendanceMail,
             GainedExperience = checked((uint)plan.GainedExperience),
             ProficiencyGained = proficiencyGained,
             Adventure = adventureCommit,
+            EndlessAdventureAmount = endlessAdventureAmount,
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
             GuildMileageGuildId = guildMileageGuildId,
@@ -287,9 +293,9 @@ internal sealed partial class CharacterRepository
             BossRushReward = prepared.BossRush,
             BlackDiamond = prepared.Options?.BlackDiamond,
             Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
-                prepared.BossRush?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
+                prepared.BossRush?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true } || endlessAdventureAmount > 0
                 ? new(expected.Inventory, committed.Inventory, prepared.Grief is not null ? "grief_tower_reward" :
-                    prepared.BossRush is not null ? "boss_rush_reward" : "creature_experience") : null
+                    prepared.BossRush is not null ? "boss_rush_reward" : endlessAdventureAmount > 0 ? "endless_adventure" : "creature_experience") : null
         };
     });
 

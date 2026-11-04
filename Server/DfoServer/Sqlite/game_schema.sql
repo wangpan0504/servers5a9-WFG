@@ -2407,6 +2407,23 @@ CREATE TABLE account_battle_pass_certificate_orders(
   FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
 );
 
+CREATE TABLE account_battle_pass_deluxe_orders(
+  account TEXT NOT NULL, season_key TEXT NOT NULL,
+  order_id TEXT NOT NULL UNIQUE CHECK(length(order_id)=32),
+  commodity_id INTEGER NOT NULL CHECK(commodity_id>0),
+  item_id INTEGER NOT NULL CHECK(item_id=490705044),
+  cera INTEGER NOT NULL CHECK(typeof(cera)='integer' AND cera BETWEEN 1 AND 2147483647),
+  recipient_character_id INTEGER NOT NULL,
+  before_season_revision INTEGER NOT NULL CHECK(typeof(before_season_revision)='integer' AND before_season_revision>=0),
+  resulting_season_revision INTEGER NOT NULL CHECK(typeof(resulting_season_revision)='integer' AND resulting_season_revision>before_season_revision),
+  before_total_experience INTEGER NOT NULL CHECK(typeof(before_total_experience)='integer' AND before_total_experience>=0),
+  paid_total_experience INTEGER NOT NULL CHECK(typeof(paid_total_experience)='integer' AND paid_total_experience>=0),
+  resulting_total_experience INTEGER NOT NULL CHECK(typeof(resulting_total_experience)='integer' AND resulting_total_experience>=paid_total_experience),
+  business_snapshot TEXT NOT NULL CHECK(json_valid(business_snapshot)),
+  committed_at INTEGER NOT NULL CHECK(typeof(committed_at)='integer' AND committed_at>=0),
+  PRIMARY KEY(account,item_id),
+  FOREIGN KEY(account,season_key) REFERENCES account_battle_pass_seasons(account,season_key)
+);
 
 CREATE TABLE account_battle_pass_cera_consumption(
   account TEXT NOT NULL, season_key TEXT NOT NULL,
@@ -2520,6 +2537,12 @@ CREATE TABLE character_fatigue_acceleration(
     enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN(0,1)),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE account_endless_adventure_days(
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(day BETWEEN 0 AND 3652058),
+  earned INTEGER NOT NULL CHECK(earned BETWEEN 0 AND 200),
+  PRIMARY KEY(account,day)
+) STRICT;
 CREATE TABLE account_pcroom_timepoint_days(
   account TEXT NOT NULL,
   day INTEGER NOT NULL CHECK(day BETWEEN 10101 AND 99991231),
@@ -2553,3 +2576,37 @@ CREATE TABLE character_epic_wishes (
     item_ids TEXT NOT NULL CHECK(json_valid(item_ids) AND json_type(item_ids)='array' AND json_array_length(item_ids)<=5),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+
+CREATE TABLE account_daily_attendance_days(
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(day BETWEEN 10101 AND 99991231),
+  clears INTEGER NOT NULL CHECK(clears BETWEEN 0 AND 2),
+  PRIMARY KEY(account,day)
+) STRICT;
+CREATE TABLE account_daily_attendance_claims(
+  account TEXT NOT NULL,
+  kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+  reward_index INTEGER NOT NULL CHECK((kind=0 AND reward_index BETWEEN 0 AND 27) OR (kind=1 AND reward_index BETWEEN 0 AND 2)),
+  day INTEGER NOT NULL CHECK(day BETWEEN 10101 AND 99991231),
+  recipient_id INTEGER NOT NULL CHECK(recipient_id BETWEEN 1 AND 65535),
+  mail_id INTEGER NOT NULL CHECK(mail_id>0),
+  item_id INTEGER NOT NULL CHECK(item_id>0),
+  item_count INTEGER NOT NULL CHECK(item_count>0),
+  claimed_at INTEGER NOT NULL CHECK(claimed_at>=0),
+  PRIMARY KEY(account,kind,reward_index)
+) STRICT;
+
+CREATE TABLE weekly_attendance_season(
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  starts_at INTEGER NOT NULL CHECK(starts_at>=0),
+  ends_at INTEGER NOT NULL CHECK(ends_at>starts_at),
+  activated_at INTEGER NOT NULL CHECK(activated_at>=starts_at AND activated_at<ends_at),
+  weeks INTEGER NOT NULL CHECK(weeks BETWEEN 1 AND 20),
+  CHECK(ends_at-starts_at=weeks*604800)
+) STRICT;
+CREATE TABLE account_weekly_attendance(
+  account TEXT NOT NULL,
+  season_start INTEGER NOT NULL CHECK(season_start>=0),
+  state TEXT NOT NULL CHECK(json_valid(state) AND json_type(state)='object'),
+  PRIMARY KEY(account,season_start)
+) STRICT;

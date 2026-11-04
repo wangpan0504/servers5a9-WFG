@@ -205,7 +205,8 @@ internal static partial class DungeonSettlementTests
         new(experience, Array.AsReadOnly(new[] { new CharacterSkillTree(0, firstSp, 4, []), new CharacterSkillTree(1, 8, 5, []) }));
 
     private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character,
-        Func<DungeonEntryPlan, DungeonEntryPlan>? configure = null, Guid? partyInstance = null)
+        Func<DungeonEntryPlan, DungeonEntryPlan>? configure = null, Guid? partyInstance = null,
+        bool load = true, int accelerationPercent = 0)
     {
         var map = new DungeonMap("boss", new(0, 0), 76126, "map/settlement-fixture.map");
         var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
@@ -219,8 +220,9 @@ internal static partial class DungeonSettlementTests
         if (!SinglePlayerDungeonRun.TryCreate(entry, character.DungeonState?.LastAttempt ?? 1, 1, new([plan], []), authority, out var run, out _))
             throw new InvalidOperationException("通关合成实例未建立");
         if (partyInstance is { } shared) run!.BindPartyInstance(shared);
-        run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
-        return (run, authority);
+        if (accelerationPercent > 0) run!.FreezeFatigueAcceleration(accelerationPercent);
+        if (load) run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
+        return (run!, authority);
     }
     private sealed class FixtureAuthority : DungeonCombatAuthority
     {

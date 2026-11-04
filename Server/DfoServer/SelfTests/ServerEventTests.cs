@@ -25,7 +25,7 @@ internal static class ServerEventTests
             const ushort strongway = 312;
             VerifyStrongwayDefault(root);
             VerifyBattlePassDefault(root);
-            foreach (ushort id in new ushort[] { 2037, 2378, 2395 })
+            foreach (ushort id in new ushort[] { 2037, 2378, 2395, 2257, 228, 2370, 2208 })
             {
                 var defaultState = events.Read(id);
                 That(defaultState.Active, "新增独立开关沿用原默认开启状态");

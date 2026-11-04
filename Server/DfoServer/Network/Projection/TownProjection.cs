@@ -39,6 +39,20 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         foreach (var body in AccountMaterialPackets.Balances(character.Inventory.AccountWallet, before))
             await context.Notify(NotiPacketType.ACCOUNT_MATERIAL_STORAGE_INFO, body,
                 before is null ? "account_material_initialize" : "account_material_committed", canSend);
+        if (context.ActivityCalendarItems is { } calendar && calendar.Epoch == context.Session.SelectionEpoch && calendar.ItemIds.Length != 0)
+        {
+            bool CalendarCurrent() => canSend?.Invoke() != false && context.Session.SelectionEpoch == calendar.Epoch &&
+                context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == calendar.ItemIds;
+            foreach (var (list, ids) in CalendarLists(calendar.ItemIds))
+            {
+                if (before is null)
+                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids),
+                        "activity_calendar_items_resync", CalendarCurrent);
+                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids))
+                    await context.Notify(obtained ? NotiPacketType.UPDATE_ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE,
+                        body, obtained ? "activity_calendar_item_obtained" : "activity_calendar_item_committed", CalendarCurrent);
+            }
+        }
         if (items is null) return;
         var now = timer.GetUtcNow();
         await context.Notify(NotiPacketType.RAID_ACCOUNT_REWARD_LIMIT,
@@ -70,12 +84,18 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
         bool onlineEnabled = context.PcRoomTimePoint is not null && events?.Read(ServerEventService.PcRoomTimePointId).Active == true;
+        bool endless = context.Session.EndlessAdventureActive;
+        bool removeEndlessNpc = !endless && context.Session.EndlessAdventureWasActive;
         if (onlineEnabled) openEvents = [.. openEvents, ServerEventService.PcRoomTimePointId];
+        bool attendanceEnabled = context.DailyAttendance?.Enabled == true;
+        if (attendanceEnabled) openEvents = [.. openEvents, ServerEventService.DailyAttendanceId];
+        bool weeklyEnabled = context.WeeklyAttendance?.Enabled == true;
+        if (weeklyEnabled) openEvents = [.. openEvents, ServerEventService.WeeklyAttendanceId];
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
         IReadOnlyList<EventInfoDesignPage> designPages = [];
-        Func<bool>? publish = canSend;
+        Func<bool>? publish = () => canSend?.Invoke() != false && context.Session.EndlessAdventureActive == endless;
         if (promotionCatalog is not null && promotionPages is not null)
         {
             if (canSend?.Invoke() == false) return;
@@ -84,21 +104,27 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             if (capture is null) return;
             // 页面On独立于购买资格；Disabled仍由同一只读服务校验真实账本。
             var snapshot = promotionPages.Read(context.Owner, catalog, 10000);
-            bool Current() => canSend?.Invoke() != false && context.Session.CanPublishNativePromotionPage(
+            bool Current() => canSend?.Invoke() != false && context.Session.EndlessAdventureActive == endless && context.Session.CanPublishNativePromotionPage(
                 capture, promotionCatalog(), snapshot, minimumPromotionRevision);
             if (!Current()) return;
             designPages = PromotionNativeDesignPage.Create(snapshot) is { } page ? [page] : [];
             publish = Current;
         }
+        if (endless) designPages = [.. designPages, EndlessAdventurePackets.Page()];
         List<ushort> activeEvents = [];
+        if (endless) activeEvents.Add(Game.Events.EndlessAdventurePolicy.EventId);
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
+        if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
+        if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);
         if (battlePass) activeEvents.Add(BattlePassEventId);
+        var firstValues = new Dictionary<ushort, uint>();
+        if (battlePass) firstValues[BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds());
+        if (attendanceEnabled) firstValues[ServerEventService.DailyAttendanceId] = GameWorld.OnlineEvents.DailyAttendanceCatalog.ClearTarget;
         byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents,
             activeEvents: activeEvents,
             designPages: designPages,
-            firstValues: battlePass ? new Dictionary<ushort, uint>
-                { [BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds()) } : null,
+            firstValues: firstValues,
             includeSeriaLuck: seriaLuck);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
@@ -106,6 +132,20 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         else
             await context.NotifyProtected(NotiPacketType.EVENT_INFO, eventInfo, action, publish);
         if (publish?.Invoke() != false) context.PcRoomTimePoint?.EventsPublished(onlineEnabled);
+        await CalendarItemsAsync(context, designPages, publish);
+        if (publish?.Invoke() != false)
+        {
+            if (endless || removeEndlessNpc)
+            {
+                var view = context.Session.ReadEndlessAdventure();
+                if (view is not null)
+                    await context.Notify(NotiPacketType.EVENT_NPC_DYNAMIC_DISPLAY,
+                        EndlessAdventurePackets.Npc(endless, towns), "endless_adventure_npc",
+                        () => publish?.Invoke() != false && context.Session.CanPublishEndlessAdventure(view));
+            }
+            await EndlessAdventureProjection.PublishAsync(context, force: endless);
+        }
+        if (publish?.Invoke() != false) context.WeeklyAttendance?.EventsPublished(weeklyEnabled);
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);
@@ -131,8 +171,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 Strongway2019NpcPackets.Display(strongway?.Active == true), "strongway_npc_display", NpcCurrent))
                 throw new IOException("Strongway NPC send queue unavailable");
         }
-        if (NpcCurrent()) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
-            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision);
+        if (NpcCurrent() && context.Session.EndlessAdventureActive == endless) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
+            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }
@@ -351,15 +391,16 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (marriage is not null) await marriage.DailyAsync(context);
     }
 
-    public async Task AssaultServiceDayAsync(GameConnectionContext context)
+    public async Task RefreshAssaultDailyAsync(GameConnectionContext context, Func<bool>? canSend = null,
+        string reason = "assault_mode_daily_reset")
     {
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch));
         if (capture.Selected is not { } character) return;
         int day = DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone);
-        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
+        bool Guard() => (canSend?.Invoke() ?? true) && context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
             context.Session.Selected?.Id == character.Id && DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone) == day);
         await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO,
-            AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), "assault_mode_daily_reset", Guard);
+            AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), reason, Guard);
     }
 
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;

@@ -54,6 +54,21 @@ internal static class MarriageWeddingTcpTests
             { Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 68),
                 InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10002631), utcNow: clock.GetUtcNow()))) }, "marriage_fixture"));
         }
+        if (type == 0 && prepared)
+        {
+            using var guestOwner = owners.Acquire("weddingg" + suffix, () => { });
+            var role = repository.LoadCharacter(guestOwner, 0);
+            var sharedItems = new[] { (10002497, (short)70), (10004383, (short)71), (490006626, (short)72) }
+                .Select(row =>
+                {
+                    var template = resources.ItemResources.Items.Get(row.Item1);
+                    That(template.Kind == ItemKind.Consumable, "共享特效回归来源必须是匹配资源中的真实消耗品模板");
+                    return new InventoryItem(0, new(InventoryListType.Main, row.Item2),
+                        InventoryRewardGrantService.Create(template, utcNow: clock.GetUtcNow()));
+                });
+            repository.Save(guestOwner, role, role.Position, role.Return, new(role.Inventory, role.Inventory with
+            { Items = role.Inventory.Items.AddRange(sharedItems) }, "marriage_fixture"));
+        }
         using (var ownerA = owners.Acquire(accountA, () => { }))
         using (var ownerB = owners.Acquire(accountB, () => { }))
         {
@@ -200,6 +215,48 @@ internal static class MarriageWeddingTcpTests
                 fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
                     "AND json_extract(item_core,'$.ItemId')=10002868", guest.Id) is [[0L]],
                 "两次礼炮准确抽取两次当前PVF礼包池，不给客户端额外中间盒子");
+
+            var sharedSources = new[]
+            {
+                (ItemId: 10002497, Slot: (ushort)70, BoosterId: 10002500, RewardCount: 1),
+                (ItemId: 10004383, Slot: (ushort)71, BoosterId: 10004230, RewardCount: 2),
+                (ItemId: 490006626, Slot: (ushort)72, BoosterId: 10004230, RewardCount: 2),
+            };
+            int[] sharedRewards = [10002498, 10002499, 10004385, 10004386, 10004387, 10004388, 10004389, 10004390, 10004391];
+            long RewardCount() => Convert.ToInt64(fixture.Query("SELECT COALESCE(sum(json_extract(item_core,'$.Value')),0) " +
+                "FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId') IN (" +
+                string.Join(",", sharedRewards) + ")", guest.Id).Single()[0]);
+            foreach (var source in sharedSources)
+            {
+                That(resources.ItemResources.Items.SharedEffect(source.ItemId) is { Outcomes: [{ Index: 0, Weight: 100000 }] } definition &&
+                    definition.Outcomes[0].BoosterId == source.BoosterId &&
+                    resources.ItemResources.Boosters.Get(source.BoosterId).Available,
+                    "三种共享特效物品仅引用已解析的单一结果和可用子奖池");
+                That(fixture.Query("SELECT json_extract(i.item_core,'$.ItemId'),json_extract(i.item_core,'$.Value') " +
+                    "FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid " +
+                    "WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1", guest.Id, source.Slot) is [[long itemId, long count]] &&
+                    itemId == source.ItemId && count == 1, "三种共享特效物品在独立主背包槽中各有一件真实来源");
+                long rewardsBefore = RewardCount();
+                byte[] use = Build(w => { w.Write(source.ItemId); w.Write(source.Slot); });
+                guest.Send(251, use);
+                guest.Expect(1, 251, Build(w => { w.Write((byte)1); w.Write(source.Slot); w.Write((byte)0); }));
+                byte[] effect = Build(w => { w.Write(guest.Id); w.Write(source.ItemId); w.Write((byte)0); });
+                foreach (var peer in new[] { guest, first, second }) peer.Expect(0, 219, effect);
+                var updates = Drain(guest);
+                That(updates.Any(packet => packet is { Kind: 0, Opcode: 14 }) && RewardCount() - rewardsBefore == source.RewardCount &&
+                    fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
+                        "AND json_extract(item_core,'$.ItemId')=$p1", guest.Id, source.ItemId) is [[0L]] &&
+                    fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 " +
+                        "AND json_extract(item_core,'$.ItemId')=$p1", guest.Id, source.BoosterId) is [[0L]],
+                    "礼炮消耗一件、发送奖励差量并直接发放子奖池结果，不把引用子盒留在背包");
+                string unchanged = fixture.Snapshot();
+                guest.Send(251, use);
+                guest.Expect(1, 251, [0, 17, 0]);
+                guest.Barrier();
+                first.Barrier();
+                second.Barrier();
+                That(fixture.Snapshot() == unchanged, "耗尽礼炮源槽重放不再发奖或发布NOTI219");
+            }
         }
         guest.Send(1041, entry);
         That(!Drain(guest).Any(p => p is { Kind: 0, Opcode: 14 }), "重复入场不会再次发放入场礼");

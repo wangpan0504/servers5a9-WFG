@@ -23,6 +23,10 @@ internal static partial class CharacterCopyTests
         {
             var source = f.LoadSource();
             f.Sql($"INSERT INTO character_epic_wishes(character_id,account,item_ids) VALUES({source.Id},'copy-account','[5000,0,7000,0,0]')");
+            f.Sql("INSERT INTO account_daily_attendance_days VALUES('copy-account',20261104,2);" +
+                $"INSERT INTO account_daily_attendance_claims VALUES('copy-account',0,0,20261104,{source.Id},1,50001,2,1)");
+            string attendanceDays = f.Snapshot("account_daily_attendance_days");
+            string attendanceClaims = f.Snapshot("account_daily_attendance_claims");
             source = f.LoadSource();
             string sourceJson = JsonSerializer.Serialize(source);
             var copy = f.Copy("CopyOne");
@@ -56,6 +60,10 @@ internal static partial class CharacterCopyTests
                 f.ScalarText($"SELECT item_ids FROM character_epic_wishes WHERE character_id={source.Id}") == "[5000,0,7000,0,0]",
                 "角色复制保留同账号五槽祈愿顺序，重写新角色外键且来源行不变");
             That(sourceJson == JsonSerializer.Serialize(f.LoadSource()), "原角色完整领域快照不变");
+            That(f.Snapshot("account_daily_attendance_days") == attendanceDays &&
+                f.Snapshot("account_daily_attendance_claims") == attendanceClaims &&
+                f.Scalar($"SELECT count(*) FROM account_daily_attendance_claims WHERE recipient_id={copy.Id}") == 0,
+                "角色复制保留账号签到与原收件事实，不为新角色复制领奖资格");
             var reopened = new CharacterRepository(f.Path);
             var loaded = reopened.LoadCharacter(f.Owner, copy.Slot);
             That(JsonSerializer.Serialize(copy) == JsonSerializer.Serialize(loaded), "仓储重开后新角色完整加载一致");

@@ -47,14 +47,14 @@ internal static partial class DatabaseSchemaTests
                 if (scenario == "replay")
                 {
                     _ = new CharacterRepository(path);
-                    // 未来空战令表须真实重建，SQL换行、插入顺序和新页号可变；逻辑结构、历史行及原有对象不变。
+                    // 未来空战令与在线活动表须真实重建，SQL换行、插入顺序和新页号可变；逻辑结构、历史行及原有对象不变。
                     Check(StrongwayReplaySnapshot(path) == current,
                         $"{previousVersion}重放至181/182保留全部表、列、索引、约束、rowid、完整奖励与历史事实及角色资产");
                     using (var db = Open(path))
                     {
                         var replayedPages = StrongwayReplayPages(db);
                         Check(existingPages.All(row => replayedPages.TryGetValue(row.Key, out var actual) && actual == row.Value),
-                            "重放保留任何原有对象的页号和原始DDL，只新增回退时已移除的未来空战令结构");
+                            "重放保留任何原有对象的页号和原始DDL，只新增回退时已移除的未来空战令与在线活动结构");
                     }
                     string saved = Snapshot(path);
                     _ = new CharacterRepository(path);
@@ -73,14 +73,16 @@ internal static partial class DatabaseSchemaTests
     static string StrongwayReplaySnapshot(string path)
     {
         using var db = Open(path);
-        // 仅这九张未来空表的DDL已核实不含跨行字面量、引用标识符或注释；不规范化其它SQL或任何数据行。
+        // 仅这十五张未来空表的DDL已核实不含跨行字面量、引用标识符或注释；不规范化其它SQL或任何数据行。
         return string.Join('|', Query(db, "PRAGMA user_version"),
             Query(db, """
                 SELECT group_concat(type||':'||name||':'||tbl_name||':'||coalesce(
                     CASE WHEN tbl_name IN ('account_battle_pass_seasons','account_battle_pass_claims',
                         'battle_pass_season_rules','account_battle_pass_mission_progress','account_battle_pass_mission_claims',
                         'account_battle_pass_source_events','account_battle_pass_certificate_orders',
-                        'account_battle_pass_cera_consumption','account_battle_pass_cera_orders')
+                        'account_battle_pass_cera_consumption','account_battle_pass_cera_orders','account_battle_pass_deluxe_orders',
+                        'account_pcroom_timepoint_days','account_pcroom_timepoint_segments','account_pcroom_timepoint_claims',
+                        'account_weekly_attendance','weekly_attendance_season')
                     THEN replace(sql,char(13)||char(10),char(10)) ELSE sql END,''),'|')
                 FROM (SELECT * FROM sqlite_schema ORDER BY name)
                 """),

@@ -55,7 +55,7 @@ internal static class EvildomWarChallengeTcpTests
             "英雄TCP使用实际疲劳，不借开发无限疲劳放行");
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         int sequence = 0;
-        foreach (var (count, returnToSelection) in new[] { (1, false), (3, false), (4, false), (4, true) })
+        foreach (var (count, returnToSelection) in new[] { (1, false), (4, false), (4, true) })
         {
             var peers = new List<TcpPeer>();
             try
@@ -129,12 +129,12 @@ internal static class EvildomWarChallengeTcpTests
                 }
                 foreach (var peer in peers)
                 {
-                    string beforeDoor = fixture.Snapshot();
                     peer.Send(36, Area(124, 2, waiting.X, waiting.Y, 124, 1));
                     var moved = All(peer)[peers.IndexOf(peer)];
-                    if (count < 4)
-                        That(!moved.Any(packet => packet is { Kind: 0, Opcode: 24 }) && fixture.Snapshot() == beforeDoor,
-                            "不足四人沿英雄实际门请求不能提前进入等待区：" + count);
+                    if (count == 1)
+                        That(moved.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, 2, ..] }) &&
+                            fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]],
+                            "单人英雄队伍可沿真实门进入124/2，不要求先凑满四人");
                     else
                         That(moved.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, 2, ..] }) &&
                             fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]],
@@ -148,21 +148,15 @@ internal static class EvildomWarChallengeTcpTests
                     "裸16没有本次选图票据时不入场、不提前扣费");
                 leader.Send(15, BitConverter.GetBytes(400000105u));
                 var selecting = All();
-                if (count < 4)
-                {
-                    That(selecting.All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 27 })) && fixture.Snapshot() == unopened,
-                        "真实不足四人的CMD15拒绝，不打开部分成员选图：" + count);
-                    continue;
-                }
                 That(selecting.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 27 })),
-                    "四真实成员从124/2按244世界图共同选中400000105");
+                    count == 1 ? "单人英雄队伍从124/2按244世界图打开魔界大战英雄选图" : "四真实成员从124/2按244世界图共同选中400000105");
                 leader.Send(16, selection);
                 var entered = All();
                 That(entered.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 28 }) &&
-                    rows.Any(packet => packet is { Kind: 0, Opcode: 29 })), "英雄四人通过同一正式入场事务发布28和29");
-                That(roomIdentities.Count == 4 && keyOffers.Count == 4 &&
+                    rows.Any(packet => packet is { Kind: 0, Opcode: 29 })), "英雄真实队伍通过同一正式入场事务发布28和29");
+                That(roomIdentities.Count == count && keyOffers.Count == count &&
                     peers.Take(withholdLastLease ? 3 : 4).All(peer => AntonTcpProbe.FiendwarLease(peer) != 0),
-                    "英雄首房普通Enter沿正式MAI/FWL1预租，待测成员保留真实未ready状态，不借漩涡攻坚身份");
+                    count == 1 ? "单人英雄首房沿正式MAI/FWL1预租，不借漩涡攻坚身份" : "英雄首房普通Enter沿正式MAI/FWL1预租，待测成员保留真实未ready状态，不借漩涡攻坚身份");
                 foreach (var peer in peers)
                     That(fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]] &&
                         fixture.Query("SELECT count(*) FROM character_dungeon_incount WHERE character_id=$p0 AND dungeon=5428", peer.Id) is [[0L]],
@@ -204,7 +198,7 @@ internal static class EvildomWarChallengeTcpTests
                     {
                         var deaths = rows.Where(packet => packet is { Kind: 0, Opcode: 38 }).ToArray();
                         That(expected ? deaths is [var notice] && notice.Body.Length == 9 && U16(notice.Body) == key && U16(notice.Body, 2) == 0
-                            : deaths.Length == 0, "英雄动态39仅为已登记对象向四人同步零掉落38；未知或冲突对象不发死亡");
+                            : deaths.Length == 0, "英雄动态39仅为已登记对象向实际成员同步零掉落38；未知或冲突对象不发死亡");
                         That(!rows.Any(packet => packet is { Kind: 0, Opcode: 31 or 34 or 35 or 37 or 597 or 1530 or 1673 }),
                             "动态退休不触发清图、结算、阶段符号或普通魔界战役奖励");
                     }
@@ -225,8 +219,11 @@ internal static class EvildomWarChallengeTcpTests
                         byte[] wrong = (byte[])dummyReport.Clone();
                         BinaryPrimitives.WriteUInt32LittleEndian(wrong.AsSpan(32), 407000557);
                         Spawn(leader, wrong); ChildDeath(dummyKey, map[bossAt + 12], expected: false);
-                        Spawn(peers[1], SpawnBody(peers[1], U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence));
-                        ChildDeath(dummyKey, map[bossAt + 12], expected: false);
+                        if (count == 4)
+                        {
+                            Spawn(peers[1], SpawnBody(peers[1], U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence));
+                            ChildDeath(dummyKey, map[bossAt + 12], expected: false);
+                        }
                         Spawn(leader, dummyReport); Spawn(leader, dummyReport);
                         // Seal_Start的MOVE MAP与Proc_0的KICK OUT最终都是100B CMD45/kind0。
                         // 活Boss与封印演员均保留，不用死亡报告伪造开门或重建Boss。
@@ -241,15 +238,16 @@ internal static class EvildomWarChallengeTcpTests
                         That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
                             "英雄ACT内部5不能当成换层kind1使用");
                         warp[10] = 0;
-                        peers[1].Send(45, warp);
-                        var sealing = All(peers[1]);
+                        var sealCaller = count == 4 ? peers[1] : leader;
+                        sealCaller.Send(45, warp);
+                        var sealing = All(sealCaller);
                         That(sealing.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body is
                             { Length: > 19 } body && body[0] == 12 && body[1] == 1 && body[13] == 1),
-                            "任一真实成员按已证ACT目标令全四人进入首次封印房");
+                            "任一真实成员按已证ACT目标令全部真实成员进入首次封印房");
                         var sealMap = sealing[0].Single(packet => packet is { Kind: 0, Opcode: 29 }).Body;
                         That(Enumerable.Range(0, sealMap[18]).Any(index => U32(sealMap, 19 + index * 22 + 8) == 407000558) &&
                             sealing.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body.SequenceEqual(sealMap)),
-                            "全四人共用原407000558封印演员计划，不建立个人实例");
+                            "实际成员共用原407000558封印演员计划，不建立个人实例");
                         visited.Add(new(12, 1));
                         leader.Send(45, warp);
                         That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })) && fixture.Snapshot() == fighting,
@@ -264,17 +262,21 @@ internal static class EvildomWarChallengeTcpTests
                         Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, nextSealKey, spawnSequence++));
                         ChildDeath(nextSealKey, sealMap[sealAt + 12], expected: false);
                         ChildDeath(dummyKey, map[bossAt + 12], expected: false);
-                        peers[2].Send(45, unsupported);
-                        That(All(peers[2]).All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
+                        leader.Send(45, unsupported);
+                        That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
                             "封印房活怪状态不开放未证12,2分支");
-                        peers[2].Send(40, [0x74, 0, 4, 1, 0, 0]);
-                        That(All(peers[2]).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 32 } &&
-                            U16(packet.Body) == peers[2].Id && packet.Body[2] == 0)),
-                            "原生死亡请求先在全队确认一名真实死亡成员");
+                        if (count == 4)
+                        {
+                            peers[2].Send(40, [0x74, 0, 4, 1, 0, 0]);
+                            That(All(peers[2]).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 32 } &&
+                                U16(packet.Body) == peers[2].Id && packet.Body[2] == 0)),
+                                "原生死亡请求先在全队确认一名真实死亡成员");
+                        }
                         fighting = fixture.Snapshot();
                         byte[] back = new byte[100]; back[0] = 12;
-                        peers[3].Send(45, back);
-                        var restored = All(peers[3]);
+                        var returnCaller = count == 4 ? peers[3] : leader;
+                        returnCaller.Send(45, back);
+                        var restored = All(returnCaller);
                         That(restored.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body is
                             { Length: 16 } body && body[0] == 12 && body[1] == 0 && body[13] == 0) && fixture.Snapshot() == fighting,
                             "封印未清按INCLUDE DEAD携真实死亡成员回原Boss缓存，不复活、不重建或伪造Boss死亡");
@@ -299,8 +301,8 @@ internal static class EvildomWarChallengeTcpTests
                             Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, key, spawnSequence++));
                             ChildDeath(key, sealMap[sealAt + 12]);
                         }
-                        peers[3].Send(45, back);
-                        That(All(peers[3]).All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body is
+                        returnCaller.Send(45, back);
+                        That(All(returnCaller).All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body is
                             { Length: 16 } body && body[0] == 12 && body[1] == 0 && body[13] == 0),
                             "多轮557真实登记退休后再次回原Boss，仍保留原Bosskey与唯一结算路径");
                         foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
@@ -384,13 +386,13 @@ internal static class EvildomWarChallengeTcpTests
                         "英雄结算后全队回124等待区，不安装平行副本");
                     leader.Send(15, BitConverter.GetBytes(400000105u));
                     That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 27 })),
-                        "英雄回城后可重新按正式四人入口选图");
+                        "英雄回城后可重新按真实Party入口选图");
                 }
                 leader.Send(16, selection);
                 That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 28 }) &&
                     rows.Any(packet => packet is { Kind: 0, Opcode: 29 })) &&
                     peers.All(peer => fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]]),
-                    "英雄返回或重选后可再次进入同一正式四人链且不扣疲劳");
+                    "英雄返回或重选后可再次进入同一真实Party链且不扣疲劳");
                 foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
                 foreach (var peer in peers)
                 {
@@ -403,42 +405,53 @@ internal static class EvildomWarChallengeTcpTests
                     "SELECT experience,gold,revive_coins,stamina_until FROM characters WHERE id=$p0", peer.Id)));
                 string recoveryEconomy = Economy();
                 byte[] cancel = (byte[])keyOffers[leader.Id].Clone(); cancel[4] = 5; cancel[5] = 6;
-                var revisions = peers.Select(peer => Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0])).ToArray();
-                string priorWrites = string.Join(" AND ", peers.Take(3).Select((peer, index) =>
-                    $"(SELECT revision FROM characters WHERE id={peer.Id})>{revisions[index]} AND " +
-                    $"NOT EXISTS(SELECT 1 FROM character_consumable_states WHERE character_id={peer.Id} AND (maintenance & 2)=0)"));
-                fixture.Sql($"""
-                    CREATE TRIGGER hero_key_recovery_failure BEFORE UPDATE OF revision ON characters
-                    WHEN NEW.id={peers[3].Id} AND NEW.revision>OLD.revision
-                    BEGIN
-                      SELECT CASE WHEN {priorWrites} THEN RAISE(ABORT,'hero-key-recovery-late-rollback')
-                        ELSE RAISE(ABORT,'hero-key-recovery-order-not-proven') END;
-                    END
-                    """);
-                WirePacket[][] paused;
-                int eventBoundary = fixture.Events().Length;
-                try
+                if (count == 4)
                 {
-                    leader.Send(FiendwarKeyLeaseRequests.Opcode, cancel); paused = All();
-                    That(paused.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode, Body.Length: 80 } &&
-                            packet.Body[4] == 5 && packet.Body[5] == 2) && !rows.Any(packet => packet is { Kind: 0, Opcode: 24 or 29 })) &&
-                        Assets() == recoveryState, "英雄恢复末成员SQL失败保留全员暂停锁并整体回滚，不宣称回城或继续生成");
-                    That(SpinWait.SpinUntil(() => fixture.Events().Skip(eventBoundary).Any(row =>
-                        row.GetProperty("Kind").GetString() == "fiendwar_key_recovery_failed" &&
-                        row.GetProperty("Detail").GetProperty("Message").GetString()?.Contains("hero-key-recovery-late-rollback", StringComparison.Ordinal) == true),
-                        TimeSpan.FromSeconds(2)), "实际SQL日志证明此前三名成员已写入后才在最后成员失败");
-                    byte[] blockedMove = new byte[100]; blockedMove[0] = 1;
-                    leader.Send(45, blockedMove);
-                    That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
-                        "恢复失败期间不能继续推进原Run");
+                    var revisions = peers.Select(peer => Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0])).ToArray();
+                    string priorWrites = string.Join(" AND ", peers.Take(3).Select((peer, index) =>
+                        $"(SELECT revision FROM characters WHERE id={peer.Id})>{revisions[index]} AND " +
+                        $"NOT EXISTS(SELECT 1 FROM character_consumable_states WHERE character_id={peer.Id} AND (maintenance & 2)=0)"));
+                    fixture.Sql($"""
+                        CREATE TRIGGER hero_key_recovery_failure BEFORE UPDATE OF revision ON characters
+                        WHEN NEW.id={peers[3].Id} AND NEW.revision>OLD.revision
+                        BEGIN
+                          SELECT CASE WHEN {priorWrites} THEN RAISE(ABORT,'hero-key-recovery-late-rollback')
+                            ELSE RAISE(ABORT,'hero-key-recovery-order-not-proven') END;
+                        END
+                        """);
+                    WirePacket[][] paused;
+                    int eventBoundary = fixture.Events().Length;
+                    try
+                    {
+                        leader.Send(FiendwarKeyLeaseRequests.Opcode, cancel); paused = All();
+                        That(paused.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode, Body.Length: 80 } &&
+                                packet.Body[4] == 5 && packet.Body[5] == 2) && !rows.Any(packet => packet is { Kind: 0, Opcode: 24 or 29 })) &&
+                            Assets() == recoveryState, "英雄恢复末成员SQL失败保留全员暂停锁并整体回滚，不宣称回城或继续生成");
+                        That(SpinWait.SpinUntil(() => fixture.Events().Skip(eventBoundary).Any(row =>
+                            row.GetProperty("Kind").GetString() == "fiendwar_key_recovery_failed" &&
+                            row.GetProperty("Detail").GetProperty("Message").GetString()?.Contains("hero-key-recovery-late-rollback", StringComparison.Ordinal) == true),
+                            TimeSpan.FromSeconds(2)), "实际SQL日志证明此前三名成员已写入后才在最后成员失败");
+                        byte[] blockedMove = new byte[100]; blockedMove[0] = 1;
+                        leader.Send(45, blockedMove);
+                        That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
+                            "恢复失败期间不能继续推进原Run");
+                    }
+                    finally { fixture.Sql("DROP TRIGGER IF EXISTS hero_key_recovery_failure"); }
+                    byte[] retry = paused[3].Last(packet => packet is { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode } && packet.Body[4] == 5).Body;
+                    peers[3].Send(FiendwarKeyLeaseRequests.Opcode, retry);
+                    That(All(peers[3]).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, ..] }) &&
+                        !rows.Any(packet => packet is { Kind: 0, Opcode: 31 or 34 or 35 or 38 or 1673 })) &&
+                        peers.All(peer => fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]]) &&
+                        Economy() == recoveryEconomy, "另一原成员精确重试后全员无罚返回124，不奖励、不额外收费或改变恢复前经济");
                 }
-                finally { fixture.Sql("DROP TRIGGER IF EXISTS hero_key_recovery_failure"); }
-                byte[] retry = paused[3].Last(packet => packet is { Kind: 0, Opcode: FiendwarKeyLeaseRequests.Opcode } && packet.Body[4] == 5).Body;
-                peers[3].Send(FiendwarKeyLeaseRequests.Opcode, retry);
-                That(All(peers[3]).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, ..] }) &&
-                    !rows.Any(packet => packet is { Kind: 0, Opcode: 31 or 34 or 35 or 38 or 1673 })) &&
-                    peers.All(peer => fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[124L, 2L]]) &&
-                    Economy() == recoveryEconomy, "另一原成员精确重试后全员无罚返回124，不奖励、不额外收费或改变恢复前经济");
+                else
+                {
+                    leader.Send(FiendwarKeyLeaseRequests.Opcode, cancel);
+                    That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [124, ..] }) &&
+                        !rows.Any(packet => packet is { Kind: 0, Opcode: 31 or 34 or 35 or 38 or 1673 })) &&
+                        fixture.Query("SELECT town,area FROM characters WHERE id=$p0", leader.Id) is [[124L, 2L]] &&
+                        Economy() == recoveryEconomy, "单人英雄原队长通过实际键租约取消无罚退出，不额外收费或奖励");
+                }
                 That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND item_id=$p1 AND (maintenance & 2)=0", peer.Id, recoveryPotionId)
                     is [[0L]]), "英雄恢复成功后全员Town边界持续药效已在同一事务清理");
             }

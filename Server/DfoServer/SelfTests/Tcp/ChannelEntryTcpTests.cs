@@ -263,6 +263,7 @@ internal static class ChannelEntryTcpTests
                     peer.Expect(0, 1801);
                     peer.Expect(0, 1802);
                 }
+                // 未开始、已结束及未配置时不发布战令页；严格屏障拒绝任何额外1800/1801/1802。
                 peer.Barrier();
             }
         }
@@ -325,12 +326,13 @@ internal static class ChannelEntryTcpTests
         peer.ExpectedOpenEvents = [2532, 266];
         peer.Select();
         CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
+        // 尚未开始的赛季不发布战令页，屏障不跳过任何战令通知。
         peer.Barrier();
         ushort id = peer.Id;
 
         await clock.WaitForOneShotTimerAsync(start);
         clock.Advance(TimeSpan.FromSeconds(1));
-        ReadBoundary(active: true, expectedRefreshes: 1, expectedMissions: ReadMissions(), initializingPass: true);
+        ReadBoundary(active: true, expectedRefreshes: 1, expectedMissions: ReadMissions(), expectedPages: true);
         That(peer.Id == id, "同一连接自然跨越赛季起点");
         await clock.WaitForOneShotTimerAsync(start.AddDays(1));
         clock.Advance(end.AddSeconds(-1) - start);
@@ -342,12 +344,12 @@ internal static class ChannelEntryTcpTests
         That(peer.Id == id, "同一连接自然跨越赛季终点");
         await fixture.StopAsync();
 
-        void ReadBoundary(bool active, int expectedRefreshes, byte[]? expectedMissions = null, bool initializingPass = false)
+        void ReadBoundary(bool active, int expectedRefreshes, byte[]? expectedMissions = null, bool expectedPages = false)
         {
             byte[][] daily = peer.InitialDailyBoosterPackets;
             That(daily.Length > 0, "在线日切已有完整礼盒名册");
             int refreshes = 0, limits = 0, dailyChunks = 0, missionCount = 0;
-            int passInfos = 0, claims = 0, earlyMissions = 0;
+            int passCount = 0, claimCount = 0;
             bool acknowledged = false;
             peer.SendBarrier();
             for (int budget = 0; budget < 256; budget++)
@@ -376,30 +378,27 @@ internal static class ChannelEntryTcpTests
                     That(dailyChunks < daily.Length, "在线日切礼盒分片不重复");
                     Bytes(packet.Body, daily[dailyChunks++], "在线日切礼盒名册及顺序完整保留");
                 }
-                else if (packet is { Kind: 0, Opcode: 1800 } && initializingPass)
+                else if (packet is { Kind: 0, Opcode: 1800 } && expectedPages)
                 {
-                    That(++passInfos == 1 && missionCount == 0 && claims == 0, "开季完整状态只发布一次且先于任务与领取页");
-                    Bytes(packet.Body, Build(writer => { writer.Write(0u); writer.Write(1u); writer.Write(0u); }),
-                        "开季完整初始等级与经验");
+                    That(++passCount == 1 && missionCount == 0 && claimCount == 0 &&
+                        refreshes == expectedRefreshes && limits == expectedRefreshes, "在线开启只发布一组顺序完整的战令三页");
+                    Bytes(packet.Body, Build(writer => { writer.Write(0u); writer.Write(1u); writer.Write(0u); }), "在线开启的初始战令进度完整");
                 }
                 else if (packet is { Kind: 0, Opcode: 1801 } && expectedMissions is not null)
                 {
-                    // 日切先获得命令门时可先补一期；开季完整三包仍必须按序且各一次。
-                    if (initializingPass && passInfos == 0)
-                        That(++earlyMissions == 1, "开季完整状态之前最多一次独立周期任务补刷");
-                    else
-                        That(++missionCount == 1 && claims == 0, "开季完整状态或跨日周期只发布一份当前任务快照");
+                    That(++missionCount == 1 && claimCount == 0 && (!expectedPages || passCount == 1),
+                        "赛季起点及跨日只发布一份当前任务快照，开启时严格位于进度页之后");
                     Bytes(packet.Body, expectedMissions, "1801完整对应当前权威任务状态");
                 }
-                else if (packet is { Kind: 0, Opcode: 1802 } && initializingPass)
+                else if (packet is { Kind: 0, Opcode: 1802 } && expectedPages)
                 {
-                    That(++claims == 1 && passInfos == 1 && missionCount == 1, "开季领取页仅在完整状态和任务页之后发布一次");
-                    Bytes(packet.Body, new byte[20], "开季未领取权益完整二十字节");
+                    That(passCount == 1 && missionCount == 1 && ++claimCount == 1, "在线开启领奖页严格位于进度页和任务页之后");
+                    Bytes(packet.Body, new byte[20], "在线开启的空领取位完整");
                 }
                 else peer.ValidateServiceDayNotice(packet);
                 if (acknowledged && refreshes == expectedRefreshes && limits == expectedRefreshes && dailyChunks == daily.Length &&
                     missionCount == (expectedMissions is null ? 0 : 1) &&
-                    passInfos == (initializingPass ? 1 : 0) && claims == (initializingPass ? 1 : 0))
+                    passCount == (expectedPages ? 1 : 0) && claimCount == (expectedPages ? 1 : 0))
                 {
                     foreach (var extra in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(extra);
                     return;

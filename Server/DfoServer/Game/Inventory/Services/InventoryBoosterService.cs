@@ -324,7 +324,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(4);
         var dailyUses = before.DailyBoosterUses;
         long? dailyDeadline = null;
-        if (definition.DailyRetainedLimit is { } dailyLimit)
+        if (definition.DailyUseLimit is { } dailyLimit)
         {
             if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
                 !sourceTemplate.AllowsUse(character.Level, character.Job) ||
@@ -355,7 +355,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             // 明确类型的随机池先检查全部有效候选，不能靠抽中项校验或钱包/契约快捷入口绕过。
             foreach (var pool in pools.Where(pool => pool.RequiredKind is not null))
-                foreach (var row in pool.Rewards.Where(row => row.Weight > 0))
+                foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
                 {
                     var template = catalog.Get(row.ItemId);
                     if (template.Kind != pool.RequiredKind || CurrencyWallet.RewardKind(row.ItemId) is not null ||
@@ -368,13 +368,13 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 return InventoryResult.Reject(19);
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
                 ? definition.PackageRewards.Select(row => row.ItemId)
-                : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 && !row.EmptyOutcome).Select(row => row.ItemId);
             if (definition.UnsealsRandomOptions)
             {
                 // 先核对整份声明，不能因本次恰好选中普通奖励而吞掉混合盒的未知解封语义。
                 var allIds = definition.Selection is { } selectionDefinition
                     ? selectionDefinition.Categories.SelectMany(group => group.Rewards).Select(row => row.ItemId)
-                    : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                    : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 && !row.EmptyOutcome).Select(row => row.ItemId);
                 foreach (int id in allIds.Distinct())
                 {
                     var rule = randomOptions?.ResolveBoosterReward(catalog.Get(id));
@@ -382,6 +382,21 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     unsealDefinitions.Add(id, rule);
                 }
             }
+            foreach (var pool in pools)
+                foreach (var row in pool.Rewards)
+                {
+                    if (row.AvatarAbility is null && row.AvatarPeriodDays is null || row.Weight <= 0 || row.EmptyOutcome)
+                        continue;
+                    if (avatars is null)
+                        return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_catalog_missing" };
+                    var avatarTemplate = catalog.Get(row.ItemId);
+                    if (avatarTemplate.Kind != ItemKind.Avatar)
+                        return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_kind" };
+                    var avatar = avatars.GetAvatar(row.ItemId);
+                    // 奖池行自己写属性号。共用 case 50 不含 0，但野生力量仍把 0 做成独立权重行，不能按玩家自选的能力表整盒拒绝。
+                    if (avatar.PendingRule is not null)
+                        return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_ability" };
+                }
             foreach (int id in ids.Distinct())
             {
                 if (choices?.Any(row => row.ItemId == id && row.NativeCreatureSelectionRow) == true)
@@ -472,6 +487,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             paid = materialAfter;
         }
         var totals = new Dictionary<int, int>();
+        var avatarRolls = new List<(BoosterReward Row, int Copies)>();
+        var avatarRewardIds = new HashSet<int>();
         byte[]? trace = null;
         try
         {
@@ -496,7 +513,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     long draws = (long)pool.Draws * request.Count;
                     if (candidates.Length == 1)
                     {
-                        Add(candidates[0].ItemId, candidates[0].Count, draws);
+                        AddPoolReward(candidates[0], draws);
                         continue;
                     }
                     long weight = candidates.Sum(row => row.Weight);
@@ -511,7 +528,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         {
                             long hits = BoosterBatchRandom.Next(draws, row.Weight, weight, random ?? Random.Shared);
                             if (hits != 0)
-                                Add(row.ItemId, row.Count, hits);
+                                AddPoolReward(row, hits);
                             draws -= hits;
                             weight -= row.Weight;
                         }
@@ -524,7 +541,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         {
                             if (value < row.Weight)
                             {
-                                Add(row.ItemId, row.Count, 1);
+                                AddPoolReward(row, 1);
                                 break;
                             }
                             value -= row.Weight;
@@ -603,7 +620,42 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             }
         }
         else
-            grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
+            grants.AddRange(totals.Where(pair => !avatarRewardIds.Contains(pair.Key))
+                .Select(pair => new InventoryReward(pair.Key, pair.Value)));
+        var avatarInstances = new List<InventoryItem>();
+        if (avatarRolls.Count > 0)
+        {
+            if (avatars is null)
+                return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_catalog_missing" };
+            try
+            {
+                foreach (var (row, copies) in avatarRolls)
+                {
+                    var template = catalog.Get(row.ItemId);
+                    int period = row.AvatarPeriodDays ?? 0;
+                    int expires = period > 0
+                        ? new ItemExpiration(Days: period).Resolve(now, shopExpiration, ignoreUsablePeriod)
+                        : template.Expiration.Resolve(now, shopExpiration, ignoreUsablePeriod);
+                    if (expires != 0 && expires <= now.ToUnixTimeSeconds())
+                        return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_expired" };
+                    var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                        ignoreUsablePeriod: ignoreUsablePeriod) with
+                    {
+                        Durability = row.AvatarAbility ?? 0,
+                        ExpireTime = expires
+                    };
+                    if (source.Core.IsRental)
+                        core = core with { IsRental = true, ExpireTime = source.ExpireTime };
+                    var prototype = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0), core);
+                    for (int copy = 0; copy < copies; copy++)
+                        avatarInstances.Add(prototype);
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+            {
+                return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_resource_invalid" };
+            }
+        }
         if (definition.CustomAbilityGrade is { } customGrade)
         {
             if (grants.Any(row => catalog.Get(row.ItemId).Echon is not null) && customGrade > 3)
@@ -680,6 +732,16 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
+        var overflow = grant.Plan.OverflowItems;
+        if (avatarInstances.Count > 0)
+        {
+            var avatarGrant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = after }, avatarInstances,
+                catalog, goldLimits, pieces, now);
+            if (!avatarGrant.Accepted)
+                return InventoryResult.Reject(avatarGrant.Error == 19 ? (ushort)19 : (ushort)4);
+            after = avatarGrant.Plan!.After;
+            overflow = overflow.AddRange(avatarGrant.Plan.OverflowItems);
+        }
         // 礼盒是尚未兑换的实体，不在翻牌发盒时计入材料所得。
         // 兑换必须足额到账；额度或持有空间不足时保留整盒，不能扣盒后静默吞掉余量。
         foreach (var (id, count) in totals)
@@ -704,7 +766,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             deadline = acquiredUntil;
         if (materialDeadline is not null && (deadline is null || materialDeadline < deadline)) deadline = materialDeadline;
         if (dailyDeadline is not null && (deadline is null || dailyDeadline < deadline)) deadline = dailyDeadline;
-        foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
+        foreach (var item in after.Items.Concat(overflow))
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
                 (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
         if (dailyDeadline is not null)
@@ -728,10 +790,21 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 return InventoryResult.Reject(19);
             song = new(character.Id, character.Revision, source, request.Count, declaredSong, now);
         }
-        return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems)
+        return new(true, 0, new(before, after, "booster_open", precondition, overflow)
         { UsedItems = [new(source.Core.ItemId, request.Count)], AccountMaterialRaidWeek = grant.Plan.AccountMaterialRaidWeek,
             BoosterSongAcquisition = song });
 
+        void AddPoolReward(BoosterReward row, long draws)
+        {
+            if (row.EmptyOutcome)
+                return;
+            if (row.AvatarAbility is not null || row.AvatarPeriodDays is not null)
+            {
+                avatarRolls.Add((row, checked((int)checked((long)row.Count * draws))));
+                avatarRewardIds.Add(row.ItemId);
+            }
+            Add(row.ItemId, row.Count, draws);
+        }
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }
 

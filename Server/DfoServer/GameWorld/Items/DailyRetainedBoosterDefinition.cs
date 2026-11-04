@@ -11,13 +11,14 @@ internal static class DailyRetainedBoosterDefinition
         "name", "explain", "flavor text", "grade", "rarity", "usable job", "attach type",
         "minimum level", "maximum level", "required skill", "cool time", "icon", "stackable type",
         "move wav", "usable period", "stack limit", "booster info", "total usable count",
-        "impossible contents", "hide booster info"
+        "impossible contents", "hide booster info", "weight", "icon mark"
     };
     static readonly HashSet<string> Blocks = new(StringComparer.Ordinal) { "usable job", "booster info", "impossible contents" };
 
-    public static bool TryParse(string text, out byte limit)
+    public static bool TryParse(string text, out byte limit, out bool retainsSource)
     {
         limit = 0;
+        retainsSource = false;
         if (text.Count(value => value == '`') % 2 != 0) return false;
         string masked = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         const string tokenPattern = @"\[(/?)([^\]\r\n]+)\]";
@@ -69,8 +70,14 @@ internal static class DailyRetainedBoosterDefinition
         if (current is not null) fields[current] = (start, text.Length);
         if (!fields.TryGetValue("total usable count", out var count) ||
             !Regex.IsMatch(text[count.Start..count.End].Trim(), @"^[0-9]+$") ||
-            !byte.TryParse(text[count.Start..count.End].Trim(), out limit) || limit == 0 ||
-            !fields.TryGetValue("impossible contents", out var impossible)) return false;
-        return Regex.IsMatch(text[impossible.Start..impossible.End], @"^\s*`delete booster`\s*$");
+            !byte.TryParse(text[count.Start..count.End].Trim(), out limit) || limit == 0) return false;
+        if (!fields.TryGetValue("impossible contents", out var impossible)) return true;
+        string body = text[impossible.Start..impossible.End];
+        var policies = Regex.Matches(body, @"`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
+        if (!string.IsNullOrWhiteSpace(Regex.Replace(body, @"`[^`]*`", "")) ||
+            policies.Length is < 1 or > 2 || policies.Distinct(StringComparer.Ordinal).Count() != policies.Length ||
+            policies.Any(policy => policy is not ("delete booster" or "gift"))) return false;
+        retainsSource = policies.Contains("delete booster", StringComparer.Ordinal);
+        return true;
     }
 }

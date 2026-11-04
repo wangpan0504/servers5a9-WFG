@@ -1,6 +1,6 @@
 # PvfLib
 
-面向 .NET 10 的独立、只读 PVF 解析库。通过项目引用使用，不依赖 DfoServer、SQLite 或外部解析进程。支持 `nkpi`、`protected_nkpi` 两种归档布局，包含文件索引、字符串池、分块读取、原始 token 和脚本文本查询。
+面向 .NET 10 的独立、只读 PVF 解析库。通过项目引用使用，不依赖 DfoServer、SQLite 或外部解析进程。支持 `nkpi`、`protected_nkpi` 两种归档布局，其中 `nkpi` 兼容 JP 带 guard 与无 guard 头；按签名、头字段及完整区段边界选择格式。包含文件索引、字符串池、分块读取、原始 token 和脚本文本查询。
 
 ## 代码分层
 

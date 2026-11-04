@@ -17,8 +17,8 @@ internal static class PcRoomTimePointTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var definition = ServerEventService.Definition(228);
-        That(definition.Name == "累积在线得好礼" && definition.DefaultState == "默认关闭" && !definition.SupportsSchedule,
-            "GM目录按真实活动228注册名称、默认关闭和开关政策");
+        That(definition.Name == "累积在线得好礼" && definition.DefaultState == "默认开启" && !definition.SupportsSchedule,
+            "GM目录按真实活动228注册名称、默认开启和开关政策");
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-28T20:00:00Z"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "pcroom-timepoint"),
             gm: true, resources: resources, clock: clock);
@@ -40,7 +40,7 @@ internal static class PcRoomTimePointTcpTests
         TcpPeer client = original;
         original.Select();
         Request();
-        State(0, 0, 0, 0, "默认关闭仍可查询真实零进度");
+        State(0, 0, 0, 0, "隔离夹具显式关闭后仍可查询真实零进度");
         clock.Advance(TimeSpan.FromMinutes(5));
         Request(1, 0xff);
         State(0, 0, 0, 0, "关闭时在线和领奖都不产生时长、领取位或邮件");
@@ -81,6 +81,10 @@ internal static class PcRoomTimePointTcpTests
         State(1800, 0, 1, 0, "关闭的十分钟不累计且保留已领进度");
         Gm("event on 228", true);
         Request();
+        Gm("event auto 228", true);
+        Request();
+        That(fixture.Query("SELECT revision,override_active FROM server_events WHERE event_id=228") is [[5L, DBNull]],
+            "显式on切回auto保留真实版本和NULL配置，后续每日、累计及重开领奖沿默认开启语义");
         clock.Advance(TimeSpan.FromMinutes(10));
         Request();
         State(2400, 0, 1, 0, "重新开启继续原账号40分钟进度，不重新清零");

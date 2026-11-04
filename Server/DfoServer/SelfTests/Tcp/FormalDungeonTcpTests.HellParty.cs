@@ -38,10 +38,6 @@ internal static partial class FormalDungeonTcpTests
         // 实测请求：副本 291100308，[4]=4，[7]=1，[16:20]=6114。
         byte[] request = Convert.FromHexString("94D6591104000001" + "00FFFF" + "0000000000" + "E2170000" + "00" + "00000000");
         long Tickets(long characterId) => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=3330",characterId)[0][0];
-        // 哈林、地轨中心等世界地图与黎明裂缝530共用时，选图会先补发1545/550；与本组其他入口用例一致，
-        // 按角色所在世界地图显式给出本轮日剩余，不能交给27的兼容读取静默跳过。
-        byte? DaybreakRemaining(TownArea row) => row.DungeonWorldMap is { } world &&
-            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 530) ? (byte)2 : null;
         foreach (var (name,qualified,tickets) in new[] { ("HellNoQuest",false,0), ("HellNoTicket",true,0), ("HellShort",true,29), ("HellYes",true,30) })
         {
             var done = new HashSet<int>(baseDone);
@@ -62,7 +58,7 @@ internal static partial class FormalDungeonTcpTests
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             string beforeSelection = fixture.Snapshot();
-            SelectMap(peer, incompleteHellQuest: !qualified, daybreakRemaining: DaybreakRemaining(area));
+            SelectMap(peer, incompleteHellQuest: !qualified, daybreakRemaining: 2);
             peer.Barrier();
             That(fixture.Snapshot() == beforeSelection, "选图资格投影不改写任务、门票、疲劳或revision");
             peer.Send(16,request);
@@ -74,7 +70,7 @@ internal static partial class FormalDungeonTcpTests
                     "深渊派对拒绝（" + name + "）：" + (qualified ? "票不够以 0x11 拒绝" : "未完成 6080 以错误9恢复") + "，不落入场状态，背包票数不变");
                 if (!qualified)
                 {
-                    SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: DaybreakRemaining(area));
+                    SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: 2);
                     peer.Send(132); peer.Expect(1, 132, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
                     peer.Expect(0, 23); peer.Expect(0, 24);
@@ -96,7 +92,7 @@ internal static partial class FormalDungeonTcpTests
             That(delta[0] == 0 && U16(delta,3) == 121 && Tickets(created.Id) == 0 &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_state WHERE character_id=$p0 AND last_attempt>0",peer.Id) is [[1L]],
                 "入场提交时扣掉 30 张 3330（NOTI 14 删除第 121 格、库内数量归零、入场状态落库）");
-            Load(peer); peer.Expect(0,36); peer.Barrier();
+            Load(peer, fatigue: false); peer.Expect(0,36); peer.Barrier();
         }
         // 时空裂缝（[inferno dungeon]）：地轨中心 7539，op16 [4]=2、[7]=1。整条路线是深渊场地，没有密门房间：
         // DUNGEON_INFO 的 [10,11] 保持 FF，入场一次扣 30 张 3330 与 6 点疲劳。
@@ -124,7 +120,7 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(riftCharacter.Slot, prepared: true, resumeTown: true, room: false);
-            SelectMap(peer, daybreakRemaining: DaybreakRemaining(riftArea));
+            SelectMap(peer);
             byte[] riftRequest = new byte[25];
             BinaryPrimitives.WriteUInt32LittleEndian(riftRequest, 7539);
             riftRequest[4] = 2;
@@ -143,7 +139,7 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[2L]] &&
                 fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                 "时空裂缝TCP：入场一次扣 30 张 3330 与 6 点疲劳，只建立一个尝试");
-            Load(peer);
+            Load(peer, fatigue: false);
             peer.Expect(0, 36);
             peer.Barrier();
         }
@@ -186,7 +182,7 @@ internal static partial class FormalDungeonTcpTests
             using (var peer = Open(fixture))
             {
                 peer.Select(cosmoCharacter.Slot, prepared: true, resumeTown: true, room: false, bossBuff: (bossBuffId, usePass ? 2 : 1));
-                SelectMap(peer, daybreakRemaining: DaybreakRemaining(cosmoArea));
+                SelectMap(peer, daybreakRemaining: 2);
                 byte[] cosmoRequest = new byte[25];
                 BinaryPrimitives.WriteUInt32LittleEndian(cosmoRequest, 7191);
                 cosmoRequest[4] = 4;
@@ -218,7 +214,7 @@ internal static partial class FormalDungeonTcpTests
                     fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]] &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                     "超星空真实TCP优先消耗1通行证，否则扣40邀请函和4灵石；均扣8疲劳，只建立一次尝试");
-                Load(peer);
+                Load(peer, fatigue: false);
                 if (usePass)
                     peer.Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(bossBuffId); writer.Write(1); writer.Write(0); writer.Write(0); }));
@@ -247,7 +243,7 @@ internal static partial class FormalDungeonTcpTests
             {
                 byte[] move = new byte[100]; move[0] = (byte)route[room].X; move[1] = (byte)route[room].Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                Load(peer);
+                Load(peer, fatigue: false);
                 if (strongBuff)
                     peer.Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(1275); writer.Write(1); writer.Write(0); writer.Write(0); }));
@@ -290,7 +286,7 @@ internal static partial class FormalDungeonTcpTests
                         Console.WriteLine($"Cosmo white boss socket epic hits: {epicIds.Length}");
                     }
                 }
-                picked += PickupResourceDrops(fixture, peer, death, 0);
+                picked += PickupResourceDrops(fixture, peer, death, 0, resources);
                 string saved = fixture.Snapshot();
                 peer.Send(39, report); peer.Barrier();
                 That(fixture.Snapshot() == saved, "超星空TCP重复死亡不重抽装备或材料、不给重复经验");

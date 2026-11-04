@@ -12,14 +12,15 @@ internal sealed record DungeonDropRatePlan(int MonsterLevel, byte MonsterType, b
     public const int RarityDenominator = 1000000;
 
     public static DungeonDropRatePlan Prepare(DungeonDropRuleCatalog rules, int monsterLevel,
-        byte monsterType, byte difficulty, byte partyMembers)
+        byte monsterType, byte difficulty, byte partyMembers, int? dungeonLevel = null)
     {
         ArgumentNullException.ThrowIfNull(rules);
         if (monsterType > 3 || difficulty > 4 || partyMembers is < 1 or > 4)
             throw new InvalidDataException("掉落矩阵索引超出已声明的类型、难度或队伍范围");
+        int probabilityLevel = dungeonLevel ?? monsterLevel;
         var probability = rules.ProbabilityRows.SingleOrDefault(row =>
-            monsterLevel >= row.MinimumLevel && monsterLevel <= row.MaximumLevel)
-            ?? throw new NotSupportedException("当前生成等级没有完整掉落概率段");
+            probabilityLevel >= row.MinimumLevel && probabilityLevel <= row.MaximumLevel)
+            ?? throw new NotSupportedException("当前副本等级没有完整掉落概率段");
         var items = rules.ItemReferences.Where(row => row.Level == monsterLevel).ToArray();
         var gold = rules.GoldReferences.Where(row => row.Level == monsterLevel).ToArray();
         if (items.Length != 1 || gold.Length != 1)
@@ -53,10 +54,17 @@ internal sealed record DungeonDropRatePlan(int MonsterLevel, byte MonsterType, b
 
     public static int Rarity(DungeonDropRuleCatalog rules, int row, int roll)
     {
-        if (row is < 0 or > 3 || roll is < 0 or >= RarityDenominator)
+        if (row is < 0 or > 3)
+            throw new ArgumentOutOfRangeException(nameof(roll));
+        return Rarity(rules.RarityDecision.AsSpan(row * 7, 7), roll);
+    }
+
+    public static int Rarity(ReadOnlySpan<int> thresholds, int roll)
+    {
+        if (thresholds.Length != 7 || roll is < 0 or >= RarityDenominator)
             throw new ArgumentOutOfRangeException(nameof(roll));
         for (int rarity = 0; rarity < 7; rarity++)
-            if (roll + 1 <= rules.RarityDecision[row * 7 + rarity])
+            if (roll + 1 <= thresholds[rarity])
                 return rarity;
         throw new InvalidDataException("掉落稀有度阈值没有覆盖该原抽样，不能回退rarity0");
     }

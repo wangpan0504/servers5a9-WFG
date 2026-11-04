@@ -26,7 +26,7 @@ internal sealed record AuctionSearchRequest(int Offset, int? ItemTemplateId, int
 /// 排除自己按卖家角色 id：机器人挂牌的 seller 为 NULL，不属于任何玩家，因此不会被排除。
 /// </summary>
 internal readonly record struct AuctionSearchFilter(int? ItemTemplateId, long? ExcludeSellerCharacterId,
-    ImmutableArray<byte> Kinds = default);
+    ImmutableArray<byte> Kinds = default, bool? Gold = null);
 
 /// <summary>分类 id 的解析结果。不过滤不等于失败，日志必须能区分下面三种情形。</summary>
 internal enum AuctionCategoryStatus
@@ -36,6 +36,9 @@ internal enum AuctionCategoryStatus
 
     /// <summary>已识别的「全部」节点（40119）：本来就该返回全部，不是未映射。</summary>
     All,
+
+    /// <summary>金币寄售分类 40101–40117：只检索金币券，不套用普通拍卖的物品维度。</summary>
+    Gold,
 
     /// <summary>
     /// 未识别的分类 id：**不过滤**。
@@ -645,6 +648,9 @@ internal static class AuctionCategoryFilter
     {
         if (categoryId == All)
             return new(categoryId, AuctionCategoryStatus.All, 0, null, new(0, 0), "「全部」节点：不过滤");
+        if (AuctionGoldTickets.IsCategory(categoryId))
+            return new(categoryId, AuctionCategoryStatus.Gold, 0, "金币寄售", new(0, 0),
+                "金币寄售分类 40101–40117：只检索金币券挂牌。各 id 与面额的对应没有抓包，因此这 17 个 id 暂时同一套结果");
         foreach (var (id, name) in TopLevel)
         {
             if (id != categoryId)
@@ -915,16 +921,28 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
     /// 把解析结果转成一次搜索的计划。未映射与「全部」都不带任何维度，从而返回全部匹配；
     /// 两者也都不写部位/族维度，因此不会触发内存过滤。
     /// </summary>
-    public AuctionSearchPlan Build(AuctionSearchRequest request, long? excludeSellerCharacterId)
+    public AuctionSearchPlan Build(AuctionSearchRequest request, long? excludeSellerCharacterId, bool goldWindow = false)
     {
-        var category = Resolve(request.CategoryId);
-        if (category.Status != AuctionCategoryStatus.Mapped)
-            return new(new(request.ItemTemplateId, excludeSellerCharacterId), category, null, 0, 0);
-        var dimensions = category.Dimensions;
+        bool gold = goldWindow || AuctionGoldTickets.IsCategory(request.CategoryId);
+        if (gold)
+        {
+            var category = AuctionGoldTickets.IsCategory(request.CategoryId)
+                ? Resolve(request.CategoryId)
+                : new AuctionCategoryResolution(request.CategoryId, AuctionCategoryStatus.Gold, 0, "金币寄售", new(0, 0),
+                    "mode=1 金币寄售窗口：只检索金币券挂牌，不套用普通分类维度");
+            int? template = request.ItemTemplateId;
+            if (template is int itemId && !AuctionGoldTickets.IsTicket(itemId))
+                template = AuctionGoldTickets.EmptyTemplateId;
+            return new(new(template, excludeSellerCharacterId, Gold: true), category, null, 0, 0);
+        }
+        var normal = Resolve(request.CategoryId);
+        if (normal.Status != AuctionCategoryStatus.Mapped)
+            return new(new(request.ItemTemplateId, excludeSellerCharacterId, Gold: false), normal, null, 0, 0);
+        var dimensions = normal.Dimensions;
         var kinds = AuctionCategoryFilter.Kinds(dimensions);
-        var filter = new AuctionSearchFilter(request.ItemTemplateId, excludeSellerCharacterId, kinds);
+        var filter = new AuctionSearchFilter(request.ItemTemplateId, excludeSellerCharacterId, kinds, Gold: false);
         bool inMemory = dimensions.Slots != 0 || dimensions.Groups != 0;
-        return new(filter, category, inMemory ? dimensions : null, kinds.Length, dimensions.Groups);
+        return new(filter, normal, inMemory ? dimensions : null, kinds.Length, dimensions.Groups);
     }
 
     /// <summary>

@@ -210,8 +210,8 @@ internal static class StackableActionTests
                 "原生属性石及复活币道具忽略服务器声明，不改原效果：" + field);
             string daily = "[stackable type]\n`[booster]` 0\n[total usable count]\n1\n[impossible contents]\n`delete booster`\n[/impossible contents]\n";
             string server = "[" + field + "]\n`[event server]`\n[/" + field + "]\n";
-            That(DailyRetainedBoosterDefinition.TryParse(server + daily + server, out byte limit) && limit == 1 &&
-                DailyRetainedBoosterDefinition.TryParse(daily.Replace("[impossible contents]", server + "[impossible contents]"), out limit) && limit == 1,
+            That(DailyRetainedBoosterDefinition.TryParse(server + daily + server, out byte limit, out bool retained) && limit == 1 && retained &&
+                DailyRetainedBoosterDefinition.TryParse(daily.Replace("[impossible contents]", server + "[impossible contents]"), out limit, out retained) && limit == 1 && retained,
                 "每日保留礼盒忽略重复服务器声明，原每日上限仍为1：" + field);
         }
     }

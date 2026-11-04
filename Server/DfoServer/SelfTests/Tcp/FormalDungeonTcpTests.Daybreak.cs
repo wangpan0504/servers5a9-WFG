@@ -42,23 +42,35 @@ internal static partial class FormalDungeonTcpTests
         byte[] request = Selection(3);
         BinaryPrimitives.WriteUInt32LittleEndian(request, 530);
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), 0);
-        void Enter(TcpPeer peer)
+        void Enter(TcpPeer peer, byte remaining)
         {
-            SelectMap(peer, incompleteHellQuest: false);
+            SelectMap(peer, incompleteHellQuest: false, daybreakRemaining: remaining, assaultDay: (byte)clock.GetLocalNow().DayOfWeek);
             long Tickets() => Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10161610", peer.Id)[0][0]);
             long tickets = Tickets();
             long fatigue = Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);
             peer.Send(16, request);
             peer.Expect(0, 28); peer.Expect(0, 29); peer.Expect(0, 14);
-            Load(peer); peer.Expect(0, 36); peer.Barrier();
+            var afterEntry = new byte[268];
+            BinaryPrimitives.WriteUInt32LittleEndian(afterEntry, 2);
+            BinaryPrimitives.WriteUInt32LittleEndian(afterEntry.AsSpan(4), 260);
+            BinaryPrimitives.WriteUInt32LittleEndian(afterEntry.AsSpan(12), 530);
+            BinaryPrimitives.WriteUInt32LittleEndian(afterEntry.AsSpan(16), checked((uint)(3 - remaining)));
+            var countNotice = peer.Expect(0, 550).Body;
+            That(countNotice.Length == 6 && countNotice[0] == 0x12 && countNotice[1] == 0x02 &&
+                countNotice[2] == 0 && countNotice[3] == 0 && countNotice[4] == checked((byte)(remaining - 1)) &&
+                countNotice[5] == checked((byte)(remaining - 1)),
+                $"黎明入场550应为530日剩余/周剩余，实际={Convert.ToHexString(countNotice)}");
+            peer.Expect(0, 1545, afterEntry);
+            peer.Expect(0, 550, [0x12, 0x02, 0, 0, checked((byte)(remaining - 1)), 0]);
+            Load(peer, fatigue: false); peer.Expect(0, 36); peer.Barrier();
             That(Tickets() == tickets - 20 && Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]) == fatigue - 8,
                 "黎明每次成功入场完整扣20诞生之芽及8疲劳");
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3); peer.Expect(0, 24);
             RefreshedQuests(peer); peer.Barrier();
         }
-        void Reject(TcpPeer peer)
+        void Reject(TcpPeer peer, byte remaining)
         {
-            SelectMap(peer, incompleteHellQuest: false);
+            SelectMap(peer, incompleteHellQuest: false, daybreakRemaining: remaining, assaultDay: (byte)clock.GetLocalNow().DayOfWeek);
             string State() => string.Join("\n", new[] { "characters", "character_inventory_items", "character_fatigue", "character_dungeon_incount", "character_dungeon_state" }
                 .Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
             string before = State();
@@ -71,23 +83,23 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer); Enter(peer); Reject(peer);
+            Enter(peer, 2); Enter(peer, 1); Reject(peer, 0);
         }
         using (var peer = Open(fixture))
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
-            Reject(peer);
+            Reject(peer, 0);
         }
         using (var peer = Open(fixture))
         {
             peer.Select(second.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer);
+            Enter(peer, 2);
         }
         clock.Now = clock.Now.AddSeconds(2);
         using (var peer = Open(fixture))
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer);
+            Enter(peer, 2);
         }
     }
 }

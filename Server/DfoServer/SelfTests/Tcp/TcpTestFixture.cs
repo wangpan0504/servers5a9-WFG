@@ -47,6 +47,26 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return map.HellQuests.Any(quest => !completed.Contains(quest));
     }
 
+    // 选图状态预期取当前角色位置与独立日账本，不从收到的1545正文反推。
+    internal byte? ExpectedDaybreakSelectionRemaining(ushort characterId)
+    {
+        var towns = townCatalog ?? resources?.Towns;
+        if (towns is null) return null;
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        if (towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is not { } world ||
+            !towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 530)) return null;
+        int day = int.Parse(UtcNow.UtcDateTime.AddHours(2).ToString("yyyyMMdd", CultureInfo.InvariantCulture));
+        var usage = Query("""
+            SELECT CASE WHEN u.day=$p1 THEN u.daily_used ELSE 0 END,
+                   CASE WHEN e.day=$p1 THEN e.daily_extra ELSE 0 END
+            FROM characters c
+            LEFT JOIN character_dungeon_incount u ON u.character_id=c.id AND u.account=c.account AND u.dungeon=530
+            LEFT JOIN character_dungeon_incount_extra e ON e.character_id=c.id AND e.account=c.account AND e.dungeon=530
+            WHERE c.id=$p0
+            """, characterId, day).Single();
+        return checked((byte)Math.Clamp(2 + Convert.ToInt32(usage[1]) - Convert.ToInt32(usage[0]), 0, 2));
+    }
+
     Process? process;
     Task? output, errors;
     Task? hosted;
@@ -104,7 +124,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     internal bool ProductionLukeCards => lukeStartPolicy is null;
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
+    readonly Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver;
     readonly bool enablePromotionPage;
+    readonly bool useDefaultActivities;
     readonly Random? fiendwarMazeRandom;
     int cliSequence;
     readonly string pvfSource;
@@ -114,14 +136,16 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null)
+        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
         this.promotions = promotions;
+        this.promotionItemResolver = promotionItemResolver;
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
+        this.useDefaultActivities = useDefaultActivities;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -296,6 +320,14 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         // 网吧身份线上默认开；TCP 组在临时数据目录显式关闭，保持既有选角、经验和虚弱断言不随线上默认值漂移。
         Directory.CreateDirectory(Options.DataDirectory);
         File.WriteAllText(Path.Combine(Options.DataDirectory, "pc-room.json"), "{\"enabled\":false}");
+        // 业务夹具显式关闭无关活动；gm-events使用无配置实例验证线上默认值，重启保留各用例的既有开关。
+        if (!useDefaultActivities)
+        {
+            var eventStore = new ServerEventRepository(Database);
+            foreach (ushort id in new ushort[] { 2257, 228, 2370, 2208 })
+                if (eventStore.Read(id) is { Revision: 0 } initial)
+                    eventStore.Save(initial, initial with { OverrideActive = false });
+        }
         if (File.Exists(pvfSource) && !File.Exists(Options.PvfPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);
@@ -330,7 +362,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

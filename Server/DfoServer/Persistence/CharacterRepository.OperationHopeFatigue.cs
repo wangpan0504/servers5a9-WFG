@@ -15,7 +15,8 @@ internal sealed partial class CharacterRepository
         int area = run.HopeAreaId ?? throw new InvalidDataException("希望加载地图不属于声明区域");
         bool ordinary = catalog is not null && run.Entry.Hope is not null;
         string rule = "operation-hope-first-area-v1";
-        ushort amount = checked((ushort)(catalog?.FatigueValue ?? 0));
+        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(
+            checked((ushort)(catalog?.FatigueValue ?? 0)), run.FatigueAccelerationPercent);
         if (!ordinary || run.Entry.Maze.QuestConnectionTokens.Count != 0 ||
             run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true && !run.Entry.Maze.DummyStages.Contains(snapshot.CurrentMap) ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
@@ -34,7 +35,7 @@ internal sealed partial class CharacterRepository
         var receipts = DungeonTransientReceipts.Get(owner, identity);
         if (receipts.HopeAreaFatigue.TryGetValue(area, out var saved) && saved.Committed)
         {
-            if (saved.Rule != rule || saved.After != saved.Before.ConsumeAtEntry(amount))
+            if (saved.Rule != rule || saved.After != saved.Before.ConsumeOrdinaryRoom(amount))
                 throw new InvalidDataException("房间扣点缓存的原始规则或余额变化");
             if (current.Revision == expected.Revision && current.Fatigue == state) return expected;
             if (expected.Revision != saved.BeforeRevision || current.Revision != saved.Revision ||
@@ -44,7 +45,7 @@ internal sealed partial class CharacterRepository
         }
         if (current.Revision != expected.Revision || current.Fatigue != state)
             throw new InvalidOperationException("扣点的原revision或疲劳owner已变化");
-        var target = state.ConsumeAtEntry(amount);
+        var target = state.ConsumeOrdinaryRoom(amount);
         command.Parameters.AddWithValue("$revision", expected.Revision);
         command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1)

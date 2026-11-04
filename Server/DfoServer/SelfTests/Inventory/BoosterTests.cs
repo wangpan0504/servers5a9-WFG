@@ -52,6 +52,7 @@ internal static class BoosterTests
             itemResources.Boosters.Get(10312270).Pools is [{ Rewards: [{ ItemId: 10305892, Count: 10 }] }],
             "同类外盒保留真实内层净化结晶和直接十个结晶两种不同用途");
         BoosterBatchRandomTests.Run(That);
+        BoosterEmptyBonusTests.Run(towns, itemResources);
         BoosterRaidTicketTests.RunResources(towns, itemResources);
         BoosterGrowTypeTests.Run(towns, itemResources);
         BoosterRandomOptionTests.Run(towns, itemResources);
@@ -82,7 +83,7 @@ internal static class BoosterTests
         foreach (string bad in new[] { "[avatar]\n1 113590008 1 3 0 101580138 1 3 0\n[/avatar]",
             "[avatar]\n1 113590008 1 3\n[/avatar]", "[avatar]\n0 113590008 1 3 0\n[/avatar]",
             "[avatar]\n1 113590008 1 0 0\n[/avatar]", "[avatar]\n1 113590008 1 3 x 0\n[/avatar]" })
-            That(!Parse(bad).Available, "装扮奖池多行、缺列或非法值保持未确认，不随机发外观");
+            That(!Parse(bad).Available, "装扮奖池缺列、四列多行或非法值保持未确认，不随机发外观");
         That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(1106).Available,
             "quota and ordinary consumables are not silently treated as simple boxes");
         That(itemResources.Boosters.Get(490704415).Available && itemResources.Boosters.Get(490704415).Pools.All(pool => pool.JobTag is not null),
@@ -199,7 +200,15 @@ internal static class BoosterTests
         That(restoredPremium.Accepted && restoredPremium.Plan!.After.Items.IsEmpty &&
             restoredPremium.Plan.After.AccountWallet.ContractExpiry(97) == now.ToUnixTimeSeconds() + 86400,
             "邮件等实际接收入口将新收到的契约实例转为期限，不占实体槽");
-        foreach (int type in new[] { 84, 97, 29 })
+        var couponContract = PremiumContractCatalog.Parse("[type] 29\n[target item] 1106\n[term] 1\n[/type]");
+        var couponGrant = InventoryRewardGrantService.TryGrantBatch(contractRole, [new(42, 1), new(1106, 1)], catalog,
+            itemResources.GoldLimits, itemResources.EpicPieces, now, contracts: couponContract);
+        That(couponGrant is { Accepted: true, Plan.After.Items.IsEmpty: true } &&
+            couponGrant.Plan.After.ReviveCoins == 1 &&
+            couponGrant.Plan.After.AccountWallet.ContractExpiry(29) == now.ToUnixTimeSeconds() + 86400 &&
+            contractRole.Inventory == InventorySnapshot.Empty,
+            "已支持的拍卖优惠券与复活币整批入账，期限独立计算且不创建实体或改动原快照");
+        foreach (int type in new[] { 84, 97 })
         {
             var unsupportedContract = PremiumContractCatalog.Parse("[type] " + type + "\n[target item] 1106\n[term] 1\n[/type]");
             var rejectedGrant = InventoryRewardGrantService.TryGrantBatch(contractRole, [new(42, 1), new(1106, 1)], catalog,
@@ -589,7 +598,7 @@ internal static class BoosterTests
             That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
                 !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty && !definition.UnsealsRandomOptions &&
                 definition.CustomAbilityGrade is null && !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
-                definition.DailyRetainedLimit is null && definition.RuneBox is null && definition.CoolTime == 0 &&
+                definition.DailyUseLimit is null && definition.RuneBox is null && definition.CoolTime == 0 &&
                 definition.CoolGroup is null && definition.CooltimeMaintenance is null && definition.Pools.Length == 1 &&
                 definition.Pools[0] is { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue,
                     GrowType: -1, RequiredKind: null } pool && pool.Rewards.SequenceEqual(expectedRows),
@@ -641,7 +650,7 @@ internal static class BoosterTests
                 !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty &&
                 !definition.UnsealsRandomOptions && definition.CustomAbilityGrade is null &&
                 !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
-                definition.DailyRetainedLimit is null && definition.RuneBox is null &&
+                definition.DailyUseLimit is null && definition.RuneBox is null &&
                 definition.CoolTime == 1000 && definition.CoolGroup is null && definition.CooltimeMaintenance is null &&
                 definition.Pools.Length == 1 && definition.Pools[0] is
                     { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue, GrowType: -1, RequiredKind: null } pool &&

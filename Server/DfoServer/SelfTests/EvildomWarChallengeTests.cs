@@ -36,9 +36,11 @@ internal static partial class EvildomWarChallengeTests
             "英雄模式正式身份、95级、四人、固定难度及原选图合同成立");
         foreach (int type in new[] { 0, 22, 54 })
             That(Check(channel: type) == "evildom-war-challenge-channel-town-required", "普通与54频道不能借英雄选图进入：" + type);
-        foreach (int count in new[] { 0, 1, 2, 3, 5 })
-            That(Check(count: count) == "evildom-war-challenge-four-members-required", "不足或超出四人不放行：" + count);
-        That(Check(party: false) == "evildom-war-challenge-four-members-required" &&
+        foreach (int count in new[] { 0, 5 })
+            That(Check(count: count) == "evildom-war-challenge-party-required", "零人或超出四人不放行：" + count);
+        foreach (int count in new[] { 1, 2, 3, 4 })
+            That(Check(count: count) is null, "真实一至四人Party均允许英雄入场：" + count);
+        That(Check(party: false) == "evildom-war-challenge-party-required" &&
             Check(actor: character with { Level = 94 }) == "evildom-war-challenge-level-required",
             "伪造人数的单人请求及94级拒绝");
         foreach (byte difficulty in new byte[] { 0, 1, 3, 4 })
@@ -181,7 +183,7 @@ internal static partial class EvildomWarChallengeTests
                     session.Selected.Return == towns.InitialReturn), "自然选角与同64历史旧67/共享房间均纠正到英雄广场，保留原普通返回地区");
                 var arrival = team[0].Selected!.Position;
                 That(!team[0].Travel(new(124, 2, waiting.X, waiting.Y, 5, 124, 1, 0)) &&
-                    team[0].Selected!.Position == arrival && team[0].TravelReason == "evildom-war-challenge-four-members-required",
+                    team[0].Selected!.Position == arrival && team[0].TravelReason == "evildom-war-challenge-party-required",
                     "单人从英雄广场走真实门被拒绝，不提前保存等待区位置");
                 That(parties.SetInformation(team[0], 0, PartySettings.Default).Accepted,
                     "英雄广场沿正式普通队伍创建，不要求54战役NPC或引导绑定");

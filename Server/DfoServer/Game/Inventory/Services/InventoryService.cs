@@ -21,7 +21,7 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
     public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) =>
         InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces, contracts: contracts);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveMaterials = false) =>
-        InventoryDeleteService.PlanBatch(character.Inventory, request, preserveMaterials);
+        InventoryDeleteService.PlanBatch(character.Inventory, request, preserveMaterials, time);
     public InventoryResult DecreaseDurability(Character character, byte slot)
     {
         var source = character.Inventory.Find(new(InventoryListType.Equipment, slot));

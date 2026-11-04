@@ -176,14 +176,19 @@ internal static class RaidQuotaEpochTests
 
     static void Migration()
     {
-        foreach (bool conflict in new[] { false, true })
+        foreach (var (conflict, endlessPreview) in new[] { (false, false), (true, false), (false, true), (true, true) })
         {
             using var f = RaidQuotaEpochTests.CreateFixture();
             SeedRun(f, 1, Instance(401), complete: true);
             SeedReceipt(f, 1, Instance(401), 20261029);
             f.Execute($"INSERT INTO account_fiendwar_guides VALUES('other',0,20261027,0,{f.Other.Id});");
+            That(f.Query("SELECT (SELECT count(*) FROM account_weekly_attendance)+(SELECT count(*) FROM weekly_attendance_season)") is 0L,
+                "团本旧库夹具只移除未来空周签到表");
             // 从完整191形态升级：仅退回本次新增结构，不动历史行或其它迁移。
             f.Execute("""
+                DROP TABLE account_weekly_attendance;
+                DROP TABLE weekly_attendance_season;
+                DROP TABLE account_battle_pass_deluxe_orders;
                 DROP INDEX character_raid_entry_clear;
                 DROP INDEX character_raid_reward_epoch;
                 ALTER TABLE character_raid_runs DROP COLUMN entry_epoch;
@@ -197,6 +202,8 @@ internal static class RaidQuotaEpochTests
                 DROP TABLE account_raid_quota_epochs;
                 PRAGMA user_version=191;
                 """);
+            if (endlessPreview)
+                f.Execute("PRAGMA user_version=192; INSERT INTO account_endless_adventure_days VALUES('other',739923,147);");
             string assets = Assets(f);
             string history = Rows(f, "SELECT * FROM character_raid_runs") + Rows(f, "SELECT * FROM character_raid_reward_receipts");
             if (conflict)
@@ -204,7 +211,7 @@ internal static class RaidQuotaEpochTests
                 f.Execute("CREATE TABLE account_raid_quota_epochs(collision TEXT);");
                 string saved = f.Snapshot(), schema = Rows(f, "SELECT type,name,sql FROM sqlite_schema ORDER BY type,name");
                 Reject<InvalidDataException>(() => new CharacterRepository(f.Path), "迁移尾部未知额度表结构必须拒绝");
-                That(f.Query("PRAGMA user_version") is 191L && f.Snapshot() == saved &&
+                That(f.Query("PRAGMA user_version") is long rejectedVersion && rejectedVersion == (endlessPreview ? 192 : 191) && f.Snapshot() == saved &&
                     Rows(f, "SELECT type,name,sql FROM sqlite_schema ORDER BY type,name") == schema,
                     "192迁移失败整笔回滚列、引导表重建、索引和版本");
                 continue;
@@ -216,13 +223,16 @@ internal static class RaidQuotaEpochTests
                 f.Query("SELECT entry_epoch FROM account_fiendwar_guides") is 0L &&
                 f.Query("SELECT count(*) FROM account_raid_quota_epochs") is 0L,
                 "191原run、奖励及引导默认归零世代，不补造全账号额度记录");
+            if (endlessPreview)
+                That(f.Query("SELECT earned FROM account_endless_adventure_days WHERE account='other'") is 147L,
+                    "旧活动192库补齐主线迁移仍保留真实147枚日额度，不重置或重复发币");
             That(Assets(f) == assets &&
                 Rows(f, "SELECT character_id,account,instance_id,raid_type,source,admitted_at,state,phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt,clear_week,guild_id,guild_joined_at FROM character_raid_runs") +
                 Rows(f, "SELECT character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type FROM character_raid_reward_receipts") == history,
                 "迁移保留原生命周期身份、完整阶段JSON、邮件键、奖励历史和所有资产");
             string current = f.Snapshot();
             _ = new CharacterRepository(f.Path);
-            That(f.Snapshot() == current, "192重复打开不重复迁移、补领或推进世代");
+            That(f.Snapshot() == current, "当前版本重复打开不重复迁移、补领或推进世代");
             f.Integrity();
         }
     }

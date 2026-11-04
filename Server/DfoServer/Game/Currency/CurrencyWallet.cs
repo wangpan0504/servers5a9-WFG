@@ -30,6 +30,8 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
     public AccountWallet SetMaterial(int itemId, AccountMaterialBalance value)
     {
         if (itemId <= 0) throw new InvalidDataException("账号材料编号无效");
+        // 库中只持久化CharacterEarned；内存快照统一成同一形态，避免同值在内存与冷读间出现null/空字典差异。
+        value = value with { Characters = value.CharacterEarned };
         value.Validate();
         return this with { Materials = value.Balance == 0 && value.RaidWeek == 0 ? Materials.Remove(itemId) : Materials.SetItem(itemId, value) };
     }

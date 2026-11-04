@@ -20,6 +20,7 @@ internal static class DailyRetainedBoosterTcpTests
         DailyRetainedBoosterTests.Run(resources.Towns, resources.ItemResources);
         await DailyBoosterProjectionTests.RunResourcesAsync(resources);
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-18T21:59:59Z"));
+        var resetAt = DateTimeOffset.Parse("2026-10-18T22:00:00Z");
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "daily-retained-booster"),
             gm: true, resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
@@ -120,6 +121,7 @@ internal static class DailyRetainedBoosterTcpTests
         await clock.WaitForOneShotTimersAsync(0);
         await fixture.StopAsync();
         That(clock.ActiveTimers == 0, "断线、换角、接管与停服回收全部daily时钟");
+        await DailyConsumedBoosterTcpTests.RunAsync(options, root, resources);
     }
 
     static void OpenBox(TcpPeer peer) => peer.Send(160, Build(writer => { writer.Write((short)65); writer.Write(1); }));

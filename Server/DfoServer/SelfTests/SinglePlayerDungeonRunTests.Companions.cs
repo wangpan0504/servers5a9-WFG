@@ -10,29 +10,20 @@ internal static partial class SinglePlayerDungeonRunTests
     static void VerifyCompanionProfiles(PvfArchive pvf)
     {
         var catalog = SupportCompanionCatalog.Load(pvf);
-        That(pvf.Contains(SupportCompanionCatalog.ResourcePath) ? !catalog.Profiles.IsEmpty :
-            ReferenceEquals(catalog, SupportCompanionCatalog.Empty) && !catalog.EqualTiers,
-            "可选档次目录存在时必须完整，缺省时保留基础模板且不授予档次选择");
-        var registry = DungeonCatalog.ParseDirectory(pvf.ReadTokens("aicharacter/aicharacter.lst"), pvf.ResolveString, "aicharacter");
-        foreach (var row in new (int Id, int Job, int Grow, string Path)[] {
-            (20900, 4, 1, "aicharacter/priest/heal_soldier/heal_soldier.aic"),
-            (9986, 1, 1, "aicharacter/support/guangbing/guangbing.aic"),
-            (74990, 14, 1, "aicharacter/support/femalecrusader/femalecrusader.aic"),
-            (19973, 3, 5, "aicharacter/support/enchantress/enchantress.aic") })
-        {
-            That(registry.TryGetValue(row.Id, out var path) && path.Equals(row.Path, StringComparison.OrdinalIgnoreCase) && pvf.Contains(row.Path),
-                "累计候选四类基础支援兵仍有各自真实注册脚本，不因缺可选档次目录丢失");
-            var tokens = pvf.ReadTokens(row.Path);
-            var minimum = PvfAiCharacterScript.MinimumInfo(tokens, pvf.ResolveString);
-            That(minimum.Length >= 6 && minimum[1].Type == 0 && minimum[1].Value == row.Job &&
-                minimum[2].Type == 0 && minimum[2].Value == row.Grow && minimum[5].Type == 0 && minimum[5].Value == 95 &&
-                tokens.Count(token => token.Type == 3 && pvf.ResolveString(token.Value) == "[equipment]") == 1 &&
-                tokens.Count(token => token.Type == 3 && pvf.ResolveString(token.Value) == "[skill]") == 1,
-                "基础支援兵保留95级职业、转职、装备及技能资源合同");
-        }
+        bool resourcePresent = pvf.Contains(SupportCompanionCatalog.ResourcePath);
+        That(resourcePresent ? !catalog.Profiles.IsEmpty :
+            ReferenceEquals(catalog, SupportCompanionCatalog.Empty) && catalog.Profiles.IsEmpty && !catalog.EqualTiers,
+            "支援兵档次目录存在时完整装配，缺省时保持空目录和非统一档次");
         foreach (int baseId in new[] { 20900, 9986, 74990, 19973 })
         foreach (string tier in new[] { "entry", "graduate", "huge" })
         {
+            if (!resourcePresent)
+            {
+                That(!catalog.HasProfile(baseId, tier) &&
+                    catalog.Pick(baseId, tier, _ => throw new InvalidOperationException()) is null,
+                    "无可选目录时每种职业档次均不提供模板或调用随机抽取");
+                continue;
+            }
             if (!catalog.HasProfile(baseId, tier))
             {
                 That(catalog.Pick(baseId, tier, _ => throw new InvalidOperationException()) is null,

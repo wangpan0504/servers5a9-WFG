@@ -99,7 +99,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Select(slot); EntryTown(peer); SelectMap(peer);
             peer.Send(16,Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
-            peer.Expect(0,28); peer.Expect(0,29); Load(peer); peer.Expect(0,36);
+            peer.Expect(0,28); peer.Expect(0,29); Load(peer, fatigue: false); peer.Expect(0,36);
             Use(peer,65,1107); Accepted(peer,65,1107); peer.Barrier();
             Use(peer,66,1065); Accepted(peer,66,1065); peer.Barrier();
             That(ItemCount(65) == 0 && ItemCount(66) == 2,"离开修炼场重登后同两种药成功消费1件，不发送还原14或泄漏豁免");

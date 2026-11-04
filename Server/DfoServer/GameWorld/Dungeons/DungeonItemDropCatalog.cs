@@ -41,6 +41,7 @@ internal sealed class DungeonItemDropPool
 // 模板目录在监听前共享装配；按类别/grade/rarity查询，不为每次死亡扫描全部物品。
 internal sealed class DungeonItemDropCatalog
 {
+    internal const int MaximumCandidateLevel = byte.MaxValue;
     readonly IReadOnlyDictionary<(ItemKind Kind, int Grade, int Rarity), ImmutableArray<ItemTemplate>> buckets;
     readonly IReadOnlyDictionary<(int Level, int Rarity), ImmutableArray<ItemTemplate>> equipmentLevels;
     private DungeonItemDropCatalog(IEnumerable<ItemTemplate> source)
@@ -62,7 +63,7 @@ internal sealed class DungeonItemDropCatalog
         if (rarity is < 0 or > 6 || maximumLevel < minimumLevel)
             throw new ArgumentOutOfRangeException(nameof(rarity));
         var result = new List<ItemTemplate>();
-        for (int level = Math.Max(1, minimumLevel); level <= Math.Min(200, maximumLevel); level++)
+        for (int level = Math.Max(1, minimumLevel); level <= Math.Min(MaximumCandidateLevel, maximumLevel); level++)
             if (equipmentLevels.TryGetValue((level, rarity), out var entries)) result.AddRange(entries);
         return new(result);
     }
@@ -79,7 +80,7 @@ internal sealed class DungeonItemDropCatalog
         var result = new List<ItemTemplate>();
         ItemKind[] kinds = creaturesOnly ? [ItemKind.Creature, ItemKind.CreatureEquipment] :
             [ItemKind.Equipment, ItemKind.Avatar, ItemKind.Creature, ItemKind.CreatureEquipment];
-        for (int grade = Math.Max(1, minimumGrade); grade <= Math.Min(200, maximumGrade); grade++)
+        for (int grade = Math.Max(1, minimumGrade); grade <= Math.Min(MaximumCandidateLevel, maximumGrade); grade++)
         foreach (var kind in kinds)
             if (buckets.TryGetValue((kind, grade, rarity), out var entries)) result.AddRange(entries);
         return new(result);
@@ -87,7 +88,7 @@ internal sealed class DungeonItemDropCatalog
 
     public DungeonItemDropPool Pool(ItemKind kind, int minimumGrade, int maximumGrade, int rarity)
     {
-        if (minimumGrade <= 0 || maximumGrade < minimumGrade || maximumGrade > 200 || rarity is < 0 or > 6)
+        if (minimumGrade <= 0 || maximumGrade < minimumGrade || maximumGrade > MaximumCandidateLevel || rarity is < 0 or > 6)
             throw new ArgumentOutOfRangeException(nameof(minimumGrade));
         var result = new List<ItemTemplate>();
         for (int grade = minimumGrade; grade <= maximumGrade; grade++)
@@ -96,24 +97,16 @@ internal sealed class DungeonItemDropCatalog
         return new(result);
     }
 
-    // 本服参考规则：堆叠品等权、装备按当前脚本creation rate；空池可回退同类rarity0。
+    // 通用候选按当前脚本creation rate加权；空池保持空，不改稀有度、grade或物品类别。
     // 本版(R)ItemDictionary布局与90参考不同，不把其展示列当作装备生成权重。
     public DungeonItemDropPool ReferencePool(bool equipment, int minimumGrade, int maximumGrade, int rarity)
     {
         if (rarity is < 0 or > 6)
             throw new ArgumentOutOfRangeException(nameof(rarity));
         minimumGrade = Math.Max(1, minimumGrade);
-        maximumGrade = Math.Min(200, maximumGrade);
+        maximumGrade = Math.Min(MaximumCandidateLevel, maximumGrade);
         var candidates = Candidates(minimumGrade, maximumGrade, rarity);
-        if (candidates.Count == 0 && rarity > 0)
-            candidates = Candidates(minimumGrade, maximumGrade, 0);
-        if (candidates.Count == 0 && equipment)
-        {
-            candidates = Nearest(rarity);
-            if (candidates.Count == 0 && rarity > 0)
-                candidates = Nearest(0);
-        }
-        return new(candidates.Select(template => new DungeonWeightedDropItem(template, equipment ? template.CreationRate : 1)));
+        return new(candidates);
 
         List<ItemTemplate> Candidates(int minimum, int maximum, int targetRarity)
         {
@@ -123,13 +116,6 @@ internal sealed class DungeonItemDropCatalog
                 if (buckets.TryGetValue((kind, grade, targetRarity), out var entries))
                     result.AddRange(entries);
             return result;
-        }
-        List<ItemTemplate> Nearest(int targetRarity)
-        {
-            for (int grade = Math.Min(200, minimumGrade - 1); grade >= 1; grade--)
-                if (buckets.TryGetValue((ItemKind.Equipment, grade, targetRarity), out var entries))
-                    return entries.ToList();
-            return [];
         }
     }
 

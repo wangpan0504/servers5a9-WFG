@@ -7,7 +7,15 @@ internal static class TcpRegressionTests
 {
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
+        ("weekly-attendance", WeeklyAttendanceTcpTests.RunAsync),
         ("knight-shield", KnightShieldTcpTests.RunAsync),
+        ("daily-attendance-rules", (_, _, resources) =>
+        {
+            DailyAttendanceTests.RunCore();
+            DungeonSettlementTests.RunDailyAttendanceResources(resources);
+            return Task.CompletedTask;
+        }),
+        ("daily-attendance", DailyAttendanceTcpTests.RunAsync),
         ("default-activities", DefaultActivityTcpTests.RunAsync),
         ("battle-pass-period-manual", BattlePassOnlinePeriodTcpTests.ManualAsync),
         ("battle-pass-period-daily", BattlePassOnlinePeriodTcpTests.DailyAsync),
@@ -101,6 +109,16 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("pcroom-timepoint", PcRoomTimePointTcpTests.RunAsync),
+        ("endless-adventure", async (_, _, resources) =>
+        {
+            Inventory.AccountMaterialTests.RunCalendarCore();
+            DungeonSettlementTests.RunEndlessAdventureCore();
+            QuestCycleContinuationTests.RunCore();
+            DungeonSettlementTests.RunEndlessAdventureResources(resources);
+            await ActivityCalendarItemTests.RunAsync(resources);
+        }),
+        ("endless-adventure-tcp", FormalDungeonTcpTests.RunEndlessAdventureAsync),
+        ("endless-adventure-flow", (options, root, resources) => FormalDungeonTcpTests.RunFatigueAccelerationExperienceAsync(options, root, resources, true)),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", async (options, root, _) =>
@@ -464,6 +482,11 @@ internal static class TcpRegressionTests
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
+        ("battle-pass-skill-material", async (_, _, resources) =>
+        {
+            global::DfoServer.BattlePassSkillMaterialTests.Run(resources);
+            await global::DfoServer.BattlePassSkillMaterialHandlerTests.RunAsync(resources);
+        }),
         ("battle-pass", async (_, _, resources) =>
         {
             await global::DfoServer.TownTravelPublicationTests.RunServerEventPublicationAsync(resources);
@@ -485,6 +508,14 @@ internal static class TcpRegressionTests
             await global::DfoServer.BattlePassGuildPostOrderingRace.RunNextDayCandidateAsync(resources);
         }),
         ("cash-shop-promotions", CashShopTcpTests.PromotionsAsync),
+        ("cash-shop-promotion-mail-rules", (_, _, _) =>
+        {
+            Inventory.CashShopPromotionSessionTests.RunCore();
+              Inventory.CashShopPromotionPersistenceTests.RunCore();
+              Inventory.CashShopPromotionPersistenceTests.RunPageCore();
+            return Task.CompletedTask;
+        }),
+        ("cash-shop-promotion-mail", CashShopPromotionMailTests.RunAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
         ("character-rename-card", CharacterRenameCardTcpTests.RunAsync),
@@ -671,7 +702,7 @@ internal static class TcpRegressionTests
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost", "dungeon-incount-retry",
-        "item-daily-expire"
+        "item-daily-expire", "battle-pass-skill-material"
     };
     internal static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
     // 同一注册表供执行和机器可读清单使用；不是外部手填组表或覆盖证明。

@@ -14,11 +14,14 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
 {
     // 仅记录本连接已写出的任务期段；账号任务状态仍由原Session和仓储持有。
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
+    // 本连接当前目录的账号材料显示槽；余额仍只取Selected的钱包，不进入实体库存。
+    internal (long Epoch, int[] ItemIds)? ActivityCalendarItems { get; set; }
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
     internal DfoServer.Network.Projection.AntonNativeRoom? AntonNativeRoom { get; set; }
     internal Func<Task>? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
+    internal DfoServer.Network.Projection.DailyAttendanceProjection? DailyAttendance { get; set; }
     internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
@@ -50,6 +53,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarMonsters { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
+    // 597仅记录当前实例实际写出的秒数；读写均沿本人owner，排队但失效的快照不占展示资格。
+    internal (Guid Instance, uint Remaining)? FiendwarRemainingDisplay { get; set; }
     internal (Guid Instance, long Sequence)? FiendwarSupportDisplay { get; set; }
     // 仅当前实例的五个原生影片符号和实际区域；FIFO写帧成功后才确认事件代。
     internal Guid FiendwarEventDisplayInstance { get; set; }
@@ -82,6 +87,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.Inventory.DailyRetainedBoosterProjection? BoosterUses { get; set; }
     public DfoServer.Network.Projection.DazzlementTowerProjection? Dazzlement { get; set; }
     public DfoServer.Network.Projection.PcRoomTimePointProjection? PcRoomTimePoint { get; set; }
+    public DfoServer.Network.Projection.WeeklyAttendanceProjection? WeeklyAttendance { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
     // 只记录本连接的原生握手；不改变监听端点或伪造当前频道身份。

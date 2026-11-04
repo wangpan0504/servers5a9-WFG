@@ -345,6 +345,46 @@ internal sealed partial class CharacterRepository
         return new() { Changes = mails.Select(mail => new MailboxStateChange(mail!.Id, state == 2 && mail.State == 3 ? (ushort)3 : state)).ToImmutableArray() };
     });
 
+    /// <summary>
+    /// GM 强制删除：不检查未领取资产、不过滤过期，直接把邮件移出收件箱（state=0）。
+    /// 附件按到期回收的同一条路径销毁：claimed=1 + item_uid=NULL + 删除 held 实例，
+    /// 全程写 mailbox_audit_log（action=gm-delete），金币与附件在审计里可追溯。
+    /// </summary>
+    public MailboxResult ForceDeleteMails(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, long now) => owner.Execute(() =>
+    {
+        ValidateMailIds(ids);
+        if (ids.Any(id => id >= MailboxAttachment.ClaimFlag))
+            return MailboxResult.Reject(MailboxError.InvalidRequest);
+        using var db = database.Open();
+        RequireMailOwner(db, null, owner, characterId);
+        using var write = db.BeginWrite("CharacterRepository.ForceDeleteMails");
+        using var tx = write.Transaction;
+        var mails = ids.Select(id => ReadMail(db, tx, characterId, id)).ToArray();
+        if (mails.Any(mail => mail is null))
+            return MailboxResult.Reject(MailboxError.MailMissing);
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        foreach (var mail in mails.OfType<MailboxEntry>())
+        {
+            AuditMail(db, tx, mail.Id, owner.Account, characterId, owner.Generation, "gm-delete", now,
+                new { mail.State, mail.Gold, mail.Attachments });
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$mail", mail.Id);
+            command.CommandText = "UPDATE mailbox_attachments SET claimed=1,item_uid=NULL WHERE mail_id=$mail AND claimed=0";
+            command.ExecuteNonQuery();
+            foreach (var attachment in mail.Attachments)
+            {
+                // held 实例按不变式必在且无槽位引用；历史脏数据缺行时跳过而不是整批回滚。
+                try { DeleteHeldItem(db, tx, owner.Account, characterId, attachment.Item.Uid); }
+                catch (InvalidOperationException) { }
+            }
+            command.CommandText = "UPDATE mailbox_messages SET state=0,gold=0,revision=revision+1 WHERE mail_id=$mail";
+            command.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return new() { Changes = mails.Select(mail => new MailboxStateChange(mail!.Id, (ushort)0)).ToImmutableArray() };
+    });
+
     public void ExpireMailbox(AccountOwners.Lease owner, ushort characterId, long now) => owner.Execute(() =>
     {
         using var db = database.Open();

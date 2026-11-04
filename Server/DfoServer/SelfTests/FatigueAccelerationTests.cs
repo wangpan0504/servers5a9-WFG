@@ -40,8 +40,8 @@ internal static class FatigueAccelerationTests
         var entry = new DungeonEntryPlan(1, 0, 3, 0, byte.MaxValue, 0, maze, map, map);
         That(FatigueAccelerationRules.Eligible(entry), "真实普通疲劳实例允许冻结燃烧");
         var story = entry with { QuestId = 3146, RouteQuestId = 3146, ActiveQuestSlot = 0 };
-        That(!story.IsOrdinary && !story.UsesFatigue && FatigueAccelerationRules.Eligible(story),
-            "正常显式剧情路线沿独立任务疲劳归属，仍允许冻结网吧燃烧经验");
+        That(!story.IsOrdinary && story.UsesFatigue && FatigueAccelerationRules.Eligible(story),
+            "正常显式剧情路线与普通路线共用真实疲劳扣点，并冻结网吧燃烧经验");
         foreach (var candidate in new[] { entry, story })
         foreach (var excluded in new[] { candidate with { IsTutorial = true }, candidate with { IsPractice = true },
             candidate with { DisableFatigueConsumption = true }, candidate with { DungeonId = 5000, Maze = maze with { IsTrainingRoom = true } },

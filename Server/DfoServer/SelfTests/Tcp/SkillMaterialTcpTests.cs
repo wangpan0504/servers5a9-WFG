@@ -45,8 +45,8 @@ internal static class SkillMaterialTcpTests
             var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             Array.Clear(selection,16,4);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
-            FormalDungeonTcpTests.Load(peer);
-            peer.Expect(0,36);
+            FormalDungeonTcpTests.Load(peer, fatigue: false);
+            peer.Expect(0, 36);
             Spend(peer, 10);
             peer.Send(18,Convert.FromHexString("1000000010001A0A080210E50218DC172005200001"));
             peer.Expect(1,18,Convert.FromHexString("010D0000000800120708E502100518021800")); peer.Barrier();

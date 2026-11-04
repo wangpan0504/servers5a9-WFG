@@ -59,7 +59,7 @@ internal static partial class CashShopTcpTests
             That(sent == 0 && stream.Length == 0 && fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[2L]] &&
                 fixture.Query("SELECT count(*) FROM mailbox_messages") is [[1L]],
                 "真实Handler/Sender首ACK写出前，主货扣款及赠礼事务已提交，尚无任何成功字节");
-            giftId = checked((uint)(long)fixture.Query("SELECT mail_id FROM mailbox_messages")[0][0]!);
+            giftId = checked((uint)(long)fixture.Query("SELECT mail_id FROM mailbox_messages").Single().Single()!);
             stop.Cancel();
             bool disconnected = false;
             try { await purchase.WaitAsync(TimeSpan.FromSeconds(10)); }
@@ -71,9 +71,9 @@ internal static partial class CashShopTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            That(MailboxTcpTests.ReadList(peer.Mailbox.Single()).Summaries is [var gift] && gift.MailId == giftId &&
+            That(MailboxTcpTests.ReadList(peer.Mailbox.Single()).Summaries is [{ MailId: var restoredId }] && restoredId == giftId &&
                 fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[2L]],
-                "ACK前断流后真实TCP登录恢复同一赠礼和累计，不补寄第二次");
+                "ACK前断流后真实TCP登录恢复原赠礼和累计，不补寄第二次");
             var mileage = MileageBefore(fixture, 2 * ExpectedCashMileage(items.CashShop.Product(100004)!));
             peer.Send(64, cart);
             peer.Expect(1, 64); peer.Expect(1, 64); peer.Expect(0, 14); peer.Expect(0, 53);
@@ -81,7 +81,7 @@ internal static partial class CashShopTcpTests
             peer.Expect(0, 99, [1, 0]); peer.Barrier();
             That(fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[4L]] &&
                 fixture.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[2L]] &&
-                fixture.Query("SELECT count(*) FROM mailbox_messages") is [[2L]],
+                fixture.Query("SELECT count(*) FROM mailbox_messages") is [[3L]],
                 "丢ACK后的相同包体新请求购买第二次，不按包hash吞单");
         }
         await fixture.StopAsync();

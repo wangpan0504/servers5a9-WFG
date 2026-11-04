@@ -24,6 +24,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.BattlePass;
 using System.Diagnostics;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Strongway2019;
@@ -110,7 +111,8 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null)
+        Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
+        Func<int, ItemTemplate>? promotionItemResolver = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -267,7 +269,32 @@ internal static class ServerRuntime
         repository.MarriageResources = marriageCatalog;
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, characters.DefaultAppearance, itemResources.Items, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
+        Game.Events.EndlessAdventurePolicy? endlessAdventure = null;
+        if (itemResources.Items.TryGet(Game.Events.EndlessAdventurePolicy.CoinId, out var energyCoin) && energyCoin.AccountMaterial is not null)
+        {
+            endlessAdventure = new(energyCoin, debugSettings, clock ?? TimeProvider.System);
+            repository.EndlessAdventure = endlessAdventure;
+            log.Write("startup", new { Stage = "Endless adventure", Event = Game.Events.EndlessAdventurePolicy.EventId,
+                Coin = energyCoin.Id, Available = endlessAdventure.Available });
+        }
         Game.Events.PcRoomTimePointService? pcRoomTimePoint = null;
+        Game.Events.DailyAttendanceService? dailyAttendance = null;
+        if (pvf.Contains(GameWorld.OnlineEvents.DailyAttendanceCatalog.ResourcePath))
+        {
+            var attendanceCatalog = GameWorld.OnlineEvents.DailyAttendanceCatalog.Load(pvf, itemResources.Items);
+            dailyAttendance = new(repository, attendanceCatalog, itemResources.Items, events, debugSettings, clock);
+            log.Write("startup", new { Stage = "Daily attendance rewards", Daily = attendanceCatalog.Daily.Length,
+                Accumulated = attendanceCatalog.Accumulated.Length, Resource = GameWorld.OnlineEvents.DailyAttendanceCatalog.ResourcePath });
+        }
+        Game.Events.WeeklyAttendanceService? weeklyAttendance = null;
+        if (pvf.Contains(GameWorld.OnlineEvents.WeeklyAttendanceCatalog.ResourcePath))
+        {
+            var weeklyCatalog = GameWorld.OnlineEvents.WeeklyAttendanceCatalog.Load(pvf, itemResources.Items);
+            repository.ConfigureWeeklyAttendance(weeklyCatalog, clock);
+            weeklyAttendance = new(repository, weeklyCatalog, itemResources.Items, events, debugSettings, clock);
+            log.Write("startup", new { Stage = "Weekly attendance", weeklyCatalog.Weeks,
+                Resource = GameWorld.OnlineEvents.WeeklyAttendanceCatalog.ResourcePath });
+        }
         if (pvf.Contains(GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath))
         {
             var onlineCatalog = GameWorld.OnlineEvents.PcRoomTimePointCatalog.Load(pvf, itemResources.Items);
@@ -276,11 +303,13 @@ internal static class ServerRuntime
                 Period = onlineCatalog.Period.Length, Resource = GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath });
         }
         if (promotionConfiguration is not null) promotionConfiguration.Changed += events.NotifyPromotionChanged;
-        var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
+        var promotionItem = promotionItemResolver ?? itemResources.Items.Get;
+        var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, promotionItem);
         var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);
         var promotionPageService = promotions is not null && (enablePromotionPage ||
-            promotions().Activities.Any(entry => entry.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope))
-            ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
+            promotions().Activities.Any(entry => entry.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope &&
+                entry.Availability == PromotionAvailability.Active))
+            ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields);
@@ -369,7 +398,8 @@ internal static class ServerRuntime
         };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
-            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices);
+            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices,
+            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop));
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);
@@ -994,11 +1024,13 @@ internal static class ServerRuntime
         questReplay?.Register(commands);
         if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
+        if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
+        if (weeklyAttendance is not null) new WeeklyAttendanceHandler().Register(commands);
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics, endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, weeklyAttendance: weeklyAttendance);
         if (options.EnableHostedDungeonEligibility)
             game.AttachHostedDungeonEligibility(new HostedDungeonEligibilityCoordinator(
                 new HostedDungeonEligibilityOptions

@@ -300,6 +300,7 @@ internal static class BoosterSelectionTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
         await RunRealTemplateSelectionsAsync(source, root, resources);
         await RunOrdinaryNativeSelectionsAsync(source, root, resources);
+        await RunEvidenceBoxAsync(source, root, resources);
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);
         void RunRookieBoxes()
@@ -507,7 +508,7 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
-    static async Task WaitForInitialDisconnectAsync(TcpTestFixture fixture, ushort characterId)
+    internal static async Task WaitForInitialDisconnectAsync(TcpTestFixture fixture, ushort characterId)
     {
         // 客户端Dispose不代表服务端已释放owner；disconnected在协议收尾和在线时长结算完成后记录。
         var elapsed=Stopwatch.StartNew();
@@ -572,8 +573,12 @@ internal static class BoosterSelectionTcpTests
         var items = resources.ItemResources.Items; var repo = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var now = DateTimeOffset.UtcNow;
         int sourceExpiry = items.Get(sourceId).Expiration.Resolve(now, ignoreAbsoluteExpiration: true);
-        That(items.Get(sourceId).StackLimit == 1 && (sourceExpiry == 0 || sourceExpiry > now.ToUnixTimeSeconds()) && items.Get(3242).StackLimit >= 37,
-            "逐项扩展礼盒保持真实堆叠上限1，永久或未来期限均为未过期源，哨兵数量37在真实模板上限内");
+        That(items.Get(sourceId).StackLimit == 1,
+            $"逐项扩展源{sourceId}保持真实堆叠上限1，实际{items.Get(sourceId).StackLimit}");
+        That(sourceExpiry == 0 || sourceExpiry > now.ToUnixTimeSeconds(),
+            $"逐项扩展源{sourceId}沿真实模板生成永久或尚未到期实例，期限{sourceExpiry}");
+        That(items.Get(3242).StackLimit >= 37,
+            $"哨兵3242数量37不超过真实模板上限{items.Get(3242).StackLimit}");
         InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot),
             InventoryRewardGrantService.Create(items.Get(id), count, now, shopExpiration: id == sourceId));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -898,6 +903,111 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY list_type,slot_index")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+
+    static async Task RunEvidenceBoxAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        const int box = 490004382;
+        int[] choices = [490004325, 490004326, 490004327, 490004328];
+        var items = resources.ItemResources.Items;
+        var definition = resources.ItemResources.Boosters.Get(box);
+        That(definition.Available && definition.Selection is { SelectionCount: 1, Categories.Length: 1 } selection &&
+            selection.Categories[0].PendingRule is null && selection.Categories[0].Rewards
+                .SequenceEqual(choices.Select(id => new BoosterChoice(id, 1))),
+            "当前证据礼盒保留单选四候选的资源合同");
+        That(choices.All(id => items.Get(id).Kind == ItemKind.Consumable && items.Get(id).Expiration == new ItemExpiration()),
+            "证据奖励均为当前永久普通消耗品，不推断特殊owner或期限");
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "evidence-selection"), resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            repo.Create(owner, new("EvidenceBox", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                Inventory = new([new(0, Bag(3), Core(box, 4))], Gold: 12345)
+            });
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, InventorySnapshot.Empty);
+            var filled = Enumerable.Range(range.Start, range.End - range.Start + 1)
+                .Concat(Enumerable.Range(ItemSlotBoundService.QuickSlotStart,
+                    ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1))
+                .Where(slot => slot != 3).Select(slot => new InventoryItem(0, Bag((short)slot), Core(box, 1))).ToImmutableArray();
+            repo.Create(owner, new("EvidenceFull", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new(filled.Add(new(0, Bag(3), Core(box, 4))), Gold: 12345)
+            });
+        }
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1); peer.Barrier();
+            string before = Snapshot();
+            SendSelect(peer, 3, [choices[0]]); peer.Expect(1, 160, [0, 4, 0]); peer.Barrier();
+            That(Snapshot() == before, "证据消耗品页及快捷栏满时不扣源、不分配奖励或UID");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            string before = Snapshot();
+            foreach (int[] invalid in new int[][] { [], choices[..2], choices, [choices[0], choices[0]], [3037] })
+            {
+                SendSelect(peer, 3, invalid); peer.Expect(1, 160, [0, 19, 0]);
+            }
+            SendSelect(peer, 3, [choices[0]], 1); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "证据礼盒空选、超额、重复、外来ID及错误分类均无资产变化");
+            fixture.Sql("CREATE TRIGGER evidence_abort BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'evidence late rollback'); END");
+            SendSelect(peer, 3, [choices[0]]); peer.Closed();
+            That(Snapshot() == before, "末段SQL故障回滚源、奖励、UID、revision和审计且没有成功ACK");
+            fixture.Sql("DROP TRIGGER evidence_abort");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            for (int index = 0; index < choices.Length; index++)
+            {
+                SendSelect(peer, 3, [choices[index]]);
+                ExpectAck(peer, box, 3, [(choices[index], 1)]);
+                byte[] delta = peer.Expect(0, 14).Body;
+                Entry(delta, 3, index == 3 ? -1 : box, 3 - index);
+                Entry(delta, (short)(65 + index), choices[index], 1);
+                peer.Barrier();
+            }
+            string before = Snapshot();
+            SendSelect(peer, 3, [choices[0]]); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "四次单选耗尽源后重放不重复发奖");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select()[4].Body;
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var saved = repo.List(owner).Single(role => role.Name == "EvidenceBox");
+            That(saved.Inventory.Items.Length == 4 && saved.Inventory.Gold == 12345 &&
+                saved.Inventory.Items.OrderBy(item => item.Core.ItemId).Select(item => item.Core).SequenceEqual(choices.Select(id => Core(id, 1))) &&
+                saved.Inventory.Items.All(item => item.Uid > 0 && item.Avatar is null && item.Creature is null) &&
+                saved.Inventory.Items.Select(item => item.Uid).Distinct().Count() == 4,
+                "保存重读仅含四次选择的四个完整消耗品实例，不额外收费或创建其它详情");
+            foreach (var item in saved.Inventory.Items) Entry(full, item.Position.Index, item.Core.ItemId, 1, true);
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line);
+            var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'evidence late rollback'.";
+        }) == 1, "证据礼盒故障断线精确来自唯一一次末段SQL注入");
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "证据选择及回滚后的库完整");
+
+        ItemCore Core(int id, int count) => InventoryRewardGrantService.Create(items.Get(id), count);
+        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT * FROM characters")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_audit_log ORDER BY rowid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM sqlite_sequence ORDER BY name"));
     }
 
     internal static byte[] EquipmentEntry(byte[] body, short slot, bool full = false)

@@ -27,7 +27,7 @@ internal static class SeriaLuckPackets
         designPages ??= [];
         if (extraEvents.Any(id => id is 0 or 9 or SeriaLuckEventId) || extraEvents.Distinct().Count() != extraEvents.Count)
             throw new InvalidDataException("EVENT_INFO 附加事件无效");
-        if (activeEvents.Count >= byte.MaxValue || activeEvents.Any(id => !extraEvents.Contains(id)) ||
+        if (activeEvents.Count >= byte.MaxValue || activeEvents.Any(id => !extraEvents.Contains(id) && !designPages.Any(page => page.EventId == id)) ||
             activeEvents.Distinct().Count() != activeEvents.Count)
             throw new InvalidDataException("EVENT_INFO 活动状态必须唯一、存在于附加事件集合且不超过254项");
         if (firstValues is not null && firstValues.Keys.Any(id => !activeEvents.Contains(id)))
@@ -71,7 +71,7 @@ internal static class SeriaLuckPackets
                 writer.Write(page.Record4C);
                 writer.Write(page.Record50);
                 PacketEncoding.WriteString(writer, page.Route);
-                PacketEncoding.WriteString(writer, page.Content);
+                PacketEncoding.WriteString(writer, CalendarContent(page));
                 writer.Write((byte)(page.Visible ? 1 : 0));
             }
             writer.Write((byte)((includeSeriaLuck ? 1 : 0) + activeEvents.Count));
@@ -95,6 +95,16 @@ internal static class SeriaLuckPackets
         using (var zlib = new ZLibStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
             plain.CopyTo(zlib);
         return compressed.ToArray();
+    }
+
+    static string CalendarContent(EventInfoDesignPage page)
+    {
+        if (page.ShowItemIds.Count == 0) return page.Content;
+        if (page.ShowItemIds.Any(id => id <= 0) || page.ShowItemIds.Distinct().Count() != page.ShowItemIds.Count)
+            throw new InvalidDataException("活动日历展示道具必须使用唯一正ID");
+        // 026BFE50从扩展页Content读取原生登记标签、条数及模板ID。
+        return page.Content + "\n[show_item_index] " + page.ShowItemIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            " " + string.Join(" ", page.ShowItemIds.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     static void ValidateStage(int stage)

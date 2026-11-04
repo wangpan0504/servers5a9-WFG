@@ -14,6 +14,7 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         HelperSafetyTests.RunCore();
+        WeeklyAttendanceTests.RunCore();
         HelperAssetSafetyTests.RunCore();
         await HelperAssetSafetyTests.RunProtocolAsync();
         MapGeometryTests.RunCore();
@@ -78,6 +79,7 @@ internal static class SelfTestRunner
         PcRoomRewardTests.RunCore();
         PcRoomQualificationTests.RunCore();
         FatigueAccelerationTests.RunCore();
+        DungeonSettlementTests.RunEndlessAdventureCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();
@@ -190,11 +192,13 @@ internal static class SelfTestRunner
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
         BoosterSelectionTests.RunCore();
+        BoosterAvatarPoolTests.RunCore();
         BoosterGrowTypeTests.RunCharacterCore();
         AvatarPackageTests.RunCore();
         OmittedDimensionsAvatarPackageTests.RunCore();
         MixedAvatarPackageTests.RunCore();
         MaterialAvatarPackageTests.RunCore();
+        CreatureStackableAvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         MonsterCardBindTests.RunCore();
         MonsterCardUpgradeTests.RunCore();
@@ -247,6 +251,7 @@ internal static class SelfTestRunner
         DungeonSettlementProtocolTests.Run();
         BlackDiamondTests.RunCore();
         ServerEventTests.RunCore();
+        DailyAttendanceTests.RunCore();
         DungeonClearExperienceCatalogTests.Run();
         DungeonLuckyStarTests.RunCore();
         DungeonKillExperienceCatalogTests.RunCore();
@@ -568,11 +573,13 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
+        BattlePassDeluxePurchaseTests.RunResources(pvf, itemResources);
         Testing.PrivilegeServiceTests.Run(towns, characters, itemResources, pvf);
         CashShopTests.VerifyMappedCoupons(towns, itemResources);
         DfoServer.Testing.Inventory.PvfItemCompatTests.Run(pvf, itemResources);
         TalismanResourceTests.Run(pvf, itemResources.Items);
         PremiumContractTests.RunResources(itemResources, pvf);
+        AuctionCouponTests.RunResources(itemResources);
         GrowthCubeContractTests.RunResources(itemResources,towns,characters);
         LimitCubeTests.RunResources(itemResources);
         EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);
@@ -587,6 +594,8 @@ internal static class SelfTestRunner
         OmittedDimensionsAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         MixedAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
         MaterialAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
+        CreatureStackableAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        CreatureStackableAvatarPackageTests.RunPersistence(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);
         MonsterCardBindTests.RunResources(itemResources);
@@ -597,6 +606,7 @@ internal static class SelfTestRunner
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         AvatarSocketTests.RunResources(itemResources.Items, itemResources.AvatarPackages);
         MagicBoxTests.Run(towns, itemResources);
+        SharedEffectItemTests.RunResources(pvf, towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
         EnhancementPotionTests.RunResources(itemResources.RecoveryConsumables.EnhancementPotions);

@@ -226,7 +226,30 @@ internal sealed partial class TcpPeer : IDisposable
         if (opcode == 7 && body.Length == 0) requestedRoster = false;
     }
 
-    public WirePacket Read() => ReadCore(channelNumber);
+    // 可选通知探针会原样归还读到的下一包，后续Expect仍按严格包序断言，不跳过任何业务包。
+    WirePacket? pushedBack;
+    public WirePacket Read()
+    {
+        if (pushedBack is { } packet) { pushedBack = null; return packet; }
+        return ReadCore(channelNumber);
+    }
+    // 服务端在ACK、房间通知与补发buff之后才发36，读到房间通知时它尚未上路；
+    // 是否发送取决于真实疲劳规则，无包时必须尽快返回，不能把可选通知拖成5秒socket超时。
+    public void ExpectOptionalFatigue()
+    {
+        long deadline = Environment.TickCount64 + 1000;
+        while (!stream.DataAvailable && Environment.TickCount64 < deadline) Thread.Sleep(1);
+        if (!stream.DataAvailable) return;
+        var packet = Read();
+        if (packet is { Kind: 0, Opcode: 36 })
+        {
+            TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
+            TestCheck.That(U16(packet.Body, 0) + U16(packet.Body, 6) == U16(packet.Body, 2),
+                "正式疲劳通知已用与剩余之和等于上限");
+            return;
+        }
+        pushedBack = packet;
+    }
 
     void ReadStoryBooks(byte[] body)
     {
@@ -320,7 +343,22 @@ internal sealed partial class TcpPeer : IDisposable
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
                 packet.Opcode is 550 or 1608 or 815 or 772))
         {
-            if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
+            if (packet.Opcode == 1536)
+            {
+                AssaultDailyInfo = packet.Body;
+                if (fixture?.ExpectedDaybreakSelectionRemaining(Id) is { } remaining)
+                {
+                    // 仅530入口世界地图在1536之后发布1545→550，二者完整核验后仍须原27。
+                    byte[] daybreak = new byte[268];
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak, remaining);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(4), 260);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(12), 530);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(16), 2);
+                    Expect(0, 1545, daybreak);
+                    Expect(0, 550, [0x12, 0x02, 0, 0, remaining, 0]);
+                    DungeonEnterCounts[530] = (remaining, 0);
+                }
+            }
             else if (packet.Opcode == 1608) ExpectDazzlementBindings(packet);
             else if (packet.Opcode == 815) ReadDimensionEntrance(packet);
             else if (packet.Opcode == 772) ReadAncientGate(packet);

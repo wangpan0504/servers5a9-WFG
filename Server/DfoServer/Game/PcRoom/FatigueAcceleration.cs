@@ -18,6 +18,10 @@ internal sealed record FatigueAccelerationReceipt(ushort CharacterId, long Gener
 
 internal static class FatigueAccelerationRules
 {
+    // 倍率绑定本次入场选择，与无限疲劳余额及经验加成比例分开。
+    public static ushort Cost(ushort amount, int percent, ushort remaining = ushort.MaxValue) =>
+        checked((ushort)Math.Min(remaining, (uint)amount * (percent > 0 ? 2u : 1u)));
+
     // 正常剧情路线也参与燃烧；它的任务疲劳归属与普通路线不同，不因此丢掉经验资格。
     public static bool Eligible(DungeonEntryPlan entry) => (entry.UsesFatigue || entry.RouteQuestId != 0 &&
         !entry.DisableFatigueConsumption && entry.LostLand is null && !entry.Maze.IsGriefTower && !entry.IsBossRush) && !entry.IsTutorial &&

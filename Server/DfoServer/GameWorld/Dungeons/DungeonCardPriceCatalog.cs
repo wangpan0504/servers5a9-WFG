@@ -12,6 +12,8 @@ internal sealed class DungeonCardPriceCatalog
         ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>>.Empty;
 
     public ImmutableArray<DungeonSpecificCardItem> TayberrsPaidRewards { get; private init; } = [];
+    public ImmutableArray<int> RarityDecision { get; private init; } = [];
+    public ImmutableArray<DungeonDropItemReference> ItemReferences { get; private init; } = [];
 
     public static DungeonCardPriceCatalog Load(PvfArchive archive) => Parse(archive.ReadTokens(ResourcePath), archive.ResolveString);
 
@@ -40,8 +42,52 @@ internal sealed class DungeonCardPriceCatalog
         return new(result.OrderBy(row => row.Level).ToArray())
         {
             SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve),
-            TayberrsPaidRewards = DungeonSpecificCardRewards.ParseTayberrsPaid(tokens, resolve)
+            TayberrsPaidRewards = DungeonSpecificCardRewards.ParseTayberrsPaid(tokens, resolve),
+            RarityDecision = ReadRarity(),
+            ItemReferences = ReadReferences()
         };
+
+        int[]? ReadIntegers(string tag)
+        {
+            int[]? found = null;
+            for (int index = 0; index < tokens.Count; index++)
+            {
+                if (tokens[index].Type != 3 || !resolve(tokens[index].Value).Equals("[" + tag + "]", StringComparison.OrdinalIgnoreCase)) continue;
+                if (found is not null) throw new InvalidDataException("翻牌资源字段重复: " + tag);
+                var data = new List<int>();
+                while (++index < tokens.Count && tokens[index].Type != 3)
+                {
+                    if (tokens[index].Type != 0 || tokens[index].Value < 0)
+                        throw new InvalidDataException("翻牌资源字段须为非负整数: " + tag);
+                    data.Add(tokens[index].Value);
+                }
+                index--;
+                found = data.ToArray();
+            }
+            return found;
+        }
+        ImmutableArray<int> ReadRarity()
+        {
+            // 只读价格的旧输入仍合法；存在的生成声明必须完整，不能静默改用怪物阈值。
+            if (ReadIntegers("basis of rarity dicision") is not { } data) return [];
+            if (data.Length != 7 || data[^1] < 1000000 || !data.SequenceEqual(data.Order()))
+                throw new InvalidDataException("翻牌稀有度须提供完整七档非递减阈值");
+            return data.ToImmutableArray();
+        }
+        ImmutableArray<DungeonDropItemReference> ReadReferences()
+        {
+            if (ReadIntegers("item drop ref table") is not { } data) return [];
+            if (data.Length == 0 || data.Length % 3 != 0)
+                throw new InvalidDataException("翻牌等级引用须为完整三列");
+            var references = ImmutableArray.CreateBuilder<DungeonDropItemReference>(data.Length / 3);
+            var seen = new HashSet<int>();
+            for (int at = 0; at < data.Length; at += 3)
+            {
+                if (data[at] == 0 || !seen.Add(data[at])) throw new InvalidDataException("翻牌引用等级无效或重复");
+                references.Add(new(data[at], data[at + 1], data[at + 2]));
+            }
+            return references.MoveToImmutable();
+        }
     }
 
     public int Price(int level)

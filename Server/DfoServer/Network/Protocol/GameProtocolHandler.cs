@@ -55,7 +55,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     Strongway2019Projection? strongwayProjection = null,
     DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null,
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
-    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null) : IConnectionProtocol
+    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
+    DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
+    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
+    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -133,7 +136,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
-            directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics);
+            directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
+            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
@@ -168,7 +172,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
+        if (dailyAttendance is not null) context.DailyAttendance = new(context, dailyAttendance, time ?? TimeProvider.System, log);
         if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
+        if (weeklyAttendance is not null) context.WeeklyAttendance = new(context, weeklyAttendance, projection, log);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -461,6 +467,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         }
                         await dailyFatigue.RefreshAsync();
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
+                        if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: request.Opcode == (ushort)CmdPacketType.SET_PLAY_RESULT);
                         await revival.RefreshAsync();
                         await disguise.RefreshAsync();
                         await tagRevival.RefreshAsync();

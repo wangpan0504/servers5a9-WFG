@@ -304,7 +304,8 @@ internal static class DevelopmentGmExtendedTests
         uint forcedId = forcedMail.GetProperty("id").GetUInt32();
         TestCheck.That(Answer("mail-delete Other " + forcedId, session).StartsWith("ERR "), "默认规则仍拒绝删除未领取附件");
         var forced = Json(Answer("mail-delete Other " + forcedId + " force", session));
-        TestCheck.That(forced.GetProperty("deleted").GetInt32() == 1 && forced.GetProperty("forced").GetBoolean() &&
+        TestCheck.That(forced.GetProperty("deleted").GetInt32() == 1 && forced.GetProperty("force").GetBoolean() &&
+            forced.GetProperty("forced").GetBoolean() &&
             Json(Answer("mails Other", session)).GetProperty("mails").GetArrayLength() == 0, "force 连附件一起删除");
         TestCheck.That(Answer("mail-delete Other " + forcedId + " hard", session).StartsWith("ERR "), "mail-delete 的可选参数只认 force");
         session.Select(0, resources.GoldLimits);

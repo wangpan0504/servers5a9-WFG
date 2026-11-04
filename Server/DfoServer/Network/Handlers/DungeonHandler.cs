@@ -303,7 +303,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0)))
             return await RejectAsync();
         bool multiplePartyMembers = context.Session.HasMultiplePartyMembers?.Invoke() == true;
-        if (multiplePartyMembers || context.Session.ReadEvildomWar() is not null)
+        // 一人真实Party也必须走共享PartyDungeonService；否则会落入单人Formal入口，英雄准入的partyAdmission被丢失。
+        bool soloPartyEntry = context.Session.CurrentParty?.Invoke() is { Members.Length: 1 } soloParty &&
+            selection.DungeonIndex is 5363 or 400000105 && soloParty.Members.Any(member =>
+                member.Slot == soloParty.Leader && ReferenceEquals(member.Actor.Session, context.Session));
+        if (multiplePartyMembers || soloPartyEntry || context.Session.ReadEvildomWar() is not null)
         {
             if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
                 return await RejectAsync();

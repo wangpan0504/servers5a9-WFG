@@ -48,7 +48,9 @@ internal static class OmittedDimensionsAvatarPackageTests
             omitted + "\n[booster select category]\n0 0\n[avatar]\n203 1 4 0\n[/avatar]\n[/booster select category]",
             omitted.Replace("[/booster select category]", ""),
             omitted + "\n[/booster select category]",
-            omitted.Replace("[/avatar]", "[/avatar]\n[etc]\n3330 1\n[/etc]")
+            omitted.Replace("[/avatar]", "[/avatar]\n[etc]\n3330 1\n[/etc]"),
+            omitted.Replace("[/avatar]", "[/avatar]\n[creature]\n100990228 1\n[/creature]"),
+            omitted.Replace("[/avatar]", "[/avatar]\n[stackable]\n10309981 1\n[/stackable]")
         })
             Rejected(invalid, "省略维数仍拒非全领、非零/多余/未闭合分类及未知混合奖励，不截断奖励");
         foreach (string rootRule in new[] { "usable datetime", "total usable count", "raid booster item", "cooltime maintenance" })

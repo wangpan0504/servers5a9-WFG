@@ -176,7 +176,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
                 }
                 continue;
             }
-            if (kind is not ("equipment" or "stackable" or "etc" or "cera" or "creature"))
+            if (kind is not ("equipment" or "stackable" or "stackble" or "etc" or "cera" or "creature"))
                 return new(category, subcategory, [], kind);
             string closing = "[/" + kind + "]";
             if (!body.AsSpan(at).StartsWith(closing, StringComparison.Ordinal))

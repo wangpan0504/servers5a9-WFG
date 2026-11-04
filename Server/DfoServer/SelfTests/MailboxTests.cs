@@ -261,6 +261,7 @@ internal static class MailboxTests
         public MailboxResult SendMail(AccountOwners.Lease owner, Character expected, MailboxSendPlan plan) => inner.SendMail(owner, expected, plan);
         public MailboxResult ClaimMail(AccountOwners.Lease owner, Character expected, MailboxClaimPlan plan) => inner.ClaimMail(owner, expected, plan);
         public MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort id, ImmutableArray<uint> ids, ushort state, long now, bool force = false) => inner.ChangeMailState(owner, id, ids, state, now, force);
+        public MailboxResult ForceDeleteMails(AccountOwners.Lease owner, ushort id, ImmutableArray<uint> ids, long now) => inner.ForceDeleteMails(owner, id, ids, now);
         public MailboxResult DeliverMail(MailboxDelivery delivery) => inner.DeliverMail(delivery);
         public void Dispose() { Release.Set(); Release.Dispose(); Started.Dispose(); }
     }

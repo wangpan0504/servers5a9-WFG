@@ -51,16 +51,7 @@ internal static class StadiumQuestEntryTests
                 {
                     var room = rooms.Get(map,requirePassiveDefinitions:false);
                     var plan = DungeonMonsterPlan.FromRoom(room,before.Id,next,entry.BasisLevel,playerTeam:entry.PlayerTeam);
-                    That(plan.Monsters.Count == room.Monsters.Count + 1 &&
-                        plan.Monsters.Take(room.Monsters.Count).Select(row => row.Source)
-                            .SequenceEqual(room.Monsters) &&
-                        plan.Monsters.Take(room.Monsters.Count).Select(row => row.SourceOrdinal)
-                            .SequenceEqual(Enumerable.Range(0,room.Monsters.Count)) &&
-                        room.AiCharacters is [{ Id:5409,Faction:"[character]",RankKind:"[normal]",Level:70 }] &&
-                        plan.Monsters[^1] is { MonsterId:5409,SourceOrdinal:0,SpawnType:5,IsFriendly:true,IsBlocking:false } &&
-                        plan.Monsters[^1].AiCharacter == room.AiCharacters[0] &&
-                        plan.Monsters[^1].CandidateLevel == room.AiCharacters[0].Level,
-                        "五房原怪物完整有序，另保留实际原生5409友方APC及其独立ordinal和等级");
+                    CheckActors(room,plan);
                     next = checked((ushort)plan.NextObjectKey);
                     if (map.Id == 655514) CheckTerminal(entry with { StartMap=map },plan);
                 }
@@ -126,19 +117,50 @@ internal static class StadiumQuestEntryTests
         Console.WriteLine($"PASS {Count-checks} 中央竞技场6304全职业32准入、完整五MAP及代表Session清图回归（非实机）");
     }
 
+    static void CheckActors(DungeonRoomDefinition room,DungeonMonsterPlan plan)
+    {
+        That(room.AiCharacters is [{Id:5409,Faction:"[character]",RankKind:"[normal]",Level:70,
+                Path:"aicharacter/fighter/28/28.aic"} native] &&
+            native.RawValues.SequenceEqual(room.Map.Id == 655510 ? [5409,645,444,0,0,0] : [5409,983,242,0,0,0]) &&
+            !DungeonCompanion.IsCompanionRow(room,0),
+            "五房独立资源预期：原序0的5409为Lv70原生友方AI，不能误过滤为伴侣");
+        var monsters = plan.Monsters.Where(row => row.AiCharacter is null).ToArray();
+        var expectedAi = room.AiCharacters.Select((actor,ordinal) => (actor,ordinal))
+            .Where(row => !DungeonCompanion.IsCompanionRow(room,row.ordinal)).ToArray();
+        var actors = plan.Monsters.Where(row => row.AiCharacter is not null).ToArray();
+        var expectedMonsters = room.Monsters.Select((source,ordinal) => (source,ordinal))
+            .Where(row => !(room.DeclaredType == "[dummy]" && row.source.RankKind == "[boss]" &&
+                row.source.SpecialChild is null && room.Map.Kind == "map" && room.Map.DummyStageIndex < 0 &&
+                room.Map.StoryStageIndex < 0 && !room.Map.IsConditional)).ToArray();
+        That(monsters.Length == expectedMonsters.Length && monsters.Select(row => row.SourceOrdinal)
+            .SequenceEqual(expectedMonsters.Select(row => row.ordinal)) &&
+            monsters.Select((row,index) => ReferenceEquals(row.Source,expectedMonsters[index].source) &&
+                row.MonsterId == expectedMonsters[index].source.MonsterId).All(value => value),
+            "五房原怪完整保留Source与独立原序，不把原生AI混入怪物索引");
+        That(actors.Length == expectedAi.Length && actors.Select(row => row.SourceOrdinal)
+            .SequenceEqual(expectedAi.Select(row => row.ordinal)) &&
+            actors.Select((row,index) => ReferenceEquals(row.AiCharacter,expectedAi[index].actor) &&
+                row.Source is null && row.MonsterId == expectedAi[index].actor.Id &&
+                row.CandidateLevel == expectedAi[index].actor.Level).All(value => value) &&
+            plan.Monsters.SequenceEqual(monsters.Concat(actors)),
+            "非伴侣原生AI完整保留来源、模板、等级和独立原序，按原怪后AI发送");
+        That(room.SpecialObjects.Count == 0 && plan.SpecialObjects.Count == 0 && plan.HellWaves.Count == 0,
+            "五房无特殊父子演员或深渊波次，不增添或漏掉其它演员");
+    }
+
     static void CheckTerminal(DungeonEntryPlan entry,DungeonMonsterPlan plan)
     {
-        That(plan.Monsters.Take(2).ToArray() is [
+        CheckActors(plan.Room,plan);
+        var monsters = plan.Monsters.Where(row => row.AiCharacter is null).ToArray();
+        var actors = plan.Monsters.Where(row => row.AiCharacter is not null).ToArray();
+        That(monsters is [
             {MonsterId:109008549,SourceOrdinal:0,SpawnType:0,IsBlocking:true,CanReportDeath:true,IsBoss:false,Source.ChampionRestricted:true},
             {MonsterId:63821,SourceOrdinal:1,SpawnType:3,Team:100,IsFriendly:false,IsBlocking:false,CanReportDeath:false,IsBoss:false,IsScriptedBoss:false}],
             "真敌与显示控制演员完整保留，显示品级仍3且不冒充dummy或战斗Boss");
         That(plan.Monsters[1].Source!.IsDisplayHuntDummy,"显示标记由原资源精确派生");
         var packet = DungeonPackets.StartMap(entry,plan,0x12345678);
-        That(plan.Monsters.Count == 3 && plan.Monsters[2] is
-            { MonsterId:5409,SourceOrdinal:0,SpawnType:5,IsFriendly:true,IsBlocking:false } &&
-            plan.Monsters[2].AiCharacter == plan.Room.AiCharacters.Single(),
-            "末房原两名怪物后保留累计候选原生5409，不将其改成敌人或追加死亡义务");
-        That(packet[18] == 3 && packet.Length == 89,"末房NOTI29含三个完整22B演员记录");
+        That(actors.Length == 1 && packet[18] == 3 && packet.Length == 89,
+            "末房NOTI29固定保留两个原怪及一个原生5409，三条完整22B记录");
         for (int index = 0; index < 2; index++)
         {
             var row = packet.AsSpan(19+22*index,22);
@@ -150,12 +172,21 @@ internal static class StadiumQuestEntryTests
                 row[16] == 255 && BinaryPrimitives.ReadUInt32LittleEndian(row[17..]) == 0 && row[21] == index,
                 "逐字段独立预期：保留原ordinal/key/品级，只有显示演员清房排除位为1");
         }
-        var apc = packet.AsSpan(63,22);
-        That(BinaryPrimitives.ReadUInt16LittleEndian(apc) == 0 && BinaryPrimitives.ReadUInt32LittleEndian(apc[2..]) == 0 &&
-            BinaryPrimitives.ReadUInt16LittleEndian(apc[6..]) == plan.Monsters[2].ObjectKey &&
-            BinaryPrimitives.ReadUInt32LittleEndian(apc[8..]) == 5409 && apc[12] == 70 &&
-            apc[13] == 5 && apc[14] == 0 && apc[15] == 0 && apc[16] == 255 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(apc[17..]) == 0 && apc[21] == 1,
-            "5409独立APC行保原资源序号、等级、类型及友方清房排除位，完整22B字段不省略");
+        for (int index = 0; index < actors.Length; index++)
+        {
+            var actor = actors[index];
+            var source = actor.AiCharacter!;
+            That(source is {Faction:"[character]",RankKind:"[normal]"} &&
+                actor is {Source:null,SpawnType:5,IsFriendly:true,IsBlocking:false,CanReportDeath:false,IsBoss:false,IsScriptedBoss:false},
+                "原生友方AI仍为普通APC，不冒充显示控制演员或战斗Boss");
+            var row = packet.AsSpan(19+22*(2+index),22);
+            That(BinaryPrimitives.ReadUInt16LittleEndian(row) == 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(row[2..]) == actor.SourceOrdinal &&
+                BinaryPrimitives.ReadUInt16LittleEndian(row[6..]) == actor.ObjectKey &&
+                BinaryPrimitives.ReadUInt32LittleEndian(row[8..]) == source.Id &&
+                row[12] == source.Level && row[13] == 5 && row[14] == 0 && row[15] == 0 &&
+                row[16] == 255 && BinaryPrimitives.ReadUInt32LittleEndian(row[17..]) == 0 && row[21] == 1,
+                "原生AI逐22B保留独立ordinal、key、模板、原等级、APC类型及友军清房排除位");
+        }
     }
 }

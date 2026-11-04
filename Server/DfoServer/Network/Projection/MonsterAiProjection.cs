@@ -16,7 +16,7 @@ internal static class MonsterAiProjection
         bool counterRoom = receipt.Entry.RaidEntry?.Kind == Game.Raids.RaidKind.Fiendwar &&
             (Game.Titles.FiendwarTitleFacts.IsTeamDungeon(receipt.Entry.DungeonId) || receipt.Entry.DungeonId is >= 5350 and <= 5358);
         bool dynamicRoom = counterRoom || receipt.Entry.DungeonId == EvildomWarChallengeEntryPolicy.DungeonId &&
-            receipt.Entry.Difficulty == 2 && receipt.Entry.PartyMemberCount == 4 && receipt.Entry.RaidEntry is null;
+            receipt.Entry.Difficulty == 2 && EvildomWarChallengeEntryPolicy.AllowsPartyCount(receipt.Entry.PartyMemberCount) && receipt.Entry.RaidEntry is null;
         if (receipt.MonsterAi is not { } && !dynamicRoom && !antonRoom) return;
         var profile = receipt.MonsterAi ?? MonsterAiProfile.Native;
         DungeonMap map = receipt.Snapshot.CurrentMap;

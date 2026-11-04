@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -19,6 +19,7 @@ internal static class PcRoomTimePointStoreTests
     {
         int before = Count;
         WatermarksAndClaims();
+        DefaultAndAutoClaims();
         RollbackAndGuards();
         Migration();
         Console.WriteLine($"PASS {Count - before} 累计在线账号水位、永久领取与同事务邮件断言");
@@ -87,6 +88,36 @@ internal static class PcRoomTimePointStoreTests
         f.Integrity();
     }
 
+    static void DefaultAndAutoClaims()
+    {
+        foreach (bool configured in new[] { false, true })
+        {
+            using var f = new Fixture();
+            f.Sql(configured
+                ? "UPDATE server_events SET override_active=NULL,revision=2 WHERE event_id=228"
+                : "DELETE FROM server_events WHERE event_id=228");
+            long revision = configured ? 2 : 0;
+            int day = PcRoomTimePointDay.At(f.Now);
+            var segment = Guid.NewGuid();
+            string before = f.Snapshot();
+            Reject<PcRoomTimePointClaimRejectedException>(() =>
+                f.Update(segment, [new(day, 4000)], new(0, 0, revision + 1), f.Items(2)),
+                "默认开启和auto模式仍拒绝不匹配的活动版本");
+            That(f.Snapshot() == before, "活动版本拒绝回滚本次水位、资格及奖励");
+            var daily = f.Update(segment, [new(day, 4000)], new(0, 0, revision), f.Items(2));
+            var period = f.Update(segment, [], new(1, 0, revision), f.Items(3));
+            That(daily.Claimed && period.Claimed && daily.MailId != period.MailId &&
+                period.Snapshot is { Seconds: 4, DailyClaims: 1, QualifiedDays: 1, PeriodClaims: 1 } &&
+                f.Query("SELECT count(*) FROM mailbox_messages") is 2L,
+                configured ? "auto模式按有效开启状态投递每日和累计奖励" : "无活动配置时按默认开启投递每日和累计奖励");
+            before = f.Snapshot();
+            That(f.Update(segment, [], new(0, 0, revision)).Replayed &&
+                f.Update(segment, [], new(1, 0, revision)).Replayed && f.Snapshot() == before,
+                "默认开启和auto模式重复领取不新增邮件或UID");
+            f.Integrity();
+        }
+    }
+
     static void RollbackAndGuards()
     {
         using var f = new Fixture();
@@ -126,27 +157,49 @@ internal static class PcRoomTimePointStoreTests
     {
         using var f = new Fixture();
         string character = JsonSerializer.Serialize(f.Repository.LoadCharacter(f.Owner, f.Character.Slot));
-        f.Sql("INSERT INTO account_skin_storage(account,state_json) VALUES('online-owner','{\"Owned\":[]}'); DROP TABLE account_pcroom_timepoint_claims; DROP TABLE account_pcroom_timepoint_segments; DROP TABLE account_pcroom_timepoint_days; PRAGMA user_version=190");
+        using (var db = f.Open())
+        {
+            DatabaseSchemaTests.DropEmptyWeeklyAttendanceTables(db);
+            DatabaseSchemaTests.RewindRaidQuotaTo191(db);
+        }
+        f.Sql("INSERT INTO account_skin_storage(account,state_json) VALUES('online-owner','{\"Owned\":[]}'); DROP TABLE account_battle_pass_deluxe_orders; DROP TABLE account_endless_adventure_days; DROP TABLE account_daily_attendance_claims; DROP TABLE account_daily_attendance_days; DROP TABLE account_pcroom_timepoint_claims; DROP TABLE account_pcroom_timepoint_segments; DROP TABLE account_pcroom_timepoint_days; PRAGMA user_version=190");
         string before = f.Snapshot();
         var upgraded = new CharacterRepository(f.Path);
-        That(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT state_json FROM account_skin_storage WHERE account='online-owner'") is "{\"Owned\":[]}" &&
+        That(f.Query("PRAGMA user_version") is long migratedVersion && migratedVersion == SqliteMigrations.CurrentVersion && f.Query("SELECT state_json FROM account_skin_storage WHERE account='online-owner'") is "{\"Owned\":[]}" &&
             JsonSerializer.Serialize(upgraded.LoadCharacter(f.Owner, f.Character.Slot)) == character && f.Snapshot() == before,
-            "190到191只追加三个空活动表，保角色库存与旧账号皮肤数据");
+            "190补齐在线、团本世代与豪华结构，保角色库存与旧账号皮肤数据");
         before = f.Snapshot();
         _ = new CharacterRepository(f.Path);
         That(f.Snapshot() == before && upgraded.Read(f.Owner, PcRoomTimePointDay.At(f.Now), f.Catalog).QualifiedDays == 0,
             "当前版本重开幂等且不补赠进度或奖励");
         int day = PcRoomTimePointDay.At(f.Now);
         var reward = f.Update(Guid.NewGuid(), [new(day, 4000)], new(0, 0, 1), f.Items(2));
-        foreach (string table in new[] { "account_battle_pass_cera_orders", "account_battle_pass_cera_consumption",
+        using (var db = f.Open())
+        {
+            DatabaseSchemaTests.DropEmptyWeeklyAttendanceTables(db);
+            DatabaseSchemaTests.RewindRaidQuotaTo191(db);
+        }
+        f.Sql("DROP TABLE account_battle_pass_deluxe_orders; PRAGMA user_version=191");
+        before = f.Snapshot();
+        upgraded = new CharacterRepository(f.Path);
+        That(f.Query("PRAGMA user_version") is long upstreamVersion && upstreamVersion == SqliteMigrations.CurrentVersion &&
+            f.Query("SELECT count(*) FROM account_battle_pass_deluxe_orders") is 0L && f.Snapshot() == before &&
+            upgraded.Read(f.Owner, day, f.Catalog) == reward.Snapshot,
+            "正式在线191补齐团本世代与空豪华订单表，保非空在线水位、已领奖邮件与资产");
+        foreach (string table in new[] { "account_battle_pass_deluxe_orders", "account_battle_pass_cera_orders", "account_battle_pass_cera_consumption",
             "account_battle_pass_certificate_orders", "account_battle_pass_source_events", "account_battle_pass_mission_claims",
             "account_battle_pass_mission_progress", "battle_pass_season_rules", "account_battle_pass_claims",
             "account_battle_pass_seasons", "character_epic_wishes" })
             f.Sql("DROP TABLE " + table);
+        using (var db = f.Open())
+        {
+            DatabaseSchemaTests.DropEmptyWeeklyAttendanceTables(db);
+            DatabaseSchemaTests.RewindRaidQuotaTo191(db);
+        }
         f.Sql("PRAGMA user_version=186");
         before = f.Snapshot();
         upgraded = new CharacterRepository(f.Path);
-        That(f.Query("PRAGMA user_version") is long currentVersion && currentVersion == SqliteMigrations.CurrentVersion && f.Snapshot() == before &&
+        That(f.Query("PRAGMA user_version") is long previewVersion && previewVersion == SqliteMigrations.CurrentVersion && f.Snapshot() == before &&
             upgraded.Read(f.Owner, day, f.Catalog) == reward.Snapshot,
             "旧228验证v186补跑正式战令和祈愿迁移，保在线水位、已领奖邮件及资产");
         f.Integrity();

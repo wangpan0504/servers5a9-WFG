@@ -67,8 +67,19 @@ internal static partial class EvildomWarChallengeTests
         That(run.ConfirmCommittedDeath(pending.Pending!).ClearFact is not null &&
             !run.CanMove(run.Snapshot.Identity, seal.Position), "返回后原Boss真实死亡仍生成唯一正式通关，结算阶段不再传送");
 
+        foreach (byte count in new byte[] { 1, 2, 3 })
+        {
+            var smaller = Create(entry with { PartyMemberCount = count });
+            smaller.CompleteLoading(smaller.Snapshot.Identity, Guid.NewGuid());
+            That(smaller.Move(smaller.Snapshot.Identity, Guid.NewGuid(), seal.Position).Outcome == DungeonRunOutcome.Accepted,
+                "一至三人英雄真实队伍同样支持Boss进入封印房：" + count);
+            smaller.CompleteLoading(smaller.Snapshot.Identity, Guid.NewGuid());
+            That(smaller.Move(smaller.Snapshot.Identity, Guid.NewGuid(), boss.Position).Outcome == DungeonRunOutcome.Accepted,
+                "一至三人英雄队伍返回同一Boss缓存：" + count);
+        }
         foreach (var invalid in new[] { entry with { DungeonId = 5422 }, entry with { IndividualMapMovement = false },
-            entry with { PartyMemberCount = 3 }, entry with { Difficulty = 1 }, entry with { DisableFatigueConsumption = false },
+            entry with { PartyMemberCount = 0 }, entry with { PartyMemberCount = 5 },
+            entry with { Difficulty = 1 }, entry with { DisableFatigueConsumption = false },
             entry with { Maze = maze with { WarpMaps = [] } } })
         {
             var other = Create(invalid);

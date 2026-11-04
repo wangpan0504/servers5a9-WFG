@@ -1,6 +1,7 @@
 using System.Net;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.Game.Strongway2019;
 using DfoServer.GameWorld.Characters;
@@ -28,12 +29,12 @@ internal static partial class Strongway2019HandlerTests
         var drops = DungeonMonsterDropCatalog.Load(archive);
         var kills = DungeonKillExperienceCatalog.Load(archive);
         var stats = new CharacterStatComputer(CharacterCatalog.Load(archive, resources.Items));
-        foreach (var (dungeonId, memberCount) in new[] { (5359u, 1), (5359u, 2), (5363u, 4) })
+        foreach (var (dungeonId, memberCount) in new[] { (5359u, 1), (5359u, 2), (5363u, 1), (5363u, 4) })
         {
             using var f = new Strongway2019MatchingTests.Fixture(towns, activity, growth);
             var wholeTeam = f.Team();
             foreach (var unused in wholeTeam.Skip(memberCount)) f.Parties.Detach(unused);
-            if (memberCount == 1) f.Parties.Detach(wholeTeam[0]);
+            if (memberCount == 1 && dungeonId == 5359) f.Parties.Detach(wholeTeam[0]);
             var sessions = wholeTeam.Take(memberCount).ToArray();
             var online = new OnlineSessionDirectory();
             foreach (var session in sessions) online.Register(session.CaptureSocialActor()!.Owner, session);
@@ -63,7 +64,7 @@ internal static partial class Strongway2019HandlerTests
                 {
                     That(sessions[0].EnterFormalDungeon(dungeonId, 0, 2, dungeons, rooms, drops,
                         items: resources.Items, pieces: resources.EpicPieces) is not null &&
-                        sessions[0].CompleteFormalDungeonLoading() is not null, "单人简单超时使用真实准入与原Run加载");
+                        sessions[0].CompleteFormalDungeonLoading() is not null, "单人挑战超时使用真实准入与原Run加载");
                 }
                 else
                 {
@@ -122,6 +123,10 @@ internal static partial class Strongway2019HandlerTests
                     var session = sessions[0];
                     session.ReturnToRoster();
                     session.Select(0, resumeTown: true); session.MarkReady();
+                    // 英雄要求真实队伍：换角后旧队伍成员随原选角失效，按真实玩法重建一人队伍再进图。
+                    if (dungeonId == 5363)
+                        That(f.Parties.SetInformation(session, 0, PartySettings.Default).Accepted,
+                            "英雄旧epoch回归前重建真实一人队伍");
                     That(session.EnterFormalDungeon(dungeonId, 0, 2, dungeons, rooms, drops,
                         items: resources.Items, pieces: resources.EpicPieces) is not null &&
                         session.CompleteFormalDungeonLoading() is not null, "旧epoch回归重新沿原正式入口进图");

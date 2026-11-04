@@ -92,7 +92,7 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
             var definition = boosters.Get(id);
             if (!definition.Available || definition.Selection is not null || !definition.PackageRewards.IsDefaultOrEmpty ||
                 definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin || definition.SetsDisjointInstanceType ||
-                definition.DailyRetainedLimit is not null || !definition.AllowsFirstGrowType(character.GrowType))
+                definition.DailyUseLimit is not null || !definition.AllowsFirstGrowType(character.GrowType))
                 throw new InvalidDataException("魔界随机奖励包含未支持的开箱附加语义");
             if (definition.RuneBox is { } box)
             {

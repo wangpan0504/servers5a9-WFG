@@ -68,7 +68,9 @@ internal static class QuestMainlineTests
 
         void RunCharacter(byte job,int through)
         {
-        using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,1,[],job: job);
+        // 剧情路线现已按真实规则消耗疲劳；本用例只考连续主线推进，不考疲劳经济，沿用调试开关的无限疲劳避免跨日补给。
+        using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,1,[],job: job,
+            debugSettings: new DfoServer.Game.Settings.GameDebugSettings());
         uint lastDungeon = 3;
         bool retryChecked = false;
         var initial = f.Read();

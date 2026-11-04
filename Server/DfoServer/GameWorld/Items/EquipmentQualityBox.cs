@@ -63,10 +63,12 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
 
     public int Roll(Func<long, long> random)
     {
-        // 当前客户端03FA9900/03FA9940：1..99使用999999893+p，100使用独立常量。
-        // 普通随机种子避开客户端的固定品级保留区，不强制重抽相同结果。
-        if (!Fixed) return checked(1 + (int)Draw(999_999_892));
-        int percent = MinimumPercent + (int)Draw(MaximumPercent - MinimumPercent + 1);
+        // 03FA9900/03FA9940 只承认 1..99 → 999999893+p 和 100 → 999999998。
+        // 区外种子解成 0%，结果窗顶部品级（最下级..最上级）不绘制。
+        // 普通箱在 1..100 上均匀取值，再写成同一套种子，显示档和属性档一致。
+        int percent = Fixed
+            ? MinimumPercent + (int)Draw(MaximumPercent - MinimumPercent + 1)
+            : 1 + (int)Draw(100);
         return SeedForPercent(percent);
 
         long Draw(long maximum)

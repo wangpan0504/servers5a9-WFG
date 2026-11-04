@@ -91,6 +91,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         while (!stop.IsCancellationRequested)
         {
             DispatchGateScope? gates = null;
+            bool leaveExpired = false;
             try
             {
                 try
@@ -123,7 +124,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                                 new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
                             if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
                         }
-                        LeaveExpiredAnton();
+                        leaveExpired = true;
                         return;
                     }
                     // 回调只能退出捕获的原Run；选图或候战时排入的回调不能退出后来安装的新图。
@@ -139,11 +140,15 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     }
                     returnCommitted = true;
                     await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
-                    LeaveExpiredAnton();
+                    leaveExpired = true;
                     log.Write(prefix + "_" + reason + "_exit", new { Connection = context.Id, view.Instance, view.Phase, Run = run, Reason = "local-policy", State = "returned" });
                     return;
                 }
-                finally { gates?.Dispose(); }
+                finally
+                {
+                    gates?.Dispose();
+                    if (leaveExpired) await LeaveExpiredAntonAsync();
+                }
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested || context.Stop.IsCancellationRequested) { return; }
             catch (Exception error) when (!returnCommitted && lifecycle?.IsRetryable(error) == true)
@@ -163,13 +168,31 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
         }
 
-        void LeaveExpiredAnton()
+        async Task LeaveExpiredAntonAsync()
         {
-            if (exitReason != ExitReason.PhaseExpired || originalBattle?.Kind != RaidKind.Anton) return;
+            if (exitReason != ExitReason.PhaseExpired || originalBattle?.Kind is not (RaidKind.Anton or RaidKind.Fiendwar)) return;
+            if (originalBattle.Kind == RaidKind.Fiendwar)
+            {
+                // 失败状态必须在原团身份仍有效时写出；先脱团会使排队中的1523被旧实例守卫丢弃。
+                using (var failureGates = await DispatchGateScope.EnterAsync(context, stop.Token))
+                {
+                    // 图内退场推进版本；同团其它成员退场不能撤销已发生的总期限失败。
+                    var failed = originalBattle.View;
+                    if (!actor.IsCurrent || !ReferenceEquals(context.Session.CurrentRaidBattle(actor), originalBattle) ||
+                        failed.Instance != view.Instance || failed.Phase != view.Phase || !failed.PhaseExpired) return;
+                    RaidCombatProjection.PostFiendwarState(context, failed, actor,
+                        () => actor.IsCurrent && ReferenceEquals(context.Session.CurrentRaidBattle(actor), originalBattle) &&
+                            originalBattle.View.PhaseExpired);
+                }
+                // 不持共享队伍门禁或其它成员命令门禁等待慢连接。
+                await context.Sender.DrainAsync().WaitAsync(stop.Token);
+            }
+            using var leaveGates = await DispatchGateScope.EnterAsync(context, stop.Token);
             if (raidStart?.LeaveExpiredAnton(actor, view.Instance) == true)
             {
                 returnCommitted = true;
-                log.Write("anton_phase_disband_member", new { Connection = context.Id, view.Instance, view.Phase, State = "left", Reason = "phase-timeout" });
+                log.Write(originalBattle.Kind == RaidKind.Fiendwar ? "fiendwar_phase_disband_member" : "anton_phase_disband_member",
+                    new { Connection = context.Id, view.Instance, view.Phase, State = "left", Reason = "phase-timeout" });
             }
         }
     }

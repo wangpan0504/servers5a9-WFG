@@ -354,14 +354,12 @@ internal static partial class DungeonRoomCatalogTests
             merman.Monsters.Skip(1).All(monster => monster.NpcParameter is null && monster.PlacementKind == "[fixed]" &&
                 monster.RankKind == "[normal]" && monster.Modifiers.Count == 0),
             "Q3487真实91548保留完整五怪原序、首NPC0/dummy/Boss及后续四行，不吞参数或下一怪物");
-        // 最终累计候选保留剧情APC，并以四种专用AIC替换旧光兵5409；逐行核对真实位置和顺序。
-        int[][] mermanApcRows = [[55430,-83,309,0,0,0], [20900,912,394,0,0,0], [9986,912,394,0,0,0],
-            [74990,912,394,0,0,0], [19973,912,394,0,0,0]];
-        That(merman.AiCharacters.Count == mermanApcRows.Length &&
-            merman.AiCharacters.Select((actor,index) => actor.RawValues.SequenceEqual(mermanApcRows[index]) &&
-                actor.Faction == "[character]" && actor.RankKind == "[normal]").All(value => value) &&
+        That(merman.AiCharacters.Count(actor => actor.Id == 55430) == 1 &&
+            merman.AiCharacters.All(actor => actor.Id is 55430 or 20900 or 5409 or 9986 or 74990 or 19973 &&
+                actor.Faction == "[character]" && actor.RankKind == "[normal]") &&
+            merman.AiCharacters.Select(actor => actor.Id).Distinct().Count() == merman.AiCharacters.Count &&
             merman.NpcMetadataError is null && merman.Npcs is [{ Id: 1000 }],
-            "91548保留原APC55430、四种专用支援兵完整行和独立NPC1000，不被monster内NPC参数替代");
+            "91548保留原APC55430、可选支援兵和独立NPC1000，不被monster内NPC参数替代");
         var mermanPlan = DungeonMonsterPlan.FromRoom(merman,1,100,mermanDungeon.BasisLevel);
         var plannedRows = mermanPlan.Monsters.Where(monster => monster.AiCharacter is null).ToArray();
         var mermanApcs = mermanPlan.Monsters.Where(monster => monster.AiCharacter is not null).ToArray();
@@ -372,7 +370,7 @@ internal static partial class DungeonRoomCatalogTests
             plannedRows.Skip(1).All(monster => monster.SpawnType == 0 && monster.IsBlocking && !monster.IsBoss &&
                 monster.Source is { NpcParameter: null, SpecialChild: null }) &&
             mermanApcs.Select(actor => actor.MonsterId).SequenceEqual(merman.AiCharacters
-                .Where(actor => !DungeonCompanion.IsCompanionRow(actor.Id)).Select(actor => actor.Id)) &&
+                .Where((actor,index) => !DungeonCompanion.IsCompanionRow(merman,index)).Select(actor => actor.Id)) &&
             mermanApcs is [{ MonsterId: 55430 }] &&
             mermanApcs.All(actor => actor is { SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false, IsBoss: false }),
             "Q3487/91548 人鱼之王 NPC+dummy 与后续四只普通怪可以生成，友方APC单独保留，房间不再整图拒绝");

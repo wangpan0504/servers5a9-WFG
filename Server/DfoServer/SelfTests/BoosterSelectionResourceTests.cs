@@ -10,6 +10,29 @@ internal static class BoosterSelectionResourceTests
 {
     const int Box = 490010644, EventBox = 490010610;
 
+    public static void RunCore()
+    {
+        int checks = Count;
+        const string typo = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
+            "[booster select category]\n0 0\n[stackble]\n490004325 1 490004326 1 490004327 1 490004328 1\n[/stackble]\n" +
+            "[/booster select category]\n";
+        var definition = BoosterCatalog.Parse(typo);
+        That(definition.Available && definition.Selection is { SelectionCount: 1, Categories.Length: 1 } category &&
+            category.Categories[0].PendingRule is null &&
+            category.Categories[0].Rewards.SequenceEqual(new BoosterChoice[]
+                { new(490004325, 1), new(490004326, 1), new(490004327, 1), new(490004328, 1) }),
+            "[stackble]声明保留单选上限和完整四个候选，不变更奖励类型和数量");
+        foreach (string bad in new[]
+        {
+            typo.Replace("[/stackble]", "[/stackable]"), typo.Replace("[/stackble]", ""),
+            typo.Replace("490004328 1", "490004328"), typo.Replace("490004328 1", "490004328 0"),
+            typo.Replace("stackble", "unrecognized")
+        })
+            That(BoosterCatalog.Parse(bad).Selection?.Categories[0].PendingRule is not null,
+                "未知标签、错配闭合、残缺或非法数量仍拒绝，不截断分类发奖");
+        Console.WriteLine($"PASS {Count - checks} stackble选择分类解析断言");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
@@ -28,6 +51,13 @@ internal static class BoosterSelectionResourceTests
                 "分类5为首饰/特殊装备且含100353086 " + id);
             That(selection.Categories.All(row => row.Rewards.Length is >= 5 and <= 6), "每个分类的候选数量在5到6件之间 " + id);
         }
+        const int evidenceBox = 490004382;
+        var evidence = catalog.Get(evidenceBox);
+        var evidenceCategory = evidence.Selection?.Categories.SingleOrDefault(row => row.Category == 0 && row.Subcategory == 0);
+        That(evidence.Available && evidence.Selection is { SelectionCount: 1 } && evidenceCategory is not null &&
+            evidenceCategory.Rewards.Select(row => row.ItemId).SequenceEqual(new[] { 490004325, 490004326, 490004327, 490004328 }) &&
+            evidenceCategory.Rewards.All(row => row.Count == 1),
+            "当前PVF 490004382的[stackble]声明完整解析四个候选及其数量");
         // 此处只验证声明形态；艾肯产物另在所属用例验证品级写入，其他装备保持原有行为。
         const string head = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
             "[booster select category]\n0 0\n[equipment]\n401030066 1\n[/equipment]\n[/booster select category]\n";

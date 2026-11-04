@@ -212,6 +212,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         MarriageRecord? marriage = null;
         InventoryResult result;
         if (context.Activity?.BlocksTownActions == true) result = InventoryResult.Reject(17);
+        else if (request.ShopId == EndlessAdventurePolicy.ShopId || request.NpcId == EndlessAdventurePolicy.NpcId ||
+            request.ItemId is >= 490011735 and <= 490011739)
+            result = context.Session.BuyEndlessAdventure(request, shop, out receipt);
         else if (Strongway2019ShopRules.Handles(request.ShopId))
             result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
                 context.Session.PlanAndCommitStrongway2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);

@@ -1093,7 +1093,10 @@ internal sealed partial class GameSession
             var after = (entryItems?.After ?? before) with { BossSelectionBuff = bossBuff.Remaining == 1 ? null : bossBuff with { Remaining = bossBuff.Remaining - 1 } };
             entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
-        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
+        int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
+        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+            DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(installing.Entry.StartFatigue,
+                accelerationPercent, character.Fatigue?.Remaining ?? 0);
         if (installing.Dazzlement is { } dazzlement &&
             (dazzlement != DazzlementTowerAdmission.At(IncountNow()) || repository.LoadDazzlementTower(owner).Rejection(character.Id, dazzlement) is not null))
             return null;
@@ -1109,7 +1112,6 @@ internal sealed partial class GameSession
         {
             installing = installing with { GuildTraining = training.Snapshot };
         }
-        int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
         Character committed;
         if (installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
@@ -1461,6 +1463,12 @@ internal sealed partial class GameSession
             var at = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
             var bonuses = PlanExperience(Selected, ExperienceEvent.Kill, basis.Amount, 0, at.ToUnixTimeSeconds(), dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
+            if (PartyDungeon is { IsExecuting: true } party)
+            {
+                // 只认本实例当前成员，不用城镇队伍或入场时的人数；随原死亡冻结，重放不重新拆分。
+                int members = party.Members.Count(member => member.IsCurrent() && ReferenceEquals(member.Actor.Session.PartyDungeon, party));
+                if (members > 1) bonuses = bonuses.SplitPartyDisplay(rewards.GetPartyRate(members));
+            }
             dungeon.PendingDeathReward = (pending, basis with
                 { BaseAmount = basis.Amount, Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                     PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at);

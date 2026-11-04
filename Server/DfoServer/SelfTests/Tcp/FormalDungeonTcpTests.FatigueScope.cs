@@ -51,7 +51,7 @@ internal static partial class FormalDungeonTcpTests
         first.Send(16, selection);
         first.Expect(0, 28);
         first.Expect(0, 29);
-        Load(first);
+        Load(first, fatigue: false);
         ExpectFatigue(first, true);
         first.Barrier();
         That(fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id") == stored &&

@@ -91,10 +91,25 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         int categoryOffset = byItemKey ? 8 : 5;
         int categoryId = body.Length >= categoryOffset + 2 ? body[categoryOffset] | (body[categoryOffset + 1] << 8) : -1;
         int itemId = byItemKey && body.Length >= 14 ? BitConverter.ToInt32(body, 10) : 0;
-        // ★ 金币寄售窗口（`mode=1`）**本仓库未接入**：那个窗口的「金币搜索」查的是别人寄售的金币，
-        // 与拍卖行挂牌是两套数据。把拍卖行结果发进去会把装备画进寄售面板（2026-10-12 实机现象），
-        // 因此这里只回**空列表**：不伪造寄售数据，也不让面板停在无响应。
-        // 探针候选在这里**不消耗**（被拒的请求不换候选，与其它拒绝路径同款，实机每点一次才换一种布局）。
+        // mode=0 普通拍卖，mode=1 金币寄售。其它值没有实机样本，仍只回空列表，避免把装备灌进未知窗口。
+        // 金币搜索不消耗搜索探针：记录布局与普通搜索相同（2026-10-12 实机把普通记录画进了寄售面板），
+        // 轮换实验布局不该推进到这个窗口。
+        if (mode == AuctionMyListReply.ConsignmentWindowMode)
+        {
+            log.Write("auction_search_consignment", new
+            {
+                ByItemKey = byItemKey,
+                Connection = context.Id,
+                Length = body.Length,
+                Body = Convert.ToHexString(body),
+                Mode = mode,
+                CategoryId = categoryId,
+                ItemId = itemId,
+                Note = "金币寄售窗口：只检索金币券挂牌，不返回普通拍卖装备"
+            });
+            return await ListingsAsync(context, mode, (byte)mode, offset, categoryId, itemId, byItemKey,
+                AuctionProbeSettings.Disabled, goldWindow: true, "auction_search_consignment_reply");
+        }
         if (mode != AuctionMyListReply.NormalWindowMode)
         {
             log.Write("auction_search_consignment", new
@@ -106,7 +121,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 Mode = mode,
                 CategoryId = categoryId,
                 ItemId = itemId,
-                Note = "金币寄售窗口未接入：只回空列表，绝不把拍卖行挂牌发进寄售面板"
+                Note = "未知拍卖窗口：只回空列表"
             });
             await context.Reply(CmdPacketType.AUCTION_SEARCH_BY_ITEMKEY,
                 AuctionPackets.SearchReply((byte)mode, 0, [], AuctionSearchRecordProbe.Default,
@@ -150,11 +165,12 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         });
         if (probe.Enabled)
             return await ProbeAsync(context, replyMode, probe, probeReply);
-        return await ListingsAsync(context, mode, replyMode, offset, categoryId, itemId, byItemKey, probe);
+        return await ListingsAsync(context, mode, replyMode, offset, categoryId, itemId, byItemKey, probe, goldWindow: false,
+            "auction_search_reply");
     }
     /// <summary>真实挂牌读路径：186/187 都按 186 应答，返回分类过滤后的匹配总数与本页（10 条）记录。</summary>
     async Task<CommandResult> ListingsAsync(GameConnectionContext context, int mode, byte replyMode, int offset, int categoryId,
-        int itemId, bool byItemKey, AuctionProbeSettings probe)
+        int itemId, bool byItemKey, AuctionProbeSettings probe, bool goldWindow, string replyAction)
     {
         var character = context.Session.Selected;
         if (character is null)
@@ -166,7 +182,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         // 分类搜索不带 itemId；按道具搜索的 itemId 为 0 时同样不过滤，避免用无效模板过滤掉全部挂牌。
         int? itemTemplateId = byItemKey && itemId > 0 ? itemId : null;
-        var page = auctions.Search(new(offset, itemTemplateId, categoryId), character.Id, now);
+        var page = auctions.Search(new(offset, itemTemplateId, categoryId), character.Id, now, goldWindow);
         // Search 一定带回分类过滤说明（仓储不解释分类，由读用例补上），日志与过滤因此共用同一份解析结果：
         // 分类名、是否命中顶层大类、实际下推的维度都来自这里，
         // 「客户端点了哪个节点 / 服务端到底过滤了什么」可以直接对照。
@@ -208,7 +224,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 listing.ItemCount, Price = listing.DisplayPrice, listing.BuyoutPrice, listing.ExpiresAtUnix }).ToArray()
         });
         await context.Reply(CmdPacketType.AUCTION_SEARCH_BY_ITEMKEY,
-            AuctionPackets.SearchReply(replyMode, page.TotalCount, page.Listings, probe.SearchRecord, now), "auction_search_reply");
+            AuctionPackets.SearchReply(replyMode, page.TotalCount, page.Listings, probe.SearchRecord, now), replyAction);
         return CommandResult.Handled;
     }
 
@@ -453,11 +469,8 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         var request = AuctionMyListRequest.Parse(body);
         byte mode = request.Mode;
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        // ★ 金币寄售窗口（`mode=1`）**本仓库未接入**：那个窗口的「确认寄售的金币」列的是**寄售金币**，
-        // 与拍卖行挂牌是两套数据。回拍卖行挂牌会把装备画进寄售面板（2026-10-12 实机现象，截图见任务记录），
-        // 因此只回**空列表**（`flag + mode=1 + count=0`）：既不伪造寄售数据，面板也不会停在无响应。
-        // 这里**不消耗**探针候选：金币寄售的请求不该推进「我的拍卖品」的记录布局轮换。
-        if (mode != AuctionMyListReply.NormalWindowMode)
+        // 未知窗口仍回空列表，并且不消耗「我的拍卖品」探针。
+        if (mode is not (AuctionMyListReply.NormalWindowMode or AuctionMyListReply.ConsignmentWindowMode))
         {
             var consignment = AuctionMyListReply.DefaultFor(panel);
             byte[] empty = AuctionPackets.MyListReply(mode, [], consignment, now);
@@ -472,11 +485,12 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 Candidate = consignment.Name,
                 BodyLength = empty.Length,
                 Head = Convert.ToHexString(empty.AsSpan(0, Math.Min(empty.Length, 4))),
-                Note = "金币寄售窗口未接入：只回空列表，绝不把拍卖行挂牌发进寄售面板"
+                Note = "未知拍卖窗口：只回空列表"
             });
             await context.Reply((CmdPacketType)(int)panel, empty, "auction_my_list_consignment");
             return CommandResult.Handled;
         }
+        bool goldWindow = mode == AuctionMyListReply.ConsignmentWindowMode;
         var character = context.Session.Selected;
         if (character is null)
         {
@@ -497,12 +511,40 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         //      访问路径上（与邮箱 `ExpireMailbox` 同一形态）。失败不阻断列表：结算抛异常时按原样回列表，
         //      下一次访问重试（宁可晚退，不可把列表打成「点了没反应」）。
         SettleExpiredListings(context, character, panel);
+        if (goldWindow)
+        {
+            // 金币窗口使用已确认的默认记录布局，不消耗探针。2026-10-12 实机证明这套记录能被寄售面板画出来。
+            var consignment = AuctionMyListReply.DefaultFor(panel);
+            IReadOnlyList<AuctionListing> goldRows = panel switch
+            {
+                AuctionMyListPanel.Registed => auctions.SellerListings(character.Id, now, includeInactive: false, goldMarket: true),
+                AuctionMyListPanel.History => auctions.SellerListings(character.Id, now, includeInactive: true, goldMarket: true),
+                _ => []
+            };
+            byte[] goldPayload = AuctionPackets.MyListReply(mode, goldRows, consignment, now);
+            log.Write("auction_my_list_consignment", new
+            {
+                Opcode = (int)panel,
+                Panel = panel.ToString(),
+                Connection = context.Id,
+                Length = body.Length,
+                Body = Convert.ToHexString(body),
+                Mode = mode,
+                Candidate = consignment.Name,
+                Count = goldRows.Count,
+                BodyLength = goldPayload.Length,
+                Head = Convert.ToHexString(goldPayload.AsSpan(0, Math.Min(goldPayload.Length, 4))),
+                Note = "金币寄售窗口：只列出该角色的金币券挂牌"
+            });
+            await context.Reply((CmdPacketType)(int)panel, goldPayload, "auction_my_list_consignment");
+            return CommandResult.Handled;
+        }
         // 本次请求取一份候选快照：探针关闭时就是该页签的默认候选（参考实现的量）。
         var layout = nextMyList(panel).MyList;
         IReadOnlyList<AuctionListing> rows = panel switch
         {
-            AuctionMyListPanel.Registed => auctions.SellerListings(character.Id, now, includeInactive: false),
-            AuctionMyListPanel.History => auctions.SellerListings(character.Id, now, includeInactive: true),
+            AuctionMyListPanel.Registed => auctions.SellerListings(character.Id, now, includeInactive: false, goldMarket: false),
+            AuctionMyListPanel.History => auctions.SellerListings(character.Id, now, includeInactive: true, goldMarket: false),
             _ => []
         };
         byte[] payload = AuctionPackets.MyListReply(mode, rows, layout, now);

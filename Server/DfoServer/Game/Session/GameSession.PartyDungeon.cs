@@ -184,7 +184,10 @@ internal sealed partial class GameSession
             ? new(channel.Incount?.CountKey ?? channel.DungeonId, channel.Period, channel.Incount, channel.Account, !channel.ChargeOnClear) : null;
         if (dungeon.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
 
-        ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : dungeon.Entry.StartFatigue;
+        int accelerationPercent = CaptureFatigueAcceleration(dungeon.Entry);
+        ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+            DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(dungeon.Entry.StartFatigue,
+                accelerationPercent, Selected.Fatigue?.Remaining ?? 0);
         DfoServer.Game.Guild.GuildDungeonAdmission? guildAdmission = null;
         if (guildDungeons?.Find(dungeon.Entry.DungeonId) is not null)
         {
@@ -201,7 +204,7 @@ internal sealed partial class GameSession
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
-                FatigueAccelerationPercent = CaptureFatigueAcceleration(dungeon.Entry),
+                FatigueAccelerationPercent = accelerationPercent,
                 RequiredEvent = Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar

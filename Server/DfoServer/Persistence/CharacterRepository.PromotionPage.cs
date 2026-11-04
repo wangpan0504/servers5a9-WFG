@@ -86,20 +86,22 @@ internal sealed partial class CharacterRepository
                         reader.GetInt64(7) < order.PlannedAt.ToUnixTimeSeconds())
                         return Unverified();
                     var awards = PageOrderAwards(rules, count, order.Units);
+                    int awardsPerMail = business.Deliveries.Length == awards.Count ? 1 : 10;
                     if (!awards.SequenceEqual(business.Awards) ||
-                        business.Deliveries.Length != (awards.Count + 9) / 10 || mails.Length != business.Deliveries.Length)
+                        business.Deliveries.Length != (awards.Count + awardsPerMail - 1) / awardsPerMail ||
+                        mails.Length != business.Deliveries.Length)
                         return Unverified();
                     for (int part = 0; part < business.Deliveries.Length; part++)
                     {
                         var delivery = business.Deliveries[part];
-                        int offset = part * 10;
+                        int offset = part * awardsPerMail;
                         if (delivery is null || delivery.Recipient is null ||
                             mails[part] is 0 or > 1073741823 || !mailIds.Add(mails[part]) ||
                             delivery.Key != PromotionMailKey.Create(order, awards[offset].PurchaseNumber, part) ||
                             delivery.Recipient.Id != order.RecipientId || delivery.Recipient.Account != owner.Account ||
                             delivery.Recipient.Name != business.Expected.Name || delivery.Gold != 0 || delivery.Expires is not null ||
                             delivery.Created != order.PlannedAt.ToUnixTimeSeconds() || delivery.Items.IsDefault ||
-                            delivery.Items.Length != Math.Min(10, awards.Count - offset))
+                            delivery.Items.Length != Math.Min(awardsPerMail, awards.Count - offset))
                             return Unverified();
                         for (int index = 0; index < delivery.Items.Length; index++)
                         {

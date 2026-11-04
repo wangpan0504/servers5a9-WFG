@@ -415,7 +415,15 @@ internal static class SocialTcpTests
         observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Expect(0, 9, queryResult);
         leader.Send(36, Area(38, 1, 450, 234, 38, 0));
         leader.Batch((0, 23), (0, 24), (0, 1379)); OwnSceneInformation();
-        observer.Expect(0, 23, AreaNotice(leader.Id, 38, 1, 450, 234));
+        // 前次同区目录异步发布可能晚于队长本人的切区响应，仅接受相同查询结果的一次重放。
+        var departure = observer.Read();
+        if (departure is { Kind: 0, Opcode: 9 })
+        {
+            Bytes(departure.Body, queryResult, "离区前重复同区目录必须逐字节等于当前队伍快照");
+            departure = observer.Read();
+        }
+        That(departure is { Kind: 0, Opcode: 23 }, "至多一次相同目录后必须收到队长离区通知");
+        Bytes(departure.Body, AreaNotice(leader.Id, 38, 1, 450, 234), "离区通知仍严格匹配队长与目的区域");
         RemoteDirectory();
         leader.Send(1404, Query(leader.Id, kind: 6)); leader.Expect(0, 9, queryResult);
         leader.Send(13); leader.Expect(1, 13, [1]);

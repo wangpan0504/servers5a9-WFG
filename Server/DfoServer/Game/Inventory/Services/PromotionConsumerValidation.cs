@@ -197,10 +197,38 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     foreach (var row in category.MaterialRows)
                     {
                         var child = items.Get(row.ItemId);
+                        if (CurrencyWallet.RewardKind(row.ItemId) is not null)
+                        {
+                            if (InventoryAvatarPackageService.WalletRowDefinitionError(new(row.ItemId, row.Count), child) is { } walletError)
+                            { Error(source, row.ItemId, walletError); continue; }
+                            Edge(new(row.ItemId, row.Count), $"{source}/{id}:wallet:{category.Category}:{category.Subcategory}", freeSource: id);
+                            continue;
+                        }
                         if (InventoryAvatarPackageService.EtcRowDefinitionError(row, child, pieces) is { } reason)
                         { Error(source, row.ItemId, reason); continue; }
                         string kind = child.Kind == ItemKind.Consumable ? "stackable" : "material";
                         Edge(new(row.ItemId, row.Count), $"{source}/{id}:{kind}:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);
+                    }
+                    foreach (var row in category.CreatureRows)
+                    {
+                        var child = items.Get(row.ItemId);
+                        if (InventoryAvatarPackageService.CreatureRowDefinitionError(row, child) is { } reason)
+                        { Error(source, row.ItemId, reason); continue; }
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:creature:{category.Category}:{category.Subcategory}", ItemKind.Creature, freeSource: id);
+                    }
+                    foreach (var row in category.StackableRows)
+                    {
+                        var child = items.Get(row.ItemId);
+                        if (CurrencyWallet.RewardKind(row.ItemId) is not null)
+                        {
+                            if (InventoryAvatarPackageService.WalletRowDefinitionError(new(row.ItemId, row.Count), child) is { } walletError)
+                            { Error(source, row.ItemId, walletError); continue; }
+                            Edge(new(row.ItemId, row.Count), $"{source}/{id}:wallet:{category.Category}:{category.Subcategory}", freeSource: id);
+                            continue;
+                        }
+                        if (InventoryAvatarPackageService.StackableRowDefinitionError(row, child, pieces) is { } reason)
+                        { Error(source, row.ItemId, reason); continue; }
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:stackable:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);
                     }
                 }
                 return;
@@ -233,7 +261,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 {
                     if (pool.Draws <= 0 || !pool.Rewards.Any(row => row.Weight > 0))
                     { Error(source, id, "empty_or_invalid_pool"); continue; }
-                    foreach (var row in pool.Rewards.Where(row => row.Weight > 0))
+                    foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
                     {
                         if (checked((long)row.Count * pool.Draws) > int.MaxValue)
                         { Error(source, row.ItemId, "pool_reward_count_overflow"); continue; }

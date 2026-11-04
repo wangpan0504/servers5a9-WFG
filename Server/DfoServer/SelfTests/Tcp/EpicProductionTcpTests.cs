@@ -78,7 +78,7 @@ internal static class EpicProductionTcpTests
                     repo.List(verify).Single().Inventory.Items.All(item=>item.Core.ItemId!=3141),"中级制作混合两种材料按请求数量落库扣除");
             var rows=new[]{10163130,10163131}.Select(id=>(id,Slot(id))).ToArray();
             peer.Send(1419,Build(w=>{w.Write((ushort)rows.Length);foreach(var (id,index) in rows){w.Write(id);w.Write((uint)index);}}));
-            Mutation(peer,1419,body=>Bytes(body,[1,0xb8,0x0b,0,0,1,0],"关闭兼容大成功后加工精确增加3000点"));
+            Mutation(peer,1419,body=>Bytes(body,[1,0xb8,0x0b,0,0,1,0],"关闭兼容大成功后加工精确增加3000点"),conditions:[10024,10026]);
             State(peer,weapon,3000,1,1);
             That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN(10024,10026) ORDER BY quest_id",created.Id) is [[0L],[0L]],
                 "成功事务同时推进两条实际已接取任务而非只更新客户端");
@@ -169,19 +169,24 @@ internal static class EpicProductionTcpTests
         That(body.Length==32 && U32(body,8)==unchecked((uint)weapon) && U32(body,12)==charge && body[17]==used && U32(body,20)==remainder,
             "提交后完整状态通知与真实持久状态匹配");peer.Barrier();
     }
-    static void Mutation(TcpPeer peer,ushort opcode,Action<byte[]> check,Action<byte[]>? inventory=null)
+    static void Mutation(TcpPeer peer,ushort opcode,Action<byte[]> check,Action<byte[]>? inventory=null,ushort[]? conditions=null)
     {
-        int changes=0;
+        int changes=0,conditionsSeen=0;
         for(int i=0;i<32;i++)
         {
             var packet=peer.Read();
-            if(packet.Kind==1 && packet.Opcode==opcode){check(packet.Body);That(changes>0,"成功制作先发布库存变化");return;}
-            // 制作事务提交后背包投影借任务条件路径补发加工任务进度，形态是应答SET_QUEST_TRIGGER(kind1/33，
-            // QuestProjection.PublishConditionsAsync)。该顺序在成组前就存在，基线提交独立复现，不是本分支引入。
+            if(packet.Kind==1 && packet.Opcode==opcode)
+            {
+                check(packet.Body);That(changes>0,"成功制作先发布库存变化");
+                That(conditionsSeen==(conditions?.Length??0),"制作成功ACK前必须完整发布本次明确预期的任务条件");
+                return;
+            }
             if(packet.Kind==1 && packet.Opcode==33)
             {
-                That(packet.Body.Length==7 && packet.Body[0]==1 && U16(packet.Body,1) is 10024 or 10026,
-                    "任务权威应答只能是本次实际推进的加工任务整条条件包");
+                That(conditions is not null && changes>0 && conditionsSeen<conditions.Length,
+                    "只允许本次库存提交之后声明的任务条件，不吞其他或重复ACK33");
+                ushort quest=conditions![conditionsSeen++];
+                Bytes(packet.Body,[1,(byte)quest,(byte)(quest>>8),0,0,0,0],"制作任务条件按原顺序完整回同一任务与已完成scalar0");
                 continue;
             }
             That(packet.Kind==0 && packet.Opcode is 14 or 21 or 32 or 356 or 574,"制作之前只能发布库存/任务权威变化");

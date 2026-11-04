@@ -7,7 +7,13 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record BoosterReward(int ItemId, long Weight, int Count);
+internal sealed record BoosterReward(int ItemId, long Weight, int Count)
+{
+    public bool EmptyOutcome { get; init; }
+    // 多行 [avatar] 与 [special avatar] 的第 4、5 列。null 表示单行 [avatar] 的尾列不参与发放。
+    public int? AvatarPeriodDays { get; init; }
+    public byte? AvatarAbility { get; init; }
+}
 internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null)
 {
     public bool Dungeon { get; init; }
@@ -58,6 +64,8 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
+    public byte? DailyConsumedLimit { get; init; }
+    public byte? DailyUseLimit => DailyConsumedLimit ?? DailyRetainedLimit;
     public ItemMaterialCost? LotteryUseNeedItem { get; init; }
     public uint LotteryGoldCost { get; init; }
     public bool AllowsLotteryGold { get; init; }
@@ -193,6 +201,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        bool finiteLegacy = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+1$");
+        // 普通实物罐只复用有限奖池；动作型旧物品不能借此跳过独立玩法。
+        if (finiteLegacy && Regex.IsMatch(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase))
+            return new([], "普通袖珍罐动作声明未支持");
         ItemMaterialCost? lotteryUseNeedItem = null;
         uint lotteryGoldCost = 0;
         var goldCosts = Regex.Matches(tags,
@@ -203,7 +215,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             int end = declaration.Index + declaration.Length;
             int next = tags.IndexOf('[', end);
             // 付费金币奖励的净增量回包尚未闭合；费用只接入类型1的有限实物池。
-            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$") ||
+            if ((!finiteLegacy && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
                 goldCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
                 !declaration.Value.Equals("[lottery use cost]", StringComparison.OrdinalIgnoreCase) ||
                 !IsRootDeclaration(tags, declaration.Index) ||
@@ -229,10 +241,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             lotteryUseNeedItem = new(materialId, materialCount);
         }
         byte? dailyLimit = null;
+        bool retainsDailySource = false;
         if (tags.Contains("[total usable count]", StringComparison.OrdinalIgnoreCase))
         {
-            if (type != "booster" || !DailyRetainedBoosterDefinition.TryParse(text, out byte limit))
-                return new([], "每日保留资格字段不完整或含未实现规则");
+            if (type != "booster" || !DailyRetainedBoosterDefinition.TryParse(text, out byte limit, out retainsDailySource))
+                return new([], "每日次数资格字段不完整或含未实现规则");
             dailyLimit = limit;
         }
         var disjointDeclarations = Regex.Matches(tags, @"\[\s*/?\s*set\s+disjoint\s+instance\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
@@ -317,7 +330,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     CultureInfo.InvariantCulture, out int abilityGrade) || abilityGrade < 0)
                 return new([], "custom ability grade");
         }
-        if (type == "legacy")
+        if (type == "legacy" && !finiteLegacy)
         {
             // [legacy] 的开箱语义只认 [action type] `[rune random box]` 族 档；其他动作与参数保持未实现。
             if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+0$"))
@@ -326,11 +339,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], pending!);
             return new([], null) { RuneBox = (family, tier), Lottery = true };
         }
-        if (type == "upgradable legacy")
+        if (type == "upgradable legacy" || finiteLegacy)
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
             string lotteryType = PvfScript.Section(text, "stackable type").Trim();
-            if (!Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
+            if (!finiteLegacy && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
                 return new([], "袖珍罐子类型待确认");
             bool allowsGold = lotteryType.EndsWith('0');
             var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);
@@ -385,6 +398,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             return new([], "礼包奖池缺失或重复");
         string body = blocks[0].Groups[1].Value;
         var pools = ImmutableArray.CreateBuilder<BoosterPool>();
+        bool allowsEmptyBonus = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[booster\]`\s+0$");
         int at = 0;
         foreach (Match match in Regex.Matches(body, @"\[(?<kind>[^/\]\r\n]+)\](?<data>.*?)\[/\k<kind>\]", RegexOptions.Singleline))
         {
@@ -410,9 +424,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     pools.Add(characterPool);
                 continue;
             }
-            if (kind == "avatar")
+            if (kind is "avatar" or "special avatar")
             {
-                if (!TryParseAvatarPool(match.Groups["data"].Value, out var avatarPool, out string? pending))
+                if (!TryParseAvatarPool(match.Groups["data"].Value, kind == "special avatar", out var avatarPool, out string? pending))
                     return new([], pending ?? "装扮奖池无效");
                 pools.Add(avatarPool);
                 continue;
@@ -428,7 +442,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             int scale = 0;
             for (int i = 1; i < tokens.Length; i += 3)
             {
-                if (!int.TryParse(tokens[i], out int id) || id <= 0 || !int.TryParse(tokens[i + 2], out int count) || count <= 0 ||
+                if (!int.TryParse(tokens[i], out int id) || id < 0 || !int.TryParse(tokens[i + 2], out int count) || count <= 0 ||
+                    id == 0 && (!allowsEmptyBonus || kind != "etc" || count != 1) ||
                     !decimal.TryParse(tokens[i + 1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) || weight < 0)
                     return new([], "奖池物品、数量或权重无效");
                 scale = Math.Max(scale, (decimal.GetBits(weight)[3] >> 16) & 0xff);
@@ -439,7 +454,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 decimal factor = 1;
                 for (int digit = 0; digit < scale; digit++)
                     factor = checked(factor * 10);
-                var rewards = rows.Select(row => new BoosterReward(row.Id, checked((long)(row.Weight * factor)), row.Count)).ToImmutableArray();
+                // 普通额外池的0号是空奖；袖珍罐的0号金币在独立入口解析，不沿用此标记。
+                var rewards = rows.Select(row => new BoosterReward(row.Id, checked((long)(row.Weight * factor)), row.Count)
+                    { EmptyOutcome = row.Id == 0 }).ToImmutableArray();
                 if (rewards.Sum(row => row.Weight) > 0)
                     pools.Add(new(draws, rewards) { RequiredKind = kind == "creature" ? ItemKind.Creature : null });
             }
@@ -449,59 +466,135 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             }
         }
         string tail = body[at..];
+        if (pools.Any(pool => pool.Rewards.Any(row => row.EmptyOutcome)) &&
+            !pools.Any(pool => pool.JobTag is null && pool.Rewards.Where(row => row.Weight > 0).All(row => !row.EmptyOutcome)))
+            return new([], "空额外奖缺少独立基础奖池");
         return !string.IsNullOrWhiteSpace(tail) &&
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())
-                { DailyRetainedLimit = dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
+                { DailyRetainedLimit = retainsDailySource ? dailyLimit : null,
+                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
     }
 
-    // 普通装扮礼包的 [avatar] 段把外观写成 (物品, 权重, 数量) 加资源特定的尾部整数列，
-    // 与选择型 [booster select category] 的四列行不同。单行奖池没有选择语义，尾部列只校验为
-    // 整数、不参与发奖；多行或行宽有歧义时保持拒绝，避免把随机外观误发成固定一件。
-    static bool TryParseAvatarPool(string data, out BoosterPool pool, out string? pending)
+    // [avatar] / [special avatar] 行宽为五列：物品、权重、数量、期限天数、属性选项。
+    // 单行 [avatar] 仍只发前三列，尾部整数只校验；多行以及 [special avatar] 把后两列带进发放。
+    // 同时能被 4 与 5 整除时按五列读。在售海之勇者、野生力量的八行池就是这种长度，四列会拆错属性。
+    static bool TryParseAvatarPool(string data, bool special, out BoosterPool pool, out string? pending)
     {
         pool = null!;
         pending = null;
         string[] tokens = data.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length < 4 || !int.TryParse(tokens[0], out int draws) || draws <= 0)
+        if (tokens.Length < 2 || !int.TryParse(tokens[0], NumberStyles.None, CultureInfo.InvariantCulture, out int draws) || draws <= 0)
         {
             pending = "装扮奖池抽取次数或行宽无效";
             return false;
         }
         int rest = tokens.Length - 1;
-        int width = rest % 5 == 0 && rest % 4 != 0 ? 5 : rest % 4 == 0 && rest % 5 != 0 ? 4 : 0;
-        if (width == 0)
+        bool widthFive = rest % 5 == 0 && rest >= 5;
+        if (special)
         {
-            pending = "装扮奖池行宽有歧义";
-            return false;
+            if (!widthFive)
+            {
+                pending = "装扮奖池行宽有歧义";
+                return false;
+            }
+            return TryParseAvatarRows(tokens, draws, out pool, out pending);
         }
-        if (rest != width)
-        {
-            pending = "装扮奖池多行选择待确认";
-            return false;
-        }
-        if (!int.TryParse(tokens[1], out int id) || id <= 0 || !int.TryParse(tokens[3], out int count) || count <= 0 ||
+        if (rest is 4 || widthFive && rest == 5)
+            return TryParseLegacyAvatarRow(tokens, draws, out pool, out pending);
+        if (widthFive)
+            return TryParseAvatarRows(tokens, draws, out pool, out pending);
+        pending = rest % 4 == 0 ? "装扮奖池多行选择待确认" : "装扮奖池行宽有歧义";
+        return false;
+    }
+
+    static bool TryParseLegacyAvatarRow(string[] tokens, int draws, out BoosterPool pool, out string? pending)
+    {
+        pool = null!;
+        pending = null;
+        if (!int.TryParse(tokens[1], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || id <= 0 ||
+            !int.TryParse(tokens[3], NumberStyles.None, CultureInfo.InvariantCulture, out int count) || count <= 0 ||
             !decimal.TryParse(tokens[2], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) ||
-            weight <= 0 || tokens[4..].Any(value => !int.TryParse(value, out _)))
+            weight <= 0 || tokens[4..].Any(value => !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)))
         {
             pending = "装扮奖池物品、数量或权重无效";
             return false;
         }
-        // 小数位权重与随机池保持同一缩放约定，单行权重恒为正。
-        int scale = Math.Max(0, (decimal.GetBits(weight)[3] >> 16) & 0xff);
-        decimal factor = 1;
-        for (int digit = 0; digit < scale; digit++)
-            factor = checked(factor * 10);
+        if (!TryScaleWeight(weight, out long scaled, out pending))
+            return false;
+        pool = new(draws, [new(id, scaled, count)]);
+        return true;
+    }
+
+    static bool TryParseAvatarRows(string[] tokens, int draws, out BoosterPool pool, out string? pending)
+    {
+        pool = null!;
+        pending = null;
+        var rows = new List<(int Id, decimal Weight, int Count, int Period, byte Ability)>();
+        int scale = 0;
+        for (int i = 1; i < tokens.Length; i += 5)
+        {
+            if (!int.TryParse(tokens[i], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || id <= 0 ||
+                !decimal.TryParse(tokens[i + 1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) ||
+                weight <= 0 ||
+                !int.TryParse(tokens[i + 2], NumberStyles.None, CultureInfo.InvariantCulture, out int count) || count <= 0 ||
+                !int.TryParse(tokens[i + 3], NumberStyles.None, CultureInfo.InvariantCulture, out int period) || period < 0 ||
+                !int.TryParse(tokens[i + 4], NumberStyles.None, CultureInfo.InvariantCulture, out int ability) || ability is < 0 or > byte.MaxValue)
+            {
+                pending = "装扮奖池物品、数量或权重无效";
+                return false;
+            }
+            scale = Math.Max(scale, (decimal.GetBits(weight)[3] >> 16) & 0xff);
+            rows.Add((id, weight, count, period, (byte)ability));
+        }
         try
         {
-            pool = new(draws, [new(id, checked((long)(weight * factor)), count)]);
+            decimal factor = 1;
+            for (int digit = 0; digit < scale; digit++)
+                factor = checked(factor * 10);
+            var rewards = new BoosterReward[rows.Count];
+            for (int i = 0; i < rows.Count; i++)
+            {
+                var row = rows[i];
+                rewards[i] = new(row.Id, checked((long)(row.Weight * factor)), row.Count)
+                {
+                    AvatarPeriodDays = row.Period,
+                    AvatarAbility = row.Ability
+                };
+            }
+            if (rewards.Sum(row => row.Weight) <= 0)
+            {
+                pending = "装扮奖池总权重为零";
+                return false;
+            }
+            pool = new(draws, rewards.ToImmutableArray());
+            return true;
         }
         catch (OverflowException)
         {
             pending = "装扮奖池权重溢出";
             return false;
         }
-        return true;
+    }
+
+    static bool TryScaleWeight(decimal weight, out long scaled, out string? pending)
+    {
+        scaled = 0;
+        pending = null;
+        int scale = Math.Max(0, (decimal.GetBits(weight)[3] >> 16) & 0xff);
+        decimal factor = 1;
+        try
+        {
+            for (int digit = 0; digit < scale; digit++)
+                factor = checked(factor * 10);
+            scaled = checked((long)(weight * factor));
+            return true;
+        }
+        catch (OverflowException)
+        {
+            pending = "装扮奖池权重溢出";
+            return false;
+        }
     }
 
     static bool TryParseRuneRandomBox(string text, string tags, out int family, out int tier, out string? pending)

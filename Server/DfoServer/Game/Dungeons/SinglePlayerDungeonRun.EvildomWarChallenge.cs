@@ -9,7 +9,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         if (entry.DungeonId != EvildomWarChallengeEntryPolicy.DungeonId || entry.Difficulty != 2 ||
             !entry.IsOrdinary || entry.IsPractice || entry.IsClassExperience || entry.IsQuestReplay ||
-            !entry.IndividualMapMovement || entry.PartyMemberCount != 4 || !entry.DisableFatigueConsumption ||
+            !entry.IndividualMapMovement || !EvildomWarChallengeEntryPolicy.AllowsPartyCount(entry.PartyMemberCount) || !entry.DisableFatigueConsumption ||
             !entry.DisableMonsterAndClearExperience || entry.HellParty is not null || entry.RaidEntry is not null ||
             entry.Maze.Width != 13 || entry.Maze.Height != 3 || entry.Maze.MapSpecification?.Count != 15 ||
             !entry.Maze.WarpMaps.Any(warp => warp.Source == current.Plan.Room.Map.Position && warp.Destination == target) ||

@@ -423,8 +423,48 @@ internal static class FiendwarGuideTcpTests
                         try
                         {
                             That(originalPartyRemoval is not null, "故障前原自然队伍名册已绑定本场身份");
+                            int faultConnection = -1;
+                            That(SpinWait.SpinUntil(() =>
+                            {
+                                var selections = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "selected" &&
+                                    row.GetProperty("Detail").GetProperty("Character").GetUInt16() == peer.Id).ToArray();
+                                if (selections.Length != 0)
+                                    faultConnection = selections[^1].GetProperty("Detail").GetProperty("Connection").GetInt32();
+                                return faultConnection >= 0;
+                            }, TimeSpan.FromSeconds(10)), "选角日志绑定本次故障的原角色连接");
+                            int eventBoundary = fixture.Events().Length;
                             peer.Send(39, deathRequest);
+                            // 故障连接的移除通知受原身份守卫约束，只允许零条或一条完整原名册通知后关闭。
                             peer.ClosedAfterFiendwarPartyRemoval(originalPartyRemoval!);
+                            That(SpinWait.SpinUntil(() => fixture.Events().Skip(eventBoundary).Any(row =>
+                                row.GetProperty("Kind").GetString() == "disconnected" &&
+                                row.GetProperty("Detail").GetProperty("Connection").GetInt32() == faultConnection &&
+                                row.GetProperty("Detail").GetProperty("Protocol").GetString() == "GAME"),
+                                TimeSpan.FromSeconds(10)), "原故障连接断线清理完成后才核对回滚账本");
+                            var failureEvents = fixture.Events().Skip(eventBoundary).ToArray();
+                            var receivedDeaths = failureEvents.Select((row, index) => (row, index)).Where(entry =>
+                                entry.row.GetProperty("Kind").GetString() == "recv" &&
+                                entry.row.GetProperty("Detail").GetProperty("Connection").GetInt32() == faultConnection &&
+                                entry.row.GetProperty("Detail").GetProperty("Kind").GetInt32() == 1 &&
+                                entry.row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 39 &&
+                                entry.row.GetProperty("Detail").GetProperty("Body").GetString() == Convert.ToHexString(deathRequest)).ToArray();
+                            That(receivedDeaths.Length == 1, "事件边界后仅原连接接收一次本次完整死亡请求");
+                            var deathEvents = failureEvents.Skip(receivedDeaths[0].index + 1).Where(row =>
+                                row.GetProperty("Detail").TryGetProperty("Connection", out var connection) &&
+                                connection.GetInt32() == faultConnection).ToArray();
+                            var closures = deathEvents.Where(row => row.GetProperty("Kind").GetString() == "closed").ToArray();
+                            That(closures.Length == 1 &&
+                                closures[0].GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                                closures[0].GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'guide battle pass rollback'.",
+                                "原死亡请求仅因本次战令触发器的精确SQLite异常关闭");
+                            That(deathEvents[^1].GetProperty("Kind").GetString() == "disconnected",
+                                "本次故障关闭后原连接完整断线，不接受无关断开");
+                            var sent = deathEvents.Where(row => row.GetProperty("Kind").GetString() == "send")
+                                .Select(row => row.GetProperty("Detail")).ToArray();
+                            That(sent.Length <= 1 && sent.All(row => row.GetProperty("Kind").GetInt32() == 0 &&
+                                row.GetProperty("Opcode").GetInt32() == 9 &&
+                                row.GetProperty("Body").GetString() == Convert.ToHexString(originalPartyRemoval!)),
+                                "故障后仅允许至多一条完整原队伍移除通知，不发送死亡或其它成功帧");
                             That(DeathSnapshot() == saved,
                                 "战令来源晚期失败回滚原成长回执、角色、来源、任务和赛季版本且不发死亡成功");
                             rollbackChecked = true;

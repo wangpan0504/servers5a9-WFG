@@ -32,9 +32,10 @@ internal static partial class DatabaseSchemaTests
                 _ = new CharacterRepository(path);
                 using (var db = Open(path))
                 {
-                    Check(Query(db, "SELECT (SELECT count(*) FROM account_battle_pass_seasons)+(SELECT count(*) FROM account_battle_pass_claims)+(SELECT count(*) FROM battle_pass_season_rules)+(SELECT count(*) FROM account_battle_pass_mission_progress)+(SELECT count(*) FROM account_battle_pass_mission_claims)+(SELECT count(*) FROM account_battle_pass_source_events)+(SELECT count(*) FROM account_battle_pass_certificate_orders)+(SELECT count(*) FROM account_battle_pass_cera_consumption)+(SELECT count(*) FROM account_battle_pass_cera_orders)") is 0L,
-                        "只从九张战令表均为空的隔离库构造正式179夹具");
+                    Check(Query(db, "SELECT (SELECT count(*) FROM account_battle_pass_seasons)+(SELECT count(*) FROM account_battle_pass_claims)+(SELECT count(*) FROM battle_pass_season_rules)+(SELECT count(*) FROM account_battle_pass_mission_progress)+(SELECT count(*) FROM account_battle_pass_mission_claims)+(SELECT count(*) FROM account_battle_pass_source_events)+(SELECT count(*) FROM account_battle_pass_certificate_orders)+(SELECT count(*) FROM account_battle_pass_cera_consumption)+(SELECT count(*) FROM account_battle_pass_cera_orders)+(SELECT count(*) FROM account_battle_pass_deluxe_orders)") is 0L,
+                        "只从十张战令表均为空的隔离库构造正式179夹具");
                     Execute(db, """
+                        DROP TABLE account_battle_pass_deluxe_orders;
                         DROP TABLE account_battle_pass_cera_orders;
                         DROP TABLE account_battle_pass_cera_consumption;
                         DROP TABLE account_battle_pass_certificate_orders;

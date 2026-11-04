@@ -115,18 +115,21 @@ internal static class DailyRetainedBoosterTests
             using var owner = owners.Acquire("daily-retained", () => { });
             repository.Create(owner, new("DailyKeep", towns.Room, towns.InitialReturn) { Inventory = new([new(0,
                 new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(resources.Items.Get(Source), utcNow: now))]) });
-            var session = new GameSession(repository, towns, owner);
+            // 建源、选角清理及开箱资格统一使用本轮虚拟时间，不能让真实日期先删除历史源。
+            var clock = new DailyBoosterTestClock(now);
+            var session = new GameSession(repository, towns, owner, timeProvider: clock);
             session.Select(0); session.MarkReady();
             var before = session.Selected!;
+            That(before.Inventory.Find(new(InventoryListType.Main, 65)) is { Core.ItemId: Source },
+                "同一虚拟时钟选角后保留真实每日源实例");
             string Snapshot() => JsonSerializer.Serialize(repository.List(owner));
             void Sql(string sql) { using var db = new SqliteConnection("Data Source=" + path); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
-            var clock = new DailyBoosterTestClock(now);
             var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces, clock: clock);
             string snapshot = Snapshot();
-            var planned = service.Open(before, new(65, 1), out _);
-            That(planned.Accepted && planned.Plan is not null,
-                "跨日提交夹具必须保留未过期源并先成功规划，不能将空计划交给仓储冒充期限拒绝");
-            var midnightPlan = planned.Plan!;
+            var midnight = service.Open(before, new(65, 1), out _);
+            That(midnight.Accepted && midnight.Plan is not null,
+                $"跨日持久化前必须成功规划完整每日奖励，实际{midnight.Error}/{midnight.RejectReason}");
+            var midnightPlan = midnight.Plan!;
             clock.Advance(TimeSpan.FromSeconds(1));
             bool expired = false;
             try { repository.CommitInventory(owner, before, midnightPlan); }
