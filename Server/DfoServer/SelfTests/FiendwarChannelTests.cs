@@ -348,9 +348,9 @@ internal static class FiendwarChannelTests
         var normalPlan = resourcePolicy.Prepare(110979, 120, 0, 2, 120);
         var championPlan = resourcePolicy.Prepare(110979, 120, 1, 2, 120);
         var equipmentPool = normalPlan.Trials[2].RarityPools.SelectMany(pool => pool.Items.Entries).ToArray();
-        That(normalPlan.Trials.Length >= 4 && normalPlan.Trials[0].Threshold is 1049 or 1050 && normalPlan.Trials[2].Threshold == 37 &&
-            championPlan.Trials[2].Threshold is 377 or 378,
-            $"120 级普通类型掉落：金币 {normalPlan.Trials[0].Threshold}/10000、装备 {normalPlan.Trials[2].Threshold}/10000（135×0.2×1.4）；生成类型 1 装备 {championPlan.Trials[2].Threshold}/10000");
+        That(normalPlan.Trials.Length >= 4 && normalPlan.Trials[0].Threshold == 750 && normalPlan.Trials[2].Threshold == 43 &&
+            championPlan.Trials[2].Threshold == 432,
+            $"120 级难度2按PVF通道矩阵掉落：金币 {normalPlan.Trials[0].Threshold}/10000、装备 {normalPlan.Trials[2].Threshold}/10000（135×0.2×1.6）；生成类型1装备 {championPlan.Trials[2].Threshold}/10000");
         Console.WriteLine($"INFO fiendwar 110979 trials {normalPlan.Trials.Length}: " + string.Join(" | ", normalPlan.Trials.Select(trial =>
             $"{trial.Threshold}/{trial.ProbabilityDenominator}x{trial.Attempts} items {trial.Items?.Entries.Length ?? -1} pools {(trial.RarityPools.IsDefault ? 0 : trial.RarityPools.Sum(pool => pool.Items.Entries.Length))}")));
         Console.WriteLine($"INFO fiendwar world drop 120 {(special.WorldByLevel.TryGetValue(120, out var world120) ? world120.Items.Length + " items" : "none")}");

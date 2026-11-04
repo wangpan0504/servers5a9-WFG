@@ -86,12 +86,12 @@ internal static class DungeonDropRuleCatalogTests
         var referencePolicy = new DungeonResourceDropPolicy(parsed, candidates,
             id => new(id, "monster/合成任意模板.mob", null, null), _ => throw new InvalidOperationException("合成无显式物品"));
         var bossPlan = referencePolicy.Prepare(42, 1, 3, 1);
-        That(bossPlan.Trials.Select(trial => trial.Threshold).SequenceEqual(new[] { 1183, 72, 300, 20 }) &&
+        That(bossPlan.Trials.Select(trial => trial.Threshold).SequenceEqual(new[] { 986, 60, 250, 17 }) &&
             bossPlan.ReferenceQuality && parsed.ProbabilityRows[0].Values[4] == 15,
             "参考默认四通道对任意Boss模板生效，第五列保留且不作为整个策略的阻塞条件");
-        var draws = new Queue<(int Bound, int Value)>([(27, 26), (10000, 1182),
-            (10000, 71), (1000000, 0), (2, 1), (10000, 299), (1000000, 0), (5, 4),
-            (999999997, 999999996), (10000, 19), (1000000, 200000), (2, 0)]);
+        var draws = new Queue<(int Bound, int Value)>([(27, 26), (10000, 985),
+            (10000, 59), (1000000, 0), (9, 8), (10000, 249), (1000000, 0), (5, 4),
+            (999999997, 999999996), (10000, 16), (1000000, 0), (9, 0)]);
         var assets = bossPlan.Generate(bound =>
         {
             var draw = draws.Dequeue(); That(bound == draw.Bound, "参考策略的金币、稀有度、候选与装备种子各用自己的抽样域");
@@ -99,11 +99,82 @@ internal static class DungeonDropRuleCatalogTests
         }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
         That(draws.Count == 0 && assets.Length == 4 && assets[0].GoldAmount == 22 &&
             assets[1].Item!.ItemId == 1001 && assets[2].Item!.Value == 999999997 && assets[3].Item!.ItemId == 1000,
-            "独立参考预期核对金币先抽、两类堆叠品、装备权重、同类稀有度回退及参考种子上界");
-        var firstDraws = new Queue<(int Bound, int Value)>([(27, 0), (10000, 1183), (10000, 9999), (10000, 9999), (10000, 9999)]);
+            "独立参考预期核对金币先抽、堆叠品及装备creation rate、完整种子上界");
+        var firstDraws = new Queue<(int Bound, int Value)>([(27, 0), (10000, 986), (10000, 9999), (10000, 9999), (10000, 9999)]);
         That(bossPlan.Generate(bound => { var draw = firstDraws.Dequeue(); That(bound == draw.Bound, "未命中金币仍先消费波动");
             return draw.Value; }, DateTimeOffset.UtcNow).IsEmpty && firstDraws.Count == 0,
             "四通道概率临界未命中不制造保底奖励");
+        int At(string tag) => source.FindIndex(token => token.Type == 3 && Resolve(token.Value) == "[" + tag + "]") + 1;
+        var classified = source.ToArray();
+        classified[At("party member drop bonusrate") + 2 * 4 + 3] = new(0, 3);
+        classified[At("dungeon difficulty drop bonusrate") + 2 * 5 + 2] = new(0, 2);
+        classified[At("monster type drop bonusrate") + 2 * 4 + 1] = new(0, 4);
+        for (int row = 0; row < 4; row++)
+        for (int rarity = 0; rarity < 7; rarity++)
+            classified[At("basis of rarity dicision") + row * 7 + rarity] = new(0, rarity < row ? 0 : 1000000);
+        var matrix = Parse(classified);
+        var colours = DungeonItemDropCatalog.Create(Enumerable.Range(0,4).Select(rarity =>
+            Template(3000+rarity,ItemKind.Equipment,rarity+1) with { Rarity=rarity }));
+        var matrixPolicy = new DungeonResourceDropPolicy(matrix,colours,
+            id => new(id,"monster/合成通道.mob",null,null),_ => throw new InvalidOperationException());
+        var matrixPlan = matrixPolicy.Prepare(42,1,1,2,1,4);
+        That(matrixPlan.Trials[2].Threshold == 6000 && matrixPlan.Trials[0].Threshold == 986 &&
+            matrixPlan.Trials[1].RarityPools[0].Threshold == 1000000 &&
+            matrixPlan.Trials[2].RarityPools[0].Threshold == 0 && matrixPlan.Trials[2].RarityPools[1].Threshold == 1000000 &&
+            matrixPlan.Trials[3].RarityPools[1].Threshold == 0 && matrixPlan.Trials[3].RarityPools[2].Threshold == 1000000,
+            "物品通道使用各自稀有度行；装备概率独立乘怪物4、难度2、四人3而非硬编码倍率");
+        foreach (int selectedRarity in new[] { 1,2,3,4 })
+        {
+            var forced = classified.ToArray();
+            for (int rarity=0;rarity<7;rarity++)
+                forced[At("basis of rarity dicision")+7+rarity]=new(0,rarity<selectedRarity?0:1000000);
+            var forcedPolicy = new DungeonResourceDropPolicy(Parse(forced),colours,
+                id => new(id,"monster/合成颜色.mob",null,null),_ => throw new InvalidOperationException());
+            var probabilityDraws = new Queue<int>([9999,9999,0,9999]);
+            var generated = forcedPolicy.Prepare(42,1,0,0).Generate(
+                bound => bound == 10000 ? probabilityDraws.Dequeue() : 0,cardNow);
+            That(selectedRarity == 4 ? generated.IsEmpty : generated is [{ Item.ItemId: var chosen }] && chosen == 3000+selectedRarity,
+                "确定性生成蓝装、假紫及稀有装备；无候选的史诗不降为白装 " + selectedRarity);
+        }
+        var splitLevels = source.ToList();
+        splitLevels[At("drop prob count")] = new(0,2);
+        splitLevels[At("drop prob")+1] = new(0,1);
+        splitLevels.InsertRange(At("drop prob")+7,new[] {2,200,100,100,100,100,0}.Select(value=>new PvfToken(0,value)));
+        var levelRules = Parse(splitLevels);
+        var levelCandidates = DungeonItemDropCatalog.Create(new[] { 1,4,5 }.Select(grade=>
+            Template(4000+grade,ItemKind.Equipment,1) with { Grade=grade }));
+        var levelPolicy = new DungeonResourceDropPolicy(levelRules,levelCandidates,
+            id=>new(id,"monster/合成等级轴.mob",null,null),_=>throw new InvalidOperationException());
+        var axisPlan=levelPolicy.Prepare(42,2,0,0,1);
+        That(axisPlan.Trials[2].Threshold==250 && levelPolicy.Prepare(42,2,0,0,2).Trials[2].Threshold==100 &&
+            axisPlan.Trials[2].RarityPools[0].Items.Entries.Select(row=>row.Template.Grade).SequenceEqual([1,4]),
+            "概率段取副本等级1，候选按怪物2引用得到grade1至4，不包含开区间上界5");
+        var cardNames = new Dictionary<int,string> { [1]="[gold card cost table]",[2]="[basis of rarity dicision]",[3]="[item drop ref table]" };
+        PvfToken[] ownCard = [new(3,1),new(0,1),new(0,100),new(3,2),new(0,0),new(0,0),
+            new(0,1000000),new(0,1000000),new(0,1000001),new(0,1000002),new(0,1000003),new(3,3),new(0,1),new(0,0),new(0,4)];
+        var ownCardRules=DungeonCardPriceCatalog.Parse(ownCard,key=>cardNames[key]);
+        var cardItem=Template(5000,ItemKind.Equipment,7) with { Grade=3,Rarity=2 };
+        var ownCards=new DungeonCardRewardPolicy(parsed,DungeonItemDropCatalog.Create([cardItem]),null!,null!,null!,prices:ownCardRules);
+        That(ownCards.Prepare(cardDungeon,0,1,_=>0,cardNow).Item?.ItemId==5000,
+            "普通翻牌使用自己的稀有度与grade引用，不复用怪物的首行阈值或较窄区间");
+        var onlyStack=new DungeonCardRewardPolicy(parsed,DungeonItemDropCatalog.Create([
+            cardItem with { Kind=ItemKind.Material,StackLimit=100 }]),null!,null!,null!,prices:ownCardRules);
+        That(onlyStack.Prepare(cardDungeon,0,1,_=>0,cardNow).Item is null,
+            "装备牌空池保留空牌，不借材料候选伪造装备奖励");
+        Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse(ownCard[..^1],key=>cardNames[key]),"翻牌残缺等级引用拒绝");
+        Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse([..ownCard,new(3,2),new(0,1)],key=>cardNames[key]),"翻牌重复稀有度声明拒绝");
+        cardNames.Add(4,"[dungeon_index specific reward rate]");
+        cardNames.Add(5,"[dungeon type]");
+        cardNames.Add(6,"[/dungeon type]");
+        cardNames.Add(7,"[/dungeon_index specific reward rate]");
+        var specificPrices=DungeonCardPriceCatalog.Parse([..ownCard,new(3,4),new(3,5),new(0,72),
+            new(0,2),new(0,0),new(0,6000),new(0,10000),new(0,1),new(3,6),new(3,7)],key=>cardNames[key]);
+        var specificItems=new ItemCatalog(null!,new Dictionary<int,string>(),new Dictionary<int,string>(),0);
+        specificItems.PrefillTemplates(new Dictionary<int,ItemTemplate>{[6000]=Template(6000,ItemKind.Material,0)});
+        var specificCards=new DungeonCardRewardPolicy(parsed,DungeonItemDropCatalog.Create([]),specificItems,null!,null!,prices:specificPrices);
+        var specificDungeon=new DungeonDefinition(2,"dungeon/合成专牌.dgn",2,2,[],[]) { DungeonType="crackofdaybreak dungeon" };
+        That(specificCards.Prepare(specificDungeon,0,1,_=>0,cardNow).Item?.ItemId==6000,
+            "普通翻牌引用仅有等级1时，等级2专牌仍使用自己的零creation rate显式奖励，不受普通池门禁影响");
         var specialRule = new DungeonIndependentDropRule(0, 42, 1001, [500000, 500000, 0, 0, 0], [2, 2, 0, 0, 0],
             1, 3, 1, 0, []);
         var special = DungeonSpecialDropCatalog.Create([specialRule], [new(1, 0, [new(1000, 2), new(1001, 1)])]);
