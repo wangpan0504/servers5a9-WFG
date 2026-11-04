@@ -247,7 +247,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 {
                     if (pool.Draws <= 0 || !pool.Rewards.Any(row => row.Weight > 0))
                     { Error(source, id, "empty_or_invalid_pool"); continue; }
-                    foreach (var row in pool.Rewards.Where(row => row.Weight > 0))
+                    foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
                     {
                         if (checked((long)row.Count * pool.Draws) > int.MaxValue)
                         { Error(source, row.ItemId, "pool_reward_count_overflow"); continue; }

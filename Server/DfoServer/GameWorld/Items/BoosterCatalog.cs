@@ -7,7 +7,10 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record BoosterReward(int ItemId, long Weight, int Count);
+internal sealed record BoosterReward(int ItemId, long Weight, int Count)
+{
+    public bool EmptyOutcome { get; init; }
+}
 internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null)
 {
     public bool Dungeon { get; init; }
@@ -385,6 +388,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             return new([], "礼包奖池缺失或重复");
         string body = blocks[0].Groups[1].Value;
         var pools = ImmutableArray.CreateBuilder<BoosterPool>();
+        bool allowsEmptyBonus = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[booster\]`\s+0$");
         int at = 0;
         foreach (Match match in Regex.Matches(body, @"\[(?<kind>[^/\]\r\n]+)\](?<data>.*?)\[/\k<kind>\]", RegexOptions.Singleline))
         {
@@ -428,7 +432,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             int scale = 0;
             for (int i = 1; i < tokens.Length; i += 3)
             {
-                if (!int.TryParse(tokens[i], out int id) || id <= 0 || !int.TryParse(tokens[i + 2], out int count) || count <= 0 ||
+                if (!int.TryParse(tokens[i], out int id) || id < 0 || !int.TryParse(tokens[i + 2], out int count) || count <= 0 ||
+                    id == 0 && (!allowsEmptyBonus || kind != "etc" || count != 1) ||
                     !decimal.TryParse(tokens[i + 1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal weight) || weight < 0)
                     return new([], "奖池物品、数量或权重无效");
                 scale = Math.Max(scale, (decimal.GetBits(weight)[3] >> 16) & 0xff);
@@ -439,7 +444,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 decimal factor = 1;
                 for (int digit = 0; digit < scale; digit++)
                     factor = checked(factor * 10);
-                var rewards = rows.Select(row => new BoosterReward(row.Id, checked((long)(row.Weight * factor)), row.Count)).ToImmutableArray();
+                // 普通额外池的0号是空奖；袖珍罐的0号金币在独立入口解析，不沿用此标记。
+                var rewards = rows.Select(row => new BoosterReward(row.Id, checked((long)(row.Weight * factor)), row.Count)
+                    { EmptyOutcome = row.Id == 0 }).ToImmutableArray();
                 if (rewards.Sum(row => row.Weight) > 0)
                     pools.Add(new(draws, rewards) { RequiredKind = kind == "creature" ? ItemKind.Creature : null });
             }
@@ -449,6 +456,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             }
         }
         string tail = body[at..];
+        if (pools.Any(pool => pool.Rewards.Any(row => row.EmptyOutcome)) &&
+            !pools.Any(pool => pool.JobTag is null && pool.Rewards.Where(row => row.Weight > 0).All(row => !row.EmptyOutcome)))
+            return new([], "空额外奖缺少独立基础奖池");
         return !string.IsNullOrWhiteSpace(tail) &&
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())

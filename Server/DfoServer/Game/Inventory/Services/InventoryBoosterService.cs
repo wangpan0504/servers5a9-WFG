@@ -355,7 +355,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             // 明确类型的随机池先检查全部有效候选，不能靠抽中项校验或钱包/契约快捷入口绕过。
             foreach (var pool in pools.Where(pool => pool.RequiredKind is not null))
-                foreach (var row in pool.Rewards.Where(row => row.Weight > 0))
+                foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
                 {
                     var template = catalog.Get(row.ItemId);
                     if (template.Kind != pool.RequiredKind || CurrencyWallet.RewardKind(row.ItemId) is not null ||
@@ -368,13 +368,13 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 return InventoryResult.Reject(19);
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
                 ? definition.PackageRewards.Select(row => row.ItemId)
-                : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 && !row.EmptyOutcome).Select(row => row.ItemId);
             if (definition.UnsealsRandomOptions)
             {
                 // 先核对整份声明，不能因本次恰好选中普通奖励而吞掉混合盒的未知解封语义。
                 var allIds = definition.Selection is { } selectionDefinition
                     ? selectionDefinition.Categories.SelectMany(group => group.Rewards).Select(row => row.ItemId)
-                    : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                    : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0 && !row.EmptyOutcome).Select(row => row.ItemId);
                 foreach (int id in allIds.Distinct())
                 {
                     var rule = randomOptions?.ResolveBoosterReward(catalog.Get(id));
@@ -496,7 +496,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     long draws = (long)pool.Draws * request.Count;
                     if (candidates.Length == 1)
                     {
-                        Add(candidates[0].ItemId, candidates[0].Count, draws);
+                        AddPoolReward(candidates[0], draws);
                         continue;
                     }
                     long weight = candidates.Sum(row => row.Weight);
@@ -511,7 +511,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         {
                             long hits = BoosterBatchRandom.Next(draws, row.Weight, weight, random ?? Random.Shared);
                             if (hits != 0)
-                                Add(row.ItemId, row.Count, hits);
+                                AddPoolReward(row, hits);
                             draws -= hits;
                             weight -= row.Weight;
                         }
@@ -524,7 +524,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         {
                             if (value < row.Weight)
                             {
-                                Add(row.ItemId, row.Count, 1);
+                                AddPoolReward(row, 1);
                                 break;
                             }
                             value -= row.Weight;
@@ -732,6 +732,10 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         { UsedItems = [new(source.Core.ItemId, request.Count)], AccountMaterialRaidWeek = grant.Plan.AccountMaterialRaidWeek,
             BoosterSongAcquisition = song });
 
+        void AddPoolReward(BoosterReward row, long draws)
+        {
+            if (!row.EmptyOutcome) Add(row.ItemId, row.Count, draws);
+        }
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }
 
