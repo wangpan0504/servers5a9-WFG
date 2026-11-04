@@ -48,6 +48,7 @@ internal static class BattlePassSkillMaterialTests
             "material operations never grant mission XP automatically");
         VerifyBoundaries();
         VerifyWriterDay();
+        BattlePassSkillMaterialBoundaryTests.Run(resources);
         Console.WriteLine($"PASS battle-pass-skill-material local SQLite/Session checks={Count - before}; no TCP/client validation");
 
         long Progress() => fixture.Repository.ReadBattlePassMissions(fixture.Owner, clock.GetUtcNow())!.Slots

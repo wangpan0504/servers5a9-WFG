@@ -249,6 +249,9 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
     public MailboxPage Inspect(AccountOwners.Lease owner, ushort characterId, DateTimeOffset now) => store.LoadMailbox(owner, characterId, now.ToUnixTimeSeconds());
     public MailboxResult ChangeState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, DateTimeOffset now, bool force = false) =>
         store.ChangeMailState(owner, characterId, ids, state, now.ToUnixTimeSeconds(), force);
+    // GM 强制删除：跳过未领取资产/过期检查，附件直接销毁（审计 action=gm-delete）。
+    public MailboxResult ForceDelete(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, DateTimeOffset now) =>
+        store.ForceDeleteMails(owner, characterId, ids, now.ToUnixTimeSeconds());
     public MailboxResult Deliver(MailboxDelivery delivery)
     {
         if (delivery.Items.IsDefault || delivery.Items.Length > 10)

@@ -384,9 +384,8 @@ internal static partial class DevelopmentGm
             case DevelopmentAction.MailDelete:
             {
                 var service = mailbox ?? throw new InvalidOperationException("邮件服务未装配");
-                // force：GM 强制删除。默认规则只删「无附件、无金币、未过期」的邮件；带 force 时连附件、
-                // 金币和过期邮件一起删（附件行保留在库里但已不可达，与过期清理同一语义）。
-                bool force = args.Length > 1 && args[1] == "force";
+                // force：GM 强制删除，沿独立销毁入口清理托管附件与金币并记录 gm-delete 审计。
+                bool force = args.Length > 1 && string.Equals(args[1], "force", StringComparison.OrdinalIgnoreCase);
                 if (args.Length > 1 && !force) throw new InvalidDataException("mail-delete 的可选参数只有 force");
                 int deleted = Target(live, owners, repository, request, true, (lease, character) =>
                 {
@@ -397,11 +396,13 @@ internal static partial class DevelopmentGm
                             .Select(mail => mail.Id).ToImmutableArray()
                         : args[0].Split(',').Select(text => (uint)Number(text, uint.MaxValue)).ToImmutableArray();
                     if (ids.IsEmpty) throw new InvalidDataException(force ? "邮箱里没有邮件" : "没有可删除的邮件（带附件/金币或已过期的邮件要加 force）");
-                    var result = service.ChangeState(lease, character.Id, ids, 0, now, force);
+                    var result = force
+                        ? service.ForceDelete(lease, character.Id, ids, now)
+                        : service.ChangeState(lease, character.Id, ids, 0, now);
                     if (!result.Accepted) throw new InvalidDataException("邮件删除被拒绝：" + result.Error + "（未领取资产或已过期的邮件要加 force）");
                     return ids.Length;
                 });
-                return Ok(new { name = request.Name, deleted, forced = force });
+                return Ok(new { name = request.Name, deleted, force, forced = force });
             }
             case DevelopmentAction.Rename:
             {
