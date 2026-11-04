@@ -247,6 +247,7 @@ internal static partial class DatabaseSchemaTests
             FiendwarCounterUpgrade(root);
             BattlePass175Upgrade(root);
             BattlePassLegacy179Upgrade(root);
+            BattlePassDeluxe194Renumber(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);
@@ -2598,11 +2599,33 @@ internal static partial class DatabaseSchemaTests
                 "验收v47强袭库补跑角色栏/装扮/魔王迁移并保留强袭次数");
     }
 
+    static void BattlePassDeluxe194Renumber(string root)
+    {
+        string directory = Path.Combine(root, "deluxe-194");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "game.db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+                Execute(db, "DROP TABLE account_endless_adventure_days; DROP TABLE account_daily_attendance_claims; DROP TABLE account_daily_attendance_days; DROP TABLE account_weekly_attendance; DROP TABLE weekly_attendance_season; PRAGMA user_version=194");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+                Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN('account_endless_adventure_days','account_daily_attendance_days','account_daily_attendance_claims','weekly_attendance_season','account_weekly_attendance','account_battle_pass_deluxe_orders')") is 6L &&
+                    Query(db, "SELECT count(*) FROM account_battle_pass_deluxe_orders") is 0L &&
+                    Query(db, "PRAGMA integrity_check") is "ok",
+                    "分支v194豪华订单库补跑无尽日额度、日签到与周签到，并保留197订单表");
+        }
+        finally { TestFiles.DeleteDirectory(directory, true); }
+    }
+
     static void RewindReleasedBattlePassTables(SqliteConnection db, int oldVersion)
     {
-        // 正式战令186..189才追加这些表；按子表先行移除旧版本尚未发布的空结构。
+        // 正式战令186..189及197才追加这些表；按子表先行移除旧版本尚未发布的空结构。
         (int Version, string Table)[] tables =
         [
+            (197, "account_battle_pass_deluxe_orders"),
             (189, "account_battle_pass_cera_orders"),
             (189, "account_battle_pass_cera_consumption"),
             (188, "account_battle_pass_certificate_orders"),

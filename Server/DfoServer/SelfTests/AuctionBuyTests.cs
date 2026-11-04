@@ -61,6 +61,7 @@ internal static class AuctionBuyTests
         Parsing();
         Wire();
         Planning();
+        Coupon();
         Commit();
         Rollback();
         Session().GetAwaiter().GetResult();
@@ -100,6 +101,32 @@ internal static class AuctionBuyTests
         That(AuctionBuyRequest.Parse(new byte[30]).ReservedHex(new byte[5]).Length == 0,
             "包体不足保留区宽度时不给保留区读数（取值不越界）");
         That(AuctionBuyRequest.Parse(new byte[30]).ListingId == 0, "全 0 请求解析出挂牌 id 0（由规划层按请求非法拒绝）");
+    }
+
+    static void Coupon()
+    {
+        That(AuctionService.AuctionCouponContractType == 29 && AuctionService.TaxPercent(false) == 5 &&
+            AuctionService.TaxPercent(true) == 3 && AuctionService.SellerProceeds(10_000) == 9_500 &&
+            AuctionService.SellerProceeds(10_000, 3) == 9_700, "无券 5%、持券 3%，实收按成交价向下取整");
+        Reject<InvalidDataException>(() => AuctionService.SellerProceeds(10_000, 1), "不接受金币寄售 1% 或其他税率");
+        using var f = new Fixture();
+        int plain = f.AddListing(f.Seller.Id, f.Seller.Name, SampleTemplate, 1, 10_000);
+        That(f.Plan(plain).Options is { SellerProceeds: 9_500 }, "卖方没有优惠券时仍按 5%");
+        f.Execute($"INSERT INTO account_wallets(account,premium_contracts) VALUES('auction-seller','{{\"29\":{f.Now + 3600}}}') ON CONFLICT(account) DO UPDATE SET premium_contracts=excluded.premium_contracts");
+        var discounted = f.Plan(plain).Options!;
+        That(discounted.SellerProceeds == 9_700 && discounted.Custody.Single(mail => mail.Gold > 0).Gold == 9_700 &&
+            discounted.Custody.Single(mail => mail.Gold > 0).Text.Contains("3%", StringComparison.Ordinal),
+            "有效类型29把卖方实收改为 floor(10000×97%)");
+        var bought = f.Service.Buy(f.BuyerOwner, f.Buyer, discounted);
+        That(bought.Error == AuctionBuyError.None && f.Mails().Single(mail => mail.Gold > 0).Gold == 9_700,
+            "提交后的卖方托管邮件按规划时的 3% 入账");
+        int second = f.AddListing(f.Seller.Id, f.Seller.Name, SampleTemplate, 1, 10_000);
+        var active = f.Plan(second).Options!;
+        f.Execute($"UPDATE account_wallets SET premium_contracts='{{\"29\":{f.Now}}}' WHERE account='auction-seller'");
+        long buyerGold = f.Gold(f.Buyer.Id);
+        var stale = f.Service.Buy(f.BuyerOwner, bought.Character!, active);
+        That(stale.Error == AuctionBuyError.StalePlan && stale.Character is null && f.ListingState(second) == 0 &&
+            f.Gold(f.Buyer.Id) == buyerGold, "券在提交前到期则整笔回滚，不按过期计划的 3% 成交");
     }
 
     /// <summary>应答字节与错误码白名单（三档，不允许出现第四档）。</summary>

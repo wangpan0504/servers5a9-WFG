@@ -141,6 +141,12 @@ internal sealed partial class CharacterRepository
             //    在这里先判一次 state 会让「影响行数必须为 1」那条唯一幂等判据永远走不到。
             if (RejectStaleBuy(AuctionListingRepository.LoadListing(db, transaction, plan.ListingId), plan) is { } reject)
                 return reject;
+            bool coupon = plan.SellerCharacterId is long sellerId &&
+                AuctionCouponActive(db, transaction, sellerId, plan.SettledAtUnix);
+            long expectedProceeds = AuctionService.SellerProceeds(plan.TotalPrice, AuctionService.TaxPercent(coupon));
+            if (expectedProceeds != plan.SellerProceeds)
+                return AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan,
+                    $"挂牌 {plan.ListingId} 的拍卖优惠券状态在规划后变化：实收 {plan.SellerProceeds}/{expectedProceeds}");
 
             // ② 挂牌置为已成交（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
             AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
@@ -204,6 +210,25 @@ internal sealed partial class CharacterRepository
     // —— 只读查询直接委托同层仓储：分类过滤、分页与在售口径由那边一份实现负责 ——
 
     public AuctionListing? LoadListing(int listingId) => auctionListings.LoadListing(listingId);
+
+    public bool AuctionCouponActive(long sellerCharacterId, long now)
+    {
+        if (sellerCharacterId <= 0) return false;
+        using var db = database.Open();
+        using var read = db.BeginRead();
+        return AuctionCouponActive(db, read, sellerCharacterId, now);
+    }
+
+    static bool AuctionCouponActive(SqliteConnection db, SqliteTransaction? transaction, long sellerCharacterId, long now)
+    {
+        if (sellerCharacterId <= 0) return false;
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT account FROM characters WHERE id=$id";
+        command.Parameters.AddWithValue("$id", sellerCharacterId);
+        if (command.ExecuteScalar() is not string account) return false;
+        return ReadAccountWallet(db, account, transaction).ContractExpiry(AuctionService.AuctionCouponContractType) > now;
+    }
 
     public AuctionSearchPage Search(AuctionSearchFilter filter, long now, int offset, int limit) =>
         auctionListings.Search(filter, now, offset, limit);

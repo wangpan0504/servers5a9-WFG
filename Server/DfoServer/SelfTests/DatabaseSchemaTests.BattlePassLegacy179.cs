@@ -33,7 +33,8 @@ internal static partial class DatabaseSchemaTests
         [
             "account_battle_pass_seasons", "account_battle_pass_claims", "battle_pass_season_rules",
             "account_battle_pass_mission_progress", "account_battle_pass_mission_claims", "account_battle_pass_source_events",
-            "account_battle_pass_certificate_orders", "account_battle_pass_cera_consumption", "account_battle_pass_cera_orders"
+            "account_battle_pass_certificate_orders", "account_battle_pass_cera_consumption", "account_battle_pass_cera_orders",
+            "account_battle_pass_deluxe_orders"
         ];
         string[] post180Tables =
         [
@@ -166,9 +167,9 @@ internal static partial class DatabaseSchemaTests
                         Query(db, "SELECT sql FROM sqlite_schema WHERE name='character_quest_completion_receipts'") is string questSql &&
                         SqliteMigrations.NormalizeTable(questSql, "character_quest_completion_receipts") ==
                         SqliteMigrations.NormalizeTable(SqliteMigrations.QuestCompletionSchemaV180, "character_quest_completion_receipts") &&
-                        Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name GLOB 'account_battle_pass_*' OR name GLOB 'battle_pass_*')") is 9L &&
+                        Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name GLOB 'account_battle_pass_*' OR name GLOB 'battle_pass_*')") is 10L &&
                         Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
-                        $"旧战令{version}补齐正式任务约束、完成189且完整性正确");
+                        $"旧战令{version}补齐正式任务约束、完成196且完整性正确");
                     Check(post180Tables.All(table => TableNames(db).Contains(table)), "正式181–185的七张表已补齐");
                     bool constrained = false;
                     try { Execute(db, "UPDATE character_teleport_cooldowns SET privilege_until=-1 WHERE character_id=1"); }
@@ -207,7 +208,7 @@ internal static partial class DatabaseSchemaTests
                                 $"新编号{version}保留{original.Table}完整事实");
                         Check(Query(db, "PRAGMA user_version") is long current && current == SqliteMigrations.CurrentVersion &&
                             Query(db, "SELECT privilege_until FROM character_teleport_cooldowns WHERE character_id=1") is 5000L &&
-                            Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name GLOB 'account_battle_pass_*' OR name GLOB 'battle_pass_*')") is 9L &&
+                            Query(db, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND (name GLOB 'account_battle_pass_*' OR name GLOB 'battle_pass_*')") is 10L &&
                             Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                             $"新编号{version}正常升级且不误当旧库");
                     }

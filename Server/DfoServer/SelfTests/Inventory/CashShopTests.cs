@@ -295,28 +295,33 @@ internal static partial class CashShopTests
         That(!service.Buy(character, new(0, [new(int.MaxValue, 0)]), out _).Accepted,
             "unknown cash shop commodity is rejected without a charge");
         VerifyFullRewards(repo, owner, character.Slot, towns, resources);
-        VerifyUnsupportedPremiumPurchases(character, resources);
+        VerifyAuctionCouponPurchases(character, resources);
         VerifyAvatars(towns, resources);
         VerifyRepeatedAbilityCasePurchase(repo, owner, towns, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
     }
 
-    static void VerifyUnsupportedPremiumPurchases(Character character, ItemResources resources)
+    static void VerifyAuctionCouponPurchases(Character character, ItemResources resources)
     {
-        foreach (int type in new[] { 29 })
+        var now = DateTimeOffset.UtcNow;
+        long instant = now.ToUnixTimeSeconds();
+        foreach (var contract in resources.Contracts.ByItem.Values.Where(row => row.Type == PremiumContractCatalog.AuctionCouponType &&
+            resources.Contracts.TryAcquisitionContract(row.ItemId, out _)).OrderBy(row => row.ItemId))
         {
-            var contract = resources.Contracts.ByItem.Values.First(row => row.Type == type &&
-                CurrencyWallet.RewardKind(row.ItemId) is null && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId));
             var shop = CashShopCatalog.Parse("[premium]\n700301 " + contract.ItemId + " 1 0 0 13 0 0 0\n" +
                 "700302 1108 1 0 0 5 0 0 0", "[bonus item]\n700302 " + contract.ItemId + " 1\n[/bonus item]");
             var service = new InventoryCashShopService(resources.Items, shop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts);
-            var before = character.Inventory;
-            foreach (var request in new CashShopPurchaseRequest[]
-            {
-                new(0, [new(700301, 0)]), new(0, [new(700302, 0)]), new(0, [new(700302, 0), new(700301, 0)])
-            })
-                That(service.Buy(character, request, out var receipt) is { Accepted: false, Plan: null } && receipt is null && character.Inventory == before,
-                    "未完整支持的premium主商品/附赠/混合购买整笔拒绝，不扣点券、发实体或吞奖励 " + type);
+            var direct = service.Buy(character, new(0, [new(700301, 0)]), out var directReceipt, now);
+            That(direct.Accepted && directReceipt is not null && direct.Plan!.After.Items.All(row => row.Core.ItemId != contract.ItemId) &&
+                direct.Plan.After.AccountWallet.ContractExpiry(contract.Type) == instant + contract.DurationSeconds,
+                "拍卖行优惠券主商品立即按PVF期限入账且不发实体 " + contract.ItemId);
+            var bonus = service.Buy(character, new(0, [new(700302, 0)]), out _, now);
+            That(bonus.Accepted && bonus.Plan!.After.AccountWallet.ContractExpiry(contract.Type) == instant + contract.DurationSeconds &&
+                bonus.Plan.After.Items.Any(row => row.Core.ItemId == 1108),
+                "附赠的拍卖行优惠券同样入账，普通商品仍进背包 " + contract.ItemId);
+            var mixed = service.Buy(character, new(0, [new(700302, 0), new(700301, 0)]), out _, now);
+            That(mixed.Accepted && mixed.Plan!.After.AccountWallet.ContractExpiry(contract.Type) == instant + contract.DurationSeconds * 2,
+                "混合购买把主商品和附赠的优惠券期限相加 " + contract.ItemId);
         }
     }
 

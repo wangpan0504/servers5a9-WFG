@@ -12,8 +12,10 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
     ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null,
-    IReadOnlySet<int>? marriedOnlyCommodities = null, PrivilegeServiceCatalog? privileges = null)
+    IReadOnlySet<int>? marriedOnlyCommodities = null, PrivilegeServiceCatalog? privileges = null,
+    CashShopProduct? deluxeOffer = null)
 {
+    internal CashShopProduct? BattlePassDeluxeOffer { get; } = deluxeOffer;
     readonly GameDebugSettings debug = debugSettings ?? new();
     readonly TimeProvider time = clock ?? TimeProvider.System;
     public MileageShopCatalog Mileage => shop.Mileage;
@@ -33,7 +35,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         DateTimeOffset? utcNow = null) => BuyCore(character, request, out receipt, utcNow, battlePassCertificate: false);
 
     InventoryResult BuyCore(Character character, CashShopPurchaseRequest request, out CashShopPurchaseReceipt? receipt,
-        DateTimeOffset? utcNow, bool battlePassCertificate)
+        DateTimeOffset? utcNow, bool battlePassCertificate, bool battlePassDeluxe = false)
     {
         receipt = null;
         bool shopExpiration = IgnoreAbsoluteExpiration;
@@ -110,6 +112,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             Deadline(couponDeadline);
             bool certificateProduct = battlePassCertificate && product.CommodityId == DfoServer.Game.BattlePass.BattlePassCertificatePurchase.Commodity &&
                 product.ItemId == DfoServer.Game.BattlePass.BattlePassCertificatePurchase.Item;
+            bool deluxeProduct = battlePassDeluxe && BattlePassDeluxeOffer is { } deluxe &&
+                product.CommodityId == deluxe.CommodityId && product.ItemId == deluxe.ItemId;
             bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
             bool privilegeProduct = product.Section == "privilege service";
             if (privilegeProduct)
@@ -140,7 +144,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     if (serviceWallet.ContractExpiry(580 + slot) > int.MaxValue) return InventoryResult.Reject(17);
                 }
             }
-            else if (!privilegeProduct && !certificateProduct && !AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
+            else if (!privilegeProduct && !certificateProduct && !deluxeProduct && !AllowsReward(product.ItemId)) return InventoryResult.Reject(17);
 
             if (product.Section == "avatar")
             {
@@ -248,7 +252,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
                 }
 
-                else if (!devilProduct && !privilegeProduct && !certificateProduct) rewards.Add(new(product.ItemId, product.Count));
+                else if (!devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
+                    rewards.Add(new(product.ItemId, product.Count));
             }
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
                 return InventoryResult.Reject(17);
@@ -258,6 +263,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             paymentLines.Add(new(product, onlyCash));
 
             var productBonuses = shop.Bonus(product.CommodityId);
+            if (deluxeProduct && productBonuses.Count != 0)
+                return InventoryResult.Reject(17) with { RejectReason = "battle_pass_deluxe_bonus" };
             if (productBonuses.Count == 0)
                 continue;
             bonuses[product.CommodityId] = productBonuses;

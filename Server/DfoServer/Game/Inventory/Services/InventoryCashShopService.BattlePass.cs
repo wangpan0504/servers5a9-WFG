@@ -23,4 +23,19 @@ internal sealed partial class InventoryCashShopService
             return InventoryResult.Reject(17) with { RejectReason = "battle_pass_certificate_template" };
         return BuyCore(character, request, out receipt, now, battlePassCertificate: true);
     }
+
+    internal InventoryResult BuyBattlePassDeluxe(Character character, CashShopPurchaseRequest request,
+        out CashShopPurchaseReceipt? receipt, DateTimeOffset now)
+    {
+        receipt = null;
+        if (!BattlePassDeluxePurchase.IsRequest(request, BattlePassDeluxeOffer) ||
+            BattlePassDeluxeOffer is not { } offer ||
+            catalog.Get(BattlePassDeluxePurchase.Item) is not { IsPremiumService: true, HasAcquisitionEffect: false } template ||
+            !template.AllowsUse(character.Level, character.Job) ||
+            !InventoryMoveService.RequiredSkillSatisfied(character, template))
+            return InventoryResult.Reject(17) with { RejectReason = "battle_pass_deluxe_request" };
+        if (offer.CeraPrice <= 0 || !Mileage.CeraOnly.Contains(offer.ItemId))
+            return InventoryResult.Reject(17) with { RejectReason = "battle_pass_deluxe_offer" };
+        return BuyCore(character, request, out receipt, now, battlePassCertificate: false, battlePassDeluxe: true);
+    }
 }

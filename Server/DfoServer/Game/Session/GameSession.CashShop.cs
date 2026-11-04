@@ -22,6 +22,8 @@ internal sealed partial class GameSession
         certificate = null;
         if (BattlePassCertificatePurchase.Contains(request))
             return BuyBattlePassCertificate(request, cashShop, out receipt, out certificate);
+        if (BattlePassDeluxePurchase.Contains(request, cashShop.BattlePassDeluxeOffer))
+            return BuyBattlePassDeluxe(request, cashShop, out receipt, out certificate);
         CashShopPurchaseReceipt? purchase = null;
         var catalog = promotions?.Current;
         PromotionCatalogEntry? entry;

@@ -370,6 +370,7 @@ internal static class SqliteMigrations
             DailyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(196, "周签到冻结赛季与账号进度", static (db, tx) => Execute(db, tx,
             WeeklyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(197, "战令豪华044一次性订单", BattlePassDeluxeSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2058,6 +2059,14 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 合并前本分支把豪华044订单记成v194，而master的v194是无尽大冒险日额度。
+        // 这类库已有精确匹配的订单表、却没有日额度表：按193补跑。v197按结构判定，已有订单原样保留。
+        if (version == 194 && current >= 197 &&
+            KnownTable(db, tx, "account_battle_pass_deluxe_orders", BattlePassDeluxeSchema.Definition))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_endless_adventure_days'";
+            if (query.ExecuteScalar() is 0L) version = 193;
+        }
         // 活动验证库曾将日额度表记为192；仅完整旧攻坚结构缺少正式额度表时补跑主线192起。
         if (version == 192 && current >= 194 &&
             KnownTable(db, tx, "account_endless_adventure_days", EndlessAdventureSchema.Definition) &&
@@ -2576,6 +2585,7 @@ internal static class SqliteMigrations
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV180),
             ("character_epic_wishes",EpicWishSchema.Definition),
+            ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

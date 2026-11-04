@@ -114,7 +114,7 @@ internal static class DailyAttendanceTests
         snapshot = f.Snapshot();
         f.Repository = new(f.Path);
         That(f.Number("PRAGMA user_version") == SqliteMigrations.CurrentVersion && f.Snapshot() == snapshot,
-            "194升级195仅新增两空表并保持原角色、邮箱及资产");
+            "194升级当前版本补齐签到空表并保持原角色、邮箱及资产");
         var disabled = f.Plan(false);
         f.Sql("UPDATE server_events SET override_active=0,revision=2 WHERE event_id=2370");
         snapshot = f.Snapshot();
