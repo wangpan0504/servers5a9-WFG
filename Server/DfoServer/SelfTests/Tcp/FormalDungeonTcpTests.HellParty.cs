@@ -214,7 +214,7 @@ internal static partial class FormalDungeonTcpTests
                     fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]] &&
                     fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                     "超星空真实TCP优先消耗1通行证，否则扣40邀请函和4灵石；均扣8疲劳，只建立一次尝试");
-                Load(peer);
+                Load(peer, fatigue: false);
                 if (usePass)
                     peer.Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(bossBuffId); writer.Write(1); writer.Write(0); writer.Write(0); }));
@@ -243,7 +243,7 @@ internal static partial class FormalDungeonTcpTests
             {
                 byte[] move = new byte[100]; move[0] = (byte)route[room].X; move[1] = (byte)route[room].Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                Load(peer);
+                Load(peer, fatigue: false);
                 if (strongBuff)
                     peer.Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(1275); writer.Write(1); writer.Write(0); writer.Write(0); }));
@@ -286,7 +286,7 @@ internal static partial class FormalDungeonTcpTests
                         Console.WriteLine($"Cosmo white boss socket epic hits: {epicIds.Length}");
                     }
                 }
-                picked += PickupResourceDrops(fixture, peer, death, 0);
+                picked += PickupResourceDrops(fixture, peer, death, 0, resources);
                 string saved = fixture.Snapshot();
                 peer.Send(39, report); peer.Barrier();
                 That(fixture.Snapshot() == saved, "超星空TCP重复死亡不重抽装备或材料、不给重复经验");

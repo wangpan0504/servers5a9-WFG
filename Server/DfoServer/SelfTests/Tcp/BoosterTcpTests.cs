@@ -676,7 +676,7 @@ internal static class BoosterTcpTests
             FormalDungeonTcpTests.EntryTown(peer);
             FormalDungeonTcpTests.Enter(peer);
             RejectSource(peer, 65, "Loading阶段不能消费副本礼包");
-            FormalDungeonTcpTests.Load(peer);
+            FormalDungeonTcpTests.Load(peer, fatigue: false);
             peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 156, 0, 0, 0]);
             RejectSource(peer, 67, "仅城镇与房间礼盒在已加载正式副本仍拒绝");
             OpenAndVerify(peer, 2);

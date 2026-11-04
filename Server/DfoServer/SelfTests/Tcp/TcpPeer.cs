@@ -233,15 +233,21 @@ internal sealed partial class TcpPeer : IDisposable
         if (pushedBack is { } packet) { pushedBack = null; return packet; }
         return ReadCore(channelNumber);
     }
+    // 服务端在ACK、房间通知与补发buff之后才发36，读到房间通知时它尚未上路；
+    // 是否发送取决于真实疲劳规则，无包时必须尽快返回，不能把可选通知拖成5秒socket超时。
     public void ExpectOptionalFatigue()
     {
+        long deadline = Environment.TickCount64 + 1000;
+        while (!stream.DataAvailable && Environment.TickCount64 < deadline) Thread.Sleep(1);
+        if (!stream.DataAvailable) return;
         var packet = Read();
         if (packet is { Kind: 0, Opcode: 36 })
         {
             TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
+            TestCheck.That(U16(packet.Body, 0) + U16(packet.Body, 6) == U16(packet.Body, 2),
+                "正式疲劳通知已用与剩余之和等于上限");
             return;
         }
-        TestCheck.That(pushedBack is null, "可选通知回推最多保留一包");
         pushedBack = packet;
     }
 
