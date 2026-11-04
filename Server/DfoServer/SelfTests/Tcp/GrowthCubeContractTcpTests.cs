@@ -77,7 +77,9 @@ internal static class GrowthCubeContractTcpTests
             Bytes(peer.CubeContractInfo,[0,255],"同账号期限共享、不同角色选择独立");
             That(Contracts()[84]==growthExpiry && Contracts()[97]==cubeExpiry,"换角不补发契约或重复续期");
         }
-        await fixture.StopAsync();await fixture.StartAsync("restart");
+        await fixture.StopAsync();
+        That(clock.TimerCount == 0,"首次停服释放全部契约、日界、活动和共享轮询时钟，不残留退出泄漏");
+        await fixture.StartAsync("restart");
         using (var peer=Open(fixture))
         {
             peer.Select(premiumContracts:true);Bytes(peer.CubeContractInfo,[0,4],"重启按持久选择恢复而非默认黑色");
@@ -114,6 +116,7 @@ internal static class GrowthCubeContractTcpTests
             fixture.Sql("DROP TRIGGER fail_cube_tick");
         }
         await fixture.StopAsync();
+        That(clock.TimerCount == 0,"最终停服后全部时钟归零，故障断线同样完成取消与释放");
 
         void Buy(TcpPeer peer,int commodity) { byte[] body=new byte[19];body[2]=1;BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(7),commodity);peer.Send(64,body); }
         Dictionary<byte,long> ReadPremium(byte[] body)
@@ -136,8 +139,8 @@ internal static class GrowthCubeContractTcpTests
         async Task WaitTimer()
         {
             for (int attempt = 0; attempt < 200 && clock.CubeTimerCount == 0; attempt++) await Task.Delay(10);
-            That(clock.CubeTimerCount == 1 && clock.DailyTimerCount == 2 && clock.TimerCount == 3,
-                "已加载副本且有材料时只有一个30秒晶体周期，同时保留礼盒及服务日唤醒，不依赖下一条客户端消耗请求");
+            That(clock.CubeTimerCount == 1 && clock.DailyTimerCount >= 2,
+                "已加载副本且有材料时只有一个30秒晶体周期，礼盒及服务日仍等待UTC22点，不把独立活动时钟计作晶体周期");
         }
         void EnterDungeon(TcpPeer peer)
         {
@@ -147,7 +150,7 @@ internal static class GrowthCubeContractTcpTests
             var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             Array.Clear(selection, 16, 4);
             peer.Send(16, selection); peer.Expect(0, 28); peer.Expect(0, 29);
-            FormalDungeonTcpTests.Load(peer);
+            FormalDungeonTcpTests.Load(peer, fatigue: false);
             peer.Expect(0, 36);
             peer.Barrier();
         }
@@ -160,12 +163,13 @@ internal static class GrowthCubeContractTcpTests
             clock.Advance(TimeSpan.FromSeconds(1)); Consumed(peer,4);
             peer.Send(535,[0,255]);peer.Expect(1,535,[1,0,255]);peer.Expect(0,901,[0,255]);Player(peer);peer.Barrier();
             clock.Advance(TimeSpan.FromSeconds(60)); peer.Barrier();
-            That(ClearBalance() == 4 && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2, "取消后停止晶体周期，保留礼盒及服务日通知，不补扣后台时间");
+            That(ClearBalance() == 4 && clock.CubeTimerCount == 0 && clock.DailyTimerCount >= 2, "取消后停止晶体周期，保留UTC22点礼盒及服务日通知，不补扣后台时间");
             peer.Send(535,[0,4]);peer.Expect(1,535,[1,0,4]);peer.Expect(0,901,[0,4]);Player(peer);peer.Barrier();
             await WaitTimer();
             peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);peer.Send(63);peer.Expect(0,53);
             clock.Advance(TimeSpan.FromSeconds(60));peer.Send(63);peer.Expect(0,53);
-            That(ClearBalance() == 4 && clock.TimerCount == 0, "返回选角取消原实例计时，旧周期不扣账号余额");
+            That(ClearBalance() == 4 && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 0,
+                "返回选角取消原实例晶体及选角日界计时，旧周期不扣余额；连接活动时钟随断线停服释放");
             peer.Select(premiumContracts:true);EnterDungeon(peer);await WaitTimer();
             peer.Send(18,Convert.FromHexString("1000000010001A0A080310E50218DC172001200001"));
             peer.Expect(1,18,Convert.FromHexString("010D0000000800120708E502100118031800"));peer.Barrier();
@@ -176,14 +180,14 @@ internal static class GrowthCubeContractTcpTests
                 clock.Advance(TimeSpan.FromSeconds(30)); Consumed(peer,remaining);
             }
             string before = Balances();clock.Advance(TimeSpan.FromMinutes(2));peer.Barrier();
-            That(before == Balances() && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2, "材料耗尽停止晶体周期并保留礼盒及服务日通知，无忙等或补扣，不自动改写角色选择");
+            That(before == Balances() && clock.CubeTimerCount == 0 && clock.DailyTimerCount >= 2, "材料耗尽停止晶体周期并保留UTC22点礼盒及服务日通知，无忙等或补扣，不自动改写角色选择");
             That(fixture.Query("SELECT count(*) FROM currency_audit_log WHERE action_name='cube_contract_consume'") is [[5L]],
                 "原生晶体脚本不发周期C2S，服务端只记五次实际扣款");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             peer.Expect(0,24); FormalDungeonTcpTests.RefreshedQuests(peer); peer.Barrier();
             peer.Send(535,[0,3]); peer.Expect(1,535,[1,0,3]); peer.Expect(0,901,[0,3]); Player(peer); peer.Barrier();
             That(fixture.Query("SELECT selected,cube_type FROM cube_premium") is [[0L,3L]] &&
-                clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2,
+                clock.CubeTimerCount == 0 && clock.DailyTimerCount >= 2,
                 "退出副本恢复城镇state0后可更换契约颜色，不重新选角且不在城镇消费晶块");
             peer.Send(535,[0,4]); peer.Expect(1,535,[1,0,4]); peer.Expect(0,901,[0,4]); Player(peer); peer.Barrier();
 
@@ -233,8 +237,8 @@ internal static class GrowthCubeContractTcpTests
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() { lock(sync) return milliseconds; }
         public override DateTimeOffset GetUtcNow() { lock(sync) return origin.AddMilliseconds(milliseconds); }
-        // 契约计数不包含共享公会轮询和活动边界等待；这些计时器仍真实推进、回调和释放。
-        public int TimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.EventBoundary && timer.Due != long.MaxValue); } }
+        // 全体注册数用于停服零泄漏；晶体及服务日计数排除独立活动等待，仍真实推进和释放。
+        public int TimerCount { get { lock(sync) return timers.Count; } }
         public int CubeTimerCount { get { lock(sync) return timers.Count(timer => timer.Cube && timer.Due != long.MaxValue); } }
         public int DailyTimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.Cube && !timer.EventBoundary && timer.Due != long.MaxValue); } }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)

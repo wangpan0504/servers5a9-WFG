@@ -92,12 +92,21 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var participant = parsed!.Participants.SingleOrDefault(member => member.ActorId == context.Session.Selected?.Id);
         if (participant is null) return CommandResult.Unhandled;
+        var reportMembers = parsed.Participants.Select(member => member.ActorId).ToArray();
+        if (context.Session.AcceptFiendwarPlayResult(participant.ActorId, participant.RankPoint,
+            parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } raid } reported)
+        {
+            log.Write("raid_dungeon_play_result_received", new { Connection = context.Id, Character = participant.ActorId,
+                reported.Snapshot.Identity, RaidInstance = raid.InstanceId, reported.Entry.DungeonId,
+                Members = reportMembers.Length, participant.RankPoint, parsed.MaximumRankPoint, parsed.ClearTime });
+            return CommandResult.Handled;
+        }
         if (context.Strongway2019 is { } strongway) await strongway.BeforeSettlementAsync(context);
         // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(participant.ActorId, participant.RankPoint, parsed.MaximumRankPoint,
             request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces,
-            parsed.Participants.Select(member => member.ActorId).ToArray(), goldLimits);
+            reportMembers, goldLimits);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, participant.RankPoint,
             parsed.MaximumRankPoint, Members = parsed.Participants.Count, result.EndlessAdventureAmount,
             result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId,

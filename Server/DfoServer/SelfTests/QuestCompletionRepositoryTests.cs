@@ -73,13 +73,14 @@ internal static class QuestCompletionRepositoryTests
             using (var db = fixture.Open()) DatabaseSchemaTests.RewindQuestSystemToV13(db);
             var migrated = new CharacterRepository(fixture.Path);
             var oldReplay = migrated.CommitQuestCompletion(fixture.Owner, plan);
-            // v13没有日切水印，升级只建空表；原疲劳余额和全部资产仍须逐项保持。
+            // v13没有character_fatigue表（v15才创建）；升级按已发布步骤重建满疲劳行，其余资产仍须逐项保持。
             var migratedCharacter=migrated.LoadCharacter(fixture.Owner, fixture.Created.Slot);
-            var legacyExpected=commit.Character with { Fatigue=commit.Character.Fatigue! with {ResetDay=0} };
+            var rebuiltFatigue=CharacterFatigueState.NewOrdinary;
+            var legacyExpected=commit.Character with { Fatigue=rebuiltFatigue };
             Check(ReceiptRows() == originalReceipt && clearRows == JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path,"SELECT rowid,* FROM character_quest_clear_receipts")) &&
-                migratedCharacter.Fatigue?.ResetDay==0 && Same(migratedCharacter, legacyExpected) &&
+                migratedCharacter.Fatigue == rebuiltFatigue && Same(migratedCharacter, legacyExpected) &&
                 oldReplay is { Duplicate: true, ProjectionCurrent: true } && oldReplay.Rewards.SequenceEqual(commit.Rewards),
-                "真实v13非空领奖迁移逐列保留旧规则/rowid/EXP/七UID/Core，原计划仍精确只读重放");
+                "真实v13非空领奖迁移逐列保留旧规则/rowid/EXP/七UID/Core，疲劳按v15结构重建，原计划仍精确只读重放");
         }
         using (var fixture = new Fixture(towns, characters, resources))
         {

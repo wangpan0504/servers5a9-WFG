@@ -103,6 +103,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
+            string questAcceptance = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId);
             Drain();
             SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
             if (luke)
@@ -232,7 +233,7 @@ internal static partial class FormalDungeonTcpTests
                 var count = peer.Expect(0,550).Body;
                 That(count.Length == 6 && U32(count,0) == 400000016,"超时空之战入场后同步本副本剩余进入次数");
             }
-            Load(peer); peer.Expect(0,36); peer.Barrier();
+            Load(peer, fatigue: false); peer.Expect(0,36); peer.Barrier();
             That(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long remaining]] &&
                 remaining == fatigue-definition.StartFatigue &&
                 fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[1L]],
@@ -249,8 +250,15 @@ internal static partial class FormalDungeonTcpTests
                     int offset = 19 + index * 22;
                     if (map[offset + 13] > 3 || map[offset + 21] != 0) continue;
                     var report = Death(U16(map,offset + 6),peer.Id,map[offset + 12]);
+                    byte[]? expectedCondition = sample.Explicit && point == maze.Bosses.Single()
+                        ? (sample.Id,U32(map,14),U32(map,offset+8)) switch
+                        {
+                            (400000016,400000015,110994) => [1,235,33,4,0,0,0],
+                            (400000046,400000102,109007083) => [1,222,34,0,0,0,0],
+                            _ => null
+                        } : null;
                     peer.Send(39,report);
-                    var packets = Drain();
+                    var packets = Drain(expectedCondition);
                     foreach (var notice in packets.Where(packet => packet.Kind == 0 && packet.Opcode == 38))
                         PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit && (!prey || sample.Id == PreyNormalCatalog.FinalDungeon) ? questId : 0u);
                     var state = fixture.Snapshot();
@@ -384,9 +392,10 @@ internal static partial class FormalDungeonTcpTests
                     is [[long coins]] && coins == remaining,"清图后合法复活仍扣一币，重复请求不扣币");
             }
 
-            List<WirePacket> Drain()
+            List<WirePacket> Drain(byte[]? expectedCondition = null)
             {
                 var packets = new List<WirePacket>();
+                bool conditionSeen = false;
                 peer.SendBarrier();
                 for (int count = 0; count < 200; count++)
                 {
@@ -394,7 +403,23 @@ internal static partial class FormalDungeonTcpTests
                     if (packet is { Kind:1,Opcode:1347 })
                     {
                         That(packet.Body.SequenceEqual(new byte[] { 1 }),"专项网络屏障完整返回");
+                        That(expectedCondition is null || conditionSeen,"本次明确终点死亡在屏障前发布一次任务条件");
                         return packets;
+                    }
+                    if (packet is { Kind:1,Opcode:33 })
+                    {
+                        That(expectedCondition is not null && !conditionSeen &&
+                            packets.Any(row => row is { Kind:0,Opcode:38 }) &&
+                            packets.All(row => row.Kind != 0 || row.Opcode is not (31 or 115)),
+                            "只接受本次明确终点死亡38后、通关115/31前唯一条件33，不吞其它任务或重复ACK");
+                        Bytes(packet.Body,expectedCondition!,"普通超时空8683/scalar4或普雷终点8926/scalar0完整条件正文");
+                        That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
+                                is [[long state]] && state == U32(expectedCondition!,3) &&
+                            fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId) == questAcceptance,
+                            "条件33对应原任务接取身份和真实提交状态，不用通知制造进度");
+                        conditionSeen = true;
+                        packets.Add(packet);
+                        continue;
                     }
                     if (packet is { Kind:0,Opcode:1760 })
                     {

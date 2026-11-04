@@ -183,7 +183,11 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             else await PartyDungeonProjection.PublishAsync(selected);
             return CommandResult.Handled;
         }
-        if (context.Session.HasMultiplePartyMembers?.Invoke() == true && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
+        bool soloHeroParty = context.Session.CurrentParty?.Invoke() is { Members.Length: 1 } soloHero &&
+            soloHero.Members.Any(member => member.Slot == soloHero.Leader && ReferenceEquals(member.Actor.Session, context.Session)) &&
+            context.Session.ChannelEntry?.Type is 55 or 64;
+        if ((context.Session.HasMultiplePartyMembers?.Invoke() == true || soloHeroParty) &&
+            context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
             if (partyDungeons is null) return CommandResult.Unhandled;
             if (entry.DungeonIndex != 0)
@@ -346,7 +350,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         // #233 实验：打开选图前刷新强袭模式每日信息（跨日后客户端不会自行更新今日索引）。
         if (dungeon == 0)
         {
-            await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
+            await projection.RefreshAssaultDailyAsync(context, CanSend, "assault_mode_daily_info");
         }
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector ||
             (dungeon is 5359 or 5363) && replayBefore.Phase == SessionPhase.Town)

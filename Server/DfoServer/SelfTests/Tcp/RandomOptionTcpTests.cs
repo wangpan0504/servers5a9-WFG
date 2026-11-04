@@ -63,7 +63,7 @@ internal static partial class RandomOptionTcpTests
             peer.Send(16, Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
             peer.Expect(0, 28);
             peer.Expect(0, 29);
-            FormalDungeonTcpTests.Load(peer);
+            FormalDungeonTcpTests.Load(peer, fatigue: false);
             peer.Expect(0, 36);
             peer.Send(401, [3, 0, 0, 0]);
             delta = peer.Expect(0, 14).Body;

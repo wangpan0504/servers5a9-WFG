@@ -79,7 +79,8 @@ internal static partial class FormalDungeonTcpTests
                 That(peer.Expect(1, 31).Body[0] == 1, "真实接取强袭特殊补给6084");
                 QuestLifecycleTcpTests.DrainNotifications(peer);
             }
-            SelectMap(peer, incompleteHellQuest: true);
+            // 54/2与黎明裂缝共用哈林选图，核对未使用的2次完整1545映射及成对550后再验27。
+            SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: 2);
             byte[] selection = Convert.FromHexString("9B1C00000000000000FFFF0000000000000000000000000000");
             BinaryPrimitives.WriteUInt32LittleEndian(selection, mission);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), questId);

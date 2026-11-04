@@ -349,7 +349,7 @@ internal static class ChannelEntryTcpTests
             byte[][] daily = peer.InitialDailyBoosterPackets;
             That(daily.Length > 0, "在线日切已有完整礼盒名册");
             int refreshes = 0, limits = 0, dailyChunks = 0, missionCount = 0;
-            int passCount = 0, claimCount = 0, serviceDayMissionCount = 0;
+            int passCount = 0, claimCount = 0;
             bool acknowledged = false;
             peer.SendBarrier();
             for (int budget = 0; budget < 256; budget++)
@@ -386,11 +386,8 @@ internal static class ChannelEntryTcpTests
                 }
                 else if (packet is { Kind: 0, Opcode: 1801 } && expectedMissions is not null)
                 {
-                    // 日切先取得命令门禁时可先发布任务页；事件开启仍须随后发布完整三页。
-                    if (expectedPages && passCount == 0)
-                        That(++serviceDayMissionCount == 1 && refreshes == 0 && limits == 0, "三页前至多一份服务日起点任务快照");
-                    else
-                        That(++missionCount == 1 && claimCount == 0, "三页内或跨多个日周期只发布一份当前任务快照");
+                    That(++missionCount == 1 && claimCount == 0 && (!expectedPages || passCount == 1),
+                        "赛季起点及跨日只发布一份当前任务快照，开启时严格位于进度页之后");
                     Bytes(packet.Body, expectedMissions, "1801完整对应当前权威任务状态");
                 }
                 else if (packet is { Kind: 0, Opcode: 1802 } && expectedPages)

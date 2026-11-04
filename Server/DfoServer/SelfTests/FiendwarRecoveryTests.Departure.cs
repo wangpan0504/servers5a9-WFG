@@ -35,6 +35,29 @@ internal static partial class FiendwarRecoveryTests
                 "离线故障用例创建实际攻坚队");
             var started = start.Start(actor, registry.Find(actor)!, definition);
             That(started.Error == 0, $"离线故障用例沿原Start取得实际Battle和持久身份：{started.Reason}");
+            Guid oldInstance = started.Receipt!.Party.Started!.InstanceId;
+            That(start.Leave(actor, actor.Character) is not null &&
+                Query($"SELECT state FROM character_fiendwar_recovery WHERE instance_id='{oldInstance:N}'") is 2L,
+                "普通主动离团仍记录原实例放弃恢复，不受超时回调守卫影响");
+            That(registry.Create(actor, 2, "Replacement", "Replacement"u8.ToArray(), 8) is not null,
+                "同一角色无需重登真实重建新漩涡团");
+            var replacement = start.Start(actor, registry.Find(actor)!, definition);
+            That(replacement.Error == 0, $"第二张原票沿正式Start开战新实例：{replacement.Reason}");
+            Guid newInstance = replacement.Receipt!.Party.Started!.InstanceId;
+            var currentParty = registry.Find(actor);
+            var currentSquad = parties.Current(session);
+            var currentBattle = session.CurrentRaidBattle(actor);
+            var currentCharacter = session.Selected;
+            That(newInstance != oldInstance &&
+                Query($"SELECT state FROM character_fiendwar_recovery WHERE instance_id='{newInstance:N}'") is 0L,
+                "新团原票恢复资格初始仍为活跃，不能沿用已放弃的旧票");
+            That(!start.LeaveExpiredAnton(actor, oldInstance) && !start.LeaveExpiredAnton(actor, oldInstance) &&
+                !start.LeaveExpiredAnton(actor, newInstance) &&
+                Query($"SELECT state FROM character_fiendwar_recovery WHERE instance_id='{newInstance:N}'") is 0L &&
+                Query($"SELECT state FROM character_fiendwar_recovery WHERE instance_id='{oldInstance:N}'") is 2L &&
+                ReferenceEquals(registry.Find(actor), currentParty) && ReferenceEquals(parties.Current(session), currentSquad) &&
+                ReferenceEquals(session.CurrentRaidBattle(actor), currentBattle) && ReferenceEquals(session.Selected, currentCharacter),
+                "旧实例重复超时回调及当前未失败回调均不写新票、不退出新团或改变自然队和角色");
             long epoch = session.SelectionEpoch;
             Sql("CREATE TRIGGER fiendwar_departure_failure BEFORE UPDATE ON character_fiendwar_recovery BEGIN SELECT RAISE(ABORT,'fixture departure failure'); END");
             bool rejected = false;
@@ -48,5 +71,7 @@ internal static partial class FiendwarRecoveryTests
 
         void Sql(string sql)
         { using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
+        object? Query(string sql)
+        { using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"); db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; return command.ExecuteScalar(); }
     }
 }

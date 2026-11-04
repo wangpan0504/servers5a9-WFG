@@ -1642,7 +1642,7 @@ internal static partial class FormalDungeonTcpTests
         int advances = 0; bool finished = false;
         for (int moves = 0; moves < 64 && !finished; moves++)
         {
-            Load(peer); peer.Expect(0,36);
+            Load(peer, fatigue: false); peer.Expect(0,36);
             if (map[13] == 0)
                 That(cache.ContainsKey(current),"dummy路线普通回访只能安装已有房间缓存");
             else
@@ -1741,7 +1741,8 @@ internal static partial class FormalDungeonTcpTests
         map.HellQuests.Any(quest => !character.CompletedQuests.Contains(quest) && !character.AccountCompletedQuests.Contains(quest));
 
     // 亡者峡谷世界地图同时含悲叹之塔入口；楼层字段随未完成深渊任务名单平移。
-    static void SelectMap(TcpPeer peer, ushort griefLayer = 0, bool? incompleteHellQuest = null, byte? daybreakRemaining = null)
+    static void SelectMap(TcpPeer peer, ushort griefLayer = 0, bool? incompleteHellQuest = null, byte? daybreakRemaining = null,
+        byte? assaultDay = null)
     {
         peer.Send(15, new byte[4]);
         peer.Expect(1, 15, [1]);
@@ -1750,12 +1751,13 @@ internal static partial class FormalDungeonTcpTests
         {
             // 哈林共享选图先同步黎明次数；独立核对完整映射及成对550，不跳过未知通知。
             That(peer.AssaultDailyInfo.Length == 5,"黎明选图沿已初始化的强袭日状态");
-            peer.Expect(0,1536,peer.AssaultDailyInfo);
+            // 跨日场景按夹具时钟独立核对完整强袭正文，不沿用上一日索引。
+            peer.Expect(0,1536,assaultDay is { } day ? new byte[] { 0, 0, day, 0, 0 } : peer.AssaultDailyInfo);
             var daily = new byte[268];
-            BinaryPrimitives.WriteUInt32LittleEndian(daily,remaining);
+            BinaryPrimitives.WriteUInt32LittleEndian(daily,2);
             BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(4),260);
             BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(12),530);
-            BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(16),2);
+            BinaryPrimitives.WriteUInt32LittleEndian(daily.AsSpan(16),checked((uint)(2 - remaining)));
             peer.Expect(0,1545,daily);
             peer.Expect(0,550,[0x12,0x02,0,0,remaining,0]);
         }
@@ -1770,7 +1772,7 @@ internal static partial class FormalDungeonTcpTests
         body[4] = difficulty;
         return body;
     }
-    internal static void Load(TcpPeer peer, bool pcRoom = false)
+    internal static void Load(TcpPeer peer, bool pcRoom = false, bool fatigue = true)
     {
         peer.Send(37, new byte[8]);
         peer.Expect(1, 37, [1]);
@@ -1778,6 +1780,8 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
         // 网吧身份在副本加载完成后补发487特权buff；关闭时没有该包。
         if (pcRoom) peer.Expect(0, 487);
+        // 常规与剧情房间按真实疲劳规则补发36；教程/修炼场/塔类不发。调用方要逐包断言时传fatigue:false自行消费。
+        if (fatigue) peer.ExpectOptionalFatigue();
     }
     // 明确合成的网络统计。独立正文编码/MD5折叠，不调用服务Parser/Builder自证。
     internal static byte[] Death(ushort key, ushort reporter, byte level, ulong decrease = 600,

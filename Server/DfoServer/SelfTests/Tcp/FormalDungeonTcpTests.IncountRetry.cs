@@ -90,7 +90,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(0, 14);
         byte daily = exhaust ? (byte)0 : (byte)4, weekly = exhaust ? (byte)0 : (byte)9;
         ExpectSharedCounts(peer, daily, weekly, "首次入场 550 与服务端扣次后剩余一致");
-        Load(peer); peer.Expect(0, 36); peer.Barrier();
+        Load(peer, fatigue: false); peer.Expect(0, 36); peer.Barrier();
         ClearTayberrs(fixture, peer, definition, map, info);
         peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
         That(PartyDungeonTcpTests.Drain(peer).Any(packet => packet is { Kind: 0, Opcode: 35 }), "通关返回翻牌");

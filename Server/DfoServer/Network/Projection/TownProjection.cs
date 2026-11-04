@@ -391,15 +391,16 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (marriage is not null) await marriage.DailyAsync(context);
     }
 
-    public async Task AssaultServiceDayAsync(GameConnectionContext context)
+    public async Task RefreshAssaultDailyAsync(GameConnectionContext context, Func<bool>? canSend = null,
+        string reason = "assault_mode_daily_reset")
     {
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch));
         if (capture.Selected is not { } character) return;
         int day = DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone);
-        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
+        bool Guard() => (canSend?.Invoke() ?? true) && context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
             context.Session.Selected?.Id == character.Id && DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone) == day);
         await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO,
-            AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), "assault_mode_daily_reset", Guard);
+            AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), reason, Guard);
     }
 
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;

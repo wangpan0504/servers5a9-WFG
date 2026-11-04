@@ -144,10 +144,39 @@ internal static partial class FiendwarBattlefieldTests
                 RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
                 RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
             }, () => clock.AdvanceWithoutCallbacks(5));
-            That(restored.Count == 2 && restored.All(body => body.Length == 5 && body[0] == 0 &&
+            That(restored.Count == 1 && restored.All(body => body.Length == 5 && body[0] == 0 &&
                     BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)) == total - 12) && battle.View.Fiendwar!.Deadline == deadline,
-                "重返新连接及重复战况快照恢复同一截止，不重给完整攻略时间");
+                "重返新连接及重复战况快照恢复同一截止，597同秒不重复且不重给完整攻略时间");
 
+            var delayed = await Capture(context =>
+            {
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+                clock.AdvanceWithoutCallbacks(1);
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+            }, () => clock.AdvanceWithoutCallbacks(5));
+            That(delayed.Count == 1, "跨秒排队的快照同秒写出时597仍只发布一次");
+
+            var sameSecond = await Capture(context =>
+            {
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+                That(battle.SetMechanism(battle.Instance, view.Revision, "[radar state]",
+                    1 - view.Symbols["[radar state]"]) is not null, "同一秒替换慢队列中的战况revision");
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, battle.View, () => true);
+            }, () => { });
+            That(sameSecond.Count == 1 && battle.View.Fiendwar!.Deadline == deadline,
+                "同秒旧快照被拒绝后新revision仍写出一次597，不能被已排队秒数吞掉");
+            view = battle.View;
+
+            var replaced = await Capture(context =>
+            {
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true);
+                clock.AdvanceWithoutCallbacks(1);
+                That(battle.SetMechanism(battle.Instance, view.Revision, "[radar state]",
+                    1 - view.Symbols["[radar state]"]) is not null, "替换已排队计时的战况revision");
+                RaidCombatProjection.PostFiendwarSnapshot(context, battle, battle.View, () => true);
+            }, () => { });
+            That(replaced.Count == 1, "新秒数已排队时旧revision仍拒绝发布，只保留新战况计时");
+            view = battle.View;
             var stale = await Capture(context => RaidCombatProjection.PostFiendwarSnapshot(context, battle, view, () => true),
                 () => That(battle.SetMechanism(battle.Instance, view.Revision, "[radar state]",
                     1 - view.Symbols["[radar state]"]) is not null && battle.View.Revision > view.Revision,
@@ -159,6 +188,17 @@ internal static partial class FiendwarBattlefieldTests
             var expired = await Capture(context => RaidCombatProjection.PostFiendwarSnapshot(context, battle, battle.View, () => true),
                 () => clock.AdvanceWithoutCallbacks(checked((int)total)));
             That(expired.Count == 0, "排队期间真实deadline到期不续时、不猜发终局清理包");
+
+            var currentDisplay = (Instance: Guid.NewGuid(), Remaining: 17u);
+            var oldTerminal = await Capture(context =>
+            {
+                owner.Execute(() => { context.FiendwarRemainingDisplay = currentDisplay; return true; });
+                var oldActor = new RaidActor(session, owner, session.SelectionEpoch, 1, "old-timer", default);
+                RaidCombatProjection.PostFiendwarState(context, view with { PhaseExpired = true }, oldActor, () => false);
+                That(owner.Execute(() => context.FiendwarRemainingDisplay == currentDisplay),
+                    "无效旧团终态通知不能清除后来新团已写出的计时水位");
+            }, () => { });
+            That(oldTerminal.Count == 0, "无效旧终态不发布新的597计时");
         }
         Console.WriteLine($"PASS {Count - before} 漩涡双模式原生总计时投影断言");
         await RunEventProjectionAsync(team, guide);

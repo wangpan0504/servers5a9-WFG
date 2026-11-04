@@ -83,7 +83,7 @@ internal static partial class FormalDungeonTcpTests
         for (int room = 0; room < route.Length; room++)
         {
             That(U32(map, 14) == route[room].Id, "3146房间沿真实资源顺序进入");
-            Load(peer, pcRoom: true);
+            Load(peer, pcRoom: true, fatigue: false);
             var fatigue = peer.Expect(0, 36).Body;
             That(fatigue.Length == 10 && U16(fatigue, 0) == 0 && U16(fatigue, 6) == U16(fatigue, 2),
                 "正常剧情加载后同步原五WORD疲劳，无限模式仍显示满额");

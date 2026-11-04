@@ -128,10 +128,14 @@ internal static class StadiumQuestEntryTests
         var expectedAi = room.AiCharacters.Select((actor,ordinal) => (actor,ordinal))
             .Where(row => !DungeonCompanion.IsCompanionRow(room,row.ordinal)).ToArray();
         var actors = plan.Monsters.Where(row => row.AiCharacter is not null).ToArray();
-        That(monsters.Length == room.Monsters.Count && monsters.Select(row => row.SourceOrdinal)
-            .SequenceEqual(Enumerable.Range(0,room.Monsters.Count)) &&
-            monsters.Select((row,index) => ReferenceEquals(row.Source,room.Monsters[index]) &&
-                row.MonsterId == room.Monsters[index].MonsterId).All(value => value),
+        var expectedMonsters = room.Monsters.Select((source,ordinal) => (source,ordinal))
+            .Where(row => !(room.DeclaredType == "[dummy]" && row.source.RankKind == "[boss]" &&
+                row.source.SpecialChild is null && room.Map.Kind == "map" && room.Map.DummyStageIndex < 0 &&
+                room.Map.StoryStageIndex < 0 && !room.Map.IsConditional)).ToArray();
+        That(monsters.Length == expectedMonsters.Length && monsters.Select(row => row.SourceOrdinal)
+            .SequenceEqual(expectedMonsters.Select(row => row.ordinal)) &&
+            monsters.Select((row,index) => ReferenceEquals(row.Source,expectedMonsters[index].source) &&
+                row.MonsterId == expectedMonsters[index].source.MonsterId).All(value => value),
             "五房原怪完整保留Source与独立原序，不把原生AI混入怪物索引");
         That(actors.Length == expectedAi.Length && actors.Select(row => row.SourceOrdinal)
             .SequenceEqual(expectedAi.Select(row => row.ordinal)) &&

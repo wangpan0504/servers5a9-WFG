@@ -184,8 +184,10 @@ internal static class QuestCinematicSettlementTests
             That(Condition() is null && QuestCompletionRepositoryTests.Same(before,f.Read()),
                 "加载中33不能提前完成演出："+id);
             var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            // 加载完成会结算房间疲劳并重载 Selected，拒绝断言以加载后的仓库状态为基线。
+            var loadedState = f.Read();
             That(Condition()?.Outcome == QuestLifecycleOutcome.Rejected && Finish().Outcome == QuestFinishOutcome.Rejected &&
-                QuestCompletionRepositoryTests.Same(before,f.Read()),"错误起点地图33与提前34均拒绝："+id);
+                QuestCompletionRepositoryTests.Same(loadedState,f.Read()),"错误起点地图33与提前34均拒绝："+id);
             int deaths = 0;
             var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
             foreach (var point in path.Skip(1))

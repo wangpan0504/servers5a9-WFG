@@ -41,14 +41,22 @@ internal static partial class RaidCombatProjection
         {
             // 00DE9128读取597槽0；type45经01DD1752/01DD187C按同一秒时钟读写，1522本身不设置时间。
             // 入场、重返和战况重放共用真实deadline，排队期间流逝的时间不能重新赠送。
+            // 仅按FIFO已写出的秒数去重；同秒新revision不能被稍后会失效的旧排队项挡住。
+            // 展示状态只在发送泵的本人owner内读取或更新，不在Battle通知线程读写复合字段。
+            uint? writtenRemaining = null;
             context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
                 () =>
                 {
                     var remaining = field.Deadline - battle.FiendwarNow;
-                    return remaining > TimeSpan.Zero
-                        ? RaidCombatPackets.PhaseRemaining(checked((uint)Math.Ceiling(remaining.TotalSeconds))) : null;
-                },
-                "fiendwar_remaining", Guard);
+                    if (remaining <= TimeSpan.Zero) return null;
+                    writtenRemaining = checked((uint)Math.Ceiling(remaining.TotalSeconds));
+                    return context.FiendwarRemainingDisplay == (view.Instance, writtenRemaining.Value)
+                        ? null : RaidCombatPackets.PhaseRemaining(writtenRemaining.Value);
+                }, "fiendwar_remaining", Guard, written: () =>
+                {
+                    if (writtenRemaining is { } remaining)
+                        context.FiendwarRemainingDisplay = (view.Instance, remaining);
+                });
         }
         // 差量在FIFO真正写帧时与已写展示比较；旧快照跳过不能吞掉后续必要删除。
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.FIEND_WAR_BOARD_USER_INFO, 1 + 16 * 13,

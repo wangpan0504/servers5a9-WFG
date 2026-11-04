@@ -7,15 +7,15 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    // 准备在owner外解析房间，提交前必须仍是原四人名册与原选图票据。
+    // 准备在owner外解析房间，提交前必须仍是原一至四人名册与原选图票据。
     sealed record EvildomWarChallengeAdmission(Character Character, long Epoch,
         DungeonSelectionContext Selection, PartySnapshot Party);
 
-    static bool HasEvildomWarChallengeRoster(PartySnapshot? party) => party is { Members.Length: EvildomWarChallengeEntryPolicy.PartyCount } &&
+    static bool HasEvildomWarChallengeRoster(PartySnapshot? party) => party is { Members.Length: >= 1 and <= EvildomWarChallengeEntryPolicy.PartyCount } &&
         party.Members.All(member => member.Slot < EvildomWarChallengeEntryPolicy.PartyCount) &&
-        party.Members.Select(member => member.Slot).Distinct().Count() == EvildomWarChallengeEntryPolicy.PartyCount &&
-        party.Members.Select(member => member.Actor.Character.Id).Distinct().Count() == EvildomWarChallengeEntryPolicy.PartyCount &&
-        party.Members.Select(member => member.Actor.Owner.Account).Distinct(StringComparer.Ordinal).Count() == EvildomWarChallengeEntryPolicy.PartyCount &&
+        party.Members.Select(member => member.Slot).Distinct().Count() == party.Members.Length &&
+        party.Members.Select(member => member.Actor.Character.Id).Distinct().Count() == party.Members.Length &&
+        party.Members.Select(member => member.Actor.Owner.Account).Distinct(StringComparer.Ordinal).Count() == party.Members.Length &&
         party.Members.Any(member => member.Slot == party.Leader) && party.EvildomWarBattleId is null;
 
     bool HasCurrentEvildomWarChallengeSeat(PartySnapshot? party) => HasEvildomWarChallengeRoster(party) &&

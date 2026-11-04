@@ -58,16 +58,28 @@ internal static partial class TagEvildomTcpTests
                 {
                     That(run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted, "真实五房逐一确认加载");
                     var monsters = plans.Single(plan => plan.Room.Map == run.Snapshot.CurrentMap).Monsters
-                        // 存活集合还包含友方原生AI与非战斗对象，不能当作普通死亡目标。
-                        .Where(monster => monster.CanReportDeath && run.Snapshot.LivingMonsters.Contains(monster.ObjectKey))
+                        // 对存活集合中的非战斗演员保留显式无死亡事实及无副作用核验。
+                        .Where(monster => run.Snapshot.LivingMonsters.Contains(monster.ObjectKey))
                         .OrderBy(monster => monster.IsBoss).ToArray();
                     foreach (var monster in monsters)
                     {
                         var observed = new NativeDungeonDeathObservation(monster.ObjectKey, first.Id, 0x111, first.Id,
                             600, 1, 0, (uint)monster.CandidateLevel, 500, 0, 1, true, new string('a', 64));
-                        var fact = authority.ValidateAndIssue(run, run.Snapshot.Identity, observed);
+                        var before = run.Snapshot;
+                        var fact = authority.ValidateAndIssue(run, before.Identity, observed);
+                        if (!monster.CanReportDeath)
+                        {
+                            That(monster is { MonsterId: 5409, IsFriendly: true, IsBlocking: false, AiCharacter.Faction: "[character]" } &&
+                                fact.Outcome == DungeonRunOutcome.Accepted && fact.Death is null,
+                                "旧玩家资源原生友方5409不取得战斗死亡事实，不能借资源遍历生成奖励或清图");
+                            var after = run.Snapshot;
+                            That(after.Identity == before.Identity && after.Phase == before.Phase && after.CurrentMap == before.CurrentMap &&
+                                after.LivingMonsters.SequenceEqual(before.LivingMonsters) && !run.HasPendingDeath && run.ClearFact is null,
+                                "非战斗演员报告不改变原TAG实例、房间、存活集合或待结算状态");
+                            continue;
+                        }
                         That(fact.Outcome == DungeonRunOutcome.Accepted && fact.Death is not null,
-                            $"TAG{id}候选{source.SourceOrdinal}房{x}地图{run.Snapshot.CurrentMap.Id}演员{monster.MonsterId}/key{monster.ObjectKey}签发真实死亡事实");
+                            "当前真实敌人必须由原生权威签发非空死亡事实");
                         var prepared = run.PrepareConfirmedDeath(fact.Death!);
                         That(prepared.Pending is not null, "实际批准怪物沿原生死亡权威形成待确认事实");
                         if (prepared.Pending!.TagEvildomClear is not null)

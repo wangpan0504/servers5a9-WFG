@@ -226,7 +226,24 @@ internal sealed partial class TcpPeer : IDisposable
         if (opcode == 7 && body.Length == 0) requestedRoster = false;
     }
 
-    public WirePacket Read() => ReadCore(channelNumber);
+    // 可选通知探针会原样归还读到的下一包，后续Expect仍按严格包序断言，不跳过任何业务包。
+    WirePacket? pushedBack;
+    public WirePacket Read()
+    {
+        if (pushedBack is { } packet) { pushedBack = null; return packet; }
+        return ReadCore(channelNumber);
+    }
+    public void ExpectOptionalFatigue()
+    {
+        var packet = Read();
+        if (packet is { Kind: 0, Opcode: 36 })
+        {
+            TestCheck.That(packet.Body.Length == 10, "正式疲劳通知保留五个u16的10字节合同");
+            return;
+        }
+        TestCheck.That(pushedBack is null, "可选通知回推最多保留一包");
+        pushedBack = packet;
+    }
 
     void ReadStoryBooks(byte[] body)
     {

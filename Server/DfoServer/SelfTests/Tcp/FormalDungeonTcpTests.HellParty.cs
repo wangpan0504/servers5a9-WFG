@@ -58,7 +58,7 @@ internal static partial class FormalDungeonTcpTests
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             string beforeSelection = fixture.Snapshot();
-            SelectMap(peer, incompleteHellQuest: !qualified);
+            SelectMap(peer, incompleteHellQuest: !qualified, daybreakRemaining: 2);
             peer.Barrier();
             That(fixture.Snapshot() == beforeSelection, "选图资格投影不改写任务、门票、疲劳或revision");
             peer.Send(16,request);
@@ -70,7 +70,7 @@ internal static partial class FormalDungeonTcpTests
                     "深渊派对拒绝（" + name + "）：" + (qualified ? "票不够以 0x11 拒绝" : "未完成 6080 以错误9恢复") + "，不落入场状态，背包票数不变");
                 if (!qualified)
                 {
-                    SelectMap(peer, incompleteHellQuest: true);
+                    SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: 2);
                     peer.Send(132); peer.Expect(1, 132, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
                     peer.Expect(0, 23); peer.Expect(0, 24);
@@ -92,7 +92,7 @@ internal static partial class FormalDungeonTcpTests
             That(delta[0] == 0 && U16(delta,3) == 121 && Tickets(created.Id) == 0 &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_state WHERE character_id=$p0 AND last_attempt>0",peer.Id) is [[1L]],
                 "入场提交时扣掉 30 张 3330（NOTI 14 删除第 121 格、库内数量归零、入场状态落库）");
-            Load(peer); peer.Expect(0,36); peer.Barrier();
+            Load(peer, fatigue: false); peer.Expect(0,36); peer.Barrier();
         }
         // 时空裂缝（[inferno dungeon]）：地轨中心 7539，op16 [4]=2、[7]=1。整条路线是深渊场地，没有密门房间：
         // DUNGEON_INFO 的 [10,11] 保持 FF，入场一次扣 30 张 3330 与 6 点疲劳。
@@ -139,7 +139,7 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[2L]] &&
                 fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                 "时空裂缝TCP：入场一次扣 30 张 3330 与 6 点疲劳，只建立一个尝试");
-            Load(peer);
+            Load(peer, fatigue: false);
             peer.Expect(0, 36);
             peer.Barrier();
         }
@@ -182,7 +182,7 @@ internal static partial class FormalDungeonTcpTests
             using (var peer = Open(fixture))
             {
                 peer.Select(cosmoCharacter.Slot, prepared: true, resumeTown: true, room: false, bossBuff: (bossBuffId, usePass ? 2 : 1));
-                SelectMap(peer);
+                SelectMap(peer, daybreakRemaining: 2);
                 byte[] cosmoRequest = new byte[25];
                 BinaryPrimitives.WriteUInt32LittleEndian(cosmoRequest, 7191);
                 cosmoRequest[4] = 4;

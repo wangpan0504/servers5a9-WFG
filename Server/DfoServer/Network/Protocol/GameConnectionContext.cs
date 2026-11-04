@@ -52,6 +52,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarMonsters { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<(byte Area, byte Kind), FiendwarTimerRow> FiendwarTimers { get; set; } = System.Collections.Immutable.ImmutableDictionary<(byte, byte), FiendwarTimerRow>.Empty;
+    // 597仅记录当前实例实际写出的秒数；读写均沿本人owner，排队但失效的快照不占展示资格。
+    internal (Guid Instance, uint Remaining)? FiendwarRemainingDisplay { get; set; }
     internal (Guid Instance, long Sequence)? FiendwarSupportDisplay { get; set; }
     // 仅当前实例的五个原生影片符号和实际区域；FIFO写帧成功后才确认事件代。
     internal Guid FiendwarEventDisplayInstance { get; set; }
