@@ -33,7 +33,7 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
             Task signal;
             lock (sync)
             {
-                if (timers.Count(row => row.Period == 0 && row.Due != long.MaxValue) == count) return;
+                if (timers.Count(row => row.Period == 0 && row.Due != long.MaxValue) >= count) return;
                 signal = changed.Task;
             }
             await signal.WaitAsync(TimeSpan.FromSeconds(5));

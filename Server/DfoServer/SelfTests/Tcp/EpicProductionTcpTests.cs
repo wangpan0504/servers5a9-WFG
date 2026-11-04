@@ -176,15 +176,15 @@ internal static class EpicProductionTcpTests
         {
             var packet=peer.Read();
             if(packet.Kind==1 && packet.Opcode==opcode){check(packet.Body);That(changes>0,"成功制作先发布库存变化");return;}
-            // 任务权威变化有两种形态：NOTI33与延迟应答SET_QUEST_TRIGGER(kind1/33，QuestProjection.PublishConditionsAsync)。
-            // 制作事务提交后背包投影先补发加工任务进度再回ACK；该顺序在成组前就存在，基线提交独立复现，不是本分支引入。
+            // 制作事务提交后背包投影借任务条件路径补发加工任务进度，形态是应答SET_QUEST_TRIGGER(kind1/33，
+            // QuestProjection.PublishConditionsAsync)。该顺序在成组前就存在，基线提交独立复现，不是本分支引入。
             if(packet.Kind==1 && packet.Opcode==33)
             {
-                That(packet.Body.Length>=3 && U16(packet.Body,1) is 10024 or 10026,
-                    "任务权威应答只能携带本次实际推进的加工任务");
+                That(packet.Body.Length==7 && packet.Body[0]==1 && U16(packet.Body,1) is 10024 or 10026,
+                    "任务权威应答只能是本次实际推进的加工任务整条条件包");
                 continue;
             }
-            That(packet.Kind==0 && packet.Opcode is 14 or 21 or 32 or 33 or 356 or 574,"制作之前只能发布库存/任务权威变化");
+            That(packet.Kind==0 && packet.Opcode is 14 or 21 or 32 or 356 or 574,"制作之前只能发布库存/任务权威变化");
             if(packet.Opcode==14){That(packet.Body.Length>=3 && packet.Body.Length==3+U16(packet.Body,1)*123,"库存差量精确行宽");inventory?.Invoke(packet.Body);changes++;}
         }
         throw new InvalidDataException("制作回包超过有界通知数");
