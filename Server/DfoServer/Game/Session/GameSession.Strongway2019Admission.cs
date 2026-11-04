@@ -34,8 +34,8 @@ internal sealed partial class GameSession
             admission.DungeonId, Strongway2019MemberCount(admission.DungeonId), admission.AntiEvil, admission.Schedule,
             (timeProvider ?? TimeProvider.System).GetUtcNow(), admission.Mode == Strongway2019Mode.Matching) == admission;
 
-    // 英雄与匹配仍需真实队伍；单人队伍不等同于未组队，简单模式保留原单角色入口。
-    int Strongway2019MemberCount(uint dungeonId) => CurrentParty?.Invoke()?.Members.Length ?? (dungeonId == 5359 ? 1 : 0);
+    // 简单与英雄允许未组队单角色进入；匹配仍需真实队伍。
+    int Strongway2019MemberCount(uint dungeonId) => CurrentParty?.Invoke()?.Members.Length ?? (dungeonId is 5359 or 5363 ? 1 : 0);
 
     InventoryEventPrecondition? Strongway2019RequiredEvent(Strongway2019Admission? admission) =>
         admission is null ? null : new(admission.Schedule, timeProvider ?? TimeProvider.System);
