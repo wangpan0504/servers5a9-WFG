@@ -29,7 +29,8 @@ internal static class MooncreekDungeonTcpTests
                         { Experience=growth.GetLevelStartExperience(84) },resources.Learning)
                 });
             }
-            fixture.Sql("UPDATE character_fatigue SET remaining=8 WHERE character_id=$p0",created.Id);
+            // 疲劳通知保持已用+剩余=上限，夹具改余额时同步回填已用量。
+            fixture.Sql("UPDATE character_fatigue SET used=maximum-8,remaining=8 WHERE character_id=$p0",created.Id);
             using var peer = Open(fixture,account);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);

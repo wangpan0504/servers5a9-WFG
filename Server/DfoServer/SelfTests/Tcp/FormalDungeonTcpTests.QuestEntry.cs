@@ -85,7 +85,7 @@ internal static partial class FormalDungeonTcpTests
                 var start = maze.MapSpecification!.Single(row => row.Position == maze.Starts.Single());
                 That(U32(map,14) == start.Id && information[8] == maze.Bosses.Single().X && information[9] == maze.Bosses.Single().Y,
                     "真实TCP的任务及普通0请求进入原起点与Boss坐标："+scenario.Quest);
-                Load(peer);
+                Load(peer, fatigue: false);
                 if (scenario.Quest == 2948 || auxiliary)
                 {
                     int used = checked((int)attempt+1);
@@ -95,7 +95,7 @@ internal static partial class FormalDungeonTcpTests
                         "SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long actualUsed,long remaining]] &&
                         actualUsed == used && remaining == 156-used,"普通猎杀请求使用真实普通迷宫，生产疲劳投影与重复加载SQL去重一致");
                 }
-                else peer.Barrier();
+                else { peer.ExpectOptionalFatigue(); peer.Barrier(); }
                 var active = fixture.Query("SELECT acceptance_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,scenario.Quest).Single();
                 acceptance ??= (string)active[0];
                 That((string)active[0] == acceptance && Convert.ToInt64(active[1]) == initial &&

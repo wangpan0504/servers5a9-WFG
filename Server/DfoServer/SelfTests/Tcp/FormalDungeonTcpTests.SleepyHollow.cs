@@ -80,7 +80,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 31, []);
                 }
                 junk += dropJunk; seeds += dropSeeds;
-                PickupResourceDrops(fixture, peer, death, 0);
+                PickupResourceDrops(fixture, peer, death, 0, resources);
                 string saved = fixture.Snapshot();
                 peer.Send(39, report); peer.Barrier();
                 That(fixture.Snapshot() == saved, "真实socket重复39不能重发材料，重复43由共用拾取断言覆盖");

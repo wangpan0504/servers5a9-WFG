@@ -95,7 +95,8 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Sql("INSERT INTO character_prey_normal_progress(character_id,account,day,branch,progress) VALUES($p0,$p1,$p2,$p3,$p4)",
                     created.Id,account,preyDay,preyBranch,preyRoute.IndexOf(sample.Id));
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : luke && !sample.Explicit ? 8 : 100;
-            fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
+            // 疲劳通知保持已用+剩余=上限，夹具改余额时同步回填已用量。
+            fixture.Sql("UPDATE character_fatigue SET used=maximum-$p0,remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
             // 普通超时空115沿普通频道；39/type45已归漩涡57，不能借团队落点验证普通副本。
             using var peer = Open(fixture,account);
             peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
@@ -260,7 +261,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(39,report);
                     var packets = Drain(expectedCondition);
                     foreach (var notice in packets.Where(packet => packet.Kind == 0 && packet.Opcode == 38))
-                        PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit && (!prey || sample.Id == PreyNormalCatalog.FinalDungeon) ? questId : 0u);
+                        PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit && (!prey || sample.Id == PreyNormalCatalog.FinalDungeon) ? questId : 0u,resources);
                     var state = fixture.Snapshot();
                     peer.Send(39,report);
                     Drain();

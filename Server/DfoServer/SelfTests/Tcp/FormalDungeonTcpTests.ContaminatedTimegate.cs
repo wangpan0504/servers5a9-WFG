@@ -67,7 +67,7 @@ internal static partial class FormalDungeonTcpTests
             That(info.Length == 36 && U32(info, 0) == 5100 && info[4] == 2 && info[8] == 3 && info[9] == 0 &&
                 map.Length >= 19 && map[0] == 0 && map[1] == 0 && U32(map, 14) == 95261,
                 "真实16两种任务号均按固定2加载5100原首房及Boss坐标，不走等级预约9583");
-            Load(peer);
+            Load(peer, fatigue: false);
             if (requested == 0)
             {
                 var fatigue = peer.Expect(0, 36).Body;
@@ -76,6 +76,7 @@ internal static partial class FormalDungeonTcpTests
                     U16(fatigue, 2) == Convert.ToInt64(row[1]) && U16(fatigue, 6) == Convert.ToInt64(row[2]),
                     "普通0保持真实逐房疲劳合同，通知与SQLite一致");
             }
+            else peer.ExpectOptionalFatigue();
             peer.Barrier();
             That(Active() == active && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)
                 is [[long actual]] && actual == ++attempt, "实际加载只预留一次尝试且不改6/6接取身份或条件");

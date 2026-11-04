@@ -70,7 +70,8 @@ internal static partial class FormalDungeonTcpTests
             created = InventoryService.Commit(repository, owner, created, inventory.Grant(created,
                 [new(TayberrsStone, exhaust ? 1 : 3)]));
         }
-        fixture.Sql("UPDATE character_fatigue SET remaining=50 WHERE character_id=$p0", created.Id);
+        // 疲劳通知保持已用+剩余=上限，夹具改余额时同步回填已用量。
+        fixture.Sql("UPDATE character_fatigue SET used=maximum-50,remaining=50 WHERE character_id=$p0", created.Id);
         if (exhaust)
         {
             var period = DungeonIncountPolicy.Period(DateTimeOffset.UtcNow, incounts.WeeklyResetDay(TayberrsDungeon));
@@ -91,7 +92,7 @@ internal static partial class FormalDungeonTcpTests
         byte daily = exhaust ? (byte)0 : (byte)4, weekly = exhaust ? (byte)0 : (byte)9;
         ExpectSharedCounts(peer, daily, weekly, "首次入场 550 与服务端扣次后剩余一致");
         Load(peer, fatigue: false); peer.Expect(0, 36); peer.Barrier();
-        ClearTayberrs(fixture, peer, definition, map, info);
+        ClearTayberrs(fixture, peer, definition, map, info, resources);
         peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
         That(PartyDungeonTcpTests.Drain(peer).Any(packet => packet is { Kind: 0, Opcode: 35 }), "通关返回翻牌");
         peer.Send(69); peer.Expect(1, 69, [1]);
@@ -135,7 +136,8 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3); peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
     }
 
-    static void ClearTayberrs(TcpTestFixture fixture, TcpPeer peer, DungeonDefinition definition, byte[] map, byte[] info)
+    static void ClearTayberrs(TcpTestFixture fixture, TcpPeer peer, DungeonDefinition definition, byte[] map, byte[] info,
+        TcpTestResources resources)
     {
         int startMap = (int)U32(map, 14);
         var maze = definition.Mazes.First(row => row.HellParty is null && row.QuestConnectionTokens.Count == 0 &&
@@ -151,7 +153,7 @@ internal static partial class FormalDungeonTcpTests
                 var report = Death(U16(map, offset + 6), peer.Id, map[offset + 12]);
                 peer.Send(39, report);
                 foreach (var notice in PartyDungeonTcpTests.Drain(peer).Where(packet => packet is { Kind: 0, Opcode: 38 }))
-                    PickupResourceDrops(fixture, peer, notice.Body, 0);
+                    PickupResourceDrops(fixture, peer, notice.Body, 0, resources);
             }
             if (point == goal) break;
             var next = route[Array.IndexOf(route, point) + 1];

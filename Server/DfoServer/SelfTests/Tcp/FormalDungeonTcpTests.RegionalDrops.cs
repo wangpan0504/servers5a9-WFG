@@ -70,7 +70,7 @@ internal static partial class FormalDungeonTcpTests
                             seeds += checked((int)U32(death, at + 10));
                     }
                     That(U16(death, 0) == key && seeds == 1, "真实死亡38通知包含一个完整诞生之芽，不伪造成功或仅改清单");
-                    PickupResourceDrops(fixture, peer, death, 0);
+                    PickupResourceDrops(fixture, peer, death, 0, resources);
                     picked += seeds;
                     string saved = fixture.Snapshot();
                     peer.Send(39, report); peer.Barrier();
