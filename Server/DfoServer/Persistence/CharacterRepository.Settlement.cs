@@ -272,9 +272,12 @@ internal sealed partial class CharacterRepository
             new DungeonLuckyStarGrant(false, ReadAccountWallet(db, owner.Account, tx).RentalPoints);
         if (luckyStar.Granted)
             committed = committed with { Inventory = committed.Inventory with { AccountWallet = ReadAccountWallet(db, owner.Account, tx) } };
+        uint attendanceMail = prepared.DailyAttendance is { } attendance
+            ? ApplyDailyAttendance(db, tx, owner.Account, committed, attendance, claim: false).MailId : 0;
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
+            DailyAttendanceMailId = attendanceMail,
             GainedExperience = checked((uint)plan.GainedExperience),
             ProficiencyGained = proficiencyGained,
             Adventure = adventureCommit,

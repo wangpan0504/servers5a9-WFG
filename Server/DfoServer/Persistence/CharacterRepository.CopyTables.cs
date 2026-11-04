@@ -93,6 +93,8 @@ internal sealed partial class CharacterRepository
         "account_adventure_receipts",
         "account_adventure_representatives",
         "account_completed_quests",
+        "account_daily_attendance_days",
+        "account_daily_attendance_claims",
         "account_dazzlement_tower_bindings",
         "account_evildom_war_guides",
         "account_fiendwar_guides",

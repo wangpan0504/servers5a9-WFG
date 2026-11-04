@@ -87,6 +87,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         bool endless = context.Session.EndlessAdventureActive;
         bool removeEndlessNpc = !endless && context.Session.EndlessAdventureWasActive;
         if (onlineEnabled) openEvents = [.. openEvents, ServerEventService.PcRoomTimePointId];
+        bool attendanceEnabled = context.DailyAttendance?.Enabled == true;
+        if (attendanceEnabled) openEvents = [.. openEvents, ServerEventService.DailyAttendanceId];
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
@@ -111,12 +113,15 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (endless) activeEvents.Add(Game.Events.EndlessAdventurePolicy.EventId);
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
+        if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
         if (battlePass) activeEvents.Add(BattlePassEventId);
+        var firstValues = new Dictionary<ushort, uint>();
+        if (battlePass) firstValues[BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds());
+        if (attendanceEnabled) firstValues[ServerEventService.DailyAttendanceId] = GameWorld.OnlineEvents.DailyAttendanceCatalog.ClearTarget;
         byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents,
             activeEvents: activeEvents,
             designPages: designPages,
-            firstValues: battlePass ? new Dictionary<ushort, uint>
-                { [BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds()) } : null,
+            firstValues: firstValues,
             includeSeriaLuck: seriaLuck);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
@@ -163,7 +168,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 throw new IOException("Strongway NPC send queue unavailable");
         }
         if (NpcCurrent() && context.Session.EndlessAdventureActive == endless) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
-            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision);
+            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }

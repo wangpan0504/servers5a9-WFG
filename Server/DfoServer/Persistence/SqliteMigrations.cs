@@ -366,6 +366,8 @@ internal static class SqliteMigrations
         }),
         new(194, "无尽大冒险账号每日产币额度", static (db, tx) => Execute(db, tx,
             EndlessAdventureSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(195, "账号日签到进度与奖励事实", static (db, tx) => Execute(db, tx,
+            DailyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2540,6 +2542,11 @@ internal static class SqliteMigrations
 
     internal static void ValidateSchema(SqliteConnection db, SqliteTransaction tx)
     {
+        foreach (string statement in DailyAttendanceSchema.Definition.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            string table = statement["CREATE TABLE ".Length..statement.IndexOf('(')];
+            if (!KnownTable(db, tx, table, statement)) throw new InvalidDataException("日签到表结构不兼容: " + table);
+        }
         ValidateTeleportCooldownColumn(db, tx, "privilege_until");
         InventoryItemRevisionSchema.Validate(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);

@@ -302,7 +302,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (!useDefaultActivities)
         {
             var eventStore = new ServerEventRepository(Database);
-            foreach (ushort id in new ushort[] { 2257, 228 })
+            foreach (ushort id in new ushort[] { 2257, 228, 2370 })
                 if (eventStore.Read(id) is { Revision: 0 } initial)
                     eventStore.Save(initial, initial with { OverrideActive = false });
         }

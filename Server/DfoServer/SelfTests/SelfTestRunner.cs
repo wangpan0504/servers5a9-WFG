@@ -244,6 +244,7 @@ internal static class SelfTestRunner
         DungeonSettlementProtocolTests.Run();
         BlackDiamondTests.RunCore();
         ServerEventTests.RunCore();
+        DailyAttendanceTests.RunCore();
         DungeonClearExperienceCatalogTests.Run();
         DungeonLuckyStarTests.RunCore();
         DungeonKillExperienceCatalogTests.RunCore();

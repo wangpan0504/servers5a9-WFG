@@ -11,6 +11,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public DungeonCardReward? Card { get; init; }
     public DfoServer.Game.Inventory.Models.InventoryPlan? Inventory { get; init; }
     public uint? MailId { get; init; }
+    public uint DailyAttendanceMailId { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public uint GainedExperience { get; init; }
@@ -52,6 +53,14 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
     public BossRushClearReward? BossRush { get; } = bossRush;
+    public DfoServer.Game.Events.DailyAttendancePlan? DailyAttendance { get; private set; }
+    bool dailyAttendanceFrozen;
+    public void FreezeDailyAttendance(DfoServer.Game.Events.DailyAttendancePlan? plan)
+    {
+        if (dailyAttendanceFrozen) return;
+        DailyAttendance = plan;
+        dailyAttendanceFrozen = true;
+    }
     public DungeonTournamentReward? Tournament { get; private set; }
     public void FreezeTournament(DungeonTournamentReward? reward)
     {

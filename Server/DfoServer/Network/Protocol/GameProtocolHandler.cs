@@ -56,7 +56,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null,
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
-    DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null) : IConnectionProtocol
+    DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
+    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -135,7 +136,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
             directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
-            endlessAdventure: endlessAdventure);
+            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
@@ -170,6 +171,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
+        if (dailyAttendance is not null) context.DailyAttendance = new(context, dailyAttendance, time ?? TimeProvider.System, log);
         if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
         session.ReturnToSelectionRequested = async () =>
         {
