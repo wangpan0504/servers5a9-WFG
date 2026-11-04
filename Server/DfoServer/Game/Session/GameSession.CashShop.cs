@@ -42,7 +42,7 @@ internal sealed partial class GameSession
             receipt = ordinary.Accepted ? purchase : null;
             return ordinary;
         }
-        if (promotionStore is null || request.CurrencyMode != 0 || request.GiftMode != 0 ||
+        if (promotionStore is null || request.CurrencyMode is not (0 or 2) || request.GiftMode != 0 ||
             request.PaymentMode != 0 || request.Items.Any(row => row.PaymentMode != 0))
             return InventoryResult.Reject(17);
         long allocated = GC.GetAllocatedBytesForCurrentThread();

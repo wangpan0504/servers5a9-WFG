@@ -104,6 +104,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     internal bool ProductionLukeCards => lukeStartPolicy is null;
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
+    readonly Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver;
     readonly bool enablePromotionPage;
     readonly bool useDefaultActivities;
     readonly Random? fiendwarMazeRandom;
@@ -115,12 +116,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null, bool useDefaultActivities = false)
+        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
         this.promotions = promotions;
+        this.promotionItemResolver = promotionItemResolver;
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
         this.useDefaultActivities = useDefaultActivities;
@@ -340,7 +342,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

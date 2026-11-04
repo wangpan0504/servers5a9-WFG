@@ -110,7 +110,8 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null)
+        Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
+        Func<int, ItemTemplate>? promotionItemResolver = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -292,11 +293,13 @@ internal static class ServerRuntime
                 Period = onlineCatalog.Period.Length, Resource = GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath });
         }
         if (promotionConfiguration is not null) promotionConfiguration.Changed += events.NotifyPromotionChanged;
-        var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
+        var promotionItem = promotionItemResolver ?? itemResources.Items.Get;
+        var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, promotionItem);
         var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);
         var promotionPageService = promotions is not null && (enablePromotionPage ||
-            promotions().Activities.Any(entry => entry.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope))
-            ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
+            promotions().Activities.Any(entry => entry.Configuration.Rules.Scope == Game.CashShopPromotions.CashShopPromotionPageService.Scope &&
+                entry.Availability == PromotionAvailability.Active))
+            ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields);

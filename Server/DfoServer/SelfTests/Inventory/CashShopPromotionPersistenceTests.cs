@@ -46,10 +46,10 @@ internal static partial class CashShopPromotionPersistenceTests
         plan.Inventory.ExpBonus = (f.Now.ToUnixTimeSeconds() + 600, 1000);
         var commit = f.Store.Commit(f.Owner, plan, f.Now);
         f.Character = commit.Character;
-        That(commit.Progress.Count == 12 && commit.Progress.Revision == 1 && commit.MailIds.Length == 2 &&
+        That(commit.Progress.Count == 12 && commit.Progress.Revision == 1 && commit.MailIds.Length == 11 &&
             commit.Character.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 8800 &&
             commit.Character.Inventory.Items.Count(item => item.Core.ItemId is 51000 or 51003) == 2,
-            "主货固定bonus扣款与十二套累计两封全部外盒原子提交");
+            "主货固定bonus扣款与十二套累计十一封逐档外盒原子提交");
         That(commit.Character.Inventory.ConsumableStates.SequenceEqual(states) &&
             f.Store.LoadCharacter(f.Owner, 0)!.Inventory.ConsumableStates.SequenceEqual(states),
             "促销完整事务及重读保留既有药效和冷却，不用促销快照覆盖新上游状态");
@@ -58,9 +58,10 @@ internal static partial class CashShopPromotionPersistenceTests
         That(f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_awards WHERE json_extract(reward_snapshot,'$.Award.PurchaseNumber')=global_purchase AND json_extract(reward_snapshot,'$.Item.Uid')>0") is 11L,
             "发奖来源全局序号与真实持久实例UID一起写入资格回执");
         var mails = f.Store.LoadMailbox(f.Owner, f.Character.Id, f.Now.ToUnixTimeSeconds()).Entries;
-        That(mails.Sum(mail => mail.Attachments.Length) == 11 && mails.SelectMany(mail => mail.Attachments).All(a => a.Item.Uid > 0) &&
+        That(mails.Length == 11 && mails.All(mail => mail.Attachments.Length == 1) &&
+            mails.Sum(mail => mail.Attachments.Length) == 11 && mails.SelectMany(mail => mail.Attachments).All(a => a.Item.Uid > 0) &&
             mails.SelectMany(mail => mail.Attachments).Select(a => a.Item.Uid).Distinct().Count() == 11,
-            "两封按十附件完整投递并分配不重复持久UID");
+            "十一档各自独立邮件完整投递并分配不重复持久UID");
         snapshot = f.Sql.Snapshot();
         var replay = f.Store.Commit(f.Owner, plan, f.Now.AddYears(1));
         That(replay.Progress == commit.Progress && replay.MailIds.SequenceEqual(commit.MailIds) && f.Sql.Snapshot() == snapshot,
@@ -134,6 +135,7 @@ internal static partial class CashShopPromotionPersistenceTests
             "AFTER UPDATE ON cash_shop_promotion_progress",
             "AFTER INSERT ON mailbox_audit_log WHEN NEW.action_name='system' AND (SELECT count(*) FROM mailbox_audit_log WHERE action_name='system')=1",
             "AFTER INSERT ON mailbox_audit_log WHEN NEW.action_name='system' AND (SELECT count(*) FROM mailbox_audit_log WHERE action_name='system')=2",
+            "AFTER INSERT ON mailbox_attachments WHEN (SELECT count(*) FROM mailbox_attachments)>=10",
             "AFTER INSERT ON cash_shop_promotion_awards"
         })
         {
@@ -208,9 +210,12 @@ internal static partial class CashShopPromotionPersistenceTests
         var plan = f.Plan(3, special: true);
         var first = f.Store.Commit(f.Owner, plan, f.Now);
         f.Character = first.Character;
-        var stored = f.Store.LoadMailbox(f.Owner, f.Character.Id, f.Now.ToUnixTimeSeconds()).Entries.Single();
-        That(stored.Attachments[0].Item.Avatar?.Color1 == 7 && stored.Attachments[1].Item.Creature?.Name == "赠礼宠物",
-            "完整时装宠物详情随真实邮件UID保存");
+        var stored = f.Store.LoadMailbox(f.Owner, f.Character.Id, f.Now.ToUnixTimeSeconds()).Entries
+            .Where(mail => first.MailIds.Contains(mail.Id)).OrderBy(mail => mail.Id).ToArray();
+        That(stored.Length == 2 && stored.All(mail => mail.Attachments.Length == 1) &&
+            stored.SelectMany(mail => mail.Attachments).Any(item => item.Item.Avatar?.Color1 == 7) &&
+            stored.SelectMany(mail => mail.Attachments).Any(item => item.Item.Creature?.Name == "赠礼宠物"),
+            "时装和宠物各自随对应逐档邮件及真实UID保存");
         var reopened = new CharacterRepository(f.Sql.Path);
         That(JsonSerializer.Serialize(reopened.LoadMailbox(f.Owner, f.Character.Id, f.Now.ToUnixTimeSeconds())) ==
             JsonSerializer.Serialize(f.Store.LoadMailbox(f.Owner, f.Character.Id, f.Now.ToUnixTimeSeconds())) &&
@@ -237,10 +242,10 @@ internal static partial class CashShopPromotionPersistenceTests
         That(newPeriod.Progress.Count == 1 && f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_progress") is 2L, "新期保留旧期事实");
         // 沿原邮件领取事务将真实附件移入背包，再删除邮件、角色和重建同名角色。
         f.Sql.Receiver = f.Character;
-        f.Sql.Claim(stored.Attachments.Select(a => a.ClaimId).ToImmutableArray());
+        f.Sql.Claim(stored.SelectMany(mail => mail.Attachments).Select(a => a.ClaimId).ToImmutableArray());
         f.Character = f.Sql.Receiver;
-        That(f.Store.ChangeMailState(f.Owner, f.Character.Id, [stored.Id], 0, f.Now.ToUnixTimeSeconds()).Accepted,
-            "领取赠礼后正常删除邮件不受历史资格外键阻止");
+        That(f.Store.ChangeMailState(f.Owner, f.Character.Id, first.MailIds, 0, f.Now.ToUnixTimeSeconds()).Accepted,
+            "逐封领取完整奖项后正常删除邮件不受历史资格外键阻止");
         That(f.Store.Commit(f.Owner, plan, f.Now).MailIds.SequenceEqual(first.MailIds), "删邮件后重放只读原mailId绝不补发");
         f.Store.Delete(f.Owner, f.Store.LoadDeletionTarget(f.Owner, f.Character.Slot));
         var rebuilt = f.Store.Create(f.Owner, new("Receiver", new(38, 1, 450, 234, 0), null) { Inventory = new([]) });
@@ -262,9 +267,39 @@ internal static partial class CashShopPromotionPersistenceTests
         using var budget = new Fixture();
         budget.Character = budget.Store.Commit(budget.Owner, budget.Plan(2), budget.Now).Character;
         var maximum = budget.Store.Commit(budget.Owner, budget.Plan(64), budget.Now);
-        That(maximum.Progress.Count == 66 && maximum.MailIds.Length == 7 &&
-            budget.Store.LoadMailbox(budget.Owner, maximum.Character.Id, budget.Now.ToUnixTimeSeconds()).Entries.Sum(m => m.Attachments.Length) == 65,
-            "最坏单车64实例分七封完整投递不截断");
+        That(maximum.Progress.Count == 66 && maximum.MailIds.Length == 64 && maximum.MailIds.Distinct().Count() == 64 &&
+            budget.Sql.Query("SELECT count(*) FROM mailbox_attachments") is 65L,
+            "最坏单车64奖项各有独立邮件和附件，不受单次邮箱页大小截断");
+        int drained = 0;
+        while (true)
+        {
+            var page = budget.Store.LoadMailbox(budget.Owner, maximum.Character.Id, budget.Now.ToUnixTimeSeconds());
+            if (page.Entries.IsEmpty) break;
+            That(page.Entries.Length <= MailboxService.PageSize && page.Entries.All(mail => mail.Attachments.Length == 1),
+                "64奖邮件按公共20封邮箱页读取且逐封一附件");
+            if (drained == 0)
+                That(page.Entries.Length == MailboxService.PageSize && page.NotLoaded == 45,
+                    "总65封邮件首屏保留20封上限并报告其余45封待加载");
+            var mailIds = page.Entries.Select(mail => mail.Id).ToImmutableArray();
+            var attachments = page.Entries.SelectMany(mail => mail.Attachments).ToArray();
+            var claims = attachments.Select(item => item.ClaimId).ToImmutableArray();
+            budget.Sql.Receiver = budget.Store.LoadCharacter(budget.Owner, 0)!;
+            That(budget.Sql.Claim(claims).Accepted,
+                "当前20封分页内的逐档奖励可领取");
+            var received = budget.Sql.Receiver;
+            var consumedUids = attachments.Select(item => item.Item.Uid).ToHashSet();
+            budget.Sql.Receiver = budget.Store.CommitInventory(budget.Owner, received,
+                new(received.Inventory, received.Inventory with
+                { Items = received.Inventory.Items.Where(item => !consumedUids.Contains(item.Uid)).ToImmutableArray() }, "consume_bulk_mail_fixture"));
+            That(budget.Store.ChangeMailState(budget.Owner, maximum.Character.Id, mailIds, 0,
+                    budget.Now.ToUnixTimeSeconds()).Accepted,
+                "领取并删除当前已空档案以恢复后续邮箱批次");
+            budget.Character = budget.Sql.Receiver;
+            drained += page.Entries.Length;
+        }
+        That(drained == 65 && budget.Store.Read(budget.Owner, budget.Rules.Scope).Count == 66 &&
+            budget.Store.LoadMailbox(budget.Owner, maximum.Character.Id, budget.Now.ToUnixTimeSeconds()).NotLoaded == 0,
+            "超过邮箱页大小的奖励逐批可读、可领、可删除且累计账本不丢");
     }
 
     static void Migration()
@@ -451,7 +486,8 @@ internal static partial class CashShopPromotionPersistenceTests
                 f.Character.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 9600 &&
                 f.Character.Inventory.Items.Where(item => item.Core.ItemId == 2058).Sum(item => item.Core.Count) == 4 &&
                 f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_orders") is 2L &&
-                f.Sql.Query("SELECT count(*) FROM mailbox_messages") is 2L,
+                f.Sql.Query("SELECT count(*) FROM mailbox_messages") is 3L &&
+                f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_awards") is 3L,
                 "下一真实请求按新订单合法复购，未以包体去重或永久阻塞账号");
             f.Sql.Integrity();
         }
@@ -646,13 +682,15 @@ internal static partial class CashShopPromotionPersistenceTests
             var awards = CashShopPromotionRules.Settle(Rules, progress.Count, units, entry.Policy!);
             var recipient = Store.FindMailRecipient(Character.Name)!;
             var deliveries = ImmutableArray.CreateBuilder<MailboxDelivery>();
-            for (int offset = 0; offset < awards.Length; offset += 10)
+            for (int index = 0; index < awards.Length; index++)
             {
-                var items = awards.Skip(offset).Take(10).Select((a, index) => new InventoryItem(0, new(InventoryListType.Main, 0), new(a.ItemId, ItemKind.Consumable, 1))).ToImmutableArray();
-                if (special) items = [
-                    new(0, new(InventoryListType.Avatar, 0), new(51001, ItemKind.Avatar, 0)) { Avatar = new() { Color1 = 7 } },
-                    new(0, new(InventoryListType.Pet, 0), new(51002, ItemKind.Creature, 0)) { Creature = new() { Name = "赠礼宠物" } }];
-                deliveries.Add(new(PromotionMailKey.Create(order, awards[offset].PurchaseNumber, offset / 10), recipient, "累计赠礼", "累计奖励", 0, items, Now.ToUnixTimeSeconds()));
+                var award = awards[index];
+                ImmutableArray<InventoryItem> items = special
+                    ? award.ItemId == 51001
+                        ? [new(0, new(InventoryListType.Avatar, 0), new(51001, ItemKind.Avatar, 0)) { Avatar = new() { Color1 = 7 } }]
+                        : [new(0, new(InventoryListType.Pet, 0), new(51002, ItemKind.Creature, 0)) { Creature = new() { Name = "赠礼宠物" } }]
+                    : [new(0, new(InventoryListType.Main, 0), new(award.ItemId, ItemKind.Consumable, award.Count))];
+                deliveries.Add(new(PromotionMailKey.Create(order, award.PurchaseNumber, index), recipient, "累计赠礼", "累计奖励", 0, items, Now.ToUnixTimeSeconds()));
             }
             var after = Character.Inventory with { AccountWallet = Character.Inventory.AccountWallet.Set(CurrencyKind.Cera,
                 Character.Inventory.AccountWallet.Get(CurrencyKind.Cera) - units * 100) };

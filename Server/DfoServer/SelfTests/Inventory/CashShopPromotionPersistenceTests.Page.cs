@@ -21,6 +21,7 @@ internal static partial class CashShopPromotionPersistenceTests
         Check("历史5001和Int64上界不钳制不循环补发", PageHistory);
         Check("账号隔离不读取他人累计", PageAccount);
         Check("领取删信不撤销已发事实", PageClaimed);
+        Check("旧合封奖励保持页面恢复及整封领取", RunLegacyMailCore);
         Check("其它writer在场只申请只读快照", PageWriter);
         Check("旧owner不能取得新读取", PageOwner);
         if (failures.Count != 0)
