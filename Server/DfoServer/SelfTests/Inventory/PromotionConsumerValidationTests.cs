@@ -245,6 +245,28 @@ internal static class PromotionConsumerValidationTests
         That(special?.Contains("avatar_material_row_definition", StringComparison.Ordinal) == true &&
             special.Contains(unsupported.ToString(), StringComparison.Ordinal),
             "[stackable]材料的特殊owner仍由材料行守卫拒绝");
+        const int walletId = 3037;
+        foreach (bool stackableWallet in new[] { false, true })
+        {
+            Reset();
+            items.PrefillTemplates([KeyValuePair.Create(walletId, Template(walletId, ItemKind.Material))]);
+            var walletCategory = new AvatarPackageCategory(0, 0, [new(avatarId, 1, 0, 0)])
+            {
+                MaterialRows = stackableWallet ? [] : [new(walletId, 20)],
+                StackableRows = stackableWallet ? [new(walletId, 20)] : []
+            };
+            avatarPackages[roots[0]] = new(() => new(0, [1, 1], [walletCategory]) { Recognized = true });
+            string? walletError = validator.Validate(rules);
+            That(walletError is null,
+                "装扮钱包" + (stackableWallet ? "stackable" : "etc") +
+                "边使用实际钱包owner，不误报typed实体或未连接材料: " + walletError);
+            items.PrefillTemplates([KeyValuePair.Create(walletId,
+                Template(walletId, ItemKind.Material) with { IsPremiumService = true })]);
+            string? walletDenied = validator.Validate(rules);
+            That(walletDenied?.Contains("avatar_wallet_row_definition", StringComparison.Ordinal) == true &&
+                walletDenied.Contains(walletId.ToString(), StringComparison.Ordinal),
+                "钱包边仍先检查真实模板，不用RewardKind快捷返回绕过付费服务守卫");
+        }
     }
 
     static void RealEmptySelectionCoordinates(ItemResources resources)

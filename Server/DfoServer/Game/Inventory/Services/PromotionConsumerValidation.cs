@@ -197,6 +197,13 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     foreach (var row in category.MaterialRows)
                     {
                         var child = items.Get(row.ItemId);
+                        if (CurrencyWallet.RewardKind(row.ItemId) is not null)
+                        {
+                            if (InventoryAvatarPackageService.WalletRowDefinitionError(new(row.ItemId, row.Count), child) is { } walletError)
+                            { Error(source, row.ItemId, walletError); continue; }
+                            Edge(new(row.ItemId, row.Count), $"{source}/{id}:wallet:{category.Category}:{category.Subcategory}", freeSource: id);
+                            continue;
+                        }
                         if (InventoryAvatarPackageService.EtcRowDefinitionError(row, child, pieces) is { } reason)
                         { Error(source, row.ItemId, reason); continue; }
                         string kind = child.Kind == ItemKind.Consumable ? "stackable" : "material";
@@ -212,6 +219,13 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     foreach (var row in category.StackableRows)
                     {
                         var child = items.Get(row.ItemId);
+                        if (CurrencyWallet.RewardKind(row.ItemId) is not null)
+                        {
+                            if (InventoryAvatarPackageService.WalletRowDefinitionError(new(row.ItemId, row.Count), child) is { } walletError)
+                            { Error(source, row.ItemId, walletError); continue; }
+                            Edge(new(row.ItemId, row.Count), $"{source}/{id}:wallet:{category.Category}:{category.Subcategory}", freeSource: id);
+                            continue;
+                        }
                         if (InventoryAvatarPackageService.StackableRowDefinitionError(row, child, pieces) is { } reason)
                         { Error(source, row.ItemId, reason); continue; }
                         Edge(new(row.ItemId, row.Count), $"{source}/{id}:stackable:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);

@@ -1,10 +1,13 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Parsers.Inventory;
+using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
@@ -83,8 +86,9 @@ internal static class MaterialAvatarPackageTests
             kind == ItemKind.Consumable ? "[waste] 0" : "");
         var boxTemplate = Template(boxId, ItemKind.Consumable, 2) with { StackableType = "[booster selection] 0" };
         var tokenTemplate = Template(tokenId, ItemKind.Consumable);
+        var walletTemplate = Template(3037, ItemKind.Material, 100);
         var templates = new[] { boxTemplate, Template(auraId, ItemKind.Avatar), Template(titleId, ItemKind.Equipment),
-            tokenTemplate, Template(fillerId, ItemKind.Consumable) };
+            tokenTemplate, Template(fillerId, ItemKind.Consumable), walletTemplate };
         var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         items.PrefillTemplates(templates.ToDictionary(row => row.Id));
         const string declared = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n0\n[booster category num]\n0\n" +
@@ -151,12 +155,99 @@ internal static class MaterialAvatarPackageTests
             filled.All(item => reused.Plan.After.Find(item.Position) == item) && reusableBefore.Find(single.Position) == single,
             "#984相同满页仅源1耗尽时券可复用唯一空槽66，不要求源槽永久为空");
 
+        const string walletDeclared = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n0\n[booster category num]\n0\n" +
+            "[booster select category]\n0 0\n[avatar]\n101590347 1 0 0\n[/avatar]\n" +
+            "[equipment]\n100331609 1\n[/equipment]\n[stackable]\n3037 20\n[/stackable]\n[/booster select category]\n";
+        foreach (string tag in new[] { "etc", "stackable" })
+        {
+            string walletText = walletDeclared.Replace("[stackable]\n3037 20\n[/stackable]",
+                "[" + tag + "]\n3037 20\n[/" + tag + "]");
+            var walletPackages = new AvatarPackageCatalog(path => path switch
+            {
+                "stackable/wallet-source.stk" => walletText,
+                "equipment/avatar.equ" => "[equipment type]\n`[aurora avatar]` 0\n",
+                _ => throw new InvalidDataException("unexpected synthetic wallet fixture read: " + path)
+            }, new Dictionary<int, string> { [auraId] = "avatar.equ" },
+                new Dictionary<int, string> { [boxId] = "wallet-source.stk" });
+            var walletService = new InventoryAvatarPackageService(items, walletPackages,
+                new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]"), pieces);
+            var walletSource = new InventoryItem(984010, new(InventoryListType.Main, 66),
+                InventoryRewardGrantService.Create(boxTemplate, 2, now));
+            // filled 已占满除源槽外的消耗品页；钱包不得要求实体空格。
+            var walletBefore = before with
+            {
+                Items = [walletSource, .. filled],
+                AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube, 9)
+            };
+            var walletRole = role with { Inventory = walletBefore };
+            foreach (int openCount in new[] { 1, 2 })
+            {
+                var walletRequest = new AvatarPackageOpenRequest(66, openCount, 0, 0,
+                    [auraId, titleId, 3037], []);
+                var walletResult = walletService.Open(walletRole, walletRequest, out var walletReceipt, now);
+                That(walletResult.Accepted && walletResult.Plan is not null && walletReceipt is { Rewards.Length: 3 },
+                    tag + "钱包与装扮称号完整规划，消耗品满页不误当实体钱包缺格");
+                var walletAfter = walletResult.Plan!.After;
+                That(walletReceipt!.Rewards.OrderBy(row => row.ItemId).SequenceEqual(new[] {
+                        new BoosterGrantedItem(auraId, openCount), new BoosterGrantedItem(titleId, openCount),
+                        new BoosterGrantedItem(3037, 20 * openCount)
+                    }.OrderBy(row => row.ItemId)) &&
+                    walletAfter.AccountWallet.Get(CurrencyKind.ClearCube) == 9 + 20 * openCount &&
+                    walletAfter.Items.All(item => item.Core.ItemId != 3037) &&
+                    walletAfter.Items.Count(item => item.Core.ItemId == auraId) == openCount &&
+                    walletAfter.Items.Count(item => item.Core.ItemId == titleId) == openCount &&
+                    (openCount == 2 ? walletAfter.Find(walletSource.Position) is null :
+                        walletAfter.Find(walletSource.Position)?.Core.Count == 1) &&
+                    filled.All(item => walletAfter.Find(item.Position) == item) &&
+                    walletResult.Plan.OverflowItems.IsEmpty &&
+                    walletAfter.Gold == walletBefore.Gold && walletAfter.ReviveCoins == walletBefore.ReviveCoins &&
+                    walletAfter.WinPoints == walletBefore.WinPoints &&
+                    ReferenceEquals(walletResult.Plan.Before, walletBefore) &&
+                    ReferenceEquals(walletRole.Inventory, walletBefore) &&
+                    walletBefore.Find(walletSource.Position) == walletSource &&
+                    walletBefore.AccountWallet.Get(CurrencyKind.ClearCube) == 9,
+                    tag + "源乘数/完整回执/钱包增量准确，钱包不造实体、不占消耗品槽，输入及哨兵不变");
+            }
+
+            // 普通实体奖励没有空间时，连同钱包和源整体失败。
+            var equipmentRange = ItemSlotBoundService.Range(ItemKind.Equipment, walletBefore);
+            var equipmentFilled = Enumerable.Range(equipmentRange.Start,
+                    equipmentRange.End - equipmentRange.Start + 1)
+                .Select(index => new InventoryItem(985000 + index,
+                    new(InventoryListType.Main, checked((short)index)),
+                    InventoryRewardGrantService.Create(items.Get(titleId), utcNow: now))).ToArray();
+            var deniedBefore = walletBefore with { Items = [.. walletBefore.Items, .. equipmentFilled] };
+            var deniedRole = walletRole with { Inventory = deniedBefore };
+            var walletDenied = walletService.Open(deniedRole,
+                new AvatarPackageOpenRequest(66, 1, 0, 0, [auraId, titleId, 3037], []), out var walletDeniedReceipt, now);
+            That(!walletDenied.Accepted && walletDenied.Error == 4 && walletDenied.Plan is null &&
+                walletDeniedReceipt is null && ReferenceEquals(deniedRole.Inventory, deniedBefore) &&
+                deniedBefore.Find(walletSource.Position) == walletSource &&
+                deniedBefore.AccountWallet.Get(CurrencyKind.ClearCube) == 9 &&
+                filled.All(item => deniedBefore.Find(item.Position) == item) &&
+                equipmentFilled.All(item => deniedBefore.Find(item.Position) == item),
+                tag + "称号页满时源/钱包/装扮/哨兵全部不变，不产生部分计划或回执");
+        }
+
         var materialTemplate = Template(3330, ItemKind.Material, 100);
+        var walletMaterialTemplate = Template(3037, ItemKind.Material, 100);
+        var reviveCoinTemplate = Template(1, ItemKind.Consumable, int.MaxValue);
         That(InventoryAvatarPackageService.EtcRowDefinitionError(new(3330, 1), materialTemplate, pieces) is null &&
             InventoryAvatarPackageService.MaterialRowDefinitionError(new(3330, 1), materialTemplate, pieces) is null &&
             InventoryAvatarPackageService.MaterialRowDefinitionError(new(tokenId, 1), tokenTemplate, pieces) is not null &&
-            InventoryAvatarPackageService.EtcRowDefinitionError(new(tokenId, 1), tokenTemplate, pieces) is null,
-            "#984新分流允许普通Consumable并保Material原严格Kind守卫，不泛化其它owner");
+            InventoryAvatarPackageService.EtcRowDefinitionError(new(tokenId, 1), tokenTemplate, pieces) is null &&
+            InventoryAvatarPackageService.WalletRowDefinitionError(new(1, 20), reviveCoinTemplate) is null &&
+            InventoryAvatarPackageService.WalletRowDefinitionError(new(3037, 20), walletMaterialTemplate) is null,
+            "#984新分流允许Consumable/Material两种真实钱包Kind，并保Material原严格Kind守卫，不泛化其它owner");
+        foreach (var forbiddenWallet in new[]
+        {
+            walletMaterialTemplate with { IsPremiumService = true },
+            walletMaterialTemplate with { PersonalCargoUpgradeTarget = 1 },
+            Template(3037, ItemKind.Equipment),
+            Template(3037, ItemKind.Avatar)
+        })
+            That(InventoryAvatarPackageService.WalletRowDefinitionError(new(3037, 1), forbiddenWallet) is not null,
+                "#984钱包行继续拒付费服务/获取效果/非Material或Consumable Kind");
         foreach (var forbidden in new[] { Template(1, ItemKind.Consumable), Template(70001, ItemKind.Material),
             tokenTemplate with { IsPremiumService = true }, tokenTemplate with { PersonalCargoUpgradeTarget = 1 },
             Template(tokenId, ItemKind.Equipment) })
@@ -197,6 +288,75 @@ internal static class MaterialAvatarPackageTests
             receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(new[] {
                 new BoosterGrantedItem(AvatarId, 1), new BoosterGrantedItem(TitleId, 1), new BoosterGrantedItem(MaterialId, 100)
             }.OrderBy(row => row.ItemId)), "#976只减所选源1个，三奖回执完整且钱包和无关实例不变");
+        RunWalletCommitResources(towns, resources);
+    }
+
+    static void RunWalletCommitResources(TownCatalog towns, ItemResources resources)
+    {
+        const int walletId = 3037;
+        var walletTemplate = resources.Items.Get(walletId);
+        var sourceTemplate = resources.Items.Get(SourceId);
+        var walletKind = CurrencyWallet.RewardKind(walletId);
+        That(walletKind is not null && walletTemplate.Id == walletId &&
+            walletTemplate.Kind is ItemKind.Material or ItemKind.Consumable,
+            "#984真实3037模板可作为钱包Material/Consumable奖励，未伪造奖励编号");
+        const string declaration = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n0\n" +
+            "[booster category num]\n2 1 1\n[booster select category]\n0 0\n" +
+            "[avatar]\n101521039 1 4 0\n[/avatar]\n[stackable]\n3037 25\n[/stackable]\n" +
+            "[/booster select category]\n";
+        var packages = new AvatarPackageCatalog(path => path switch
+        {
+            "stackable/wallet.stk" => declaration,
+            "equipment/avatar.equ" => "[equipment type]\n`[aurora avatar]` 0\n",
+            _ => throw new InvalidDataException("unexpected wallet fixture path: " + path)
+        }, new Dictionary<int, string> { [AvatarId] = "avatar.equ" },
+            new Dictionary<int, string> { [SourceId] = "wallet.stk" });
+        string path = Path.Combine(Path.GetTempPath(), "S5A9-avatar-wallet-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            var now = new DateTimeOffset(2026, 10, 31, 12, 45, 0, TimeSpan.Zero);
+            var source = new InventoryItem(0, new(InventoryListType.Main, SourceSlot),
+                InventoryRewardGrantService.Create(sourceTemplate, utcNow: now));
+            var role = new NewCharacter("AvatarWallet", towns.Room, towns.InitialReturn)
+            {
+                Level = 4,
+                Inventory = new InventorySnapshot([source])
+            };
+            using var owner = new AccountOwners().Acquire("avatar-wallet", () => { });
+            var repository = new CharacterRepository(path);
+            var created = repository.Create(owner, role);
+            var service = new InventoryAvatarPackageService(resources.Items, packages,
+                resources.GoldLimits, resources.EpicPieces);
+            var request = new AvatarPackageOpenRequest(SourceSlot, 1, 0, 0, [AvatarId, walletId], []);
+            var opened = service.Open(created, request, out var receipt, now);
+            That(opened.Accepted && opened.Plan is not null && receipt is { Rewards.Length: 2 } &&
+                receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(new[] {
+                    new BoosterGrantedItem(AvatarId, 1), new BoosterGrantedItem(walletId, 25)
+                }.OrderBy(row => row.ItemId)),
+                "#984真实3037由AvatarPackage.Open规划装扮+钱包奖励同一计划");
+            var beforeBalance = created.Inventory.AccountWallet.Get(walletKind!.Value);
+            var committed = repository.CommitInventory(owner, created, opened.Plan!);
+            var reopened = new CharacterRepository(path).List(owner).Single();
+            That(committed.Inventory.AccountWallet.Get(walletKind.Value) == beforeBalance + 25 &&
+                reopened.Inventory.AccountWallet.Get(walletKind.Value) == beforeBalance + 25 &&
+                reopened.Inventory.Items.Count(item => item.Core.ItemId == walletId) == 0 &&
+                reopened.Inventory.Items.Count(item => item.Core.ItemId == AvatarId) == 1 &&
+                reopened.Inventory.Find(source.Position) is null,
+                "#984提交后3037只进入账号钱包，源扣除与真实装扮实体一并持久化，重开余额一致");
+            var persisted = reopened;
+            bool rejected = false;
+            try { repository.CommitInventory(owner, created, opened.Plan!); }
+            catch (InvalidOperationException) { rejected = true; }
+            var afterRejected = new CharacterRepository(path).List(owner).Single();
+            That(rejected && afterRejected.Revision == persisted.Revision &&
+                afterRejected.Inventory.AccountWallet.Get(walletKind.Value) == persisted.Inventory.AccountWallet.Get(walletKind.Value) &&
+                afterRejected.Inventory.Items.SequenceEqual(persisted.Inventory.Items),
+                "#984重复提交陈旧AvatarPackage计划整体拒绝，钱包/源/装扮均保持原子回滚");
+        }
+        finally
+        {
+            TestFiles.DeleteFile(path);
+        }
     }
 
     public static void RunBoundaryResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
