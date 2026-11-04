@@ -14,7 +14,7 @@ internal static class GmEventTcpTests
         using (var probe = new TcpListener(IPAddress.Loopback, 0))
         { probe.Start(); port = ((IPEndPoint)probe.LocalEndpoint).Port; }
         await using var fixture = new TcpTestFixture(source with { GmWebPort = port },
-            Path.Combine(root, "gm-events"), resources: resources);
+            Path.Combine(root, "gm-events"), resources: resources, useDefaultActivities: true);
         await fixture.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
         for (int attempt = 0; ; attempt++)
@@ -36,13 +36,14 @@ internal static class GmEventTcpTests
             definitions.TryGetValue(2532, out var nolan) && !nolan.GetProperty("supportsSchedule").GetBoolean() &&
             definitions.TryGetValue(228, out var onlineGift) && onlineGift.GetProperty("name").GetString() == "累积在线得好礼" &&
             onlineGift.GetProperty("supportsControl").GetBoolean() && !onlineGift.GetProperty("supportsSchedule").GetBoolean() &&
-            onlineGift.GetProperty("defaultState").GetString() == "默认关闭",
-            "当前GM目录保留原活动能力并注册默认关闭且只提供开关的228");
+            onlineGift.GetProperty("defaultState").GetString() == "默认开启" &&
+            definitions[2257].GetProperty("defaultState").GetString() == "默认开启",
+            "当前GM目录将2257和228标为默认开启，保留228只支持开关的能力");
         That(definitions.Values.All(row => !string.IsNullOrWhiteSpace(row.GetProperty("name").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("purpose").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("conditions").GetString())),
             "当前活动目录提供GM面板所需名称、用途和条件");
-        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (228, false) })
+        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (2257, true), (228, true) })
         {
             await State(id, "auto", defaultActive);
             foreach (string op in new[] { "on", "off", "auto" })

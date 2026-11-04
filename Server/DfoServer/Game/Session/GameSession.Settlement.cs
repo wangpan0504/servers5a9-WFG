@@ -251,6 +251,8 @@ internal sealed partial class GameSession
         var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
         // 入场扣费重基及剧情终点调整会替换Run的不可变计划；战令来源须绑定签发清图事实的当前计划。
         var completionEntry = dungeon.Run.Entry;
+        prepared.Pending.FreezeEndlessAdventure(endlessAdventure?.Prepare(dungeon.Run,
+            completionEntry.RecommendedQuestItems, EndlessAdventureActive));
         prepared.Pending.FreezeBattlePassTayberrsClear(contributionDefinition, completionEntry, timeProvider ?? TimeProvider.System);
         byte finalRankGrade = dungeon.Settlement?.Presentation.RankGrade ?? rewards.GradeForPoint(rankPoint);
         prepared.Pending.FreezeBattlePassFormalClear(contributionDefinition, completionEntry, dungeon.ReviveCoinsSpent, timeProvider ?? TimeProvider.System,
@@ -283,6 +285,7 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
         AdventureProgressionCommit? adventureCommit = null;
+        int endlessAdventureAmount = 0;
         uint guildMileageGuildId = 0;
         GuildContributionCommit? guildContribution = null;
         if (!settlement.Committed)
@@ -327,6 +330,7 @@ internal sealed partial class GameSession
             settlement.LuckyStarGained = commit.LuckyStarGained;
             settlement.LuckyStarTotal = commit.LuckyStarTotal;
             adventureCommit = commit.Adventure;
+            endlessAdventureAmount = commit.EndlessAdventureAmount;
             guildMileageGuildId = commit.GuildMileageGuildId;
             guildContribution = commit.GuildContribution;
             settlement.GuildDungeon = commit.GuildDungeon;
@@ -373,6 +377,7 @@ internal sealed partial class GameSession
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
                 Adventure = adventureCommit,
+                EndlessAdventureAmount = endlessAdventureAmount,
                 GuildMileageGuildId = guildMileageGuildId,
                 GuildContribution = guildContribution,
                 GuildDungeon = settlement.GuildDungeon,

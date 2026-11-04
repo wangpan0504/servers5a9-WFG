@@ -124,8 +124,8 @@ internal sealed partial class CharacterRepository
         state.Validate();
         bool ordinary = run.Entry.UsesRoomFatigue;
         string rule = CharacterFatigueState.NormalRoomRuleId;
-        if (!ordinary || run.Entry.Maze.QuestConnectionTokens.Count != 0 ||
-            run.Entry.Maze.MapSpecification?.Contains(snapshot.CurrentMap) != true && !run.Entry.Maze.DummyStages.Contains(snapshot.CurrentMap) ||
+        ushort amount = DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(1, run.FatigueAccelerationPercent);
+        if (!ordinary || run.CurrentMonsterPlan.Room.Map != snapshot.CurrentMap ||
             snapshot.Phase != SinglePlayerDungeonPhase.Loading || identity.CharacterId != expected.Id ||
             identity.InstanceId == Guid.Empty || identity.TaskAttempt != expected.DungeonState?.LastAttempt)
             throw new InvalidDataException("疲劳扣点需要本服已准入实例的真实首次房间加载");
@@ -142,7 +142,7 @@ internal sealed partial class CharacterRepository
         var receipts = DungeonTransientReceipts.Get(owner, identity);
         if (receipts.Fatigue.TryGetValue(snapshot.CurrentMap.Id, out var saved) && saved.Committed)
         {
-            if (saved.Rule != rule || saved.After != saved.Before.ConsumeOrdinaryRoom())
+            if (saved.Rule != rule || saved.After != saved.Before.ConsumeOrdinaryRoom(amount))
                 throw new InvalidDataException("房间扣点缓存的原始规则或余额变化");
             if (current.Revision == expected.Revision && current.Fatigue == state) return expected;
             if (expected.Revision != saved.BeforeRevision || current.Revision != saved.Revision ||
@@ -152,7 +152,7 @@ internal sealed partial class CharacterRepository
         }
         if (current.Revision != expected.Revision || current.Fatigue != state)
             throw new InvalidOperationException("扣点的原revision或疲劳owner已变化");
-        var target = state.ConsumeOrdinaryRoom();
+        var target = state.ConsumeOrdinaryRoom(amount);
         command.Parameters.AddWithValue("$revision", expected.Revision);
         command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         if (command.ExecuteNonQuery() != 1)

@@ -24,8 +24,10 @@ internal sealed record ServerEventDefinition(ushort Id, string Name, string Purp
             "仅改变NPC显示，不改变时空石商店的交易资格。", false, "默认显示"),
         new(2532, "诺兰显示", "显示或隐藏诺兰NPC。",
             "仅控制NPC显示，不会补齐未实现的节日玩法；不支持设置起止时间。", false, "默认显示"),
+        new(2257, "无尽大冒险", "推荐地下城通关按应耗疲劳发放账号能量硬币，燃烧双倍，每日最多200枚。",
+            "需要本版账号能量硬币及疲劳商店；无限疲劳保留应耗统计，关闭保留余额与日进度。", true, "默认开启"),
         new(228, "累积在线得好礼", "按当前客户端资源累计在线并通过系统邮件发放每日和累计奖励。",
-            "活动关闭时暂停计时但保留账号进度；奖励按账号幂等领取。", false, "默认关闭")
+            "活动关闭时暂停计时但保留账号进度；奖励按账号幂等领取。", false, "默认开启")
     ];
 
     public static ServerEventDefinition? Find(int id) => Registered.FirstOrDefault(entry => entry.Id == id);

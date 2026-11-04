@@ -176,7 +176,7 @@ internal static class RaidQuotaEpochTests
 
     static void Migration()
     {
-        foreach (bool conflict in new[] { false, true })
+        foreach (var (conflict, endlessPreview) in new[] { (false, false), (true, false), (false, true), (true, true) })
         {
             using var f = RaidQuotaEpochTests.CreateFixture();
             SeedRun(f, 1, Instance(401), complete: true);
@@ -197,6 +197,8 @@ internal static class RaidQuotaEpochTests
                 DROP TABLE account_raid_quota_epochs;
                 PRAGMA user_version=191;
                 """);
+            if (endlessPreview)
+                f.Execute("PRAGMA user_version=192; INSERT INTO account_endless_adventure_days VALUES('other',739923,147);");
             string assets = Assets(f);
             string history = Rows(f, "SELECT * FROM character_raid_runs") + Rows(f, "SELECT * FROM character_raid_reward_receipts");
             if (conflict)
@@ -204,7 +206,7 @@ internal static class RaidQuotaEpochTests
                 f.Execute("CREATE TABLE account_raid_quota_epochs(collision TEXT);");
                 string saved = f.Snapshot(), schema = Rows(f, "SELECT type,name,sql FROM sqlite_schema ORDER BY type,name");
                 Reject<InvalidDataException>(() => new CharacterRepository(f.Path), "迁移尾部未知额度表结构必须拒绝");
-                That(f.Query("PRAGMA user_version") is 191L && f.Snapshot() == saved &&
+                That(f.Query("PRAGMA user_version") is long rejectedVersion && rejectedVersion == (endlessPreview ? 192 : 191) && f.Snapshot() == saved &&
                     Rows(f, "SELECT type,name,sql FROM sqlite_schema ORDER BY type,name") == schema,
                     "192迁移失败整笔回滚列、引导表重建、索引和版本");
                 continue;
@@ -216,6 +218,9 @@ internal static class RaidQuotaEpochTests
                 f.Query("SELECT entry_epoch FROM account_fiendwar_guides") is 0L &&
                 f.Query("SELECT count(*) FROM account_raid_quota_epochs") is 0L,
                 "191原run、奖励及引导默认归零世代，不补造全账号额度记录");
+            if (endlessPreview)
+                That(f.Query("SELECT earned FROM account_endless_adventure_days WHERE account='other'") is 147L,
+                    "旧活动192库补齐主线迁移仍保留真实147枚日额度，不重置或重复发币");
             That(Assets(f) == assets &&
                 Rows(f, "SELECT character_id,account,instance_id,raid_type,source,admitted_at,state,phase0_event,phase0_anchor,phase0_receipt,phase1_event,phase1_anchor,phase1_receipt,clear_week,guild_id,guild_joined_at FROM character_raid_runs") +
                 Rows(f, "SELECT character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type FROM character_raid_reward_receipts") == history,

@@ -126,12 +126,12 @@ internal static class PcRoomTimePointStoreTests
     {
         using var f = new Fixture();
         string character = JsonSerializer.Serialize(f.Repository.LoadCharacter(f.Owner, f.Character.Slot));
-        f.Sql("INSERT INTO account_skin_storage(account,state_json) VALUES('online-owner','{\"Owned\":[]}'); DROP TABLE account_pcroom_timepoint_claims; DROP TABLE account_pcroom_timepoint_segments; DROP TABLE account_pcroom_timepoint_days; PRAGMA user_version=190");
+        f.Sql("INSERT INTO account_skin_storage(account,state_json) VALUES('online-owner','{\"Owned\":[]}'); DROP TABLE account_pcroom_timepoint_claims; DROP TABLE account_pcroom_timepoint_segments; DROP TABLE account_pcroom_timepoint_days; DROP TABLE account_endless_adventure_days; PRAGMA user_version=190");
         string before = f.Snapshot();
         var upgraded = new CharacterRepository(f.Path);
         That(f.Query("PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && f.Query("SELECT state_json FROM account_skin_storage WHERE account='online-owner'") is "{\"Owned\":[]}" &&
             JsonSerializer.Serialize(upgraded.LoadCharacter(f.Owner, f.Character.Slot)) == character && f.Snapshot() == before,
-            "190到191只追加三个空活动表，保角色库存与旧账号皮肤数据");
+            "190升级当前版本只追加空活动表，保角色库存与旧账号皮肤数据");
         before = f.Snapshot();
         _ = new CharacterRepository(f.Path);
         That(f.Snapshot() == before && upgraded.Read(f.Owner, PcRoomTimePointDay.At(f.Now), f.Catalog).QualifiedDays == 0,

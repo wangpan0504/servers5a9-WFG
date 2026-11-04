@@ -1093,7 +1093,10 @@ internal sealed partial class GameSession
             var after = (entryItems?.After ?? before) with { BossSelectionBuff = bossBuff.Remaining == 1 ? null : bossBuff with { Remaining = bossBuff.Remaining - 1 } };
             entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
-        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
+        int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
+        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+            DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(installing.Entry.StartFatigue,
+                accelerationPercent, character.Fatigue?.Remaining ?? 0);
         if (installing.Dazzlement is { } dazzlement &&
             (dazzlement != DazzlementTowerAdmission.At(IncountNow()) || repository.LoadDazzlementTower(owner).Rejection(character.Id, dazzlement) is not null))
             return null;
@@ -1109,7 +1112,6 @@ internal sealed partial class GameSession
         {
             installing = installing with { GuildTraining = training.Snapshot };
         }
-        int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
         Character committed;
         if (installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {

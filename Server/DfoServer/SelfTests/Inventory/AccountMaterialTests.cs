@@ -57,6 +57,7 @@ internal static class AccountMaterialTests
         var deleted = AccountMaterialPackets.Balances(AccountWallet.Empty, AccountWallet.Empty.SetMaterial(Coin, new(10))).Single();
         That(deleted.Length == 10 && deleted[0] == 1 && deleted[1] == 1 &&
             BinaryPrimitives.ReadInt32LittleEndian(deleted.AsSpan(6)) == 0, "563消费至零明确删除客户端旧项");
+        RunCalendarCore();
         var limits = new Dictionary<int, AccountMaterialDefinition> { [Coin] = definition };
         var accountBody = AccountMaterialPackets.Limits(ordinary.AccountWallet, 1, limits, Now, true);
         var characterBody = AccountMaterialPackets.Limits(ordinary.AccountWallet, 1, limits, Now, false);
@@ -67,6 +68,37 @@ internal static class AccountMaterialTests
             BinaryPrimitives.ReadInt32LittleEndian(characterBody.AsSpan(6)) == 1300 &&
             BinaryPrimitives.ReadInt32LittleEndian(characterBody.AsSpan(10)) == 1300, "1460/1461各自完整三u32行，角色与账号不混用");
         Console.WriteLine("PASS account material core: 10 checks");
+    }
+
+    public static void RunCalendarCore()
+    {
+        int start = Count;
+        int[] ids = [3175, Coin];
+        var before = AccountWallet.Empty.SetMaterial(Coin, new(5)).SetMaterial(3175, new(7));
+        var current = before.SetMaterial(Coin, new(12)).SetMaterial(3175, new(0)).SetMaterial(999, new(123));
+        byte[] full = ActivityCalendarItemPackets.Full(45, current, ids);
+        That(full.Length == 126 && full[0] == 45 && BinaryPrimitives.ReadUInt16LittleEndian(full.AsSpan(1)) == 1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(full.AsSpan(3)) == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(full.AsSpan(5)) == Coin && BinaryPrimitives.ReadInt32LittleEndian(full.AsSpan(9)) == 12 &&
+            full.AsSpan(13).IndexOfAnyExcept((byte)0) == -1,
+            "零余额模板保留原槽序，未登记材料不进入list45，完整123B材料行不制造物理UID");
+        var updates = ActivityCalendarItemPackets.Changes(45, before, current, ids).ToArray();
+        That(updates.Length == 2 && !updates[0].Obtained && updates[1].Obtained &&
+            updates.All(row => row.Body.Length == 126 && row.Body[0] == 45 && BinaryPrimitives.ReadUInt16LittleEndian(row.Body.AsSpan(1)) == 1),
+            "同一事务多种活动材料有增有减时分别静默同步和播报获得，均使用原生完整行");
+        That(BinaryPrimitives.ReadUInt16LittleEndian(updates[0].Body.AsSpan(3)) == 0 &&
+            BinaryPrimitives.ReadInt32LittleEndian(updates[0].Body.AsSpan(5)) == -1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(updates[1].Body.AsSpan(3)) == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(updates[1].Body.AsSpan(9)) == 12,
+            "归零明确清原槽，增加行携带最终12而非本次7，客户端自行计算新增数量");
+        That(!ActivityCalendarItemPackets.Changes(45, current, current, ids).Any() &&
+            ActivityCalendarItemPackets.Full(45, AccountWallet.Empty, ids).SequenceEqual(new byte[] {45, 0, 0}),
+            "重复同步不重放获得，空账号全量清除上一个角色的显示");
+        Reject<InvalidDataException>(() => ActivityCalendarItemPackets.Full(44, current, Enumerable.Range(1, 65).ToArray()),
+            "账号材料显示槽遵守本版list44的64格边界");
+        Reject<InvalidDataException>(() => ActivityCalendarItemPackets.Full(45, current, Enumerable.Range(1, 51).ToArray()),
+            "共通材料显示槽遵守本版list45的50格边界");
+        Console.WriteLine($"PASS activity calendar account materials {Count - start}");
     }
 
     public static void Run(TownCatalog towns, ItemResources resources)

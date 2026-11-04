@@ -28,6 +28,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     long queuedPromotionRevision;
     long battlePassEpoch = -1;
     bool battlePassActive;
+    bool queuedEndless;
 
     public ServerEventProjection(GameConnectionContext context, ServerEventService events, TownProjection town, ServerLog log, TimeProvider time)
     {
@@ -41,7 +42,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         ushort id = change.State.Schedule.EventId;
         if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId or
             ServerEventService.BattlePassId or ServerEventService.SeriaLuckId or ServerEventService.GuildHongbaoId or
-            ServerEventService.JonathanVisibilityId or 10999)
+            ServerEventService.JonathanVisibilityId or Game.Events.EndlessAdventurePolicy.EventId or 10999)
             pending.Writer.TryWrite(true);
     }
     internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||
@@ -59,6 +60,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         queuedHongbao = hongbao;
         queuedJonathan = jonathan;
         queuedPromotionRevision = promotionRevision;
+        queuedEndless = context.Session.EndlessAdventureActive;
         pending.Writer.TryWrite(true);
     }
     public void Refresh() => pending.Writer.TryWrite(true);
@@ -84,12 +86,14 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 var now = time.GetUtcNow();
                 if (queuedEpoch >= 0 && context.Session.Ready &&
                     (queuedMileage != (state.Active && town.MileageAvailable) ||
+                     queuedEndless != context.Session.EndlessAdventureActive ||
                      queuedNolan != nolanVisible || queuedSeriaLuck != seriaLuck.Active ||
                      queuedHongbao != hongbao.Active || queuedJonathan != jonathan.Active || queuedPromotionRevision != events.PromotionRevision ||
                      NeedsStrongwayDisplay(strongway.Active) ||
                      battlePassEpoch != context.Session.SelectionEpoch || battlePassActive != town.IsBattlePassEventActive(now))) pending.Writer.TryWrite(true);
                 long? next = new[] { state.Schedule, strongway.Schedule, seriaLuck.Schedule, hongbao.Schedule,
-                    events.Read(ServerEventService.BattlePassId).Schedule }.Where(schedule => schedule.OverrideActive is null)
+                    events.Read(ServerEventService.BattlePassId).Schedule,
+                    events.Read(Game.Events.EndlessAdventurePolicy.EventId).Schedule }.Where(schedule => schedule.OverrideActive is null)
 
                     .SelectMany(schedule => new[] { schedule.StartsAt, schedule.EndsAt })
                     .Where(value => value > now.ToUnixTimeSeconds()).Min();
@@ -121,6 +125,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                     if (!selection.Ready || selection.Selected is null || queuedEpoch == selection.SelectionEpoch &&
                         current == queuedMileage && currentNolan == queuedNolan && currentSeriaLuck == queuedSeriaLuck &&
                         currentHongbao == queuedHongbao && currentJonathan == queuedJonathan && queuedPromotionRevision == events.PromotionRevision &&
+                        queuedEndless == context.Session.EndlessAdventureActive &&
                         !NeedsStrongwayDisplay(strongwayCurrent) &&
                         battlePassEpoch == selection.SelectionEpoch && currentBattlePass == battlePassActive) continue;
                     bool newlyOpenedBattlePass = currentBattlePass && (battlePassEpoch != selection.SelectionEpoch || !battlePassActive);

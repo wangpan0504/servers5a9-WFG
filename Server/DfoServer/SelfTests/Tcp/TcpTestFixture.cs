@@ -105,6 +105,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
     readonly bool enablePromotionPage;
+    readonly bool useDefaultActivities;
     readonly Random? fiendwarMazeRandom;
     int cliSequence;
     readonly string pvfSource;
@@ -114,7 +115,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null)
+        Random? fiendwarMazeRandom = null, bool useDefaultActivities = false)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
@@ -122,6 +123,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         this.promotions = promotions;
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
+        this.useDefaultActivities = useDefaultActivities;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -296,6 +298,14 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         // 网吧身份线上默认开；TCP 组在临时数据目录显式关闭，保持既有选角、经验和虚弱断言不随线上默认值漂移。
         Directory.CreateDirectory(Options.DataDirectory);
         File.WriteAllText(Path.Combine(Options.DataDirectory, "pc-room.json"), "{\"enabled\":false}");
+        // 业务夹具显式关闭无关活动；gm-events使用无配置实例验证线上默认值，重启保留各用例的既有开关。
+        if (!useDefaultActivities)
+        {
+            var eventStore = new ServerEventRepository(Database);
+            foreach (ushort id in new ushort[] { 2257, 228 })
+                if (eventStore.Read(id) is { Revision: 0 } initial)
+                    eventStore.Save(initial, initial with { OverrideActive = false });
+        }
         if (File.Exists(pvfSource) && !File.Exists(Options.PvfPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);

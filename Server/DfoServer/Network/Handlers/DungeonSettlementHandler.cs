@@ -99,7 +99,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces,
             parsed.Participants.Select(member => member.ActorId).ToArray(), goldLimits);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, participant.RankPoint,
-            parsed.MaximumRankPoint, Members = parsed.Participants.Count,
+            parsed.MaximumRankPoint, Members = parsed.Participants.Count, result.EndlessAdventureAmount,
             result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId, result.Receipt?.Snapshot.Identity,
             Adventure = result.Adventure is { } progression
                 ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
@@ -194,6 +194,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_lucky_star", Guard);
         if (result.Inventory is { } inventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
+        await EndlessAdventureProjection.PublishAsync(context, force: result.Inventory?.Plan?.AccountMaterialsChanged == true);
         if (receipt.Entry.DungeonId is >= 7101 and <= 7107 && !receipt.Entry.IsPractice)
             await DimensionEntranceProjection.AncientAsync(context, Guard, entranceOnly: false);
         if (result.AssaultClear is { } assaultClear)
