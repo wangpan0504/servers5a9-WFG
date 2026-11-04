@@ -69,9 +69,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
         var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
-        var reference = rules.ItemReferences.SingleOrDefault(row => row.Level == level);
-        if (gold.Level == 0 || reference.Level == 0 || reference.Value0 < 0 || reference.Value1 < 0)
-            throw new NotSupportedException("当前副本等级缺少完整翻牌引用表");
+        if (gold.Level == 0)
+            throw new NotSupportedException("当前副本等级缺少翻牌金币引用");
         draw ??= random ?? Random.Shared.Next;
         int Next(int bound)
         {
@@ -121,13 +120,26 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             }
             throw new InvalidDataException("副本翻牌奖励未命中已验证权重池");
         }
-        int rarity = DungeonDropRatePlan.Rarity(rules, 0, Next(DungeonDropRatePlan.RarityDenominator));
+        // 专用牌先按原专表返回；普通等级引用不能成为专用奖励的新门禁。
+        var references = prices is { ItemReferences.IsEmpty: false } ? prices.ItemReferences : rules.ItemReferences;
+        var reference = references.SingleOrDefault(row => row.Level == level);
+        if (reference.Level == 0 || reference.Value0 < 0 || reference.Value1 < 0)
+            throw new NotSupportedException("当前副本等级缺少普通翻牌物品引用");
+        int rarityRoll = Next(DungeonDropRatePlan.RarityDenominator);
+        int rarity = prices is { RarityDecision.IsEmpty: false }
+            ? DungeonDropRatePlan.Rarity(prices.RarityDecision.AsSpan(), rarityRoll)
+            : DungeonDropRatePlan.Rarity(rules, 0, rarityRoll);
         var pool = candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, rarity);
-        if (pool.TotalWeight == 0)
-            pool = candidates.ReferencePool(false, level - reference.Value0, level + reference.Value1 - 1, rarity);
         ItemCore? core = pool.TotalWeight == 0 ? null : DungeonDropCreation.Create(pool.Select(Next(pool.TotalWeight)), 1, Next, now, referenceQuality: true);
+        string itemSource = prices switch
+        {
+            { RarityDecision.IsEmpty: false, ItemReferences.IsEmpty: false } => DungeonCardPriceCatalog.ResourcePath,
+            { RarityDecision.IsEmpty: false } or { ItemReferences.IsEmpty: false } =>
+                $"{DungeonDropRuleCatalog.MonsterPath};{DungeonCardPriceCatalog.ResourcePath}",
+            _ => DungeonDropRuleCatalog.MonsterPath
+        };
         var reward = new DungeonCardReward(checked((int)Math.Max(1, amount)), core, Rule,
-            $"{DungeonDropRuleCatalog.CommonPath};{DungeonDropRuleCatalog.MonsterPath};{dungeon.Path}", now.ToUnixTimeSeconds());
+            $"{DungeonDropRuleCatalog.CommonPath};{itemSource};{dungeon.Path}", now.ToUnixTimeSeconds());
         reward.Validate();
         return reward;
     }

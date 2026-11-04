@@ -13,9 +13,9 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     DungeonDropControlSettings? dropControl = null, LegacyHellDropPolicy? legacyHell = null,
     DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null, AssaultMaterialDropPolicy? assaultMaterials = null)
 {
-    public const string Rule = "pvf-monster-reference-v1";
-    public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
-        "dungeon difficulty drop bonusrate", "first boss/named mob hunting", "condition rate", "gold quantity", "gold volume", "item drop rarity control",
+    public const string Rule = "pvf-monster-reference-v2";
+    public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity row[3]",
+        "first boss/named mob hunting", "condition rate", "gold quantity", "gold volume", "item drop rarity control",
         "common champion drop item", "monster repeated item blocks after first"];
     static readonly decimal[] DifficultyRates = [1m, 1.2m, 1.4m, 1.6m, 1.8m];
 
@@ -42,7 +42,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
             var plan = monster.SpawnType > 3
                 ? new DungeonDropGenerationPlan("hell-party-apc", [], amplification: amplification)
-                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel);
+                : Prepare(monster.MonsterId, monster.CandidateLevel, monster.RewardType, entry.Difficulty, entry.BasisLevel, entry.PartyMemberCount);
             if (riftEpics is not null) plan = riftEpics.Extend(plan, entry, monster);
             if (monster.HellRewardRolls > 0 && hellRewards is not null)
                 plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,
@@ -118,31 +118,28 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         }), plan.ReferenceQuality, plan.Amplification);
     }
 
-    public DungeonDropGenerationPlan Prepare(int monsterId, int level, byte monsterType, byte difficulty, int? dungeonLevel = null)
+    public DungeonDropGenerationPlan Prepare(int monsterId, int level, byte monsterType, byte difficulty, int? dungeonLevel = null,
+        byte partyMembers = 1)
     {
-        if (monsterType > 3 || difficulty > 4)
-            throw new InvalidDataException("资源掉落准备的怪物类型或难度越界");
-        var probability = rules.ProbabilityRows.SingleOrDefault(row => level >= row.MinimumLevel && level <= row.MaximumLevel)
-            ?? throw new NotSupportedException("当前怪物等级缺少PVF掉落概率段: " + level);
-        var reference = rules.ItemReferences.SingleOrDefault(row => row.Level == level);
-        var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
-        if (reference.Level == 0 || gold.Level == 0 || reference.Value0 < 0 || reference.Value1 < 0)
+        // 概率段取副本等级，候选及金币引用取怪物等级；两种等级不能互相替代。
+        var rates = DungeonDropRatePlan.Prepare(rules, level, monsterType, difficulty, partyMembers, dungeonLevel);
+        var reference = rates.ItemReference;
+        var gold = rates.GoldReference;
+        if (reference.Value0 < 0 || reference.Value1 < 0)
             throw new InvalidDataException("当前等级的物品或金币引用不完整: " + level);
+        // 金币数量暂保留原有本服倍率，不将其套用到物品掉落概率。
         decimal multiplier = DifficultyRates[difficulty];
-        int Rate(int channel) => Math.Clamp(checked((int)Math.Min(DungeonDropRatePlan.ProbabilityDenominator,
-            Math.Floor(probability.Values[channel] * rules.MonsterTypeBonus[channel * 4 + monsterType].ReferenceDouble * (double)multiplier))),
-            0, DungeonDropRatePlan.ProbabilityDenominator);
+        int Rate(int channel) => rates.Thresholds[channel];
         int minimum = level - reference.Value0, maximum = level + reference.Value1 - 1;
-        ImmutableArray<DungeonDropRarityPool> Pools(bool equipment) => Enumerable.Range(0, 7).Select(rarity =>
-            new DungeonDropRarityPool(rules.RarityDecision[rarity], candidates.ReferencePool(equipment, minimum, maximum, rarity))).ToImmutableArray();
-        var stackables = Pools(false);
-        var equipment = Pools(true);
+        ImmutableArray<DungeonDropRarityPool> Pools(int channel) => Enumerable.Range(0, 7).Select(rarity =>
+            new DungeonDropRarityPool(rules.RarityDecision[(channel - 1) * 7 + rarity],
+                candidates.ReferencePool(channel == 2, minimum, maximum, rarity))).ToImmutableArray();
         var trials = new List<DungeonDropTrial>
         {
             new(Rate(0), null, 1, 1, gold, multiplier, ReferenceGold: true, Category: DungeonDropCategory.Gold),
-            new(Rate(1), null, 1, 1, RarityPools: stackables, Category: DungeonDropCategory.Materials),
-            new(Rate(2), null, 1, 1, RarityPools: equipment, Category: DungeonDropCategory.Equipment),
-            new(Rate(3), null, 1, 1, RarityPools: stackables, Category: DungeonDropCategory.Materials)
+            new(Rate(1), null, 1, 1, RarityPools: Pools(1), Category: DungeonDropCategory.Materials),
+            new(Rate(2), null, 1, 1, RarityPools: Pools(2), Category: DungeonDropCategory.Equipment),
+            new(Rate(3), null, 1, 1, RarityPools: Pools(3), Category: DungeonDropCategory.Materials)
         };
         var declaration = resolveMonster(monsterId);
         if (declaration.Items is { Count: > 0 } rows)
