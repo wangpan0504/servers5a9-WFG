@@ -64,6 +64,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         await BossSelectionBuffProjection.PostAsync(context);
         await EndlessAdventureProjection.PublishAsync(context);
         if (context.Session.NeedsEndlessAdventureRefresh) return false;
+        if (context.DailyAttendance is { } attendance) await attendance.RefreshAsync();
         town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;

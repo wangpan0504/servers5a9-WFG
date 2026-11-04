@@ -134,6 +134,12 @@ internal sealed partial class GameSession
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
             Prepared: formalDungeon?.Settlement is not null,
             ValidReport: formalDungeon is { } current && ValidSettlementReport(current, actorId, rankPoint, maximumRankPoint, reportMembers)));
+        Events.DailyAttendancePlan? attendance = null;
+        uint attendanceMailId = 0;
+        if (!capture.Prepared && capture.ValidReport && capture.Character is { } attendee && capture.Dungeon is { } attendanceDungeon &&
+            dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
+                dungeons.Get(checked((int)attendanceDungeon.Entry.DungeonId)), attendee.Level))
+            attendance = dailyAttendance.Prepare(owner, claim: false);
         // 宠物资源与纯成长规划在账号锁外完成；结算事务只保存冻结结果，不重新读CRE或抽取进化目标。
         InventoryPlan? creatureInventory = null;
         if (!capture.Prepared && capture.Character is { } character && capture.Points > 0 && creatures is not null &&
@@ -271,6 +277,7 @@ internal sealed partial class GameSession
                 contributionSource = GuildContributionSource.RecommendedDungeon;
         }
         prepared.Pending.FreezeGuildContribution(dungeon.GuildMemberships, contributionSource, guildDungeons, guildReward);
+        prepared.Pending.FreezeDailyAttendance(attendance);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
             new(dungeon.ClearTimeMilliseconds, rankPoint, finalRankGrade, dungeon.KillExperienceTotal)
             {
@@ -320,6 +327,12 @@ internal sealed partial class GameSession
                 dungeon.Run.ConfirmCommittedSettlement(prepared.Pending) != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("已提交通关结算不能确认原准备");
             Selected = commit.Character;
+            attendanceMailId = commit.DailyAttendanceMailId;
+            if (prepared.Pending.DailyAttendance is not null)
+            {
+                DailyAttendanceVersion++;
+                if (commit.DailyAttendanceMailId > 0) NotifyMailbox(Selected.Id, restoreOnTown: true);
+            }
             settlement.Card = commit.Card;
             settlement.GriefReward = commit.GriefReward;
             settlement.BossRushReward = commit.BossRushReward;
@@ -371,6 +384,7 @@ internal sealed partial class GameSession
         }
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,
+                DailyAttendanceMailId = attendanceMailId,
                 AssaultClear = assaultClear, CrackClear = crackClear,
                 GainedExperience = settlement.GainedExperience,
                 ProficiencyGained = settlement.ProficiencyGained,

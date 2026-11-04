@@ -100,7 +100,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             parsed.Participants.Select(member => member.ActorId).ToArray(), goldLimits);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, participant.RankPoint,
             parsed.MaximumRankPoint, Members = parsed.Participants.Count, result.EndlessAdventureAmount,
-            result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId, result.Receipt?.Snapshot.Identity,
+            result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId,
+            result.DailyAttendanceMailId, result.Receipt?.Snapshot.Identity,
             Adventure = result.Adventure is { } progression
                 ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
                     progression.State.CapsuleExperience, BravePoints = progression.State.Points[0] }

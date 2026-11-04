@@ -33,6 +33,23 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort MileageShopId = 266;
     public const ushort Strongway2019Id = 312;
     public const ushort PcRoomTimePointId = 228;
+    public const ushort DailyAttendanceId = 2370;
+    ServerEventState dailyAttendanceState = new(new(DailyAttendanceId), false);
+    public bool IsDailyAttendanceCurrent(long revision, bool enabled)
+    {
+        var current = Volatile.Read(ref dailyAttendanceState);
+        return current.Schedule.Revision == revision && current.Active == enabled;
+    }
+    void ObserveDailyAttendance(ServerEventState state)
+    {
+        // 较早开始的只读查询可能晚于GM更新返回，不能让它倒退发送守卫的版本。
+        while (true)
+        {
+            var previous = Volatile.Read(ref dailyAttendanceState);
+            if (previous.Schedule.Revision > state.Schedule.Revision) return;
+            if (ReferenceEquals(Interlocked.CompareExchange(ref dailyAttendanceState, state, previous), previous)) return;
+        }
+    }
     public static IReadOnlyList<ServerEventDefinition> Definitions => ServerEventDefinition.Registered;
     readonly object updates = new();
     ServerEventSchedule endlessAdventureSchedule = store.Read(EndlessAdventurePolicy.EventId);
@@ -60,7 +77,8 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort GuildHongbaoId = 2378;
     public const ushort JonathanVisibilityId = 2395;
     public static bool DefaultActive(ushort id) => id is MileageShopId or NolanVisibilityId or
-        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or PcRoomTimePointId;
+        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or
+        PcRoomTimePointId or DailyAttendanceId;
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
     public void NotifyPromotionChanged()
@@ -85,7 +103,9 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
         schedule.Validate();
         if (eventId == BattlePassId) Volatile.Write(ref battlePassSchedule, schedule);
         if (eventId == EndlessAdventurePolicy.EventId) Volatile.Write(ref endlessAdventureSchedule, schedule);
-        return State(schedule);
+        var state = State(schedule);
+        if (eventId == DailyAttendanceId) ObserveDailyAttendance(state);
+        return state;
     }
 
     public ServerEventState Override(ushort eventId, bool? active) => Update(eventId,
@@ -143,6 +163,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
         if (eventId == EndlessAdventurePolicy.EventId) Volatile.Write(ref endlessAdventureSchedule, schedule);
         if (eventId == Strongway2019Id) Interlocked.Increment(ref strongway2019DisplayRevision);
         var state = State(schedule);
+        if (eventId == DailyAttendanceId) ObserveDailyAttendance(state);
         Changed?.Invoke(new(state, time.GetUtcNow(), time.GetTimestamp()));
         return state;
     }
