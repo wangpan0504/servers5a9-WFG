@@ -2,7 +2,10 @@ using PvfLib.Scripting;
 
 namespace PvfLib;
 
-public sealed record SharedEffectOutcome(int Index, int Weight, int RewardItemId, string DodgeAnimation, string Animation);
+public sealed record SharedEffectOutcome(int Index, int Weight, int RewardItemId, string DodgeAnimation, string Animation)
+{
+    public string? AdditionalAnimation { get; init; }
+}
 
 public sealed record SharedEffectConsumableFile(StackableFile Stackable, int? SharedEffect, int CoolGroup,
     int CooltimeMaintenance, IReadOnlyList<SharedEffectOutcome> Outcomes, IReadOnlyList<string> Errors)
@@ -21,17 +24,23 @@ public sealed record SharedEffectConsumableFile(StackableFile Stackable, int? Sh
         }
         var outcomes = new List<SharedEffectOutcome>();
         var tables = document.Sections.Where(row => row.Name == "chn random image percent").ToArray();
-        if (tables is [{ Children.Length: 0 } table] && table.Values.Length > 0 && table.Values.Length % 5 == 0)
+        if (tables is [{ Children.Length: 0 } table] && table.Values.Length >= 5)
         {
-            for (int at = 0; at < table.Values.Length; at += 5)
+            // 同一结果表采用两条或三条动画路径；额外路径只保留原文，不改变结果序号和奖励。
+            int width = table.Values.Length > 5 && table.Values[5].Type == 6 ? 6 : 5;
+            if (table.Values.Length % width != 0)
+                errors.Add("chn random image percent");
+            for (int at = 0; at + width <= table.Values.Length; at += width)
             {
-                var row = table.Values.AsSpan(at, 5);
-                if (row[0].Type != 0 || row[1].Type != 0 || row[2].Type != 0 || row[3].Type != 6 || row[4].Type != 6)
+                var row = table.Values.AsSpan(at, width);
+                if (row[0].Type != 0 || row[1].Type != 0 || row[2].Type != 0 || row[3].Type != 6 || row[4].Type != 6 ||
+                    width == 6 && row[5].Type != 6)
                 {
                     errors.Add("chn random image percent");
                     break;
                 }
-                outcomes.Add(new(row[0].Value, row[1].Value, row[2].Value, resolve(row[3].Value), resolve(row[4].Value)));
+                outcomes.Add(new(row[0].Value, row[1].Value, row[2].Value, resolve(row[3].Value), resolve(row[4].Value))
+                { AdditionalAnimation = width == 6 ? resolve(row[5].Value) : null });
             }
         }
         else errors.Add("chn random image percent");

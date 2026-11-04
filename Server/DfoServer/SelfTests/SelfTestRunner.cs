@@ -600,6 +600,7 @@ internal static class SelfTestRunner
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         AvatarSocketTests.RunResources(itemResources.Items, itemResources.AvatarPackages);
         MagicBoxTests.Run(towns, itemResources);
+        SharedEffectItemTests.RunResources(pvf, towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
         EnhancementPotionTests.RunResources(itemResources.RecoveryConsumables.EnhancementPotions);
