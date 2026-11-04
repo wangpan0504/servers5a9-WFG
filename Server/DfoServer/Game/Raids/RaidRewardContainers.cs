@@ -19,7 +19,7 @@ internal sealed class RaidRewardContainers(RaidScript script, ItemCatalog items,
             var definition = (boosters ?? throw new InvalidDataException("攻坚奖励缺少奖池目录")).Get(id);
             if (!definition.Lottery) continue;
             if (!definition.Available || definition.Pools is not [{ Draws: 1, JobTag: null } pool] ||
-                definition.LotteryUseNeedItem is not null || definition.DailyRetainedLimit is not null ||
+                definition.LotteryUseNeedItem is not null || definition.DailyUseLimit is not null ||
                 pool.Rewards.IsEmpty || pool.Rewards.Any(row => row.Weight < 0 || row.Count <= 0 ||
                     !items.TryGet(row.ItemId, out var item) || item.StackLimit < 1) ||
                 pool.Rewards.Sum(row => row.Weight) is <= 0 or > int.MaxValue)

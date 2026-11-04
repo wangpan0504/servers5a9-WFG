@@ -70,7 +70,7 @@ internal sealed class TagEvildomRewardCatalog
     {
         if (!source.Available || source.Selection is not null || !source.PackageRewards.IsDefaultOrEmpty ||
             source.Lottery || source.NpcPocketPot || !source.FirstGrowTypes.IsEmpty || source.UnsealsRandomOptions ||
-            source.GrantsEpicExchangeOrigin || source.SetsDisjointInstanceType || source.DailyRetainedLimit is not null ||
+            source.GrantsEpicExchangeOrigin || source.SetsDisjointInstanceType || source.DailyUseLimit is not null ||
             source.RuneBox is not null || source.Pools.IsDefaultOrEmpty || source.Pools.Length > 10)
             throw new InvalidDataException("再战结算定义包含未支持的开箱或附加资格");
         var result = ImmutableArray.CreateBuilder<TagEvildomRewardItem>(source.Pools.Length);

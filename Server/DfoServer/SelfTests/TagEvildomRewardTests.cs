@@ -36,7 +36,7 @@ internal static class TagEvildomRewardTests
         {
             parsed with { PendingRule = "unknown" }, parsed with { Lottery = true },
             parsed with { FirstGrowTypes = [1] }, parsed with { UnsealsRandomOptions = true },
-            parsed with { DailyRetainedLimit = 1 }, parsed with { Pools = [] },
+            parsed with { DailyRetainedLimit = 1 }, parsed with { DailyConsumedLimit = 1 }, parsed with { Pools = [] },
             parsed with { Pools = [new(2, [new(100, 1000, 1)])] },
             parsed with { Pools = [new(1, [new(100, 500, 1), new(200, 500, 1)])] },
             parsed with { Pools = [new(1, [new(100, 0, 1)])] },

@@ -121,6 +121,7 @@ internal static class DailyRetainedBoosterTcpTests
         await clock.WaitForOneShotTimersAsync(0);
         await fixture.StopAsync();
         That(clock.ActiveTimers == 0, "断线、换角、接管与停服回收全部daily时钟");
+        await DailyConsumedBoosterTcpTests.RunAsync(options, root, resources);
     }
 
     static void OpenBox(TcpPeer peer) => peer.Send(160, Build(writer => { writer.Write((short)65); writer.Write(1); }));

@@ -14,6 +14,22 @@ internal static class DailyBoosterUsageTests
 
     public static void RunCore()
     {
+        const string retention = "[impossible contents]\n`delete booster`\n[/impossible contents]\n";
+        string consumed = Retained.Replace(retention, "");
+        That(BoosterCatalog.Parse(consumed).Available,
+            "每日限次普通盒不要求保留源声明，扣源后返还自身的礼盒不得额外留源");
+        That(BoosterCatalog.Parse(consumed) is { DailyConsumedLimit: 1, DailyUseLimit: 1, DailyRetainedLimit: null } &&
+            BoosterCatalog.Parse(Retained) is { DailyConsumedLimit: null, DailyUseLimit: 1, DailyRetainedLimit: 1 },
+            "相同每日额度与是否留源分别解释，旧每日保留源语义不变");
+        That(BoosterCatalog.Parse(consumed + "[weight]\n1\n[icon mark]\n`Item/IconMark.img` 34\n" +
+            "[impossible contents]\n`gift`\n[/impossible contents]\n").Available,
+            "重量和图标标记不改变日限次，gift声明不等于delete booster保留源");
+        That(BoosterCatalog.Parse(Retained.Replace("`delete booster`", "`gift` `delete booster`")) is
+            { Available: true, DailyRetainedLimit: 1, DailyConsumedLimit: null },
+            "禁止赠送和保留源同时声明仍完整保留源");
+        foreach (string body in new[] { "", "`gift` `gift`", "`gift` 1", "`unknown`", "`delete booster` `gift` `gift`" })
+            That(!BoosterCatalog.Parse(Retained.Replace("`delete booster`", body)).Available,
+                "每日次数不吞掉无效或未知的禁令声明：" + body);
         That(BoosterCatalog.Parse(Retained).Available, "每日保留普通盒接受完整奖池及明确删除禁令");
         That(!BoosterCatalog.Parse(Retained + "[unknown count group").Available,
             "未闭合未知根字段不能被正则静默忽略");

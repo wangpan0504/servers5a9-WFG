@@ -324,7 +324,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(4);
         var dailyUses = before.DailyBoosterUses;
         long? dailyDeadline = null;
-        if (definition.DailyRetainedLimit is { } dailyLimit)
+        if (definition.DailyUseLimit is { } dailyLimit)
         {
             if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
                 !sourceTemplate.AllowsUse(character.Level, character.Job) ||
