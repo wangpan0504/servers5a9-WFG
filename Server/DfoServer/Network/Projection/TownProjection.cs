@@ -89,6 +89,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (onlineEnabled) openEvents = [.. openEvents, ServerEventService.PcRoomTimePointId];
         bool attendanceEnabled = context.DailyAttendance?.Enabled == true;
         if (attendanceEnabled) openEvents = [.. openEvents, ServerEventService.DailyAttendanceId];
+        bool weeklyEnabled = context.WeeklyAttendance?.Enabled == true;
+        if (weeklyEnabled) openEvents = [.. openEvents, ServerEventService.WeeklyAttendanceId];
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
@@ -114,6 +116,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (jonathan) activeEvents.Add(JonathanVisibleEvent);
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
+        if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);
         if (battlePass) activeEvents.Add(BattlePassEventId);
         var firstValues = new Dictionary<ushort, uint>();
         if (battlePass) firstValues[BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds());
@@ -142,6 +145,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             }
             await EndlessAdventureProjection.PublishAsync(context, force: endless);
         }
+        if (publish?.Invoke() != false) context.WeeklyAttendance?.EventsPublished(weeklyEnabled);
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
                 MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);

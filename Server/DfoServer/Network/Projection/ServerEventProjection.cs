@@ -45,7 +45,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId or
             ServerEventService.BattlePassId or ServerEventService.SeriaLuckId or ServerEventService.GuildHongbaoId or
             ServerEventService.JonathanVisibilityId or Game.Events.EndlessAdventurePolicy.EventId or
-            ServerEventService.DailyAttendanceId or 10999)
+            ServerEventService.DailyAttendanceId or ServerEventService.WeeklyAttendanceId or 10999)
             pending.Writer.TryWrite(true);
     }
     internal bool NeedsStrongwayDisplay(bool value) => queuedEpoch != context.Session.SelectionEpoch ||
@@ -98,8 +98,8 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                      battlePassEpoch != context.Session.SelectionEpoch || battlePassActive != town.IsBattlePassEventActive(now))) pending.Writer.TryWrite(true);
                 long? next = new[] { state.Schedule, strongway.Schedule, seriaLuck.Schedule, hongbao.Schedule,
                     events.Read(ServerEventService.BattlePassId).Schedule,
-                    events.Read(Game.Events.EndlessAdventurePolicy.EventId).Schedule }.Where(schedule => schedule.OverrideActive is null)
-
+                    events.Read(Game.Events.EndlessAdventurePolicy.EventId).Schedule,
+                    events.Read(ServerEventService.WeeklyAttendanceId).Schedule }.Where(schedule => schedule.OverrideActive is null)
                     .SelectMany(schedule => new[] { schedule.StartsAt, schedule.EndsAt })
                     .Where(value => value > now.ToUnixTimeSeconds()).Min();
                 if (town.BattlePassMissions is { } policy)
@@ -110,6 +110,8 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                     var request = pending.Reader.ReadAsync(wait.Token).AsTask();
                     var delay = next is { } point ? DateTimeOffset.FromUnixTimeSeconds(point) - now : Timeout.InfiniteTimeSpan;
                     if (delay > TimeSpan.FromDays(30)) delay = TimeSpan.FromDays(30);
+                    if (context.WeeklyAttendance is not null && (delay == Timeout.InfiniteTimeSpan || delay > TimeSpan.FromSeconds(30)))
+                        delay = TimeSpan.FromSeconds(30);
                     var timer = Task.Delay(delay, time, wait.Token);
                     await Task.WhenAny(request, timer);
                     await wait.CancelAsync();
@@ -119,6 +121,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 await context.CommandGate.WaitAsync(stop.Token);
                 try
                 {
+                    if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: true);
                     var selection = context.Owner.Execute(() => (context.Session.Ready, context.Session.Selected, context.Session.SelectionEpoch));
                     bool current = events.Read(ServerEventService.MileageShopId).Active && town.MileageAvailable;
                     bool currentBattlePass = town.IsBattlePassEventActive(time.GetUtcNow());

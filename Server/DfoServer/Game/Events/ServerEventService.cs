@@ -50,6 +50,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
             if (ReferenceEquals(Interlocked.CompareExchange(ref dailyAttendanceState, state, previous), previous)) return;
         }
     }
+    public const ushort WeeklyAttendanceId = 2208;
     public static IReadOnlyList<ServerEventDefinition> Definitions => ServerEventDefinition.Registered;
     readonly object updates = new();
     ServerEventSchedule endlessAdventureSchedule = store.Read(EndlessAdventurePolicy.EventId);
@@ -78,7 +79,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort JonathanVisibilityId = 2395;
     public static bool DefaultActive(ushort id) => id is MileageShopId or NolanVisibilityId or
         SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or
-        PcRoomTimePointId or DailyAttendanceId;
+        PcRoomTimePointId or DailyAttendanceId or WeeklyAttendanceId;
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
     public void NotifyPromotionChanged()

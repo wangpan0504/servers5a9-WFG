@@ -84,6 +84,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.Inventory.DailyRetainedBoosterProjection? BoosterUses { get; set; }
     public DfoServer.Network.Projection.DazzlementTowerProjection? Dazzlement { get; set; }
     public DfoServer.Network.Projection.PcRoomTimePointProjection? PcRoomTimePoint { get; set; }
+    public DfoServer.Network.Projection.WeeklyAttendanceProjection? WeeklyAttendance { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
     // 只记录本连接的原生握手；不改变监听端点或伪造当前频道身份。
