@@ -202,6 +202,20 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                         string kind = child.Kind == ItemKind.Consumable ? "stackable" : "material";
                         Edge(new(row.ItemId, row.Count), $"{source}/{id}:{kind}:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);
                     }
+                    foreach (var row in category.CreatureRows)
+                    {
+                        var child = items.Get(row.ItemId);
+                        if (InventoryAvatarPackageService.CreatureRowDefinitionError(row, child) is { } reason)
+                        { Error(source, row.ItemId, reason); continue; }
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:creature:{category.Category}:{category.Subcategory}", ItemKind.Creature, freeSource: id);
+                    }
+                    foreach (var row in category.StackableRows)
+                    {
+                        var child = items.Get(row.ItemId);
+                        if (InventoryAvatarPackageService.StackableRowDefinitionError(row, child, pieces) is { } reason)
+                        { Error(source, row.ItemId, reason); continue; }
+                        Edge(new(row.ItemId, row.Count), $"{source}/{id}:stackable:{category.Category}:{category.Subcategory}", child.Kind, freeSource: id);
+                    }
                 }
                 return;
             }

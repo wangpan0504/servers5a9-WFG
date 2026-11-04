@@ -22,9 +22,12 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         if (source is null) return RejectOpen("avatar_package_source");
         var definition = packages.Get(source.Core.ItemId);
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows, out var materialRows))
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null ||
+            !TrySelect(definition, category, request.ItemIds, out var rows, out var equipmentRows, out var materialRows,
+                out var creatureRows, out var stackableRows))
             return RejectOpen("avatar_package_selection");
-        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now, equipmentRows, materialRows);
+        return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod,
+            out receipt, now, equipmentRows, materialRows, creatureRows, stackableRows);
     }
 
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
@@ -70,11 +73,14 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     InventoryResult Grant(Character character, InventoryItem source, int count, AvatarPackageRow[] rows,
         AvatarPackageChoice[] choices, bool allowOverflowMail, bool shopExpiration, bool ignoreUsablePeriod,
         out BoosterReceipt? receipt, DateTimeOffset now, AvatarPackageEquipmentRow[]? equipmentRows = null,
-        AvatarPackageMaterialRow[]? materialRows = null)
+        AvatarPackageMaterialRow[]? materialRows = null, AvatarPackageCreatureRow[]? creatureRows = null,
+        AvatarPackageStackableRow[]? stackableRows = null)
     {
         receipt = null;
         equipmentRows ??= [];
         materialRows ??= [];
+        creatureRows ??= [];
+        stackableRows ??= [];
         var selectedIds = rows.Select(row => row.ItemId).ToHashSet();
         if (choices.Any(choice => choice.ItemId <= 0) || choices.Select(choice => choice.ItemId).Distinct().Count() != choices.Length ||
             choices.Any(choice => !selectedIds.Contains(choice.ItemId)))
@@ -84,7 +90,9 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var totals = new Dictionary<int, int>();
         var equipmentDefinitions = new List<(AvatarPackageEquipmentRow Row, ItemTemplate Template)>();
         var materialDefinitions = new List<(ItemTemplate Template, int Amount)>();
-        long total = 0, equipmentTotal = 0, materialStacks = 0;
+        var creatureDefinitions = new List<(ItemTemplate Template, int Amount)>();
+        var stackableDefinitions = new List<(ItemTemplate Template, int Amount)>();
+        long total = 0, equipmentTotal = 0, materialStacks = 0, creatureTotal = 0, stackableStacks = 0;
         try
         {
             foreach (var row in rows)
@@ -135,12 +143,40 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 materialStacks = checked(materialStacks + 1);
                 materialDefinitions.Add((template, amount));
             }
+            foreach (var row in creatureRows)
+            {
+                var template = items.Get(row.ItemId);
+                if (CreatureRowDefinitionError(row, template) is not null) return InventoryResult.Reject(19);
+                int amount = checked(row.Count * count);
+                totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
+                creatureTotal = checked(creatureTotal + amount);
+                creatureDefinitions.Add((template, amount));
+            }
+            foreach (var row in stackableRows)
+            {
+                var template = items.Get(row.ItemId);
+                if (StackableRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
+                int amount = checked(row.Count * count);
+                if (amount > template.StackLimit) return InventoryResult.Reject(4);
+                totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
+                if (template.Kind == ItemKind.Material)
+                {
+                    materialStacks = checked(materialStacks + 1);
+                    materialDefinitions.Add((template, amount));
+                }
+                else
+                {
+                    stackableStacks = checked(stackableStacks + 1);
+                    stackableDefinitions.Add((template, amount));
+                }
+            }
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
         {
             return RejectOpen("avatar_row_resource:" + error.Message);
         }
-        if (totals.Count > BoosterReceipt.MaximumItems || total + equipmentTotal > int.MaxValue) return InventoryResult.Reject(4);
+        long prototypeTotal = total + equipmentTotal + materialStacks + creatureTotal + stackableStacks;
+        if (totals.Count > BoosterReceipt.MaximumItems || prototypeTotal > int.MaxValue) return InventoryResult.Reject(4);
         var before = character.Inventory;
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, count).Plan!.After;
         if (!allowOverflowMail)
@@ -157,6 +193,14 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 if (equipmentTotal > equipmentRange.End - equipmentRange.Start + 1 - equipmentOccupied)
                     return InventoryResult.Reject(4);
             }
+            if (creatureTotal != 0)
+            {
+                var creatureRange = ItemSlotBoundService.Range(ItemKind.Creature, paid);
+                int creatureOccupied = paid.Items.Count(item => item.Position.List == InventoryListType.Pet &&
+                    item.Position.Index >= creatureRange.Start && item.Position.Index <= creatureRange.End);
+                if (creatureTotal > creatureRange.End - creatureRange.Start + 1 - creatureOccupied)
+                    return InventoryResult.Reject(4);
+            }
         }
         // [etc]保留原声明，两个真实Kind分别预检容量，实际堆叠仍由统一放置器判定。
         foreach (var group in materialDefinitions.GroupBy(row => row.Template.Kind))
@@ -166,7 +210,17 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1;
             if (group.Count() > capacity) return InventoryResult.Reject(4);
         }
-        var prototypes = new List<InventoryItem>((int)(total + equipmentTotal + materialStacks));
+        short stackableStart = 0;
+        if (stackableStacks != 0)
+        {
+            var stackableRange = ItemSlotBoundService.Range(ItemKind.Consumable, paid);
+            stackableStart = stackableRange.Start;
+            // 这里只给出宽上界；兼容堆、快捷栏和真实空位仍由同一放置器判定。
+            int stackableCapacity = stackableRange.End - stackableRange.Start + 1 +
+                ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1;
+            if (stackableStacks > stackableCapacity) return InventoryResult.Reject(4);
+        }
+        var prototypes = new List<InventoryItem>((int)prototypeTotal);
         foreach (var definition in definitions)
         {
             var (row, template, type, ability) = definition;
@@ -203,6 +257,23 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             prototypes.Add(InventoryRewardGrantService.CreateItem(template,
                 new(InventoryListType.Main, ItemSlotBoundService.Range(template.Kind, paid).Start), core));
         }
+        foreach (var (template, amount) in creatureDefinitions)
+        {
+            for (int i = 0; i < amount; i++)
+            {
+                var core = InventoryRewardGrantService.Create(template, utcNow: now, shopExpiration: shopExpiration,
+                    ignoreUsablePeriod: ignoreUsablePeriod);
+                if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+                prototypes.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Pet, 0), core));
+            }
+        }
+        foreach (var (template, amount) in stackableDefinitions)
+        {
+            var core = InventoryRewardGrantService.Create(template, amount, now, shopExpiration: shopExpiration,
+                ignoreUsablePeriod: ignoreUsablePeriod);
+            if (core.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+            prototypes.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, stackableStart), core));
+        }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
         if (!grant.Accepted)
@@ -210,8 +281,9 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             {
                 RejectReason = "avatar_package_grant:" + grant.Error
             };
+        var after = grant.Plan!.After;
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
-        return new(true, 0, new(before, grant.Plan!.After, "avatar_package_open",
+        return new(true, 0, new(before, after, "avatar_package_open",
             new(character, EarliestDeadline(source, prototypes), clock, requirePosition: true), grant.Plan.OverflowItems));
     }
 
@@ -231,7 +303,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     {
         rows = [];
         // 518仅确认过纯装扮选择；混合分类不能按装扮子集成功并漏掉装备。
-        return category.EquipmentRows.IsEmpty && TrySelect(definition, category, ids, out rows, out _);
+        return category.EquipmentRows.IsEmpty && category.MaterialRows.IsEmpty && category.CreatureRows.IsEmpty &&
+            category.StackableRows.IsEmpty && TrySelect(definition, category, ids, out rows, out _);
     }
 
     internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
@@ -240,7 +313,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         rows = [];
         equipmentRows = [];
         // 旧调用方没有材料输出，不能接受装扮和装备子集后漏发材料。
-        return category.MaterialRows.IsEmpty && TrySelect(definition, category, ids, out rows, out equipmentRows, out _);
+        return category.MaterialRows.IsEmpty && category.CreatureRows.IsEmpty && category.StackableRows.IsEmpty &&
+            TrySelect(definition, category, ids, out rows, out equipmentRows, out _);
     }
 
     internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
@@ -249,15 +323,33 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         rows = [];
         equipmentRows = [];
         materialRows = [];
+        // 旧输出没有宠物和消耗品，不能按旧奖励子集成功后漏发。
+        return category.CreatureRows.IsEmpty && category.StackableRows.IsEmpty &&
+            TrySelect(definition, category, ids, out rows, out equipmentRows, out materialRows, out _, out _);
+    }
+
+    internal static bool TrySelect(AvatarPackageDefinition definition, AvatarPackageCategory category, int[] ids,
+        out AvatarPackageRow[] rows, out AvatarPackageEquipmentRow[] equipmentRows, out AvatarPackageMaterialRow[] materialRows,
+        out AvatarPackageCreatureRow[] creatureRows, out AvatarPackageStackableRow[] stackableRows)
+    {
+        rows = [];
+        equipmentRows = [];
+        materialRows = [];
+        creatureRows = [];
+        stackableRows = [];
         if (category.PendingRule is not null || category.Rows.IsEmpty) return false;
-        if (!category.EquipmentRows.IsEmpty || !category.MaterialRows.IsEmpty)
+        if (!category.EquipmentRows.IsEmpty || !category.MaterialRows.IsEmpty ||
+            !category.CreatureRows.IsEmpty || !category.StackableRows.IsEmpty)
         {
             if (definition.SelectionCount != 0 || !ids.Order().SequenceEqual(category.Rows.Select(row => row.ItemId)
-                .Concat(category.EquipmentRows.Select(row => row.ItemId)).Concat(category.MaterialRows.Select(row => row.ItemId)).Order()))
+                .Concat(category.EquipmentRows.Select(row => row.ItemId)).Concat(category.MaterialRows.Select(row => row.ItemId))
+                .Concat(category.CreatureRows.Select(row => row.ItemId)).Concat(category.StackableRows.Select(row => row.ItemId)).Order()))
                 return false;
             rows = category.Rows.ToArray();
             equipmentRows = category.EquipmentRows.ToArray();
             materialRows = category.MaterialRows.ToArray();
+            creatureRows = category.CreatureRows.ToArray();
+            stackableRows = category.StackableRows.ToArray();
             return true;
         }
         if (definition.SelectionCount == 0)
@@ -299,6 +391,26 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             template.StackLimit <= 0 || !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect ||
             CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId))
             return "avatar_material_row_definition";
+        return null;
+    }
+
+    internal static string? CreatureRowDefinitionError(AvatarPackageCreatureRow row, ItemTemplate template)
+    {
+        if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Creature ||
+            template.EquipmentSlot != 26 || template.StackLimit <= 0 || template.CreatureName is null || template.CreatureInitialMode > 1 ||
+            !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect)
+            return "avatar_creature_row_definition";
+        return null;
+    }
+
+    internal static string? StackableRowDefinitionError(AvatarPackageStackableRow row, ItemTemplate template, EpicPieceCatalog pieces)
+    {
+        if (template.Kind == ItemKind.Material)
+            return MaterialRowDefinitionError(new(row.ItemId, row.Count), template, pieces);
+        if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Consumable ||
+            template.StackLimit <= 0 || !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect ||
+            CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId))
+            return "avatar_stackable_row_definition";
         return null;
     }
 

@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-// 使用真实CMD160正文与既有隔离夹具，不修改客户端或PVF，不接受猜测请求变体。
+// 已实收CMD160与明确命名的合成兼容用例分别保留；后者不冒客户端请求证据。
 internal static class MixedAvatarPackageTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
@@ -137,6 +137,7 @@ internal static class MixedAvatarPackageTcpTests
             fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "混合双奖服务重建不重复、不溢出邮寄，数据库与外键完整");
         await RunMaterialObservedAsync(fixture, repo, resources);
+        await RunTypedSyntheticAsync(fixture, repo, resources);
 
         void CheckReconnect(TcpPeer peer)
         {
@@ -365,5 +366,154 @@ internal static class MixedAvatarPackageTcpTests
             fixture.Query("SELECT count(*) FROM mailbox_messages"), fixture.Query("SELECT count(*) FROM mailbox_attachments"),
             fixture.Query("SELECT name,seq FROM sqlite_sequence WHERE name IN ('character_inventory_items','inventory_audit_log') ORDER BY name")
         });
+    }
+
+    // #981仅合成TCP兼容回归；五主ID/options合同未实收，不把这两个30B当客户端请求证据。
+    // 复用同一已停fixture和资源，只补Handler/ACK/105+三容器投影；SQL事务/恢复沿既有专项复用。
+    static async Task RunTypedSyntheticAsync(TcpTestFixture fixture, CharacterRepository repo, TcpTestResources resources)
+    {
+        const int boxId = 10310044, avatarId = 101590523;
+        short[] sourceSlots = [66, 68];
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var role = repo.List(owner).Single();
+            That(sourceSlots.All(slot => role.Inventory.Find(new(InventoryListType.Main, slot)) is null),
+                "#981合成TCP复用已停夹具，两个源槽原为空，不覆盖旧实收资产");
+            var core = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(boxId));
+            var sources = sourceSlots.Select(slot => new InventoryItem(0, new(InventoryListType.Main, slot), core));
+            repo.CommitInventory(owner, role, new(role.Inventory,
+                role.Inventory with { Items = [.. role.Inventory.Items, .. sources] }, "typed_synthetic_tcp_seed"));
+        }
+        await fixture.StartAsync("typed-synthetic");
+        BoosterTcpTests.SetExpirationDebug(fixture, false);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            for (byte category = 0; category < 2; category++)
+            {
+                int[] ids = category == 0 ? [avatarId, 100331839, 100990228, 10309981, 10310266] :
+                    [avatarId, 100331840, 100990229, 10309982, 10310048];
+                short sourceSlot = sourceSlots[category];
+                var previous = Saved();
+                var source = previous.Inventory.Find(new(InventoryListType.Main, sourceSlot))!;
+                That(source is { Uid: > 0 } && source.Core.ItemId == boxId,
+                    "#981合成TCP每分类绑定独立持久源UID，不将前一新奖励当下一源");
+                if (category == 0)
+                {
+                    string before = JsonSerializer.Serialize(previous);
+                    byte[] missingPet = SyntheticTypedBody(sourceSlot, category, ids.Where(id => id != ids[2]).ToArray());
+                    That(missingPet.Length == 26, "#981缺Pet的四主ID26B是明确合成负例");
+                    peer.Send(160, missingPet); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                    That(JsonSerializer.Serialize(Saved()) == before,
+                        "#981 Handler完整RowCount5拒合成四ID，无资产或revision变化且连接仍可用");
+                }
+                byte[] synthetic = SyntheticTypedBody(sourceSlot, category, ids);
+                That(synthetic.Length == 30, "#981五主ID/零options/尾0的30B仅测试服务器既有语法，不冒实收");
+                peer.Send(160, synthetic);
+                BoosterTcpTests.ExpectAck(peer, boxId, sourceSlot, ids.Select((id, index) =>
+                    (id, category == 1 && index == 4 ? 3 : 1)).ToArray());
+                var committed = Saved();
+                var oldUids = previous.Inventory.Items.Select(item => item.Uid).ToHashSet();
+                var rewards = committed.Inventory.Items.Where(item => !oldUids.Contains(item.Uid)).ToArray();
+                That(committed.Revision == previous.Revision + 1 && rewards.Length == 5 &&
+                    rewards.All(item => item.Uid > 0) && rewards.Select(item => item.Uid).Distinct().Count() == 5 &&
+                    rewards.Select(item => item.Core.ItemId).Order().SequenceEqual(ids.Order()) &&
+                    committed.Inventory.Items.Length == previous.Inventory.Items.Length + 4 &&
+                    committed.Inventory.Items.All(item => item.Uid != source.Uid) &&
+                    previous.Inventory.Items.Where(item => item.Uid != source.Uid).All(item =>
+                        committed.Inventory.Items.Single(saved => saved.Uid == item.Uid) == item),
+                    "#981合成TCP五奖同一revision，按新UID差集区分两次同模板光环，原资产及另一源完整保留");
+
+                // 新Pet详情必须在任何引用其UID的14之前抵达。独立解码，不用生产builder回造期待值。
+                CheckCreatureDetails(peer.Expect(0, 105).Body, committed.Inventory, category + 1);
+                var mainRewards = rewards.Where(item => item.Position.List == InventoryListType.Main).ToArray();
+                var mainSlots = mainRewards.Select(item => item.Position.Index).Append(sourceSlot).Distinct().Order().ToArray();
+                var replaced = mainSlots.Where(slot => previous.Inventory.Find(new(InventoryListType.Main, slot)) is { } old &&
+                    committed.Inventory.Find(new(InventoryListType.Main, slot)) is { } current &&
+                    old.Core.ItemId != current.Core.ItemId).ToArray();
+                if (replaced.Length != 0)
+                    CheckMain(peer.Expect(0, 14).Body, replaced, InventorySnapshot.Empty,
+                        "#981合成TCP源槽合法被消耗品复用，先逐槽清旧模板");
+                byte[] main = peer.Expect(0, 14).Body;
+                CheckMain(main, mainSlots, committed.Inventory, "#981合成TCP完整Main差量与已提交源和三Main奖励一致");
+                var title = rewards.Single(item => item.Core.ItemId == ids[1]);
+                BoosterTcpTests.Entry(main, title.Position.Index, ids[1], InventoryRewardGrantService.InitialQuality);
+                foreach (var item in mainRewards.Where(item => item.Core.ItemId != ids[1]))
+                    That(item.Core.Kind == ItemKind.Consumable && item.Core.Count ==
+                        (category == 1 && item.Core.ItemId == ids[4] ? 3 : 1),
+                        "#981合成TCP两个普通消耗品保原数量，不把三份拆作三个主ID");
+
+                var aura = rewards.Single(item => item.Core.ItemId == avatarId);
+                byte[] avatar = peer.Expect(0, 14).Body;
+                That(avatar[0] == 1 && U16(avatar, 1) == 1 && avatar.Length == 168,
+                    "#981合成TCP每次只有新光环的一条完整165B差量");
+                var row = avatar.AsSpan(3, 165).ToArray();
+                That(U16(row, 0) == aura.Position.Index && U32(row, 2) == avatarId && U32(row, 6) == 0 &&
+                    U16(row, 11) == 0 && U32(row, 123) == 30 && U32(row, 157) == 4 &&
+                    U16(row, 161) == 0 && U16(row, 163) == 0,
+                    "#981合成TCP光环永久/无能力/RAW详情完整，第二次相同模板仍定位新UID对应槽");
+                for (int index = 0; index < 5; index++)
+                    That(U16(row, 127 + index * 6) == (index < 2 ? 0xFFEF : 0) &&
+                        U32(row, 129 + index * 6) == (index < 2 ? uint.MaxValue : 0),
+                        "#981合成TCP双M映射FFEF/空徽章，其余孔关闭");
+
+                var pet = rewards.Single(item => item.Core.ItemId == ids[2]);
+                byte[] petPage = peer.Expect(0, 14).Body;
+                That(petPage[0] == 7 && U16(petPage, 1) == 1 && petPage.Length == 126,
+                    "#981合成TCP新Pet只一条完整123B差量，不混入Avatar RAW");
+                byte[] petRow = BoosterSelectionTcpTests.EquipmentEntry(petPage, pet.Position.Index);
+                That(U32(petRow, 2) == ids[2] && U32(petRow, 6) == pet.Uid && U32(petRow, 22) == 0 &&
+                    petRow[13] == 0 && pet.Core.Value == pet.Uid && pet.Creature is { Mode: 0, ExpireTime: 0 },
+                    "#981合成TCP Pet记录引用刚到达105的真实UID/永久非蛋核心，不以数量1替UID");
+                peer.Barrier();
+            }
+        }
+        await fixture.StopAsync();
+        Console.WriteLine("#981 synthetic typed TCP: two categories; generated30B only, client producer/request not observed.");
+
+        DfoServer.Game.Characters.Character Saved()
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single();
+        }
+        static byte[] SyntheticTypedBody(short slot, byte category, int[] ids) => Build(writer =>
+        {
+            writer.Write(slot); writer.Write(1); writer.Write(category); writer.Write((byte)0);
+            foreach (int id in ids) writer.Write(id);
+            writer.Write((byte)0); writer.Write((byte)0);
+        });
+        static void CheckMain(byte[] body, short[] slots, InventorySnapshot inventory, string message)
+        {
+            That(body[0] == 0 && U16(body, 1) == slots.Length && body.Length == 3 + slots.Length * 123, message);
+            foreach (short slot in slots)
+            {
+                var item = inventory.Find(new(InventoryListType.Main, slot));
+                BoosterTcpTests.Entry(body, slot, item?.Core.ItemId ?? -1, item?.Core.Value ?? 0);
+            }
+        }
+        static void CheckCreatureDetails(byte[] body, InventorySnapshot inventory, int count)
+        {
+            var pets = inventory.Items.Where(item => item.Creature is not null).OrderBy(item => item.Uid).ToArray();
+            using var stream = new MemoryStream(body);
+            using var reader = new BinaryReader(stream);
+            That(reader.ReadByte() == count && pets.Length == count,
+                "#981合成TCP 105完整列出一/两Pet详情，不因第二类覆盖第一类");
+            foreach (var pet in pets)
+            {
+                int uid = reader.ReadInt32(); byte satiety = reader.ReadByte(), mode = reader.ReadByte();
+                int experience = reader.ReadInt32(); byte level = reader.ReadByte();
+                string expectedName = pet.Creature?.Name ??
+                    throw new InvalidDataException("typed Pet detail has no species name");
+                byte[] expectedNameBytes = DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(expectedName);
+                int length = reader.ReadInt32();
+                That(uid == pet.Uid && satiety == 100 && mode == 0 && experience == 0 && level == 1 &&
+                    length == expectedNameBytes.Length && length <= stream.Length - stream.Position - 1,
+                    "#981合成TCP独立解码105 UID/初始详情/各species原名字节宽度");
+                Bytes(reader.ReadBytes(length), expectedNameBytes,
+                    "#981合成TCP各species使用自身原名，不复制其它Pet或装备名");
+                That(reader.ReadByte() == 0, "#981合成TCP 105原尾标志保持0");
+            }
+            That(stream.Position == stream.Length, "#981合成TCP 105两行完整消费，无遗漏或多余尾段");
+        }
     }
 }
