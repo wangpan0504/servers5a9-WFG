@@ -9,9 +9,9 @@ internal sealed class DungeonKillExperienceCatalog
     public const string ResourcePath = "monster/monsterexp.tbl";
     public const string ServerParameterPath = "etc/(r)serverparameter.etc";
     private readonly IReadOnlyDictionary<int, uint> values;
-    private readonly float[] difficultyRates, monsterRates;
-    private DungeonKillExperienceCatalog(IReadOnlyDictionary<int, uint> values, float[] difficulty, float[] monster)
-        => (this.values, difficultyRates, monsterRates) = (values, difficulty, monster);
+    private readonly float[] difficultyRates, monsterRates, partyRates;
+    private DungeonKillExperienceCatalog(IReadOnlyDictionary<int, uint> values, float[] difficulty, float[] monster, float[] party)
+        => (this.values, difficultyRates, monsterRates, partyRates) = (values, difficulty, monster, party);
 
     public static DungeonKillExperienceCatalog Load(PvfArchive pvf) =>
         Parse(pvf.ReadTokens(ResourcePath), pvf.ReadTokens(ServerParameterPath), pvf.ResolveString);
@@ -20,14 +20,17 @@ internal sealed class DungeonKillExperienceCatalog
         ? value : throw new NotSupportedException("怪物等级没有本服经验表记录");
 
     public float GetDifficultyRate(byte difficulty) => difficulty < difficultyRates.Length ? difficultyRates[difficulty] : 1;
+    // 可选声明缺失时不虚构组队分量，也不阻断原有单人及组队经验。
+    public float GetPartyRate(int members) => members >= 1 && members <= partyRates.Length ? partyRates[members - 1] : 1;
     public float GetMonsterRate(byte type, bool named) =>
         monsterRates[type < monsterRates.Length ? type : 0] * (named && type != 3 ? 3 : 1);
 
     internal static DungeonKillExperienceCatalog Parse(ReadOnlySpan<PvfToken> table,
         IReadOnlyList<PvfToken> server, Func<int, string> resolve) => new(Parse(table),
-        ReadRates(server, resolve, "dungeon difficulty exp bonusrate", 5), ReadRates(server, resolve, "monster exp bonusrate", null));
+        ReadRates(server, resolve, "dungeon difficulty exp bonusrate", 5), ReadRates(server, resolve, "monster exp bonusrate", null),
+        ReadRates(server, resolve, "party user number exp bonusrate", 4, required: false));
 
-    private static float[] ReadRates(IReadOnlyList<PvfToken> server, Func<int, string> resolve, string tag, int? count)
+    private static float[] ReadRates(IReadOnlyList<PvfToken> server, Func<int, string> resolve, string tag, int? count, bool required = true)
     {
         float[]? result = null;
         for (int i = 0; i < server.Count; i++)
@@ -48,7 +51,7 @@ internal sealed class DungeonKillExperienceCatalog
                 throw new InvalidDataException("击杀经验倍率数量无效: " + tag);
             result = rates.ToArray();
         }
-        return result ?? throw new InvalidDataException("缺少击杀经验倍率: " + tag);
+        return result ?? (required ? throw new InvalidDataException("缺少击杀经验倍率: " + tag) : []);
     }
 
     public static float GetDungeonWeight(DungeonDefinition dungeon)
