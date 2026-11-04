@@ -598,7 +598,7 @@ internal static class BoosterTests
             That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
                 !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty && !definition.UnsealsRandomOptions &&
                 definition.CustomAbilityGrade is null && !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
-                definition.DailyRetainedLimit is null && definition.RuneBox is null && definition.CoolTime == 0 &&
+                definition.DailyUseLimit is null && definition.RuneBox is null && definition.CoolTime == 0 &&
                 definition.CoolGroup is null && definition.CooltimeMaintenance is null && definition.Pools.Length == 1 &&
                 definition.Pools[0] is { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue,
                     GrowType: -1, RequiredKind: null } pool && pool.Rewards.SequenceEqual(expectedRows),
@@ -650,7 +650,7 @@ internal static class BoosterTests
                 !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty &&
                 !definition.UnsealsRandomOptions && definition.CustomAbilityGrade is null &&
                 !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
-                definition.DailyRetainedLimit is null && definition.RuneBox is null &&
+                definition.DailyUseLimit is null && definition.RuneBox is null &&
                 definition.CoolTime == 1000 && definition.CoolGroup is null && definition.CooltimeMaintenance is null &&
                 definition.Pools.Length == 1 && definition.Pools[0] is
                     { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue, GrowType: -1, RequiredKind: null } pool &&

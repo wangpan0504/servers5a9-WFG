@@ -64,6 +64,8 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
+    public byte? DailyConsumedLimit { get; init; }
+    public byte? DailyUseLimit => DailyConsumedLimit ?? DailyRetainedLimit;
     public ItemMaterialCost? LotteryUseNeedItem { get; init; }
     public uint LotteryGoldCost { get; init; }
     public bool AllowsLotteryGold { get; init; }
@@ -239,10 +241,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             lotteryUseNeedItem = new(materialId, materialCount);
         }
         byte? dailyLimit = null;
+        bool retainsDailySource = false;
         if (tags.Contains("[total usable count]", StringComparison.OrdinalIgnoreCase))
         {
-            if (type != "booster" || !DailyRetainedBoosterDefinition.TryParse(text, out byte limit))
-                return new([], "每日保留资格字段不完整或含未实现规则");
+            if (type != "booster" || !DailyRetainedBoosterDefinition.TryParse(text, out byte limit, out retainsDailySource))
+                return new([], "每日次数资格字段不完整或含未实现规则");
             dailyLimit = limit;
         }
         var disjointDeclarations = Regex.Matches(tags, @"\[\s*/?\s*set\s+disjoint\s+instance\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
@@ -469,7 +472,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         return !string.IsNullOrWhiteSpace(tail) &&
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())
-                { DailyRetainedLimit = dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
+                { DailyRetainedLimit = retainsDailySource ? dailyLimit : null,
+                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
     }
 
     // [avatar] / [special avatar] 行宽为五列：物品、权重、数量、期限天数、属性选项。

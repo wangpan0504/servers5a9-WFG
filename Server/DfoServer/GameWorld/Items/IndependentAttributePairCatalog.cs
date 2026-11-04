@@ -197,7 +197,7 @@ internal sealed class IndependentAttributePairCatalog
                 var definition = boosters.Get(source.ItemId);
                 Require(template.StackLimit == 1000 && definition.Available && definition.Pools.Length == 1 &&
                     definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty && !definition.Lottery &&
-                    !definition.NpcPocketPot && !definition.SetsDisjointInstanceType && definition.DailyRetainedLimit is null);
+                    !definition.NpcPocketPot && !definition.SetsDisjointInstanceType && definition.DailyUseLimit is null);
                 var pool = definition.Pools[0];
                 Require(pool.Draws == 1 && pool.JobTag is null && pool.GrowType == -1 && pool.MinimumLevel == 0 &&
                     pool.MaximumLevel == int.MaxValue && pool.RequiredKind is null && pool.Rewards.Length == 66 &&

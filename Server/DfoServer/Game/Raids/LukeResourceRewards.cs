@@ -29,7 +29,7 @@ internal sealed class LukeResourceRewards
             {
                 var box = boosters.Get(id);
                 if (!box.Available || box.PendingRule is not null || !box.PackageRewards.IsDefaultOrEmpty ||
-                    box.Pools.IsDefaultOrEmpty || box.LotteryUseNeedItem is not null || box.DailyRetainedLimit is not null ||
+                    box.Pools.IsDefaultOrEmpty || box.LotteryUseNeedItem is not null || box.DailyUseLimit is not null ||
                     box.Pools.Any(pool => pool.Draws != 1 || pool.JobTag is not null || pool.GrowType != -1 ||
                         pool.Rewards.IsDefaultOrEmpty || pool.Rewards.Any(row => row.Weight <= 0 || row.Count <= 0) ||
                         pool.Rewards.Sum(row => row.Weight) > int.MaxValue))
