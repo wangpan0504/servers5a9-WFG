@@ -24,6 +24,7 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Settings;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.BattlePass;
 using System.Diagnostics;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Game.Strongway2019;
@@ -397,7 +398,8 @@ internal static class ServerRuntime
         };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
-            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices);
+            marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices,
+            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop));
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);

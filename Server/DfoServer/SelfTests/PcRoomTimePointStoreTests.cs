@@ -169,7 +169,7 @@ internal static class PcRoomTimePointStoreTests
             "当前版本重开幂等且不补赠进度或奖励");
         int day = PcRoomTimePointDay.At(f.Now);
         var reward = f.Update(Guid.NewGuid(), [new(day, 4000)], new(0, 0, 1), f.Items(2));
-        foreach (string table in new[] { "account_battle_pass_cera_orders", "account_battle_pass_cera_consumption",
+        foreach (string table in new[] { "account_battle_pass_deluxe_orders", "account_battle_pass_cera_orders", "account_battle_pass_cera_consumption",
             "account_battle_pass_certificate_orders", "account_battle_pass_source_events", "account_battle_pass_mission_claims",
             "account_battle_pass_mission_progress", "battle_pass_season_rules", "account_battle_pass_claims",
             "account_battle_pass_seasons", "character_epic_wishes" })

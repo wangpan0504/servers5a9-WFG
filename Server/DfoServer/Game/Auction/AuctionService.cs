@@ -66,6 +66,9 @@ internal interface IAuctionListingStore
     /// </summary>
     AuctionListing? LoadListing(int listingId);
 
+    /// <summary>卖方账号在 <paramref name="now"/> 是否仍持有未过期的拍卖行优惠券。机器人或已删角色为 false。</summary>
+    bool AuctionCouponActive(long sellerCharacterId, long now);
+
     /// <summary>
     /// 取消上架提交：**挂牌置为已下架 + 道具还回背包 + 背包审计在同一个外层事务内**，事务由本方法拥有。
     /// 与 <see cref="RegisterListing"/> 同形，但方向相反：先写背包（发放实例）再更新挂牌状态；
@@ -556,11 +559,23 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// </summary>
     public const int SaleTaxPercent = 5;
 
+    /// <summary>持有效拍卖行优惠券（premium 类型 29）时的卖方税率。金币寄售未实现，不另造 1% 路径。</summary>
+    public const int CouponSaleTaxPercent = 3;
+
+    public const int AuctionCouponContractType = PremiumContractCatalog.AuctionCouponType;
+
+    public static int TaxPercent(bool couponActive) => couponActive ? CouponSaleTaxPercent : SaleTaxPercent;
+
     /// <summary>托管邮件的系统发件人名（卖方所得那封由拍卖行自己发，不是卖家发给卖家）。</summary>
     public const string SystemSender = "拍卖行";
 
     /// <summary>卖方实收 = `floor(成交价 × (100 - 税率) / 100)`。整数运算（先乘后除）等于向下取整，不引入浮点。</summary>
-    public static long SellerProceeds(long totalPrice) => totalPrice * (100 - SaleTaxPercent) / 100;
+    public static long SellerProceeds(long totalPrice, int taxPercent = SaleTaxPercent)
+    {
+        if (taxPercent is not (SaleTaxPercent or CouponSaleTaxPercent))
+            throw new InvalidDataException("拍卖行税率只允许无券 5% 或持券 3%");
+        return totalPrice * (100 - taxPercent) / 100;
+    }
 
     /// <summary>
     /// 买方道具托管邮件的幂等键。按挂牌 id 命名：它与挂牌状态在同一事务提交，正常路径不可能重复；
@@ -671,10 +686,12 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);
         custody.Add(new(CustodyItemKey(listing.ListingId), buyer.Id, Required: true, listing.SellerName,
             itemText, 0, [InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 0), core)], now, null));
-        long proceeds = SellerProceeds(totalPrice);
+        bool coupon = listing.SellerCharacterId is long couponSeller && store.AuctionCouponActive(couponSeller, now);
+        int taxPercent = TaxPercent(coupon);
+        long proceeds = SellerProceeds(totalPrice, taxPercent);
         if (listing.SellerCharacterId is { } sellerId)
         {
-            var goldText = $"拍卖行成交（挂牌 {listing.ListingId}）：卖方所得（已扣 {SaleTaxPercent}% 手续费）";
+            var goldText = $"拍卖行成交（挂牌 {listing.ListingId}）：卖方所得（已扣 {taxPercent}% 手续费）";
             overlong = AuctionCustodyMail.TextTooLong(SystemSender, goldText);
             if (overlong is not null)
                 return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, overlong);

@@ -17,6 +17,7 @@ internal static partial class CashShopTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        global::DfoServer.AuctionCouponTests.RunResources(resources.ItemResources);
         await PrivilegeAsync(source, root, resources);
         Inventory.CashShopTests.RunCore();
         Inventory.CashShopTests.Run(resources.Towns, resources.Characters, resources.ItemResources);

@@ -15,6 +15,7 @@ internal static partial class BattlePassMissionTests
         Periods();
         Persistence();
         EventControlPersistence();
+        DeluxePurchasePersistence();
         DailyLoginPersistence();
         NativeShopVisitPersistence();
         CompletionPersistence();

@@ -567,11 +567,13 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
+        BattlePassDeluxePurchaseTests.RunResources(pvf, itemResources);
         Testing.PrivilegeServiceTests.Run(towns, characters, itemResources, pvf);
         CashShopTests.VerifyMappedCoupons(towns, itemResources);
         DfoServer.Testing.Inventory.PvfItemCompatTests.Run(pvf, itemResources);
         TalismanResourceTests.Run(pvf, itemResources.Items);
         PremiumContractTests.RunResources(itemResources, pvf);
+        AuctionCouponTests.RunResources(itemResources);
         GrowthCubeContractTests.RunResources(itemResources,towns,characters);
         LimitCubeTests.RunResources(itemResources);
         EnchantmentTests.RunResources(itemResources, itemResources.Enchantments);

@@ -92,7 +92,7 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
         }
         await StaminaAsync(character, Guard);
         // 请求完成后检查黑钻到期/撤销；不在业务ACK之前插入会员刷新，也不把魔王子服务扩展为逐请求重发。
-        bool changed = announced is null || new[] { 56, 84, 88, 92, 97, 128 }.Any(type =>
+        bool changed = announced is null || new[] { 29, 56, 84, 88, 92, 97, 128 }.Any(type =>
             announced.GetValueOrDefault(type) != (type == 128
                 ? PremiumPackets.PcRoomExpiry(character.Inventory.AccountWallet, now, context.Session.PremiumPcRoom)
                 : character.Inventory.AccountWallet.ContractExpiry(type) > now ? character.Inventory.AccountWallet.ContractExpiry(type) : 0));

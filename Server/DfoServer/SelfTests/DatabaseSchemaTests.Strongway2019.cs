@@ -73,14 +73,15 @@ internal static partial class DatabaseSchemaTests
     static string StrongwayReplaySnapshot(string path)
     {
         using var db = Open(path);
-        // 仅这九张未来空表的DDL已核实不含跨行字面量、引用标识符或注释；不规范化其它SQL或任何数据行。
+        // 仅这些未来空战令表的DDL已核实不含跨行字面量、引用标识符或注释；不规范化其它SQL或任何数据行。
         return string.Join('|', Query(db, "PRAGMA user_version"),
             Query(db, """
                 SELECT group_concat(type||':'||name||':'||tbl_name||':'||coalesce(
                     CASE WHEN tbl_name IN ('account_battle_pass_seasons','account_battle_pass_claims',
                         'battle_pass_season_rules','account_battle_pass_mission_progress','account_battle_pass_mission_claims',
                         'account_battle_pass_source_events','account_battle_pass_certificate_orders',
-                        'account_battle_pass_cera_consumption','account_battle_pass_cera_orders')
+                        'account_battle_pass_cera_consumption','account_battle_pass_cera_orders',
+                        'account_battle_pass_deluxe_orders')
                     THEN replace(sql,char(13)||char(10),char(10)) ELSE sql END,''),'|')
                 FROM (SELECT * FROM sqlite_schema ORDER BY name)
                 """),
