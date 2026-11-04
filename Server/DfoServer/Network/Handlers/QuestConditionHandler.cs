@@ -33,7 +33,8 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
         {
             if (quests is null || items is null || goldLimits is null || pieces is null) return CommandResult.Unhandled;
             var condition = new QuestClientCondition(request.Channel,request.Value,request.Reserved);
-            changed = context.Session.ObserveOperationHopeTrigger(request.QuestId,condition) ??
+            changed = context.Session.ObserveAntonPhaseQuestTrigger(request.QuestId,condition,quests) ??
+                context.Session.ObserveOperationHopeTrigger(request.QuestId,condition) ??
                 context.Session.ObservePvpTrainingTrigger(request.QuestId,condition,quests);
             if (changed is null && rooms is not null && context.Session.PartyDungeon is { } party &&
                 condition is { Channel: 0x10 or 0x20 or 0x40, Value: 0, Reserved: 0 } &&

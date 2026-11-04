@@ -31,6 +31,21 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
 
     async Task<CommandResult> FacilityAsync(GameConnectionContext context, Packet request)
     {
+        if (context.Session.RaidCombatKind() == RaidKind.Anton && RaidRequests.AntonConstructorLast(request.Body) is { } constructor &&
+            context.Session.PartyDungeon is { } constructorParty)
+        {
+            var report = constructorParty.ReportAntonConstructorLast(context.Session, constructor);
+            if (report.EnergyChanged) context.Session.PublishRaidCombat();
+            return report.Accepted ? CommandResult.Handled : CommandResult.Unhandled;
+        }
+        if (context.Session.RaidCombatKind() == RaidKind.Anton && RaidRequests.AntonBatteryLast(request.Body) &&
+            context.Session.PartyDungeon is { } batteryParty)
+        {
+            var report = batteryParty.ReportAntonObjectLast(context.Session);
+            if (report.EnergyChanged) context.Session.PublishRaidCombat();
+            // 662本身不携带对象身份；只有批准生成、23销毁和此Last三者齐备才扣能量。
+            return report.Accepted ? CommandResult.Handled : CommandResult.Unhandled;
+        }
         if (context.Session.RaidCombatKind() == RaidKind.Anton && RaidRequests.AntonEnergyClear(request.Body) &&
             context.Session.PartyDungeon is { } antonParty && antonParty.ReportAntonEnergy(context.Session))
         {
@@ -76,6 +91,20 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         RaidRewardCardRequest selected;
         try { selected = RaidRequests.RewardCard(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (selected.Kind == 0 && context.Session.SelectAntonEmptyCardBack(selected.Card) is { } back)
+        {
+            bool BackCurrent() => context.Session.CanPublishRaidBattle(back.Actor, back.View);
+            bool AcknowledgeCurrent() => back.Actor.IsCurrent &&
+                context.Session.SelectAntonEmptyCardBack(selected.Card) is { } latest &&
+                latest.Actor == back.Actor && latest.View.Instance == back.View.Instance &&
+                latest.View.Phase == back.View.Phase && latest.Card == back.Card &&
+                latest.View.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Intermission or AntonRaidBattleState.Completed;
+            // 自然客户端同一次选择连续发送1/0；0只确认牌背，不再借它发放全团奖池。
+            if (back.View.State == AntonRaidBattleState.Reward)
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST, AntonRewardPackets.Choices(0), "anton_card_back", BackCurrent);
+            context.Sender.Post(1, (ushort)CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "anton_card_back_selected", AcknowledgeCurrent);
+            return CommandResult.Handled;
+        }
         bool luke = context.Session.RaidCombatKind() == RaidKind.Luke;
         var entryView = luke ? context.Session.RaidCombatView() : null;
         var rejectedView = entryView;
@@ -125,29 +154,47 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
             LukeRewardResults.Bind(receipt, items, (clock ?? TimeProvider.System).GetUtcNow()) is { } result &&
             context.LukeResults.Post(context, receipt, result)) return CommandResult.Handled;
         // 600会写当前卡片窗口；旧阶段receipt只回放领取确认，不把旧展示装进新阶段。
-        // 同阶段保护沿B线c0070b73；01DC8B70消费者及Docs/协议/副本.md翻牌章节。
         bool DisplayGuard() => Guard() && context.Session.RaidCombatView() is { State: AntonRaidBattleState.Reward } view &&
             view.Phase == receipt.Prepared.Phase;
+        // 普通20人安徒恩走023CA1B0公共16B结果；01DC8B70的8B分支只属于+DC非零的单人/引导记录。
         if (receipt.Prepared.RaidType == RaidKind.Anton && DisplayGuard() &&
             context.Session.AntonRaidTimerSnapshot() is null)
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display),
                 "raid_reward_display", DisplayGuard);
-        if (receipt.Prepared.RaidType == RaidKind.Anton && !receipt.Commit.Duplicate &&
+        if (receipt.Prepared.RaidType == RaidKind.Anton &&
             context.Session.AntonRaidTimerSnapshot() is not null)
         {
             if (AntonRewardPackets.TryFrozenResult(receipt.Prepared.Kind, receipt.Prepared.Character, receipt.Prepared.Card,
                 receipt.Prepared.Grants, out var body, out var missing))
                 await context.Notify(NotiPacketType.RAID_REWARD_LIST, body, "raid_reward_display", DisplayGuard);
             else
-                log.Write("raid_reward_display_unimplemented", new { Connection = context.Id, receipt.Prepared.Phase,
-                    receipt.Prepared.Kind, Reason = "anton-general600-tail1-unverified", MissingFields = missing });
+                log.Write("raid_reward_display_rejected", new { Connection = context.Id, receipt.Prepared.Phase,
+                    receipt.Prepared.Kind, Reason = missing });
         }
         if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer, receipt.Prepared.RaidType),
                 "prey_reward_display", DisplayGuard);
         bool sent = false;
         await context.Reply(CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "raid_reward_selected", () => sent = Guard());
-        if (sent) context.Session.ConfirmRaidRewardPublished(receipt);
+        if (sent)
+        {
+            context.Session.ConfirmRaidRewardPublished(receipt);
+            if (receipt.Prepared.RaidType == RaidKind.Anton && receipt.Prepared.Kind is 1 or 2)
+                await PublishAutomaticAntonSquadAsync(context);
+        }
         return CommandResult.Handled;
+    }
+
+    async Task PublishAutomaticAntonSquadAsync(GameConnectionContext context)
+    {
+        var receipt = context.Session.ClaimAutomaticAntonSquadReward(rewards, items, gold, pieces,
+            (clock ?? TimeProvider.System).GetUtcNow());
+        if (receipt is null) return;
+        await inventory.RefreshAsync(context, receipt.Inventory);
+        if (!receipt.Commit.MailIds.IsEmpty) context.Session.NotifyMailbox(receipt.Prepared.Character);
+        // 完整团队权益已在state4前一次装配；本人到账只刷新库存，不能用单行600覆盖全表。
+        context.Session.ConfirmRaidRewardPublished(receipt);
+        log.Write("raid_reward_committed", new { Connection = context.Id, receipt.Prepared.Instance,
+            receipt.Prepared.Phase, receipt.Prepared.Kind, receipt.Prepared.Card, receipt.Commit.Duplicate, Automatic = true });
     }
 }

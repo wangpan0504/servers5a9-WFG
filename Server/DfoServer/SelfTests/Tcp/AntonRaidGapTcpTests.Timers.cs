@@ -95,7 +95,7 @@ internal static partial class AntonRaidGapTcpTests
             }
             clock.Advance(2399 - advanced);
             var before = AntonTcpProbe.Barrier(peer, "总deadline前一秒");
-            That(before.All(packet => packet.Opcode is not (24 or 665)), "2400前不得退场");
+            That(before.All(packet => packet.Opcode is not (24 or 601 or 665)), "2400前不得发失败601或退场");
             foreach (var packet in before.Where(packet => packet.Opcode == 597 || packet is { Opcode: 596, Body: [0, ..] }))
             {
                 That(phase is 0 or 1, "两阶段均按原deadline补发头时钟");
@@ -113,11 +113,18 @@ internal static partial class AntonRaidGapTcpTests
                 if (packet is { Kind: 1, Opcode: 665 }) break;
             }
             That(frames.Any(packet => packet is { Kind: 1, Opcode: 665, Body: [1,1] }) &&
-                frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) == (scene != "town") && frames.All(packet => packet.Opcode is not (587 or 597 or 600 or 601)) &&
+                frames.Any(packet => packet is { Kind: 0, Opcode: 24 }) == (scene != "town") && frames.All(packet => packet.Opcode is not (587 or 597 or 600)) &&
                 frames.Where(packet => packet.Opcode == 596).All(packet => packet.Body.Length == 13 &&
                     packet.Body[0] is >= 1 and <= 3 && U32(packet.Body, 9) == 1 &&
                     U32(packet.Body, 5) < DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                "本服2400秒总超时沿原退场回城，仅允许按图已过期596清除，不猜失败587或奖励包");
+                "本服2400秒总超时先失败601再沿原退场回城，保留已过期596清除，不发失败587或奖励包");
+            int resultAt = frames.FindIndex(packet => packet is { Kind: 0, Opcode: 601 });
+            That(resultAt >= 0 && frames.Count(packet => packet is { Kind: 0, Opcode: 601 }) == 1 &&
+                frames.FindIndex(packet => packet.Opcode == 665) > resultAt &&
+                (scene == "town" || frames.FindIndex(packet => packet.Opcode == 24) > resultAt),
+                "两阶段图内、待命区与选图均实际写出一次601后才退场/665");
+            Bytes(frames[resultAt].Body, [1, checked((byte)phase), 0x60, 9, 0, 0, 0, 0, 2, 0],
+                "失败601精确10B，A1/F0及原阶段2400秒、0死亡和rank2沿封存统计");
             AntonTcpProbe.Barrier(peer, "超时退场完成");
             string prefix = phase == 0 ? "phase0" : "phase1";
             That(fixture.Query($"SELECT r.state,json_extract(r.{prefix}_receipt,'$.Eligible'),json_extract(r.{prefix}_receipt,'$.Reason'),r.clear_week FROM character_raid_runs r JOIN characters c ON c.id=r.character_id WHERE c.account=$p0", account)
@@ -135,7 +142,7 @@ internal static partial class AntonRaidGapTcpTests
                 "超时已清原团与分队，成员可以重新建团");
             clock.Advance(600);
             var rest = AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED休息边界");
-            That(rest.All(packet => packet.Opcode is not (587 or 596 or 597 or 665)) && failed == fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2"),
+            That(rest.All(packet => packet.Opcode is not (587 or 596 or 597 or 601 or 665)) && failed == fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2"),
                 "UNIMPLEMENTED：600声明不擅自重开失败阶段、自动换phase或签发新事件");
             That(assets == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") &&
                 receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2"), "超时与重复请求不扣票、退款或发奖");

@@ -175,6 +175,9 @@ internal static class AntonRaidResourceTests
             registered.Dungeons.All(row => registered.EntryCatalog.Find(row.Id) is not null) &&
             AntonRaidMapPaths.Paths.Keys.All(id => dungeons.MapPath(id) is null) && !dungeons.ContainsDungeon(210),
             "应用显式登记后14团本定义可用、两处MissingMaps归零，普通主目录与原缺DGN诊断不变");
+        That(registered.Dungeons.All(row => registered.EntryCatalog!.Find(row.Id) is { CoinLimit: 12 } dungeon &&
+            dungeon.RawSections.All(section => section.Tag is not ("coin info" or "character coin limit"))),
+            "正式14图最终coin limit均为12，未声明个人计数或个人额度，沿客户端缺省共享Run总数");
         var blacksmoke = registered.EntryCatalog!.Find(210)!.Mazes.Single().MapSpecification!;
         var rooms = SelfTestCatalogs.Rooms(pvf);
         That(blacksmoke.Select(map => map.Id).SequenceEqual(new[] { 32200, 32202, 32201, 32204 }) &&

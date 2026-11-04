@@ -26,6 +26,19 @@ internal sealed partial class NativeChannel
             ? records.Select(row => (Row: row, State: NativeObjectStates.TryRead(row,
                 initial.Snapshot.CurrentMap.Position, out var state) ? state : null)).Where(x => x.State is not null).ToArray()
             : [];
+        var objectSpawns = initial.Entry.RaidEntry is { Kind: RaidKind.Anton }
+            ? records.Select(row => NativePassiveObjectSpawns.TryRead(row, initial.Snapshot.CurrentMap.Position, out var batch)
+                ? batch : null).Where(batch => batch is not null).Select(batch => new AntonNativeObjectSpawnBatch(
+                    batch!.RoomX, batch.RoomY, [.. batch.Rows.Select(row => new AntonNativeObjectSpawn(row.Template,
+                        row.ObjectKind, row.ObjectKey, row.PositionMode, row.X, row.Y, row.Z))])
+                    { SourceKind = batch.SourceKind, SourceKey = batch.SourceKey, ParentKind = batch.ParentKind,
+                        ParentKey = batch.ParentKey, Mode = batch.Mode, Tick = batch.Tick }).ToArray()
+            : [];
+        var objectDestructions = initial.Entry.RaidEntry is { Kind: RaidKind.Anton }
+            ? records.Select(row => NativeObjectDestructions.TryRead(row, initial.Snapshot.CurrentMap.Position, out var destruction)
+                ? destruction : null).Where(row => row is not null).Select(row =>
+                    new AntonNativeObjectDestruction(row!.ObjectKind, row.ObjectKey, row.Room)).ToArray()
+            : [];
         var party = origin.PartyDungeon;
         if (party is null && (!ReferenceEquals(origin, destination) || records.Any(row => row.Appearance is null && row.Kind != 0))) return false;
         if (party is not null && !ReferenceEquals(party, destination.PartyDungeon)) return false;
@@ -35,6 +48,7 @@ internal sealed partial class NativeChannel
             return false;
         var partyGate = party is null ? null : origin.CurrentParty?.Invoke()?.Commands;
         if (party is not null && partyGate is null) return false;
+        bool energyChanged = false, published = false;
         if (partyGate is not null) await partyGate.WaitAsync(source.Context.Stop);
         try
         {
@@ -61,6 +75,8 @@ internal sealed partial class NativeChannel
                     bool sent = target.Post(NativeFrame.Build(source.Entry.Token, targetEntry.Token, body), CanSend);
                     if (sent)
                     {
+                        if (party is not null && (objectSpawns.Length != 0 || objectDestructions.Length != 0))
+                            energyChanged |= party.ObserveNativeObjects(origin, initial, objectSpawns, objectDestructions).EnergyChanged;
                         foreach (var observation in observations)
                         {
                             var result = source.StateObservations.Observe(initial.Snapshot.Identity,
@@ -78,11 +94,14 @@ internal sealed partial class NativeChannel
                             Npc = origin.ReadNpcFavorAppearance(capture!)?.NpcId });
                     return sent;
                 }
-                return party is null ? Publish() : party.Execute(_ => Publish());
+                published = party is null ? Publish() : party.Execute(_ => Publish());
             }
             finally { source.Context.CommandGate.Release(); }
         }
         finally { partyGate?.Release(); }
+        // 阶段发布可能取得全团owner；退出共享副本Execute及本次peer/command门禁后再发布。
+        if (energyChanged) origin.PublishRaidCombat();
+        return published;
 
         bool Current() => IsRegistered(source.Entry) && IsRegistered(targetEntry) && ReferenceEquals(source.Entry.Current, source) &&
             ReferenceEquals(targetEntry.Current, target) && ReferenceEquals(origin.PartyDungeon, party) &&

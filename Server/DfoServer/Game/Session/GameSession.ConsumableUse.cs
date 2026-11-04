@@ -20,7 +20,7 @@ internal sealed partial class GameSession
 
     bool CanAccessPortableCargo(InventoryListType list) =>
         list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
-        portableCargo is { } access && Ready && Selected is { } character &&
+        portableCargo is { } access && !AntonRejoinPresentationPending && Ready && Selected is { } character &&
         (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
@@ -39,7 +39,7 @@ internal sealed partial class GameSession
             (grief.GriefItems ?? throw new InvalidOperationException("悲叹实例缺少物品使用规则")).CommitUse(itemId);
     }
 
-    bool CanUseConsumable() => pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
+    bool CanUseConsumable() => !AntonRejoinPresentationPending && pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.HasPendingFatigue != true &&
         formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true;
 

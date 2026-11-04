@@ -14,14 +14,14 @@ internal static partial class AntonRaidGapTcpTests
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-10-28T00:00:00Z"));
         await using var fixture = await BootAsync(source, root, resources, "anton-raid-phase1",
             """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
-        Create(fixture, resources, "phaseformal", "PhaseFormal", 2);
+        Create(fixture, resources, "phaseformal", "PhaseFormal", 2, pcroom: true);
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
         var raidResources = DfoServer.GameWorld.Raids.RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main,
             resources.ItemResources.Items, antonMapPath: DfoServer.GameWorld.Raids.AntonRaidMapPaths.Bind(main.MapPath),
             antonMapPoolPaths: DfoServer.GameWorld.Raids.AntonRaidMapPaths.Paths).Find(0)!.Resources!;
         var catalog = raidResources.EntryCatalog!;
         using var peer = Open(fixture, "phaseformal", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
-        peer.Select(); AntonRaidTcpTests.Drain(peer);
+        peer.Select(premiumPcRoom: true); AntonRaidTcpTests.Drain(peer);
         var report = AntonTcpProbe.Play(peer, catalog, "start");
         // 583消费者0237F210原样SET；按真实PVF逐图核对，避免把已清次数当成剩余HP。
         foreach (var dungeon in raidResources.Script.Phases[0].Dungeons)
@@ -170,10 +170,13 @@ internal static partial class AntonRaidGapTcpTests
             returning.All(p => p is not { Kind: 0, Opcode: 587, Body: [2, 1] }),
             "未领完回城保持原Reward，不代领另一kind或推进阶段");
         AntonTcpProbe.RejectClosed(peer, null, 218);
-        Claim(0, 0, true);
+        Claim(0, 0, false);
+        That(townAssets == Assets(), "候战室自然kind0只确认空牌背，不代领小队3");
+        Claim(2, 0, true);
         foreach (var dungeon in raidResources.Script.Phases[1].Dungeons)
             AssertHp(dungeon.Id, dungeon.HpRaw);
         foreach (int dungeon in new[] { 220, 221, 222, 223, 224 }) AntonTcpProbe.RejectClosed(peer, null, dungeon);
+        VerifyBatteryObserver(peer, catalog);
         AntonTcpProbe.Enter(peer, catalog, 218, report, clear: true, leave: false);
         AssertState(report, 218, 0);
         int hpSymbol = raidResources.Script.Symbols["[218 dgn hp]"];
@@ -185,11 +188,11 @@ internal static partial class AntonRaidGapTcpTests
         byte[] energy = [110, 0, 0, 0, 0xB8, 0x0B, 0, 0, 2];
         peer.Send(662, energy);
         var energyReply = AntonTcpProbe.Barrier(peer, "218终末Last能量报告");
-        That(energyReply.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == 7000),
+        That(energyReply.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == 6900),
             "正式218通关后110减3000，保持HP0剩余语义");
         peer.Send(662, energy);
         var duplicateEnergy = AntonTcpProbe.Barrier(peer, "同Run重复Last");
-        That(duplicateEnergy.Where(p => p is { Kind: 0, Opcode: 583 }).All(p => Energy(p.Body) == 7000),
+        That(duplicateEnergy.Where(p => p is { Kind: 0, Opcode: 583 }).All(p => Energy(p.Body) == 6900),
             "同Run重复报告不再扣能量");
         static int Energy(byte[] body)
         {
@@ -199,6 +202,7 @@ internal static partial class AntonRaidGapTcpTests
             return -1;
         }
         peer.Send(42); AntonTcpProbe.Barrier(peer, "218回候战室");
+        VerifyConstructorLast(peer, catalog, report, clock);
         int volcanoMap = report.Maps.Count;
         AntonTcpProbe.Enter(peer, catalog, 219, report, clear: true);
         That(U32(report.Maps[volcanoMap], 14) == 19206 && report.Maps[volcanoMap][0] == 0 && report.Maps[volcanoMap][1] == 1,
@@ -216,8 +220,8 @@ internal static partial class AntonRaidGapTcpTests
         peer.Send(117, report.LastClearCheck!); AntonTcpProbe.Barrier(peer, "重复最终clear");
         That(completed == fixture.Snapshot("SELECT * FROM character_raid_runs"), "重复最终通关不增加次数或改奖励");
         peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "阶段二影片完成");
-        Claim(1, 1, false); Claim(0, 1, true);
-        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]], "两阶段两独立牌种完整实际提交四笔");
+        Claim(1, 1, false); Claim(0, 1, false); Claim(2, 1, true);
+        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[6L]], "PC成员两阶段团队1、PC房2及自动小队3完整提交六笔");
         string finalAssets = Assets();
         Claim(0, 1, false);
         That(finalAssets == Assets() && completed == fixture.Snapshot("SELECT * FROM character_raid_runs"), "Completed同牌重放不改资产或通关次数");
@@ -233,14 +237,16 @@ internal static partial class AntonRaidGapTcpTests
         That(AntonTcpProbe.Barrier(peer, "Completed回城后的旧重试及回城").All(p => p.Opcode is not (72 or 28 or 29)),
             "旧菜单不能在Completed后安装新Run或重复成功");
         peer.Dispose(); await fixture.StopAsync();
+        // 旧实例回收必须在同进程宿主完全停止后、重开新宿主前核对：时钟为两份宿主共用，
+        // 重开后的周签到等活动轮询是当前连接的合法one-shot，不能与旧实例残留混为一谈。
+        int callbacks = clock.Callbacks; clock.Advance(3600);
+        That(clock.Callbacks == callbacks, "结束/Host停止后旧实例时钟已回收");
         _ = new CharacterRepository(fixture.Database);
         That(finalAssets == Assets() && completed == fixture.Snapshot("SELECT * FROM character_raid_runs"), "重开仓储保留完整资产、阶段事件、冻结奖励和最终周通关");
         await fixture.StartAsync("reopened");
         using var reopened = Open(fixture, "phaseformal", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
-        reopened.Select(); AntonRaidTcpTests.Drain(reopened);
+        reopened.Select(premiumPcRoom: true); AntonRaidTcpTests.Drain(reopened);
         That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE raid_type=0 AND state=2") is [[1L]], "重建Host不重计最终通关");
-        int callbacks = clock.Callbacks; clock.Advance(3600);
-        That(clock.Callbacks == callbacks, "结束/Host停止后旧实例时钟已回收");
 
         void AssertHp(int id, int expected)
         {

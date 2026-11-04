@@ -274,15 +274,21 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             try { inventory.RefreshAsync(context, receipt.Inventory).GetAwaiter().GetResult(); }
             catch (IOException) { context.Disconnect(); return; }
             if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
-            // 普通团非空600第一尾尚未闭合；保留真实资产与回执，不发8B错误结果。
-            if (AntonRewardPackets.TryFrozenResult(receipt.Prepared.Kind, receipt.Prepared.Character, receipt.Prepared.Card,
-                receipt.Prepared.Grants, out var body, out var missing))
-                sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST, body, "raid_reward_display",
-                    () => session.CanPublishRaidReward(receipt) && session.RaidCombatView() is
-                        { State: DfoServer.Game.Raids.AntonRaidBattleState.Reward } view && view.Phase == receipt.Prepared.Phase);
-            else
-                log.Write("raid_reward_display_unimplemented", new { Connection = context.Id, receipt.Prepared.Phase,
-                    receipt.Prepared.Kind, Reason = "anton-general600-tail1-unverified", MissingFields = missing });
+            // 由已提交资产显式选择普通可见16B展示，自动确认不会重抽或伪造660请求。
+            // state4前已预填全员密封权益，自动发本人资产不能再覆盖成单行团队表。
+            if (receipt.Prepared.Kind != 3 || receipt.Prepared.Source != DfoServer.Game.Raids.AntonResourceRewards.Source)
+            {
+                if (AntonRewardPackets.TryFrozenResult(receipt.Prepared.Kind, receipt.Prepared.Character, receipt.Prepared.Card,
+                    receipt.Prepared.Grants, out var body, out var missing))
+                    sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST, body, "raid_reward_display",
+                        () => session.CanPublishRaidReward(receipt) && session.RaidCombatView() is
+                            { PhaseExpired: false } view && view.Phase == receipt.Prepared.Phase &&
+                            view.State is DfoServer.Game.Raids.AntonRaidBattleState.Reward or
+                                DfoServer.Game.Raids.AntonRaidBattleState.Intermission or DfoServer.Game.Raids.AntonRaidBattleState.Completed);
+                else
+                    log.Write("raid_reward_display_rejected", new { Connection = context.Id, receipt.Prepared.Phase,
+                        receipt.Prepared.Kind, Reason = missing });
+            }
             log.Write("raid_reward_committed", new { Connection = context.Id, receipt.Prepared.Instance,
                 receipt.Prepared.Phase, receipt.Prepared.Kind, receipt.Prepared.Card, receipt.Commit.Duplicate, Automatic = true });
         };

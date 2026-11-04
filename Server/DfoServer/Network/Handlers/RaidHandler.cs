@@ -228,16 +228,18 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         }
         var decision = Decide(actor, key);
         var recovery = decision.Matched && parties is not null ? registry.RestoreAnton(actor, key, rejoin, parties) : null;
+        if (recovery is { Restored: true, Party: not null })
+        {
+            await PublishAntonRejoinAsync(context, actor, key, recovery);
+            return CommandResult.Handled;
+        }
         log.Write("raid_rejoin_rejected", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
             decision.Reason, decision.OldEpoch, decision.NewEpoch, decision.Slot, decision.Squad,
             decision.OldSessionReleased, OwnerReplace = recovery?.Restored == true ? "bound-new-owner" : decision.OwnerReplace,
             LoadingBarrier = recovery is { Restored: true, Run: not null } ? "original-run-awaiting-client" : decision.LoadingBarrier, decision.Unknown,
             StateRestored = recovery?.Restored ?? false, StateReason = recovery?.Reason,
             Instance = recovery?.Instance, Run = recovery?.Run, Error = RaidPackets.CreateUnavailable });
-        // 副本协议668仅证明key:u32与空成功体；状态提交可完成，未知恢复包序仍不发猜测成功。
         await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
-        if (recovery?.Restored == true)
-            RaidCombatProjection.AntonTimersForScene(context, () => actor.IsCurrent, replayState: false);
         return CommandResult.Handled;
     }
 

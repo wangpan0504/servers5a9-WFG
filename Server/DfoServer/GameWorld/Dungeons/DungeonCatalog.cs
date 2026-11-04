@@ -9,7 +9,11 @@ internal readonly record struct DungeonPoint(int X, int Y);
 // Third 保留资源原值；018E6EDC区分非零消耗/零持有，多行AND/OR仍未接入。
 internal readonly record struct DungeonRequiredItemRow(int ItemId, int Count, int Third);
 // 迷宫 [randomized object creation] 中已闭合的单对象行。世界坐标来自 [pos]，[map] 只表示所在格。
-internal sealed record DungeonRandomizedObject(DungeonPoint Map, int ObjectId, string Team, int PositionX, int PositionY);
+internal sealed record DungeonRandomizedObject(DungeonPoint Map, int ObjectId, string Team, int PositionX, int PositionY)
+{
+    // 02A004B0消费29第五个u32：0为原骑乘初始化，1为Native21被动生成；模板命名空间不能代替此字段。
+    public int SpawnMode { get; init; }
+}
 internal sealed record DungeonMap(string Kind, DungeonPoint Position, int Id, string Path)
 {
     public int StoryStageIndex { get; init; } = -1;
@@ -60,6 +64,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonMap> ConditionalMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
     public IReadOnlyList<DungeonRandomizedObject> RandomizedObjects { get; init; } = [];
+    public IReadOnlyList<DungeonRandomizedObjectGroup> RandomizedObjectGroups { get; init; } = [];
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
@@ -98,7 +103,13 @@ internal sealed record DungeonMaze(
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
+        SameObjectGroups(RandomizedObjectGroups, other.RandomizedObjectGroups) &&
         IsBossRush == other.IsBossRush && IsInfernoSpecial == other.IsInfernoSpecial && SameEntrance(BossEntrance, other.BossEntrance);
+
+    static bool SameObjectGroups(IReadOnlyList<DungeonRandomizedObjectGroup> left, IReadOnlyList<DungeonRandomizedObjectGroup> right) =>
+        left.Count == right.Count && left.Zip(right).All(pair => pair.First.SelectCount == pair.Second.SelectCount &&
+            pair.First.Regenerate == pair.Second.Regenerate && pair.First.MinimapIcon == pair.Second.MinimapIcon &&
+            pair.First.Objects.SequenceEqual(pair.Second.Objects));
 
     static bool SameEntrance(DungeonBossEntrance? left, DungeonBossEntrance? right) =>
         left is null || right is null ? left is null && right is null :
@@ -133,8 +144,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
 {
     public int? LimitTimeSeconds => RawSections.Where(row => row.Tag == "limit time").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } seconds] }] ? seconds.Value : null;
-    public int? CoinLimit => RawSections.Where(row => row.Tag == "coin limit").ToArray() is
-        [{ Tokens: [{ Type: 0, Value: >= 0 } count] }] ? count.Value : null;
+    // 客户端逐段覆盖；舰炮先声明4，raid段再声明12，取最后一段而非拒绝重复标签。
+    public int? CoinLimit => RawSections.LastOrDefault(row => row.Tag == "coin limit") is
+        { Tokens: [{ Type: 0, Value: >= 0 } count] } ? count.Value : null;
     internal IReadOnlyList<int> PersonalCoinInfoLimits { get; init; } = [];
     public int? PersonalCoinInfoLimit(byte difficulty) => difficulty < PersonalCoinInfoLimits.Count
         ? PersonalCoinInfoLimits[difficulty] : null;
@@ -925,6 +937,7 @@ internal sealed class DungeonCatalog
             { IsBossRush = allowOffGridBoss, LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
+                RandomizedObjectGroups = DungeonRandomizedObjectGroups.Parse(mazeSections, resolve),
                 IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),
                 IsAncientInfiniteVariant = mazeSections.Any(row => row.Tag == "infinite difficulty"),
                 IsInfernoSpecial = mazeSections.Any(row => row.Tag == "inferno special" && row.Tokens.Count == 0),

@@ -22,6 +22,9 @@ internal static class SelfTestRunner
         await MapGeometryBatchHttpTests.RunCoreAsync();
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         await AntonSymbolProjectionTests.RunAsync();
+        AntonRaidEventLedgerTests.Run();
+        AntonDungeonRevivalTests.Run();
+        Testing.QuestAntonPhaseProgressTests.RunCore();
         CinematicDeathRulesTests.Run();
         await GmWebServerTests.RunClientPagesAsync();
         CharacterRenameCardTests.RunCore();
@@ -70,6 +73,8 @@ internal static class SelfTestRunner
         LukeRaidIntermissionTests.RunCore();
         ClientRequestSequenceTests.RunCore();
         NativeMonsterSpawnsTests.RunCore();
+        NativePassiveObjectLifecycleTests.RunCore();
+        AntonDungeonObjectTests.RunCore();
         Testing.PcRoomTests.RunCore();
         PcRoomRewardTests.RunCore();
         PcRoomQualificationTests.RunCore();

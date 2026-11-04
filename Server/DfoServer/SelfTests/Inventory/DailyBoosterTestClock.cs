@@ -33,6 +33,8 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
             Task signal;
             lock (sync)
             {
+                // count=0 表示等一次性定时器全部清空（调用方用它在取消/到期后确认已摘除），
+                // 不能用 >= 以免恒真直接放行。
                 if (timers.Count(row => row.Period == 0 && row.Due != long.MaxValue) == count) return;
                 signal = changed.Task;
             }
@@ -52,6 +54,22 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
             lock (sync)
             {
                 if (timers.Count(row => row.Period == 0 && row.Due == due) >= minimumCount) return;
+                signal = changed.Task;
+            }
+            await signal.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+    // 同一虚拟时钟服务多个连接时，边界唤醒必须等全部连接登记完毕；只等任一连接就推进，
+    // 会让尚未登记的连接按推进后的时刻重算延时，从而整段跳过该边界。
+    public async Task WaitForOneShotTimersAsync(DateTimeOffset dueAt, int count)
+    {
+        long due = (dueAt - origin).Ticks;
+        while (true)
+        {
+            Task signal;
+            lock (sync)
+            {
+                if (timers.Count(row => row.Period == 0 && row.Due == due) >= count) return;
                 signal = changed.Task;
             }
             await signal.WaitAsync(TimeSpan.FromSeconds(5));

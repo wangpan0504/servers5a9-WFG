@@ -15,7 +15,8 @@ internal sealed partial class GameSession
     public PartyDungeonInstance? PartyDungeon { get; private set; }
     Guid? partyDungeonRun;
     public Func<PartyDungeonNotice, Task>? PartyDungeonNoticeArrived { get; set; }
-    bool CanMutatePartyDungeon => (PartyDungeon is null || PartyDungeon.IsExecuting) && formalDungeon?.Run.FiendwarObjectKeys?.RecoveryRequired != true;
+    bool CanMutatePartyDungeon => (PartyDungeon is null || PartyDungeon.IsExecuting) && !AntonRejoinPresentationPending &&
+        formalDungeon?.Run.FiendwarObjectKeys?.RecoveryRequired != true;
 
     internal bool CanBeginPartySelection() => owner.Execute(() => Ready && Selected is not null &&
         CanUseEvildomWarChallengeEntrance() &&
@@ -53,7 +54,7 @@ internal sealed partial class GameSession
     }
 
     internal bool CanMoveWithParty() => owner.Execute(() => Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
-        formalDungeon is { } dungeon && !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
+        !AntonRejoinPresentationPending && formalDungeon is { } dungeon && !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
         !HasPendingQuestScene && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue && dungeon.Run.FiendwarObjectKeys?.RecoveryRequired != true);
 
     internal bool CanCompletePartyLoading() => owner.Execute(() => Ready && formalDungeon is { } dungeon &&

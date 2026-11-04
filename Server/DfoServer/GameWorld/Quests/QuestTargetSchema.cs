@@ -132,7 +132,7 @@ internal static class QuestTargetSchema
                 result = data is [> 0] && sub is -1 or 0 or 7 ? Parsed() with { Initial = (uint)data[0] } : Invalid("决斗累计需要正场次与已确认模式"); break;
             case QuestTargetKind.RaidPhaseClear:
                 result = data.Count >= 4 && data.Count % 4 == 0 && data.Where((_, at) => at % 4 == 1).All(value => value is >= 0 and <= 3)
-                    ? Parsed() : Pending("攻坚阶段需要四元组；第三项不能直接认作累计次数"); break;
+                    ? Parsed() : Pending("攻坚阶段需要阶段、攻坚类型、目标次数和参与身份四元组"); break;
             case QuestTargetKind.Question:
                 result = quest.Npc > 0 && data is [> 0] ? Parsed() : Invalid("问题需要独立NPC字段和已确认整数形状"); break;
             case QuestTargetKind.UseSkill:

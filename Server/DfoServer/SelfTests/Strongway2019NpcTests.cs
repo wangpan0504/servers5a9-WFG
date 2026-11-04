@@ -95,9 +95,9 @@ internal static class Strongway2019NpcTests
             var now = clock.GetUtcNow();
             Gm($"event schedule 312 {now.AddSeconds(1):yyyy-MM-ddTHH:mm:sszzz} {now.AddSeconds(3):yyyy-MM-ddTHH:mm:sszzz}");
             RefreshBoth(false);
-            await clock.WaitForOneShotTimerAsync(now.AddSeconds(1));
+            await clock.WaitForOneShotTimersAsync(now.AddSeconds(1), 2);
             clock.Advance(TimeSpan.FromSeconds(1)); RefreshBoth(true);
-            await clock.WaitForOneShotTimerAsync(now.AddSeconds(3));
+            await clock.WaitForOneShotTimersAsync(now.AddSeconds(3), 2);
             clock.Advance(TimeSpan.FromSeconds(2)); RefreshBoth(false);
 
             void RefreshBoth(bool active)

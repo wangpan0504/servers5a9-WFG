@@ -224,7 +224,7 @@ internal static class RaidCombatPackets
         return body;
     }
 
-    // 安徒恩专用01DC8B70；不是023CA1B0的普通团本布局。660成功ACK另发单字节01。
+    // 单人/引导安徒恩的01DC8B70分支；普通20人安徒恩走AntonRewardPackets的023CA1B0公共16B门控。660成功ACK另发单字节01。
     public static byte[] Reward(byte kind, IReadOnlyList<RaidRewardDisplayRow> rows)
     {
         int size = checked(2 + rows.Sum(row => checked(4 + 8 * row.Items.Length)));

@@ -13,9 +13,9 @@ internal static partial class AntonRaidGapTcpTests
             var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-10-28T00:00:00Z"));
             await using var fixture = await BootAsync(source, root, resources, "anton-reward-timeout-" + partial,
                 """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
-            Create(fixture, resources, "timeoutcards", "TimeoutCards", 2);
+            Create(fixture, resources, "timeoutcards", "TimeoutCards", 2, pcroom: partial);
             using var peer = Open(fixture, "timeoutcards", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
-            peer.Select(); AntonRaidTcpTests.Drain(peer);
+            peer.Select(premiumPcRoom: partial); AntonRaidTcpTests.Drain(peer);
             var report = AntonTcpProbe.Play(peer, Catalog(resources), "reward");
             That(report.Reward, "正式阶段一成功进入Reward");
             clock.Advance(25);
@@ -50,11 +50,11 @@ internal static partial class AntonRaidGapTcpTests
                 "无人或部分选牌均只推进一次至原595秒休息");
             That(assets != fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") +
                 fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY phase,kind") &&
-                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]],
-                "到期在线成员自动提交两种冻结奖励，部分已领者不增发");
+                Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts")[0][0]) == (partial ? 3 : 2),
+                "到期在线普通成员提交1/3，部分领取PC成员补齐2/3，均不增发");
             peer.Send(660, [0, 0]);
             That(AntonTcpProbe.Barrier(peer, "超时后回放").Any(p => p is { Kind: 1, Opcode: 660, Body: [1] }) &&
-                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]],
+                Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts")[0][0]) == (partial ? 3 : 2),
                 "休息态重放到期已提交回执，不增发");
             peer.Send(666);
             That(AntonTcpProbe.Barrier(peer, "休息后准备").Any(p => p is { Kind: 1, Opcode: 666, Body: [1] }),

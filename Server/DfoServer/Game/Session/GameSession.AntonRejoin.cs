@@ -25,7 +25,7 @@ internal sealed partial class GameSession
                 if (fact is null || CurrentParty?.Invoke() is not { } party ||
                     party.Members.SingleOrDefault(m => ReferenceEquals(m.Actor.Session, this)) is not { } own ||
                     AntonRaidBattle.AntonMemberReservation.Capture(combat.Battle, combat.Actor, fact.Run) is not { } member ||
-                    formalDungeon is { } dungeon && (ScriptedNavigationBlocked(dungeon) || dungeon.PendingDeathReward is not null ||
+                    formalDungeon is { } dungeon && (ScriptedNavigationBlocked(dungeon, allowDead: true) || dungeon.PendingDeathReward is not null ||
                         dungeon.PendingQuestDrop is not null || dungeon.PendingInventoryDiscard is not null)) return false;
                 var state = new AntonRejoinState(this);
                 preparedAntonDisconnect = fact with { Anton = new(combat.Actor, combat.Battle, member, state, party.Id,
@@ -103,6 +103,7 @@ internal sealed partial class GameSession
                     // 恢复已有Run的合法阶段，不调用会清理Run的普通城镇切换，也不伪造加载ACK。
                     _ = UserStatePolicy.Read(phase, true, true, false, dungeon.Run.Phase, false);
                     target.Phase = phase;
+                    target.antonRejoinPresentation = new(actor.Owner.Generation, actor.Epoch, dungeon.Run.Snapshot.Identity);
                 }
                 return true;
             }

@@ -16,7 +16,9 @@ internal static class RaidRewardRules
 internal sealed record RaidRewardDisplayItem(byte RawCode, uint ItemId, ushort DisplayValue, byte RawFlag);
 internal sealed record RaidRewardDisplayRow(ushort RawOwner, byte Card, ImmutableArray<RaidRewardDisplayItem> Items);
 // 601：KB-20261026T063752-4691836ed4，C只证秒制显示，D只证整数，E只证rank动画选择。
-// 读宽不独立证明业务值；Anton在结算候选冻结阶段用时/死亡，RawFlag不表示已领奖。
+// 读宽不独立证明业务值；Anton在结算候选冻结阶段用时/死亡。
+// F经F==0写任务管理器+39C，抑制[raid phase clear]；非零允许继续匹配，不表示已领奖。
+// 原生601成功分支发布阶段任务事件；正式Anton仅在阶段资格与任务同事务提交后允许该事件。
 internal sealed record RaidResultDisplay(byte Result, byte Phase, uint Seconds, ushort RawValue, byte Rank, byte RawFlag);
 internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<InventoryReward> Grants,
     ImmutableArray<RaidRewardDisplayRow> Display)
@@ -48,4 +50,8 @@ internal interface IRaidRewardStore
 
 // 每阶段资格独立冻结；不是资产计划，也不以领取次数代替最终通关次数。
 internal sealed record RaidPhaseEligibility(Guid Instance, RaidKind RaidType, int Phase, Guid Event, long Anchor,
-    ushort Character, bool CountsAsClear, bool Eligible, string Reason, string Source, int Week, ImmutableArray<RaidRewardOffer> Offers);
+    ushort Character, bool CountsAsClear, bool Eligible, string Reason, string Source, int Week, ImmutableArray<RaidRewardOffer> Offers)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public AntonPhaseQuestProgress? AntonQuestProgress { get; init; }
+}

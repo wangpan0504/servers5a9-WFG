@@ -674,6 +674,23 @@ internal sealed partial class TcpPeer : IDisposable
         Closed();
     }
 
+    // 入场回滚用例既允许先收到队伍名册删除NOTI9再关闭，也允许事务失败后直接干净关闭：
+    // 生产关闭连接时会丢弃尚未冲刷的写队列，两种顺序都不改变回滚业务断言。
+    public void ClosedAfterOptionalPartyRemoval()
+    {
+        int first;
+        try { first = stream.ReadByte(); }
+        catch (IOException e) when (e.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted })
+        {
+            TestCheck.That(true, "connection reset after rejection");
+            return;
+        }
+        if (first < 0) { Closed(); return; }
+        var packet = ReadCore(channelNumber, first);
+        TestCheck.That(packet is { Kind: 0, Opcode: 9 }, "回滚关闭前若仍有通知，只能是队伍名册NOTI9");
+        Closed();
+    }
+
     public void Closed()
     {
         try
