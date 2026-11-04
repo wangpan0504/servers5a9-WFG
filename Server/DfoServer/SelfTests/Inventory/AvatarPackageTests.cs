@@ -86,6 +86,35 @@ internal static class AvatarPackageTests
             "混合分类仍拒绝未经证明的部分自选合同");
         That(Package("101 1 3 0\n[/avatar]\n[unknown reward]\n103 1\n[/unknown reward]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
             "未知混合奖励段继续拒绝，不生成截断的装扮子集");
+        string stacked = "101 1 3 0\n[/avatar]\n[stackable]\n103 10\n[/stackable]\n[stackable]\n104 2\n[/stackable]\n[avatar]\n102 1 3 0";
+        var stackedDefinition = Package(stacked);
+        var stackedCategory = stackedDefinition.Categories[0];
+        That(stackedCategory.PendingRule is null && stackedCategory.RowCount == 4 &&
+            stackedCategory.StackableRows.SequenceEqual(new AvatarPackageStackableRow[] { new(103, 10), new(104, 2) }) &&
+            InventoryAvatarPackageService.TrySelect(stackedDefinition, stackedCategory, [104, 101, 103, 102],
+                out var stackedAvatars, out var stackedEquipment, out var stackedMaterials, out var stackedCreatures, out var stackedItems) &&
+            stackedAvatars.Length == 2 && stackedEquipment.Length == 0 && stackedMaterials.Length == 0 && stackedCreatures.Length == 0 && stackedItems.SequenceEqual(stackedCategory.StackableRows),
+            "混合装扮的多个stackable块保留原顺序、数量与完整选择，不截断后续奖励");
+        var combinedRows = Package(stacked.Replace("[stackable]\n104 2\n[/stackable]", "[etc]\n104 2\n[/etc]"))
+            .Categories[0];
+        That(combinedRows.PendingRule is null && combinedRows.MaterialRows is [{ ItemId: 104, Count: 2 }] && combinedRows.StackableRows is [{ ItemId: 103, Count: 10 }] &&
+            Package(stacked.Replace("[stackable]\n104 2\n[/stackable]", "[etc]\n103 2\n[/etc]"))
+                .Categories[0].PendingRule is not null,
+            "etc与stackable共存时保留两段原序，跨标签重复奖励仍整类拒绝");
+        That(!InventoryAvatarPackageService.TrySelect(stackedDefinition, stackedCategory, [101, 102], out _) &&
+            !InventoryAvatarPackageService.TrySelect(stackedDefinition, stackedCategory, [101, 102, 103, 104], out _, out _) &&
+            !InventoryAvatarPackageService.TrySelect(stackedDefinition, stackedCategory, [101, 102, 103], out _, out _, out _) &&
+            !InventoryAvatarPackageService.TrySelect(stackedDefinition, stackedCategory, [101, 102, 103, 103], out _, out _, out _) &&
+            Package(stacked, 1).Categories[0].PendingRule is not null,
+            "混合stackable仍拒绝旧入口截断、缺项、重复与未经确认的部分自选");
+        foreach (string malformed in new[] { "103", "103 0", "-1 1", "103 65536", "101 1", "103 1 103 1" })
+            That(Package("101 1 3 0\n[/avatar]\n[stackable]\n" + malformed + "\n[/stackable]\n[avatar]\n102 1 3 0")
+                .Categories[0].PendingRule is not null, "stackable行拒绝坏宽度、数量、编号和跨种类冲突");
+        That(Package(stacked.Replace("[/stackable]", "[/etc]")).Categories[0].PendingRule is not null,
+            "stackable不混用结束标记");
+        That(Package(stacked.Replace("[stackable]", "[creature]").Replace("[/stackable]", "[/creature]"))
+                .Categories[0].CreatureRows.SequenceEqual(new AvatarPackageCreatureRow[] { new(103, 10), new(104, 2) }),
+            "已支持的宠物段继续独立保留，不因堆叠段整合回退");
         foreach (string equipment in new[] { "103", "103 0", "-1 1", "103 65536", "101 1", "103 1 103 1" })
             That(Package("101 1 3 0\n[/avatar]\n[equipment]\n" + equipment + "\n[/equipment]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
                 "混合装备行拒绝坏宽度、数量、编号和种类冲突");

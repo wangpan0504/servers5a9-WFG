@@ -39,6 +39,12 @@ internal static class MaterialAvatarPackageTests
         var definition = AvatarPackageCatalog.Parse(declared);
         That(definition.Available && definition.Categories is [{ PendingRule: null, RowCount: 3 }],
             "#976完整三Kind声明总行数3，etc不能只删Pending后从解析结果丢失");
+        var stackable = AvatarPackageCatalog.Parse(declared.Replace("[etc]", "[stackable]").Replace("[/etc]", "[/stackable]"));
+        That(stackable.Categories is [{ PendingRule: null, RowCount: 3 }] &&
+            stackable.Categories[0].MaterialRows.IsEmpty &&
+            stackable.Categories[0].StackableRows.Select(row => (row.ItemId, row.Count))
+                .SequenceEqual(definition.Categories[0].MaterialRows.Select(row => (row.ItemId, row.Count))),
+            "stackable材料声明与etc共用真实Kind分派，保留原ID及数量");
         foreach (string invalid in new[]
         {
             declared.Replace("3330 100", "3330"),
