@@ -40,6 +40,8 @@ internal static class FriendlyAiCharacterDeathTests
             That(f.Session.ObserveFormalDungeonDeath(mixed,kills,growth).Outcome == DungeonRunOutcome.Rejected &&
                 QuestCompletionRepositoryTests.Same(initial,f.Read()),"加载前友方来源不能授权死亡或落经验");
             var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            // 加载完成会结算房间疲劳并重载 Selected，后续断言以加载后的角色为基线。
+            var baseline = f.Session.Selected!;
             var unknown = mixed with
             {
                 MonsterKey = 65534, ReporterKey = 65533, BodySha256 = new string('B',64),
@@ -48,14 +50,14 @@ internal static class FriendlyAiCharacterDeathTests
             var beforeEmpty = f.Session.DungeonSnapshot!;
             That(Ignored(f.Session.ObserveFormalDungeonDeath(unknown,kills,growth),65534) &&
                 Ignored(f.Session.ObserveFormalDungeonScriptedDeath(new(65534,0x21,true,new string('C',64)),kills,growth),65534) &&
-                QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
+                QuestCompletionRepositoryTests.Same(baseline,f.Read()) && ReferenceEquals(baseline,f.Session.Selected) &&
                 beforeEmpty.Identity == f.Session.DungeonSnapshot!.Identity &&
                 beforeEmpty.LivingMonsters.SequenceEqual(f.Session.DungeonSnapshot!.LivingMonsters),
                 "未知目标普通/count0报告只审计忽略，不响应、不写成长、任务或清图状态");
             That(Empty(f.Session.ObserveFormalDungeonDeath(Source(receipt,actor,actor.ObjectKey,false),kills,growth),actor.ObjectKey) &&
                 !f.Session.DungeonSnapshot!.LivingMonsters.Contains(actor.ObjectKey) &&
                 Empty(f.Session.ObserveFormalDungeonScriptedDeath(new(actor.ObjectKey,0x21,true,new string('C',64)),kills,growth),actor.ObjectKey) &&
-                QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
+                QuestCompletionRepositoryTests.Same(baseline,f.Read()) && ReferenceEquals(baseline,f.Session.Selected) &&
                 beforeEmpty.Identity == f.Session.DungeonSnapshot!.Identity,
                 "友方APC普通死亡退场与count0重放空响应，只移除存活视觉对象，不改revision、经验或任务");
             var retried = mixed;
@@ -63,7 +65,7 @@ internal static class FriendlyAiCharacterDeathTests
             {
                 f.Sql("CREATE TRIGGER apc_growth_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'APC late growth failure'); END");
                 Reject<SqliteException>(() => f.Session.ObserveFormalDungeonDeath(mixed,kills,growth),"多来源死亡仍经真实成长事务，晚期故障整笔回滚");
-                That(QuestCompletionRepositoryTests.Same(initial,f.Read()) && ReferenceEquals(initial,f.Session.Selected) &&
+                That(QuestCompletionRepositoryTests.Same(baseline,f.Read()) && ReferenceEquals(baseline,f.Session.Selected) &&
                     f.Session.DungeonSnapshot!.LivingMonsters.Contains(enemies[0].ObjectKey),"失败保留在线快照、任务与存活目标，可原事实重试");
                 f.Sql("DROP TRIGGER apc_growth_fail");
                 retried = mixed with
@@ -75,7 +77,7 @@ internal static class FriendlyAiCharacterDeathTests
             var first = f.Session.ObserveFormalDungeonDeath(retried,kills,growth);
             var committed = f.Read();
             That(first.Outcome == DungeonRunOutcome.Accepted && first.Reward is not null &&
-                committed.Revision == initial.Revision+1 && committed.Learning.Experience == initial.Learning.Experience+first.Reward.Amount &&
+                committed.Revision == baseline.Revision+1 && committed.Learning.Experience == baseline.Learning.Experience+first.Reward.Amount &&
                 first.Receipt is not null && !f.Session.DungeonSnapshot!.LivingMonsters.Contains(enemies[0].ObjectKey),
                 "FFFF与APC多来源正常提交；SQL回滚后换0211或未知来源仍只提交一次真实敌人经验");
             foreach (var replay in new[]
@@ -149,7 +151,7 @@ internal static class FriendlyAiCharacterDeathTests
                 QuestCompletionRepositoryTests.Same(afterOldSource,f.Read()),"未选角仍拒绝死亡，来源审计不绕过会话owner与状态");
             f.Session.Select(0); f.Session.MarkReady();
             That(QuestCompletionRepositoryTests.Same(f.Session.Selected!,f.Read()) &&
-                f.Read().Learning.Experience > initial.Learning.Experience && f.Read().ActiveMainQuests.Single().QuestId == 3163,
+                f.Read().Learning.Experience > baseline.Learning.Experience && f.Read().ActiveMainQuests.Single().QuestId == 3163,
                 "重选恢复真实击杀经验和未伪造的任务状态");
         }
         Console.WriteLine($"PASS {Count-checks} 多职业来源审计、无奖励退场、跨实例重放与死亡事务断言（非实机）");

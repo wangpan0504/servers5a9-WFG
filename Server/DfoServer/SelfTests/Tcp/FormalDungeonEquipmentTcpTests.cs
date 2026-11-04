@@ -69,7 +69,7 @@ internal static partial class FormalDungeonTcpTests
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), 0);
             peer.Send(16, selection); peer.Expect(0, 28);
             byte[] map = peer.Expect(0, 29).Body;
-            Load(peer); peer.Expect(0, 36);
+            Load(peer, fatigue: false); peer.Expect(0, 36);
             int room = 0;
             foreach (var family in families)
             {
@@ -257,7 +257,7 @@ internal static partial class FormalDungeonTcpTests
                 if (map[0] == target.X && map[1] == target.Y) continue;
                 byte[] move = new byte[100]; move[0] = target.X; move[1] = target.Y;
                 peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                Load(peer); peer.Expect(0, 36);
+                Load(peer, fatigue: false); peer.Expect(0, 36);
                 if (map.Length > 16) ClearRoom(map);
             }
             That(U32(map, 14) == 58553, "真实普通Boss房清图后进入结算阶段");

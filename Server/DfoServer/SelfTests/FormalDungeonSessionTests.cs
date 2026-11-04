@@ -918,11 +918,12 @@ internal static partial class FormalDungeonSessionTests
                 f.Session.BeginDungeonSelection();
                 var before = f.Session.Selected!;
                 var entry = Enter(f);
-                Check(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.Phase == SessionPhase.Dungeon &&
+                var loaded = f.Session.CompleteFormalDungeonLoading();
+                Check(loaded is not null && f.Session.Phase == SessionPhase.Dungeon &&
                     entry.Character.Job == identity.Job && entry.Character.GrowType == identity.Grow &&
                     entry.Character.DungeonState!.LastAttempt == 1 && entry.Character.Revision == before.Revision + 1 &&
                     Same(before with { Revision = entry.Character.Revision, DungeonState = entry.Character.DungeonState }, entry.Character) &&
-                    Same(entry.Character, f.Read()),
+                    Same(f.Session.Selected!, f.Read()),
                     $"特殊职业/转职{identity.Job}/{identity.Grow}允许真实准入加载，保留原技能状态而不伪造初始化");
                 Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town &&
                     f.Session.DungeonSnapshot is null && f.Count() == 0 && Same(f.Session.Selected!, f.Read()),
@@ -1059,7 +1060,9 @@ internal static partial class FormalDungeonSessionTests
 
         void ObjectKeyReuse()
         {
-            using var f = new Fixture("KeyReuse", towns, characters, learning, quests);
+            // 500次连续入场只验证对象key单调与跨局复用，房间疲劳不是本用例对象；按调试开关恒满疲劳隔离。
+            using var f = new Fixture("KeyReuse", towns, characters, learning, quests,
+                debugSettings: new DfoServer.Game.Settings.GameDebugSettings { InfiniteFatigue = true });
             var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             var plan = new DungeonDropGenerationPlan("key-reuse-fixture", [new(10000, null, 15, 15, new(1, 1, 0))]);
             FormalDungeonReceipt? previous = null;
@@ -1663,7 +1666,8 @@ internal static partial class FormalDungeonSessionTests
             committed, exactChangesOnly, coldMatches, assertions = TestCheck.Count - beforeChecks }));
 
         static long CountItem(Character character, int item) => character.Inventory.Items
-            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count) +
+            character.Inventory.AccountWallet.Material(item).Balance;
         static long CubeBalance(Character character) => DfoServer.Game.Currency.CurrencyWallet.Get(character.Inventory,
             DfoServer.Game.Currency.CurrencyKind.ClearCube);
         static Character Normalize(Character character) => character with
@@ -1836,7 +1840,8 @@ internal static partial class FormalDungeonSessionTests
             fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
         }
         static long CountItem(Character character, int item) => character.Inventory.Items
-            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count) +
+            character.Inventory.AccountWallet.Material(item).Balance;
     }
 
     // 只比较本用例现有临时文件库，覆盖全部表的行及审计，不建立另一套持久模型。
@@ -2024,7 +2029,8 @@ internal static partial class FormalDungeonSessionTests
             fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
         }
         static long CountItem(Character character, int item) => character.Inventory.Items
-            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count) +
+            character.Inventory.AccountWallet.Material(item).Balance;
 
     }
 
@@ -2233,7 +2239,8 @@ internal static partial class FormalDungeonSessionTests
             JsonSerializer.Serialize(Normalize(first)) == JsonSerializer.Serialize(Normalize(second));
 
         static long CountItem(Character character, int item) => character.Inventory.Items
-            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count) +
+            character.Inventory.AccountWallet.Material(item).Balance;
 
         // 只比较本用例现有临时文件库，覆盖全部表的行及审计，不建立另一套持久模型。
         static string SqlSnapshot(Fixture fixture)
@@ -2576,12 +2583,22 @@ internal static partial class FormalDungeonSessionTests
             int previous = before.Inventory.ShopPurchases.SingleOrDefault(value => value.ItemId == row.Item)?.Count ?? 0;
             bool quota = row.Limit is null ? after.Inventory.ShopPurchases.IsEmpty : after.Inventory.ShopPurchases is [{ } key] &&
                 key == new ShopPurchaseCount(nolan, row.Item, true, false, 0, previous + count);
+            // 账号共通材料不占Main实体：ACK21只带核心和购买计数，余额沿563发布，不伪造背包UID。
+            bool accountMaterial = itemResources.Items.Get(row.Item).AccountMaterial is not null;
             var received = receipt is null ? null : after.Inventory.Find(receipt.Position);
+            bool delivery = receipt is not null && (accountMaterial
+                ? received is null && receipt.Position == new InventorySlot(InventoryListType.Main, -1) &&
+                    receipt.Core is { } grantedCore && grantedCore.ItemId == row.Item && grantedCore.Count == count
+                : received is { Uid: > 0 } && received.Core == receipt.Core &&
+                    receipt.Position != new InventorySlot(InventoryListType.Main, -1));
             var allowed = before with { Revision = before.Revision + 1, Inventory = before.Inventory with
-                { Items = after.Inventory.Items, ShopPurchases = after.Inventory.ShopPurchases } };
+                {
+                    Items = after.Inventory.Items, ShopPurchases = after.Inventory.ShopPurchases,
+                    AccountWallet = accountMaterial ? after.Inventory.AccountWallet : before.Inventory.AccountWallet
+                } };
             Check(result.Accepted && result.Receipt is { } committed && session.CanPublishInventory(committed) &&
-                receipt is not null && receipt.ItemId == row.Item && receipt.Count == count && received is { Uid: > 0 } &&
-                received.Core == receipt.Core && CountItem(after, material) == CountItem(before, material) - (long)row.Cost * count &&
+                receipt is not null && receipt.ItemId == row.Item && receipt.Count == count && delivery &&
+                CountItem(after, material) == CountItem(before, material) - (long)row.Cost * count &&
                 CountItem(after, row.Item) == CountItem(before, row.Item) + count && quota && Same(allowed, after) &&
                 before.Inventory.Items.Where(item => item.Core.ItemId != material && item.Core.ItemId != row.Item)
                     .SequenceEqual(after.Inventory.Items.Where(item => item.Core.ItemId != material && item.Core.ItemId != row.Item)) &&
@@ -2594,7 +2611,8 @@ internal static partial class FormalDungeonSessionTests
             Check(result is { Accepted: false, Plan: null, Receipt: null } && result.Error == error &&
                 Same(before, f.Read()) && Same(before, f.Session.Selected!) && SqlSnapshot(f) == sql, name);
         static long CountItem(Character character, int itemId) => character.Inventory.Items
-            .Where(item => item.Core.ItemId == itemId).Sum(item => (long)item.Core.Count);
+            .Where(item => item.Core.ItemId == itemId).Sum(item => (long)item.Core.Count) +
+            character.Inventory.AccountWallet.Material(itemId).Balance;
     }
 
     internal static void VerifyLoginWearWindow(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)

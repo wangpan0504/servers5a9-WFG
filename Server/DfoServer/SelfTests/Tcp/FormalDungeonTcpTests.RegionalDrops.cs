@@ -44,7 +44,9 @@ internal static partial class FormalDungeonTcpTests
             using (var peer = Open(fixture))
             {
                 peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
-                SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, character));
+                SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, character),
+                    daybreakRemaining: resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.Any(option => option.DungeonId == 530)
+                        ? (byte)2 : null);
                 var request = new byte[25];
                 BinaryPrimitives.WriteUInt32LittleEndian(request, checked((uint)dungeonId));
                 request[9] = request[10] = byte.MaxValue;
@@ -52,7 +54,7 @@ internal static partial class FormalDungeonTcpTests
                 var information = peer.Expect(0, 28).Body;
                 var map = peer.Expect(0, 29).Body;
                 That(U32(information, 0) == dungeonId, "地区材料走真实普通16入场及Runtime装配");
-                Load(peer); peer.Expect(0, 36);
+                Load(peer, fatigue: false); peer.Expect(0, 36);
                 foreach (int offset in Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
                     .Where(offset => map[offset + 13] < 3 && map[offset + 14] == 0).Take(2))
                 {

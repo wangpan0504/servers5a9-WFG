@@ -5,10 +5,11 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection;
 
 internal sealed record RaidCombatDisplayIdentity(Game.Session.GameSession Session, Game.Accounts.AccountOwners.Lease Owner,
-    long SelectionEpoch, ushort Character, Guid Instance, int Phase, AntonRaidBattleState State, bool AntonPreparing)
+    long SelectionEpoch, ushort Character, Guid Instance, int Phase, AntonRaidBattleState State, bool AntonPreparing, bool PhaseExpired)
 {
     public static RaidCombatDisplayIdentity Capture(RaidActor actor, AntonRaidBattleView view) =>
-        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing || view.LukePreparing);
+        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing || view.LukePreparing,
+            view.PhaseExpired);
 }
 
 internal static partial class RaidCombatProjection

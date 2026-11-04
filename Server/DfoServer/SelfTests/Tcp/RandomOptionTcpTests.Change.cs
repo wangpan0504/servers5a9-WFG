@@ -88,7 +88,7 @@ internal static partial class RandomOptionTcpTests
             string before = Snapshot();
             peer.Send(437, [13, 0, 0, 0, 1]); peer.Expect(1, 437, [0, 19, 0]); peer.Barrier();
             That(Snapshot() == before, "加载中拒绝437，不让合法目标绕过user细阶段门禁");
-            FormalDungeonTcpTests.Load(peer); peer.Expect(0, 36);
+            FormalDungeonTcpTests.Load(peer, fatigue: false); peer.Expect(0, 36);
             Change(peer, 300);
         }
         void Change(TcpPeer peer, uint gold)

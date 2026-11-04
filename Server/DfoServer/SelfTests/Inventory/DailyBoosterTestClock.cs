@@ -40,15 +40,18 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
         }
     }
     // 推进虚拟时间前确认指定活动边界已注册，避免把尚未创建的延时永远留在未来。
-    public async Task WaitForOneShotTimerAsync(DateTimeOffset dueAt)
+    public Task WaitForOneShotTimerAsync(DateTimeOffset dueAt) => WaitForOneShotTimerAsync(dueAt, 1);
+    // 同期限的业务时钟必须均已注册；其他期限或额外活动时钟不影响本业务等待。
+    public async Task WaitForOneShotTimerAsync(DateTimeOffset dueAt, int minimumCount)
     {
+        if (minimumCount <= 0) throw new ArgumentOutOfRangeException(nameof(minimumCount));
         long due = (dueAt - origin).Ticks;
         while (true)
         {
             Task signal;
             lock (sync)
             {
-                if (timers.Any(row => row.Period == 0 && row.Due == due)) return;
+                if (timers.Count(row => row.Period == 0 && row.Due == due) >= minimumCount) return;
                 signal = changed.Task;
             }
             await signal.WaitAsync(TimeSpan.FromSeconds(5));

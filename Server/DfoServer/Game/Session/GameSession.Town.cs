@@ -77,7 +77,7 @@ internal sealed partial class GameSession
             (ChannelEntry?.Type != Characters.ChannelAreaLanding.EvildomWarChallengeType ||
                 !HasCurrentEvildomWarChallengeSeat(CurrentParty?.Invoke())))
         {
-            TravelReason = "evildom-war-challenge-four-members-required";
+            TravelReason = "evildom-war-challenge-party-required";
             return null;
         }
         if (plan.Position is { Town: 57, Area: >= 2 } && fiendwar is null)

@@ -42,6 +42,7 @@ internal static class DungeonSettlementSessionTests
         var expectedReward = clear.Calculate(definition, 0, 99);
         CommittedSettlement();
         ReturnWithoutSettlement();
+        RaidStatisticsIsolation();
         PublicationGuard();
         RetryCollectionRules();
         FreeCards(false);
@@ -60,6 +61,28 @@ internal static class DungeonSettlementSessionTests
         MaxedProficiencySettlement();
         AdventureSettlement();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
+
+        void RaidStatisticsIsolation()
+        {
+            using var f = new Fixture("RaidStats", towns, characters, learning, quests);
+            f.SelectEntry();
+            Check(f.Session.AcceptFiendwarPlayResult(f.Created.Id, 90, 90, [f.Created.Id]) is null,
+                "未入图的普通Session不能取得团本统计接纳资格");
+            Enter(f);
+            Check(f.Session.AcceptFiendwarPlayResult(f.Created.Id, 90, 90, [f.Created.Id]) is null,
+                "普通战斗Run不因合法统计格式获得团本清图资格");
+            ClearRun(f);
+            var beforeReport = f.Read();
+            long killsBefore = f.Kills;
+            Check(f.Session.AcceptFiendwarPlayResult(f.Created.Id, 90, 90, [f.Created.Id]) is null &&
+                Same(beforeReport, f.Read()) && f.Settlements == 0 && f.Kills == killsBefore,
+                "普通ClearFact不能走漩涡统计接纳或绕过正式奖励事务");
+            using var replacement = f.TakeOver();
+            Reject<InvalidOperationException>(() => f.Session.AcceptFiendwarPlayResult(f.Created.Id, 90, 90, [f.Created.Id]),
+                "接管后的旧owner仍被原租约边界拒绝，不能发布旧Run统计");
+            Check(Same(beforeReport, f.Read(replacement)) && f.Settlements == 0 && f.Kills == killsBefore,
+                "旧owner统计请求不写新owner角色或原死亡/结算账本");
+        }
 
         void PremiumCards(bool member,bool full)
         {

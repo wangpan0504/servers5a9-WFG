@@ -101,7 +101,7 @@ internal sealed partial class SinglePlayerDungeonRun
             (entry.DungeonId is >= 291100339 and <= 291100364 or >= 5350 and <= 5358));
 
     internal bool IsEvildomWarChallengeDynamic => entry.DungeonId == EvildomWarChallengeEntryPolicy.DungeonId &&
-        entry.Difficulty == 2 && entry.IsOrdinary && entry.RaidEntry is null && entry.PartyMemberCount == 4 &&
+        entry.Difficulty == 2 && entry.IsOrdinary && entry.RaidEntry is null && EvildomWarChallengeEntryPolicy.AllowsPartyCount(entry.PartyMemberCount) &&
         entry.IndividualMapMovement && entry.DisableFatigueConsumption && entry.DisableMonsterAndClearExperience &&
         !entry.IsPractice && !entry.IsClassExperience && !entry.IsQuestReplay && entry.HellParty is null;
 

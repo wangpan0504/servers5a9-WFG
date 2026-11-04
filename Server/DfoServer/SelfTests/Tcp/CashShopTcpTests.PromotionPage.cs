@@ -100,7 +100,7 @@ internal static partial class CashShopTcpTests
         }
         await fixture.StopAsync();
 
-        // 独立默认关闭样本不传enablePromotionPage，保留机器请求也不得变成聊天广播。
+        // 已配置但关闭的原生活动仍返回disabled快照，不能把查询当聊天或重新启用购买。
         await using var disabled = new TcpTestFixture(source, Path.Combine(root, "cash-shop-promotion-page-disabled"), resources: resources,
             promotions: () => catalog, clock: clock);
         SeedPageBuyer(disabled);
@@ -109,7 +109,22 @@ internal static partial class CashShopTcpTests
         {
             peer.Select();
             peer.Send(17, PromotionPageChatBody(PromotionPageNonceA));
+            var unavailable = PromotionPageFields(peer.Expect(0, 1709).Body);
+            That(unavailable.Length == 19 && unavailable[0] == "1" && unavailable[1] == "snapshot" && unavailable[2] == PromotionPageNonceA &&
+                unavailable[3] == peer.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) &&
+                unavailable[4] == catalog.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture) &&
+                unavailable[5] == "0" && unavailable[6] == "spring-2020" && unavailable[7] == "replica-1" &&
+                unavailable[8] == "v1" && unavailable[9] == "default" && unavailable[10] == "package" &&
+                unavailable[16] == "10000" && unavailable[11] == "disabled" && unavailable[12] == "0" &&
+                unavailable[13] == "5000" && unavailable[14] == "0" && unavailable[15] == "0",
+                "配置存在但关闭的活动不依赖诊断开关，查询只返回本人零进度disabled快照");
+            AssertPromotionPageNames(unavailable, items.Items);
             peer.Barrier();
+            That(disabled.Query("SELECT count(*) FROM cash_shop_promotion_progress") is [[0L]] &&
+                disabled.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[0L]] &&
+                disabled.Query("SELECT count(*) FROM cash_shop_promotion_awards") is [[0L]] &&
+                disabled.Query("SELECT count(*) FROM mailbox_messages") is [[0L]],
+                "关闭活动页面查询不创建进度、订单、资格或奖励邮件");
         }
         await disabled.StopAsync();
 

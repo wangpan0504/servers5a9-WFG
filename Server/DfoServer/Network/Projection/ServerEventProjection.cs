@@ -76,6 +76,19 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         battlePassActive = value;
         pending.Writer.TryWrite(true);
     }
+
+    // 事件worker与日切调用方均持本人命令门禁；开始边界只能由这一入口初始化整组页面。
+    internal async Task PublishBattlePassOpeningAsync()
+    {
+        var selection = context.Owner.Execute(() => (context.Session.Ready, context.Session.Selected, context.Session.SelectionEpoch));
+        if (!selection.Ready || selection.Selected is null || !town.IsBattlePassEventActive(time.GetUtcNow()) ||
+            battlePassEpoch == selection.SelectionEpoch && battlePassActive) return;
+        bool CanSend() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == selection.SelectionEpoch);
+        await town.ServerEventsAsync(context, CanSend);
+        if (CanSend() && town.BattlePass is { } battlePass)
+            await battlePass.ReadyAsync(context);
+    }
+
     async Task RunAsync()
     {
         try
@@ -145,10 +158,9 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                         continue;
                     }
                     bool newlyOpenedBattlePass = currentBattlePass && (battlePassEpoch != selection.SelectionEpoch || !battlePassActive);
-                    await town.ServerEventsAsync(context, CanSend);
+                    if (newlyOpenedBattlePass) await PublishBattlePassOpeningAsync();
+                    else await town.ServerEventsAsync(context, CanSend);
                     if (context.DailyAttendance is { } attendance && CanSend()) await attendance.RefreshAsync();
-                    if (newlyOpenedBattlePass && CanSend() && town.BattlePass is { } battlePass)
-                        await battlePass.ReadyAsync(context);
                 }
                 finally { context.CommandGate.Release(); }
             }

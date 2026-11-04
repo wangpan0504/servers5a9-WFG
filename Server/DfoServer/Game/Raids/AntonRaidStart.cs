@@ -74,13 +74,15 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         {
             var departingBattle = actor.Session.CurrentRaidBattle(actor);
             var beforeBattle = departingBattle?.View;
+            // 旧超时回调在任何票据写入前拒绝，不能先把后来新团的恢复资格记为主动放弃。
+            if (expiredAntonInstance is { } expected &&
+                (!actor.IsCurrent || departingBattle is not { Kind: RaidKind.Anton or RaidKind.Fiendwar, View.PhaseExpired: true } ||
+                    departingBattle.Instance != expected || registry.Find(actor)?.Started?.InstanceId != expected))
+                return (Change: (RaidChange?)null, Notices: Array.Empty<PartyNotice>(), Battle: departingBattle, BeforeBattle: beforeBattle);
             if (target == actor.Character && actor.CanManage && departingBattle is { Kind: RaidKind.Fiendwar } &&
                 registry.Find(actor)?.Started?.InstanceId == departingBattle.Instance)
                 actor.Session.RecordFiendwarDeparture(actor, departingBattle, disconnected: false);
-            var change = expiredAntonInstance is not { } expected ||
-                actor.IsCurrent && departingBattle is { Kind: RaidKind.Anton, View.PhaseExpired: true } &&
-                departingBattle.Instance == expected && registry.Find(actor)?.Started?.InstanceId == expected
-                    ? registry.Leave(actor, target) : null;
+            var change = registry.Leave(actor, target);
             if (change is { Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed

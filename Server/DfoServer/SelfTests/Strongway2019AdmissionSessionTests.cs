@@ -62,20 +62,18 @@ internal static class Strongway2019AdmissionSessionTests
         var rooms = DungeonRoomCatalog.Load(pvf);
         var drops = DungeonMonsterDropCatalog.Load(pvf);
         var kills = DungeonKillExperienceCatalog.Load(pvf);
-        foreach (int members in new[] { 0, 1, 4 })
+        foreach (int members in new[] { 1, 4 })
         {
             using var f = new Strongway2019MatchingTests.Fixture(towns, new(pvf), growth);
-            var team = f.Team(count: Math.Max(1, members));
-            if (members == 0)
-                That(f.Parties.Leave(team[0]).Accepted, "未组队英雄样本通过原队伍服务退出队伍");
-            var originalParty = f.Parties.Current(team[0]);
+            var team = f.Team(count: members);
+            var originalParty = f.Parties.Current(team[0])!;
             var service = new PartyDungeonService(f.Parties, f.Repository);
             FormalDungeonReceipt[] scenes;
-            if (members <= 1)
+            if (members == 1)
             {
                 var selection = team[0].BeginDungeonSelection();
                 That(selection is not null && team[0].ConfirmNewDungeonSelection(selection),
-                    "单人英雄沿原单人选图链进入英雄选图，队伍人数：" + members);
+                    "一人真实队伍沿原单人选图链进入英雄选图");
                 var entered = team[0].EnterFormalDungeon(5363, 0, 2, dungeons, rooms, drops,
                     items: items.Items, pieces: items.EpicPieces, prepareDrops: RejectDropPreparation);
                 That(entered is not null && team[0].PartyDungeon is null,
@@ -105,16 +103,15 @@ internal static class Strongway2019AdmissionSessionTests
                     session.CommitStrongway2019Reward(pending, items.Items, f.Repository) is { Commit.Granted: true },
                     "首期英雄每个原Run各自真终点提交736邮件");
             }
-            if (members <= 1)
+            if (members == 1)
             {
                 That(team[0].ReturnFromFormalDungeon() is not null && team[0].Phase == SessionPhase.Town &&
-                    ReferenceEquals(f.Parties.Current(team[0]), originalParty) &&
-                    (originalParty is null || originalParty.Members.Single().Actor.IsCurrent() &&
-                        originalParty.Members.Single().Slot == originalParty.Leader),
-                    "英雄单人通关返城保留原队伍身份，未组队时不创建Party");
+                    ReferenceEquals(f.Parties.Current(team[0]), originalParty) && originalParty.Members.Single().Actor.IsCurrent() &&
+                    originalParty.Members.Single().Slot == originalParty.Leader,
+                    "英雄单人通关返城仍保留原一人Party、队长和有效owner");
             }
         }
-        Console.WriteLine($"PASS {Count - before} 首期英雄未组队、一人及四人选图、全部真实房间死亡与邮件");
+        Console.WriteLine($"PASS {Count - before} 首期英雄一人及四人选图、全部真实房间死亡与邮件");
     }
 
     public static void RunMatchingClear(PvfArchive pvf, TownCatalog towns, ItemResources items)
@@ -413,16 +410,11 @@ internal static class Strongway2019AdmissionSessionTests
             antiEvil = 3999;
             That(session.PrepareStrongway2019Admission(5359) is null, "穿戴抗魔不足不能沿用此前准入");
             antiEvil = 9999;
-            That(session.PrepareStrongway2019Admission(5363) is { Mode: Strongway2019Mode.Hero, MemberCount: 1 },
-                "未组队英雄按本人一人准入，不要求创建Party");
-            antiEvil = 5399;
-            That(session.PrepareStrongway2019Admission(5363) is null, "未组队英雄仍要求5400抗魔");
-            antiEvil = 5400;
-            That(session.PrepareStrongway2019Admission(5363) is { AntiEvil: 5400 }, "未组队英雄抗魔边界准入");
             That(session.PrepareStrongway2019Admission(5360) is null &&
                 session.PrepareStrongway2019Admission(5360, matched: true) is null &&
+                session.PrepareStrongway2019Admission(5363) is null &&
                 session.PrepareStrongway2019Admission(5364) is null,
-                "未组队角色无法借直接调用获得匹配或隐藏图资格");
+                "未组队角色无法借直接调用获得匹配、英雄或隐藏图资格");
             events.Override(312, false);
             That(session.PrepareStrongway2019Admission(5359) is null, "关活动后不再生成新准入");
             session.ReturnToRoster();

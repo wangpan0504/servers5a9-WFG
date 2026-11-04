@@ -820,8 +820,10 @@ internal static class DungeonEntryPlanTests
         That(DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out var unlinked,out _,quest: unlinkedQuest) &&
             unlinked is { QuestId: 100, RouteQuestId: 100, BossMap.Id: 456 },
             "合成不同任务和地图同样复用明确声明的唯一无连接清图路线，不硬编码转职编号");
-        foreach (var unsupported in new[] { unlinkedQuest with { Definition = unlinkedQuest.Definition! with { Dungeons = [] } },
-            unlinkedQuest with { Definition = unlinkedQuest.Definition! with { Dungeons = [new(18,-1)] } },
+        That(DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out var mapOnlyClear,out _,quest: unlinkedQuest) &&
+            mapOnlyClear is { BossMap.Id: 456 },
+            "仅声明MAP且目标确在无连接路线时允许清图任务借用该路线");
+        foreach (var unsupported in new[] { unlinkedQuest with { Definition = unlinkedQuest.Definition! with { Dungeons = [new(18,-1)] } },
             unlinkedQuest with { Condition = "[hunt enemy]" } })
             That(!DungeonEntryPlan.TryCreate(unlinkedDefinition,pendingClear,17,100,0,out _,out _,quest: unsupported),
                 "缺少地下城归属或非清图目标不能借用无连接路线");
