@@ -633,9 +633,28 @@ internal static class MetroQuestEntryTcpTests
                     FormalDungeonTcpTests.Load(peer); Drain();
                     if (x==4)
                     {
-                        That(map[18]==2 && U32(map,27)==109008549 && map[32]==0 && map[40]==0 &&
-                            U32(map,49)==63821 && map[54]==3 && map[62]==1,
-                            "真实29末房保留真敌和显示演员，独立确认原品级及显示排除位");
+                        That(map.Length==89 && map[18]==3 && plan.Monsters.Count==3 &&
+                            plan.Room.AiCharacters is [{Id:5409,Faction:"[character]",RankKind:"[normal]",Level:70,
+                                Path:"aicharacter/fighter/28/28.aic"} native] &&
+                            native.RawValues.SequenceEqual([5409,983,242,0,0,0]) &&
+                            !DungeonCompanion.IsCompanionRow(plan.Room,0) &&
+                            plan.Monsters[2] is {MonsterId:5409,SourceOrdinal:0,Source:null,SpawnType:5,
+                                IsFriendly:true,IsBlocking:false,CanReportDeath:false,IsBoss:false} &&
+                            ReferenceEquals(plan.Monsters[2].AiCharacter,native),
+                            "真实29末房固定两个原怪及原生友方5409，独立资源预期禁止误过滤为伴侣");
+                        for (int index=0;index<3;index++)
+                        {
+                            int offset=19+22*index;
+                            That(U16(map,offset)==0 && U32(map,offset+2)==(index==1 ? 1u : 0u) &&
+                                U16(map,offset+6)==plan.Monsters[index].ObjectKey &&
+                                U32(map,offset+8)==(index==0 ? 109008549u : index==1 ? 63821u : 5409u) &&
+                                map[offset+12]==(index==2 ? 70 : 95) &&
+                                map[offset+13]==(index==0 ? 0 : index==1 ? 3 : 5) &&
+                                map[offset+14]==0 && map[offset+15]==0 && map[offset+16]==255 &&
+                                U32(map,offset+17)==0 && map[offset+21]==(index==0 ? 0 : 1),
+                                "真实29三条22B完整保留敌人、显示63821、原生AI的原序、独立key、等级、品级和清房排除位");
+                        }
+                        Bytes(map.AsSpan(85).ToArray(),[0,0,0,255],"末房29保留空物品、非深渊、空骑乘及无成员选择尾部");
                         var display=plan.Monsters.Single(row=>row.MonsterId==63821);
                         if (request==0)
                         {

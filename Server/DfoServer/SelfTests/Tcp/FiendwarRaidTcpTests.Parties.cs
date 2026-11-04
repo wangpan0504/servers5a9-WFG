@@ -192,6 +192,8 @@ internal static partial class FiendwarRaidTcpTests
             if (count == 4) Reconnect(3);
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
             MoveTeam(first, 15);
+            // 途中真实遭遇已完成专用战令探针时，到此结束；其36确认包已由该遭遇正常消费。
+            if (battlePassProbeChecked) return;
             if (second.Length != 0) MoveTeam(second, 17);
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
@@ -871,7 +873,7 @@ internal static partial class FiendwarRaidTcpTests
                 queue = new Queue<int>(); queue.Enqueue(origin);
                 previous = new Dictionary<int, int> { [origin] = -1 };
                 while (queue.TryDequeue(out int current) && !previous.ContainsKey(target))
-                    foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next is not (30 or 31)))
+                    foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next == target || next is not (30 or 31)))
                         if (previous.TryAdd(next, current)) queue.Enqueue(next);
             }
             That(previous.ContainsKey(target), "当前真实兵线存在可清理路线，空路封闭时沿真实遭遇继续");

@@ -248,8 +248,14 @@ internal static partial class FormalDungeonTcpTests
                                     "无尽清首房尾怪39获得完整退场38后才能请求第二房");
                                 if (questId == 5651)
                                 {
-                                    That(ObserveQuestNotification(peer.Expect(0,14)),"清房死亡先发布已提交的任务材料");
-                                    That(ObserveQuestNotification(peer.Expect(1,33)),"清房死亡再原位发布5651归零");
+                                    // 无目标不等待通知；中途波次已观察的提交不重复等待，目标正例仍严格核对14→33。
+                                    if (questTargetKilled)
+                                    {
+                                        if (materialNotifications == 0)
+                                            That(ObserveQuestNotification(peer.Expect(0,14)),"清房死亡先发布已提交的任务材料");
+                                        if (huntNotifications == 0)
+                                            That(ObserveQuestNotification(peer.Expect(1,33)),"清房死亡再原位发布5651归零");
+                                    }
                                     peer.Barrier();
                                 }
                                 break;
@@ -478,6 +484,8 @@ internal static partial class FormalDungeonTcpTests
             {
                 if (packet is { Kind: 1, Opcode: 33 })
                 {
+                    That(questId != 5651 || materialNotifications == 1,
+                        "5651原位33必须晚于同一提交的材料14，包含中途波次与清房尾包");
                     That(++huntNotifications == 1 && (id == 11007 || questId == 5651),
                         "祭坛只在已接任务真实目标条件改变时发送一次原位33");
                     var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id)

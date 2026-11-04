@@ -109,7 +109,9 @@ internal static partial class PvpTrainingTcpTests
             peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             peer.Select(prepared: true); peer.Barrier();
             That(saved == Saved(peer.Id), "同连接小退选角保持当天原分配");
-            await clock.WaitForOneShotTimersAsync(2);
+            // 本轮显式UTC时区，先等本地06:00的PVP服务日边界，不依赖活动定时器总数。
+            var reset = new DateTimeOffset(clock.GetUtcNow().UtcDateTime.Date.AddHours(6), TimeSpan.Zero);
+            await clock.WaitForOneShotTimerAsync(reset);
             clock.Advance(TimeSpan.FromSeconds(1));
             var notices = new List<WirePacket>();
             while (notices.Count(row => row is { Kind: 0, Opcode: 579 }) < 2)
@@ -117,7 +119,8 @@ internal static partial class PvpTrainingTcpTests
                 That(notices.Count < 200, "日切通知有界，等待真实579完成");
                 notices.Add(peer.Read());
             }
-            await clock.WaitForOneShotTimersAsync(2);
+            // UTC06:00后服务日worker先等待东八区下一06:00，即同日UTC22:00。
+            await clock.WaitForOneShotTimerAsync(reset.AddHours(16));
             notices.AddRange(PartyDungeonTcpTests.Drain(peer));
             That(notices.All(row => row.Kind == 0 && row.Opcode is 21 or 36 or 356 or 541 or 550 or 574 or 746 or 1343 or 1349 or 1536 or 578 or 579) &&
                 notices.Single(row => row.Opcode == 36).Body.Length == 10 &&

@@ -42,7 +42,7 @@ internal static partial class FormalDungeonTcpTests
         byte[] request = Selection(3);
         BinaryPrimitives.WriteUInt32LittleEndian(request, 530);
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), 0);
-        void Enter(TcpPeer peer)
+        void Enter(TcpPeer peer, byte remaining)
         {
             SelectMap(peer, incompleteHellQuest: false);
             long Tickets() => Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10161610", peer.Id)[0][0]);
@@ -50,6 +50,15 @@ internal static partial class FormalDungeonTcpTests
             long fatigue = Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);
             peer.Send(16, request);
             peer.Expect(0, 28); peer.Expect(0, 29); peer.Expect(0, 14);
+            // 入场扣次先发布通用550（无周上限时第二值回填日剩余），再发布黎明1545/550。
+            peer.Expect(0, 550, [0x12, 0x02, 0, 0, remaining, remaining]);
+            byte[] daybreak = new byte[268];
+            BinaryPrimitives.WriteUInt32LittleEndian(daybreak, remaining);
+            BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(4), 260);
+            BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(12), 530);
+            BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(16), 2);
+            peer.Expect(0, 1545, daybreak);
+            peer.Expect(0, 550, [0x12, 0x02, 0, 0, remaining, 0]);
             Load(peer); peer.Expect(0, 36); peer.Barrier();
             That(Tickets() == tickets - 20 && Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]) == fatigue - 8,
                 "黎明每次成功入场完整扣20诞生之芽及8疲劳");
@@ -71,7 +80,7 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer); Enter(peer); Reject(peer);
+            Enter(peer, 1); Enter(peer, 0); Reject(peer);
         }
         using (var peer = Open(fixture))
         {
@@ -81,13 +90,13 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(second.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer);
+            Enter(peer, 1);
         }
         clock.Now = clock.Now.AddSeconds(2);
         using (var peer = Open(fixture))
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer);
+            Enter(peer, 1);
         }
     }
 }

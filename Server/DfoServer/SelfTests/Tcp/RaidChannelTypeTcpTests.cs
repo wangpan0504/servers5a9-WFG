@@ -120,10 +120,33 @@ internal static class RaidChannelTypeTcpTests
             var point = new DfoServer.GameWorld.Towns.Location(38, 0, 629, 196);
             DfoServer.Game.Characters.Character role;
             using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(account, () => { }))
-                role = new DfoServer.Persistence.CharacterRepository(fixture.Database).Create(owner,
-                    new(label + "Gate" + scenario, point, point) { Level = (byte)level, CompletedQuests = [entryQuest, prerequisite] });
+            {
+                var repository = new DfoServer.Persistence.CharacterRepository(fixture.Database);
+                if (scenario < 2)
+                    role = repository.Create(owner, new(label + "Gate" + scenario, point, point)
+                        { Level = (byte)level, CompletedQuests = [entryQuest, prerequisite] });
+                else
+                {
+                    // 此场景先真实入城，使用与本组票据角色一致的完整剧情、技能和经验前置。
+                    var candidate = DfoServer.Game.Characters.CharacterCreation.Prepare(label + "Gate" + scenario,
+                        resources.Characters.Get(0), point, point, resources.Learning.Get);
+                    var learning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0, 0, (byte)level,
+                        candidate.InitialLearning with { Experience = resources.Growth.GetLevelStartExperience(level) }, resources.Learning);
+                    role = repository.Create(owner, candidate with { Level = (byte)level, AcceptedStoryLevel = (byte)level,
+                        CompletedQuests = [entryQuest, prerequisite], InitialLearning = learning });
+                }
+            }
             using var peer = Open(fixture, account, gamePort: endpoints[channel], channelNumber: channel);
-            if (scenario >= 2) peer.Send(8, [255, 255, 2]);
+            if (scenario >= 2)
+            {
+                // 先真实入城再返回选角，确保后面的过期等级走权威准入，而非新登录选频道门禁。
+                peer.Select(nativeSwitch: true);
+                peer.Barrier();
+                peer.Send(7, []);
+                peer.Expect(1, 7, [1]);
+                peer.Expect(0, 2);
+                peer.Send(8, [255, 255, 2]);
+            }
             peer.Send(1278, []); peer.Expect(1, 1278, [1]);
             if (scenario < 2)
                 fixture.Sql("DELETE FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",

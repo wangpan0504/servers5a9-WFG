@@ -10,10 +10,20 @@ internal static partial class SinglePlayerDungeonRunTests
     static void VerifyCompanionProfiles(PvfArchive pvf)
     {
         var catalog = SupportCompanionCatalog.Load(pvf);
-        That(!catalog.Profiles.IsEmpty, "累计资源包含真实支援兵外观与装备模板");
+        bool resourcePresent = pvf.Contains(SupportCompanionCatalog.ResourcePath);
+        That(resourcePresent ? !catalog.Profiles.IsEmpty :
+            ReferenceEquals(catalog, SupportCompanionCatalog.Empty) && catalog.Profiles.IsEmpty && !catalog.EqualTiers,
+            "支援兵档次目录存在时完整装配，缺省时保持空目录和非统一档次");
         foreach (int baseId in new[] { 20900, 9986, 74990, 19973 })
         foreach (string tier in new[] { "entry", "graduate", "huge" })
         {
+            if (!resourcePresent)
+            {
+                That(!catalog.HasProfile(baseId, tier) &&
+                    catalog.Pick(baseId, tier, _ => throw new InvalidOperationException()) is null,
+                    "无可选目录时每种职业档次均不提供模板或调用随机抽取");
+                continue;
+            }
             if (!catalog.HasProfile(baseId, tier))
             {
                 That(catalog.Pick(baseId, tier, _ => throw new InvalidOperationException()) is null,

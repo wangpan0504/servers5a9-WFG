@@ -320,7 +320,22 @@ internal sealed partial class TcpPeer : IDisposable
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
                 packet.Opcode is 550 or 1608 or 815 or 772))
         {
-            if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
+            if (packet.Opcode == 1536)
+            {
+                AssaultDailyInfo = packet.Body;
+                if (fixture?.ExpectedDaybreakSelectionRemaining(Id) is { } remaining)
+                {
+                    // 仅530入口世界地图在1536之后发布1545→550，二者完整核验后仍须原27。
+                    byte[] daybreak = new byte[268];
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak, remaining);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(4), 260);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(12), 530);
+                    BinaryPrimitives.WriteUInt32LittleEndian(daybreak.AsSpan(16), 2);
+                    Expect(0, 1545, daybreak);
+                    Expect(0, 550, [0x12, 0x02, 0, 0, remaining, 0]);
+                    DungeonEnterCounts[530] = (remaining, 0);
+                }
+            }
             else if (packet.Opcode == 1608) ExpectDazzlementBindings(packet);
             else if (packet.Opcode == 815) ReadDimensionEntrance(packet);
             else if (packet.Opcode == 772) ReadAncientGate(packet);

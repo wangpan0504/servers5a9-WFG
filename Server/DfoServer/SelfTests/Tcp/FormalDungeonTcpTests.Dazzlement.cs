@@ -96,8 +96,10 @@ internal static partial class FormalDungeonTcpTests
 
             async Task ResetAt(DateTimeOffset at)
             {
-                // 无客户端请求触发：礼盒、眩惑和服务日各有一个有界时钟，共用同一连接门禁。
-                await clock.WaitForOneShotTimersAsync(3);
+                // 跨多日仍先等待当前已注册的下一次东八区06:00，不依赖其他活动定时器总数。
+                var local = clock.GetUtcNow().ToOffset(TimeSpan.FromHours(8));
+                var nextReset = new DateTimeOffset(local.AddHours(-6).Date.AddDays(1).AddHours(6), local.Offset);
+                await clock.WaitForOneShotTimerAsync(nextReset);
                 clock.Advance(at - clock.GetUtcNow());
                 int chunks = 0;
                 bool tower = false;
@@ -117,8 +119,8 @@ internal static partial class FormalDungeonTcpTests
                     }
                     else peer.ValidateServiceDayNotice(packet);
                 }
-                // 服务日重新装填的是三只一次性定时器；公会服务的共享周期轮询不属于本次计数。
-                await clock.WaitForOneShotTimersAsync(peer.DazzlementBindings is [0] ? 2 : 3);
+                // 礼盒和服务日继续注册下一日；周四眩惑解绑后仍保留两者的正常日界。
+                await clock.WaitForOneShotTimerAsync(at.AddDays(1));
                 foreach (var packet in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(packet);
             }
         }
