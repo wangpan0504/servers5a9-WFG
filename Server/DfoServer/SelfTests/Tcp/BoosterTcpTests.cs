@@ -142,6 +142,8 @@ internal static class BoosterTcpTests
             peer.Barrier();
             Console.WriteLine($"Bulk booster TCP ACK and delta: {timer.Elapsed.TotalMilliseconds:F2}ms");
         }
+        await BoosterSelectionTcpTests.WaitForInitialDisconnectAsync(fixture,
+            Convert.ToUInt16(fixture.Query("SELECT id FROM characters WHERE name='BoxTcp'").Single()[0]));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single(role => role.Name == "BoxTcp");
@@ -361,7 +363,16 @@ internal static class BoosterTcpTests
         CharacterPool(fixture,resources,repo,owners);
         PlainCooldown(fixture, resources, repo, owners, clock);
         DungeonPlaces(fixture, resources, repo, owners);
+        EmptyBonus(fixture, resources, repo, owners);
         await fixture.StopAsync();
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line);
+            var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'moon bonus rollback'.";
+        }) == 1, "月兔礼盒故障断线来自唯一一次末段SQL注入");
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
 
@@ -666,6 +677,7 @@ internal static class BoosterTcpTests
             FormalDungeonTcpTests.Enter(peer);
             RejectSource(peer, 65, "Loading阶段不能消费副本礼包");
             FormalDungeonTcpTests.Load(peer);
+            peer.Expect(0, 36, [0, 0, 156, 0, 0, 0, 156, 0, 0, 0]);
             RejectSource(peer, 67, "仅城镇与房间礼盒在已加载正式副本仍拒绝");
             OpenAndVerify(peer, 2);
         }
@@ -807,6 +819,81 @@ internal static class BoosterTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
             fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,kind,item_id") +
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") + fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
+    static void EmptyBonus(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const int box = 490704484, bonus = 490704485;
+        var items = resources.ItemResources.Items;
+        Character actor;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            actor = repo.Create(owner, new("MoonBoxTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
+                Inventory = new([new(0, Bag(65), Core(box, 2)), new(0, Bag(66), Core(1106, 7))], Gold: 12345)
+            });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot); peer.Barrier();
+            string before = State();
+            fixture.Sql("CREATE TRIGGER moon_bonus_abort BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'moon bonus rollback'); END");
+            SendOpen(peer, 65, 2); peer.Closed();
+            That(State() == before, "月兔双池提交失败不扣源、不发基础/额外奖、不改钱包或UID");
+            fixture.Sql("DROP TRIGGER moon_bonus_abort");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot); peer.Barrier();
+            SendOpen(peer, 65, 2);
+            byte[] ack = peer.Expect(1, 160).Body;
+            That(ack.Length >= 18 && ack[0] == 1 && ack[1] == 0 && U32(ack, 2) == box && U16(ack, 6) == 65 &&
+                U32(ack, 8) == 0 && U32(ack, 12) == 0 && U16(ack, 16) is 1 or 2 && ack.Length == 18 + U16(ack, 16) * 8,
+                "月兔礼盒成功ACK160保留实际完整奖励行数，不回传0号空奖");
+            var rewards = Enumerable.Range(0, U16(ack, 16)).Select(index =>
+                (Id: (int)U32(ack, 18 + index * 8), Count: (int)U32(ack, 22 + index * 8))).ToArray();
+            That(rewards.Count(row => row.Id == 15 && row.Count is >= 10 and <= 20) == 1 &&
+                rewards.All(row => row.Id == 15 || row.Id == bonus && row.Count is 1 or 2),
+                "真实CMD160只发两次基础奖励及实际可能抽中的黄金箱");
+            var saved = Read();
+            That(saved.Inventory.Gold == 12345 && saved.Inventory.Items.All(item => item.Core.ItemId is 15 or bonus or 1106) &&
+                saved.Inventory.Items.Length == rewards.Length + 1 &&
+                saved.Inventory.Items.Single(item => item.Core.ItemId == 1106) == actor.Inventory.Items.Single(item => item.Core.ItemId == 1106),
+                "空额外奖不落成金币或0号实体，哨兵完整Core和UID保留");
+            bool reused = saved.Inventory.Find(Bag(65)) is not null;
+            if (reused) Entry(peer.Expect(0, 14).Body, 65, -1, 0);
+            byte[] delta = peer.Expect(0, 14).Body;
+            That(U16(delta, 1) == rewards.Length + (reused ? 0 : 1), "月兔奖励差量没有额外或截断行");
+            foreach (var reward in rewards)
+            {
+                var item = saved.Inventory.Items.Single(item => item.Core.ItemId == reward.Id);
+                That(item.Core == Core(reward.Id, reward.Count) && item.Uid > 0, "月兔完整奖励实例与ACK数量一致");
+                Entry(delta, item.Position.Index, reward.Id, reward.Count);
+            }
+            if (!reused) Entry(delta, 65, -1, 0);
+            peer.Barrier();
+            string consumed = State();
+            SendOpen(peer, 65, 2); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(State() == consumed, "耗尽或复用源格的月兔请求重放不重复发奖");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(actor.Slot)[4].Body;
+            foreach (var item in Read().Inventory.Items) Entry(full, item.Position.Index, item.Core.ItemId, item.Core.Count, true);
+            peer.Barrier();
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single(role => role.Id == actor.Id);
+        }
+        ItemCore Core(int id, int count) => InventoryRewardGrantService.Create(items.Get(id), count);
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") +
+            fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
 
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);

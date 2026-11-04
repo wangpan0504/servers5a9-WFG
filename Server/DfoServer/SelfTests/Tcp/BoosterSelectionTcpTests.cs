@@ -508,7 +508,7 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
-    static async Task WaitForInitialDisconnectAsync(TcpTestFixture fixture, ushort characterId)
+    internal static async Task WaitForInitialDisconnectAsync(TcpTestFixture fixture, ushort characterId)
     {
         // 客户端Dispose不代表服务端已释放owner；disconnected在协议收尾和在线时长结算完成后记录。
         var elapsed=Stopwatch.StartNew();
