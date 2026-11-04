@@ -38,6 +38,10 @@ internal static partial class FormalDungeonTcpTests
         // 实测请求：副本 291100308，[4]=4，[7]=1，[16:20]=6114。
         byte[] request = Convert.FromHexString("94D6591104000001" + "00FFFF" + "0000000000" + "E2170000" + "00" + "00000000");
         long Tickets(long characterId) => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=3330",characterId)[0][0];
+        // 哈林、地轨中心等世界地图与黎明裂缝530共用时，选图会先补发1545/550；与本组其他入口用例一致，
+        // 按角色所在世界地图显式给出本轮日剩余，不能交给27的兼容读取静默跳过。
+        byte? DaybreakRemaining(TownArea row) => row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 530) ? (byte)2 : null;
         foreach (var (name,qualified,tickets) in new[] { ("HellNoQuest",false,0), ("HellNoTicket",true,0), ("HellShort",true,29), ("HellYes",true,30) })
         {
             var done = new HashSet<int>(baseDone);
@@ -58,7 +62,7 @@ internal static partial class FormalDungeonTcpTests
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             string beforeSelection = fixture.Snapshot();
-            SelectMap(peer, incompleteHellQuest: !qualified);
+            SelectMap(peer, incompleteHellQuest: !qualified, daybreakRemaining: DaybreakRemaining(area));
             peer.Barrier();
             That(fixture.Snapshot() == beforeSelection, "选图资格投影不改写任务、门票、疲劳或revision");
             peer.Send(16,request);
@@ -70,7 +74,7 @@ internal static partial class FormalDungeonTcpTests
                     "深渊派对拒绝（" + name + "）：" + (qualified ? "票不够以 0x11 拒绝" : "未完成 6080 以错误9恢复") + "，不落入场状态，背包票数不变");
                 if (!qualified)
                 {
-                    SelectMap(peer, incompleteHellQuest: true);
+                    SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: DaybreakRemaining(area));
                     peer.Send(132); peer.Expect(1, 132, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
                     peer.Expect(0, 23); peer.Expect(0, 24);
@@ -120,7 +124,7 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(riftCharacter.Slot, prepared: true, resumeTown: true, room: false);
-            SelectMap(peer);
+            SelectMap(peer, daybreakRemaining: DaybreakRemaining(riftArea));
             byte[] riftRequest = new byte[25];
             BinaryPrimitives.WriteUInt32LittleEndian(riftRequest, 7539);
             riftRequest[4] = 2;
@@ -182,7 +186,7 @@ internal static partial class FormalDungeonTcpTests
             using (var peer = Open(fixture))
             {
                 peer.Select(cosmoCharacter.Slot, prepared: true, resumeTown: true, room: false, bossBuff: (bossBuffId, usePass ? 2 : 1));
-                SelectMap(peer);
+                SelectMap(peer, daybreakRemaining: DaybreakRemaining(cosmoArea));
                 byte[] cosmoRequest = new byte[25];
                 BinaryPrimitives.WriteUInt32LittleEndian(cosmoRequest, 7191);
                 cosmoRequest[4] = 4;
