@@ -44,8 +44,9 @@ internal static partial class CashShopPromotionSessionTests
             purchase, new(Rules.Scope, 29, 7), Rules, catalog.Revision, "pure", now);
         That(plan.Order.Units == 2 && plan.Order.ExpectedCount == 29 && plan.Order.ExpectedRevision == 7 &&
             plan.Awards.Select(row => row.PurchaseNumber).SequenceEqual(new long[] { 30, 31 }) &&
-            plan.Deliveries is [var mail] && mail.Items.Length == 2 && mail.Items.All(row => row.Uid == 0) && mail.Expires is null,
-            "纯规划仅累计实际活动行，冻结跨年原进度及完整UID0永久邮件");
+            plan.Deliveries.Length == 2 && plan.Deliveries.All(mail => mail.Items is [{ Uid: 0 }] && mail.Expires is null) &&
+            plan.Deliveries.Select(mail => mail.Key).Distinct().Count() == 2,
+            "纯规划仅累计实际活动行，每档独立永久邮件保留完整UID0实例和独立领取身份");
         That(service.Plan(character, plan.Inventory, purchase, new(Rules.Scope, 29, 7), Rules, catalog.Revision, "pure", now.AddSeconds(1))
             .Awards.SequenceEqual(plan.Awards), "单纯跨年不改规则身份、不重置累计");
         var another = Rules with { Scope = Rules.Scope with { Group = "other" }, Products = [new(700102, 2058, 1)] };

@@ -111,7 +111,7 @@ internal sealed partial class CharacterRepository
                 ?? throw new InvalidOperationException("累计赠礼已提交邮件缺失");
             for (int index = 0; index < delivery.Items.Length; index++)
             {
-                var award = plan.Awards[part * 10 + index];
+                var award = plan.Awards[part];
                 using var receipt = PromotionCommand(db, tx, order.Scope, owner.Account);
                 receipt.CommandText = """
                     INSERT INTO cash_shop_promotion_awards(account,campaign,period,realm,promotion_group,rules_version,
@@ -157,7 +157,7 @@ internal sealed partial class CharacterRepository
             plan.Inventory.Reason != "cash_shop_buy" || plan.Inventory.CharacterPrecondition is null ||
             plan.Inventory.CharacterPrecondition.IsExpired(now.ToUnixTimeSeconds()) ||
             plan.Awards.IsDefault || plan.Deliveries.IsDefault || plan.Awards.Length > 64 ||
-            plan.Deliveries.Length != (plan.Awards.Length + 9) / 10 || plan.Deliveries.Length > 7 ||
+            plan.Deliveries.Length != plan.Awards.Length ||
             plan.Purchase.Products.Count is < 1 or > 64)
             throw new InvalidOperationException("累计赠礼购买规划无效或已到期");
         var awards = CashShopPromotionRules.Settle(plan.Rules, order.ExpectedCount, order.Units, plan.EffectivePolicy);
@@ -174,11 +174,11 @@ internal sealed partial class CharacterRepository
         for (int part = 0; part < plan.Deliveries.Length; part++)
         {
             var mail = plan.Deliveries[part];
-            int offset = part * 10;
+            int offset = part;
             if (mail.Key != PromotionMailKey.Create(order, awards[offset].PurchaseNumber, part) ||
                 mail.Recipient.Id != order.RecipientId || mail.Recipient.Account != order.Account || mail.Gold != 0 ||
                 mail.Expires is not null || mail.Created != order.PlannedAt.ToUnixTimeSeconds() ||
-                mail.Items.IsDefault || mail.Items.Length != Math.Min(10, awards.Length - offset))
+                mail.Items.IsDefault || mail.Items.Length != 1)
                 throw new InvalidOperationException("累计赠礼邮件分封、身份或内容不完整");
             for (int index = 0; index < mail.Items.Length; index++)
             {

@@ -56,17 +56,15 @@ internal sealed class CashShopPromotionService(Func<CashShopPromotionCatalog> cu
             progress.Count, progress.Revision, units, now);
         var recipient = new MailboxRecipient(character.Id, account, character.Name, character.Job, character.GrowType, character.Level);
         var deliveries = ImmutableArray.CreateBuilder<MailboxDelivery>();
-        for (int offset = 0; offset < awards.Length; offset += 10)
+        // 原生邮箱列表按邮件ID显示一行；每档单独投递，不能只让首档可见。
+        for (int offset = 0; offset < awards.Length; offset++)
         {
-            var attachments = ImmutableArray.CreateBuilder<InventoryItem>();
-            foreach (var award in awards.Skip(offset).Take(10))
-            {
-                var template = item(award.ItemId);
-                attachments.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 65),
-                    InventoryRewardGrantService.Create(template, award.Count, now)));
-            }
-            deliveries.Add(new(PromotionMailKey.Create(order, awards[offset].PurchaseNumber, offset / 10), recipient,
-                "商城赠礼", "累计购买赠礼，请查收附件。", 0, attachments.ToImmutable(), now.ToUnixTimeSeconds()));
+            var award = awards[offset];
+            var template = item(award.ItemId);
+            var attachment = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 65),
+                InventoryRewardGrantService.Create(template, award.Count, now));
+            deliveries.Add(new(PromotionMailKey.Create(order, award.PurchaseNumber, offset), recipient,
+                "商城赠礼", "累计购买赠礼，请查收附件。", 0, [attachment], now.ToUnixTimeSeconds()));
         }
         return new(order, character, inventory, purchase, awards, deliveries.ToImmutable()) { Rules = rules, Policy = policy, CatalogRevision = revision };
     }

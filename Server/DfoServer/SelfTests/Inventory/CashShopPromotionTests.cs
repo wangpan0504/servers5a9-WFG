@@ -15,6 +15,7 @@ internal static class CashShopPromotionTests
         foreach (var (before, units, expected) in new (long, int, PromotionAward[])[]
         {
             (0, 1, []),
+            (0, 4, [new(2, 490705441, 1), new(3, 490705442, 1), new(4, 490705443, 1)]),
             (1, 1, [new(2, 490705441, 1)]),
             (9, 1, [new(10, 490705449, 1)]),
             (10, 2, [new(12, 490705441, 1)]),
@@ -31,8 +32,8 @@ internal static class CashShopPromotionTests
         That(CashShopPromotionRules.Settle(rules, 4999, 1).SequenceEqual([new PromotionAward(5000, 490705415, 1)]),
             "累计上限最后一套仍完整发奖");
         var maximumBatch = CashShopPromotionRules.Settle(rules, 30, 64);
-        That(maximumBatch.Length == 64 && maximumBatch.All(award => award.Count == 1) &&
-            (maximumBatch.Length + 9) / 10 == 7, "首期最坏单车64完整外盒，按10附件分7封邮件有界");
+        That(maximumBatch.Length == 64 && maximumBatch.All(award => award.Count == 1),
+            "首期最坏单车完整结算64个独立奖励外盒，不截断档位");
         foreach (var (before, units) in new (long, int)[] { (-1, 1), (0, 0), (0, -1), (0, 65), (5000, 1), (4999, 2), (long.MaxValue, 1) })
             Reject<ArgumentOutOfRangeException>(() => CashShopPromotionRules.Settle(rules, before, units), "非法购买范围整段拒绝");
         foreach (var invalid in new[]

@@ -103,7 +103,7 @@ internal static partial class CashShopTcpTests
             That(fixture.Query("SELECT count(DISTINCT strftime('%Y',committed_at,'unixepoch')) FROM cash_shop_promotion_orders") is [[2L]],
                 "远离历史销售期且跨日跨年累计持续，不按时间清零或停用");
             Buy(peer, Enumerable.Repeat(105681, 64).ToArray());
-            That(Progress() == 95 && Awards() == ExpectedAwards(95), "64行跨档全部累计，64份促销实例和7封赠礼不截断");
+            That(Progress() == 95 && Awards() == ExpectedAwards(95), "64行跨档全部累计，64份促销实例和64封逐档赠礼不截断");
             Buy(peer, [108727, 100004, 105684, 108726]);
             That(Progress() == 97, "非活动混车及105684主货正常购买，只累计两行活动商品");
             string before = Snapshot();
@@ -308,7 +308,8 @@ internal static partial class CashShopTcpTests
             entry.Policy is { IsPermanent: false } policy && policy.CounterScope == predecessor.Scope,
             "原5000上限TCP只在临时夹具启用原v1策略，累计继续原CounterScope");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "promotion-permanent"),
-            resources: resources, promotions: () => catalog, sharedResourcePath: true);
+            resources: resources, promotions: () => catalog, sharedResourcePath: true,
+            promotionItemResolver: id => resources.ItemResources.Items.Get(id) with { Expiration = new() });
         var repository = new CharacterRepository(fixture.Database, resources.Quests, promotions: () => catalog);
         var owners = new AccountOwners();
         ushort characterId;

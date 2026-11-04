@@ -507,6 +507,14 @@ internal static class TcpRegressionTests
             await global::DfoServer.BattlePassGuildPostOrderingRace.RunNextDayCandidateAsync(resources);
         }),
         ("cash-shop-promotions", CashShopTcpTests.PromotionsAsync),
+        ("cash-shop-promotion-mail-rules", (_, _, _) =>
+        {
+            Inventory.CashShopPromotionSessionTests.RunCore();
+              Inventory.CashShopPromotionPersistenceTests.RunCore();
+              Inventory.CashShopPromotionPersistenceTests.RunPageCore();
+            return Task.CompletedTask;
+        }),
+        ("cash-shop-promotion-mail", CashShopPromotionMailTests.RunAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
         ("character-rename-card", CharacterRenameCardTcpTests.RunAsync),
