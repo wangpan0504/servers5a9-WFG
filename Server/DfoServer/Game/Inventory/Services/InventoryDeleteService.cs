@@ -4,7 +4,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal static class InventoryDeleteService
 {
-    public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request, bool preserveMaterials = false)
+    public static InventoryResult PlanBatch(InventorySnapshot before, InventoryDeleteRequest request, bool preserveMaterials = false,
+        TimeProvider? timeProvider = null)
     {
         if (!Allows(request.List) || request.Flag != 0 || request.Items.Length is < 1 or > 352 ||
             request.Items.Any(item => item.Type is not (0 or 1 or 2 or 3)) || request.Items.Select(item => item.Slot).Distinct().Count() != request.Items.Length)
@@ -39,7 +40,7 @@ internal static class InventoryDeleteService
         }
         string reason = request.Items.Any(item => item.Type == 3) ? "delete_equipment_material" :
             request.Items.Any(item => item.Type == 2) ? "delete_skill_material" : "delete_item";
-        var clock = TimeProvider.System;
+        var clock = timeProvider ?? TimeProvider.System;
         return new(true, 0, new InventoryPlan(before, after, reason)
         {
             PreserveMaterials = preserveMaterials,
