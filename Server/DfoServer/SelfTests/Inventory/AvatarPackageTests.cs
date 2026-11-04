@@ -84,8 +84,8 @@ internal static class AvatarPackageTests
             "完整混合分类保留两类行且160按完整集合领取，518纯装扮入口不截断装备");
         That(Package("101 1 3 0\n[/avatar]\n[equipment]\n103 1\n[/equipment]\n[avatar]\n102 1 3 0", 1).Categories[0].PendingRule is not null,
             "混合分类仍拒绝未经证明的部分自选合同");
-        That(Package("101 1 3 0\n[/avatar]\n[stackable]\n103 1\n[/stackable]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
-            "其他未实现混合奖励段继续拒绝，不生成截断的装扮子集");
+        That(Package("101 1 3 0\n[/avatar]\n[unknown reward]\n103 1\n[/unknown reward]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
+            "未知混合奖励段继续拒绝，不生成截断的装扮子集");
         foreach (string equipment in new[] { "103", "103 0", "-1 1", "103 65536", "101 1", "103 1 103 1" })
             That(Package("101 1 3 0\n[/avatar]\n[equipment]\n" + equipment + "\n[/equipment]\n[avatar]\n102 1 3 0").Categories[0].PendingRule is not null,
                 "混合装备行拒绝坏宽度、数量、编号和种类冲突");

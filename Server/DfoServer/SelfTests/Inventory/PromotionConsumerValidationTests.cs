@@ -214,6 +214,37 @@ internal static class PromotionConsumerValidationTests
         avatarPackages[roots[0]] = new(() => new(0, [], [], "typed-avatar-invalid") { Recognized = true });
         That(validator.Validate(rules)?.Contains("typed-avatar-invalid", StringComparison.Ordinal) == true,
             "装扮已识别却不支持时拒绝，不回落已合法普通booster");
+
+        // 只替换当前fixture目录缓存，验证[stackable]材料边而不读取新的资源叶。
+        Reset();
+        const int avatarId = 880001103;
+        items.PrefillTemplates([KeyValuePair.Create(avatarId, Template(avatarId, ItemKind.Avatar, 9)),
+            KeyValuePair.Create(unsupported, Template(unsupported, ItemKind.Material))]);
+        var avatarItems = (ConcurrentDictionary<int, Lazy<AvatarPackageItemDefinition>>)typeof(AvatarPackageCatalog)
+            .GetField("avatars", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(avatars)!;
+        avatarItems[avatarId] = new(() => new([], [0]) { RequiresAbilityChoice = false });
+        var materialCategory = new AvatarPackageCategory(0, 0, [new(avatarId, 1, 0, 0)])
+            { StackableRows = [new(unsupported, 1)] };
+        avatarPackages[roots[0]] = new(() => new(0, [1, 1], [materialCategory]) { Recognized = true });
+        definitions[roots[1]] = new([new(1, [new(leaf, 1, 1)])], Lottery: true)
+            { LotteryUseNeedItem = new(unsupported, 1) };
+        string? connected = validator.Validate(rules);
+        That(connected is null, "[stackable]材料按实际Kind经Edge并连接已有材料用途: " + connected);
+
+        Reset();
+        string? disconnected = validator.Validate(rules);
+        That(disconnected?.Contains("material_consumer_not_connected", StringComparison.Ordinal) == true &&
+            disconnected.Contains(unsupported.ToString(), StringComparison.Ordinal) &&
+            disconnected.Contains(":stackable:", StringComparison.Ordinal) &&
+            !disconnected.Contains("reward_template_kind", StringComparison.Ordinal),
+            "材料类型边通过后，未连接用途仍因该材料拒绝");
+
+        items.PrefillTemplates([KeyValuePair.Create(unsupported,
+            Template(unsupported, ItemKind.Material) with { IsPremiumService = true })]);
+        string? special = validator.Validate(rules);
+        That(special?.Contains("avatar_material_row_definition", StringComparison.Ordinal) == true &&
+            special.Contains(unsupported.ToString(), StringComparison.Ordinal),
+            "[stackable]材料的特殊owner仍由材料行守卫拒绝");
     }
 
     static void RealEmptySelectionCoordinates(ItemResources resources)

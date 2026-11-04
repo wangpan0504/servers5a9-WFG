@@ -54,8 +54,8 @@ internal static class MaterialAvatarPackageTests
             declared.Replace("[/etc]", "[/equipment]"),
             declared.Replace("[/etc]", "[/etc]\n[etc]\n3330 100\n[/etc]"),
             declared.Replace("[booster selection num]\n0", "[booster selection num]\n1"),
-            declared.Replace("[etc]\n3330 100\n[/etc]", "[creature]\n710 1\n[/creature]"),
-            declared.Replace("[etc]\n3330 100\n[/etc]", "[stackable]\n10310265 1\n[/stackable]"),
+            declared.Replace("[etc]\n3330 100\n[/etc]", "[creature]\n710 0\n[/creature]"),
+            declared.Replace("[etc]\n3330 100\n[/etc]", "[stackable]\n10310265 0\n[/stackable]"),
             declared.Replace("[etc]", "[unknown]\n1\n[/unknown]\n[etc]")
         })
         {

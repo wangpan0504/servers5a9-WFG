@@ -191,6 +191,7 @@ internal static class SelfTestRunner
         OmittedDimensionsAvatarPackageTests.RunCore();
         MixedAvatarPackageTests.RunCore();
         MaterialAvatarPackageTests.RunCore();
+        CreatureStackableAvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         MonsterCardBindTests.RunCore();
         MonsterCardUpgradeTests.RunCore();
@@ -583,6 +584,8 @@ internal static class SelfTestRunner
         OmittedDimensionsAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         MixedAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
         MaterialAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
+        CreatureStackableAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        CreatureStackableAvatarPackageTests.RunPersistence(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);
         MonsterCardBindTests.RunResources(itemResources);
