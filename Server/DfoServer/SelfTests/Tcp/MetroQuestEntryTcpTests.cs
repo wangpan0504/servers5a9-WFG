@@ -28,14 +28,24 @@ internal static class MetroQuestEntryTcpTests
     {
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"stadium-quest"),resources:resources);
         await fixture.StartAsync();
+        var conditionUpdates=new Dictionary<ushort,int>();
         Verify(fixture,resources,SelfTestCatalogs.Growth(resources.Archive,resources.Learning),Drain,stadiumOnly:true);
-        static void Drain(TcpPeer peer,Action<WirePacket>? observe)
+        // 两个request各推进6304一次条件达成；每次只允许一条33原位投影。
+        That(conditionUpdates.Count==2 && conditionUpdates.Values.All(value=>value==1),"竞技场条件达成各发布一次单任务33");
+        void Drain(TcpPeer peer,Action<WirePacket>? observe)
         {
             peer.SendBarrier();
             for (int at=0;at<64;at++)
             {
                 var packet=peer.Read();
                 if (packet.Kind==1 && packet.Opcode==1347) { Bytes(packet.Body,[1],"竞技场事件有界处理完成"); return; }
+                // 死亡推进的任务条件按单任务33原位投影，与正式副本同一合同，不整表重建。
+                if (packet.Kind==1 && packet.Opcode==33)
+                {
+                    Bytes(packet.Body,[1,0xA0,0x18,0,0,0,0],"竞技场条件达成按单任务33原位投影");
+                    conditionUpdates[peer.Id]=conditionUpdates.GetValueOrDefault(peer.Id)+1;
+                    continue;
+                }
                 if (packet.Kind==0 && packet.Opcode==1760) { peer.ReadCardMembershipState(packet); continue; }
                 That(packet.Kind==0,"竞技场事件后无遗漏失败ACK");
                 observe?.Invoke(packet);

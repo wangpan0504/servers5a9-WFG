@@ -166,8 +166,9 @@ internal static partial class AntonRaidGapTcpTests
 
     static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        var clock = new LukeRaidClockTests.Clock();
         await using var fixture = await BootAsync(source, root, resources, "anton-raid-gap-party",
-            """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""");
+            """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
         Create(fixture, resources, "gaplead", "GapLead", 2);
         Create(fixture, resources, "gapmate", "GapMate", 2);
         var catalog = Catalog(resources);
@@ -290,12 +291,12 @@ internal static partial class AntonRaidGapTcpTests
         leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
         var leadCards = AntonTcpProbe.Barrier(leader, "同队竞争第四张");
         var mateCards = AntonTcpProbe.Barrier(member, "同队竞争第四张队员");
-        var picked = fixture.Query("SELECT card FROM character_raid_reward_receipts ORDER BY card").Select(row => Convert.ToByte(row[0])).ToArray();
+        var picked = fixture.Query("SELECT card FROM character_raid_reward_receipts WHERE kind=1 ORDER BY card").Select(row => Convert.ToByte(row[0])).ToArray();
         That(picked.SequenceEqual(new byte[] { 0, 3 }) &&
-            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]], "两成员同时选同牌只占不同位置，逐人提交原资产");
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]], "两成员同牌竞争只占不同团队位置，各自自动提交小队3");
         leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
         AntonTcpProbe.Barrier(leader, "队长重复点击"); AntonTcpProbe.Barrier(member, "队员重复点击");
-        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]], "竞争后重复点击不重复发奖");
+        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]], "竞争后重复点击不重复发奖");
         leader.Send(660, [0, 3]); member.Send(660, [0, 3]);
         AntonTcpProbe.Barrier(leader, "竞争成员第二牌种"); AntonTcpProbe.Barrier(member, "竞争队员第二牌种");
         leader.Send(660, [1, 3]); member.Send(660, [1, 3]);
@@ -304,7 +305,8 @@ internal static partial class AntonRaidGapTcpTests
         That(new[] { lateLead, lateMate }.All(packets => packets.Any(p => p is { Kind: 1, Opcode: 660, Body: [1] })) &&
             fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[4L]],
             "冲突改位后跨休息态重发原请求仍确认同份回执，不增发");
-
+        clock.Advance(595); clock.Advance(3);
+        await VerifyBatteryNativeAsync(fixture, leader, member, catalog);
     }
 
     static void SameRoom(byte[] leader, byte[] member, uint? map, string why) =>
@@ -339,7 +341,7 @@ internal static partial class AntonRaidGapTcpTests
         return fixture;
     }
 
-    static void Create(TcpTestFixture fixture, TcpTestResources resources, string account, string name, int tickets)
+    static void Create(TcpTestFixture fixture, TcpTestResources resources, string account, string name, int tickets, bool pcroom = false)
     {
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
@@ -350,10 +352,11 @@ internal static partial class AntonRaidGapTcpTests
             { Experience = resources.Growth.GetLevelStartExperience(85) }, resources.Learning);
         var created = repository.Create(owner, candidate with
             { Level = 85, AcceptedStoryLevel = 85, CompletedQuests = [12829, 3779], InitialLearning = learning });
-        if (tickets == 0) return;
         var items = resources.ItemResources;
-        InventoryService.Commit(repository, owner, created,
+        if (tickets > 0) created = InventoryService.Commit(repository, owner, created,
             new InventoryService(items.Items, items.GoldLimits, items.EpicPieces).Grant(created, [new(10096296, tickets)]));
+        if (pcroom) repository.CommitInventory(owner, created, new(created.Inventory, created.Inventory with
+            { AccountWallet = created.Inventory.AccountWallet.SetContractExpiry(128, 2_000_000_000) }, "anton_pcroom_fixture"));
     }
 
     static RaidDungeonCatalog Catalog(TcpTestResources resources)

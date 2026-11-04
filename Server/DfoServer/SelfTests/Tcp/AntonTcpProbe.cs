@@ -222,8 +222,7 @@ internal static partial class AntonTcpProbe
         if (stopAfter == "card")
         {
             peer.Send(659, [1]); Note(report, Flush(peer, "影片完成"));
-            // 已证601为完整10B；D/E/F取值来源未闭合，不能用Luke夹具或零补全。
-            // 未配置的牌种/槽位仅作负例，不给它们推定原厂语义。
+            // 未配置牌种和越界槽位不进入实际资产链。
             foreach (byte[] rejected in new byte[][] { [byte.MaxValue, 0], [1, byte.MaxValue] })
             {
                 peer.Send(660, rejected);
@@ -233,7 +232,7 @@ internal static partial class AntonTcpProbe
                     throw new InvalidOperationException("未配置的660不得发布结果、成功ACK或推进阶段");
                 report.RejectedCards++;
             }
-            // 01101417/039EC4D0已观察(1,0)/(0,0)。正式策略由原Battle/账本提供，不推导其它牌种或槽位。
+            // 原生1后0：团队1实际提交后服务器自动提交小队3，0只确认相同原牌背。
             bool? available = null;
             bool advanced = false;
             foreach (byte[] request in new byte[][] { [1, 0], [1, 0], [0, 0], [0, 0] })
@@ -248,18 +247,19 @@ internal static partial class AntonTcpProbe
                 if (accepted && cards.Any(packet => packet.Kind == 1 && packet.Opcode == 660 && !packet.Body.SequenceEqual(new byte[] { 1 })))
                     throw new InvalidOperationException("ACK660成功应只有01，不能追加奖励业务体");
                 if (cards.Any(packet => packet.Opcode == 601))
-                    throw new InvalidOperationException("正式601的D/E/F取值来源未闭合，不得在660时补发占位结果");
+                    throw new InvalidOperationException("660领取不能重复发送阶段601");
                 foreach (var display in cards.Where(packet => packet is { Kind: 0, Opcode: 600 }))
                 {
-                    // 01DC8BA7/01DC8BB6读取kind/count；未知8B物品列不补零、不借Luke16B。
-                    if (display.Body.Length < 6 || display.Body[0] != request[0] || display.Body[1] != 1 || display.Body.Length != 6 + 8 * display.Body[5])
-                        throw new InvalidOperationException("正式600尚无完整展示列，只允许已证空列表骨架");
-                    if (!accepted || cards.IndexOf(display) >= cards.FindIndex(packet => packet is { Kind: 1, Opcode: 660 }))
-                        throw new InvalidOperationException("600必须在资产提交后的ACK660之前写出");
+                    if (display.Body is [0, 0] && request[0] == 0) continue;
+                    if (display.Body.Length < 6 || display.Body[0] != request[0] && display.Body[0] != 3 ||
+                        display.Body[1] != 1 || display.Body.Length != 6 + 16 * display.Body[5])
+                        throw new InvalidOperationException("普通20人团600必须使用完整16B物品列，自动小队结果固定kind3");
+                    if (!accepted || display.Body[0] != 3 && cards.IndexOf(display) >= cards.FindIndex(packet => packet is { Kind: 1, Opcode: 660 }))
+                        throw new InvalidOperationException("手动600必须在资产提交后的ACK660之前写出，内部小队3随后发布");
                 }
-                if (advanced && cards.Any(packet => packet.Opcode is 600 or 601))
+                if (advanced && cards.Any(packet => packet.Opcode == 601 || packet.Opcode == 600 && packet.Body.Length != 2))
                     throw new InvalidOperationException("旧阶段660回放不能向下一阶段窗口发布600/601");
-                advanced |= cards.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [2, 1] });
+                advanced |= cards.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [5, 0] });
             }
             report.CardUnavailable = available != true;
             FinishStep(report, elapsed, "card", report.CardUnavailable
@@ -319,7 +319,7 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
-        bool leave = true, bool requireClearNotice = true)
+        bool leave = true, bool requireClearNotice = true, Action<byte[]>? beforeRoomClear = null)
     {
         bool fiendwar = IsFiendwarDungeon(dungeon);
         if (!fiendwar) peer.Send(15, DungeonId(dungeon));
@@ -346,6 +346,7 @@ internal static partial class AntonTcpProbe
         peer.Send(37, new byte[8]);
         Note(report, Flush(peer, "37 加载"));
         var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
+        beforeRoomClear?.Invoke(map.Body);
         ClearRoom(peer, map.Body, report, out ushort bossKey, out byte bossLevel, path[0].X == info.Body[8] && path[0].Y == info.Body[9],
             requireSettlementOrder: formalSettles);
         for (int i = 1; i < path.Length; i++)
@@ -360,6 +361,7 @@ internal static partial class AntonTcpProbe
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             peer.Send(37, new byte[8]);
             Note(report, Flush(peer, "37 下一房"));
+            beforeRoomClear?.Invoke(map.Body);
             ClearRoom(peer, map.Body, report, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length,
                 requireSettlementOrder: formalSettles);
             if (dungeon is 213 or 215 && i == 1)
@@ -702,8 +704,8 @@ internal static partial class AntonTcpProbe
             else if (packet.Opcode == 601)
             {
                 if (packet.Body.Length != 10 || packet.Body[0] != 0 || packet.Body[1] > 1 ||
-                    packet.Body[8] is < 2 or > 5 || packet.Body[9] != 0)
-                    throw new InvalidOperationException("601必须为成功10B、合法阶段/rank/option");
+                    packet.Body[8] is < 2 or > 5 || packet.Body[9] > 1)
+                    throw new InvalidOperationException("601必须为成功10B、合法阶段/rank及已封存任务标志");
                 report.Opcode601++;
             }
             if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)

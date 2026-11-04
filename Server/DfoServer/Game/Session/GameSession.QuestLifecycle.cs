@@ -61,7 +61,7 @@ internal sealed partial class GameSession
             bool cinematicTransition = action == QuestLifecycleAction.Condition && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 Phase == SessionPhase.Loading && formalDungeon is { } changing &&
                 quests.TryGet(questId,out var movie) && CinematicLoadingTransition(changing,movie);
-            Character? character = Ready && Selected is not null && Phase != SessionPhase.Unselected &&
+            Character? character = !AntonRejoinPresentationPending && Ready && Selected is not null && Phase != SessionPhase.Unselected &&
                 (Phase != SessionPhase.Loading || cinematicTransition) &&
                 pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
                 !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
@@ -142,7 +142,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+            if (AntonRejoinPresentationPending || pendingRental is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestQuickClear is { CommitStarted: true } ||
                 !ReferenceEquals(pendingQuestLifecycle,capture.Pending) || !CanPublishQuestLifecycle(refusal)) throw new InvalidOperationException("任务规划的原选角或实际场景已失效");
             if (strongwayQuest && capture.Pending is null && (!IsCurrentStrongway2019QuestSchedule(strongwaySchedule) ||
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))

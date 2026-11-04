@@ -47,7 +47,7 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
         }
         command.Parameters.AddWithValue("$week", week);
         var runQuota = ReadRaidRunQuotaEpochs(db, tx, owner.Account, expected.Id, prepared.Instance, prepared.RaidType);
-        if (runQuota is null && (prepared.RaidType != RaidKind.Anton || prepared.Source == AntonResourceRewards.Source)) return null;
+        if (runQuota is null && (prepared.RaidType != RaidKind.Anton || AntonResourceRewards.IsFormalSource(prepared.Source))) return null;
         long rewardEpoch = runQuota?.Reward ?? ReadRaidQuotaEpochs(db, tx, owner.Account, prepared.RaidType).Reward;
         command.Parameters.AddWithValue("$rewardEpoch", rewardEpoch);
         // 产品规格KB-20261026T064659-c2fb533dc5：每角色每周2次，周四06:00。
@@ -57,7 +57,7 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
         {
             command.CommandText += " AND raid_type=0";
             if (Convert.ToInt32(command.ExecuteScalar()) >= RaidRewardRules.WeeklyClearLimit) return null;
-            if (prepared.Source == AntonResourceRewards.Source)
+            if (AntonResourceRewards.IsFormalSource(prepared.Source))
             {
                 if (prepared.Phase is not (0 or 1) || prepared.FinalPhase != (prepared.Phase == 1)) return null;
                 string prefix = prepared.Phase == 0 ? "phase0" : "phase1";

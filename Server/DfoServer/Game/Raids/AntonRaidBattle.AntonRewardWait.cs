@@ -24,6 +24,9 @@ internal sealed partial class AntonRaidBattle
                 (HasAntonRewards ? AntonEligibility(actor.Character, phase) : LukeEligibility(actor.Character, phase)) is not { Eligible: true } ||
                 policy[phase].Offers.SingleOrDefault(offer => offer.Kind == kind && offer.Card == 0) is not { } frozen)
                 return null;
+            // 新版小队奖励由服务器自动交付，不占玩家四张团队牌的选择槽。
+            if (HasAntonRewards && kind == 3)
+                return automaticLuke && requested == 0 ? frozen : null;
             if (Kind == RaidKind.Fiendwar)
             {
                 if (requested > 3) return null;
@@ -108,7 +111,9 @@ internal sealed partial class AntonRaidBattle
         // DEAD COUNT四档与95 rank 2..5动画一致；>14保守使用最低档，待实机确认。
         byte rank = deaths <= 1 ? (byte)2 : deaths <= 5 ? (byte)3 : deaths <= 9 ? (byte)4 : (byte)5;
         uint seconds = lukePhaseAnchor is { } start ? checked((uint)Math.Max(0, Math.Floor(lukeClock.GetElapsedTime(start).TotalSeconds))) : 0;
-        antonResults[current.Phase] = new(0, checked((byte)current.Phase), seconds, deaths, rank, 0);
+        // 601的1进入已证失败分支；阶段、用时、死亡和评级沿本服同一封存统计，F固定抑制成功任务。
+        antonResults[current.Phase] = new(pendingTransition?.PhaseExpired == true ? (byte)1 : (byte)0,
+            checked((byte)current.Phase), seconds, deaths, rank, 0);
     }
 
     TimeSpan? AntonRewardWaitRemainingLocked()

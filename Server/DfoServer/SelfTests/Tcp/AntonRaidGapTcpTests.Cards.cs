@@ -13,7 +13,7 @@ internal static partial class AntonRaidGapTcpTests
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-10-28T00:00:00Z"));
         await using var fixture = await BootAsync(source, root, resources, "anton-raid-card600-601",
             """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
-        Create(fixture, resources, "antoncards", "AntonCards", 2);
+        Create(fixture, resources, "antoncards", "AntonCards", 2, pcroom: true);
         using var peer = Open(fixture, "antoncards", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
         peer.Select(); AntonRaidTcpTests.Drain(peer);
         Denied([1, 0], "没有Battle不能以660生成奖励");
@@ -30,10 +30,17 @@ internal static partial class AntonRaidGapTcpTests
             skip.All(p => p.Opcode != 600), "00只确认并提示跳过，不冒充影片结束");
         peer.Send(659, [1]);
         var opened = AntonTcpProbe.Barrier(peer, "659影片结束");
-        That(opened.Any(p => p is { Kind: 1, Opcode: 659, Body: [1] }) && opened.Count(p => p.Opcode == 600) == 2 &&
-            opened.FindIndex(p => p is { Opcode: 587, Body: [4,0] }) < opened.FindIndex(p => p.Opcode == 600), "01后state4再发布空选择列表");
-        foreach (var packet in opened.Where(p => p.Opcode == 600))
-            That(packet.Body.Length == 2 && packet.Body[1] == 0, "选择列表严格2B，不预填本人结果或猜测物品尾");
+        int openedState = opened.FindIndex(p => p is { Opcode: 587, Body: [4,0] });
+        int teamAt = opened.FindIndex(p => p is { Opcode: 600, Body: [3, ..] });
+        That(opened.Any(p => p is { Kind: 1, Opcode: 659, Body: [1] }) && opened.Count(p => p.Opcode == 600) == 4 &&
+            teamAt >= 0 && openedState > teamAt && opened.Where(p => p is { Opcode: 600, Body: [not 3, ..] })
+                .All(packet => opened.IndexOf(packet) > openedState), "01后完整class2权益先于state4，随后才发布1/0/PC房2空选择列表");
+        foreach (var packet in opened.Where(p => p is { Opcode: 600, Body: [not 3, ..] }))
+            That(packet.Body.Length == 2 && packet.Body[1] == 0, "可选牌列表严格2B，不预填本人手动结果");
+        var team = opened[teamAt].Body;
+        That(team.Length >= 6 && team[1] == 1 && team[4] == 0 && team.Length == 6 + 16 * team[5] &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+            "完整权益表为已持久阶段owner、冻结Card0与16B物品列，预填不发资产");
         peer.Send(659, [1]);
         That(AntonTcpProbe.Barrier(peer, "重复影片完成").All(p => p.Opcode is not (600 or 601 or 587)), "重复确认不重建牌组、不续期");
         // 不重新抽奖；直接读资格事务已经冻结的原计划，随机结果以数据库为准。
@@ -44,23 +51,25 @@ internal static partial class AntonRaidGapTcpTests
         var deniedStart = AntonTcpProbe.Barrier(peer, "Reward中666明确拒绝");
         Bytes(deniedStart.Single(p => p is { Kind: 1, Opcode: 666 }).Body, [0, 19, 0],
             "Reward中666复用不可开始错误0x13，不能确认已开始");
-        foreach (byte[] body in new byte[][] { [], [1], [1, 0, 0], [2, 0], [1, 4], [0, 255] })
+        foreach (byte[] body in new byte[][] { [], [1], [1, 0, 0], [3, 0], [1, 4], [0, 255] })
             Denied(body, "畸形长度或未配置kind/card不伪造展示和成功");
 
         var first = Claim(1, advances: false);
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "首牌提交真实资产回执");
         That(first.FindIndex(p => p.Opcode == 14) >= 0 &&
             first.FindIndex(p => p.Opcode == 14) < first.FindIndex(p => p is { Kind: 1, Opcode: 660 }),
-            "库存真实UID投影先于ACK660，结果展示仍未实现");
+            "库存真实UID投影先于ACK660");
         string assets = State();
         Claim(1, advances: false);
         That(assets == State(), "同阶段同牌只回放原回执，不增发或重抽");
         Claim(1, advances: false);
         That(assets == State(), "重复选择不制造另一笔奖励");
-        Claim(0, advances: true);
-        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]] &&
+        Claim(0, advances: false);
+        That(assets == State(), "自然kind0只确认牌背，不授予小队资产");
+        Claim(2, advances: true);
+        That(fixture.Query("SELECT kind FROM character_raid_reward_receipts ORDER BY kind") is [[1L], [2L], [3L]] &&
             frozen == fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs"),
-            "两类奖励提交后保留原阶段资格和冻结计划");
+            "团队1、PC房2及内部小队3提交后保留原阶段资格和冻结计划");
         clock.Advance(100);
         AntonTcpProbe.Barrier(peer, "休息100秒");
         peer.Send(666);
@@ -74,7 +83,7 @@ internal static partial class AntonRaidGapTcpTests
         That(AntonTcpProbe.Barrier(peer, "准备完成").Count(p => p is { Opcode: 587, Body: [2,1] }) == 1,
             "团长准备后只启动一次P2，旧休息回调无权重复推进");
         assets = State();
-        foreach (byte kind in new byte[] { 1, 0 })
+        foreach (byte kind in new byte[] { 1, 2 })
         {
             peer.Send(660, [kind, 3]);
             var replay = AntonTcpProbe.Barrier(peer, "阶段1重放阶段0回执");
@@ -82,6 +91,7 @@ internal static partial class AntonRaidGapTcpTests
                 replay.All(p => p.Opcode is not (600 or 601)) && assets == State(),
                 "旧阶段660可确认原资产，不能把600/601装入新阶段窗口");
         }
+        Denied([0, 3], "新阶段不能回放旧阶段牌背或向新窗口发送600");
         clock.Advance(20);
         That(AntonTcpProbe.Barrier(peer, "旧20秒截止").All(p => p is not { Opcode: 587, Body: [5,0] }), "选牌推进后旧截止不能重复处理");
 
@@ -102,9 +112,12 @@ internal static partial class AntonRaidGapTcpTests
         {
             peer.Send(660, [kind, 3]);
             var packets = AntonTcpProbe.Barrier(peer, "正式660领奖kind" + kind);
-            That(packets.All(p => p.Opcode is not (600 or 601)) &&
+            That(packets.All(p => p.Opcode != 601) &&
                 packets.Count(p => p is { Kind: 1, Opcode: 660, Body: [1] }) == 1,
-                "正式资产提交后ACK01，不发送已知错误的8B结果");
+                "正式资产提交后ACK01，660不重复发送阶段601");
+            foreach (var packet in packets.Where(packet => packet.Opcode == 600))
+                That(packet.Body is [_, 0] || packet.Body.Length >= 6 && packet.Body[1] == 1 &&
+                    packet.Body.Length == 6 + 16 * packet.Body[5], "600仅使用空牌背或完整16B物品行");
             That(packets.Any(p => p is { Kind: 0, Opcode: 587, Body: [5, 0] }) == advances,
                 "全部规定牌种确认后才发送休息态587");
             return packets;

@@ -67,6 +67,11 @@ internal static partial class RaidRequests
         BinaryPrimitives.ReadUInt32LittleEndian(body) == 110 &&
         BinaryPrimitives.ReadUInt32LittleEndian(body[4..]) == 3000 && body[8] == 2;
 
+    // Transmission_S_Last.act的显式110[-]100；不把其它对象/操作/减量解释为电池Last。
+    internal static bool AntonBatteryLast(ReadOnlySpan<byte> body) => body.Length == 9 &&
+        BinaryPrimitives.ReadUInt32LittleEndian(body) == 110 &&
+        BinaryPrimitives.ReadUInt32LittleEndian(body[4..]) == 100 && body[8] == 2;
+
     // ARAD 01DC6180: symbol:u32, value:u32, operation:u8。这里只开放三设施+1白名单。
     public static int? LukeFacilitySymbol(ReadOnlySpan<byte> body)
     {

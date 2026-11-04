@@ -12,7 +12,8 @@ internal sealed record AntonRaidRejoinReservation(RaidActor Original, AntonRaidB
 {
     internal RaidActor? Bound { get; set; }
 }
-internal sealed record AntonRaidRecovery(bool Restored, string Reason, Guid? Instance = null, Guid? Run = null);
+internal sealed record AntonRaidRecovery(bool Restored, string Reason, Guid? Instance = null, Guid? Run = null,
+    PartySnapshot? Party = null, PartyDungeonNotice? Scene = null);
 
 internal sealed partial class RaidRegistry
 {
@@ -58,7 +59,11 @@ internal sealed partial class RaidRegistry
                         return true;
                     }
                 });
-                return restored is null ? new(false, "binding-conflict") : new(true, "state-restored-wire-unimplemented", fact.Instance, fact.Run);
+                if (restored is null) return new(false, "binding-conflict");
+                var scene = actor.Session.CurrentFormalDungeonScene();
+                return new(true, "original-state-restored", fact.Instance, fact.Run, restored,
+                    scene is null ? null : new(PartyDungeonNoticeKind.AntonRejoinScene,
+                        restored.Members.Single(member => ReferenceEquals(member.Actor.Session, actor.Session)), restored.Members, scene));
             });
         }
         catch (InvalidOperationException) when (actors.Any(a => !a.IsCurrent)) { return new(false, "owner-changed"); }

@@ -33,7 +33,12 @@ internal static class AntonRaidTimerTests
         session.Select(created.Slot); session.MarkReady();
         var actor = new RaidActor(session, owner, session.SelectionEpoch, created.Id, created.Name, new(2, 19));
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
-        var script = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items).Find(0)!.Resources!.Script;
+        var definition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
+            antonMapPath: AntonRaidMapPaths.Bind(main.MapPath), antonMapPoolPaths: AntonRaidMapPaths.Paths).Find(0)!;
+        var script = definition.Resources!.Script;
+        QuestAntonPhaseProgressTests.RunResources(resources, script);
+        AntonFailureResultTests.Run(resources);
+        AntonConstructorTests.RunResources(resources, definition.Resources!.EntryCatalog!, script);
         That(script.Headers.Single(row => row.Tag == "[phase time over]").Values.Select(row => row.Number).SequenceEqual(new[] { 2400, 2400 }) &&
             script.Headers.Single(row => row.Tag == "[phase break time]").Values.Single().Number == 600,
             "PHASE TIME OVER与休息只读匹配2400/2400、600；秒制仅本服约定");
@@ -41,6 +46,7 @@ internal static class AntonRaidTimerTests
             "匹配PVF的PARTY MAX原值216=1、其它P1图=5，不解释并发语义");
         foreach (int dungeon in new[] { 221, 222, 223, 224 }) Hatchery(dungeon);
         Energy();
+        BatteryEnergy();
         PhaseReset();
         foreach (int dungeon in new[] { 212, 214 }) TimedPhaseReset(dungeon);
         PendingHatcheryAfterVolcano();
@@ -90,6 +96,76 @@ internal static class AntonRaidTimerTests
                 clock.Advance(240); clock.FireQueued();
                 That(battle.View.Symbols["[black volcano barrier]"] == stopped && battle.View.Dungeons[220] == RaidDungeonState.Open,
                     "火山通关取消充电，迟到回调不能污染心脏阶段");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
+
+        void BatteryEnergy()
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false);
+            var service = new LukeRaidClocks(clock, store, (_, _) => { });
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215);
+                Settle(battle, store); Rewards(battle, clock);
+                var maze = definition.Resources!.EntryCatalog!.Find(218)!.Mazes.Single();
+                var batteries = maze.RandomizedObjectGroups.Single(group => group.Objects.Any(row => row.ObjectId == 18865));
+                That(batteries is { SelectCount: 5, Regenerate: false } && batteries.Objects.Length == 8 &&
+                    batteries.Objects.All(row => row.ObjectId == 18865 && row.SpawnMode == 1),
+                    "真实累计PVF的18865为不再生五选八，100合同不借用普通怪或再生许可");
+                var selection = DungeonRandomizedObjectSelection.Create([batteries], _ => 0);
+                var ledger = new AntonDungeonObjectLedger(selection, clock);
+                var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+                using var reservation = battle.ReserveDungeon(new(battle.Instance, 1, 1), 218, [(actor, identity)])!;
+                reservation.Install();
+                AntonDungeonObjectDestructionFact? last = null;
+                DungeonRunSnapshot? latest = null;
+                int count = 0;
+                foreach (var row in selection.Groups[0].Objects)
+                {
+                    var map = maze.MapSpecification!.Single(map => map.Position == row.Map);
+                    latest = new(identity with { Epoch = count + 1 }, SinglePlayerDungeonPhase.Dungeon, map, []);
+                    var scope = battle.CaptureAntonObjectScope(actor, latest)!;
+                    ledger.OpenRoom(scope, row.Map);
+                    ushort key = checked((ushort)(count + 1));
+                    That(ledger.Register(scope, row.Map, 18865, actor.Character, key, row.PositionX, row.PositionY, 0) &&
+                        ledger.TryDestroy(scope, row.Map, actor.Character, key, out last), "资源电池绑定真实对象身份并产生销毁事实");
+                    var before = battle.View;
+                    That(ledger.ApplyBatteryLast(scope, row.Map, Commit) == 0 && ReferenceEquals(before, battle.View),
+                        "单独23不修改真实Battle屏障");
+                    That(!battle.ConfirmAntonObjectEnergy(actor, latest, last! with
+                        { Scope = scope with { HostEpoch = scope.HostEpoch + 1 } }, out _) &&
+                        !battle.ConfirmAntonObjectEnergy(actor, latest, last! with { EventId = last!.EventId + 1 }, out _),
+                        "Battle拒绝换host旧对象及不匹配冻结许可的事件身份");
+                    That(ledger.ReportBatteryLast(scope, row.Map) && ledger.ApplyBatteryLast(scope, row.Map, Commit) == 1 &&
+                        battle.View.Symbols["[black volcano barrier]"] == 10000 - 100 * (count + 1),
+                        "真实资源电池Last双事实每次只扣100");
+                    before = battle.View;
+                    That(battle.ConfirmAntonObjectEnergy(actor, latest, last!, out bool replayChanged) && !replayChanged &&
+                        ReferenceEquals(before, battle.View), "共享事件账本重复事实不改屏障或revision");
+                    count++;
+                    bool Commit(AntonDungeonObjectDestructionFact fact) => battle.ConfirmAntonObjectEnergy(actor, latest, fact, out _);
+                }
+                That(count == 5 && ledger.BatteryLastCount == 5, "Cave_02镜像只在共享Run的五份真实Last配对后累计五次");
+                battle.ReleaseDungeon(actor, identity.InstanceId);
+                That(!battle.ConfirmAntonObjectEnergy(actor, latest!, last!, out _), "释放Run后原对象事实不能再写Battle");
+                var nextIdentity = identity with { InstanceId = Guid.NewGuid() };
+                using var next = battle.ReserveDungeon(new(battle.Instance, 1, 1), 218, [(actor, nextIdentity)])!;
+                next.Install();
+                var snapshot = latest! with { Identity = nextIdentity };
+                var newScope = battle.CaptureAntonObjectScope(actor, snapshot)!;
+                var nextFact = last! with { Scope = newScope };
+                That(battle.ConfirmAntonObjectEnergy(actor, snapshot, nextFact, out bool changed) && changed &&
+                    battle.View.Symbols["[black volcano barrier]"] == 9400,
+                    "新Run的相同冻结选择序号拥有独立事件，不被旧Run消费污染");
+                That(battle.CompleteAntonReservedDungeon(new(nextIdentity, 218, [Guid.NewGuid()])
+                    { ClearMap = snapshot.CurrentMap }) is not null &&
+                    battle.ConfirmAntonEnergy(actor, snapshot with { Phase = SinglePlayerDungeonPhase.Settlement }) &&
+                    battle.View.Symbols["[black volcano barrier]"] == 6400,
+                    "对象100与正式清图后的终末3000使用独立事件，不互相替代");
+                battle.ReleaseDungeon(actor, nextIdentity.InstanceId);
             }
             finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         }

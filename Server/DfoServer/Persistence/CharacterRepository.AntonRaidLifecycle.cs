@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Raids;
+using DfoServer.Game.Quests;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
@@ -10,7 +11,14 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
     bool IAntonRaidLifecycleStore.IsRetryable(Exception error) => SqliteBusyRetry.IsBusy(error);
     // 复用666同事务签发的生命周期；阶段和通关次数独立于660领取，重复clear不重复计。
     public ImmutableArray<RaidPhaseEligibility> CommitAntonPhase(AntonRaidBattle.AntonPhaseSettlement candidate)
+        => CommitAntonPhase(candidate, []);
+
+    public ImmutableArray<RaidPhaseEligibility> CommitAntonPhase(AntonRaidBattle.AntonPhaseSettlement candidate,
+        ImmutableArray<AntonPhaseQuestSnapshot> snapshots)
     {
+        if (snapshots.IsDefault || snapshots.Select(row => row.Character).Distinct().Count() != snapshots.Length ||
+            snapshots.Any(row => !candidate.Members.Any(member => member.Character == row.Character && member.Account == row.Account)))
+            throw new InvalidDataException("安徒恩阶段任务快照不属于原成员");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitAntonPhase");
         using var tx = write.Transaction;
@@ -58,7 +66,11 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
             bool counts = eligible && candidate.Phase == 1;
             var receipt = new RaidPhaseEligibility(candidate.Instance, RaidKind.Anton, candidate.Phase, candidate.Event,
                 candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible,
-                candidate.TimedOut ? "phase-timeout" : eligible ? "eligible" : "admission-abandoned-or-weekly-limit", member.Policy.Source, candidate.Week, member.Policy.Offers);
+                candidate.TimedOut ? "phase-timeout" : eligible ? "eligible" : "admission-abandoned-or-weekly-limit", member.Policy.Source, candidate.Week, member.Policy.Offers)
+            {
+                AntonQuestProgress = eligible && snapshots.SingleOrDefault(row => row.Character == member.Character) is { } snapshot
+                    ? CommitAntonQuestProgress(db, tx, candidate.Phase, snapshot) : null
+            };
             command.Parameters["$receipt"].Value = JsonSerializer.Serialize(receipt);
             command.Parameters["$state"].Value = candidate.TimedOut ? 1 : candidate.Phase == 1 ? counts ? 2 : 1 : state;
             command.Parameters["$clear"].Value = counts ? candidate.Week : DBNull.Value;
@@ -72,5 +84,24 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
             CommitRaidGuildContribution(db, tx, candidate.Instance, RaidKind.Anton, result,
                 candidate.GuildParties, candidate.Anchor.ToUnixTimeSeconds());
         tx.Commit(); return result.MoveToImmutable();
+    }
+
+    AntonPhaseQuestProgress? CommitAntonQuestProgress(SqliteConnection db, SqliteTransaction tx, int phase,
+        AntonPhaseQuestSnapshot snapshot)
+    {
+        if (quests is null) return null;
+        var before = ReadActiveMainQuests(db, snapshot.Character, tx).ToImmutableArray();
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", snapshot.Character); command.Parameters.AddWithValue("$account", snapshot.Account);
+        command.CommandText = "SELECT revision FROM characters WHERE id=$id AND account=$account";
+        if (command.ExecuteScalar() is not long revision || revision != snapshot.Revision || !before.SequenceEqual(snapshot.Active))
+            throw new InvalidOperationException("安徒恩阶段任务角色或原版本已变化");
+        var after = QuestRaidPhaseProgress.Apply(before, snapshot.Bindings, quests, phase);
+        if (before.SequenceEqual(after)) return new(revision, revision, before, after) { Bindings = snapshot.Bindings };
+        WriteQuestConditions(db, tx, snapshot.Character, before, after);
+        command.Parameters.AddWithValue("$revision", revision);
+        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("安徒恩阶段任务版本提交未命中原角色");
+        return new(revision, checked(revision + 1), before, after) { Bindings = snapshot.Bindings };
     }
 }

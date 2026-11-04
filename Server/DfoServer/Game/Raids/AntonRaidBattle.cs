@@ -29,6 +29,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<string, long> LukeFacilityWriteEpochs { get; init; } = ImmutableDictionary<string, long>.Empty;
     // ACT使用原数值113/114；与etc的138/139分开，随原Battle候选发布。
     public ImmutableDictionary<int, int> LukeEnergySignals { get; init; } = ImmutableDictionary<int, int>.Empty;
+    // Constructor Last的四个原生客户端信号，不伪装成etc.symbol中不存在的字段。
+    public ImmutableDictionary<int, int> AntonConstructorSignals { get; init; } = ImmutableDictionary<int, int>.Empty;
     public bool AntonCardsReady { get; init; }
     public bool AntonPreparing { get; init; }
     public long AntonWaitAnchor { get; init; }
@@ -59,6 +61,7 @@ internal sealed partial class AntonRaidBattle
     readonly RaidScript script;
     sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, RaidDungeonRun? Run = null);
     readonly Dictionary<(Guid Run, ushort Character), DungeonBinding> entries = [];
+    readonly AntonRaidEventLedger antonEvents = new();
     readonly Dictionary<RaidActor, ImmutableArray<RaidPhaseRewardPolicy>> members = [];
     readonly Dictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>> originalLukePolicies = [];
     readonly LukeResourceRewards? lukeResourceRewards;
@@ -77,7 +80,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind is RaidKind.Luke or RaidKind.Fiendwar ? 8 : 20) || policy.Length != PhaseCount ||
                 policy.Any(p => string.IsNullOrWhiteSpace(p.Source) || p.Offers.IsEmpty ||
-                    p.Offers.Any(o => o.Kind is not (0 or 1) || o.Grants.IsEmpty) ||
+                    p.Offers.Any(o => (o.Kind is not (0 or 1) && !(HasAntonRewards && o.Kind is 2 or 3)) || o.Grants.IsEmpty) ||
                     p.Offers.Select(o => (o.Kind, o.Card)).Distinct().Count() != p.Offers.Length ||
                     p.Offers.Any(o => o.Display.Length > byte.MaxValue || o.Display.Any(r => r.Items.Length > byte.MaxValue) ||
                         2 + o.Display.Sum(r => 4 + 8 * r.Items.Length) > 65520)) ||
@@ -179,6 +182,7 @@ internal sealed partial class AntonRaidBattle
             foreach (var dungeon in script.Phases[view.Phase].Dungeons)
                 symbols[script.Symbols[dungeon.HpSymbol]] = dungeon.HpRaw - view.Symbols[dungeon.HpSymbol];
         return symbols.Select(row => (row.Key, row.Value)).Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value)))
+            .Concat(Kind == RaidKind.Anton && view.Phase == 1 ? view.AntonConstructorSignals.Select(row => (row.Key, row.Value)) : [])
             .OrderBy(row => row.Item1).ToArray();
     }
     internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>

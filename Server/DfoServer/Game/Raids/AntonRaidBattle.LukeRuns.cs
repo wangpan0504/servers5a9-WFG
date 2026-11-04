@@ -111,6 +111,13 @@ internal sealed partial class AntonRaidBattle
                     battle.entries.Add((run.Id, actor.Actor.Character), new(actor.Identity, run.Phase, run.Dungeon, run));
                 }
                 run.Installed = true;
+                if (battle.Kind == RaidKind.Anton && run.Dungeon is 218 or 221 or 222 or 223 or 224)
+                {
+                    var scope = new AntonRaidEventKey(battle.Instance, run.Id, run.Generation, run.Phase,
+                        checked((int)run.Dungeon), 1);
+                    if (!battle.antonEvents.Activate(scope))
+                        throw new InvalidOperationException("安徒恩对象事件账本无法激活当前 Run");
+                }
                 finished = true;
             }
         }
@@ -354,6 +361,8 @@ internal sealed partial class AntonRaidBattle
                 if (fiendwarEncounters.TryGetValue(run.Id, out var encounter) && current.FiendwarDungeonTimers.ContainsKey(encounter.Area))
                     current = current with { FiendwarDungeonTimers = current.FiendwarDungeonTimers.Remove(encounter.Area), Revision = current.Revision + 1 };
                 dungeonRuns.Remove(run.Id); fiendwarEncounters.Remove(run.Id); fiendwarBossReports.Remove(run.Id);
+                antonEvents.RemoveRun(run.Id);
+                RemoveAntonConstructorRun(run.Id);
                 if (current.FiendwarExpiredRuns.Contains(run.Id))
                     current = current with { FiendwarExpiredRuns = current.FiendwarExpiredRuns.Remove(run.Id), Revision = current.Revision + 1 };
             }
