@@ -39,13 +39,15 @@ internal static class GmEventTcpTests
             onlineGift.GetProperty("defaultState").GetString() == "默认开启" &&
             definitions[2257].GetProperty("defaultState").GetString() == "默认开启" &&
             definitions.TryGetValue(2370, out var attendance) && attendance.GetProperty("defaultState").GetString() == "默认开启" &&
-            attendance.GetProperty("supportsControl").GetBoolean() && !attendance.GetProperty("supportsSchedule").GetBoolean(),
-            "当前GM目录将2257、228和2370标为默认开启，保留228和2370只支持开关的能力");
+            attendance.GetProperty("supportsControl").GetBoolean() && !attendance.GetProperty("supportsSchedule").GetBoolean() &&
+            definitions[2208].GetProperty("defaultState").GetString() == "默认开启" &&
+            definitions[2208].GetProperty("supportsSchedule").GetBoolean(),
+            "当前GM目录将2257、228、2370和2208标为默认开启，保留228和2370只支持开关的能力");
         That(definitions.Values.All(row => !string.IsNullOrWhiteSpace(row.GetProperty("name").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("purpose").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("conditions").GetString())),
             "当前活动目录提供GM面板所需名称、用途和条件");
-        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (2257, true), (228, true), (2370, true) })
+        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (2257, true), (228, true), (2370, true), (2208, true) })
         {
             await State(id, "auto", defaultActive);
             foreach (string op in new[] { "on", "off", "auto" })

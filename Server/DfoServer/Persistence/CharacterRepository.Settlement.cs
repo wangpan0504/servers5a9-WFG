@@ -170,6 +170,7 @@ internal sealed partial class CharacterRepository
         // 推荐地下城通关按角色累计到u16上限，账号面板读取时求和；同一实例的重复报告已在上面提前返回。
         if (recommendedClear)
         {
+            RecordWeeklyAttendanceClear(db, tx, owner);
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$id", expected.Id);
             command.Parameters.AddWithValue("$account", owner.Account);

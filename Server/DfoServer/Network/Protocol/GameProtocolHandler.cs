@@ -57,7 +57,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
-    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null) : IConnectionProtocol
+    DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
+    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -173,6 +174,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
         if (dailyAttendance is not null) context.DailyAttendance = new(context, dailyAttendance, time ?? TimeProvider.System, log);
         if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
+        if (weeklyAttendance is not null) context.WeeklyAttendance = new(context, weeklyAttendance, projection, log);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -459,6 +461,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         }
                         await dailyFatigue.RefreshAsync();
                         if (context.PcRoomTimePoint is { } onlineRewards) await onlineRewards.RefreshAsync();
+                        if (context.WeeklyAttendance is { } weekly) await weekly.RefreshAsync(force: request.Opcode == (ushort)CmdPacketType.SET_PLAY_RESULT);
                         await revival.RefreshAsync();
                         await disguise.RefreshAsync();
                         await tagRevival.RefreshAsync();

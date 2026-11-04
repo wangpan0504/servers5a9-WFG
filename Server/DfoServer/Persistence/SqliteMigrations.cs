@@ -368,6 +368,8 @@ internal static class SqliteMigrations
             EndlessAdventureSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(195, "账号日签到进度与奖励事实", static (db, tx) => Execute(db, tx,
             DailyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(196, "周签到冻结赛季与账号进度", static (db, tx) => Execute(db, tx,
+            WeeklyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2672,7 +2674,9 @@ internal static class SqliteMigrations
             ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_pcroom_claims",PcRoomSchema.Definition.Split(';')[0]),
             ("character_pcroom_claims",PcRoomSchema.Definition.Split(';')[1]),
-            ("character_fatigue_acceleration",FatigueAccelerationSchema.Definition) })
+            ("character_fatigue_acceleration",FatigueAccelerationSchema.Definition),
+            ("weekly_attendance_season",WeeklyAttendanceSchema.Definition.Split(';')[0]),
+            ("account_weekly_attendance",WeeklyAttendanceSchema.Definition.Split(';')[1]) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -2786,6 +2790,8 @@ internal static class SqliteMigrations
         "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
         "SELECT account,day,elapsed_ms,qualified FROM account_pcroom_timepoint_days LIMIT 0",
         "SELECT account,day,earned FROM account_endless_adventure_days LIMIT 0",
+        "SELECT id,starts_at,ends_at,activated_at,weeks FROM weekly_attendance_season LIMIT 0",
+        "SELECT account,season_start,state FROM account_weekly_attendance LIMIT 0",
         "SELECT account,segment_id,day,total_ms FROM account_pcroom_timepoint_segments LIMIT 0",
         "SELECT account,kind,day,reward_index,recipient_id,mail_id,item_id,item_count,claimed_at FROM account_pcroom_timepoint_claims LIMIT 0",
         "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",
