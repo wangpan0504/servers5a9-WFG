@@ -48,6 +48,14 @@ internal static partial class AntonRaidGapTcpTests
         Load();
         foreach (var next in path.Skip(1))
         {
+            // 安徒恩的Boss死亡会立即判定本Run通关，之后的移动被服务端正确拒绝；若通往电池格的
+            // 途中房间就有Boss，本局无法走完电池格观测，按机制如实跳过而不把它当成失败。
+            if (Enumerable.Range(0, map[18]).Any(index =>
+                    map[19 + index * 22 + 13] == 3 && map[19 + index * 22 + 21] != 1))
+            {
+                TestCheck.Skip("anton.battery-boss-on-route", "218本局通往电池格的房间含Boss，清Boss即通关，按机制跳过电池格观测");
+                return;
+            }
             AntonTcpProbe.ClearRoom(peer, map, report, out _, out _, false);
             byte[] move = new byte[100]; move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
             peer.Send(45, move);

@@ -130,7 +130,7 @@ internal static partial class PartyDungeonTcpTests
             group.Peers[0].Send(16,Convert.FromHexString("94D659110400000100FFFF0000000000E21700000000000000"));
             if (scenario=="rollback")
             {
-                group.Peers[0].Expect(0,9); group.Peers[0].Closed();
+                group.Peers[0].ClosedAfterOptionalPartyRemoval();
                 That(fixture.Snapshot()==before,"深渊第二名队员SQL失败回滚全员门票、尝试号与revision");
                 fixture.Sql("DROP TRIGGER reject_coop_hell"); continue;
             }

@@ -35,7 +35,7 @@ internal static partial class PartyDungeonTcpTests
             string before = fixture.Snapshot();
             fixture.Sql("CREATE TRIGGER reject_otherverse_party BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id=" +
                 group.Peers[1].Id + " BEGIN SELECT RAISE(ABORT,'party entry rollback'); END");
-            group.Peers[0].Send(16, Coop.Selection(dungeon, 0, 2)); group.Peers[0].Expect(0, 9); group.Peers[0].Closed();
+            group.Peers[0].Send(16, Coop.Selection(dungeon, 0, 2)); group.Peers[0].ClosedAfterOptionalPartyRemoval();
             That(fixture.Snapshot() == before, "第二成员晚期SQL失败，全队异界或远古费用、次数和尝试号回滚");
             fixture.Sql("DROP TRIGGER reject_otherverse_party");
         }

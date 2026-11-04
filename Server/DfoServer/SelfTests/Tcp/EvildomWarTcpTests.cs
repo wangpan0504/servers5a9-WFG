@@ -199,7 +199,7 @@ internal static class EvildomWarTcpTests
                 leader.Send(16, selection);
                 if (scenario == "rollback")
                 {
-                    leader.Expect(0, 9); leader.Closed();
+                    leader.ClosedAfterOptionalPartyRemoval();
                     That(peers.Skip(1).All(peer => !Drain(peer).Any(packet => packet.Opcode is 28 or 29)) && fixture.Snapshot() == assets,
                         "后续队员SQL失败，全队次数、疲劳和尝试号原子回滚");
                     foreach (var peer in peers) GuildTrainingEntryTcpTests.CheckCoins(fixture, peer.Id, 20);

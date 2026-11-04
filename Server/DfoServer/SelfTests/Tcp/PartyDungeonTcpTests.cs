@@ -158,8 +158,7 @@ internal static partial class PartyDungeonTcpTests
             fixture.Sql("CREATE TRIGGER reject_party_member BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id=" + beta.Id +
                 " BEGIN SELECT RAISE(ABORT,'party entry rollback'); END");
             alpha.Send(16, selection);
-            alpha.Expect(0, 9);
-            alpha.Closed();
+            alpha.ClosedAfterOptionalPartyRemoval();
             That(!Drain(beta).Any(p => p is { Kind: 0, Opcode: 28 or 29 }),
                 "入场事务失败不向另一成员安装副本或发送入场成功");
             That(fixture.Snapshot() == before && fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == objects &&

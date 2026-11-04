@@ -237,14 +237,16 @@ internal static partial class AntonRaidGapTcpTests
         That(AntonTcpProbe.Barrier(peer, "Completed回城后的旧重试及回城").All(p => p.Opcode is not (72 or 28 or 29)),
             "旧菜单不能在Completed后安装新Run或重复成功");
         peer.Dispose(); await fixture.StopAsync();
+        // 旧实例回收必须在同进程宿主完全停止后、重开新宿主前核对：时钟为两份宿主共用，
+        // 重开后的周签到等活动轮询是当前连接的合法one-shot，不能与旧实例残留混为一谈。
+        int callbacks = clock.Callbacks; clock.Advance(3600);
+        That(clock.Callbacks == callbacks, "结束/Host停止后旧实例时钟已回收");
         _ = new CharacterRepository(fixture.Database);
         That(finalAssets == Assets() && completed == fixture.Snapshot("SELECT * FROM character_raid_runs"), "重开仓储保留完整资产、阶段事件、冻结奖励和最终周通关");
         await fixture.StartAsync("reopened");
         using var reopened = Open(fixture, "phaseformal", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
         reopened.Select(premiumPcRoom: true); AntonRaidTcpTests.Drain(reopened);
         That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE raid_type=0 AND state=2") is [[1L]], "重建Host不重计最终通关");
-        int callbacks = clock.Callbacks; clock.Advance(3600);
-        That(clock.Callbacks == callbacks, "结束/Host停止后旧实例时钟已回收");
 
         void AssertHp(int id, int expected)
         {
