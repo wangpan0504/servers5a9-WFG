@@ -1461,6 +1461,12 @@ internal sealed partial class GameSession
             var at = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var basis = DungeonKillExperiencePolicy.Plan(dungeon.Run, pending, rewards, Selected.Level);
             var bonuses = PlanExperience(Selected, ExperienceEvent.Kill, basis.Amount, 0, at.ToUnixTimeSeconds(), dungeon.Entry.DungeonId, dungeon.Entry.ExperienceEquipmentModule);
+            if (PartyDungeon is { IsExecuting: true } party)
+            {
+                // 只认本实例当前成员，不用城镇队伍或入场时的人数；随原死亡冻结，重放不重新拆分。
+                int members = party.Members.Count(member => member.IsCurrent() && ReferenceEquals(member.Actor.Session.PartyDungeon, party));
+                if (members > 1) bonuses = bonuses.SplitPartyDisplay(rewards.GetPartyRate(members));
+            }
             dungeon.PendingDeathReward = (pending, basis with
                 { BaseAmount = basis.Amount, Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                     PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at);

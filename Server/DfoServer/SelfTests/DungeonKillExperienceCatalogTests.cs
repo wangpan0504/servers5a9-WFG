@@ -20,11 +20,21 @@ internal static class DungeonKillExperienceCatalogTests
             DungeonKillExperiencePolicy.Calculate(72, 1, 1.3f, 1, 3, 3) == 93 &&
             DungeonKillExperiencePolicy.Calculate(95, 1, 1.3f, 1, 3, 5) == 137,
             "真实Lv3和相对Lv5怪物的104/93/137经验");
-        string Resolve(int id) => id == 1 ? "[dungeon difficulty exp bonusrate]" : "[monster exp bonusrate]";
+        string Resolve(int id) => id switch { 1 => "[dungeon difficulty exp bonusrate]", 3 => "[party user number exp bonusrate]",
+            _ => "[monster exp bonusrate]" };
         PvfToken[] table = [new(0, 1), new(0, 30)];
         PvfToken[] server = [new(3, 1), new(2, BitConverter.SingleToInt32Bits(1.3f)), new(0, 2), new(2, BitConverter.SingleToInt32Bits(2.5f)),
             new(0, 3), new(0, 4), new(3, 2), new(0, 1)];
         var catalog = DungeonKillExperienceCatalog.Parse(table, server, Resolve);
+        That(catalog.GetPartyRate(2) == 1, "缺可选人数倍率不虚构组队分量或阻断已有经验");
+        PvfToken[] party = [new(3, 3), new(0, 1), new(2, BitConverter.SingleToInt32Bits(1.5f)),
+            new(2, BitConverter.SingleToInt32Bits(2.5f)), new(0, 4)];
+        var partyCatalog = DungeonKillExperienceCatalog.Parse(table, [..server, ..party], Resolve);
+        That(partyCatalog.GetPartyRate(1) == 1 && partyCatalog.GetPartyRate(2) == 1.5f &&
+            partyCatalog.GetPartyRate(3) == 2.5f && partyCatalog.GetPartyRate(4) == 4,
+            "人数显示倍率读取实际资源，可保留非整数而不是写死人数");
+        Reject<InvalidDataException>(() => DungeonKillExperienceCatalog.Parse(table, [..server, ..party[..^1]], Resolve), "残缺人数倍率拒绝");
+        Reject<InvalidDataException>(() => DungeonKillExperienceCatalog.Parse(table, [..server, ..party, ..party], Resolve), "重复人数倍率拒绝");
         That(catalog.GetMonsterRate(0, true) == 3 && catalog.GetMonsterRate(3, true) == 1 &&
             catalog.GetMonsterRate(9, false) == 1 && catalog.GetDifficultyRate(5) == 1,
             "单项怪物倍率覆盖Boss及越界类型，精英三倍不加在Boss上");
@@ -43,6 +53,8 @@ internal static class DungeonKillExperienceCatalogTests
     {
         int checks = Count;
         var table = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+        That(Enumerable.Range(1, 4).All(members => table.GetPartyRate(members) == members),
+            "匹配PVF人数经验倍率为1/2/3/4，用于击杀播报份额拆分");
         That(table.GetExperience(1) == 30 && table.GetExperience(2) == 60 &&
             table.GetExperience(3) == 72 && table.GetExperience(300) == 64906,
             "基础经验直接使用匹配表的等级与经验整数对");

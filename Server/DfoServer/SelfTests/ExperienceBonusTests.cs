@@ -27,6 +27,27 @@ internal static class ExperienceBonusTests
         That(combined.Applied(121).Extra == 21 && combined.Applied(99).Extra == 0 &&
             combined.Applied(99).Ordinary == 99, "经验封顶按实际额度分配，分项总和不超到账");
         That(combined.Scale(3).Total == combined.Total * 3, "批量任务按一次奖励分项等比例扩展，不重算资格");
+        var shared = ExperienceBonuses.Calculate(101, 101,
+            [new(ExperienceBonusSource.GrowthContract, 20), new(ExperienceBonusSource.Potion, 100), new(ExperienceBonusSource.Guild, 10)]);
+        var split = shared.SplitPartyDisplay(2);
+        That(split.Total == shared.Total && split.Ordinary == 50 && split.Amount(ExperienceBonusSource.Party) == 51 &&
+            split.Display(split.Total).GrowthContractExperience == 20 && split.Display(split.Total).PotionExperience == 101 &&
+            split.Display(split.Total).GuildExperience == 10,
+            "双人只把普通101拆为基础50和队伍51，其他来源不改类、不重新发经验");
+        That(shared.SplitPartyDisplay(3).Ordinary == 33 && shared.SplitPartyDisplay(4).Ordinary == 25 &&
+            shared.SplitPartyDisplay(1.5f).Ordinary == 67 && ReferenceEquals(shared.SplitPartyDisplay(1), shared),
+            "单人保持零队伍分量，三四人及小数人数倍率按截断后的基础差计算");
+        That(split.Applied(30).Total == 30 && split.Display(30).PartyExperience == 0 &&
+            split.Display(80).PartyExperience == 0 && split.Display(200).PartyExperience == 29 &&
+            split.Scale(2).Amount(ExperienceBonusSource.Party) == 102,
+            "经验封顶只展示已到账分量，冻结拆分和批量缩放不重算队伍资格");
+        Throws(() => split.SplitPartyDisplay(2));
+        Throws(() => shared.SplitPartyDisplay(float.NaN));
+        var unlabelled = ExperienceBonuses.Calculate(100, 100,
+            [new(ExperienceBonusSource.Equipment, 10),new(ExperienceBonusSource.BlackDiamond, 5),
+                new(ExperienceBonusSource.Avatar, 2),new(ExperienceBonusSource.Creature, 5),new(ExperienceBonusSource.Event, 20)]);
+        That(unlabelled.Display(unlabelled.Total) == CharacterExperienceDisplay.Ordinary && unlabelled.Total == 142,
+            "未证独立槽的来源保留绝对经验，不误归队伍、普通Buff或伪造特权资源ID");
         Throws(() => ExperienceBonuses.Calculate(1, 1, [new(ExperienceBonusSource.Guild, -1)]));
         Throws(() => ExperienceBonuses.Calculate(1, 1, [new(ExperienceBonusSource.Guild, 1), new(ExperienceBonusSource.Guild, 2)]));
         Throws(() => ExperienceBonuses.Calculate(uint.MaxValue, uint.MaxValue, [new(ExperienceBonusSource.Event, 100)]));
