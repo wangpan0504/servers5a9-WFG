@@ -14,7 +14,9 @@ internal static partial class LotteryTcpTests
     {
         const int pot = 2749786;
         var items = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery-gold-cost"), resources: resources);
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        clock.Advance(DateTimeOffset.UtcNow - clock.GetUtcNow());
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery-gold-cost"), resources: resources, clock: clock);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -86,6 +88,7 @@ internal static partial class LotteryTcpTests
                 fixture.Query("PRAGMA foreign_key_check").Length == 0,
                 "重启与重登保留收费结果、完整实例和UID，数据库完整");
         }
+        LegacyPaid(fixture, resources, repo, owners);
         await fixture.StopAsync();
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +

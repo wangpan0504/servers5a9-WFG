@@ -196,6 +196,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        bool finiteLegacy = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+1$");
+        // 普通实物罐只复用有限奖池；动作型旧物品不能借此跳过独立玩法。
+        if (finiteLegacy && Regex.IsMatch(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase))
+            return new([], "普通袖珍罐动作声明未支持");
         ItemMaterialCost? lotteryUseNeedItem = null;
         uint lotteryGoldCost = 0;
         var goldCosts = Regex.Matches(tags,
@@ -206,7 +210,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             int end = declaration.Index + declaration.Length;
             int next = tags.IndexOf('[', end);
             // 付费金币奖励的净增量回包尚未闭合；费用只接入类型1的有限实物池。
-            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$") ||
+            if ((!finiteLegacy && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
                 goldCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
                 !declaration.Value.Equals("[lottery use cost]", StringComparison.OrdinalIgnoreCase) ||
                 !IsRootDeclaration(tags, declaration.Index) ||
@@ -320,7 +324,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     CultureInfo.InvariantCulture, out int abilityGrade) || abilityGrade < 0)
                 return new([], "custom ability grade");
         }
-        if (type == "legacy")
+        if (type == "legacy" && !finiteLegacy)
         {
             // [legacy] 的开箱语义只认 [action type] `[rune random box]` 族 档；其他动作与参数保持未实现。
             if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+0$"))
@@ -329,11 +333,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], pending!);
             return new([], null) { RuneBox = (family, tier), Lottery = true };
         }
-        if (type == "upgradable legacy")
+        if (type == "upgradable legacy" || finiteLegacy)
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
             string lotteryType = PvfScript.Section(text, "stackable type").Trim();
-            if (!Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
+            if (!finiteLegacy && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
                 return new([], "袖珍罐子类型待确认");
             bool allowsGold = lotteryType.EndsWith('0');
             var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);

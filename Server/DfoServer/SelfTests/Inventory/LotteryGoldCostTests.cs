@@ -40,6 +40,7 @@ internal static class LotteryGoldCostTests
 
     public static void RunResources(ItemResources items, TownCatalog towns)
     {
+        LegacyPaidPotTests.Run(towns, items);
         int checks = Count;
         const int potId = 2749786;
         const uint cost = 2000;
