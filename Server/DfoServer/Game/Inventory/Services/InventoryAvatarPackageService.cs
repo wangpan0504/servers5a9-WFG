@@ -92,6 +92,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var materialDefinitions = new List<(ItemTemplate Template, int Amount)>();
         var creatureDefinitions = new List<(ItemTemplate Template, int Amount)>();
         var stackableDefinitions = new List<(ItemTemplate Template, int Amount)>();
+        var walletRewards = new Dictionary<CurrencyKind, int>();
         long total = 0, equipmentTotal = 0, materialStacks = 0, creatureTotal = 0, stackableStacks = 0;
         try
         {
@@ -136,6 +137,14 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             foreach (var row in materialRows)
             {
                 var template = items.Get(row.ItemId);
+                if (CurrencyWallet.RewardKind(row.ItemId) is { } walletKind)
+                {
+                    if (WalletRowDefinitionError(row, template) is { } walletError) return RejectOpen(walletError);
+                    int walletAmount = checked(row.Count * count);
+                    walletRewards[walletKind] = checked(walletRewards.GetValueOrDefault(walletKind) + walletAmount);
+                    totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + walletAmount);
+                    continue;
+                }
                 if (EtcRowDefinitionError(row, template, pieces) is { } materialError) return RejectOpen(materialError);
                 int amount = checked(row.Count * count);
                 if (amount > template.StackLimit) return InventoryResult.Reject(4);
@@ -155,6 +164,14 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             foreach (var row in stackableRows)
             {
                 var template = items.Get(row.ItemId);
+                if (CurrencyWallet.RewardKind(row.ItemId) is { } walletKind)
+                {
+                    if (WalletRowDefinitionError(new(row.ItemId, row.Count), template) is { } walletError) return RejectOpen(walletError);
+                    int walletAmount = checked(row.Count * count);
+                    walletRewards[walletKind] = checked(walletRewards.GetValueOrDefault(walletKind) + walletAmount);
+                    totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + walletAmount);
+                    continue;
+                }
                 if (StackableRowDefinitionError(row, template, pieces) is not null) return InventoryResult.Reject(19);
                 int amount = checked(row.Count * count);
                 if (amount > template.StackLimit) return InventoryResult.Reject(4);
@@ -276,6 +293,18 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         }
         var grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, prototypes, items,
             goldLimits, pieces, now, allowOverflowMail: allowOverflowMail);
+        if (grant.Accepted && walletRewards.Count != 0)
+        {
+            var wallet = grant.Plan!.After;
+            var currency = new CurrencyService(goldLimits);
+            foreach (var (kind, amount) in walletRewards)
+            {
+                var walletGrant = currency.Grant(character with { Inventory = wallet }, kind, amount);
+                if (!walletGrant.Accepted) return walletGrant;
+                wallet = walletGrant.Plan!.After;
+            }
+            grant = new(true, 0, grant.Plan!.WithAfter(wallet));
+        }
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4) with
             {
@@ -382,6 +411,15 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             template.StackLimit <= 0 || !template.Expiration.SupportsCreation || template.IsPremiumService || template.HasAcquisitionEffect ||
             CurrencyWallet.RewardKind(row.ItemId) is not null || pieces.ByPiece.ContainsKey(row.ItemId))
             return "avatar_etc_consumable_row_definition";
+        return null;
+    }
+
+    internal static string? WalletRowDefinitionError(AvatarPackageMaterialRow row, ItemTemplate template)
+    {
+        if (row.ItemId <= 0 || row.Count == 0 || template.Id != row.ItemId ||
+            template.Kind is not (ItemKind.Material or ItemKind.Consumable) ||
+            template.StackLimit <= 0 || template.IsPremiumService || template.HasAcquisitionEffect)
+            return "avatar_wallet_row_definition";
         return null;
     }
 
