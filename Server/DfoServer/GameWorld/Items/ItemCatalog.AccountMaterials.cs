@@ -16,9 +16,7 @@ internal sealed partial class ItemCatalog
         if (equipment || !text.Has("stack in account inventory") && !text.Has("stack in account common item inventory")) return null;
         var raw = StackableDefinition(id) ?? throw new InvalidDataException("账号材料缺少堆叠物品声明");
         bool common = text.Has("stack in account common item inventory");
-        // 共通材料使用原生list45，普通账号材料使用list44；服务端均复用同一账号余额事务。
-        if (common && text.Section("stack in account common item inventory").Trim().Length != 0)
-            throw new InvalidDataException("账号共通材料容器声明无效：" + id);
+        // 共通声明按标记存在启用，不要求正文为空；list45与普通账号材料list44共用账号余额事务。
         if (!common && (raw.UnsupportedFields.Contains("stack in account inventory") || raw.DeclaredStackInAccountInventory is not (0 or 1)))
             throw new InvalidDataException("账号材料容器声明无效：" + id);
         if (!common && raw.DeclaredStackInAccountInventory == 0) return null;
