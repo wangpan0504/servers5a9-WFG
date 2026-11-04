@@ -17,8 +17,8 @@ internal static class PcRoomTimePointTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var definition = ServerEventService.Definition(228);
-        That(definition.Name == "累积在线得好礼" && definition.DefaultState == "默认关闭" && !definition.SupportsSchedule,
-            "GM目录按真实活动228注册名称、默认关闭和开关政策");
+        That(definition.Name == "累积在线得好礼" && definition.DefaultState == "默认开启" && !definition.SupportsSchedule,
+            "GM目录按真实活动228注册名称、默认开启和开关政策");
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-28T20:00:00Z"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "pcroom-timepoint"),
             gm: true, resources: resources, clock: clock);
@@ -40,7 +40,7 @@ internal static class PcRoomTimePointTcpTests
         TcpPeer client = original;
         original.Select();
         Request();
-        State(0, 0, 0, 0, "默认关闭仍可查询真实零进度");
+        State(0, 0, 0, 0, "隔离夹具显式关闭后仍可查询真实零进度");
         clock.Advance(TimeSpan.FromMinutes(5));
         Request(1, 0xff);
         State(0, 0, 0, 0, "关闭时在线和领奖都不产生时长、领取位或邮件");

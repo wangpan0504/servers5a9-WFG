@@ -12,7 +12,7 @@ internal enum ServerNoticeDisplay : byte
     InformationMode100 = 1, // 同一1006窗口附参数100；不将该参数猜成确认结果或服务器业务成功。
     Chat = 2, // 聊天栏系统消息。
     Toast = 3, // 客户端固定约两秒的屏幕短提示。
-    ItemList = 4, // 底层问题：需要count:u8及每项两个u32；字段的业务来源未接入，不能用文本替代。
+    ItemList = 4, // count:u8及itemId/count各u32；活动发奖使用专用物品正文，不能用文本替代。
     ToastWithOptions = 5 // 底层问题：文本后必读两个u8，第一项用途未闭合，第二项写短提示对象+108。
 }
 
@@ -46,7 +46,7 @@ internal static class ServerNoticePackets
         if (!Enum.IsDefined(display)) throw new ArgumentOutOfRangeException(nameof(display));
         if (display is ServerNoticeDisplay.ItemList or ServerNoticeDisplay.ToastWithOptions)
             throw new NotSupportedException(display == ServerNoticeDisplay.ItemList
-                ? "NOTI502 type4 requires count:u8 and two u32 values per row; source semantics are not integrated."
+                ? "NOTI502 type4 requires a dedicated itemId/count payload, not text."
                 : "NOTI502 type5 requires two u8 options after text; option semantics are not verified.");
         ArgumentNullException.ThrowIfNull(text);
         int length = CharacterName.Encoding.GetByteCount(text);

@@ -35,6 +35,8 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort PcRoomTimePointId = 228;
     public static IReadOnlyList<ServerEventDefinition> Definitions => ServerEventDefinition.Registered;
     readonly object updates = new();
+    ServerEventSchedule endlessAdventureSchedule = store.Read(EndlessAdventurePolicy.EventId);
+    public bool IsEndlessAdventureActive(DateTimeOffset now) => Volatile.Read(ref endlessAdventureSchedule).IsActive(now);
     public const ushort BattlePassId = 2520;
     ServerEventSchedule battlePassSchedule = new(BattlePassId);
     DateTimeOffset? battlePassStart, battlePassEnd;
@@ -58,7 +60,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort GuildHongbaoId = 2378;
     public const ushort JonathanVisibilityId = 2395;
     public static bool DefaultActive(ushort id) => id is MileageShopId or NolanVisibilityId or
-        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId;
+        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or PcRoomTimePointId;
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
     public void NotifyPromotionChanged()
@@ -82,6 +84,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
         var schedule = store.Read(eventId);
         schedule.Validate();
         if (eventId == BattlePassId) Volatile.Write(ref battlePassSchedule, schedule);
+        if (eventId == EndlessAdventurePolicy.EventId) Volatile.Write(ref endlessAdventureSchedule, schedule);
         return State(schedule);
     }
 
@@ -137,6 +140,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     {
         ushort eventId = schedule.EventId;
         if (eventId == BattlePassId) Volatile.Write(ref battlePassSchedule, schedule);
+        if (eventId == EndlessAdventurePolicy.EventId) Volatile.Write(ref endlessAdventureSchedule, schedule);
         if (eventId == Strongway2019Id) Interlocked.Increment(ref strongway2019DisplayRevision);
         var state = State(schedule);
         Changed?.Invoke(new(state, time.GetUtcNow(), time.GetTimestamp()));

@@ -100,6 +100,7 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,
     Character? PreviousCharacter = null)
 {
+    public int EndlessAdventureAmount { get; init; }
     public uint GuildMileageGuildId { get; init; }
     public DfoServer.Game.Guild.GuildContributionCommit? GuildContribution { get; init; }
     public DfoServer.Game.Guild.GuildDungeonProgress? GuildDungeon { get; init; }

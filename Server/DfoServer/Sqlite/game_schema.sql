@@ -2520,6 +2520,12 @@ CREATE TABLE character_fatigue_acceleration(
     enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN(0,1)),
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE account_endless_adventure_days(
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(day BETWEEN 0 AND 3652058),
+  earned INTEGER NOT NULL CHECK(earned BETWEEN 0 AND 200),
+  PRIMARY KEY(account,day)
+) STRICT;
 CREATE TABLE account_pcroom_timepoint_days(
   account TEXT NOT NULL,
   day INTEGER NOT NULL CHECK(day BETWEEN 10101 AND 99991231),

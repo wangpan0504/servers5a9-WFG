@@ -121,12 +121,13 @@ internal static class QuestCycleContinuationTests
                 "重复15重放原初始化，等待真实加载完成前仍延后切日");
             var loaded = f.Session.CompleteFormalDungeonLoading();
             That(loaded is not null && f.Session.Phase == SessionPhase.Dungeon && !f.Session.HasFormalDungeonContinuation() &&
-                !loaded.Entry.IsOrdinary && loaded.Character.Revision == reserved.Revision &&
-                loaded.Character.Fatigue == reserved.Fatigue && f.Session.CanPublishFormalDungeon(loaded),
-                "真实任务路线加载完成不扣普通疲劳，清除连图pending并发布当前副本");
+                !loaded.Entry.IsOrdinary && loaded.Character.Revision == reserved.Revision + 1 &&
+                loaded.Character.Fatigue == reserved.Fatigue!.ConsumeOrdinaryRoom() &&
+                Same(loaded.Character,f.Read()) && f.Session.CanPublishFormalDungeon(loaded),
+                "正常任务路线加载同事务扣一次真实疲劳，清除连图pending并发布当前副本");
             var identity = loaded!.Snapshot.Identity;
             var rolled = f.Session.AdvanceQuestCycle(after);
-            That(rolled is not null && rolled.Character.Revision == reserved.Revision+1 &&
+            That(rolled is not null && rolled.Character.Revision == loaded.Character.Revision+1 &&
                 rolled.Character.QuestCycleDay == QuestCycle.Day(after) && rolled.Character.CompletedQuests.Length == 0 &&
                 rolled.Character.QuestDailyClaims.Count == 0 && rolled.Character.ActiveMainQuests.SequenceEqual(reserved.ActiveMainQuests) &&
                 rolled.Character.DungeonState == reserved.DungeonState && f.Session.DungeonSnapshot!.Identity == identity &&

@@ -14,6 +14,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
 {
     // 仅记录本连接已写出的任务期段；账号任务状态仍由原Session和仓储持有。
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
+    // 本连接当前目录的账号材料显示槽；余额仍只取Selected的钱包，不进入实体库存。
+    internal (long Epoch, int[] ItemIds)? ActivityCalendarItems { get; set; }
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
     internal Func<Task>? AfterDispatch { get; set; }

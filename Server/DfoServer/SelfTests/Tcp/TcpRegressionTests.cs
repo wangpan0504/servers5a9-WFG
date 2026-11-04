@@ -101,6 +101,16 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("pcroom-timepoint", PcRoomTimePointTcpTests.RunAsync),
+        ("endless-adventure", async (_, _, resources) =>
+        {
+            Inventory.AccountMaterialTests.RunCalendarCore();
+            DungeonSettlementTests.RunEndlessAdventureCore();
+            QuestCycleContinuationTests.RunCore();
+            DungeonSettlementTests.RunEndlessAdventureResources(resources);
+            await ActivityCalendarItemTests.RunAsync(resources);
+        }),
+        ("endless-adventure-tcp", FormalDungeonTcpTests.RunEndlessAdventureAsync),
+        ("endless-adventure-flow", (options, root, resources) => FormalDungeonTcpTests.RunFatigueAccelerationExperienceAsync(options, root, resources, true)),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", async (options, root, _) =>

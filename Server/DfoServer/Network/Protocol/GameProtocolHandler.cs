@@ -55,7 +55,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     Strongway2019Projection? strongwayProjection = null,
     DfoServer.GameWorld.PcRoom.PcRoomCatalog? pcRoom = null,
     DfoServer.Game.Events.PcRoomTimePointService? pcRoomTimePoint = null,
-    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null) : IConnectionProtocol
+    DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
+    DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -133,7 +134,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
-            directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics);
+            directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
+            endlessAdventure: endlessAdventure);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };

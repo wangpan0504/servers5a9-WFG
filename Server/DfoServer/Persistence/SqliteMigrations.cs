@@ -364,6 +364,8 @@ internal static class SqliteMigrations
             Execute(db, tx, GuildNpcItemCraftWeekSchema.Sql);
             Execute(db, tx, GuildDungeonScrollSchema.Sql);
         }),
+        new(194, "无尽大冒险账号每日产币额度", static (db, tx) => Execute(db, tx,
+            EndlessAdventureSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2052,6 +2054,16 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 活动验证库曾将日额度表记为192；仅完整旧攻坚结构缺少正式额度表时补跑主线192起。
+        if (version == 192 && current >= 194 &&
+            KnownTable(db, tx, "account_endless_adventure_days", EndlessAdventureSchema.Definition) &&
+            KnownTable(db, tx, "character_raid_runs", RaidGuildContributionSchema.Definition) &&
+            KnownTable(db, tx, "character_raid_reward_receipts", RaidLifecycleSchema.FiendwarRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) &&
+            KnownTable(db, tx, "account_fiendwar_guides", RaidLifecycleSchema.FiendwarGuideBindings))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_raid_quota_epochs'";
+            if (query.ExecuteScalar() is 0L) version = 191;
+        }
         // 228验证分支曾使用v186；精确匹配其三表且尚无正式战令表时，从v185补跑主线。
         if (version == 186 && current >= 191)
         {
@@ -2766,6 +2778,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision,claimed FROM character_dungeon_card_rewards LIMIT 0",
         "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
         "SELECT account,day,elapsed_ms,qualified FROM account_pcroom_timepoint_days LIMIT 0",
+        "SELECT account,day,earned FROM account_endless_adventure_days LIMIT 0",
         "SELECT account,segment_id,day,total_ms FROM account_pcroom_timepoint_segments LIMIT 0",
         "SELECT account,kind,day,reward_index,recipient_id,mail_id,item_id,item_count,claimed_at FROM account_pcroom_timepoint_claims LIMIT 0",
         "SELECT character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot,operation_id,operation_kind FROM character_quest_skip_receipts LIMIT 0",

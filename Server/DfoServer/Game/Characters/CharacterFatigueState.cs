@@ -50,9 +50,9 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
         return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)(Remaining - amount) };
     }
 
-    public CharacterFatigueState ConsumeOrdinaryRoom()
+    public CharacterFatigueState ConsumeOrdinaryRoom(ushort amount = 1)
     {
         Validate();
-        return this with { Used = (ushort)Math.Min(Maximum, Used + 1), Remaining = (ushort)Math.Max(0, Remaining - 1) };
+        return this with { Used = (ushort)Math.Min(Maximum, Used + amount), Remaining = (ushort)Math.Max(0, Remaining - amount) };
     }
 }

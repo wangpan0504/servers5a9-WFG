@@ -24,6 +24,7 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
     public BossRushClearReward? BossRushReward { get; init; }
+    public int EndlessAdventureAmount { get; init; }
 }
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。
@@ -34,6 +35,14 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
 {
     private readonly byte[] report = reportBody.ToArray();
     public Guid EventId { get; } = Guid.NewGuid();
+    public DfoServer.Game.Events.EndlessAdventureClear? EndlessAdventure { get; private set; }
+    bool endlessAdventureFrozen;
+    public void FreezeEndlessAdventure(DfoServer.Game.Events.EndlessAdventureClear? reward)
+    {
+        if (endlessAdventureFrozen) return;
+        EndlessAdventure = reward;
+        endlessAdventureFrozen = true;
+    }
     public DungeonClearFact Fact { get; } = fact;
     public ReadOnlySpan<byte> ReportBody => report;
     public DungeonClearExperienceReward Reward { get; } = reward;

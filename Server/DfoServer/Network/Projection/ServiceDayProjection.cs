@@ -62,6 +62,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                     expired.Character.Revision, Slots = expiry.Plan.ChangedSlots.Length });
         }
         await BossSelectionBuffProjection.PostAsync(context);
+        await EndlessAdventureProjection.PublishAsync(context);
+        if (context.Session.NeedsEndlessAdventureRefresh) return false;
         town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;

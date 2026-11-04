@@ -73,6 +73,7 @@ internal static class SelfTestRunner
         PcRoomRewardTests.RunCore();
         PcRoomQualificationTests.RunCore();
         FatigueAccelerationTests.RunCore();
+        DungeonSettlementTests.RunEndlessAdventureCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();

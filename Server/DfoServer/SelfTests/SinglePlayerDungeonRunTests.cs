@@ -35,7 +35,7 @@ internal static partial class SinglePlayerDungeonRunTests
             "resource-qualified friendly actors preserve the full route and key namespace");
         var run = created!;
         run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
-        That(run.Snapshot.ConsumedFatigue == 0, "任务专用路线不计入普通房间疲劳");
+        That(run.Snapshot.ConsumedFatigue == 1, "正常任务路线首次加载同样累计一点应耗疲劳");
         var fatigueRoute = new DungeonFixedRoute([WithTeams(Plan(start, 30), 0), WithTeams(Plan(friendly, 31), 0),
             BossPlan(boss, 32)], route.Connections);
         var acceptedHunt = new DfoServer.Game.Characters.ActiveMainQuest(0,3145,2) { AcceptanceId = Guid.NewGuid() };
