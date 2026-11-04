@@ -1263,7 +1263,7 @@ internal sealed partial class GameSession
     bool CanUseScriptedReturn(FormalDungeon dungeon) => Ready && Selected is not null &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement && !ScriptedNavigationBlocked(dungeon);
 
-    bool ScriptedNavigationBlocked(FormalDungeon dungeon) => dungeon.CharacterDead ||
+    bool ScriptedNavigationBlocked(FormalDungeon dungeon, bool allowDead = false) => !allowDead && dungeon.CharacterDead ||
         dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene ||
         dungeon.HasPendingFatigue || HasPendingTownQuestCommit || HasPendingFormalCard ||
         dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement;
@@ -1638,7 +1638,8 @@ internal sealed partial class GameSession
 
     TownTravelReceipt? ReturnFromFormalDungeonCore(bool clearedHell) => owner.Execute(() =>
     {
-        if (!CanMutatePartyDungeon || !CheckState(UserStateRequirement.DungeonContext) || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
+        if ((!CanMutatePartyDungeon && !(AntonRejoinPresentationPending && PartyDungeon is { IsExecuting: true })) ||
+            !CheckState(UserStateRequirement.DungeonContext) || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
             dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
@@ -1712,6 +1713,8 @@ internal sealed partial class GameSession
         var monsters = original with { Monsters = Array.AsReadOnly(original.Monsters.Where(monster => living.Contains(monster.ObjectKey)).ToArray()) };
         return new(Selected!, owner.Generation, SelectionEpoch, dungeon.Entry with { StartMap = snapshot.CurrentMap }, snapshot, monsters, dungeon.MapSeed)
         {
+            RoomLoadingIdentity = snapshot.Phase == SinglePlayerDungeonPhase.Loading
+                ? snapshot.Identity : dungeon.Run.LastLoadingFact?.Identity,
             PassiveItems = dungeon.Ground.CurrentPassiveItems(),
             MonsterAi = dungeon.Run.CurrentMonsterAi,
             PartyActors = dungeon.PartyActors,

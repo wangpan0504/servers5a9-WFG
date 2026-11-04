@@ -51,7 +51,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public Character? Selected
     {
         get => selected;
-        private set { InvalidateGuildHallWait(selected, value); TrackHiddenQuestArea(selected, value); selected = value; }
+        private set { InvalidateGuildHallWait(selected, value); TrackHiddenQuestArea(selected, value); selected = value; PublishAntonQuestBindings(); }
     }
     public bool Ready { get; private set; }
     SessionPhase phase = SessionPhase.Unselected;
@@ -69,7 +69,12 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             phase = value;
         }
     }
-    public long SelectionEpoch { get; private set; }
+    long selectionEpoch;
+    public long SelectionEpoch
+    {
+        get => selectionEpoch;
+        private set { selectionEpoch = value; PublishAntonQuestBindings(); }
+    }
     public string TravelReason { get; private set; } = "not-requested";
     public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true ||
         (Selected?.Inventory.AccountWallet.ContractExpiry(128) ?? 0) >

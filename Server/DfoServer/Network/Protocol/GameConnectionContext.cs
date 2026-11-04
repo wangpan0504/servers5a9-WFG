@@ -16,6 +16,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal (long Epoch, long Period)? BattlePassMissionDisplay { get; set; }
     internal PartyCardTemplate? PartyCardTemplate { get; set; }
     internal DfoServer.Network.Projection.FiendwarCounterRoom? FiendwarCounterRoom { get; set; }
+    internal DfoServer.Network.Projection.AntonNativeRoom? AntonNativeRoom { get; set; }
     internal Func<Task>? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
     internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
@@ -87,6 +88,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public bool HasEnteredWorld { get; set; }
     public bool ChannelSelectionRequired { get; set; }
     internal DfoServer.Network.Projection.LukeRewardResultProjection LukeResults { get; } = new();
+    internal DfoServer.Network.Projection.AntonRewardResultProjection AntonResults { get; } = new();
+    internal DfoServer.Network.Projection.AntonFailureResultProjection AntonFailureResult { get; } = new();
     // 返回选角时服务端已主动推送名册；用于吞掉客户端随后重复的 C2S8，避免双重名册刷新。
     public bool SelectionRosterPushed { get; set; }
     // 可选活动只暴露操作门禁与连接收尾；具体状态由对应模块拥有。

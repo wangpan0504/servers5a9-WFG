@@ -101,6 +101,14 @@ internal static class AntonRaidRejoinTcpTests
             leader.Send(37, new byte[8]);
             That(AntonTcpProbe.Barrier(leader, "队长先确认加载").All(p => p is not { Kind: 0, Opcode: 30 }),
                 "队员尚未确认时原共享加载屏障仍关闭");
+            if (clientNotifyGap)
+            {
+                member.Send(37, new byte[8]);
+                That(AntonTcpProbe.Barrier(member, "战斗中断线夹具实际加载").Any(p => p is { Kind: 0, Opcode: 30 }),
+                    "纯呈现恢复夹具先以双方真实37进入业务Dungeon");
+                AntonTcpProbe.Barrier(leader, "战斗中断线前同步队长");
+                AntonTcpProbe.ClearRoom(leader, runMap, new(), out _, out _, false, member, new());
+            }
         }
         ushort disconnected = member.Id;
         member.Dispose();
@@ -113,7 +121,8 @@ internal static class AntonRaidRejoinTcpTests
         QuietDrain(leader);
         That(left && AntonRaidTcpTests.Information(leader, key, 1).Members.All(row => row.Character != disconnected),
             "断线后幸存者名册不再包含该成员");
-        using var again = Open(fixture, "antonrejoin1", gamePort: endpoints[19], channelNumber: 19);
+        using var initialAgain = Open(fixture, "antonrejoin1", gamePort: endpoints[19], channelNumber: 19);
+        var again = initialAgain;
         again.Select();
         string logs = fixture.Options.LogDirectory;
         if (!enabled)
@@ -135,9 +144,38 @@ internal static class AntonRaidRejoinTcpTests
         That(notice.Length == 7 && U32(notice) == key && notice[4] == 0 && notice[5] == 0 && notice[6] == 0,
             "重登后835携带原团key和未知零尾");
         string assets = RejoinAssets();
-        AssertClientNotifyGap(key, "首次668状态恢复");
-        AssertClientNotifyGap(key, "重复668");
-        AssertClientNotifyGap(key + 9, "错误key");
+        var replay = Rejoin(key, "首次668原状态恢复", accepted: true);
+        Rejoin(key, "重复668", accepted: false);
+        Rejoin(key + 9, "错误key", accepted: false);
+        var survivorRestored = AntonTcpProbe.Barrier(leader, "恢复场景不替幸存者加载");
+        That(survivorRestored.All(p => p is not { Kind: 0, Opcode: 27 or 28 or 29 or 30 }),
+            "668只向重返客户端重放场景，幸存者不收到重复27至30");
+        if (clientNotifyGap)
+        {
+            // 在新场景尚未37时再次断线，不能把呈现屏障误记为业务Loading或遗失原Run能力。
+            again.Dispose();
+            AwaitMemberLeft(leader, "重入呈现中二次断线");
+        }
+        using var resumedAgain = clientNotifyGap ? Open(fixture, "antonrejoin1", gamePort: endpoints[19], channelNumber: 19) : null;
+        if (resumedAgain is not null)
+        {
+            again = resumedAgain;
+            again.Select();
+            That(U32(ReadNotice(again)) == key, "呈现中二次断线仍捕获同一原团候选");
+            replay = Rejoin(key, "呈现中二次断线恢复", accepted: true);
+            // 恢复者的1278不能排空另一连接；幸存者先收齐正式名册，再发1361读取团表。
+            var survivorRestoredAgain = AntonTcpProbe.Barrier(leader, "呈现中二次恢复同步幸存者名册");
+            That(survivorRestoredAgain.All(p => p is not { Kind: 0, Opcode: 27 or 28 or 29 or 30 }) &&
+                survivorRestoredAgain.Single(p => p is { Kind: 0, Opcode: 26 }).Body is [0],
+                "二次恢复幸存者只同步成员与原主机槽0，不重复场景或加载");
+            var roster = survivorRestoredAgain.Single(p => p is { Kind: 0, Opcode: 9 }).Body;
+            That(roster.Length == 38 && U16(roster) == 1 && U16(roster, 2) == 9999 &&
+                roster[9] == 2 && roster[11] == 2 && roster[12] == 0 && U16(roster, 13) == leader.Id &&
+                roster[20] == 1 && U16(roster, 21) == again.Id && roster[28] == 0 && roster[30] == 0,
+                "二次恢复使用action2完整两人名册，队长与新owner保留原普通分队槽及主机");
+            Bytes(roster, survivorRestored.Single(p => p is { Kind: 0, Opcode: 9 }).Body,
+                "二次恢复保持首次恢复的完整普通分队身份和成员投影");
+        }
         That(RejoinAssets() == assets, "668首次、重复与错误key均不改变库存、资产审计或奖励回执");
         var members = AntonRaidTcpTests.Information(leader, key, 1).Members;
         That(members.Any(row => row.Character == again.Id) && members.Length == 2, "状态恢复使新owner回到原团名册，不建立新团");
@@ -147,21 +185,33 @@ internal static class AntonRaidRejoinTcpTests
             "状态恢复和重复668没有再次扣票或退票");
         if (inRun)
         {
-            var clean = AntonTcpProbe.Barrier(again, "恢复wire缺口屏障");
-            That(clean.All(p => p.Opcode is not (27 or 28 or 29 or 30 or 585 or 586)),
-                "UNIMPLEMENTED 恢复通知序列：状态恢复未擅自发送场景通知");
-            if (clientNotifyGap)
-            {
-                That(AntonTcpProbe.Barrier(leader, "668后幸存者加载屏障").All(p => p is not { Kind: 0, Opcode: 30 }),
-                    "UNIMPLEMENTED 客户端未自然加载，幸存者也不能收到伪造30放行");
-            }
-            else
-            {
-                again.Send(37, new byte[8]);
-                var loaded = AntonTcpProbe.Barrier(again, "原Run重新确认加载");
-                That(loaded.Any(p => p is { Kind: 0, Opcode: 30 }), "测试主动37仅验证原Run屏障能力，不代表客户端自然恢复");
-                RejectChangedRun(fixture, leader, again, key, runCatalog!, runInfo!, runMap!);
-            }
+            byte[] replayInfo = replay.Single(p => p is { Kind: 0, Opcode: 28 }).Body;
+            byte[] replayMap = replay.Single(p => p is { Kind: 0, Opcode: 29 }).Body;
+            Bytes(replayInfo, runInfo!, "668重放原冻结地图信息，不重新抽取入口");
+            That(replayMap[0] == runMap![0] && replayMap[1] == runMap[1] && U32(replayMap, 3) == U32(runMap, 3),
+                "668使用原房间坐标和seed");
+            if (clientNotifyGap) That(replayMap[18] == 0, "重连29只投影当前存活怪，不复活已清原房间");
+            else Bytes(replayMap, runMap, "原业务加载中断线重放同一完整演员计划");
+            again.Send(662, [110, 0, 0, 0, 100, 0, 0, 0, 2]);
+            again.Send(660, [1, 0]);
+            if (runMap![18] > 0)
+                again.Send(39, FormalDungeonTcpTests.Death(U16(runMap, 25), again.Id, runMap[31]));
+            again.Send(40, [0, 0, 0, 0]);
+            var beforeLoaded = AntonTcpProbe.Barrier(again, "重入确认前禁止业务推进");
+            That(beforeLoaded.All(p => p is not { Kind: 0, Opcode: 29 or 30 or 600 } && p is not { Kind: 1, Opcode: 660, Body: [1] }) &&
+                RejoinAssets() == assets, "实际37前不释放加载或发放奖励资产");
+            again.Send(37, new byte[8]);
+            var loaded = AntonTcpProbe.Barrier(again, "收到重放29后确认原场景");
+            That(loaded.Count(p => p is { Kind: 0, Opcode: 30 }) == 1 &&
+                loaded.Any(p => p is { Kind: 1, Opcode: 37, Body: [1] }),
+                "模拟客户端仅在收到完整场景后37，服务端才一次确认并释放本人30");
+            That(AntonTcpProbe.Barrier(leader, "重入真实37后幸存者屏障").All(p => p is not { Kind: 0, Opcode: 30 }),
+                "已加载幸存者不被要求重发37，也不重收30");
+            again.Send(37, new byte[8]);
+            That(AntonTcpProbe.Barrier(again, "重复重入37").All(p => p is not { Kind: 0, Opcode: 30 }),
+                "同一重入呈现屏障只能消费一次");
+            That(RejoinAssets() == assets, "原场景加载确认不重扣票、库存或重复奖励");
+            RejectChangedRun(fixture, leader, again, key, runCatalog!, runInfo!, replayMap, firstRoomCleared: clientNotifyGap);
         }
         else
         {
@@ -173,16 +223,16 @@ internal static class AntonRaidRejoinTcpTests
         await fixture.StopAsync();
         var saved = CompleteEvents(logs);
         That(LastReason(saved, "raid_rejoin_notice") == "835-tail-semantics-unknown", "835尾部在日志中标为unknown");
-        That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
+        That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_installed" &&
             row.GetProperty("Detail").TryGetProperty("StateRestored", out var restored) && restored.GetBoolean()),
-            "日志明确记录状态已恢复，与wire未知分开");
+            "日志明确记录原能力安装和本服场景重放策略");
         That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
             row.GetProperty("Detail").GetProperty("Reason").GetString() == "duplicate-rejoin"), "重复重入有独立原因");
         if (inRun)
         {
             var entry = saved.Single(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
                 row.GetProperty("Detail").GetProperty("Accepted").GetBoolean()).GetProperty("Detail");
-            var restored = saved.Single(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
+            var restored = saved.First(row => row.GetProperty("Kind").GetString() == "raid_rejoin_installed" &&
                 row.GetProperty("Detail").GetProperty("StateRestored").GetBoolean()).GetProperty("Detail");
             That(entry.GetProperty("RaidInstance").GetGuid() == restored.GetProperty("Instance").GetGuid() &&
                 entry.GetProperty("Runs")[0].GetGuid() == restored.GetProperty("Run").GetGuid(),
@@ -197,24 +247,47 @@ internal static class AntonRaidRejoinTcpTests
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
             fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY character_id,instance_id,phase,kind");
 
-        void AssertClientNotifyGap(uint requestedKey, string why)
+        List<WirePacket> Rejoin(uint requestedKey, string why, bool accepted)
         {
-            // 证据见 Docs/协议/安徒恩重入/EVIDENCE.md：0234447C→0055D870在0x17直接返回；
-            // 585/586/27/28/29/30的恢复顺序未证。必须收齐ACK前后帧，不能由ReadAck吞掉提前通知。
+            // 本服复用正式场景消费者；收齐ACK前后帧，不能由ReadAck吞掉提前通知。
             again.Send(668, Build(w => w.Write(requestedKey)));
             var received = AntonTcpProbe.Barrier(again, why);
             var acknowledgements = received.Where(p => p is { Kind: 1, Opcode: 668 }).ToArray();
             That(acknowledgements.Length == 1, why + " 恰好一个668应答");
-            Bytes(acknowledgements[0].Body, [0, 19, 0], why + " wire未知仍回已证错误19，不能以01冒充成功");
-            That(received.All(p => p is not { Kind: 0, Opcode: 27 or 28 or 29 or 30 or 585 or 586 or 587 or 594 or 600 or 601 } &&
-                p is not { Kind: 1, Opcode: 16 or 666 }), why + " UNIMPLEMENTED 恢复通知，ACK前后均无猜测场景、状态或奖励包");
+            Bytes(acknowledgements[0].Body, accepted ? [1] : [0, 19, 0], why + " 应答只反映本次原能力安装结果");
+            That(received.All(p => p is not { Kind: 0, Opcode: 30 } && p is not { Kind: 1, Opcode: 16 or 666 }),
+                why + " 不伪造入场、重新开战或未确认加载");
+            if (accepted && inRun)
+                That(received.Count(p => p is { Kind: 0, Opcode: 27 }) == 1 &&
+                    received.FindIndex(p => p is { Kind: 0, Opcode: 27 }) < received.FindIndex(p => p is { Kind: 0, Opcode: 28 }) &&
+                    received.FindIndex(p => p is { Kind: 0, Opcode: 28 }) < received.FindIndex(p => p is { Kind: 0, Opcode: 29 }),
+                    why + " 先27建立选图模块，再28安装DGN、29安装原房间");
+            else That(received.All(p => p is not { Kind: 0, Opcode: 27 or 28 or 29 }), why + " 无新房间重放");
+            return received;
         }
     }
 
-    static void RejectChangedRun(TcpTestFixture fixture, TcpPeer leader, TcpPeer member, uint key,
-        RaidDungeonCatalog catalog, byte[] info, byte[] firstMap)
+    static void AwaitMemberLeft(TcpPeer leader, string why)
     {
-        AntonTcpProbe.ClearRoom(leader, firstMap, new(), out _, out _, false, member, new());
+        for (int at = 0; at < 256; at++)
+        {
+            var packet = leader.Read();
+            if (packet is { Kind: 0, Opcode: 591 } && U32(packet.Body, 4) == 3)
+            {
+                AntonTcpProbe.Barrier(leader, why);
+                return;
+            }
+        }
+        throw new InvalidOperationException(why + "未观察到原团移除成员");
+    }
+
+    static void RejectChangedRun(TcpTestFixture fixture, TcpPeer leader, TcpPeer member, uint key,
+        RaidDungeonCatalog catalog, byte[] info, byte[] firstMap, bool firstRoomCleared)
+    {
+        // 战斗中断线夹具已真实清房，恢复29必须反映空存活集；不能按入场旧演员再杀一次。
+        if (firstRoomCleared)
+            That(firstMap.Length >= 19 && firstMap[18] == 0, "过期Run用例从恢复29确认已清首房，不重杀旧怪物");
+        else AntonTcpProbe.ClearRoom(leader, firstMap, new(), out _, out _, false, member, new());
         member.Dispose();
         // 原分队成员退出会发NOTI9/action2与NOTI26；见PartyProjection及PartyPackets.Host的023A2237读宽。
         // 先等断线事实再收齐后续帧，不能把本连接屏障当成另一连接已清理的证明。

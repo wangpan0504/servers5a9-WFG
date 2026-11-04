@@ -68,14 +68,16 @@ internal sealed partial class GameSession
     public InventoryResult? ReviveFormalCharacter(ushort targetKey)
     {
         Raids.AntonRaidBattle.RevivalReservation? reservation = null;
+        AntonDungeonRevivalPool.Reservation? antonReservation = null;
         Exception? revivalFailure = null;
         try
         {
             return owner.Execute(() =>
             {
-                if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
+                if (AntonRejoinPresentationPending || !CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
                     formalDungeon.Entry.Maze.IsGriefTower) return null;
                 bool luke = formalDungeon.Entry.RaidEntry?.Kind is Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar;
+                bool anton = formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton;
                 if (luke)
                 {
                     if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } raid ||
@@ -83,6 +85,16 @@ internal sealed partial class GameSession
                         return InventoryResult.Reject();
                     reservation = raid.Battle.ReserveLukeRevival(raid.Actor, formalDungeon.Run.Snapshot.Identity, formalDungeon.DeathSerial);
                     if (reservation is null) return InventoryResult.Reject();
+                }
+                else if (anton)
+                {
+                    if (PartyDungeon is not { } party ||
+                        raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Anton } raid ||
+                        formalDungeon.Entry.RaidEntry!.InstanceId != raid.Battle.Instance || PreservesDungeonConsumables)
+                        return InventoryResult.Reject();
+                    antonReservation = party.ReserveAntonRevival(this, formalDungeon.Run.Snapshot.Identity,
+                        formalDungeon.DeathSerial, formalDungeon.Entry.CoinLimit);
+                    if (antonReservation is null) return InventoryResult.Reject();
                 }
                 else if (formalDungeon.Entry.CoinLimit is { } maximum && formalDungeon.ReviveCount >= maximum)
                     return InventoryResult.Reject();
@@ -94,16 +106,15 @@ internal sealed partial class GameSession
                     {
                         formalDungeon.ReviveCoinsSpent = checked(formalDungeon.ReviveCoinsSpent + coinsBefore - Selected!.Inventory.ReviveCoins);
                         reservation?.Commit();
+                        antonReservation?.Commit();
                         formalDungeon.CharacterDead = false;
                         formalDungeon.AltarRevivalDue = null;
                         formalDungeon.ReviveCount++;
                         formalDungeon.Run.QuestFacts.Revived();
-                        if (formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton)
-                            PartyDungeon?.RecordAntonRevival();
                     }
                     return result;
                 }
-                finally { reservation?.Dispose(); }
+                finally { reservation?.Dispose(); antonReservation?.Dispose(); }
             });
         }
         catch (Exception error) { revivalFailure = error; throw; }
@@ -120,7 +131,7 @@ internal sealed partial class GameSession
     }
 
     // 清图后角色仍留在原房间，残留攻击可能致死；结算菜单不结束死亡与扣币资格。
-    bool CanChangeDungeonLife() => pendingRental is null && pendingConsumableUse is null &&
+    bool CanChangeDungeonLife() => !AntonRejoinPresentationPending && pendingRental is null && pendingConsumableUse is null &&
         !HasPendingTownQuestCommit && !HasPendingFormalCard &&
         Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon is { } dungeon && dungeon.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&

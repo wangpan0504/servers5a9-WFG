@@ -41,7 +41,10 @@ internal static partial class RaidCombatProjection
             if (anton.HasAntonRewards || anton.PhaseProgress)
                 PostAntonSnapshot(context, anton, view, Guard);
         }
-        context.LukePhaseExit?.Notice(view, actor);
+        // 正式安徒恩失败先写601，再由写后回调安排原退场/665；SQL或发送失败都不提前离团。
+        if (!(view.PhaseExpired && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton, HasAntonRewards: true }) ||
+            context.AntonFailureResult.Post(context, actor, view))
+            context.LukePhaseExit?.Notice(view, actor);
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } statusBattle)
         {
             PostStatus(context, statusBattle, view, Guard);
@@ -160,6 +163,28 @@ internal static partial class RaidCombatProjection
         PostAntonTimers(context, battle, view, Guard);
     }
 
+    internal static void PostAntonQuestConditions(GameConnectionContext context, AntonRaidBattleView view,
+        RaidActor actor, Func<bool> current)
+    {
+        if (context.Session.CurrentRaidBattle(actor) is not { Kind: RaidKind.Anton } battle ||
+            battle.AntonEligibility(actor.Character, view.Phase)?.AntonQuestProgress is not { } progress) return;
+        foreach (var after in progress.After)
+        {
+            if (!progress.Before.Any(before => before.QuestId == after.QuestId && before.Slot == after.Slot &&
+                before.AcceptanceId == after.AcceptanceId && before.ConditionState != after.ConditionState)) continue;
+            // 601在客户端触发一次减计数；紧随其后的33安装已提交值，重发也不会累计减计数。
+            // 排队期间可能完成其它条件，写帧前只读取同一接取身份的最新权威值。
+            context.Sender.PostPrepared(1, (ushort)CmdPacketType.SET_QUEST_TRIGGER, 7, () =>
+            {
+                if (context.Session.CaptureAntonPhaseQuestConditions(view) is not { } receipt ||
+                    !context.Session.CanPublishQuestLifecycle(receipt)) return null;
+                var active = receipt.Character.ActiveMainQuests.SingleOrDefault(row =>
+                    row.QuestId == after.QuestId && row.Slot == after.Slot && row.AcceptanceId == after.AcceptanceId);
+                return active is null ? null : QuestPackets.ClearTrigger(active.QuestId, active.ConditionState);
+            }, "anton_phase_quest_conditions", current);
+        }
+    }
+
     static bool DungeonChanged(GameConnectionContext context, Guid instance, int dungeon,
         GameWorld.Raids.RaidDungeonState state) => context.AntonDungeonDisplayInstance != instance ||
         !context.AntonDungeonDisplays.TryGetValue(dungeon, out var previous) || previous != state;
@@ -214,12 +239,25 @@ internal static partial class RaidCombatProjection
                 context.Session.CurrentRaidBattle(actor)?.Kind != RaidKind.Luke ||
                 context.Session.Phase == Game.Session.SessionPhase.Town;
             if (!SceneReady()) return false;
-            bool Show() => current() && SceneReady() && context.RaidDisplay != identity;
+            bool completedTeam = view.State == AntonRaidBattleState.Completed &&
+                context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } formalAnton &&
+                formalAnton.AntonEligibility(actor.Character, view.Phase) is { Eligible: true, Source: AntonResourceRewards.Source };
+            if (completedTeam && !context.AntonResults.PostTeam(context, actor,
+                context.Session.CurrentRaidBattle(actor)!, view)) return false;
+            bool Show() => current() && SceneReady() && context.RaidDisplay != identity &&
+                (!completedTeam || context.AntonResults.HasTeam(actor, view));
             // 587同state/phase仍会重新安装原生动画；601只判断，587成功写帧才确认。
             // 两包在本人owner内连续入队，无网络等待；仅使用Post，不用于QueuePublished的提前guard。
             // 601使用资格提交后冻结的真实阶段统计。
             if (view.State == AntonRaidBattleState.Reward && context.Session.RaidCombatResult(view) is { } result)
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result), "raid_phase_result", Show);
+            {
+                bool resultWritten = false;
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result).Length,
+                    () => context.Session.RaidCombatResult(view) is { } currentResult ? RaidCombatPackets.Result(currentResult) : null,
+                    "raid_phase_result", Show, written: () => resultWritten = true);
+                PostAntonQuestConditions(context, view, actor, () => resultWritten && actor.IsCurrent &&
+                    context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance);
+            }
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidCombatPackets.State(view), action, Show, () =>
             {
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
@@ -246,14 +284,18 @@ internal static partial class RaidCombatProjection
                 rewardBattle.RewardPolicy(actor, view.Phase) is { } policy &&
                 rewardBattle.AntonEligibility(actor.Character, view.Phase) is { Eligible: true })
             {
-                bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity;
+                bool teamRequired = policy.Source == AntonResourceRewards.Source;
+                if (teamRequired && !context.AntonResults.PostTeam(context, actor, rewardBattle, view)) return false;
+                bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity &&
+                    (!teamRequired || context.AntonResults.HasTeam(actor, view));
                 // 只在影片屏障结束后开放共同翻牌组合对象。初始列表不预填本人已选结果。
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, [4, checked((byte)view.Phase)], "anton_movie_cards", Cards);
-                // 非空600第一尾仍UNIMPLEMENTED；空选择列表无物品尾字段，不冒充奖励结果。
+                // 选择列表只描述牌面；实际物品结果沿冻结的奖励回执发布。
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "anton_movie_skip", Cards);
-                foreach (var offer in policy.Offers)
+                var kinds = new byte[] { 1, 0 }.Concat(policy.Offers.Any(offer => offer.Kind == 2) ? [2] : Array.Empty<byte>()).ToArray();
+                foreach (byte kind in kinds)
                     context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
-                        AntonRewardPackets.Choices(offer.Kind), "anton_card_list", Cards, offer == policy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
+                        AntonRewardPackets.Choices(kind), "anton_card_list", Cards, kind == kinds[^1] ? () => context.AntonCardsDisplay = identity : null);
             }
             if (view.State == AntonRaidBattleState.Intermission &&
                 context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)

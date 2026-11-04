@@ -26,6 +26,9 @@ internal static class AntonRaidEventLedgerTests
             "不同事件号和类型独立记账");
         That(!ledger.TryCommit(key with { EventId = 19 }, AntonRaidEventKind.EnergySettled),
             "达到容量后拒绝无界增长");
+        That(ledger.Activate(key with { RunId = Guid.NewGuid() }) &&
+            !ledger.Activate(key with { RunId = Guid.NewGuid() }), "活动Run作用域同样有界，事件满时不能另建无界索引");
         That(ledger.RemoveRun(run) == 2 && ledger.Count == 0, "Run 回收时一并清理事件账本");
+        That(ledger.Activate(key with { RunId = Guid.NewGuid() }), "回收Run释放活动作用域容量");
     }
 }

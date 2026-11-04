@@ -252,7 +252,25 @@ internal static class DungeonPackets
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(14), 1);
             body[18] = 0x0B;
         }
-        return body;
+        if (plan.RandomizedObjectSelection is not { } selection || selection.MinimapGroups.IsEmpty) return body;
+        var groups = selection.MinimapGroups;
+        if (groups.Length > byte.MaxValue || groups.Any(group => group.Length > byte.MaxValue))
+            throw new InvalidDataException("随机对象小地图组超过通知数量范围");
+        // 0238AC12在practice之后读取组数；每组即使为空也占一个count，后续字段整体后移。
+        using var stream = new MemoryStream();
+        stream.Write(body.AsSpan(0, 13));
+        stream.WriteByte(checked((byte)groups.Length));
+        foreach (var group in groups)
+        {
+            stream.WriteByte(checked((byte)group.Length));
+            foreach (var room in group)
+            {
+                stream.WriteByte(checked((byte)room.X));
+                stream.WriteByte(checked((byte)room.Y));
+            }
+        }
+        stream.Write(body.AsSpan(14));
+        return stream.ToArray();
     }
 
     // 匹配ARAD的0238D630已静态核对四轮循环、成员code0及字段宽度；战斗表现仍需实机验收。
@@ -534,6 +552,7 @@ internal static class DungeonPackets
     // 0238EFE8 只消费当前格的骑乘记录；其它格的 [map] 声明不进入本包。
     static IReadOnlyList<DungeonRandomizedObject> RoomRidables(DungeonEntryPlan plan)
     {
+        if (plan.RandomizedObjectSelection is { } selection) return selection.ForRoom(plan.StartMap.Position);
         var result = new List<DungeonRandomizedObject>();
         foreach (var row in plan.Maze.RandomizedObjects)
             if (row.Map == plan.StartMap.Position && row.Team is "neutral" or "monster" or "character")
@@ -545,13 +564,13 @@ internal static class DungeonPackets
     {
         Span<byte> buffer = stackalloc byte[20];
         // 0238F055 起连续五个 u32，原顺序交给 02A11610。Q1/Q2 为位置分量，Q3 为模板号。
-        // [neutral] 与 92270 步行者 monster team 0 对齐；Q5=0 走 ridable 模式 0，不走 Q5=1 的被动初始化。
+        // Q5=1经02A00537→028E6F30请求Native21；默认0仍沿原ridable分支。
         uint faction = row.Team switch { "monster" => 100, "character" => 200, _ => 0 };
         BinaryPrimitives.WriteUInt32LittleEndian(buffer, checked((uint)row.PositionX));
         BinaryPrimitives.WriteUInt32LittleEndian(buffer[4..], checked((uint)row.PositionY));
         BinaryPrimitives.WriteUInt32LittleEndian(buffer[8..], checked((uint)row.ObjectId));
         BinaryPrimitives.WriteUInt32LittleEndian(buffer[12..], faction);
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer[16..], 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer[16..], checked((uint)row.SpawnMode));
         stream.Write(buffer);
     }
 }

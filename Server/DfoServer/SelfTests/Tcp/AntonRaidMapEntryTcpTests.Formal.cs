@@ -133,8 +133,8 @@ internal static partial class AntonRaidMapEntryTcpTests
             }
             That(sessions[0].PartyDungeon == sessions[1].PartyDungeon && scene.Entry.RaidEntry ==
                 new RaidDungeonIdentity(sessions[0].StartedRaid!.InstanceId, 0, 1) && scene.Entry.DisableClearReward &&
-                scene.Entry.DisableMonsterAndClearExperience && scene.Entry.CoinLimit == 0 && scene.Entry.AllowsCompanionAi,
-                "实际Run绑定原Battle/阶段/分队且不授予普通经济与复活，保留GM同伴资源准入");
+                scene.Entry.DisableMonsterAndClearExperience && scene.Entry.CoinLimit == 12 && scene.Entry.AllowsCompanionAi,
+                "实际Run绑定原Battle/阶段/分队，保留DGN共享12币且不授予普通经济，保留GM同伴资源准入");
             string loadingCommitted = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
             var loadingInstance = sessions[0].PartyDungeon;
             // 现场25B请求末字段FFFFFFFF；覆盖连续两轮15/16重试及拒绝后的合法请求。
@@ -191,6 +191,7 @@ internal static partial class AntonRaidMapEntryTcpTests
                 That(acknowledgment >= 0 && acknowledgment < loaded.FindIndex(p => p is { Kind: 0, Opcode: 30 }) &&
                     loaded.Any(p => p is { Kind: 0, Opcode: 30, Body.Length: 5 }), "全员37后才发布ACK37及30");
             }
+            VerifyFormalCoins(fixture, sessions.Take(2).ToArray(), peers.Take(2).ToArray());
             string committed = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
             peers[0].Send(16, request);
             That(Read(peers[0]).All(p => p.Opcode is not (28 or 29)) &&
@@ -204,6 +205,7 @@ internal static partial class AntonRaidMapEntryTcpTests
             Bytes(Read(peers[2]).Single(p => p is { Kind: 1, Opcode: 16 }).Body, [0, 9, 0, 0], "Loading原团授权失效仍拒绝16");
             That(fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == committed,
                 "授权失效拒绝不修改原Run账本");
+            await AntonRaidRejoinPresentationTests.VerifyAsync(fixture, resources, definition);
         }
         finally
         {

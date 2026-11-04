@@ -8,6 +8,8 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
+    // 房间加载前的身份在本次访问内保持不变；业务Epoch仍随加载、死亡等提交推进。
+    public DungeonRunIdentity? RoomLoadingIdentity { get; init; }
     public TimeProvider? BattlePassMissionClock { get; init; }
     public bool LostLandStarted { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
@@ -18,7 +20,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
         Monsters.Monsters.Where(monster => monster.IsBlocking).All(monster => !Snapshot.LivingMonsters.Contains(monster.ObjectKey));
 
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
-    // 本次房间访问冻结的四项AI参数；null 表示冻结时功能关闭，不为该次29发送私有包。
+    // 本次房间访问冻结的AI参数；null不改原生数值，独立对象观测仍可发送仅携场景的私有包。
     public MonsterAiProfile? MonsterAi { get; init; }
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];

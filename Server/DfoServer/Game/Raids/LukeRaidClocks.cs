@@ -153,12 +153,12 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                     catch (Exception error)
                     { Battle.FaultLukeClock(this); Report("receipt", error); Dispose(); return; }
                 }
-                if (!IsStopped && Battle.PendingAntonSettlement() is { } anton)
+                if (!IsStopped && Battle.PendingAntonSettlement() is not null)
                 {
                     try
                     {
                         if (store is not IAntonRaidLifecycleStore antonStore) throw new InvalidOperationException("安徒恩时钟缺少阶段存储");
-                        Battle.AcceptAntonSettlement(anton, antonStore.CommitAntonPhase(anton)); changed = true;
+                        changed |= Battle.CommitPendingAntonSettlement(antonStore);
                     }
                     catch (Exception error) when (store.IsRetryable(error))
                     { failures = failures == int.MaxValue ? failures : failures + 1; Report("anton-settlement", error); return; }

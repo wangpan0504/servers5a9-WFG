@@ -424,8 +424,7 @@ internal static class FiendwarGuideTcpTests
                         {
                             That(originalPartyRemoval is not null, "故障前原自然队伍名册已绑定本场身份");
                             peer.Send(39, deathRequest);
-                            peer.Expect(0, 9, originalPartyRemoval!);
-                            peer.Closed();
+                            peer.ClosedAfterFiendwarPartyRemoval(originalPartyRemoval!);
                             That(DeathSnapshot() == saved,
                                 "战令来源晚期失败回滚原成长回执、角色、来源、任务和赛季版本且不发死亡成功");
                             rollbackChecked = true;

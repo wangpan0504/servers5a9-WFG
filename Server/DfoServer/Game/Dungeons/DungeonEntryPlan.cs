@@ -72,6 +72,8 @@ internal sealed record DungeonEntryPlan(
     public bool DisableItemDrops { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }
+    // 在准入时冻结；共享成员和后续房间只复用原Run选择，构包不再抽取。
+    public DungeonRandomizedObjectSelection? RandomizedObjectSelection { get; init; }
     public int? Strongway2019TimeLimitSeconds { get; init; }
     public bool IsAltar => DungeonId is 11006 or 11007;
     public bool IsDespair => DungeonId is >= 11008 and <= 11107;
@@ -684,6 +686,8 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             RequestedDifficulty = requestedDifficulty == difficulty ? null : requestedDifficulty,
+            RandomizedObjectSelection = raid?.Kind == DfoServer.Game.Raids.RaidKind.Anton
+                ? DungeonRandomizedObjectSelection.Create(planMaze.RandomizedObjectGroups, draw) : null,
             LostLand = lostLandAdmission,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,

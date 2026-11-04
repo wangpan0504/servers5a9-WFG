@@ -192,7 +192,13 @@ internal static partial class FiendwarRaidTcpTests
             if (count == 4) Reconnect(3);
             var first = peers.Take(4).ToArray(); var second = peers.Skip(4).ToArray();
             MoveTeam(first, 15);
-            if (second.Length != 0) MoveTeam(second, 17);
+            // 途中遭遇已完成战令专属探针时，沿调用栈结束；不能再把已消费场景当作目标首次入场。
+            if (battlePassProbe is not null && battlePassProbeChecked) return;
+            if (second.Length != 0)
+            {
+                MoveTeam(second, 17);
+                if (battlePassProbe is not null && battlePassProbeChecked) return;
+            }
             var entry = Enter(first, 15, direct: true);
             if (second.Length != 0) Enter(second, 17);
             foreach (var peer in peers) VerifyCubeContractInRaid(fixture, peer);
@@ -243,6 +249,7 @@ internal static partial class FiendwarRaidTcpTests
             if (timed.Length == 0)
             {
                 MoveTeam(first, 17, 15);
+                if (battlePassProbe is not null && battlePassProbeChecked) return;
                 timed = first; Enter(timed, 17);
             }
             // 一人/八人保留局部超时；单人另有299秒断线，四人保留较短安全通关正例。
@@ -266,6 +273,7 @@ internal static partial class FiendwarRaidTcpTests
             foreach (int camp in new[] { 27, 28, 29 })
             {
                 MoveTeam(first, camp);
+                if (battlePassProbe is not null && battlePassProbeChecked) return;
                 var campEntry = Enter(first, camp); Clear(first, camp, campEntry);
                 if (battlePassProbe is not null)
                 {
@@ -871,7 +879,9 @@ internal static partial class FiendwarRaidTcpTests
                 queue = new Queue<int>(); queue.Enqueue(origin);
                 previous = new Dictionary<int, int> { [origin] = -1 };
                 while (queue.TryDequeue(out int current) && !previous.ContainsKey(target))
-                    foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next is not (30 or 31)))
+                    // 目标本身必须放行：黑白入口作为目标时，若沿用空路过滤，回退路线永远无法登记目标。
+                    foreach (int next in raid.Fiendwar!.Areas[current].Neighbours.Where(next => next == target ||
+                        next is not (30 or 31)))
                         if (previous.TryAdd(next, current)) queue.Enqueue(next);
             }
             That(previous.ContainsKey(target), "当前真实兵线存在可清理路线，空路封闭时沿真实遭遇继续");

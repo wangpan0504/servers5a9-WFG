@@ -36,6 +36,7 @@ internal static class QuestTargetRules
         QuestTargetKind.LookCinematic => QuestClientSceneProgress.Cinematic(quest, out _, out _) || QuestClientSceneProgress.DungeonCinematic(quest),
         QuestTargetKind.CustomMultiCondition => QuestDazzlementStorage.Matches(quest) || DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest),
         QuestTargetKind.Question => QuestQuestionProgress.TryCount(quest, out _),
+        QuestTargetKind.RaidPhaseClear => QuestRaidPhaseProgress.Supports(quest),
         _ => QuestStateProgress.Type(quest) is not null || QuestPvpProgress.Supports(quest) ||
             QuestClientObservation.Supports(quest) && quest.TargetKind != QuestTargetKind.MeetPassiveObject ||
             QuestEventProgress.Supports(quest) && (quest.TargetKind != QuestTargetKind.GetItem || catalog.Items is not null)
@@ -54,6 +55,7 @@ internal static class QuestTargetRules
         QuestTargetKind.CustomMultiCondition when QuestDazzlementStorage.Matches(quest) => 1,
         QuestTargetKind.CustomMultiCondition when DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest) => DfoServer.Game.Pvp.PvpTrainingProgress.Initial(quest),
         QuestTargetKind.Question when QuestQuestionProgress.TryCount(quest, out _) => QuestQuestionProgress.Unanswered,
+        QuestTargetKind.RaidPhaseClear when QuestRaidPhaseProgress.Supports(quest) => QuestRaidPhaseProgress.Initial(quest),
         QuestTargetKind.Seeking or QuestTargetKind.CheckItem when QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest) => QuestLifecyclePlan.MaterialState(character.Inventory, quest, now.ToUnixTimeSeconds(), catalog.Items),
         QuestTargetKind.SeekAndMeetNpc when quest.SubType is -1 or 0 && QuestLifecyclePlan.ValidSeeking(quest) => 512u | QuestLifecyclePlan.MaterialState(character.Inventory, quest, now.ToUnixTimeSeconds(), catalog.Items),
         QuestTargetKind.EquippedItem when catalog.Items is { } items => QuestItemProgress.Equipped(character.Inventory, quest, items, now.ToUnixTimeSeconds()) ? 0u : 1u,

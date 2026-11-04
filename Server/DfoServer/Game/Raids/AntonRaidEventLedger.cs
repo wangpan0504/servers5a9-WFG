@@ -37,6 +37,7 @@ internal sealed class AntonRaidEventLedger(int capacity = 1024)
         {
             var normalized = scope with { EventId = 0 };
             if (activeRuns.TryGetValue(scope.RunId, out var current)) return current == normalized;
+            if (activeRuns.Count >= capacity) return false;
             activeRuns.Add(scope.RunId, normalized);
             return true;
         }

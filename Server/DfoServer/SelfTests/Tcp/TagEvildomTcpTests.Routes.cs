@@ -57,13 +57,20 @@ internal static partial class TagEvildomTcpTests
                 for (int x = 0; x < 5; x++)
                 {
                     That(run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted, "真实五房逐一确认加载");
+                    // 312479等房间带有5409这类[character]友方演员，随房间加载但不可报死亡；
+                    // 按Run自己的准入谓词过滤，不能把友军当敌人击杀来清房。
                     var monsters = plans.Single(plan => plan.Room.Map == run.Snapshot.CurrentMap).Monsters
-                        .Where(monster => run.Snapshot.LivingMonsters.Contains(monster.ObjectKey)).OrderBy(monster => monster.IsBoss).ToArray();
+                        .Where(monster => (monster.CanReportDeath || monster.IsSpecialChild) &&
+                            run.Snapshot.LivingMonsters.Contains(monster.ObjectKey))
+                        .OrderBy(monster => monster.IsBoss).ToArray();
                     foreach (var monster in monsters)
                     {
                         var observed = new NativeDungeonDeathObservation(monster.ObjectKey, first.Id, 0x111, first.Id,
                             600, 1, 0, (uint)monster.CandidateLevel, 500, 0, 1, true, new string('a', 64));
                         var fact = authority.ValidateAndIssue(run, run.Snapshot.Identity, observed);
+                        That(fact.Death is not null,
+                            $"原生死亡事实必须签发：map={run.Snapshot.CurrentMap.Id} key={monster.ObjectKey} id={monster.MonsterId} " +
+                            $"faction={monster.AiCharacter?.Faction ?? "none"}");
                         var prepared = run.PrepareConfirmedDeath(fact.Death!);
                         That(prepared.Pending is not null, "实际批准怪物沿原生死亡权威形成待确认事实");
                         if (prepared.Pending!.TagEvildomClear is not null)

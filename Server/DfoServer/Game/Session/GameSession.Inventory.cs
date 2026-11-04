@@ -76,7 +76,7 @@ internal sealed partial class GameSession
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {
-        if (pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
+        if (AntonRejoinPresentationPending || pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
             formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null ||
             formalDungeon?.AltarSettlement is { Stage: < 2 })
             return InventoryResult.Reject(invalidStateError);
@@ -308,7 +308,7 @@ internal sealed partial class GameSession
     bool CanPlanInventory(bool requireTown, bool allowSettlement, SessionPhase? requiredPhase, Func<bool>? additionalGuard,
         int? consumableItemId = null, InventorySlot? usedItem = null)
     {
-        if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
+        if (AntonRejoinPresentationPending || pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
             requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
         if ((usedItem is { } slot ? Selected.Inventory.Find(slot)?.Core.ItemId ?? 0 : consumableItemId) is { } itemId && !CanUseDungeonItem(itemId)) return false;
         // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。

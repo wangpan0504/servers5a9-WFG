@@ -9,10 +9,12 @@ namespace DfoServer.Game.Raids;
 // 资源依据：etc/raid/anton.etc两阶段STATE REWARD。外层抽样沿既有本服相对权重政策。
 // 86直接解析upgradable legacy奖池；95沿共享BoosterCatalog解析相同三列并冻结实际产物。
 // 不同格式的booster多池保留原箱，不套86单池算法。
-// party及全员privilege福利走kind1；squad走kind0；PC房福利取既有Session.PremiumPcRoom。
+// party及全员privilege福利走kind1；PC房128走kind2；squad为服务端自动kind3。
 internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items, BoosterCatalog? boosters)
 {
-    internal const string Source = "anton-resource-reward-v2;etc/raid/anton.etc;legacy=resolved;booster=box;weighted-squad=1;privilege=all";
+    internal const string LegacySource = "anton-resource-reward-v2;etc/raid/anton.etc;legacy=resolved;booster=box;weighted-squad=1;privilege=all";
+    internal const string Source = "anton-resource-reward-v3;etc/raid/anton.etc;legacy=resolved;booster=box;weighted-squad=1;privilege=all;pcroom=kind2;squad=kind3";
+    internal static bool IsFormalSource(string source) => source is Source or LegacySource;
     // Runtime装配时预热；开战持owner锁时只访问本策略不可变奖池，不再解析PVF。
     readonly RaidRewardContainers containers = new(script, items, boosters);
 
@@ -23,13 +25,16 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
         foreach (var (phase, index) in script.Phases.Select((phase, index) => (phase, index)))
         {
             var fixedGrants = ImmutableArray.CreateBuilder<InventoryReward>();
+            InventoryReward? pcroomGrant = null;
             foreach (string kind in new[] { "party_card", "pcroom_card", "privilege_card" })
             {
                 var rows = phase.Rewards.Where(row => row.Kind == kind).ToArray();
                 if (rows is not [{ RawA: -1, RawB: 100, RawD: 0, ItemId: > 0 } row])
                     throw new InvalidDataException("安徒恩固定奖励声明变化：" + kind);
                 RequireItem(row.ItemId);
-                if (kind != "pcroom_card" || pcroom) fixedGrants.Add(containers.Resolve(row.ItemId, draw));
+                if (kind == "pcroom_card")
+                { if (pcroom) pcroomGrant = containers.Resolve(row.ItemId, draw); }
+                else fixedGrants.Add(containers.Resolve(row.ItemId, draw));
             }
             var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();
             if (squad.Length is < 1 or > 32 || squad.Any(row => row.RawA != -1 || row.RawB <= 0 || row.RawD is not (0 or 1)))
@@ -44,8 +49,11 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items,
             RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants,
                 [new(character, 0, grants.Select(item => new RaidRewardDisplayItem(0,
                     checked((uint)item.ItemId), checked((ushort)item.Count), 0)).ToImmutableArray())]);
-            result.Add(new(Source,
-                [Offer(1, fixedGrants.ToImmutable()), Offer(0, [containers.Resolve(winner.ItemId, draw)])],
+            var offers = ImmutableArray.CreateBuilder<RaidRewardOffer>();
+            offers.Add(Offer(1, fixedGrants.ToImmutable()));
+            if (pcroomGrant is { } entitled) offers.Add(Offer(2, [entitled]));
+            offers.Add(Offer(3, [containers.Resolve(winner.ItemId, draw)]));
+            result.Add(new(Source, offers.ToImmutable(),
                 new(0, checked((byte)index), 0, 0, 2, 0)));
 
         }

@@ -26,7 +26,7 @@ internal static class DefaultActivityTcpTests
             Path.Combine(root, "default-activities"), gm: true, resources: resources, clock: clock, sharedResourcePath: true);
         var repository = new CharacterRepository(fixture.Database);
         using (var owner = new AccountOwners().Acquire("10000", () => { }))
-            repository.Create(owner, new NewCharacter("DefaultEvents", resources.Towns.Room, resources.Towns.InitialReturn)
+            repository.Create(owner, new NewCharacter("DefaultEvt", resources.Towns.Room, resources.Towns.InitialReturn)
             { Job = 0, GrowType = 33, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
         using var http = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
         { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(15) };
@@ -35,7 +35,14 @@ internal static class DefaultActivityTcpTests
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = JsonContent.Create(body) };
             if (header) request.Headers.Add("X-GM-Request", "1");
             using var response = await http.SendAsync(request);
-            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            string content = await response.Content.ReadAsStringAsync();
+            if (!header)
+            {
+                That(!accepted && response.StatusCode == HttpStatusCode.Forbidden && content.Length == 0,
+                    "缺少管理请求头时严格返回空正文403，拒绝在业务执行之前");
+                return default;
+            }
+            using var json = JsonDocument.Parse(content);
             var reply = json.RootElement;
             That((response.IsSuccessStatusCode && reply.GetProperty("ok").GetBoolean()) == accepted,
                 "real default activity HTTP result: " + reply);

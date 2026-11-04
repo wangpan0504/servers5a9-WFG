@@ -36,10 +36,13 @@ internal sealed partial class GameSession
         try
         {
             if (!Current()) return true;
-            foreach (byte kind in new byte[] { 1, 0 })
+            var kinds = owner.Execute(() => raidCombat is { } raid && ReferenceEquals(raid.Battle, battle) && Selected is { } character
+                ? battle.AntonEligibility(character.Id, phase)?.Offers.Select(offer => offer.Kind)
+                    .OrderBy(kind => kind == 1 ? 0 : kind == 2 ? 1 : kind == 3 ? 2 : 3).ToArray() ?? [] : []);
+            foreach (byte kind in kinds)
             {
                 if (!Current()) return true;
-                var receipt = ClaimRaidReward(kind, 0, store, items, gold, pieces, now);
+                var receipt = ClaimRaidReward(kind, 0, store, items, gold, pieces, now, automaticLuke: kind == 3);
                 if (receipt is null) return !Current();
                 // 已提交资产先排入原连接FIFO；自动领取不伪造客户端请求的ACK。
                 AntonAutoRewardArrived?.Invoke(receipt);
@@ -95,6 +98,33 @@ internal sealed partial class GameSession
             return true;
         });
     }
+
+    internal RaidRewardReceipt? ClaimAutomaticAntonSquadReward(IRaidRewardStore store, ItemCatalog items,
+        GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now)
+    {
+        bool available = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.HasAntonRewards: true } raid &&
+            raid.Battle.View is { State: AntonRaidBattleState.Reward, AntonCardsReady: true } view &&
+            raid.Battle.RewardPolicy(raid.Actor, view.Phase) is { } policy && policy.Offers.Any(offer => offer.Kind == 3) &&
+            policy.Offers.Where(offer => offer.Kind is 1 or 2).All(offer => raid.Receipts.ContainsKey((view.Phase, offer.Kind))));
+        return available ? ClaimRaidReward(3, 0, store, items, gold, pieces, now, automaticLuke: true) : null;
+    }
+
+    // 新版660 kind0只是四张团队牌的原选位/空牌背请求；不签发奖励计划或资产回执。
+    internal (RaidActor Actor, AntonRaidBattleView View, byte Card)? SelectAntonEmptyCardBack(byte requested) =>
+        owner.Execute<(RaidActor, AntonRaidBattleView, byte)?>(() =>
+        {
+            if (!Ready || AntonRejoinPresentationPending || Selected is not { } character || raidCombat is not { Actor.IsCurrent: true, Battle.HasAntonRewards: true } raid ||
+                raid.Battle.View is not { } view ||
+                raid.Battle.RewardPolicy(raid.Actor, view.Phase)?.Source != AntonResourceRewards.Source) return null;
+            // 团队及小队已提交后可能已经进入休息/完成；自然客户端紧随其后的0仍只确认原选位。
+            if (raid.Receipts.TryGetValue((view.Phase, 1), out var committed))
+                return committed.Prepared.Card == requested || raid.Battle.MatchesAntonCardReplay(committed.Prepared, requested)
+                    ? (raid.Actor, view, committed.Prepared.Card) : null;
+            if (view.State != AntonRaidBattleState.Reward) return null;
+            byte squad = StartedRaid?.Participants.SingleOrDefault(row => row.Character == character.Id).Squad ?? 0;
+            var offer = raid.Battle.SelectAntonRewardCard(raid.Actor, view.Phase, 1, requested, squad);
+            return offer is null ? null : (raid.Actor, view, offer.Card);
+        });
 
     internal bool DetachRaidCombatStart(RaidActor actor, Guid instance) => owner.Execute(() =>
     {
@@ -217,14 +247,18 @@ internal sealed partial class GameSession
             ? policy.Result with { Seconds = seconds } : policy.Result;
         if (raid.Battle.AntonResult(view.Phase) is not { } result ||
             raid.Battle.AntonEligibility(raid.Actor.Character, view.Phase) is not { } eligibility) return null;
-        // 86合格成员option0，无资格option1；95按是否零消费，不以显示资格替代存储屏障。
-        return result with { RawFlag = eligibility.Eligible ? (byte)0 : (byte)1 };
+        // 95的F为零抑制阶段任务；只有同事务已承诺任务处理的合格回执可放行原生事件。
+        bool sameTasks = eligibility is { Eligible: true, AntonQuestProgress: { } progress } && Selected is { } character &&
+            SameAntonQuestIdentities(character.ActiveMainQuests, progress.After) &&
+            SameAntonQuestIdentities(character.ActiveMainQuests, progress.Bindings) &&
+            CanTriggerNativeAntonQuests(character.ActiveMainQuests, questCatalog);
+        return result with { RawFlag = sameTasks ? (byte)1 : (byte)0 };
     });
 
     internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View)? RaidMovieSnapshot() =>
         owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView)?>(() =>
         {
-            if (!Ready || raidCombat is not { Actor.IsCurrent: true } raid ||
+            if (!Ready || AntonRejoinPresentationPending || raidCombat is not { Actor.IsCurrent: true } raid ||
                 raid.Battle.View is not { State: AntonRaidBattleState.Reward, PhaseExpired: false, ClockFaulted: false } view ||
                 raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
                 !(raid.Battle.HasAntonRewards ? raid.Battle.CanConfirmAntonMovie(raid.Actor, view) :
@@ -294,8 +328,10 @@ internal sealed partial class GameSession
         CommitPendingAntonPhase();
         var capture = owner.Execute(() =>
         {
-            if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
+            if (!Ready || AntonRejoinPresentationPending || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
                 !Enum.IsDefined(raid.Battle.Kind)) return null;
+            // kind3没有原生手动请求；已经提交的自动回执也不能被外部660借道重新播放终结动画。
+            if (raid.Battle.HasAntonRewards && kind == 3 && !automaticLuke) return null;
             var view = raid.Battle.View;
             if (view.ClockFaulted) return null;
             int phase = view.Phase;
@@ -342,7 +378,7 @@ internal sealed partial class GameSession
             { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek, AccountMaterialRaidDefinitions = plan.AccountMaterialRaidDefinitions };
         return owner.Execute(() =>
         {
-            if (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(raidCombat, capture.Binding) ||
+            if (AntonRejoinPresentationPending || !ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(raidCombat, capture.Binding) ||
                 !capture.Binding.Actor.IsCurrent || capture.Binding.Battle.View is not { State: AntonRaidBattleState.Reward } view ||
                 view.Phase != capture.Prepared.Phase ||
                 !capture.Binding.Battle.CanClaimRaidReward(capture.Binding.Actor, view.Phase, automaticLuke)) return null;

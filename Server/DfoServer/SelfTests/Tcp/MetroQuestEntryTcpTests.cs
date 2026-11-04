@@ -37,6 +37,12 @@ internal static class MetroQuestEntryTcpTests
                 var packet=peer.Read();
                 if (packet.Kind==1 && packet.Opcode==1347) { Bytes(packet.Body,[1],"竞技场事件有界处理完成"); return; }
                 if (packet.Kind==0 && packet.Opcode==1760) { peer.ReadCardMembershipState(packet); continue; }
+                if (packet.Kind==1 && packet.Opcode==33)
+                {
+                    Bytes(packet.Body,[1,0xA0,0x18,0,0,0,0],"竞技场只接受6304真实清图后的权威条件归零回显");
+                    observe?.Invoke(packet);
+                    continue;
+                }
                 That(packet.Kind==0,"竞技场事件后无遗漏失败ACK");
                 observe?.Invoke(packet);
             }
@@ -624,7 +630,7 @@ internal static class MetroQuestEntryTcpTests
                 uint next=checked((uint)(long)fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
                 var plans=Plans(maze,peer.Id,next,dungeons.Get(9609).BasisLevel);
                 var map=Enter(peer,6304,9609,request,maze);
-                int enabled=0,confirmed=0,emptyRetirements=0,deathGrowth=0;
+                int enabled=0,confirmed=0,emptyRetirements=0,deathGrowth=0,questUpdates=0;
                 ushort? focus=null;
                 for (byte x=0;x<5;x++)
                 {
@@ -633,9 +639,11 @@ internal static class MetroQuestEntryTcpTests
                     FormalDungeonTcpTests.Load(peer); Drain();
                     if (x==4)
                     {
-                        That(map[18]==2 && U32(map,27)==109008549 && map[32]==0 && map[40]==0 &&
-                            U32(map,49)==63821 && map[54]==3 && map[62]==1,
-                            "真实29末房保留真敌和显示演员，独立确认原品级及显示排除位");
+                        That(map[18]==3 && U32(map,27)==109008549 && map[32]==0 && map[40]==0 &&
+                            U32(map,49)==63821 && map[54]==3 && map[62]==1 &&
+                            U32(map,65)==0 && U32(map,71)==5409 && map[75]==70 &&
+                            map[76]==5 && map[84]==1,
+                            "真实29末房保留真敌、显示演员及原生5409友方APC，独立确认各自品级和排除位");
                         var display=plan.Monsters.Single(row=>row.MonsterId==63821);
                         if (request==0)
                         {
@@ -663,7 +671,7 @@ internal static class MetroQuestEntryTcpTests
                         map=MoveMap(peer,new(x+1,0),0);
                     }
                 }
-                That(Scalar(peer.Id,6304)==0 && Identity(peer.Id,6304)==acceptance &&
+                That(questUpdates==1 && Scalar(peer.Id,6304)==0 && Identity(peer.Id,6304)==acceptance &&
                     fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=6304",peer.Id) is [[1L]],
                     "完整真实TCP五房形成原接取唯一ClearFact和条件达成");
                 byte[] report= DungeonSettlementProtocolTests.Report(peer.Id,99);
@@ -684,6 +692,11 @@ internal static class MetroQuestEntryTcpTests
                     fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0 ORDER BY instance_id",peer.Id);
                 void Drain()=>drain(peer,packet=>
                 {
+                    if(packet.Kind==1 && packet.Opcode==33)
+                    {
+                        Bytes(packet.Body,[1,0xA0,0x18,0,0,0,0],"6304条件归零不由显示演员或重复死亡生成");
+                        questUpdates++;
+                    }
                     if(packet.Opcode==37) deathGrowth++;
                     if(packet.Opcode==38 && U16(packet.Body)==plans.Last().Monsters.Single(row=>row.MonsterId==63821).ObjectKey)
                     {

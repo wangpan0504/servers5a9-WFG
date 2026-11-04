@@ -27,12 +27,18 @@ internal static class AntonRewardDisplayTests
         foreach (var incomplete in new[] { explicitItem with { RawCode = null }, explicitItem with { RawFlag = null },
             explicitItem with { RawTail1 = null } })
             Reject<InvalidDataException>(() => Encode([incomplete]), "缺任一未证列禁止编码，不能补常数");
-        That(!AntonRewardPackets.TryFrozenResult(1, 0x4321, 2, [grant], out var blocked, out var missing) &&
-            missing == "RawCode,RawFlag,RawTail1", "正式冻结来源门控关闭且逐列报告缺证");
-        Bytes(blocked, [1,0], "门控失败仅返回空选择列表");
+        That(AntonRewardPackets.TryFrozenResult(1, 0x4321, 2, [grant], out var plain, out var missing) &&
+            missing == "", "已授予冻结物品显式使用普通可见展示策略");
+        Bytes(plain, [1,1,0x21,0x43,2,1,0,0x78,0x56,0x34,0x12,0x56,0x34,0,0,0,0,0,0xab,0,0,0],
+            "普通团16B包含完整两个u32尾，实际附魔不被普通策略覆盖");
+        That(!AntonRewardPackets.TryFrozenResult(1, 0x4321, 2, [], out var blocked, out missing) &&
+            missing == "empty-grants", "空资产不能伪造成非空结果");
+        Bytes(blocked, [1,0], "空资产保留空选择列表");
         Bytes(AntonRewardPackets.Choices(0), [0,0], "初始选择列表不提前写本人已选行");
         Reject<InvalidDataException>(() => AntonRewardDisplayItem.FromFrozen(grant with { Count = 65536 }), "数量溢出拒绝截断");
-        Reject<InvalidDataException>(() => AntonRewardPackets.Result(2, []), "不扩展牌种");
+        Bytes(AntonRewardPackets.Result(2, []), [2,0], "PC房结果沿公共16B读取器");
+        Bytes(AntonRewardPackets.Result(3, []), [3,0], "全团结果沿公共16B读取器");
+        Reject<InvalidDataException>(() => AntonRewardPackets.Result(4, []), "拒绝本实现外牌种");
         Console.WriteLine($"PASS {Count-before} 安徒恩普通团600字段合同断言");
     }
 

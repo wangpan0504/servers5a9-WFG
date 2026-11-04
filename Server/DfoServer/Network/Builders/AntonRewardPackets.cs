@@ -7,12 +7,21 @@ namespace DfoServer.Network.Builders;
 
 internal static class AntonRewardPackets
 {
-    // 来源门控不能由旧8B Display中的合成code/flag绕过；正式冻结资产仅能提供三列。
+    // class2第二页按完整owner表枚举；每行来自同一阶段已经持久化的精确权益。
+    internal static byte[] TeamResults(IReadOnlyList<AntonTeamRewardEntitlement> results)
+    {
+        if (results.Count is < 1 or > 20 || results.Select(row => row.Owner).Distinct().Count() != results.Count)
+            throw new InvalidDataException("安徒恩团队权益必须是完整且owner唯一的20人内表");
+        return Result(3, results.Select(row => new AntonRewardDisplayRow(row.Owner, row.Card,
+            row.Grants.Select(AntonRewardDisplayItem.PlainGranted).ToImmutableArray())).ToArray());
+    }
+
+    // 仅投影已提交回执的实际物品；显式选择普通展示策略，不从旧8B Display推导附加列。
     internal static bool TryFrozenResult(byte kind, ushort owner, byte card, IReadOnlyList<InventoryReward> grants,
         out byte[] body, out string missing)
     {
-        var items = grants.Select(AntonRewardDisplayItem.FromFrozen).ToImmutableArray();
-        missing = "RawCode,RawFlag,RawTail1";
+        var items = grants.Select(AntonRewardDisplayItem.PlainGranted).ToImmutableArray();
+        missing = "empty-grants";
         if (items.Length == 0 || items.Any(item => !item.Complete))
         {
             body = Choices(kind);
@@ -23,13 +32,13 @@ internal static class AntonRewardPackets
         return true;
     }
 
-    internal static byte[] Choices(byte kind) => kind is 0 or 1 ? [kind, 0]
+    internal static byte[] Choices(byte kind) => kind <= 3 ? [kind, 0]
         : throw new InvalidDataException("安徒恩600类别无效");
 
     // 023CA1B0普通20人团：2+Σ(4+16M)，仅供完整显式字段编码；有值不自动证明来源合法。
     internal static byte[] Result(byte kind, IReadOnlyList<AntonRewardDisplayRow> rows)
     {
-        if (kind is not (0 or 1) || rows.Count > byte.MaxValue || rows.Any(row =>
+        if (kind > 3 || rows.Count > byte.MaxValue || rows.Any(row =>
             row.Card > 3 || row.Items.IsDefaultOrEmpty || row.Items.Length > byte.MaxValue ||
             row.Items.Any(item => !item.Complete || item.ItemId == 0 || item.DisplayNumber == 0)))
             throw new InvalidDataException("安徒恩600字段缺证或超出范围");

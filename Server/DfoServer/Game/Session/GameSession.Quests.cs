@@ -42,7 +42,7 @@ internal sealed partial class GameSession
     {
         var captured = owner.Execute(() =>
         {
-            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+            if (AntonRejoinPresentationPending || pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
                 !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
@@ -170,7 +170,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+            if (AntonRejoinPresentationPending || pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||
                 !ReferenceEquals(pendingQuestCompletion,captured.Pending) || !CanPublishQuestRefusal(rejection))
                 throw new InvalidOperationException("领奖资源规划的原选角、角色快照或实例已失效");
             if (preparation.Outcome != QuestCompletionOutcome.Accepted || preparation.Plan is null)

@@ -80,7 +80,11 @@ internal sealed partial class DungeonHandler
         var warReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true } completed &&
             context.Session.CanPublishEvildomWar(completed) && evildomRewards is not null && evildomRewardStore is not null
             ? context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore) : null;
-        using var publication = context.Sender.QueuePublication(notice.Recipient.Actor.IsCurrent);
+        bool RejoinSceneCurrent() => notice.Recipient.Actor.IsCurrent() && notice.Scene is { } restoring &&
+            context.Session.HasAntonRejoinPresentation && context.Session.CanPublishNativeScene(restoring);
+        Func<bool> publicationCurrent = notice.Kind == PartyDungeonNoticeKind.AntonRejoinScene
+            ? RejoinSceneCurrent : notice.Recipient.Actor.IsCurrent;
+        using var publication = context.Sender.QueuePublication(publicationCurrent);
         if (notice.Kind is PartyDungeonNoticeKind.EvildomWarStarted or PartyDungeonNoticeKind.EvildomWarUpdated)
         {
             if (notice.WarView is not { } view || !context.Session.CanPublishEvildomWar(view)) return;
@@ -251,13 +255,29 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(notice.Peer), "party_story_player_state", Current);
             return;
         }
+        var objectPlan = context.Session.PartyDungeon?.ProjectAntonObjectPlan(scene.Entry) ?? scene.Entry;
         switch (notice.Kind)
         {
+            case PartyDungeonNoticeKind.AntonRejoinScene:
+                // 本服重返呈现策略：复用已证的正式场景消费者，不宣称原厂668成功包序。
+                await town.DetachAsync(context);
+                await PublishPartyRosterAsync(context, notice.Members, Current);
+                await PublishPartyHostAsync(context, notice.Members, Current);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_rejoin_selection_scene", Current);
+                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(objectPlan), "anton_rejoin_information", Current);
+                await MonsterAiProjection.SendAsync(context, scene, "anton_rejoin_monster_ai", Current);
+                if (!context.Sender.TryPost(0, (ushort)NotiPacketType.START_MAP,
+                    DungeonPackets.StartMap(objectPlan, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems),
+                    "anton_rejoin_map", RejoinSceneCurrent, written: () => context.Session.MarkAntonRejoinSceneWritten(scene)))
+                    throw new IOException("安徒恩重返场景入队失败");
+                RaidCombatProjection.AntonTimersForScene(context, Current);
+                break;
             case PartyDungeonNoticeKind.LoadingReplay:
                 // 现场00:02:51的28/29及首次Entry构包合同；重用冻结seed/演员，不补无证ACK16。
-                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "anton_loading_information_replay", Current);
+                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(objectPlan), "anton_loading_information_replay", Current);
+                await MonsterAiProjection.SendAsync(context, scene, "anton_loading_monster_ai_replay", Current);
                 await context.Notify(NotiPacketType.START_MAP,
-                    DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "anton_loading_map_replay", Current);
+                    DungeonPackets.StartMap(objectPlan, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "anton_loading_map_replay", Current);
                 RaidCombatProjection.AntonTimersForScene(context, Current);
                 break;
             case PartyDungeonNoticeKind.Entry:
@@ -277,13 +297,13 @@ internal sealed partial class DungeonHandler
                         "raid_entry_retry_disabled", Current);
                 await PublishPartyRosterAsync(context, notice.Members, Current);
                 await PublishPartyHostAsync(context, notice.Members, Current);
-                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "party_dungeon_information", Current);
+                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(objectPlan), "party_dungeon_information", Current);
                 if (OrdinaryLukeProgress.Applies(scene.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Current);
                 if (PreyNormalProgress.Applies(scene.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Current);
                 if (AntonNormalProgress.Applies(scene.Entry)) await AntonNormalSequenceProjection.RefreshAsync(context, Current);
                 await MonsterAiProjection.SendAsync(context, scene, "party_monster_ai", Current);
                 await context.Notify(NotiPacketType.START_MAP,
-                    DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "party_start_map", Current);
+                    DungeonPackets.StartMap(objectPlan, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "party_start_map", Current);
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } entryHell)
                     await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO,entryHell,"party_hell_monsters",Current);
                 await QuestProjection.DungeonTerrainBypassAsync(context, scene.Entry, Current);
@@ -319,6 +339,9 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "party_loading_release", Current);
                 foreach (var member in notice.Members)
                     await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_player_state", Current);
+                // 只有重返加载回执携带死亡快照；新客户端重建名册后恢复原死状态，不生成死亡或复活事实。
+                foreach (ushort member in notice.AntonRejoinDeaths)
+                    await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(member, (byte)0), "anton_rejoin_dead_member", Current);
                 // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
                 await PcRoomBuffProjection.PostAsync(context, Current);
                 town.GuildEconomy?.Post(context, force: true);
@@ -346,7 +369,7 @@ internal sealed partial class DungeonHandler
                 if (scene.NavigationReplay) break;
                 await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "party_move_ack", Current);
                 await MonsterAiProjection.SendAsync(context, scene, "party_monster_ai", Current);
-                await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed,
+                await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(objectPlan, scene.Monsters, scene.MapSeed,
                     scene.Snapshot.MapOperation, scene.Snapshot.MapPayload, scene.PassiveItems), "party_next_map", Current);
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } moveHell && scene.Snapshot.MapPayload != DungeonMapPayload.Cached)
                     await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO,moveHell,"party_hell_monsters",Current);

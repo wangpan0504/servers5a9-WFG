@@ -812,6 +812,7 @@ internal static class ServerRuntime
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online, settings, log),
             new FiendwarCounterHandler(repository, titleService, titleProjection, inventoryProjection),
             new FiendwarSpawnHandler(),
+            new AntonNativeHandler(),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,
