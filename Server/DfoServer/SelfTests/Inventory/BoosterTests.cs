@@ -83,7 +83,7 @@ internal static class BoosterTests
         foreach (string bad in new[] { "[avatar]\n1 113590008 1 3 0 101580138 1 3 0\n[/avatar]",
             "[avatar]\n1 113590008 1 3\n[/avatar]", "[avatar]\n0 113590008 1 3 0\n[/avatar]",
             "[avatar]\n1 113590008 1 0 0\n[/avatar]", "[avatar]\n1 113590008 1 3 x 0\n[/avatar]" })
-            That(!Parse(bad).Available, "装扮奖池多行、缺列或非法值保持未确认，不随机发外观");
+            That(!Parse(bad).Available, "装扮奖池缺列、四列多行或非法值保持未确认，不随机发外观");
         That(!itemResources.Boosters.Get(10162064).Available && !itemResources.Boosters.Get(1106).Available,
             "quota and ordinary consumables are not silently treated as simple boxes");
         That(itemResources.Boosters.Get(490704415).Available && itemResources.Boosters.Get(490704415).Pools.All(pool => pool.JobTag is not null),

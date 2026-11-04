@@ -160,8 +160,8 @@ internal static class AuctionListingTests
         That(weapon.TotalCount == 1 && weapon.Listings.Single().SellerName == "武器",
             "武器子叶（10101）只回族 101 的装备部位 12；称号、防具、材料都被挡住");
         // 完全没见过的 id：不过滤（客户端界面可能已变化，猜错的过滤比不过滤更难发现）。
-        That(f.Search(40101, 0).TotalCount == 3 && f.Search(99999, 0).TotalCount == 3,
-            "未采集过的分类 id 不过滤，并在日志里暴露 id");
+        That(f.Search(40101, 0).TotalCount == 0 && f.Search(99999, 0).TotalCount == 3,
+            "金币寄售 40101 只检索金币券（这组没有金币券，所以是 0）；其它未采集 id 仍不过滤");
     }
 
     /// <summary>
@@ -273,8 +273,8 @@ internal static class AuctionListingTests
             "副职业（33000）连 SQL 侧都是 0 行：这一类的 0 来自确无该大类的挂牌");
 
         // 未映射 / 未采集过的 id 不过滤（既有行为的非回归断言，见 Categories 组）。
-        That(f.Search(21000, 0).TotalCount == 13 && f.Search(40101, 0).TotalCount == 13 && f.Search(99999, 0).TotalCount == 13,
-            "未映射 id（金币寄售 21000、全部上方的 40101、不存在的 99999）不过滤，回全部 13 条");
+        That(f.Search(21000, 0).TotalCount == 13 && f.Search(40101, 0).TotalCount == 0 && f.Search(99999, 0).TotalCount == 13,
+            "未映射 id（21000、99999）不过滤；40101 是金币寄售，这组没有金币券所以是 0，不会把 13 件装备算进去");
         That(f.Search(21000, 0).Plan is { SlotDimensions: null, Category.Status: AuctionCategoryStatus.Unmapped },
             "未映射 id 的搜索计划不带任何维度，因此 SQL 与内存两侧都不会过滤");
 
@@ -442,9 +442,10 @@ internal static class AuctionListingTests
         That(AuctionCategoryFilter.Resolve(33000).Dimensions.KindList.SequenceEqual(new byte[] { (byte)ItemKind.Profession }),
             "副职业按物品大类过滤");
         That(AuctionCategoryFilter.Resolve(AuctionCategoryFilter.All).Status == AuctionCategoryStatus.All &&
-            AuctionCategoryFilter.Resolve(40101).Status == AuctionCategoryStatus.Unmapped &&
+            AuctionCategoryFilter.Resolve(40101).Status == AuctionCategoryStatus.Gold &&
+            AuctionCategoryFilter.Resolve(40117).Status == AuctionCategoryStatus.Gold &&
             AuctionCategoryFilter.Resolve(21000).Status == AuctionCategoryStatus.Unmapped,
-            "「全部」是已识别节点，金币寄售与其它未知 id 归未映射，两者都不过滤但日志可区分");
+            "「全部」是已识别节点；40101–40117 是金币寄售；其它未知 id 仍归未映射");
         That(AuctionCategoryFilter.Resolve(AuctionCategoryFilter.All).Note is not null &&
             AuctionCategoryFilter.Resolve(10101).Note is not null && AuctionCategoryFilter.Resolve(21000).Note is not null,
             "每条解析都带回取舍说明，日志因此能区分「全部」「子叶未对账」「没见过」三种不过滤/粗过滤");

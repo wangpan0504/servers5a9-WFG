@@ -187,6 +187,7 @@ internal static class SelfTestRunner
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
         BoosterSelectionTests.RunCore();
+        BoosterAvatarPoolTests.RunCore();
         BoosterGrowTypeTests.RunCharacterCore();
         AvatarPackageTests.RunCore();
         OmittedDimensionsAvatarPackageTests.RunCore();

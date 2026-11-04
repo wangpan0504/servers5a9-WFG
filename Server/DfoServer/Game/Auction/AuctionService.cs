@@ -245,11 +245,11 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// **为什么匹配总数必须是过滤后的值**：客户端按每页 10 条算总页数并直接显示「搜索出 N 个」，
     /// 用过滤前的条数会让页数虚高、翻到后面全是空页。因此内存过滤在分页之前完成，总数取过滤后的条数。
     /// </summary>
-    public AuctionSearchPage Search(AuctionSearchRequest request, long? excludeSellerCharacterId, long now)
+    public AuctionSearchPage Search(AuctionSearchRequest request, long? excludeSellerCharacterId, long now, bool goldWindow = false)
     {
         if (request.Offset < 0)
             throw new InvalidDataException("拍卖行翻页偏移不能为负");
-        var plan = categories.Build(request, excludeSellerCharacterId);
+        var plan = categories.Build(request, excludeSellerCharacterId, goldWindow);
         if (plan.SlotDimensions is not { } dimensions)
             return store.Search(plan.Filter, now, request.Offset, PageSize) with { Plan = plan };
         // 有内存维度（装备部位 / 武器族）：先取回 SQL 侧的全部匹配挂牌（已按 listing_id 稳定排序），
@@ -352,8 +352,21 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// 没有选中角色时调用方不会走到这里；角色 id 非正（不可能出现在真实会话里）时返回空列表，
     /// 宁可回空也不做一次「卖家为 NULL」的查询把机器人挂牌当成玩家的东西发出去。
     /// </summary>
-    public ImmutableArray<AuctionListing> SellerListings(long sellerCharacterId, long now, bool includeInactive) =>
-        sellerCharacterId <= 0 ? [] : store.LoadSellerListings(sellerCharacterId, now, includeInactive);
+    public ImmutableArray<AuctionListing> SellerListings(long sellerCharacterId, long now, bool includeInactive, bool? goldMarket = null)
+    {
+        if (sellerCharacterId <= 0)
+            return [];
+        var rows = store.LoadSellerListings(sellerCharacterId, now, includeInactive);
+        if (goldMarket is not bool gold)
+            return rows;
+        var kept = ImmutableArray.CreateBuilder<AuctionListing>(rows.Length);
+        foreach (var row in rows)
+        {
+            if (AuctionGoldTickets.IsTicket(row.ItemTemplateId) == gold)
+                kept.Add(row);
+        }
+        return kept.ToImmutable();
+    }
 
     // —— CMD 183 上架（AUCTION_REGIST_ITEM）——
 
@@ -559,12 +572,21 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// </summary>
     public const int SaleTaxPercent = 5;
 
-    /// <summary>持有效拍卖行优惠券（premium 类型 29）时的卖方税率。金币寄售未实现，不另造 1% 路径。</summary>
+    /// <summary>
+    /// 持有效拍卖行优惠券（premium 类型 29）时的卖方税率。
+    /// 数字出自 PVF <c>etc/guide/41.gdata</c>：「拍卖手续费减少至3%」。
+    /// 拍卖券 stk（<c>ticket_premiumauction.stk</c> / <c>ticket_premiumauction2.stk</c>）只写「减少使用拍卖行所需的手续费」，没有另一套百分数。
+    /// 文档里「金币寄售有券 5%→1%」在这两处都没有出处，不采用。
+    /// </summary>
     public const int CouponSaleTaxPercent = 3;
+
+    /// <summary>金币寄售持券税率。与普通拍卖同一 PVF 出处，仍是 3%，不是 1%。</summary>
+    public const int GoldCouponSaleTaxPercent = CouponSaleTaxPercent;
 
     public const int AuctionCouponContractType = PremiumContractCatalog.AuctionCouponType;
 
-    public static int TaxPercent(bool couponActive) => couponActive ? CouponSaleTaxPercent : SaleTaxPercent;
+    public static int TaxPercent(bool couponActive, bool goldConsignment = false) =>
+        couponActive ? goldConsignment ? GoldCouponSaleTaxPercent : CouponSaleTaxPercent : SaleTaxPercent;
 
     /// <summary>托管邮件的系统发件人名（卖方所得那封由拍卖行自己发，不是卖家发给卖家）。</summary>
     public const string SystemSender = "拍卖行";
@@ -687,7 +709,8 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         custody.Add(new(CustodyItemKey(listing.ListingId), buyer.Id, Required: true, listing.SellerName,
             itemText, 0, [InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 0), core)], now, null));
         bool coupon = listing.SellerCharacterId is long couponSeller && store.AuctionCouponActive(couponSeller, now);
-        int taxPercent = TaxPercent(coupon);
+        bool goldListing = AuctionGoldTickets.IsTicket(listing.ItemTemplateId);
+        int taxPercent = TaxPercent(coupon, goldListing);
         long proceeds = SellerProceeds(totalPrice, taxPercent);
         if (listing.SellerCharacterId is { } sellerId)
         {

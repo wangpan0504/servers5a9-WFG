@@ -29,9 +29,8 @@ namespace DfoServer;
 /// 背景（2026-10-12 实机）：普通拍卖行窗口发 `mode=0`、金币寄售窗口发 `mode=1`，
 /// 两个窗口的数据是**两套**（拍卖行挂牌 vs 寄售金币）。原先两条路径都不看 mode、
 /// 一律把拍卖行挂牌发回去，客户端就把**我的装备画进了金币寄售的「确认寄售的金币」面板**。
-/// 金币寄售本仓库未接入 ⇒ 现在的契约是：`mode=0` 走真实数据，**`mode≠0` 一律回空列表**
-/// （`flag + mode(回显) + count=0`），既不伪造寄售数据、也不让面板停在无响应，
-/// 并且**不消耗**探针候选（金币寄售的请求不该推进「我的拍卖品」的记录布局轮换）。
+/// 金币寄售接入后：`mode=0` 只回普通挂牌，`mode=1` 只回金币券挂牌。
+/// 这组夹具只有装备，因此 `mode=1` 仍是空列表。空列表与有数据的金币请求都不消耗探针候选。
 ///
 /// 只在**真实命令表 + 真实会话 + 真实发送队列**上验证：这一层才看得出「谁发的 mode、
 /// 服务端回了什么、发出去的字节是什么」，而 mode 回显错一个字节就是把记录灌进另一类窗口。
@@ -150,15 +149,20 @@ internal static class AuctionWindowModeTests
                 "★★ 186 mode=1 = flag + mode 回显 + total(0) + count(0)，共 8 字节：金币寄售的「金币搜索」不再列出拍卖行装备");
             That(sent[0].Action == "auction_search_consignment_reply", "搜索空列表的动作名区分于 auction_search_reply");
 
-            // ⑦ 187（分类搜索）mode=1 也回空列表；mode=0 仍然真发 —— 门闸只挡寄售窗口，不误伤普通拍卖行。
+            // ⑦ 187（分类搜索）mode=1 也回空列表；mode=0 的普通分类仍然真发。
+            // 分类 40101 即使出现在 mode=0 里也只查金币券，不能把装备算进金币分类。
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 187, CategorySearchBody(0x01)));
             That(sent[0].Opcode == 186 && sent[0].Body.SequenceEqual<byte>([0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-                "187 mode=1 与 186 同款空列表（分类搜索的寄售窗口路径同样不发明数据）");
+                "187 mode=1 与 186 同款空列表（这组没有金币券，不能把装备发明进寄售窗口）");
+            sent.Clear();
+            await commands.DispatchAsync(context, new Packet(1, 187, CategorySearchBody(0x00, 0)));
+            That(BitConverter.ToInt32(sent[0].Body, 2) >= 1 && sent[0].Body[1] == 0x00,
+                "★ mode=0 的普通分类搜索不受影响（没有把普通拍卖行一起关掉），且 mode 仍回显 0");
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 187, CategorySearchBody(0x00)));
-            That(BitConverter.ToInt32(sent[0].Body, 2) >= 1 && sent[0].Body[1] == 0x00,
-                "★ mode=0 的 187 分类搜索不受影响（没有把普通拍卖行一起关掉），且 mode 仍回显 0");
+            That(sent[0].Body[1] == 0x00 && BitConverter.ToInt32(sent[0].Body, 2) == 0,
+                "mode=0 但分类 40101 只检索金币券：装备挂牌不会出现在金币分类里");
 
             // ⑧ 日志：两条路径分别记账，且金币寄售那条永远带 mode=1。
             log.Flush();
@@ -176,6 +180,33 @@ internal static class AuctionWindowModeTests
             var search = Logged(jsonl, "auction_search");
             That(search.All(entry => entry.GetProperty("Mode").GetInt32() == 0),
                 "★ auction_search 只记普通拍卖行窗口（mode=0）：mode=1 的请求在到达探针/读路径之前就分流了");
+
+            // ⑨ 补一条金币券挂牌后，两个窗口各看各的：装备不进 mode=1，金币券不进 mode=0。
+            // 探针在上面已经轮过，这里换回关闭态，避免下一次 mode=0 撞上 head-only 空记录。
+            myLists = AuctionProbe.Parse("off");
+            const int goldTicket = 2681725;
+            long goldMine = SeedGold(path, repository, me.Id, me.Name, now, goldTicket);
+            long goldOther = SeedGold(path, repository, null, "拍卖机器人乙", now, goldTicket);
+            sent.Clear();
+            await commands.DispatchAsync(context, new Packet(1, 188, [0x01]));
+            That(sent[0].Action == "auction_my_list_consignment" && sent[0].Body.Length == 3 + 151 && sent[0].Body[1] == 0x01 &&
+                sent[0].Body[2] == 1 && BitConverter.ToInt32(sent[0].Body, 3) == goldMine,
+                "188 mode=1 只列出自己的金币券，记录布局仍是默认 151B");
+            sent.Clear();
+            await commands.DispatchAsync(context, new Packet(1, 188, [0x00]));
+            That(sent[0].Body[1] == 0x00 && sent[0].Body[2] == 1 && BitConverter.ToInt32(sent[0].Body, 3) == mine,
+                "188 mode=0 仍然只有原来那件装备，金币券不混进普通「我的拍卖品」");
+            sent.Clear();
+            var goldSearch = new byte[14];
+            goldSearch[0] = 0x01;
+            await commands.DispatchAsync(context, new Packet(1, 186, goldSearch));
+            That(sent[0].Action == "auction_search_consignment_reply" && sent[0].Body[1] == 0x01 &&
+                BitConverter.ToInt32(sent[0].Body, 2) == 1 && BitConverter.ToUInt16(sent[0].Body, 6) == 1 &&
+                sent[0].Body.Length == 8 + 168,
+                "186 mode=1 只返回别人的金币券（自己的被排除），应答仍是 168B 搜索记录");
+            That(BodyContains(sent[0].Body, goldTicket) && !BodyContains(sent[0].Body, SampleTemplate),
+                "金币搜索记录里是金币券模板，不是装备模板");
+            That(goldOther > goldMine, "机器人金币券挂牌已写入，搜索才有可返回的一行");
         }
         finally
         {
@@ -193,12 +224,12 @@ internal static class AuctionWindowModeTests
     }
 
     /// <summary>187（按分类搜索）请求体：20 字节，mode + 分类 id @5（其余为实机样本的固定位）。</summary>
-    static byte[] CategorySearchBody(byte mode)
+    static byte[] CategorySearchBody(byte mode, int categoryId = 40101)
     {
         var body = new byte[20];
         body[0] = mode;
-        body[5] = 0xA5;      // 40101：未采集过的分类 id ⇒ 服务端不过滤（本组只关心 mode 分流）
-        body[6] = 0x9C;
+        body[5] = (byte)categoryId;
+        body[6] = (byte)(categoryId >> 8);
         body[7] = 0x07;
         body[9] = 0x1F;
         body[19] = 0x08;
@@ -206,6 +237,25 @@ internal static class AuctionWindowModeTests
     }
 
     /// <summary>插入一条挂牌并返回 listing_id（真实批量插入入口，不经业务上架）。</summary>
+    static bool BodyContains(byte[] body, int value)
+    {
+        var needle = BitConverter.GetBytes(value);
+        for (int index = 0; index <= body.Length - needle.Length; index++)
+        {
+            if (body.AsSpan(index, needle.Length).SequenceEqual(needle))
+                return true;
+        }
+        return false;
+    }
+
+    static long SeedGold(string path, CharacterRepository repository, long? sellerId, string sellerName, long now, int itemId)
+    {
+        var core = new ItemCore(itemId, ItemKind.Material, 1);
+        repository.InsertListings([new(sellerId, sellerName, itemId, (byte)ItemKind.Material, 1,
+            AuctionPackets.ItemEntrySnapshot(core), 700_000, 800_000, now, now + 86_400)]);
+        return Query(path, "SELECT max(listing_id) FROM auction_listings");
+    }
+
     static long Seed(string path, CharacterRepository repository, long? sellerId, string sellerName, int buyout, long now)
     {
         var core = new ItemCore(SampleTemplate, ItemKind.Equipment, 1_000_000 + (int)(sellerId ?? 0)) { Attr = 2, Durability = 45 };

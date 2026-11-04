@@ -159,6 +159,7 @@ internal static partial class CashShopTests
 
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
+        BoosterAvatarPoolTests.RunResources(towns, characters, resources);
         int[] expiryItems = [490705385, 490705234, 490705235, 490705286, 490705249];
         var originalTemplates = expiryItems.Select(id => KeyValuePair.Create(id, resources.Items.Get(id))).ToArray();
         try
