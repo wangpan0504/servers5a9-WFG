@@ -2059,13 +2059,34 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
-        // 合并前本分支把豪华044订单记成v194，而master的v194是无尽大冒险日额度。
-        // 这类库已有精确匹配的订单表、却没有日额度表：按193补跑。v197按结构判定，已有订单原样保留。
+        // 原豪华193使用旧公会结构；仅完整已知形态补跑正式193，不重建原订单。
+        if (version == 193 && current >= 197 && IsLegacyDeluxe193(db, tx))
+            version = 192;
+        // 原上游豪华分支占用194；在193严格识别之后处理，避免混合库连续回退。
         if (version == 194 && current >= 197 &&
             KnownTable(db, tx, "account_battle_pass_deluxe_orders", BattlePassDeluxeSchema.Definition))
         {
             query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_endless_adventure_days'";
             if (query.ExecuteScalar() is 0L) version = 193;
+        }
+        // 豪华订单预览曾占用v192；完整旧团本结构与在线事实均已知，且没有任何双世代结构时才补跑正式192。
+        if (version == 192 && current >= 193 &&
+            KnownTable(db, tx, "account_battle_pass_deluxe_orders", BattlePassDeluxeSchema.Definition) &&
+            KnownTable(db, tx, "character_raid_runs", RaidGuildContributionSchema.Definition) &&
+            KnownTable(db, tx, "character_raid_reward_receipts", RaidLifecycleSchema.FiendwarRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) &&
+            KnownTable(db, tx, "account_fiendwar_guides", RaidLifecycleSchema.FiendwarGuideBindings) &&
+            PcRoomTimePointSchema.Definition.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql)))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name IN('account_raid_quota_epochs','character_raid_entry_clear','character_raid_reward_epoch')";
+            if (query.ExecuteScalar() is 0L) version = 191;
+        }
+        // 豪华订单预览曾占用v191；仅接管已知豪华表且三张正式在线表均不存在的旧库。
+        if (version == 191 && current >= 193 &&
+            KnownTable(db, tx, "account_battle_pass_deluxe_orders", BattlePassDeluxeSchema.Definition))
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name IN('account_pcroom_timepoint_days','account_pcroom_timepoint_segments','account_pcroom_timepoint_claims')";
+            if (query.ExecuteScalar() is 0L) version = 190;
         }
         // 活动验证库曾将日额度表记为192；仅完整旧攻坚结构缺少正式额度表时补跑主线192起。
         if (version == 192 && current >= 194 &&
@@ -3054,4 +3075,36 @@ internal static class SqliteMigrations
             assets TEXT NOT NULL CHECK(json_valid(assets))
         );
         """;
+
+    static bool IsLegacyDeluxe193(SqliteConnection db, SqliteTransaction tx)
+    {
+        string craft = GuildNpcItemCraftSchema.Sql.Split(';')[0]
+            .Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)
+            .Replace("CHECK(npc_id IN(400001065,400001061))", "CHECK(npc_id=400001065)", StringComparison.Ordinal)
+            .Replace("CHECK(benefit_id>0)", "CHECK(benefit_id BETWEEN 7001 AND 7005)", StringComparison.Ordinal);
+        string requests = GuildRequestSchema.Sql.Split(';')[0]
+            .Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)
+            .Replace("CHECK(kind BETWEEN 1 AND 7)", "CHECK(kind BETWEEN 1 AND 6)", StringComparison.Ordinal);
+        if (!KnownTable(db, tx, "account_battle_pass_deluxe_orders", BattlePassDeluxeSchema.Definition) ||
+            !KnownTable(db, tx, "character_guild_npc_item_crafts", craft) ||
+            !KnownTable(db, tx, "guild_request_claims", requests) ||
+            !KnownTable(db, tx, "character_raid_runs", RaidQuotaSchema.RunsDefinition) ||
+            !KnownTable(db, tx, "character_raid_reward_receipts", RaidQuotaSchema.RewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) ||
+            !KnownTable(db, tx, "account_fiendwar_guides", RaidLifecycleSchema.CurrentFiendwarGuideBindings) ||
+            !KnownTable(db, tx, "account_raid_quota_epochs", RaidQuotaSchema.EpochTable) ||
+            !PcRoomTimePointSchema.Definition.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(sql => KnownTable(db, tx, sql["CREATE TABLE ".Length..sql.IndexOf('(')], sql)))
+            return false;
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = """
+            SELECT count(*) FROM sqlite_schema WHERE name IN(
+              'character_guild_npc_craft_weeks','guild_dungeon_scroll_receipts',
+              'account_endless_adventure_days','account_daily_attendance_days','account_daily_attendance_claims',
+              'weekly_attendance_season','account_weekly_attendance')
+            """;
+        if (query.ExecuteScalar() is not 0L) return false;
+        RaidQuotaSchema.ValidateIndexes(db, tx);
+        return true;
+    }
+
 }

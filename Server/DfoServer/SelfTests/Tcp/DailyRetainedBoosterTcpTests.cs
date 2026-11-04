@@ -20,6 +20,7 @@ internal static class DailyRetainedBoosterTcpTests
         DailyRetainedBoosterTests.Run(resources.Towns, resources.ItemResources);
         await DailyBoosterProjectionTests.RunResourcesAsync(resources);
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-18T21:59:59Z"));
+        var resetAt = DateTimeOffset.Parse("2026-10-18T22:00:00Z");
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "daily-retained-booster"),
             gm: true, resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);

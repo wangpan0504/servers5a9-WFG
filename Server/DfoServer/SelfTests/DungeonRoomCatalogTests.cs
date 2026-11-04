@@ -355,7 +355,7 @@ internal static partial class DungeonRoomCatalogTests
                 monster.RankKind == "[normal]" && monster.Modifiers.Count == 0),
             "Q3487真实91548保留完整五怪原序、首NPC0/dummy/Boss及后续四行，不吞参数或下一怪物");
         That(merman.AiCharacters.Count(actor => actor.Id == 55430) == 1 &&
-            merman.AiCharacters.All(actor => actor.Id is 55430 or 20900 or 5409 &&
+            merman.AiCharacters.All(actor => actor.Id is 55430 or 20900 or 5409 or 9986 or 74990 or 19973 &&
                 actor.Faction == "[character]" && actor.RankKind == "[normal]") &&
             merman.AiCharacters.Select(actor => actor.Id).Distinct().Count() == merman.AiCharacters.Count &&
             merman.NpcMetadataError is null && merman.Npcs is [{ Id: 1000 }],
@@ -370,7 +370,7 @@ internal static partial class DungeonRoomCatalogTests
             plannedRows.Skip(1).All(monster => monster.SpawnType == 0 && monster.IsBlocking && !monster.IsBoss &&
                 monster.Source is { NpcParameter: null, SpecialChild: null }) &&
             mermanApcs.Select(actor => actor.MonsterId).SequenceEqual(merman.AiCharacters
-                .Where(actor => !DungeonCompanion.IsCompanionRow(actor.Id)).Select(actor => actor.Id)) &&
+                .Where((actor,index) => !DungeonCompanion.IsCompanionRow(merman,index)).Select(actor => actor.Id)) &&
             mermanApcs is [{ MonsterId: 55430 }] &&
             mermanApcs.All(actor => actor is { SpawnType: 5, IsFriendly: true, IsBlocking: false, CanReportDeath: false, IsBoss: false }),
             "Q3487/91548 人鱼之王 NPC+dummy 与后续四只普通怪可以生成，友方APC单独保留，房间不再整图拒绝");

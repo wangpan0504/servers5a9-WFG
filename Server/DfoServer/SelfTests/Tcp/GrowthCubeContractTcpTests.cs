@@ -233,18 +233,33 @@ internal static class GrowthCubeContractTcpTests
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() { lock(sync) return milliseconds; }
         public override DateTimeOffset GetUtcNow() { lock(sync) return origin.AddMilliseconds(milliseconds); }
-        // 契约计数不包含共享公会轮询；共享计时器仍真实推进、回调和释放。
-        public int TimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && timer.Due != long.MaxValue); } }
+        // 契约计数不包含共享公会轮询和活动边界等待；这些计时器仍真实推进、回调和释放。
+        public int TimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.EventBoundary && timer.Due != long.MaxValue); } }
         public int CubeTimerCount { get { lock(sync) return timers.Count(timer => timer.Cube && timer.Due != long.MaxValue); } }
-        public int DailyTimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.Cube && timer.Due != long.MaxValue); } }
+        public int DailyTimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.Cube && !timer.EventBoundary && timer.Due != long.MaxValue); } }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            bool cube = dueTime == TimeSpan.FromSeconds(30);
+            // 周签到轮询与晶体周期都为30秒；按真实调用来源分类，不凭注册顺序冒认晶体计时器。
+            bool eventPoll = dueTime == TimeSpan.FromSeconds(30) &&
+                new System.Diagnostics.StackTrace().GetFrames().Any(frame =>
+                    frame.GetMethod()?.DeclaringType is { } type &&
+                    (type == typeof(Network.Projection.ServerEventProjection) ||
+                     type.DeclaringType == typeof(Network.Projection.ServerEventProjection)));
+            bool cube = dueTime == TimeSpan.FromSeconds(30) && !eventPoll;
+            bool eventBoundary = eventPoll || period == Timeout.InfiniteTimeSpan && dueTime == TimeSpan.FromDays(30);
+            bool dayBoundary = period == Timeout.InfiniteTimeSpan && dueTime != Timeout.InfiniteTimeSpan &&
+                milliseconds + (long)dueTime.TotalMilliseconds == 22 * 60 * 60 * 1000;
+            bool onlineEventBoundary;
             bool shared = dueTime == period && (period == TimeSpan.FromSeconds(1) || period == TimeSpan.FromSeconds(5));
             lock(sync)
-                That(shared || period == Timeout.InfiniteTimeSpan && (cube || dueTime != Timeout.InfiniteTimeSpan && milliseconds + (long)dueTime.TotalMilliseconds == 22 * 60 * 60 * 1000),
-                    "该场景只注册原生30秒晶体等待、当前服务日UTC22点通知或共享公会轮询，不接纳未知定时器");
-            var timer = new ClockTimer(this,callback,state,cube);
+            {
+                // 上游累计在线活动新增一个与服务日同刻的单次唤醒；第三个22:00边界属于该worker。
+                onlineEventBoundary = dayBoundary && timers.Count(timer => timer.DayBoundary) >= 2;
+                That(shared || eventBoundary || dayBoundary || period == Timeout.InfiniteTimeSpan && cube,
+                    "该场景只注册原生30秒晶体等待、服务日/累计在线活动UTC22点通知、活动轮询/边界等待或共享公会轮询，不接纳未知定时器");
+            }
+            eventBoundary |= onlineEventBoundary;
+            var timer = new ClockTimer(this,callback,state,cube,eventBoundary,dayBoundary);
             lock(sync) timers.Add(timer);
             timer.Change(dueTime,period);
             return timer;
@@ -263,9 +278,11 @@ internal static class GrowthCubeContractTcpTests
             }
             foreach(var timer in due) timer.Callback(timer.State);
         }
-        sealed class ClockTimer(Clock clock,TimerCallback callback,object? state,bool cube) : ITimer
+        sealed class ClockTimer(Clock clock,TimerCallback callback,object? state,bool cube,bool eventBoundary,bool dayBoundary) : ITimer
         {
             public bool Cube { get; } = cube;
+            public bool EventBoundary { get; } = eventBoundary;
+            public bool DayBoundary { get; } = dayBoundary;
             public TimerCallback Callback { get; } = callback;
             public object? State { get; } = state;
             public long Due { get; set; } = long.MaxValue;

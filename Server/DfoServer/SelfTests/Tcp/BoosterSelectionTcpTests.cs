@@ -573,8 +573,12 @@ internal static class BoosterSelectionTcpTests
         var items = resources.ItemResources.Items; var repo = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
         var now = DateTimeOffset.UtcNow;
         int sourceExpiry = items.Get(sourceId).Expiration.Resolve(now, ignoreAbsoluteExpiration: true);
-        That(items.Get(sourceId).StackLimit == 1 && (sourceExpiry == 0 || sourceExpiry > now.ToUnixTimeSeconds()) && items.Get(3242).StackLimit >= 37,
-            "逐项扩展礼盒保持真实堆叠上限1，永久或未来期限均为未过期源，哨兵数量37在真实模板上限内");
+        That(items.Get(sourceId).StackLimit == 1,
+            $"逐项扩展源{sourceId}保持真实堆叠上限1，实际{items.Get(sourceId).StackLimit}");
+        That(sourceExpiry == 0 || sourceExpiry > now.ToUnixTimeSeconds(),
+            $"逐项扩展源{sourceId}沿真实模板生成永久或尚未到期实例，期限{sourceExpiry}");
+        That(items.Get(3242).StackLimit >= 37,
+            $"哨兵3242数量37不超过真实模板上限{items.Get(3242).StackLimit}");
         InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot),
             InventoryRewardGrantService.Create(items.Get(id), count, now, shopExpiration: id == sourceId));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))

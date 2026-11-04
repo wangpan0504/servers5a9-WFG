@@ -286,7 +286,11 @@ internal static partial class AntonRaidTcpTests
 
             using (var reconnected = Open(fixture, "antonmember5", gamePort: endpoints[19], channelNumber: 19))
             {
-                reconnected.Select(resumeTown: true); Drain(reconnected);
+                // 同团本端点原生直发4恢复已有房间，1379→124→24仍按完整恢复包序核验。
+                var reentry = reconnected.Select(resumeTown: true);
+                Bytes(reentry.Single(packet => packet is { Kind: 0, Opcode: 1379 }).Body, [38, 0, 0, 0],
+                    "安徒恩房间重连的1379完整i32保留普通出门城镇38");
+                Drain(reconnected);
                 var membersBeforeReconnectReward = Information(observer, key, 1).Members;
                 string beforeReconnectReward = fixture.Snapshot();
                 for (int repeat = 0; repeat < 2; repeat++)

@@ -11,8 +11,14 @@ internal static partial class AntonRaidTcpTests
         var members = Enumerable.Range(0, 20).Select(i =>
         {
             var peer = Open(fixture, "antonmember" + i, gamePort: port, channelNumber: 19);
-            // 仅成员6刚从普通频道跨类型返回；其余同频道重连保留客户端城镇快照。
-            cleanup.Add(peer); peer.Select(resumeTown: i != 6); return peer;
+            cleanup.Add(peer);
+            // member6刚从普通频道返回，谓词变化须重新入城；其余成员恢复原安徒恩房间。
+            var reentry = peer.Select(resumeTown: i != 6);
+            Bytes(reentry.Single(packet => packet is { Kind: 0, Opcode: 1379 }).Body, [38, 0, 0, 0],
+                "开战成功链重连仍保留普通出门城镇38，不把安徒恩房间写成返回地区");
+            That(peer.SavedTownPosition() is { Town: 19, Area: 0 },
+                "全部开战成员按各自频道历史恢复或重新进入安徒恩房间");
+            return peer;
         }).ToArray();
         foreach (var peer in members) Drain(peer);
         Drain(observer);

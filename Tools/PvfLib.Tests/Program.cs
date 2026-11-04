@@ -19,6 +19,7 @@ if (args.Length > 0)
 }
 
 PvfArchiveTests.Run();
+ArchiveHeaderFormatTests.Run();
 ArchiveIndexTests.Run();
 ArchiveBoundaryTests.Run();
 NumericTextTests.Run();

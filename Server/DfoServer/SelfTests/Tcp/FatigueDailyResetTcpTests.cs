@@ -18,6 +18,8 @@ internal static class FatigueDailyResetTcpTests
         ServerItemCycleTests.RunResource(resources.Archive);
         var zone = TimeZoneInfo.Utc;
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2030-05-02T05:59:59Z"), zone);
+        var localResetAt = DateTimeOffset.Parse("2030-05-02T06:00:00Z");
+        var legacyResetAt = DateTimeOffset.Parse("2030-05-02T22:00:00Z");
         int day = new DateOnly(2030, 5, 1).DayNumber;
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "fatigue-daily"), gm: true, resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
@@ -73,9 +75,9 @@ internal static class FatigueDailyResetTcpTests
             var map = FormalDungeonTcpTests.Enter(peer, information: body => information = body, requestQuestId: 0);
             FormalDungeonTcpTests.Load(peer); PartyDungeonTcpTests.Drain(peer);
             That(Remaining(first) == 0 && Remaining(second) == 7, "06:00前正常首次房间扣至0，不影响另一个账号");
-            await clock.WaitForOneShotTimersAsync(4);
+            await clock.WaitForOneShotTimerAsync(localResetAt);
             clock.Advance(TimeSpan.FromSeconds(1));
-            await clock.WaitForOneShotTimersAsync(4);
+            await clock.WaitForOneShotTimerAsync(legacyResetAt);
             foreach (var client in new[] { peer, other })
             {
                 // 不发送屏障或心跳，直接等定时通知，证明持续在线且没有新请求也会刷新。
@@ -109,7 +111,7 @@ internal static class FatigueDailyResetTcpTests
             FormalDungeonTcpTests.Load(peer); PartyDungeonTcpTests.Drain(peer);
             That(Remaining(first) == 155 && Remaining(second) == 156, "原实例跨日后仍可正常过图，新房间实扣1，不影响另一账号");
 
-            await clock.WaitForOneShotTimersAsync(4);
+            await clock.WaitForOneShotTimerAsync(legacyResetAt);
             clock.Advance(TimeSpan.FromHours(16));
             foreach (var client in new[] { peer, other })
             {

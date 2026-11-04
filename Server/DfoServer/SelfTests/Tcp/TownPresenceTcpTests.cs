@@ -47,6 +47,15 @@ internal static class TownPresenceTcpTests
             beta.CheckPcRoomRefresh(false, blackDiamond: false);
             That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") == beforePcRoom,
                 "同一全局开关作用于两个账号但不写任何角色资产或会员期限");
+            // 关闭网吧资格已完整返回选角，先恢复双方入城，再验证同屏入口。
+            var alphaReselected = alpha.Select(prepared: true)[2].Body;
+            var betaReselected = beta.Select(prepared: true)[2].Body;
+            AssertBlackDiamondActor(alphaReselected, active: false, pcRoom: false);
+            AssertBlackDiamondActor(betaReselected, active: false, pcRoom: false);
+            PvpGrade(alphaReselected, 20, 9);
+            PvpGrade(betaReselected, 0);
+            alpha.Barrier();
+            beta.Barrier();
             alpha.Send(1426);
             alpha.SendBarrier();
             alpha.Batch((0, 23), (0, 24), (1, 1347));

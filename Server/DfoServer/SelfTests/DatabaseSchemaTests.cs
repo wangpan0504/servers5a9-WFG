@@ -2622,10 +2622,15 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindReleasedBattlePassTables(SqliteConnection db, int oldVersion)
     {
-        // 正式战令186..189及197才追加这些表；按子表先行移除旧版本尚未发布的空结构。
+        // 正式战令186..189、197及在线活动191与周签到196追加这些表；按子表先行移除旧版本尚未发布的空结构。
         (int Version, string Table)[] tables =
         [
             (197, "account_battle_pass_deluxe_orders"),
+            (196, "account_weekly_attendance"),
+            (196, "weekly_attendance_season"),
+            (191, "account_pcroom_timepoint_claims"),
+            (191, "account_pcroom_timepoint_segments"),
+            (191, "account_pcroom_timepoint_days"),
             (189, "account_battle_pass_cera_orders"),
             (189, "account_battle_pass_cera_consumption"),
             (188, "account_battle_pass_certificate_orders"),
@@ -2640,7 +2645,7 @@ internal static partial class DatabaseSchemaTests
         foreach (string table in futureTables)
         {
             Check(Query(db, "SELECT count(*) FROM " + table) is 0L,
-                "已发布旧库夹具只移除未来空战令表，不丢弃订单、领取或任务事实：" + table);
+                "已发布旧库夹具只移除未来空战令与在线活动表，不丢弃订单、领取或任务事实：" + table);
         }
         foreach (string table in futureTables) Execute(db, "DROP TABLE " + table);
     }

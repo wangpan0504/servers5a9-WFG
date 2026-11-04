@@ -106,9 +106,9 @@ internal static class WeeklyAttendanceTests
             Reject<WeeklyAttendanceRejectedException>(() => repository.CommitWeeklyAttendance(owner, other, season, secondWeek, catalog, true, false, []));
             That(repository.ReadWeeklyAttendanceSeason() == season && Count() == 3, "关闭保留固定赛季与原奖励事实");
             // 仅回退本测试的两张专用表，已有角色和邮件保持。
-            Sql("DROP TABLE account_weekly_attendance; DROP TABLE weekly_attendance_season; PRAGMA user_version=195", "");
+            Sql("DROP TABLE account_battle_pass_deluxe_orders; DROP TABLE account_weekly_attendance; DROP TABLE weekly_attendance_season; PRAGMA user_version=195", "");
             _ = new CharacterRepository(path);
-            That(Count() == 3 && repository.ReadWeeklyAttendanceSeason() is null, "195升级196保留既有角色邮件且新赛季保持未激活");
+            That(Count() == 3 && repository.ReadWeeklyAttendanceSeason() is null, "195升级当前版本保留既有角色邮件，周签到196步骤不变且新赛季保持未激活");
 
             long Count()
             {

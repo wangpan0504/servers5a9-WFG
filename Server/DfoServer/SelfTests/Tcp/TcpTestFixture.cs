@@ -47,6 +47,26 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return map.HellQuests.Any(quest => !completed.Contains(quest));
     }
 
+    // 选图状态预期取当前角色位置与独立日账本，不从收到的1545正文反推。
+    internal byte? ExpectedDaybreakSelectionRemaining(ushort characterId)
+    {
+        var towns = townCatalog ?? resources?.Towns;
+        if (towns is null) return null;
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        if (towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is not { } world ||
+            !towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 530)) return null;
+        int day = int.Parse(UtcNow.UtcDateTime.AddHours(2).ToString("yyyyMMdd", CultureInfo.InvariantCulture));
+        var usage = Query("""
+            SELECT CASE WHEN u.day=$p1 THEN u.daily_used ELSE 0 END,
+                   CASE WHEN e.day=$p1 THEN e.daily_extra ELSE 0 END
+            FROM characters c
+            LEFT JOIN character_dungeon_incount u ON u.character_id=c.id AND u.account=c.account AND u.dungeon=530
+            LEFT JOIN character_dungeon_incount_extra e ON e.character_id=c.id AND e.account=c.account AND e.dungeon=530
+            WHERE c.id=$p0
+            """, characterId, day).Single();
+        return checked((byte)Math.Clamp(2 + Convert.ToInt32(usage[1]) - Convert.ToInt32(usage[0]), 0, 2));
+    }
+
     Process? process;
     Task? output, errors;
     Task? hosted;

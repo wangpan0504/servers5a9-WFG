@@ -182,8 +182,13 @@ internal static class RaidQuotaEpochTests
             SeedRun(f, 1, Instance(401), complete: true);
             SeedReceipt(f, 1, Instance(401), 20261029);
             f.Execute($"INSERT INTO account_fiendwar_guides VALUES('other',0,20261027,0,{f.Other.Id});");
+            That(f.Query("SELECT (SELECT count(*) FROM account_weekly_attendance)+(SELECT count(*) FROM weekly_attendance_season)") is 0L,
+                "团本旧库夹具只移除未来空周签到表");
             // 从完整191形态升级：仅退回本次新增结构，不动历史行或其它迁移。
             f.Execute("""
+                DROP TABLE account_weekly_attendance;
+                DROP TABLE weekly_attendance_season;
+                DROP TABLE account_battle_pass_deluxe_orders;
                 DROP INDEX character_raid_entry_clear;
                 DROP INDEX character_raid_reward_epoch;
                 ALTER TABLE character_raid_runs DROP COLUMN entry_epoch;
@@ -227,7 +232,7 @@ internal static class RaidQuotaEpochTests
                 "迁移保留原生命周期身份、完整阶段JSON、邮件键、奖励历史和所有资产");
             string current = f.Snapshot();
             _ = new CharacterRepository(f.Path);
-            That(f.Snapshot() == current, "192重复打开不重复迁移、补领或推进世代");
+            That(f.Snapshot() == current, "当前版本重复打开不重复迁移、补领或推进世代");
             f.Integrity();
         }
     }

@@ -111,8 +111,8 @@ internal static partial class FormalDungeonTcpTests
             }
             if (slot < 2)
             {
-                // 礼盒日界、服务日和本次600秒等待均已注册；共享公会周期不计入。
-                await clock.WaitForOneShotTimersAsync(3);
+                // 精确等待本实例600秒到期，不依赖活动边界等其他一次性定时器的总数。
+                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(600));
                 clock.Advance(TimeSpan.FromSeconds(599)); peer.Barrier();
                 clock.Advance(TimeSpan.FromSeconds(1)); peer.Expect(0, 31, []);
             }
@@ -125,7 +125,7 @@ internal static partial class FormalDungeonTcpTests
             if (slot == 1)
             {
                 // 收到31后再等原生30秒宽限注册，只有无42槽推进宽限。
-                await clock.WaitForOneShotTimersAsync(3);
+                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(30));
                 clock.Advance(TimeSpan.FromSeconds(30));
             }
             if (slot != 1) { peer.Send(42); peer.Expect(1, 42, [1]); }
