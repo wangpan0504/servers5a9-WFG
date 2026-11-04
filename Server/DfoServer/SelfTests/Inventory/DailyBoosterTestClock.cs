@@ -33,7 +33,9 @@ internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo?
             Task signal;
             lock (sync)
             {
-                if (timers.Count(row => row.Period == 0 && row.Due != long.MaxValue) >= count) return;
+                // count=0 表示等一次性定时器全部清空（调用方用它在取消/到期后确认已摘除），
+                // 不能用 >= 以免恒真直接放行。
+                if (timers.Count(row => row.Period == 0 && row.Due != long.MaxValue) == count) return;
                 signal = changed.Task;
             }
             await signal.WaitAsync(TimeSpan.FromSeconds(5));
