@@ -231,6 +231,18 @@ internal sealed class AuctionListingRepository(string path)
             }
             conditions.Add($"item_kind IN ({string.Join(',', names)})");
         }
+        if (filter.Gold is bool gold)
+        {
+            var names = new string[AuctionGoldTickets.All.Length];
+            for (int index = 0; index < AuctionGoldTickets.All.Length; index++)
+            {
+                names[index] = "$gold" + index;
+                command.Parameters.AddWithValue(names[index], AuctionGoldTickets.All[index].ItemId);
+            }
+            conditions.Add(gold
+                ? $"item_template_id IN ({string.Join(',', names)})"
+                : $"item_template_id NOT IN ({string.Join(',', names)})");
+        }
         return string.Join(" AND ", conditions);
     }
 

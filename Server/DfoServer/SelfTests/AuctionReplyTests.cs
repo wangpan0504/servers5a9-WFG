@@ -41,9 +41,9 @@ internal static class AuctionReplyTests
         AuctionBuyProbeTests.Run();
         // 一口价购买（CMD 185）的**实现**：30 字节布局、失败码三档、金额口径、同事务成交与全部回滚路径。
         AuctionBuyTests.Run();
-        // 窗口 mode 分流（2026-10-12 实机：金币寄售面板被画进拍卖行装备）：mode=0 走真实数据、
-        // mode≠0 一律回空列表，并且不消耗记录布局候选。
+        // 窗口 mode 分流：mode=0 只回普通挂牌，mode=1 只回金币券。没有金币券时 mode=1 仍是空列表。
         AuctionWindowModeTests.Run();
+        AuctionGoldConsignTests.Run();
         // 保证金（挂牌扣 / 取消不退 / 到期未售退还）与挂在读路径上的到期结算。
         AuctionDepositTests.Run();
         Console.WriteLine($"PASS {Count - checks} auction search reply assertions");
