@@ -81,6 +81,10 @@ internal static class PcRoomTimePointTcpTests
         State(1800, 0, 1, 0, "关闭的十分钟不累计且保留已领进度");
         Gm("event on 228", true);
         Request();
+        Gm("event auto 228", true);
+        Request();
+        That(fixture.Query("SELECT revision,override_active FROM server_events WHERE event_id=228") is [[5L, DBNull]],
+            "显式on切回auto保留真实版本和NULL配置，后续每日、累计及重开领奖沿默认开启语义");
         clock.Advance(TimeSpan.FromMinutes(10));
         Request();
         State(2400, 0, 1, 0, "重新开启继续原账号40分钟进度，不重新清零");

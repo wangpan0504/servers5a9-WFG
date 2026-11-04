@@ -123,9 +123,8 @@ internal sealed partial class CharacterRepository : IPcRoomTimePointStore
                         if (snapshot.QualifiedDays < reward.RequiredDays) throw new PcRoomTimePointClaimRejectedException("累计在线累计天数不足");
                         itemId = reward.ItemId; count = reward.Count;
                     }
-                    command.Parameters.AddWithValue("$revision", claim.ActivityRevision);
-                    command.CommandText = "SELECT count(*) FROM server_events WHERE event_id=228 AND override_active=1 AND revision=$revision";
-                    if (command.ExecuteScalar() is not 1L)
+                    var schedule = ServerEventRepository.Read(db, tx, ServerEventService.PcRoomTimePointId);
+                    if (schedule.Revision != claim.ActivityRevision || !schedule.IsActive(now))
                         throw new PcRoomTimePointClaimRejectedException("累计在线活动已关闭或配置版本已变化");
                     if (attachments.IsEmpty || attachments.Length > 10 ||
                         attachments.Any(item => item.Uid != 0 || item.Core.ItemId != itemId || item.Core.Count <= 0) ||

@@ -19,6 +19,7 @@ internal static class PcRoomTimePointStoreTests
     {
         int before = Count;
         WatermarksAndClaims();
+        DefaultAndAutoClaims();
         RollbackAndGuards();
         Migration();
         Console.WriteLine($"PASS {Count - before} 累计在线账号水位、永久领取与同事务邮件断言");
@@ -85,6 +86,36 @@ internal static class PcRoomTimePointStoreTests
         That(f.Repository.Read(f.Owner, day, f.Catalog) is { DailyClaims: 1, QualifiedDays: 2, PeriodClaims: 1 },
             "删除领奖角色不清账号时长、累计天数与已领事实");
         f.Integrity();
+    }
+
+    static void DefaultAndAutoClaims()
+    {
+        foreach (bool configured in new[] { false, true })
+        {
+            using var f = new Fixture();
+            f.Sql(configured
+                ? "UPDATE server_events SET override_active=NULL,revision=2 WHERE event_id=228"
+                : "DELETE FROM server_events WHERE event_id=228");
+            long revision = configured ? 2 : 0;
+            int day = PcRoomTimePointDay.At(f.Now);
+            var segment = Guid.NewGuid();
+            string before = f.Snapshot();
+            Reject<PcRoomTimePointClaimRejectedException>(() =>
+                f.Update(segment, [new(day, 4000)], new(0, 0, revision + 1), f.Items(2)),
+                "默认开启和auto模式仍拒绝不匹配的活动版本");
+            That(f.Snapshot() == before, "活动版本拒绝回滚本次水位、资格及奖励");
+            var daily = f.Update(segment, [new(day, 4000)], new(0, 0, revision), f.Items(2));
+            var period = f.Update(segment, [], new(1, 0, revision), f.Items(3));
+            That(daily.Claimed && period.Claimed && daily.MailId != period.MailId &&
+                period.Snapshot is { Seconds: 4, DailyClaims: 1, QualifiedDays: 1, PeriodClaims: 1 } &&
+                f.Query("SELECT count(*) FROM mailbox_messages") is 2L,
+                configured ? "auto模式按有效开启状态投递每日和累计奖励" : "无活动配置时按默认开启投递每日和累计奖励");
+            before = f.Snapshot();
+            That(f.Update(segment, [], new(0, 0, revision)).Replayed &&
+                f.Update(segment, [], new(1, 0, revision)).Replayed && f.Snapshot() == before,
+                "默认开启和auto模式重复领取不新增邮件或UID");
+            f.Integrity();
+        }
     }
 
     static void RollbackAndGuards()
