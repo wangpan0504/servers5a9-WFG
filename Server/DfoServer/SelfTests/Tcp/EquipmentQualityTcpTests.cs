@@ -54,7 +54,7 @@ internal static class EquipmentQualityTcpTests
         var titleRole = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Replace(role.Inventory.Items[0], new(1, Bag(9), title)) } };
         var titleResult = firstService.ResetQuality(titleRole, new(9, title.ItemId, 103, 0, false));
         That(items.Items.Get(title.ItemId).EquipmentSlot == 13 && titleResult.Accepted &&
-            titleResult.Plan!.After.Find(Bag(9))!.Core == title with { Value = 1 }, "称号只调整基础品级，不改附加词条");
+            titleResult.Plan!.After.Find(Bag(9))!.Core == title with { Value = 999_999_894 }, "称号只调整基础品级，不改附加词条");
 
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "equipment-quality"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
@@ -94,9 +94,9 @@ internal static class EquipmentQualityTcpTests
             That(Snapshot() == baseline, "最后一只箱子消耗后重发不能再次调整");
             Apply(peer, 81, Request(9, original.ItemId, 103), 103, 1);
             saved = Read();
-            That(saved.Value is >= 1 and <= 999999892 && saved.Random0.Type == 70 && saved.Random0.Value1 < 56 && saved.Random0.Value2 < 56 &&
+            That(Displayable(saved.Value) && saved.Random0.Type == 70 && saved.Random0.Value1 < 56 && saved.Random0.Value2 < 56 &&
                 saved with { Value = original.Value, Random0 = original.Random0 } == original,
-                "普通箱只改基础品级及可变魔封值，UID和其他全部核心字段保持");
+                "普通箱只改基础品级及可变魔封值，品级种子落在客户端可显示区间，UID和其他全部核心字段保持");
             baseline = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_quality AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'quality rollback'); END");
             peer.Send(455, [9, 0, 103, 0, 255, 255]); peer.Closed();
@@ -134,6 +134,7 @@ internal static class EquipmentQualityTcpTests
         }
     }
 
+    static bool Displayable(int seed) => seed == 999_999_998 || seed is >= 999_999_894 and <= 999_999_992;
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static byte[] Request(short slot, int id, short material)
     {

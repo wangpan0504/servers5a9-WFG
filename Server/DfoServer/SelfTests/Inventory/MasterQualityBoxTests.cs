@@ -27,6 +27,9 @@ internal static class MasterQualityBoxTests
             """));
         That(epic is { MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: 4, RejectTitle: true } && epic.Roll(_ => 0) == 999999998,
             "史诗大师箱固定最高品级种子");
+        var ordinary = new EquipmentQualityBox(-1, -1, []);
+        That(!ordinary.Fixed && ordinary.Roll(_ => 0) == 999_999_894 && ordinary.Roll(max => max - 1) == 999_999_998,
+            "普通箱两端写入客户端可显示的1%和100%种子");
         That(EquipmentQualityBox.Parse(1, new PvfDocument("[stackable type]\n`[etc]` 0\n[variable need material]\n[material count]\n1\n[materials]\n15 1 16 1\n[/materials]\n[/variable need material]\n")) is null,
             "不是15/897成对材料的声明不当成品级箱");
         var weapon = new ItemTemplate(100, ItemKind.Equipment, 12, 1, 30, 1, 0, 4, 0, "[sealing]", ushort.MaxValue, 0, "史诗武器");
