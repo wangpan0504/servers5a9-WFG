@@ -28,7 +28,7 @@ internal static partial class Strongway2019HandlerTests
         var drops = DungeonMonsterDropCatalog.Load(archive);
         var kills = DungeonKillExperienceCatalog.Load(archive);
         var stats = new CharacterStatComputer(CharacterCatalog.Load(archive, resources.Items));
-        foreach (var (dungeonId, memberCount) in new[] { (5359u, 1), (5359u, 2), (5363u, 4) })
+        foreach (var (dungeonId, memberCount) in new[] { (5359u, 1), (5359u, 2), (5363u, 1), (5363u, 4) })
         {
             using var f = new Strongway2019MatchingTests.Fixture(towns, activity, growth);
             var wholeTeam = f.Team();
@@ -63,7 +63,7 @@ internal static partial class Strongway2019HandlerTests
                 {
                     That(sessions[0].EnterFormalDungeon(dungeonId, 0, 2, dungeons, rooms, drops,
                         items: resources.Items, pieces: resources.EpicPieces) is not null &&
-                        sessions[0].CompleteFormalDungeonLoading() is not null, "单人简单超时使用真实准入与原Run加载");
+                        sessions[0].CompleteFormalDungeonLoading() is not null, "单人挑战超时使用真实准入与原Run加载");
                 }
                 else
                 {
