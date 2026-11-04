@@ -103,6 +103,7 @@ internal static class AccountMaterialTests
 
     public static void Run(TownCatalog towns, ItemResources resources)
     {
+        AccountMaterialDeclarationTests.Run(resources, towns);
         var template = resources.Items.Get(Coin);
         That(template.AccountMaterial is { HoldingLimit: 4000, WeeklyAccountLimit: 4000, WeeklyCharacterLimit: 1300 },
             "不渝材料容器、持有和两级额度来自匹配资源");
