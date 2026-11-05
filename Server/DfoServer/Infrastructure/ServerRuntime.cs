@@ -102,7 +102,8 @@ internal static class ServerRuntime
                 items.EpicPieces, items.Contracts, items.RandomOptions, items.AttributePairs,
                 items.Creatures, items.CollectBoxes, items.LimitCubes, items.Enchantments, items.Enhancements, items.RecoveryConsumables,
                 items.Amplifications, items.AmplifyUpgrades,
-                items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287))).Validate(rules));
+                items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287)),
+                creatureEggs: items.CreatureEggs).Validate(rules));
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,

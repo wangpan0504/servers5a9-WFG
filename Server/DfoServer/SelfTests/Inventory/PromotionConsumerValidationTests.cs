@@ -48,6 +48,7 @@ internal static class PromotionConsumerValidationTests
 
     public static void RunResources(ItemResources resources)
     {
+        PromotionCreatureEggConsumerTests.RunResources(resources);
         PromotionLevelUpByTableConsumerTests.RunResources(resources);
         PromotionDimensionEntryConsumerTests.RunResources(resources);
         var shipped = JsonSerializer.Deserialize<PromotionConfiguration[]>(ServerRuntime.ReadShippedPromotionConfig())

@@ -14,7 +14,8 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     CollectBoxCatalog collectBoxes, LimitCubeCatalog cubes, EnchantmentCatalog enchantments,
     EnhancementCatalog enhancements, RecoveryConsumableCatalog consumables,
     AmplificationCatalog amplifications, AmplifyUpgradeCatalog amplifyUpgrades,
-    SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null)
+    SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
+    CreatureEggCatalog? creatureEggs = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -58,6 +59,15 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
         }
 
         void Error(string source, int id, string reason) => errors.Add($"{source}/{id}: {reason}");
+
+        void AdultCreature(int id, ItemTemplate template, CreatureDefinition? creature)
+        {
+            if (template.Id != id || template.Kind != ItemKind.Creature || template.EquipmentSlot != 26 ||
+                creature is null || creature.ItemId != id || creature.Egg || creature.Species <= 0 ||
+                creature.MaximumLevel is < 1 or > 255 || creature.ItemsPerLevel <= 0 ||
+                creature.ArtifactSlots > 7 || template.CreatureInitialMode > 1)
+                throw new InvalidDataException("creature_definition");
+        }
 
         bool Special(int id, ItemTemplate template) => CurrencyWallet.RewardKind(id) is not null ||
             pieces.ByPiece.ContainsKey(id) || contracts.Recognizes(id) || template.HasAcquisitionEffect ||
@@ -371,10 +381,18 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     return;
                 case ItemKind.Creature:
                     var creature = creatures.Get(id);
-                    if (template.EquipmentSlot != 26 || creature is null || creature.ItemId != id || creature.Egg ||
-                        creature.Species <= 0 || creature.MaximumLevel is < 1 or > 255 || creature.ItemsPerLevel <= 0 ||
-                        creature.ArtifactSlots > 7 || template.CreatureInitialMode > 1)
-                        throw new InvalidDataException("creature_definition");
+                    if (creature is { Egg: true })
+                    {
+                        if (template.EquipmentSlot != 26 || template.UseForbidden || creature.ItemId != id ||
+                            creature.Species <= 0 || creatureEggs?.Get(id) is not { } egg || egg.EggItemId != id ||
+                            egg.Species != creature.Species || egg.OutputItemId != creature.OutputItemId ||
+                            egg.OutputItemId <= 0 || egg.OutputItemId == id)
+                            throw new InvalidDataException("creature_egg_definition");
+                        // 孵化转换原UID和期限，不将成宠当作新奖励创建；双方species由各自定义决定。
+                        AdultCreature(egg.OutputItemId, items.Get(egg.OutputItemId), creatures.Get(egg.OutputItemId));
+                    }
+                    else
+                        AdultCreature(id, template, creature);
                     return;
                 case ItemKind.Emblem:
                     // 与真实装扮/装备镶嵌消费者相同；没有孔型的徽章不能只凭 Kind 通行。
