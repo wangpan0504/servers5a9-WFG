@@ -33,8 +33,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         catch (InvalidDataException) { return InventoryResult.Reject(17); }
         // ACK21必需实体核心并会解引用购入对象；服务商品不能伪造空槽或临时库存回执。
         if (template.IsPremiumService) return InventoryResult.Reject(17);
-        // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
-        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman))
+        // 装备类购买的 count=0 表示一件，包含独立分类的护石和公会勋章；其他商品数量须为正。
+        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman or ItemKind.GuildMedal))
             return InventoryResult.Reject(0x85);
         int count = template.Kind is ItemKind.Equipment or ItemKind.Talisman or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
         // 交易窗口(ShopId<0)按名册买价结算；名册内没有金币买价也没有兑换材料的商品必须拒绝。
