@@ -65,6 +65,8 @@ internal sealed record AdventureSnapshot(AdventureState State, ImmutableArray<Ad
     // 内容通关累计按账号汇总；默认全零，读取时由角色级计数填充。
     public ImmutableArray<ushort> ContentCounts { get; init; } = ImmutableArray.Create(new ushort[AdventureContent.Count]);
     public AdventureRaidClears RaidClears { get; init; }
+    public uint DespairTowerClears { get; init; }
+    public uint LamentTowerClears { get; init; }
 
     // 收藏分类状态：按PVF [expert list] 分类统计已收集的不同转职数，同一分支的多个角色只计一次。
     // 角色簿左侧分类按钮由客户端FUN_00D8F1C0按显示槽3字节判定：有符号byte0>=0、有符号byte1>0才记为已收集，
