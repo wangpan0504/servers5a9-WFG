@@ -1140,6 +1140,30 @@ internal static class ChatServiceTests
                 var current=broadcast.Broadcast(new(3,9999,0,2,"hi"),session.ChatOrigin()!,session);
                 await heldSender.DrainAsync(); await sender.DrainAsync();
                 That(current.Recipients==2 && heldMessages==1,"重选完成的新消息恢复接收，不遗留禁收状态");
+
+                int receivedBeforeBlocked = received.Count;
+                int framesBeforeBlocked = frames.Count;
+                var blockedHandler = new ChatHandler(broadcast, null, log, named: new NamedWhisperService(online, repository), isChatBlocked: _ => true);
+                var blockedCommands = new GameCommandRegistry();
+                blockedHandler.Register(blockedCommands);
+                blockedCommands.Seal();
+                byte[] targetNameBytes = ChatText.Encoding.GetBytes("ChatA");
+                byte[] whisperHead = SendBody(1, 4, 0, "blocked-whisper");
+                byte[] whisperBody = new byte[whisperHead.Length + 4 + targetNameBytes.Length + 1];
+                whisperHead.CopyTo(whisperBody, 0);
+                BinaryPrimitives.WriteInt32LittleEndian(whisperBody.AsSpan(whisperHead.Length), targetNameBytes.Length);
+                targetNameBytes.CopyTo(whisperBody, whisperHead.Length + 4);
+                var blockedWhisper = await blockedCommands.DispatchAsync(receivingContext, new Packet(1, (ushort)CmdPacketType.SEND_MESSAGE, whisperBody));
+                var blockedNormal = await blockedCommands.DispatchAsync(receivingContext, new Packet(1, (ushort)CmdPacketType.SEND_MESSAGE, SendBody(3, 4, 0, "blocked-normal")));
+                await receivingSender.DrainAsync(); await sender.DrainAsync();
+                log.Flush();
+                using var blockedLogFile = new FileStream(Path.Combine(root, "Logs", "server.jsonl"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var blockedLogReader = new StreamReader(blockedLogFile);
+                string blockedEvents = blockedLogReader.ReadToEnd();
+                That(blockedWhisper == CommandResult.Handled && blockedNormal == CommandResult.Handled &&
+                    received.Count == receivedBeforeBlocked && frames.Count == framesBeforeBlocked &&
+                    blockedEvents.Split('\n').Count(line => line.Contains("\"Kind\":\"chat_blocked\"", StringComparison.Ordinal)) == 2,
+                    "禁言拦截在具名私聊与常规广播前生效，记chat_blocked且不向目标投递");
             }
             finally { session.ChatNoticeArrived=null; receiving.ChatNoticeArrived=null; }
         }

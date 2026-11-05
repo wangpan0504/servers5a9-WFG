@@ -176,7 +176,7 @@ internal static class ExpertJobCraft
 
     public static bool TryPlanEnchant(Character character, InventoryEnchantmentService enchantments,
         ExpertJobScriptCatalog scripts, byte targetListByte, ushort targetSlot, byte sourceListByte, ushort sourceSlot,
-        long utcSeconds, out InventoryPlan inventory, out int experience, out ushort error)
+        long utcSeconds, out InventoryPlan inventory, out int experience, out ushort error, Func<int, int>? next = null)
     {
         inventory = null!;
         experience = character.ExpertJobExperience;
@@ -199,7 +199,7 @@ internal static class ExpertJobCraft
         inventory = result.Plan;
         var bead = character.Inventory.Find(source);
         if (bead is not null)
-            experience = AddCardExp(character, scripts, experience, _ => 0);
+            experience = AddCardExp(character, scripts, experience, next ?? Random.Shared.Next);
         return true;
     }
 

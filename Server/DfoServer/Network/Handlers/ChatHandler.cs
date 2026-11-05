@@ -38,7 +38,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
     NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
     SelfCharacterScoreProjection? selfScore = null, DfoServer.GameWorld.Characters.ChatEmoticonCatalog? emoticons = null,
     PromotionPageProjection? promotionPage = null,
-    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null) : IGameCommandModule
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null,
+    Func<GameSession, bool>? isChatBlocked = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -57,7 +58,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         // 助手机器命名空间在解码/具名私聊/正文日志之前隔离，畸形或跨频道请求也不广播。
         if (HelperRequests.Reserved(packet.Body))
         {
-            if (!context.Session.AllowChatSend() || IsChatBlocked(context.Session)) return CommandResult.Handled;
+            if (!context.Session.AllowChatSend() || (isChatBlocked ?? IsChatBlocked)(context.Session)) return CommandResult.Handled;
             var helper = HelperRequests.Parse(packet.Body);
             if (helper is null) return CommandResult.Handled;
             if (helper.DirectPickup is { } pickupEnabled)
@@ -161,6 +162,13 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
+        // 静音/封禁预留钩子：玩家管理模块尚未接入，默认恒不拦截；接入后在这里读取真实状态并记 chat_blocked（覆盖具名私聊与常规广播）。
+        if ((isChatBlocked ?? IsChatBlocked)(context.Session))
+        {
+            log.Write("chat_blocked", new { Connection = context.Id, send.Type });
+            return CommandResult.Handled;
+        }
+
         if (send.TargetName is not null && named is not null)
         {
             if (emoticons is not null && send.Text.Contains('\x1e'))
@@ -171,13 +179,6 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
                 Connection = context.Id, Kind = (ChatRequestType)send.Type is ChatRequestType.OneToOne or ChatRequestType.OneToOneReply ? "OneToOne" : "Whisper",
                 result.Recipients, Reason = result.TargetOffline ? "target-offline" : result.Rejection
             });
-            return CommandResult.Handled;
-        }
-
-        // 静音/封禁预留钩子：玩家管理模块尚未接入，恒不拦截；接入后在这里读取真实状态并记 chat_blocked。
-        if (IsChatBlocked(context.Session))
-        {
-            log.Write("chat_blocked", new { Connection = context.Id, send.Type });
             return CommandResult.Handled;
         }
 
@@ -292,7 +293,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        if (IsChatBlocked(context.Session))
+        if ((isChatBlocked ?? IsChatBlocked)(context.Session))
         {
             log.Write("chat_blocked", new { Connection = context.Id, link.Kind });
             return CommandResult.Handled;

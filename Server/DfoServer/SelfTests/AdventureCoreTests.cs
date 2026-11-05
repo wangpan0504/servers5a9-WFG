@@ -153,7 +153,7 @@ internal static class AdventureCoreTests
         var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, ack: true);
         That(ack[0] == 1 && ack.AsSpan(1, 2).SequenceEqual(new byte[2]) && ack.Length == info.Length + 1,
             "ACK1403保留成功前缀与选角owner0");
-        var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue) };
+        var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue), DespairTowerClears = 5, LamentTowerClears = 8 };
         foreach (bool isAck in new[] { false, true })
         {
             byte[] content = AdventurePackets.Information(42, raids, catalog, [], ack: isAck);
@@ -161,9 +161,11 @@ internal static class AdventureCoreTests
             That(BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LukeRaidClearOffset)) == 65536 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.MetroRaidClearOffset)) == 70000 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.PreyRaidClearOffset)) == uint.MaxValue &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DespairTowerClearOffset)) == 5 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LamentTowerClearOffset)) == 8 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.RecommendedClearOffset)) == 12 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DuelWinOffset)) == 0,
-                "通知和ACK的三类团本使用完整u32，空代表不清通关累计，不串写推荐与未接内容");
+                "通知和ACK的三类团本与双塔100层使用完整u32，空代表不清通关累计，不串写推荐与未接内容");
         }
         byte[] refresh = AdventurePackets.Refresh(42, snapshot.State, catalog);
         That(refresh.Length == 50 && BinaryPrimitives.ReadUInt32LittleEndian(refresh.AsSpan(2)) == 40 &&
@@ -273,6 +275,27 @@ internal static class AdventureCoreTests
         That(repo.ReadAdventure(owner, catalog, now).RaidClears == new AdventureRaidClears(2, 3, 1) &&
             repo.ReadAdventure(other, catalog, now).RaidClears == new AdventureRaidClears(0, 1, 0),
             "只读团本累计严格按账号隔离");
+        Execute(db, """
+            INSERT INTO dungeon_special_entry_receipts(character_id,account,instance_id,task_attempt,service_day,kind,dungeon_id,layer,gold,revision) VALUES
+              (1,'adventure','10000000000000000000000000000001',1,20001,3,11106,99,0,1),
+              (1,'adventure','10000000000000000000000000000002',2,20002,3,11107,100,0,2),
+              (2,'adventure','10000000000000000000000000000003',1,20002,3,11107,100,0,1);
+            INSERT INTO dungeon_despair_clear_receipts(character_id,account,instance_id,event_id,task_attempt,epoch,dungeon_id,clear_day,play_milliseconds,death_events,assets_json) VALUES
+              (1,'adventure','10000000000000000000000000000001','20000000000000000000000000000001',1,1,11106,20001,1000,'[]','{}'),
+              (1,'adventure','10000000000000000000000000000002','20000000000000000000000000000002',2,1,11107,20002,1000,'[]','{}'),
+              (2,'adventure','10000000000000000000000000000003','20000000000000000000000000000003',1,1,11107,20002,1000,'[]','{}');
+            INSERT INTO character_grief_tower_entries(character_id,account,instance_id,task_attempt,game_day,layer,dungeon_id,invitation,account_used,account_limit,revision) VALUES
+              (1,'adventure','30000000000000000000000000000001',3,20001,99,11200,0,1,3,3),
+              (1,'adventure','30000000000000000000000000000002',4,20002,100,11201,0,1,3,4);
+            INSERT INTO character_grief_tower_clears(character_id,account,instance_id,event_id,task_attempt,game_day,layer,dungeon_id,reward_json,mail_id,revision) VALUES
+              (1,'adventure','30000000000000000000000000000001','40000000000000000000000000000001',3,20001,99,11200,'{}',NULL,3),
+              (1,'adventure','30000000000000000000000000000002','40000000000000000000000000000002',4,20002,100,11201,'{}',NULL,4);
+            """);
+        var towerSnapshot = repo.ReadAdventure(owner, catalog, now);
+        var otherTowerSnapshot = repo.ReadAdventure(other, catalog, now);
+        That(towerSnapshot is { DespairTowerClears: 2, LamentTowerClears: 1 } &&
+            otherTowerSnapshot is { DespairTowerClears: 0, LamentTowerClears: 0 },
+            "绝望之塔与悲叹之塔按账号只统计100层通关回执，不混入非100层且严格按账号隔离");
     }
 
     static void Migrate()
