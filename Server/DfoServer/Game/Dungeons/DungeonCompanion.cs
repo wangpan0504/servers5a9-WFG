@@ -54,6 +54,12 @@ internal static class DungeonCompanion
     // ID判定只覆盖专用模板；5409原生演员与人偶不能全局归入伴侣。
     public static bool IsCompanionRow(int id) => id is WangFuguiId or GuangbingId or FemaleCrusaderId or EnchantressId;
 
+    // 活动地图由新 DLL 全权接管；服务端按旧支援兵的完整友方普通 APC 形状屏蔽 5409，
+    // 不把普通副本中的未知 5409 原生演员误判为支援兵。
+    public static bool IsLegacyCompanionRow(DungeonRoomAiCharacter row) =>
+        row.Id == 5409 && row.Faction == "[character]" && row.RankKind == "[normal]" &&
+        row.RawValues is [5409, _, _, 0, 0, 0];
+
     // 旧5409仅在来源清单中的MAP原行及完整六字段仍匹配时过滤；不改人偶或原生剧情演员。
     public static bool IsCompanionRow(DungeonRoomDefinition room, int ordinal)
     {

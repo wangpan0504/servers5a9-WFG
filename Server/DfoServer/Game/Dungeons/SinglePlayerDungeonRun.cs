@@ -505,7 +505,8 @@ internal sealed partial class SinglePlayerDungeonRun
                     entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
-                    companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                    companionRows: plan.Room.Map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
+                    suppressCompanions: entry.IsTagSystem);
                 if (plan.Tournament is not null)
                 {
                     if (!entry.IsTournament || plan.Room.Map != entry.StartMap || entry.StartMap != entry.BossMap ||

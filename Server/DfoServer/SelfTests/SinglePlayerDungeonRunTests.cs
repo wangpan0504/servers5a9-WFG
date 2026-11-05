@@ -12,6 +12,7 @@ internal static partial class SinglePlayerDungeonRunTests
         int checks = Count;
         VerifyHelperRotation();
         VerifyCompanionStartRoomIdentity();
+        VerifyTagSystemCompanionSuppression();
         VerifyBattleLevels();
         VerifyMonsterAi();
         VerifyTagEvildomLife();
