@@ -11,6 +11,12 @@ internal sealed record GuildSettingsChange(uint Mask, string Promotion, bool Web
 internal sealed record GuildGovernanceChange(GuildGovernanceAction Action, byte Grade = 0, uint Permissions = 0,
     string Text = "", GuildSettingsChange? Settings = null, GuildManagementTarget? Target = null, byte Region = 0,
     ChannelEntry? RecommendedChannel = null);
+internal sealed record GuildBoardPost(uint PostId, ushort AuthorCharacterId, string AuthorName, byte Grade, string Content, uint CreatedAtUnix);
+internal sealed record GuildBoardPage(uint GuildId, byte Page, ushort TotalCount, IReadOnlyList<GuildBoardPost> Posts);
+internal sealed record GuildBoardWriteCommit(ushort Error, GuildBoardPost? Post = null, GuildBoardPage? Page = null)
+{
+    public bool Success => Error == 0;
+}
 
 internal interface IGuildGovernanceStore
 {
@@ -76,11 +82,19 @@ internal static class GuildGovernanceRules
         try { return CharacterName.Encoding.GetByteCount(text) <= bytes; }
         catch (EncoderFallbackException) { return false; }
     }
+
+    public static bool ValidBoardText(string text) => ValidText(text, 255, 120, true) && !string.IsNullOrWhiteSpace(text);
 }
 
 internal sealed class GuildGovernanceService(IGuildGovernanceStore store, GuildManagementService management,
     TimeProvider? clock = null, ChannelCatalog? channels = null)
 {
+    public const int BoardPageSize = 10;
+    public const int MaxBoardPostsPerGuild = 200;
+    readonly object boardSync = new();
+    readonly Dictionary<uint, List<GuildBoardPost>> boards = [];
+    uint nextBoardPostId = 1;
+
     public GuildManagementIdentity? Capture(GameSession session) => management.Capture(session);
     public GuildManagementTarget? Target(string name) => management.Target(name);
     public GuildManagementCommit Change(GuildManagementIdentity actor, GuildGovernanceChange change)
@@ -96,4 +110,59 @@ internal sealed class GuildGovernanceService(IGuildGovernanceStore store, GuildM
         return store.ChangeGuildGovernance(actor, change, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
     }
     public void Publish(GuildManagementCommit commit) => management.Publish(commit);
+
+    public GuildBoardPage? OpenBoard(GuildManagementIdentity actor, byte page)
+    {
+        if (!actor.IsCurrent()) return null;
+        var state = management.Store.ReadGuildManagement(actor.Owner, actor.CharacterId);
+        if (state is null) return null;
+        lock (boardSync) return ReadBoardPageLocked(state.Guild.Id, page);
+    }
+
+    public GuildBoardWriteCommit WriteBoard(GuildManagementIdentity actor, string content)
+    {
+        if (!actor.IsCurrent()) return new(3);
+        if (!GuildGovernanceRules.ValidBoardText(content)) return new(108);
+        var state = management.Store.ReadGuildManagement(actor.Owner, actor.CharacterId);
+        if (state is null) return new(34);
+        uint now = (uint)Math.Max(0, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
+        lock (boardSync)
+        {
+            if (!boards.TryGetValue(state.Guild.Id, out var list))
+                boards[state.Guild.Id] = list = [];
+            var post = new GuildBoardPost(nextBoardPostId++, actor.CharacterId, actor.Name, state.Grade, content, now);
+            list.Insert(0, post);
+            if (list.Count > MaxBoardPostsPerGuild)
+                list.RemoveRange(MaxBoardPostsPerGuild, list.Count - MaxBoardPostsPerGuild);
+            return new(0, post, ReadBoardPageLocked(state.Guild.Id, 0));
+        }
+    }
+
+    public GuildBoardWriteCommit DeleteBoard(GuildManagementIdentity actor, uint postId)
+    {
+        if (!actor.IsCurrent()) return new(3);
+        var state = management.Store.ReadGuildManagement(actor.Owner, actor.CharacterId);
+        if (state is null) return new(34);
+        lock (boardSync)
+        {
+            if (!boards.TryGetValue(state.Guild.Id, out var list)) return new(7);
+            int index = list.FindIndex(post => post.PostId == postId);
+            if (index < 0) return new(7);
+            var post = list[index];
+            bool master = actor.CharacterId == state.MasterId && state.Grade == 1;
+            bool canManage = master || state.Grade == 2 || (state.Permissions & (1u << 11)) != 0;
+            if (post.AuthorCharacterId != actor.CharacterId && !canManage) return new(36);
+            list.RemoveAt(index);
+            return new(0, post, ReadBoardPageLocked(state.Guild.Id, 0));
+        }
+    }
+
+    GuildBoardPage ReadBoardPageLocked(uint guildId, byte page)
+    {
+        if (!boards.TryGetValue(guildId, out var list) || list.Count == 0)
+            return new(guildId, page, 0, []);
+        int skip = page * BoardPageSize;
+        var slice = skip >= list.Count ? [] : list.Skip(skip).Take(BoardPageSize).ToArray();
+        return new(guildId, page, (ushort)Math.Min(ushort.MaxValue, list.Count), slice);
+    }
 }

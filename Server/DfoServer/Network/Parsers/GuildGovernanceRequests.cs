@@ -47,6 +47,43 @@ internal static class GuildGovernanceRequests
         return true;
     }
 
+    public static bool TryMasterDelegate(ReadOnlySpan<byte> body, out byte region, out string name)
+    {
+        region = 0;
+        name = "";
+        if (body.Length >= 5 && TryText(body, 31, out name) && name.Length > 0) return true;
+        if (body.Length < 6 || body[0] >= 250 || !TryText(body[1..], 31, out name) || name.Length == 0) return false;
+        region = body[0];
+        return true;
+    }
+
+    public static bool TryBoardPage(ReadOnlySpan<byte> body, out byte page)
+    {
+        page = 0;
+        if (body.IsEmpty) return true;
+        if (body.Length == 1) { page = body[0]; return true; }
+        if (body.Length != 4) return false;
+        uint raw = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        if (raw > byte.MaxValue) return false;
+        page = (byte)raw;
+        return true;
+    }
+
+    public static bool TryBoardWrite(ReadOnlySpan<byte> body, out string content)
+    {
+        content = "";
+        if (body.Length >= 5 && TryText(body, 255, out content) && !string.IsNullOrWhiteSpace(content)) return true;
+        return body.Length >= 6 && body[0] <= 10 && TryText(body[1..], 255, out content) && !string.IsNullOrWhiteSpace(content);
+    }
+
+    public static bool TryBoardDelete(ReadOnlySpan<byte> body, out uint postId)
+    {
+        postId = 0;
+        if (body.Length != 4) return false;
+        postId = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        return postId > 0;
+    }
+
     static bool TryText(ReadOnlySpan<byte> body, int limit, out string text)
     {
         text = "";

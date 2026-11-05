@@ -155,6 +155,22 @@ internal static class TitleTests
             "空槽组不挤占章节，空位前的章节奖励保持");
         That(catalog.Sections[1024].LockMessage == "Closed" && !catalog.Fits(4, 0, 26596) && catalog.Fits(4, 10, 26596),
             "活动关闭栏保留原组号，不能因全空而把锁移到自由展示栏");
+        var q6501 = QuestEligibilityTests.Quest(6501) with { Grade = "[title]", Condition = "[ui click]", RewardType = "[title]", Rewards = [new(0, 26596, null), new(0, 1, null)] };
+        var quests = new QuestCatalog(new Dictionary<int, StoryQuest> { [6501] = q6501 });
+        var items = new ItemCatalog(null!, null!, null!, 0);
+        items.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [26596] = new(26596, ItemKind.Equipment, 13, 1, 0, 1, 0, 1, 1, "", 0, 0, "title")
+        });
+        var service = new TitleAchievementService(
+            new TitleCatalog(new PvfLib.TitleBookFile(categories, sections, []), quests),
+            quests, items, new GoldLimitCatalog("[gold limit from level]\n0 100000000\n1 100000000\n[/gold limit from level]"),
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"));
+        var actor = new Character(1, 0, "EmotionActor", 0, new(1, 0, 10, 10), null);
+        var triggered = service.Trigger(actor, new(6501, new(1, 0, 0)), DateTimeOffset.UtcNow);
+        That(triggered.Accepted && triggered.Plan is { } emotionPlan && emotionPlan.UnlockedEmotions.SequenceEqual([10]) &&
+            service.UnlockedEmotions(actor with { TitleSections = emotionPlan.Sections }).SequenceEqual([10]),
+            "完成称号簿章节时识别并暴露[give emotion]表情解锁奖励");
     }
 
     static void Persist(ItemCore core)
@@ -166,10 +182,16 @@ internal static class TitleTests
             string path = Path.Combine(root, "game.db");
             var repo = new CharacterRepository(path);
             using var owner = new AccountOwners().Acquire("title-test", () => { });
-            var current = repo.Create(owner, new("TitleStore", new(1, 0, 10, 10), null));
+            var current = repo.Create(owner, new("TitleStore", new(1, 0, 10, 10), null)
+                { DungeonState = new(256, 0, CharacterRepository.GrowthCapsuleFullExperience, 0, 0) });
+            current = repo.ClaimGrowthCapsule(owner, current);
+            That(current.Revision == 1 && current.DungeonState?.GrowthCapsuleExperience == 0,
+                "角色成长胶囊满额兑换原子扣减1000万胶囊经验并推进revision");
+            Reject<InvalidOperationException>(() => repo.ClaimGrowthCapsule(owner, current),
+                "未满额角色成长胶囊拒绝重复兑换");
             var partial = Plan(new(2, 1, 3));
             current = repo.CommitTitleAchievement(owner, partial);
-            That(current.Revision == 1 && current.TitleProgress[6501].Remaining == new TitleCounters(2, 1, 3) && current.Inventory.Items.IsEmpty,
+            That(current.Revision == 2 && current.TitleProgress[6501].Remaining == new TitleCounters(2, 1, 3) && current.Inventory.Items.IsEmpty,
                 "仅进度有变化也提交revision，不创建称号或独立资产事务");
             var target = TitleBookService.Slot(0, 0);
             var final = Plan(default) with
@@ -182,7 +204,7 @@ internal static class TitleTests
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
             Execute("CREATE TRIGGER fail_title_mail BEFORE INSERT ON mailbox_attachments BEGIN SELECT RAISE(ABORT,'late title failure'); END");
             Reject<SqliteException>(() => repo.CommitTitleAchievement(owner, final), "邮件附件晚期失败回滚整个称号事务");
-            That(Query("SELECT revision FROM characters") is 1L && Query("SELECT count(*) FROM character_inventory_items") is 0L &&
+            That(Query("SELECT revision FROM characters") is 2L && Query("SELECT count(*) FROM character_inventory_items") is 0L &&
                 Query("SELECT count(*) FROM character_title_sections") is 0L && Query("SELECT remaining1 FROM character_title_progress") is 2L &&
                 Query("SELECT count(*) FROM mailbox_messages") is 0L, "失败不留下称号UID、完成计数、章节或半份邮件");
             Execute("DROP TRIGGER fail_title_mail");

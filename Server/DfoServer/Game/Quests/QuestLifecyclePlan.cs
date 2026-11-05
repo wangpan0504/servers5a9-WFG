@@ -309,7 +309,10 @@ internal sealed class QuestLifecyclePlan
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedEpic = QuestEpicProductionProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
-        bool observedEvent = (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest)) && scalar == active.ConditionState;
+        bool observedEvent = (QuestEventProgress.Supports(quest) || QuestPvpProgress.Supports(quest)) &&
+            (scalar == active.ConditionState ||
+             scalar <= active.ConditionState && quest.TargetKind is QuestTargetKind.UiClick or QuestTargetKind.SendChatting
+                 or QuestTargetKind.CheckTime or QuestTargetKind.CheckLife);
         bool holding = scalar <= 1 && catalog is not null && (quest.TargetKind == QuestTargetKind.CheckItem &&
             scalar == MaterialState(expected.Inventory, quest, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), catalog.Items) ||
             quest.TargetKind == QuestTargetKind.EquippedItem && catalog.Items is { } facts &&

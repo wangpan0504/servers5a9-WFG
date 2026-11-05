@@ -10,7 +10,10 @@ internal static class QuestClientObservation
     {
         QuestTargetKind.UseSkill => quest.IntData[0] is 0 or 1,
         QuestTargetKind.GetScore => quest.IntData[0] is 0 or 4 or 5 or 10,
-        QuestTargetKind.EnterMap or QuestTargetKind.MeetApc or QuestTargetKind.MeetMonster or QuestTargetKind.MeetPassiveObject => true,
+        QuestTargetKind.EnterMap or QuestTargetKind.MeetApc or QuestTargetKind.MeetMonster or QuestTargetKind.MeetPassiveObject
+            or QuestTargetKind.EnemyActionCheck or QuestTargetKind.DamageByEnemy or QuestTargetKind.CheckActiveStatus
+            or QuestTargetKind.CheckControl or QuestTargetKind.CheckMyTeamDeadCount or QuestTargetKind.EnemyKillOrder
+            or QuestTargetKind.EnemyFewKill => true,
         _ => false
     };
 
@@ -18,7 +21,8 @@ internal static class QuestClientObservation
     {
         if (!Supports(quest) || run.Entry.HasFreeCombatConsumption || run.Entry.IsQuestReplay ||
             run.Phase != SinglePlayerDungeonPhase.Dungeon || run.LastLoadingFact?.Map != run.Snapshot.CurrentMap) return false;
-        var limits = QuestTargetSchema.Read(quest).DungeonLimits;
+        var parsed = QuestTargetSchema.Read(quest);
+        var limits = parsed.DungeonLimits;
         if (!limits.IsEmpty && !limits.Contains(checked((int)run.Entry.DungeonId))) return false;
         return quest.TargetKind switch
         {
@@ -27,6 +31,11 @@ internal static class QuestClientObservation
             QuestTargetKind.MeetMonster => run.CurrentMonsterPlan.Monsters.Any(row => row.AiCharacter is null && row.MonsterId == quest.IntData[0]),
             // 物件的动态实例另有原生事件，缺少已发布实例绑定时不凭地图模板猜测会面成功。
             QuestTargetKind.MeetPassiveObject => false,
+            QuestTargetKind.EnemyActionCheck or QuestTargetKind.DamageByEnemy or QuestTargetKind.CheckActiveStatus
+                or QuestTargetKind.CheckControl or QuestTargetKind.CheckMyTeamDeadCount or QuestTargetKind.EnemyKillOrder
+                or QuestTargetKind.EnemyFewKill => parsed.Nested.All(nested =>
+                    (nested.Dungeon == -1 || nested.Dungeon == run.Entry.DungeonId) &&
+                    (nested.Difficulty == -1 || run.Entry.Difficulty >= nested.Difficulty)),
             _ => true
         };
     }
