@@ -35,7 +35,7 @@ internal sealed partial class GameSession
                 npcTownVisit is { } visit && visit.Epoch == SelectionEpoch ? visit.Visit : null,
                 raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: false, Started: null },
                 raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 2, Guide: true, Started: null },
-                raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar })
+                raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Fiendwar }, HasPreyTeamTownAccess)
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
@@ -60,6 +60,13 @@ internal sealed partial class GameSession
             (ChannelEntry?.Type != 32 || raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 1 }))
         {
             TravelReason = "luke-raid-required";
+            return null;
+        }
+        if (plan.Position is { Town: 59, Area: >= 2 and <= 5 } preyTarget &&
+            (ChannelEntry?.Type != 50 || raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 3 } ||
+                preyTarget.Area >= 3 && !HasPreyTeamTownAccess))
+        {
+            TravelReason = "prey-raid-required";
             return null;
         }
         // 等待区只允许当前真实魔界大战队伍进入；拒绝必须发生在保存位置和发布切图之前。
@@ -92,6 +99,12 @@ internal sealed partial class GameSession
             ? fiendwar.Battle.ReserveFiendwarMovement(fiendwar.Actor, target.Area) : null;
         if (fiendwar is not null && movement is null)
         { TravelReason = "fiendwar-area-unavailable"; return null; }
+        var prey = raidCombat is { Actor.IsCurrent: true, Battle.Kind: Game.Raids.RaidKind.Prey, Battle.PreyGuide: false } preyBinding
+            ? preyBinding : null;
+        using var sideEntry = prey is not null && plan.Position is { Town: 59, Area: 4 or 5 } side
+            ? prey.Battle.ReservePreySideEntry(prey.Actor, side.Area) : null;
+        if (prey is not null && plan.Position is { Town: 59, Area: 4 or 5 } && sideEntry is null)
+        { TravelReason = "prey-boarding-full"; return null; }
         var hallEntry = towns.IsGuildHall(plan.Position!, completed) && !towns.IsGuildHall(Selected!.Position, completed)
             ? new DfoServer.Game.BattlePass.GuildHallEntryFact(Guid.NewGuid(),
                 (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider ?? TimeProvider.System,
@@ -104,7 +117,8 @@ internal sealed partial class GameSession
         npcTownVisit = plan.NpcVisit is { } visit ? (visit, SelectionEpoch) : null;
         InvalidateImageCommunication();
         InvalidateExpertJobStore();
-        return new(Selected, owner.Generation, SelectionEpoch) { BattlePassMissionAt = hallEntry?.Clock.GetUtcNow() };
+        return new(Selected, owner.Generation, SelectionEpoch)
+            { BattlePassMissionAt = hallEntry?.Clock.GetUtcNow(), RaidBattleChange = RecordPreyTownLocation() };
     }
 
     Game.Characters.Character? SaveTownPosition(Game.Characters.Character character,

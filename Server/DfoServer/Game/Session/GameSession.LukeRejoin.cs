@@ -6,7 +6,7 @@ internal sealed partial class GameSession
 {
     internal Game.Town.TownTravelReceipt? ReturnLukeRejoinToWaiting(RaidActor actor) => owner.Execute(() =>
     {
-        if (!actor.IsCurrent || !CanChangeTownParty || raidCombat is not { Battle.Kind: RaidKind.Luke or RaidKind.Fiendwar } combat || combat.Actor != actor ||
+        if (!actor.IsCurrent || !CanChangeTownParty || raidCombat is not { Battle.SupportsLukeRejoin: true } combat || combat.Actor != actor ||
             Selected is not { } character || combat.Battle.LukeWaitingRoom is not { } room ||
             !towns.Areas.TryGetValue(((byte)room.Town, (byte)room.Area), out var area)) return null;
         if (combat.Battle.Kind == RaidKind.Fiendwar) room = room with { Area = combat.Battle.FiendwarPosition(actor.Character) };
@@ -19,18 +19,20 @@ internal sealed partial class GameSession
             .Where(link => link.Gate.Door).OrderBy(link => link.Town).ThenBy(link => link.Area)
                 .Select(link => towns.Entrance(new(link.Town, link.Area, 0, 0), target, completed)).FirstOrDefault(position => position is not null);
         if (landing is null && combat.Battle.Kind == RaidKind.Fiendwar) landing = towns.Spawn(target, completed);
-        return landing is null ? null : CommitTravel(new(landing, null, "ready"));
+        // 普雷候战区不是普通返回地区；重返只恢复攻坚落点，保留进入频道前的完整返回点。
+        var back = combat.Battle is { Kind: RaidKind.Prey, PreyGuide: false } ? character.Return : null;
+        return landing is null ? null : CommitTravel(new(landing, back, "ready"));
     });
 
     // 仅取已发布绑定中的不可变身份提示，不读Selected或授权；调用者必须零等待取得全团owner后复验。
     internal RaidActor? ReadLukeDisconnectActorHint() =>
-        Volatile.Read(ref raidCombat) is { Battle.Kind: RaidKind.Luke or RaidKind.Fiendwar } combat ? combat.Actor : null;
+        Volatile.Read(ref raidCombat) is { Battle.SupportsLukeRejoin: true } combat ? combat.Actor : null;
 
     // 调用方已持本owner及全团门禁；只装原Battle身份，不改位置/资产/加载屏障。
     internal bool InstallLukeRejoin(RaidActor actor, AntonRaidBattle battle)
     {
         if (!MatchesRaidCombatActor(actor) || !CanChangeTownParty || raidCombat is not null ||
-            raidRegistry is null || battle.Kind is not (RaidKind.Luke or RaidKind.Fiendwar)) return false;
+            raidRegistry is null || !battle.SupportsLukeRejoin) return false;
         raidCombat = new(actor, battle);
         return true;
     }

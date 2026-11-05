@@ -76,11 +76,13 @@ internal sealed partial class GameSession
             {
                 if (AntonRejoinPresentationPending || !CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
                     formalDungeon.Entry.Maze.IsGriefTower) return null;
-                bool luke = formalDungeon.Entry.RaidEntry?.Kind is Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar;
+                bool shared = formalDungeon.Entry.RaidEntry is { Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } or
+                    { Kind: Raids.RaidKind.Prey, PreyGuide: false };
                 bool anton = formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton;
-                if (luke)
+                if (shared)
                 {
-                    if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar } raid ||
+                    if (raidCombat is not { Actor.IsCurrent: true, Battle.SupportsLukeRevival: true } raid ||
+                        formalDungeon.Entry.RaidEntry!.Kind != raid.Battle.Kind ||
                         formalDungeon.Entry.RaidEntry!.InstanceId != raid.Battle.Instance || PreservesDungeonConsumables)
                         return InventoryResult.Reject();
                     reservation = raid.Battle.ReserveLukeRevival(raid.Actor, formalDungeon.Run.Snapshot.Identity, formalDungeon.DeathSerial);

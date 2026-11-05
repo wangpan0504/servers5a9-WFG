@@ -308,7 +308,8 @@ internal sealed partial class GameSession
         var inventory = after == character.Inventory ? null : new InventoryPlan(character.Inventory, after, "dungeon_retreat_stamina", new(character));
         var activeHope = dungeon.Run.HopeBinding is { } binding
             ? character.ActiveMainQuests.SingleOrDefault(q => q.AcceptanceId == binding.Acceptance.AcceptanceId) : null;
-        return new PartyExitPreparation(new(owner, character, dungeon.OrdinaryReturnPosition ?? character.Position, inventory)
+        if (RaidDungeonExitPosition(dungeon, character) is not { } destination) return null;
+        return new PartyExitPreparation(new(owner, character, destination, inventory)
             { Hope = activeHope is null ? null : new(dungeon.Run.HopeCatalog!,activeHope) },
             SelectionEpoch, dungeon, kind);
     });
@@ -336,6 +337,7 @@ internal sealed partial class GameSession
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Town);
+        raidChange = RecordPreyTownLocation(raidChange);
         if (prepared.Kind is PartyDungeonExitKind.ResultSelection or PartyDungeonExitKind.HellSelection)
         {
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, committed.Id, committed.Position, committed.Position);

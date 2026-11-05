@@ -9,7 +9,8 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class TownHandler(TownProjection projection, ServerLog log, TagEvildomProjection? tagEvildom = null,
     DfoServer.Game.Raids.FiendwarDungeonService? fiendwar = null,
-    Func<GameConnectionContext, AreaRequest, Task<bool>>? fiendwarEncounter = null) : IGameCommandModule
+    Func<GameConnectionContext, AreaRequest, Task<bool>>? fiendwarEncounter = null,
+    DfoServer.Game.Party.PartyService? preyParties = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -43,11 +44,36 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
             return CommandResult.Handled;
         if (fiendwarEncounter is not null && await fiendwarEncounter(context, requested))
             return CommandResult.Handled;
+        if (requested is { Town: 59, Area: 3, PreviousTown: 59, PreviousArea: 2, Movement: 5, PathKind: 0, TargetNpc: 0 } &&
+            context.PreyFlightDisplay is { } flight && session.Selected?.Id == flight.Character &&
+            session.SelectionEpoch == flight.Epoch && session.CompletePreyBoardingPreparation(flight.Instance) is { } prepared)
+            session.PublishRaidCombat(prepared);
+        var before = session.Selected?.Position;
         bool accepted = session.Travel(requested, out var receipt);
         log.Write("travel", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, Requested = requested, session.Selected?.Position, session.Selected?.Revision });
         if (accepted)
         {
+            if (preyParties is not null)
+            {
+                var notices = await preyParties.UpdatePreyBoardingAsync(session, context.Stop);
+                if (notices.Length != 0)
+                {
+                    preyParties.Publish(notices);
+                    var party = preyParties.Current(session);
+                    log.Write("prey_boarding_party", new { Connection = context.Id, Character = session.Selected?.Id,
+                        session.Selected?.Position.Area, Party = party?.Id, party?.Leader, Members = party?.Members.Length ?? 0 });
+                }
+            }
             await projection.TravelAsync(context, receipt!);
+            bool boarded = context.Owner.Execute(() =>
+            {
+                if (before is not { Town: 59, Area: 2 } || receipt!.Character.Position is not { Town: 59, Area: 3 } ||
+                    !session.CanPublishTravel(receipt) || session.CapturePreyBoarding() is not { } boarding) return false;
+                context.PreyBoardingDisplay = (boarding.Actor.Epoch, boarding.Actor.Character, boarding.Battle.Instance);
+                return true;
+            });
+            if (boarded) session.PublishRaidCombat();
+            else if (receipt!.RaidBattleChange is { } raidChange) session.PublishRaidCombat(raidChange);
             fiendwar?.Travelled(session);
             if (receipt!.BattlePassMissionAt is { } at)
             {
@@ -59,7 +85,7 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
                 }
             }
         }
-        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required" or "luke-raid-required")
+        else if (session.TravelReason is "guild-membership-required" or "evildom-war-party-required" or "luke-raid-required" or "prey-raid-required" or "prey-boarding-full")
         {
             await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "town_admission_denied");
             if (session.TravelReason == "evildom-war-party-required")
@@ -68,6 +94,7 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
             else if (session.TravelReason == "luke-raid-required")
                 await context.Notify(NotiPacketType.AAS_TIPS, DfoServer.Network.Builders.ServerNoticePackets.Build(
                     "卢克攻坚队", "请先创建或加入卢克攻坚队。"), "luke_raid_required");
+            // 普雷候战区门禁沿原客户端静默失败合同；只回C2S36失败，不弹公共提示。
         }
         return CommandResult.Handled;
     }

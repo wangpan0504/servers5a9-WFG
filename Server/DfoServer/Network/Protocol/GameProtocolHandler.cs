@@ -237,6 +237,17 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         {
             if (inventory is not null) await inventory.RefreshAsync(context, receipt.Inventory);
             if (!receipt.Commit.MailIds.IsEmpty) session.NotifyMailbox(receipt.Prepared.Character);
+            if (receipt.Prepared is { RaidType: DfoServer.Game.Raids.RaidKind.Prey, Source: DfoServer.Game.Raids.PreyGuideRewards.TeamSource })
+            {
+                // 一阶段600把本人已提交产物装入原生过渡队列，必须先写出再允许切阶段。
+                bool Current() => session.CanPublishRaidReward(receipt) &&
+                    session.RaidCombatView() is { State: DfoServer.Game.Raids.AntonRaidBattleState.Reward } view &&
+                    view.Phase == receipt.Prepared.Phase;
+                if (receipt.Prepared.Phase == 0)
+                    await context.Notify(NotiPacketType.RAID_REWARD_LIST,
+                        PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer), "prey_automatic_reward_result", Current);
+                // 二阶段由原时钟在本批交付后发布完整表，覆盖在线、离线及跨角色恢复分支。
+            }
             if (DfoServer.Game.BattlePass.BattlePassUndefeatedSongSource.DeclaresSong(receipt.Prepared) && session.CanPublishRaidReward(receipt))
                 await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
             if (items is not null && DfoServer.Game.Raids.LukeRewardResults.Bind(receipt, items,
@@ -295,7 +306,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.RaidStartArrived = (receipt, actor) => RaidProjection.Started(context, projection, receipt, actor);
         session.RaidCostArrived = (rows, actor) => RaidProjection.Cost(context, rows, actor);
         session.RaidRecordNoticeArrived = (party, actor) => sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
-            RaidProjection.Record(party, enableLukeRaidStart), "raid_record_updated", () => session.CanPublishRaid(actor, party));
+            RaidProjection.Record(party, enableLukeRaidStart, context), "raid_record_updated", () => session.CanPublishRaid(actor, party));
         session.RaidPeerNoticeArrived = (recipient, peer, peerId, invite) => RaidProjection.Peer(context, recipient, peer, peerId, invite);
         session.RaidDirectoryNoticeArrived = (change, actor) => RaidProjection.Directory(context, change, actor, enableLukeRaidStart);
         session.RaidPeerRefused = actor => sender.Post(1, (ushort)CmdPacketType.RESPONSE_PEER,
@@ -516,6 +527,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
+            if (context.PreyBoarding is { } preyBoarding) await preyBoarding.DisposeAsync();
             if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
             // 此处不持本人owner；在普通队伍/团名册/Session移除前冻结原身份。
             if (lukeRejoin is not null)

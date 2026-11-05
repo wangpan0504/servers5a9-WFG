@@ -17,7 +17,8 @@ internal sealed partial class AntonRaidBattle
             .Where(run => run.Installed && run.Phase == view.Phase && run.Active.Any(actor => actor.IsCurrent))
             .OrderBy(run => run.Dungeon).ThenBy(run => run.Squad).Select(run => new RaidRunDisplay(run.Id, run.Dungeon,
                 run.Squad, [.. run.Active.Where(actor => actor.IsCurrent).OrderBy(actor => actor.Character).Select(actor => actor.Character)],
-                Kind == RaidKind.Luke ? checked((uint)run.RevivalUsed) : run.Hp?.UsedCoins ?? checked((uint)run.RevivalUsed),
+                Kind == RaidKind.Luke || Kind == RaidKind.Prey && !PreyGuide
+                    ? checked((uint)run.RevivalUsed) : run.Hp?.UsedCoins ?? checked((uint)run.RevivalUsed),
                 run.Hp?.Context ?? 0,
                 // 原序百分比按真实监控死亡与全员清图事实投影，未知目录不猜目标形状。
                 RunHpValues(run),

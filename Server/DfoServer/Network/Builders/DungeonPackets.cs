@@ -135,6 +135,14 @@ internal static class DungeonPackets
         return body;
     }
 
+    // NOTI785：0237F7D0只读一个相对秒数；普雷HUD与当前副本使用同一截止点。
+    public static byte[] DungeonLimitTime(uint seconds)
+    {
+        byte[] body = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, seconds);
+        return body;
+    }
+
     public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
 
     public static byte[] StoryPause(ushort characterId, byte state, byte type)

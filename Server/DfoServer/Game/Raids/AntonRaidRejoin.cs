@@ -34,12 +34,19 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
     void PruneLukeLocked()
     {
         foreach (var row in byCharacter.Where(row => row.Value.LukeDeadlineAnchor is { } anchor &&
-            timer.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(300)).ToArray())
+            timer.GetElapsedTime(anchor) >= (row.Value.Luke?.Window ?? TimeSpan.FromSeconds(300))).ToArray())
             byCharacter.Remove(row.Key);
     }
     internal long LukeAnchor => timer.GetTimestamp();
     internal bool HasLukeParty(uint key)
-    { lock (gate) { PruneLukeLocked(); return byCharacter.Values.Any(fact => fact.Key == key && fact.Luke is not null); } }
+    {
+        lock (gate)
+        {
+            PruneLukeLocked();
+            return byCharacter.Values.Any(fact => fact.Key == key && fact.Luke is { } reservation &&
+                (reservation.Battle.Kind != RaidKind.Prey || fact.LukeDeadlineAnchor is not null && reservation.Bound is null));
+        }
+    }
 
     // 成功重返后候选已绑定在线成员，不再按断线截止时间清理；下一次断线会写入新锚点。
     internal bool MarkLukeCandidateBound(AntonRaidDisconnectFact expected)

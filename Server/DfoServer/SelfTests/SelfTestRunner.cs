@@ -13,6 +13,9 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        PreyTeamResourceTests.RunCore();
+        PreyTeamBattleTests.RunCore();
+        PreyTeamProtocolTests.RunCore();
         HelperSafetyTests.RunCore();
         WeeklyAttendanceTests.RunCore();
         HelperAssetSafetyTests.RunCore();
@@ -565,6 +568,8 @@ internal static class SelfTestRunner
         EvildomWarChallengeTests.RunResources(towns, pvf, characters, itemResources);
         RaidCreateFlowTests.RunResources(pvf, itemResources.Items);
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
+        PreyTeamResourceTests.Run(pvf);
+        PreyTeamResourceTests.RunRewards(pvf, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
         PvpPrivateCharacterTests.RunResources(towns,pvf,characters,itemResources,sharedSkills);

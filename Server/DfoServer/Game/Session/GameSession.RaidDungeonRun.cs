@@ -38,7 +38,9 @@ internal sealed partial class GameSession
                 ? actors.Any(actor => !scale.Participants.Contains(actor.Actor.Character))
                 : !scale.Participants.ToHashSet().SetEquals(actors.Select(actor => actor.Actor.Character))) ||
             prepared.Any(token => !ReferenceEquals(token.Session.PreparedParty(token).Dungeon.Entry.FiendwarScale, first.Entry.FiendwarScale)))) return null;
-        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects, route, first.Entry.Maze.SourceOrdinal, first.Entry.CoinLimit);
+        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects, route,
+            first.Entry.Maze.SourceOrdinal, first.Entry.CoinLimit, admission.PreyLanding,
+            admission.Catalog.Find(checked((int)first.Entry.DungeonId))?.LimitTimeSeconds);
     }
 
     // PartyDungeonInstance在全部成员SQL已确认后调用；即使上次网络前消费中断，也从原Run保留的事实恢复。
@@ -91,7 +93,8 @@ internal sealed partial class GameSession
                 snapshots[0]!.Snapshot.CurrentMap.Id, observeMap);
             return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members, snapshots[0], RaidBattleChange: fiendwarChange)];
         }
-        if (members.Length is < 1 or > 4 || members[0].Actor.Session.raidCombat is not { Battle.Kind: RaidKind.Luke } first)
+        if (members.Length is < 1 or > 4 || members[0].Actor.Session.raidCombat is not { } first ||
+            first.Battle.Kind != RaidKind.Luke && (first.Battle.Kind != RaidKind.Prey || first.Battle.PreyGuide))
             return notices;
         var rows = new List<(RaidActor Actor, DungeonRunIdentity Identity)>();
         DfoServer.GameWorld.Dungeons.DungeonMap? map = null;
@@ -99,7 +102,7 @@ internal sealed partial class GameSession
         {
             var session = member.Actor.Session;
             if (session.raidCombat is not { } raid || !ReferenceEquals(raid.Battle, first.Battle) || !raid.Actor.IsCurrent ||
-                session.formalDungeon is not { Entry.RaidEntry.Kind: RaidKind.Luke } dungeon ||
+                session.formalDungeon is not { Entry.RaidEntry: { } raidEntry } dungeon || raidEntry.Kind != first.Battle.Kind ||
                 dungeon.Entry.RaidEntry.InstanceId != raid.Battle.Instance || dungeon.Run.Snapshot.Identity.InstanceId != instance)
                 return notices;
             var snapshot = dungeon.Run.Snapshot;
@@ -107,8 +110,10 @@ internal sealed partial class GameSession
             map = snapshot.CurrentMap;
             rows.Add((raid.Actor, snapshot.Identity));
         }
-        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null, observeMap ? map : null,
-            members[0].Actor.Session.formalDungeon!.Run);
+        var change = first.Battle.Kind == RaidKind.Prey
+            ? first.Battle.ObservePreyTeamRun(instance, rows.ToArray(), observeMap ? map!.Id : null)
+            : first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null, observeMap ? map : null,
+                members[0].Actor.Session.formalDungeon!.Run);
         // 通知仍由原发布队列在owner锁外分发；重放时允许以当前view恢复丢失投影。
         return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members,
             members[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change,
@@ -119,5 +124,17 @@ internal sealed partial class GameSession
     {
         if (formalDungeon is not { Entry.RaidEntry: not null } dungeon || raidCombat is not { } raid) return null;
         return raid.Battle.ReleaseDungeon(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId);
+    }
+
+    GameWorld.Towns.Location? RaidDungeonExitPosition(FormalDungeon dungeon, Characters.Character character)
+    {
+        // 只在原末阶段资格已提交后改变本次正式退出落点；结果/CG仍等待原Run退出屏障。
+        if (dungeon.Entry.RaidEntry is { Kind: RaidKind.Prey, PreyGuide: false, Phase: 1 } entry &&
+            raidCombat is { Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid &&
+            entry.InstanceId == raid.Battle.Instance && entry.Phase + 1 == raid.Battle.PhaseCount &&
+            raid.Battle.RequiresLukeCompletedPhaseReturn(raid.Actor, entry.InstanceId, entry.Phase) &&
+            raid.Battle.LukeWaitingRoom is { } room)
+            return towns.Spawn(new(checked((byte)room.Town), checked((byte)room.Area), 0, 0), completed);
+        return dungeon.OrdinaryReturnPosition ?? character.Position;
     }
 }

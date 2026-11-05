@@ -20,10 +20,16 @@ internal static partial class RaidCombatProjection
         // 卢克首个Run策略尚无奖励记录，不能借安徒恩投影打开空窗口。
         if (view.State == AntonRaidBattleState.Reward && context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Luke &&
             context.Session.RaidCombatResult(view) is null) return;
+        bool preyStateFirst = false;
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke)
             PostLukeSnapshot(context, luke, view, Guard);
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey)
+        {
+            // 587先安装二阶段并关闭旧控件，新符号随后交给新阶段上下文消费。
+            preyStateFirst = !prey.PreyGuide && view.Phase == 1 && view.State == AntonRaidBattleState.Fighting && !view.PhaseExpired;
+            if (preyStateFirst) PostState(context, view, actor, Guard, "raid_phase_state");
             PostPreySnapshot(context, prey, view, Guard);
+        }
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Fiendwar } fiendwar)
         {
             PostFiendwarSnapshot(context, fiendwar, view, Guard);
@@ -46,6 +52,8 @@ internal static partial class RaidCombatProjection
         if (!(view.PhaseExpired && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton, HasAntonRewards: true }) ||
             context.AntonFailureResult.Post(context, actor, view))
             context.LukePhaseExit?.Notice(view, actor);
+        if (context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Prey && !view.PhaseExpired)
+            context.PreyBoarding?.Notice(view, actor);
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } statusBattle)
         {
             PostStatus(context, statusBattle, view, Guard);
@@ -55,9 +63,11 @@ internal static partial class RaidCombatProjection
             PostRetryEligibility(context, Guard);
         if (view.PhaseExpired)
         {
+            PostPreyFailure(context, view, actor, Guard);
+            PostRoster(context, view, actor, Guard);
             return;
         }
-        PostState(context, view, actor, Guard, "raid_phase_state");
+        if (!preyStateFirst) PostState(context, view, actor, Guard, "raid_phase_state");
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } resultsBattle)
         {
             context.LukeResults.PostTeam(context, actor, resultsBattle, view);
@@ -99,7 +109,9 @@ internal static partial class RaidCombatProjection
             // 591/op3会强制开窗，仅保留给原有建队、编队流程。
             var body = RaidPackets.Information(2, party.Key, party.TitleBytes, party.Type, party.Leader,
                 DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party),
-                (byte)view.State, checked((byte)view.Phase), guide: party.Guide, clearCounts: clears, recruitRoles: party.RecruitRoles);
+                RaidProjection.DisplayState(party, view, context), checked((byte)view.Phase), guide: party.Guide, clearCounts: clears, recruitRoles: party.RecruitRoles,
+                preyPositions: RaidProjection.PreyPositions(party), preyLocations: RaidProjection.PreyLocations(party, view),
+                preyRetryDeadlines: RaidProjection.PreyRetryDeadlines(party, view));
             bool Guard() => current() && actor.Session.HasRaidKey(actor, party.Key) &&
                 (context.RaidRosterDisplay is not { } displayed || !body.AsSpan().SequenceEqual(displayed));
             context.Sender.Post(1, (ushort)CmdPacketType.REQUEST_RAID_INFO, body, "raid_clear_counts", Guard,
@@ -222,8 +234,12 @@ internal static partial class RaidCombatProjection
         if (view.PhaseExpired) return;
         // 业务Completed并非原生翻牌状态。无资格成员没有牌面可恢复，有资格成员的
         // 末张结果也必须保留原窗口，均不能借587=4重开一个不可选择的空四卡/八卡页。
-        if (view.State == AntonRaidBattleState.Completed && context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Luke)
-            return;
+        if (view.State == AntonRaidBattleState.Completed && context.Session.CurrentRaidBattle(actor) is { } endedBattle)
+        {
+            if (endedBattle is { Kind: RaidKind.Prey, PreyGuide: false })
+            { PostPreyResults(context, actor, endedBattle, view); return; }
+            if (endedBattle.Kind == RaidKind.Luke) return;
+        }
         // Luke的业务Completed与原生state4共用数值，但state4会重新安装翻牌组合对象。
         // 本阶段牌面已打开时，末张600后的业务终结只更新名册/次数，不重建正在播放的第二轮翻牌。
         if (view.State == AntonRaidBattleState.Completed &&
@@ -235,10 +251,21 @@ internal static partial class RaidCombatProjection
             return;
         context.Owner.Execute(() =>
         {
-            var identity = RaidCombatDisplayIdentity.Capture(actor, view);
-            bool SceneReady() => view.State != AntonRaidBattleState.Reward ||
-                context.Session.CurrentRaidBattle(actor)?.Kind != RaidKind.Luke ||
-                context.Session.Phase == Game.Session.SessionPhase.Town;
+            bool preyPreparing = context.Session.CurrentRaidBattle(actor)?.PreyPreparationPending(view) == true;
+            bool preyBoarding = view.State == AntonRaidBattleState.Fighting &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } &&
+                context.PreyBoardingPending(view.Instance);
+            var identity = RaidCombatDisplayIdentity.Capture(actor, view) with
+                { AntonPreparing = view.AntonPreparing || view.LukePreparing || preyPreparing || preyBoarding };
+            bool SceneReady()
+            {
+                if (view.State != AntonRaidBattleState.Reward) return true;
+                var battle = context.Session.CurrentRaidBattle(actor);
+                if (battle is { Kind: RaidKind.Prey, PreyGuide: false })
+                    return context.Session.Phase == Game.Session.SessionPhase.Town &&
+                        context.LukePhaseExit?.ReturnPending(view.Instance) != true;
+                return battle?.Kind != RaidKind.Luke || context.Session.Phase == Game.Session.SessionPhase.Town;
+            }
             if (!SceneReady()) return false;
             bool completedTeam = view.State == AntonRaidBattleState.Completed &&
                 context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } formalAnton &&
@@ -259,17 +286,32 @@ internal static partial class RaidCombatProjection
                 PostAntonQuestConditions(context, view, actor, () => resultWritten && actor.IsCurrent &&
                     context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance);
             }
-            context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidCombatPackets.State(view), action, Show, () =>
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
+                preyPreparing || preyBoarding ? [1, checked((byte)view.Phase)] : RaidCombatPackets.State(view), action, Show, () =>
             {
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (preyBoarding)
+            {
+                var flight = (actor.Epoch, actor.Character, view.Instance);
+                // 594同时启动原生倒数与飞鸟，开团立即发送；原36及23/24完成前仍保持本人state1。
+                context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "prey_boarding_flight",
+                    () => current() && context.RaidDisplay == identity && context.PreyFlightDisplay != flight &&
+                        context.Session.CurrentRaidBattle(actor)?.View is { State: AntonRaidBattleState.Fighting, PhaseExpired: false, ClockFaulted: false } latest &&
+                        context.Session.Phase == Game.Session.SessionPhase.Town &&
+                        context.Session.Selected?.Position is { Town: 59, Area: 2 },
+                    () => context.PreyFlightDisplay = flight);
+            }
             if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } rewardLuke)
                 context.LukeResults.PostIneligible(context, actor, rewardLuke, view);
             if (view.Phase == 0 && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } lukeMovie)
                 PostLukeMovieCards(context, actor, lukeMovie, view);
             if (view.State == AntonRaidBattleState.Reward &&
-                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } prey &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } preyMovie)
+                PostPreyResults(context, actor, preyMovie, view);
+            if (view.State == AntonRaidBattleState.Reward &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: true } prey &&
                 prey.LukeEligibility(actor.Character, view.Phase) is { Eligible: true } &&
                 prey.RewardPolicy(actor, view.Phase) is { } preyPolicy)
             {
@@ -323,11 +365,18 @@ internal static partial class RaidCombatProjection
                 if (view.LukePreparing)
                     context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "luke_phase2_prepare", current);
             }
+            if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } preparingPrey && preyPreparing)
+            {
+                // 597仅为导航余时；原生可视倒数及飞鸟由已发送的594负责。
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
+                    () => preparingPrey.PreyPreparationSeconds(view) is { } seconds ? RaidCombatPackets.AntonWaitRemaining(0, seconds) : null,
+                    "prey_prepare_remaining", () => current() && context.RaidDisplay == identity);
+            }
             // 778没有阶段字段；对应587确实写出后才可按该phase解释used，不发送P1假计数。
             if (view.Phase == 1 && view.LukePhaseCoinsUsed is { } used)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
                     RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
-            if (view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
+            if (!preyPreparing && view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
                 context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind is RaidKind.Luke or RaidKind.Prey || battle.HasAntonRewards))
             {
                 if (battle.Kind == RaidKind.Anton)
@@ -393,6 +442,19 @@ internal static partial class RaidCombatProjection
                     // 01DD06B0频道50忽略中列，以now+末列保存截止点；补发只写当前剩余值。
                     ? RaidCombatPackets.LukePositiveTimer(checked((sbyte)timer.Kind), timer.DungeonId, 0, seconds) : null,
                 "prey_rule_timer", guard);
+        for (byte group = 0; group < 3; group++)
+        {
+            int target = view.PreyMarkers.GetValueOrDefault(group);
+            byte markerGroup = group;
+            bool Changed() => context.PreyMarkerDisplays.TryGetValue(markerGroup, out var old)
+                ? old != (view.Instance, view.Phase, target) : target != 0;
+            if (!context.Owner.Execute(() => guard() && Changed())) continue;
+            context.Sender.TryPost(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyMarker(group, target),
+                "prey_marker_snapshot", () => guard() && Changed(),
+                () => context.PreyMarkerDisplays[markerGroup] = (view.Instance, view.Phase, target));
+        }
+
     }
+
 
 }

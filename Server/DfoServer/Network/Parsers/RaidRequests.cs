@@ -15,6 +15,7 @@ internal readonly record struct RaidSearchRequest(uint Offset, byte RaidType, st
 // C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 招募对象掩码。
 internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
 internal readonly record struct RaidManagerRequest(uint Operation, uint Character, uint Argument);
+internal readonly record struct PreyMarkerRequest(uint Operation, uint Group, uint Target);
 internal readonly record struct RaidInfoRequest(byte Mode, uint Key);
 internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
 internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEntries);
@@ -106,6 +107,25 @@ internal static partial class RaidRequests
         return new(BinaryPrimitives.ReadUInt32LittleEndian(body), entries);
     }
 
+    // 015B66F9..015B6717：本体HP百分比阈值报告，仅一个u32，不携带怪物或死亡身份。
+    public static int PreyMonsterHp(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("PREY_RAID_MONSTER_HP需要单个u32");
+        return BinaryPrimitives.ReadInt32LittleEndian(body);
+    }
+
+    // 015B3800..015B382A：设置Boss HP报警值，原生按一个u32发送。
+    public static int PreyBossHpAlarm(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("RAID_SET_BOSS_HP_ALARM需要单个u32");
+        return BinaryPrimitives.ReadInt32LittleEndian(body);
+    }
+
+    // 0096E843..0096E84B经01DC6180：每2秒赋值symbol212，HP单位为最大值的1/10000。
+    public static int? PreyBossHpUnits(ReadOnlySpan<byte> body) => body.Length == 9 &&
+        BinaryPrimitives.ReadUInt32LittleEndian(body) == 212 && body[8] == 0
+            ? BinaryPrimitives.ReadInt32LittleEndian(body[4..]) : null;
+
     // NOTI835的023AB9FA..023ABA1B发送REJOIN_RAID：唯一正文为原通知的u32团key。
     public static uint Rejoin(ReadOnlySpan<byte> body)
     {
@@ -119,6 +139,17 @@ internal static partial class RaidRequests
         if (body.Length != 12) throw new InvalidDataException("RAID_MANAGER_WORK 需要三个u32");
         return new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt32LittleEndian(body[4..]),
             BinaryPrimitives.ReadUInt32LittleEndian(body[8..]));
+    }
+
+    public static PreyMarkerRequest PreyMarker(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 12) throw new InvalidDataException("普雷战略标记需要三个u32");
+        var request = new PreyMarkerRequest(BinaryPrimitives.ReadUInt32LittleEndian(body),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[4..]), BinaryPrimitives.ReadUInt32LittleEndian(body[8..]));
+        if (request.Operation is not (1 or 2) || request.Group > 2 ||
+            request.Operation == 1 && request.Target is not (>= 301 and <= 320) || request.Operation == 2 && request.Target != 0)
+            throw new InvalidDataException("普雷战略标记操作、分组或区域无效");
+        return request;
     }
 
     // 01DC6660/01DC7410；失败ACK也必须回传mode/key，不是裸公共失败前缀。

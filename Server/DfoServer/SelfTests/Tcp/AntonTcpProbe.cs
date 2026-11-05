@@ -319,7 +319,7 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
-        bool leave = true, bool requireClearNotice = true, Action<byte[]>? beforeRoomClear = null)
+        bool leave = true, bool requireClearNotice = true, bool allowPhaseReward = false, Action<byte[]>? beforeRoomClear = null)
     {
         bool fiendwar = IsFiendwarDungeon(dungeon);
         if (!fiendwar) peer.Send(15, DungeonId(dungeon));
@@ -395,7 +395,8 @@ internal static partial class AntonTcpProbe
         var cleared = Flush(peer, "117 确认 " + dungeon);
         Note(report, cleared);
         // 正式Run已随39发送许可，117仅协调重放；未启用正式Run的诊断保持原确认合同。
-        if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 or 600 or 601 } or { Kind: 1, Opcode: 72 }))
+        if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 } or { Kind: 1, Opcode: 72 }) ||
+            !allowPhaseReward && cleared.Any(p => p is { Kind: 0, Opcode: 600 or 601 }))
             throw new InvalidOperationException(dungeon + " 的117误发普通结算、阶段牌面或未请求的EPLP确认");
         if (formalSettles && cleared.Any(packet => packet is { Kind: 0, Opcode: 115 }))
             throw new InvalidOperationException(dungeon + " 的117重发了已提交Run的Boss确认");

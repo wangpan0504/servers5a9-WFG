@@ -34,7 +34,7 @@ internal static class TownTravel
     }
 
     public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null,
-        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false)
+        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false, bool preyBoarding = false)
     {
         if (!ChannelAreaLanding.AllowsFiendwarTown(channel, request.Town))
             return TownTravelPlan.Reject("fiendwar-channel-town-mismatch");
@@ -112,6 +112,11 @@ internal static class TownTravel
              request.PathKind != 0 && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
         string reason = towns.Admission(character.Position, target, character.Level, completed,
             RoomDoorReturn(character, towns, completed, channel), portal, request.TargetNpc);
+        // 普雷开战演出经原生36登上鸟背，候战地图没有普通有向门；资格由当前普通攻坚实例签发。
+        if (reason == "route-not-in-pvf" && preyBoarding && channel?.Type == 50 &&
+            character.Position is { Town: 59, Area: 2 } && target is { Town: 59, Area: 3 } &&
+            request is { TargetNpc: 0, PathKind: 0 })
+            reason = towns.DestinationAdmission(target, character.Level, completed);
         // 57/1的团队门condition1、引导门condition2；真实未开战攻坚队及模式由Session核验。
         // 仅解释对应模式的已证门，不放行其他地图或跨模式条件。
         if (reason == "route-state-required" && (fiendwarWaiting || fiendwarGuideWaiting) && channel?.Type == ChannelAreaLanding.FiendwarType &&

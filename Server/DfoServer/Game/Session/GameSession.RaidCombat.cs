@@ -263,6 +263,7 @@ internal sealed partial class GameSession
                 raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
                 !(raid.Battle.HasAntonRewards ? raid.Battle.CanConfirmAntonMovie(raid.Actor, view) :
                     raid.Battle.Kind == RaidKind.Fiendwar ? raid.Battle.CanConfirmFiendwarMovie(raid.Actor, view) :
+                    raid.Battle is { Kind: RaidKind.Prey, PreyGuide: false } ? raid.Battle.CanConfirmPreyMovie(raid.Actor, view) :
                     raid.Battle.CanConfirmLukeMovie(raid.Actor, view))) return null;
             return (raid.Actor, raid.Battle, view);
         });

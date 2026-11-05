@@ -6,9 +6,9 @@ namespace DfoServer.Testing;
 // C2S664 CREATE_RAID：魔界大战频道 41（type 0x36，客户端按 01DC69B0 落到团本类型 6，raid.lst 没有 6）不按团本建队，
 // ACK664 一律失败 0x13；1361 查类型 6 无记录回失败；667 类型 6 静默不处理；666 无记录仍回失败。
 // 魔界大战开战走 67/2 芮兹的 C2S 1652 START_EVILDOM_WAR；无队伍须明确失败，合法开战由专属TCP组覆盖。
-// 普雷频道 42（01DC69B0：0x32 → 类型 3）请求类型 3 时建单人队：NOTI 0x24E → NOTI 0x24F op3(M=1) → ACK664 成功 key；
+// 普雷频道42请求类型3时建立一人攻坚名册，不创建普通Party；590/591后回复664成功key。
 // 类型与频道不符回失败；LEAVE_RAID(665) 删队回 01 00，再退无回包；RAID_ENTRY_COST_INFO(658) 回 01。
-// START_RAID(666) 普雷脚本最低 1 人，开战包序未恢复，有队无队都回 0x13；SET_RAID_WAITING(667) 队长回 0x13，无队登记回 01、重复回 0x12；
+// 本组角色缺少普雷前置与门票，666始终拒绝；合法开战由prey-team系列覆盖。667队长拒绝，无队登记成功、重复回0x12。
 // MODIFY_RAID_INFO(670) 队长同类型改名：NOTI 0x24F op2 后 ACK 01，类型不符/无队回 0x13。全程不写库。
 internal static class RaidCreateTcpTests
 {
@@ -62,18 +62,32 @@ internal static class RaidCreateTcpTests
             var open = peer.Expect(0, 591).Body;
             That(U32(open) == key && U32(open, 4) == 3 && open[8] == 1 && U16(open, 9) == id && U32(open, 12) == (uint)NameWidth("Raid42"),
                 "0x24F op3 M=1：队长成员块（角色号 + 名字）");
+            int initialName = checked((int)U32(open, 12));
+            That(open.Length == 62 + initialName && open[18 + initialName] == 1 && open[42 + initialName] == 11,
+                "建团首份完整591直接携带创建者第1队第1格，无需先发送669");
             var ack = peer.Expect(1, 664).Body;
             That(ack.Length == 5 && ack[0] == 1 && U32(ack, 1) == key, "ACK664 成功 = 01 + 同一 key");
+            peer.Send(666);
+            var unavailable = AntonTcpProbe.Barrier(peer, "raid-create prey prerequisites missing");
+            Bytes(unavailable.Single(packet => packet is { Kind: 1, Opcode: 666 }).Body, [0, 0x13, 0],
+                "创建者已有默认标记时，缺少普雷前置和门票仍明确拒绝666");
+            That(unavailable.All(packet => packet.Opcode is not (9 or 587 or 594 or 1595)) && fixture.Snapshot() == saved &&
+                fixture.Query("SELECT count(*) FROM character_raid_runs WHERE raid_type=3") is [[0L]],
+                "前置和门票拒绝保留资产和角色，不创建生命周期或普通Party");
             peer.Send(658, [1]);
             peer.Expect(0, 598, Build(writer =>
             { writer.Write(1); writer.Write(id); writer.Write((byte)0); writer.Write((short)0); }));
             peer.Expect(1, 658, [1]);
             peer.Send(669, Build(writer => { writer.Write(2u); writer.Write((uint)id); writer.Write(11u); }));
-            var formation = AntonTcpProbe.Barrier(peer, "prey formation");
-            That(formation.Any(packet => packet is { Kind: 1, Opcode: 669, Body: [1] }) &&
-                formation.Any(packet => packet.Kind == 0 && packet.Opcode == 591 && U32(packet.Body, 4) == 3 &&
-                    packet.Body[42 + NameWidth("Raid42")] == 11),
-                "类型3的operation2提交真实槽位并通过完整名册及ACK解除忙标记");
+            var assigned = AntonTcpProbe.Barrier(peer, "raid-create prey marker");
+            Bytes(assigned.Single(packet => packet is { Kind: 1, Opcode: 669 }).Body, [1],
+                "普雷669重复指定创建者默认位置沿原幂等逻辑确认成功");
+            var marked = assigned.Single(packet => packet is { Kind: 0, Opcode: 591 } && U32(packet.Body, 4) == 3).Body;
+            int name = checked((int)U32(marked, 12));
+            That(U32(marked) == key && marked[8] == 1 && U16(marked, 9) == id && marked.Length == 62 + name &&
+                marked[18 + name] == 1 && marked[42 + name] == 11 &&
+                assigned.All(packet => packet is not { Kind: 0, Opcode: 9 }),
+                "完整591成员记录保存逻辑组1与座次11，标记操作不建立普通队伍");
             peer.Send(666, []);
             peer.Expect(1, 666, [0, 0x13, 0]);
             peer.Send(667, [0, 3]);

@@ -468,7 +468,8 @@ internal static class ServerRuntime
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
         var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled,
-            lukeCandidatesEnabled: lukeStartPolicy is not null || raidCatalog.Find(2)?.Resources?.Fiendwar is not null, clock: clock);
+            lukeCandidatesEnabled: lukeStartPolicy is not null || raidCatalog.Find(2)?.Resources?.Fiendwar is not null ||
+                raidCatalog.Find(3)?.Resources?.PreyTeam is { PreyTeamStartReady: true }, clock: clock);
         raidRegistry.BindRejoin(antonRejoin);
         var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
@@ -477,14 +478,21 @@ internal static class ServerRuntime
         var lukeAutomaticRewards = new Game.Raids.LukeAutomaticRewards(repository, owners, online, repository.LoadCharacterById,
             itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock ?? TimeProvider.System);
         var preyReady = raidCatalog.Find(3)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true };
-        var preyRun = preyReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey) : null;
+        var preyTeamReady = raidCatalog.Find(3)?.Resources?.PreyTeam is { PreyTeamStartReady: true };
+        var preyRun = preyReady || preyTeamReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties,
+            raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey,
+            preyTeamReady ? raidCatalog.Find(3)!.Resources!.PreyTeam!.EntryCatalog : null) : null;
         var preyRewards = preyReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.Script, itemResources.Items, itemResources.Boosters) : null;
         if (preyRewards is not null) _ = preyRewards.Create(false);
+        var preyTeamRewards = preyTeamReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.PreyTeam!.Script, itemResources.Items, itemResources.Boosters) : null;
+        if (preyTeamRewards is not null) _ = preyTeamRewards.CreateTeam(false, false);
+        log.Write("startup", new { Stage = "Prey raid modes", Guide = preyReady, Team = preyTeamReady,
+            TeamIssues = raidCatalog.Find(3)?.Resources?.PreyTeam?.Issues.Select(issue => new { issue.Code, issue.Path, issue.TokenIndex, issue.Detail }).ToArray() });
         bool fiendwarReady = raidCatalog.Find(2)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true, Fiendwar: not null };
         var fiendwarRun = fiendwarReady ? new Game.Raids.FiendwarDungeonService(raidRegistry, parties, raidCatalog.Find(2)!.Resources!.EntryCatalog!, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.EntryCatalog) : null;
         var fiendwarRewards = fiendwarReady ? new Game.Raids.FiendwarRewards(raidCatalog.Find(2)!.Resources!.Fiendwar!, itemResources.Items, itemResources.Boosters, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.Fiendwar) : null;
         if (fiendwarRewards is not null) _ = fiendwarRewards.Create(false);
-        var lukeTimers = !preyReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        var lukeTimers = !preyReady && !preyTeamReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new
             {
                 Stage = stage, Reason = error.GetType().Name, error.Message, error.StackTrace,
@@ -516,7 +524,7 @@ internal static class ServerRuntime
             lukeStart = null;
         }
         // 原实例五分钟候选与835/668共用，不恢复进程重启前的活跃Battle。
-        var lukeRejoin = lukeStart is null && raidCatalog.Find(2)?.Resources?.Fiendwar is null ? null :
+        var lukeRejoin = lukeStart is null && raidCatalog.Find(2)?.Resources?.Fiendwar is null && !preyTeamReady ? null :
             new Game.Raids.LukeRaidRejoin(raidRegistry, parties, antonRejoin);
         var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
             raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
@@ -528,7 +536,15 @@ internal static class ServerRuntime
         }
         var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
         var raidStart = new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
-            raidSettings.AntonPhaseProgressEnabled || preyReady || fiendwarReady ? lukeTimers : null, preyRewards, fiendwarRewards, fiendwarMazeRandom);
+            raidSettings.AntonPhaseProgressEnabled || preyReady || preyTeamReady || fiendwarReady ? lukeTimers : null,
+            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards)
+#if DEBUG
+            { DebugIgnorePreyEntryLimits = true, DebugIgnorePreyRewardLimits = true }
+#endif
+            ;
+#if DEBUG
+        log.Write("raid_start_debug_policy", new { RaidType = 3, IgnoreEntryLimits = true, IgnoreRewardLimits = true });
+#endif
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
             raidStart, lukeStart, antonRejoin, parties, lukeRejoin, projection, pvpRecords);
         if (raidSettings.AntonRejoinEnabled)
@@ -831,7 +847,7 @@ internal static class ServerRuntime
             new SkillHandler(learning, log, inventoryProjection),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log, tagEvildomProjection, fiendwarRun,
-                dungeon is DungeonHandler formalDungeon ? formalDungeon.EnterFiendwarAreaAsync : null),
+                dungeon is DungeonHandler formalDungeon ? formalDungeon.EnterFiendwarAreaAsync : null, preyParties: parties),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates, guildParameters.TeleportCost, privilege: itemResources.PrivilegeServices), projection, inventoryProjection, presence, log, guildTeleportHandler),
             guildTeleportHandler,
@@ -1008,6 +1024,9 @@ internal static class ServerRuntime
                     itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions),
                     new Game.Characters.CombatPowerService(itemResources.Items, itemResources.CharacterInvestmentMetadata, stats)), chatEmoticons,
                 promotionPage: promotionPage, learning: learning)
+#if DEBUG
+                { DebugDungeonKill = dungeon is DungeonHandler killHandler ? killHandler.DebugKillAsync : null }
+#endif
         ];
         foreach (var module in modules)
             module.Register(commands);

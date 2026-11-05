@@ -82,10 +82,10 @@ internal static class ChannelAreaLanding
     // 城镇里的街区不能写成共享房间的返回地区，否则普通频道的 1379 与出门城镇会变成战舰（#740 回归）。
     internal const byte AntonTown = 19;
 
-    // 四团WAITING ROOM分别为19/2、32/4、57/2、59/2；57的后续区域是同团战场。
+    // 四团WAITING ROOM分别为19/2、32/4、57/2、59/2；57后续区域和普雷鸟背59/3至5属于原攻坚实例。
     // 卢克普通街区32/3不在此列。实例地区重登必须先回频道入口，再由原团重返恢复。
     internal static bool IsRaidInstanceArea(Location position) => position is
-        { Town: 19, Area: 2 } or { Town: 32, Area: 4 } or { Town: 57, Area: >= 2 } or { Town: 59, Area: 2 };
+        { Town: 19, Area: 2 } or { Town: 32, Area: 4 } or { Town: 57, Area: >= 2 } or { Town: 59, Area: >= 2 and <= 5 };
 
     // 普通区域频道类型：channel.txt 的 21 个普通区域入口。选角出生共享房间，房间出口只认角色记住的返回地区（#740）；
     // 频道分组只决定特殊区域与团队频道的落点。与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”一致。
