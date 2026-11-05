@@ -1112,10 +1112,10 @@ internal static class BoosterSelectionTests
                             {
                                 var template = catalog.Get(reward.Core.ItemId);
                                 var expected = InventoryRewardGrantService.Create(template, utcNow: now) with { DisjointForbidden = true };
-                                if (epic) expected = expected with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 1 };
+                                if (epic) expected = expected with { EpicExchangeOrigin = new(1, sourceId) };
                                 That(selected.Contains(reward.Core.ItemId) && template.Kind == ItemKind.Equipment && reward.Uid == 0 &&
                                     reward.Core == expected && reward.Avatar is null && reward.Creature is null,
-                                    "三盒完整装备核心保留，原epic两盒带不可交换来源与119资格位 " + sourceId + ":" + reward.Core.ItemId);
+                                    "三盒完整装备核心保留，原epic两盒带不可交换来源且不授予119资格位 " + sourceId + ":" + reward.Core.ItemId);
                             }
                         }
             }

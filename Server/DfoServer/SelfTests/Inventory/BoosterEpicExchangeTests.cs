@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
@@ -126,7 +127,7 @@ internal static class BoosterEpicExchangeTests
                         var after = opened.Plan!.After;
                         var reward = after.Items.Single(item => item.Core.ItemId == id);
                         AssertOrigin(reward.Core, "每个真实奖励保留飞跃来源 " + id);
-                        That(reward.Core.Extension119 == 0x01, "每个真实奖励投影交换资格位且次数为0 " + id);
+                        That(reward.Core.Extension119 == 0, "活动礼盒产物按原说明禁止交换且次数为0 " + id);
                         That(JsonWithoutInstance(reward.Core) == JsonWithoutInstance(Core(id)) && reward.Uid == 0 &&
                             reward.Avatar is null && reward.Creature is null &&
                             after.Find(Bag(3)) is { Uid: 1, Core.Count: 1 } &&
@@ -152,6 +153,7 @@ internal static class BoosterEpicExchangeTests
         var oneFree = full with { Inventory = full.Inventory with { Items = full.Inventory.Items.RemoveAt(full.Inventory.Items.Length - 1) } };
         That(service.Open(oneFree, Select([SampleId]), out _, now).Accepted, "一个装备空格可领取单件完整实例");
         RunPersistence(towns, resources, service, now);
+        RunRandomResources(towns, resources);
         Console.WriteLine($"PASS {Count - checks} Tayberrs growth selection checks");
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Get(id), count, now);
@@ -163,6 +165,75 @@ internal static class BoosterEpicExchangeTests
             var rejected = service.Open(role, request, out var receipt, now);
             That(!rejected.Accepted && rejected.Plan is null && receipt is null && JsonSerializer.Serialize(role) == before, label);
         }
+    }
+
+    public static void RunRandomResources(TownCatalog towns, ItemResources resources)
+    {
+        const int sourceId = 490703923;
+        int checks = Count;
+        var now = DateTimeOffset.UtcNow;
+        var definition = resources.Boosters.Get(sourceId);
+        int[] ids = [100100693, 100050792, 100150662, 100200637, 100250656, 100110637, 100160578,
+            100260618, 100060651, 100210602, 100170572, 100220572, 100270569, 100070605, 100120597,
+            100230578, 100130610, 100280573, 100080629, 100180578, 100140429, 100190400, 100240407,
+            100290420, 100090434, 100312640, 100300946, 100322533, 100312641, 100300947, 100322534,
+            100344897, 100353080, 100390020, 100344898, 100353081, 100390021];
+        That(definition.Available && definition.SetsEpicExchangeInstanceType && definition.Selection is null &&
+            definition.Pools is [{ Draws: 1 } pool] && pool.Rewards.Select(row => row.ItemId).SequenceEqual(ids) &&
+            pool.Rewards.All(row => row.Weight == 100 && row.Count == 1),
+            "鸿运盒保留全部37个等权装备候选和根级禁止交换声明");
+        var source = new InventoryItem(1, Bag(65), InventoryRewardGrantService.Create(resources.Items.Get(sourceId), 2, now));
+        var role = new Character(1, 0, "RandomOrigin", 0, towns.Room, towns.InitialReturn)
+            { Inventory = new([source], Gold: 50_000_000) { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.EpicSoul, 100) } };
+        var exchange = new EpicExchangeService(resources.EpicExchanges, resources.Items, resources.EpicPieces, resources.GoldLimits);
+        for (int index = 0; index < ids.Length; index++)
+            for (byte job = 0; job < 16; job++)
+            {
+                var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
+                    resources.EpicPieces, new RewardRandom(index * 100));
+                var before = role with { Job = job };
+                var opened = service.Open(before, new(65, 1), out var receipt, now);
+                var expected = InventoryRewardGrantService.Create(resources.Items.Get(ids[index]), utcNow: now) with
+                    { EpicExchangeOrigin = new(1, sourceId) };
+                That(opened.Accepted && receipt is { Rewards.Length: 1 } && receipt.Rewards[0] == new BoosterGrantedItem(ids[index], 1) &&
+                    opened.Plan!.After.Items.Single(item => item.Core.ItemId == ids[index]).Core == expected &&
+                    opened.Plan.After.Find(Bag(65)) is { Uid: 1, Core.Count: 1 } &&
+                    before.Inventory == role.Inventory,
+                    "各职业可获得完整随机装备但不授予交换资格 " + ids[index] + ":" + job);
+                var denied = exchange.Exchange(before with { Inventory = opened.Plan!.After }, ids[index], ids[0], -1, now);
+                That(!denied.Accepted && denied.Plan is null,
+                    "足额金币与史诗灵魂也不能交换活动礼盒产物 " + ids[index]);
+                if (index == 0 && job == 0)
+                {
+                    var inventory = opened.Plan.After;
+                    var reward = inventory.Items.Single(item => item.Core.ItemId == ids[0]);
+                    var eligible = before with { Inventory = inventory with { Items = inventory.Items.Replace(reward,
+                        reward with { Core = reward.Core with { Extension119 = 1 } }) } };
+                    That(exchange.Exchange(eligible, ids[0], ids[0], -1, now).Accepted,
+                        "相同费用与装备输入仅补资格位即可交换，拒绝确由禁交换状态产生");
+                }
+            }
+        var fixedService = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
+            resources.EpicPieces, new RewardRandom(0));
+        var batch = fixedService.Open(role, new(65, 2), out var batchReceipt, now);
+        That(batch.Accepted && batchReceipt is { Rewards: [{ Count: 2 }] } && batch.Plan!.After.Find(Bag(65)) is null &&
+            batch.Plan.After.Items.Count(item => item.Core.ItemId == ids[0] && item.Core.Extension119 == 0 &&
+                item.Core.EpicExchangeOrigin == new EpicExchangeOrigin(1, sourceId)) == 2,
+            "批量开盒逐件保留来源及禁交换状态并完整扣源");
+        var range = ItemSlotBoundService.Range(ItemKind.Equipment, role.Inventory);
+        var full = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.AddRange(
+            Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot => new InventoryItem(1000 + slot,
+                Bag((short)slot), InventoryRewardGrantService.Create(resources.Items.Get(16400), utcNow: now)))) } };
+        var rejected = fixedService.Open(full, new(65, 1), out var rejectedReceipt, now);
+        That(!rejected.Accepted && rejected.Plan is null && rejectedReceipt is null && full.Inventory.Find(Bag(65)) == source,
+            "随机来源装备满页整笔拒绝并保留源");
+        RunPersistence(towns, resources, fixedService, now, sourceId, ids[0], new(3, 1));
+        Console.WriteLine($"PASS {Count - checks} random epic marker checks");
+    }
+
+    sealed class RewardRandom(long value) : Random
+    {
+        public override long NextInt64(long maxValue) => value < maxValue ? value : 0;
     }
 
     const string Marker = "[set epic exchange instance type]\n";
@@ -199,9 +270,10 @@ internal static class BoosterEpicExchangeTests
                 "重复、有值、残缺、多余闭标签、嵌套或交叉闭合的史诗交换声明拒绝");
         That(!BoosterCatalog.Parse(MarkerBox("", EquipmentBody + "\n" + Marker)).Available,
             "分类内的史诗交换声明不能当根级空声明");
-        That(!BoosterCatalog.Parse(Marker + "[stackable type]\n`[booster]` 0\n[booster info]\n" +
-            "[equipment]\n1 101000783 1 1\n[/equipment]\n[/booster info]\n").Available,
-            "史诗交换声明不扩大到随机booster类型");
+        var random = BoosterCatalog.Parse(Marker + "[stackable type]\n`[booster]` 0\n[booster info]\n" +
+            "[equipment]\n1 101000783 1 1\n[/equipment]\n[/booster info]\n");
+        That(random.Available && random.SetsEpicExchangeInstanceType && random.GrantsEpicExchangeOrigin,
+            "普通装备随机盒保留合法根级史诗交换声明及来源");
     }
 
     static void RunMarkerRewardBoundary(TownCatalog towns, ItemResources resources, DateTimeOffset now)
@@ -239,7 +311,7 @@ internal static class BoosterEpicExchangeTests
             var eligible = role with { GrowType = branch };
             var opened = service.Open(eligible, Select([SampleId]), out var receipt, now);
             var expected = InventoryRewardGrantService.Create(resources.Items.Get(SampleId), utcNow: now) with
-                { EpicExchangeOrigin = new(1, SourceId), Extension119 = 0x01 };
+                { EpicExchangeOrigin = new(1, SourceId) };
             That(opened.Accepted && receipt is { Rewards: [{ ItemId: SampleId, Count: 1 }] } &&
                 opened.Plan!.After.Find(Bag(3)) is null &&
                 opened.Plan.After.Items.Single(item => item.Core.ItemId == SampleId).Core == expected &&
@@ -248,6 +320,10 @@ internal static class BoosterEpicExchangeTests
                 JsonSerializer.Serialize(role) == before,
                 "合法首转与觉醒分支领取完整来源装备，旧计划不绑定转职后的角色 " + branch);
         }
+        definitions[SourceId] = BoosterCatalog.Parse(MarkerBox(Marker)) with { FromExchangeShop = true };
+        var markedShop = service.Open(role, Select([SampleId]), out _, now);
+        That(markedShop.Accepted && markedShop.Plan!.After.Items.Single(item => item.Core.ItemId == SampleId).Core.Extension119 == 0,
+            "显式禁交换声明优先于商店来源，不能因来源重叠获得资格");
     }
 
     // 休亚在售的套装礼盒在 PVF 里没有交换声明，产物同样按“休亚处兑换”记资格。
@@ -280,8 +356,10 @@ internal static class BoosterEpicExchangeTests
             "opening the shop box stamps the product with the exchange bit and the box as origin");
     }
 
-    static void RunPersistence(TownCatalog towns, ItemResources resources, InventoryBoosterService service, DateTimeOffset now)
+    static void RunPersistence(TownCatalog towns, ItemResources resources, InventoryBoosterService service, DateTimeOffset now,
+        int sourceId = SourceId, int rewardId = SampleId, BoosterOpenRequest? request = null)
     {
+        request ??= Select([rewardId]);
         string root = Path.Combine(Path.GetTempPath(), "s5a9-epic-origin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -291,14 +369,14 @@ internal static class BoosterEpicExchangeTests
             var owners = new AccountOwners();
             using var owner = owners.Acquire("epic-origin", () => { });
             repo.Create(owner, new("Growth", towns.Room, towns.InitialReturn)
-            { Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(resources.Items.Get(SourceId), utcNow: now))], Gold: 12345) });
+            { Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(resources.Items.Get(sourceId), utcNow: now))], Gold: 12345) });
             var session = new GameSession(repo, towns, owner);
             session.Select(0);
             session.MarkReady();
             var saved = session.Selected!;
             string before = Snapshot();
-            var stale = service.Open(saved, Select([SampleId]), out _, now).Plan!;
-            Query("CREATE TRIGGER fail_epic_origin BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=" + SampleId +
+            var stale = service.Open(saved, request, out _, now).Plan!;
+            Query("CREATE TRIGGER fail_epic_origin BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=" + rewardId +
                 " BEGIN SELECT RAISE(ABORT,'epic origin late audit rollback'); END");
             Reject<SqliteException>(() => Open(), "来源奖励晚审计失败必须真正回滚");
             That(ReferenceEquals(session.Selected, saved) && Snapshot() == before,
@@ -309,8 +387,8 @@ internal static class BoosterEpicExchangeTests
                 "来源与源消费同一Session提交后才产生回执");
             var current = session.Selected!;
             var reward = current.Inventory.Items.Single();
-            AssertOrigin(reward.Core, "真实落库奖励保留来源");
-            That(reward.Uid > 0 && reward.Core.ItemId == SampleId && reward.Core.Extension119 == 0x01 &&
+            AssertOrigin(reward.Core, "真实落库奖励保留来源", sourceId);
+            That(reward.Uid > 0 && reward.Core.ItemId == rewardId && reward.Core.Extension119 == 0 &&
                 current.Inventory.Find(Bag(3)) is null && current.Inventory.Gold == 12345 &&
                 JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(current),
                 "完整来源重开Repository恢复且源只消费一次");
@@ -320,8 +398,8 @@ internal static class BoosterEpicExchangeTests
             That(!replay.Accepted && replay.Receipt is null && Snapshot() == before, "已耗尽源重放不能复制来源实例");
             That(Query("PRAGMA integrity_check") is "ok", "私有临时库完整性");
 
-            InventoryResult Open() => session.PlanAndCommitBooster(role => service.Open(role, Select([SampleId]), out _, now),
-                service.UsePlaces(SourceId), SourceId);
+            InventoryResult Open() => session.PlanAndCommitBooster(role => service.Open(role, request, out _, now),
+                service.UsePlaces(sourceId), sourceId);
             string Snapshot() => JsonSerializer.Serialize(new CharacterRepository(path).List(owner)) + ":" +
                 Query("SELECT count(*) FROM inventory_audit_log") + ":" +
                 Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
@@ -365,11 +443,11 @@ internal static class BoosterEpicExchangeTests
     }
     static bool HasOrigin(ItemCore core) => JsonSerializer.SerializeToElement(core).TryGetProperty(OriginProperty, out var origin) &&
         origin.ValueKind == JsonValueKind.Object;
-    static void AssertOrigin(ItemCore core, string label)
+    static void AssertOrigin(ItemCore core, string label, int sourceId = SourceId)
     {
         var json = JsonSerializer.SerializeToElement(core);
         That(json.TryGetProperty(OriginProperty, out var origin) && origin.ValueKind == JsonValueKind.Object &&
-            origin.GetProperty("Version").GetInt32() == 1 && origin.GetProperty("SourceItemId").GetInt32() == SourceId, label);
+            origin.GetProperty("Version").GetInt32() == 1 && origin.GetProperty("SourceItemId").GetInt32() == sourceId, label);
     }
     static string JsonWithoutOrigin(ItemCore core)
     {

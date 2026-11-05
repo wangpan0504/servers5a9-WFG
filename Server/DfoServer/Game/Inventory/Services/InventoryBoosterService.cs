@@ -714,8 +714,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                             core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
                                 (random ?? Random.Shared).NextInt64);
                         if (definition.GrantsEpicExchangeOrigin && core.Kind == ItemKind.Equipment)
-                            // 客户端物品核心 +0xC1（123B 偏移 119）的 bit0 才是交换资格位；只记服务端来源不够。
-                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId), Extension119 = 0x01 };
+                            // 活动礼盒显式禁止交换，不能把来源记录误当作休亚兑换资格。
+                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId),
+                                Extension119 = definition.SetsEpicExchangeInstanceType ? (byte)0 : (byte)0x01 };
                         if (source.Core.IsRental)
                         {
                             if (source.ExpireTime <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);

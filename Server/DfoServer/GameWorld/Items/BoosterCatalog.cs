@@ -61,7 +61,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool SetsEpicExchangeInstanceType { get; init; }
     // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
     public bool FromExchangeShop { get; init; }
-    // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
+    // 显式声明记录禁交换礼盒来源；休亚商店来源另行授予交换资格。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
     public byte? DailyConsumedLimit { get; init; }
@@ -269,7 +269,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         bool setsEpicExchangeInstanceType = epicDeclarations.Count != 0;
         if (setsEpicExchangeInstanceType)
         {
-            if (type != "booster selection" || epicDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0)
+            if (type is not ("booster" or "booster selection") || epicDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0)
                 return new([], "set epic exchange instance type");
             var declaration = epicDeclarations[0];
             int end = declaration.Index + declaration.Length;
@@ -473,7 +473,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             !Regex.IsMatch(tail, @"^(?:\s*\[hide booster info\](?:\s*\[/hide booster info\])?)+\s*$")
             ? new([], "未识别的奖池尾段") : new(pools.ToImmutable())
                 { DailyRetainedLimit = retainsDailySource ? dailyLimit : null,
-                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType };
+                    DailyConsumedLimit = retainsDailySource ? null : dailyLimit, SetsDisjointInstanceType = setsDisjointInstanceType,
+                    SetsEpicExchangeInstanceType = setsEpicExchangeInstanceType };
     }
 
     // [avatar] / [special avatar] 行宽为五列：物品、权重、数量、期限天数、属性选项。
