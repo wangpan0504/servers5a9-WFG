@@ -384,6 +384,12 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     if (template.EquipmentSlot is < 27 or > 29) throw new InvalidDataException("creature_equipment_slot");
                     return;
             }
+            if (items.ActionConsumable(id) is
+                { Label: "[add dimension dungeon enter count]", Parameters: [> 0 and <= 5] } dimensionTicket)
+            {
+                if (dimensionTicket.Item != template) throw new InvalidDataException("dimension_entry_ticket_definition");
+                return;
+            }
             // 积分 owner 仅接实际支持的 typed 动作，其它 label 不借此放行。
             if (items.ActionConsumable(id) is { Label: "[add mileage]", Parameters: [> 0] } mileage)
             {
