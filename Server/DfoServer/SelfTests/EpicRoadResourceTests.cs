@@ -62,8 +62,8 @@ internal static class EpicRoadResourceTests
             var singleRoute = definition with { Mazes = [maze] };
             That(DungeonEntryPlan.TryCreate(singleRoute, character, (uint)id, 0, 2, out var plan, out var reason),
                 "真实星河脚本的逐条测试路线能生成95级入场计划：" + reason);
-            That(plan!.DisjointForbiddenDropRarities.SetEquals([4]) && plan.DisableClearReward && plan.DisableGiveupPenalty,
-                "活动两图入场保留来源限制并禁用普通翻牌及虚弱惩罚");
+            That(plan!.DisjointForbiddenDropRarities.IsEmpty && plan.DisableClearReward && plan.DisableGiveupPenalty,
+                "本服活动两图入场解除史诗来源限制并保留无普通翻牌及虚弱惩罚");
             That(plan.ExperienceWeight == DungeonKillExperienceCatalog.GetDungeonWeight(catalog.Get(291100308)) &&
                 plan.ExperienceWeight > 0 && plan.SuppressOrdinaryResultBoard,
                 "两活动图击杀权重参考星空裂缝所在黑暗都市，仍抑制普通结算页");

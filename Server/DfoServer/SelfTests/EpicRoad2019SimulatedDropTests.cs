@@ -1,4 +1,7 @@
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
@@ -129,20 +132,35 @@ internal static class EpicRoad2019SimulatedDropTests
         var catalog = DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps);
         var rooms = DungeonRoomCatalog.Load(pvf);
         var seen = new HashSet<int>();
+        var character = new Character(1, 0, "EpicDrop", 1, new(1, 0, 1, 1, 0), null) { Level = 95 };
         foreach (int id in new[] { 400000097, 400000098 })
         foreach (var maze in catalog.Get(id).Mazes)
         {
             var map = maze.MapSpecification!.Single(row => row.Kind == "boss");
-            var entry = new DungeonEntryPlan(1, 0, (uint)id, 0, 0, 0, maze, maze.MapSpecification![0], map);
+            That(DungeonEntryPlan.TryCreate(catalog.Get(id) with { Mazes = [maze] }, character, (uint)id, 0, 2,
+                out var entry, out var reason), "真实入场冻结两图每条路线：" + reason);
             var monsters = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), 1, 10, 95).Monsters;
             var boss = monsters.Single(row => row.IsBoss);
             seen.Add(boss.MonsterId);
-            var generated = policy.Extend(new("resource-test", []), entry, boss).WithDisjointRestrictions([4])
+            var generated = policy.Extend(new("resource-test", []), entry!, boss).WithDisjointRestrictions(entry!.DisjointForbiddenDropRarities)
                 .Generate(_ => 0, DateTimeOffset.UtcNow);
-            That(generated is [{ Item.Count: 1, Item.DisjointForbidden: true }] &&
-                pool.Entries.Any(row => row.Template.Id == generated[0].Item!.ItemId), "原活动每条末房路线可生成一件95史诗并保留禁止分解");
+            That(generated is [{ Item.Count: 1, Item.DisjointForbidden: false }] &&
+                pool.Entries.Any(row => row.Template.Id == generated[0].Item!.ItemId), "本服每条末房路线生成一件95史诗且解除来源禁止分解");
         }
         That(seen.SetEquals([407000590, 407000595, 407000596, 407000601]), "真实四个末房领主均覆盖");
-        Console.WriteLine($"PASS {Count - before} 星河裂缝原资源模拟装备生成断言");
+        var service = new InventoryDisjointService(items.Items, items.Disjoint, items.GoldLimits, items.EpicPieces);
+        var position = new InventorySlot(InventoryListType.Main, 3);
+        var request = new DisjointRequest(position, -1, 0);
+        foreach (var candidate in pool.Entries)
+        {
+            var core = DungeonDropCreation.Create(candidate.Template, 1, _ => 0, DateTimeOffset.UtcNow);
+            var current = character with { Inventory = new([new(1, position, core)]) };
+            That(!candidate.Template.DisjointForbidden && service.Disjoint(current, request, out var receipt).Accepted &&
+                receipt is not null, "模拟池每种普通来源史诗均能沿现有分解服务规划产物：" + candidate.Template.Id);
+            var restricted = current with { Inventory = new([new(1, position, core with { DisjointForbidden = true })]) };
+            That(!service.Disjoint(restricted, request, out _).Accepted,
+                "同模板的其它禁分来源仍拒绝：" + candidate.Template.Id);
+        }
+        Console.WriteLine($"PASS {Count - before} 星河裂缝原资源模拟装备生成及分解资格断言");
     }
 }

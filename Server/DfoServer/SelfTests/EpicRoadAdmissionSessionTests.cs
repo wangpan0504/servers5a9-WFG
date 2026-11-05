@@ -332,8 +332,8 @@ internal static class EpicRoadAdmissionSessionTests
                             else
                             {
                             That(equipment is [var gear] && gear.ResourceIdentity.Contains(EpicRoad2019SimulatedDropPolicy.Rule) &&
-                                gear.Core.Count == 1 && gear.Core.DisjointForbidden,
-                                "合法末房领主经原死亡冻结生成一件模拟95史诗并保留来源限制");
+                                gear.Core.Count == 1 && !gear.Core.DisjointForbidden,
+                                "合法末房领主经原死亡冻结生成一件允许分解的模拟95史诗");
                             if (nativeTown) events.Override(ServerEventService.EpicRoadId, false);
                             var saved = repository.LoadCharacter(owner, before.Slot);
                             That(session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate &&
@@ -348,7 +348,7 @@ internal static class EpicRoadAdmissionSessionTests
                                 "同一地面模拟装备不能重复领取");
                             var received = repository.LoadCharacter(owner, before.Slot)!;
                             That(received.Inventory.Items.Count(row => row.Core.ItemId == equipment[0].Core.ItemId &&
-                                row.Core.DisjointForbidden) == 1, "模拟装备完整持久化且禁止分解");
+                                !row.Core.DisjointForbidden) == 1, "模拟装备完整持久化且没有来源禁分标记");
                             }
                         }
                     }
