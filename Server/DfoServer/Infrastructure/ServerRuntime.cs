@@ -925,7 +925,7 @@ internal static class ServerRuntime
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
             new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
-                itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+                itemResources.EpicPieces, itemResources.GoldLimits, itemResources.Boosters), inventoryProjection),
             new ChronicleEnchantHandler(new InventoryChronicleEnchantService(itemResources.Items, itemResources.ChronicleEnchants,
                 itemResources.Disjoint, itemResources.AmplifyUpgrades, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。

@@ -64,6 +64,7 @@ internal static class AuctionBuyTests
         Coupon();
         Commit();
         Rollback();
+        BuyApiece().GetAwaiter().GetResult();
         Session().GetAwaiter().GetResult();
         Console.WriteLine($"PASS {Count - checks} auction buy assertions");
     }
@@ -533,7 +534,7 @@ internal static class AuctionBuyTests
             // ⑦ 334 仍是抓包桩：不回包。
             sent.Clear();
             var stub = await commands.DispatchAsync(context, new Packet(1, 334, new byte[40]));
-            That(stub == CommandResult.Unhandled && sent.Count == 0, "★ 334 仍未实现：一个包都不发（与 AuctionBuyProbeTests 同口径）");
+            That(stub == CommandResult.Unhandled && sent.Count == 0, "★ 334 全 0 抓包探测样本：不回包（与 AuctionBuyProbeTests 同口径）");
 
             log.Flush();
             var rejected = Logged(Path.Combine(logDirectory, "server.jsonl"), "auction_buy_rejected");
@@ -552,6 +553,75 @@ internal static class AuctionBuyTests
         {
             TestFiles.DeleteDirectory(root, recursive: true);
         }
+    }
+
+    static async Task BuyApiece()
+    {
+        Bytes(AuctionPackets.BuyApieceSuccess(), [0x01],
+            "★ CMD 334 成功应答 = flag(01) 1B（ARAD.exe 0x0235A590 不读 mode:u8）");
+        Bytes(AuctionPackets.BuyApieceFailure(0xd2), [0x00, 0xd2, 0],
+            "CMD 334 失败应答 = flag(00) + u16 错误码");
+
+        using var f = new Fixture();
+        int listingId = f.AddListing(f.Seller.Id, f.Seller.Name, StackTemplate, 5, 1_000);
+        byte[] firstReqBytes = ApieceBody(listingId, 2_000, 2, StackTemplate, f.Now + 86_400);
+        var parsed = AuctionBuyApieceRequest.Parse(firstReqBytes);
+        That(parsed.Amount == 2_000 && parsed.Count == 2 && parsed.ListingId == listingId && parsed.ItemTemplateId == StackTemplate,
+            "CMD 334 33B 请求体逐字段解析（TotalPrice@0 / Count@4 / ListingId@8 / Expires@12 / ItemTemplateId@29）");
+        Reject<InvalidDataException>(() => AuctionBuyApieceRequest.Parse(firstReqBytes[..32]), "CMD 334 不足 33B 拒绝");
+
+        // ① 购买 5 个中的 2 个（拆分购买）：挂牌仍为 state=0，余量变为 3，托管邮件各 1 封。
+        var firstPlan = f.Service.PlanBuyApiece(f.Buyer, f.Service.FindListing(listingId), parsed, f.Now).Options!;
+        That(firstPlan.EffectivePurchaseCount == 2 && firstPlan.RemainingCount == 3 &&
+            firstPlan.TotalPrice == 2_000 && firstPlan.SellerProceeds == 1_900,
+            "拆分购买 2/5：总价 2000、卖方实收 1900、挂牌余量 3");
+        var firstCommit = f.Service.Buy(f.BuyerOwner, f.Buyer, firstPlan);
+        That(firstCommit.Error == AuctionBuyError.None && firstCommit.Character is not null, "第一笔拆分购买提交成功");
+        var afterFirstListing = f.Service.FindListing(listingId)!;
+        var afterFirstCore = AuctionPackets.ItemCoreFromEntry(afterFirstListing.ItemEntry, ItemKind.Material);
+        That(afterFirstListing.State == AuctionListingState.Active && afterFirstListing.ItemCount == 3 && afterFirstCore.Count == 3,
+            "★ 拆分购买后挂牌保持 state=0 在售，item_count 与 item_entry 快照数量同步更新为余量 3");
+
+        // ② 并发/陈旧计划（仍按余量 5 去扣）被条件更新拒绝并回滚。
+        var staleCommit = f.Service.Buy(f.BuyerOwner, firstCommit.Character!, firstPlan);
+        That(staleCommit.Error == AuctionBuyError.StalePlan, "挂牌余量已变为 3 后旧计划（余量 5）被拒");
+
+        // ③ 再通过会话派发 CMD 334 买走剩余 3 个：挂牌流转为 state=1（已成交），应答 [0x01]。
+        var towns = new TownCatalog(new Dictionary<(byte, byte), TownArea>(), Room, Room, new TownDock(0, [], []),
+            [], new Dictionary<uint, uint[]>());
+        var stats = new CharacterStatComputer(new CharacterCatalog(new Dictionary<byte, CharacterProfile>()));
+        var projection = new InventoryProjection(stats, new TownProjection(towns, stats, null, f.Pieces), f.Pieces);
+        using var log = new ServerLog(Path.Combine(Path.GetTempPath(), "S5A9-apiece-log-" + Guid.NewGuid().ToString("N")));
+        var handler = new AuctionHandler(f.Catalog, f.Service, projection,
+            static () => AuctionProbeSettings.Disabled, static () => AuctionProbeSettings.Disabled,
+            static _ => AuctionProbeSettings.Disabled, log);
+        var commands = new GameCommandRegistry();
+        handler.Register(commands);
+        commands.Seal();
+        var session = new GameSession(f.Repository, towns, f.BuyerOwner);
+        session.Select(f.Buyer.Slot);
+        session.MarkReady();
+        using var stop = new CancellationTokenSource();
+        using var stream = new MemoryStream();
+        var sent = new List<(ushort Opcode, byte[] Body)>();
+        await using var sender = new GameConnectionSender(f.BuyerOwner, stream, stop, 0,
+            (_, opcode, _, body, _) => sent.Add((opcode, body.ToArray())));
+        var context = new GameConnectionContext(new(1, IPAddress.Loopback, stream, stop), f.BuyerOwner, session, sender);
+        await commands.DispatchAsync(context, new Packet(1, 334, ApieceBody(listingId, 3_000, 3, StackTemplate, f.Now + 86_400)));
+        That(sent.Any(pkt => pkt.Opcode == 334 && pkt.Body.SequenceEqual<byte>([0x01])) &&
+            f.ListingState(listingId) == (int)AuctionListingState.Sold && f.Mails().Length == 4,
+            "★ 会话派发 CMD 334 买空剩余 3 个：回 [0x01]，挂牌变为 state=1，前后两笔共生成 4 封托管邮件（无唯一键冲突）");
+    }
+
+    static byte[] ApieceBody(int listingId, int amount, int count, int templateId, long expiresAtUnix)
+    {
+        var body = new byte[AuctionBuyApieceRequest.BodySize];
+        BitConverter.GetBytes(amount).CopyTo(body, AuctionBuyApieceRequest.AmountOffset);
+        BitConverter.GetBytes(count).CopyTo(body, AuctionBuyApieceRequest.CountOffset);
+        BitConverter.GetBytes(listingId).CopyTo(body, AuctionBuyApieceRequest.ListingIdOffset);
+        BitConverter.GetBytes((int)expiresAtUnix).CopyTo(body, AuctionBuyApieceRequest.ExpiresEchoOffset);
+        BitConverter.GetBytes(templateId).CopyTo(body, AuctionBuyApieceRequest.ItemTemplateIdOffset);
+        return body;
     }
 
     /// <summary>购买请求体（前导 0 + 一口价 + 挂牌 id + 到期回显 + 13B 保留 + 模板 id）。</summary>
@@ -666,6 +736,8 @@ internal static class AuctionBuyTests
         public AccountOwners.Lease BuyerOwner { get; }
         public AccountOwners.Lease SellerOwner { get; }
         public CharacterRepository Repository { get; }
+        public ItemCatalog Catalog { get; }
+        public EpicPieceCatalog Pieces { get; }
         public AuctionService Service { get; }
         public Character Buyer { get; set; }
         public Character Seller { get; }
@@ -679,10 +751,11 @@ internal static class AuctionBuyTests
             BuyerOwner = Owners.Acquire("auction-buyer", () => { });
             SellerOwner = Owners.Acquire("auction-seller", () => { });
             Repository = new(Path);
-            var catalog = new ItemCatalog(null!, null!, null!, 0);
-            catalog.PrefillTemplates(Templates);
-            Service = new AuctionService(Repository, new AuctionCategoryResolver(catalog), catalog,
-                new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            Catalog = new ItemCatalog(null!, null!, null!, 0);
+            Catalog.PrefillTemplates(Templates);
+            Pieces = new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]");
+            Service = new AuctionService(Repository, new AuctionCategoryResolver(Catalog), Catalog,
+                Pieces,
                 AuctionPackets.ItemEntrySnapshot, AuctionPackets.ItemCoreFromEntry);
             // 走真实上架路径的用例需要在主背包槽 27 放一件可上架装备（其余用例不需要、也不该依赖它）。
             ImmutableArray<InventoryItem> items = withItem

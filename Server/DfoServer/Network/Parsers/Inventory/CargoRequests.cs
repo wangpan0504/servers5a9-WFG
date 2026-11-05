@@ -1,6 +1,9 @@
 using System.Buffers.Binary;
+using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Network.Parsers.Inventory;
+
+internal readonly record struct MoveToAccountCargoRequest(InventoryListType List, short Slot, int Count);
 
 internal static class CargoRequests
 {
@@ -23,4 +26,13 @@ internal static class CargoRequests
             throw new InvalidDataException("Client个人仓库升级请求宽度");
         return BinaryPrimitives.ReadInt16LittleEndian(body);
     }
+
+    public static MoveToAccountCargoRequest MoveToAccountCargo(ReadOnlySpan<byte> body) => body.Length switch
+    {
+        2 => new(InventoryListType.Main, BinaryPrimitives.ReadInt16LittleEndian(body), 0),
+        3 => new((InventoryListType)body[0], BinaryPrimitives.ReadInt16LittleEndian(body[1..]), 0),
+        6 => new(InventoryListType.Main, BinaryPrimitives.ReadInt16LittleEndian(body), BinaryPrimitives.ReadInt32LittleEndian(body[2..])),
+        7 => new((InventoryListType)body[0], BinaryPrimitives.ReadInt16LittleEndian(body[1..]), BinaryPrimitives.ReadInt32LittleEndian(body[3..])),
+        _ => throw new InvalidDataException("Client移入账号仓库请求宽度")
+    };
 }

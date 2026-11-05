@@ -131,4 +131,19 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         return new(true, 0, new(before, after, "personal_cargo_upgrade",
             new(character, item.ExpireTime > 0 ? item.ExpireTime : null, Clock)));
     }
+
+    public InventoryResult MoveToAccountCargo(Character character, InventoryListType sourceList, short sourceSlot, int count = 0)
+    {
+        var before = character.Inventory;
+        if (before.AccountCargo.Capacity == 0 || sourceList == InventoryListType.AccountCargo)
+            return InventoryResult.Reject(23);
+        var source = before.Find(new(sourceList, sourceSlot));
+        if (source is null)
+            return InventoryResult.Reject(23);
+        int moveCount = count <= 0 ? source.Core.Count : count;
+        var request = new InventoryMoveRequest(
+            source.Position, source.Core.ItemId, moveCount,
+            new(InventoryListType.AccountCargo, 0), 0, 0, 0, 0, 0);
+        return InventoryMoveService.Plan(character, request, catalog, Clock.GetUtcNow().ToUnixTimeSeconds());
+    }
 }

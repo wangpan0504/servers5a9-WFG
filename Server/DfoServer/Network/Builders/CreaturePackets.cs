@@ -54,6 +54,23 @@ internal static class CreaturePackets
         ? [1, (byte)source.Index, (byte)(source.Index >> 8), (byte)source.List]
         : [0, (byte)error, (byte)(error >> 8)];
 
+    // 0227FFC0：CMD 323 成功读取 [1:u8, itemId:i32, slot:u16] 共 7B，失败读取 [0:u8, error:u16] 共 3B。
+    public static byte[] EvolutionItemAck(bool accepted, int itemId, short slot, ushort error = 123)
+    {
+        if (!accepted)
+            return [0, (byte)error, (byte)(error >> 8)];
+        using var stream = new MemoryStream(7);
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(itemId);
+        writer.Write((ushort)slot);
+        return stream.ToArray();
+    }
+
+    public static byte[] Ack(bool accepted, ushort error = 123) => accepted
+        ? [1]
+        : [0, (byte)error, (byte)(error >> 8)];
+
     public static byte[] Message(byte type, ushort actorId, string text)
     {
         using var stream = new MemoryStream();

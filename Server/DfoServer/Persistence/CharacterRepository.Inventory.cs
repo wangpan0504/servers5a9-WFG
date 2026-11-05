@@ -148,8 +148,16 @@ internal sealed partial class CharacterRepository
                 return AuctionListingBuyResult.Reject(AuctionBuyError.StalePlan,
                     $"挂牌 {plan.ListingId} 的拍卖优惠券状态在规划后变化：实收 {plan.SellerProceeds}/{expectedProceeds}");
 
-            // ② 挂牌置为已成交（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
-            AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
+            // ② 挂牌置为已成交或扣减堆叠余量（条件更新，影响 0 行即整笔回滚并翻成静默码 0x7e）。
+            if (plan.RemainingCount > 0)
+            {
+                AuctionListingRepository.DeductListingCount(db, transaction, plan.ListingId, plan.ItemCount,
+                    plan.RemainingCount, plan.RemainingItemEntry.ToArray());
+            }
+            else
+            {
+                AuctionListingRepository.MarkSold(db, transaction, plan.ListingId, plan.SettledAtUnix);
+            }
 
             // ③ 买方扣款。
             var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);

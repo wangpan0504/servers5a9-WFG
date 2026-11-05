@@ -16,6 +16,7 @@ internal sealed class CargoHandler(InventoryCargoService cargo, InventoryProject
         commands.Register(CmdPacketType.DEPOSIT_MONEY, (context, packet) => Gold(context, packet, true), nameof(CargoHandler));
         commands.Register(CmdPacketType.WITHDRAW_MONEY, (context, packet) => Gold(context, packet, false), nameof(CargoHandler));
         commands.Register(CmdPacketType.UPGRADE_CARGO, PersonalUpgrade, nameof(CargoHandler));
+        commands.Register(CmdPacketType.MOVE_ITEM_TO_ACCOUNT_CARGO, MoveToAccountCargo, nameof(CargoHandler));
     }
 
     async Task<CommandResult> AccountUpgrade(GameConnectionContext context, Packet packet, bool create)
@@ -50,6 +51,18 @@ internal sealed class CargoHandler(InventoryCargoService cargo, InventoryProject
         var result = context.BlocksTownActions ? InventoryResult.Reject(17) :
             context.Session.MutateInventory(character => cargo.PersonalUpgrade(character, slot), 17);
         await context.Reply(CmdPacketType.UPGRADE_CARGO, CargoPackets.Ack(result), result.Accepted ? "personal_cargo_upgraded" : "personal_cargo_upgrade_rejected");
+        await projection.RefreshAsync(context, result);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> MoveToAccountCargo(GameConnectionContext context, Packet packet)
+    {
+        var request = CargoRequests.MoveToAccountCargo(packet.Body);
+        var result = context.BlocksTownActions ? InventoryResult.Reject(23) :
+            context.Session.MutateInventory(character =>
+                cargo.MoveToAccountCargo(character, request.List, request.Slot, request.Count), 23);
+        await context.Reply(CmdPacketType.MOVE_ITEM_TO_ACCOUNT_CARGO, CargoPackets.Ack(result),
+            result.Accepted ? "account_cargo_moved" : "account_cargo_move_rejected");
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }

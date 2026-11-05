@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 namespace DfoServer.Network.Parsers.Inventory;
 
 internal readonly record struct EpicExchangeRequest(int Slot, int SourceItemId, int TargetItemId);
+internal readonly record struct RewardEpicExchangeRequest(int SourceItemId, byte Mode, int TargetItemId);
 
 internal static class EpicExchangeRequests
 {
@@ -16,5 +17,15 @@ internal static class EpicExchangeRequests
         return new(BinaryPrimitives.ReadInt32LittleEndian(body),
             BinaryPrimitives.ReadInt32LittleEndian(body[4..]),
             BinaryPrimitives.ReadInt32LittleEndian(body[8..]));
+    }
+
+    // 01488060 / 01493150：CMD 1572 构包 [源物品编号:i32, 模式标志:u8, 目标物品编号:i32] 共 9 字节。
+    public static RewardEpicExchangeRequest RewardExchange(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 9)
+            throw new InvalidDataException("Client奖励史诗交换请求必须是9字节");
+        return new(BinaryPrimitives.ReadInt32LittleEndian(body),
+            body[4],
+            BinaryPrimitives.ReadInt32LittleEndian(body[5..]));
     }
 }

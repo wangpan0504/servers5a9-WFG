@@ -5,6 +5,25 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Auction;
 
+/// <summary>拍卖行搜索结果排序方式。</summary>
+internal enum AuctionSortOrder : byte
+{
+    /// <summary>默认按挂牌 id 升序稳定排序。</summary>
+    Default = 0,
+    /// <summary>按当前竞拍/显示价升序。</summary>
+    PriceAsc = 1,
+    /// <summary>按当前竞拍/显示价降序。</summary>
+    PriceDesc = 2,
+    /// <summary>按一口价总额升序（纯竞拍排后）。</summary>
+    BuyoutAsc = 3,
+    /// <summary>按一口价总额降序（纯竞拍排后）。</summary>
+    BuyoutDesc = 4,
+    /// <summary>按到期时间升序。</summary>
+    ExpiresAsc = 5,
+    /// <summary>按到期时间降序。</summary>
+    ExpiresDesc = 6
+}
+
 /// <summary>
 /// 搜索请求（已解析的字段）。CMD 186（按道具搜索）与 CMD 187（分类搜索）共用：
 /// 只有按道具搜索带 itemId，分类搜索的 itemId 为 0。
@@ -13,7 +32,18 @@ namespace DfoServer.Game.Auction;
 /// 顶层大类与**已对账的子叶**按精确 id 过滤，未对账的子叶按所属顶层大类过滤（不是不过滤），
 /// 完全没见过的 id 才不过滤。
 /// </summary>
-internal sealed record AuctionSearchRequest(int Offset, int? ItemTemplateId, int CategoryId);
+internal sealed record AuctionSearchRequest(int Offset, int? ItemTemplateId, int CategoryId)
+{
+    public AuctionSortOrder SortOrder { get; init; }
+    public byte? Rarity { get; init; }
+    public byte MinLevel { get; init; }
+    public byte MaxLevel { get; init; }
+    public byte MinUpgrade { get; init; }
+    public byte MaxUpgrade { get; init; } = 31;
+
+    public bool HasAttributeFilter =>
+        Rarity is < 7 || MinLevel > 0 || (MaxLevel > 0 && MaxLevel < 95) || MinUpgrade > 0 || (MaxUpgrade > 0 && MaxUpgrade < 31);
+}
 
 /// <summary>
 /// 搜索过滤条件，全部是 SQL 能表达的条件。<see cref="Kinds"/> 为空表示不按物品大类过滤。
@@ -117,6 +147,7 @@ internal static class AuctionCategoryFilter
     const int SpecialEquipment = 32000; // 0x7D00
     const int SupportEquipment = 32001; // 0x7D01 辅助装备
     const int MagicStone = 32100;       // 0x7D64 魔法石
+    const int Earring = 32200;          // 0x7DC8 耳环
     const int ExpertJob = 33000;     // 0x80E8
     const int Other = 34000;         // 0x84D0
 
@@ -343,17 +374,18 @@ internal static class AuctionCategoryFilter
         if (itemTemplateId < 100_000_000 || itemTemplateId > 999_999_999)
             return 0;
         int family = itemTemplateId / 1_000_000;
+        ulong mask = 0;
         foreach (var (number, _, group, _) in WeaponFamilies)
         {
             if (number == family)
-                return WeaponGroupMask(group);
+                mask |= WeaponGroupMask(group);
         }
         foreach (var (number, group, _) in ArmorFamilies)
         {
             if (number == family)
-                return ArmorGroupMask(group);
+                mask |= ArmorGroupMask(group);
         }
-        return 0;
+        return mask;
     }
 
     /// <summary>
@@ -518,8 +550,47 @@ internal static class AuctionCategoryFilter
         new(11402, Armor, "板甲·头肩", ArmorLeaf(ArmorMaterial.Plate, 2, 15), "族 114 第 2 项；PVF 组 `mt shoulder`；部位 15=头肩"),
         new(11403, Armor, "板甲·下装", ArmorLeaf(ArmorMaterial.Plate, 3, 16), "族 114 第 3 项；PVF 组 `mt pants`；部位 16=下装"),
         new(11404, Armor, "板甲·鞋", ArmorLeaf(ArmorMaterial.Plate, 4, 17), "族 114 第 4 项；PVF 组 `mt shoes`；部位 17=鞋"),
-        new(11405, Armor, "板甲·腰带", ArmorLeaf(ArmorMaterial.Plate, 5, 18), "族 114 第 5 项；PVF 组 `mt waist`；部位 18=腰带")
+        new(11405, Armor, "板甲·腰带", ArmorLeaf(ArmorMaterial.Plate, 5, 18), "族 114 第 5 项；PVF 组 `mt waist`；部位 18=腰带"),
+
+        // —— 特殊装备：辅助装备（32001 下 16 职业子叶 32002–32017）、魔法石（32100 下 16 职业子叶 32101–32116）、耳环（32200）——
+        // 依据：ARAD.exe 0x0371F1B0 分类树构造与 0x0256F400（跳表 0x0256F558）16 职业索引。
+        new(32002, SupportEquipment, "辅助装备·鬼剑士(男)", SpecialEquipmentLeaf(22, "[swordman]"), "ARAD.exe 0x0256F400 跳表 #0（0xec67）：鬼剑士(男)"),
+        new(32003, SupportEquipment, "辅助装备·格斗家(男)", SpecialEquipmentLeaf(22, "[fighter]"), "ARAD.exe 0x0256F400 跳表 #1（0x186a9）：格斗家(男)"),
+        new(32004, SupportEquipment, "辅助装备·格斗家(女)", SpecialEquipmentLeaf(22, "[at fighter]"), "ARAD.exe 0x0256F400 跳表 #2（0xb65d）：格斗家(女)"),
+        new(32005, SupportEquipment, "辅助装备·神枪手(男)", SpecialEquipmentLeaf(22, "[gunner]"), "ARAD.exe 0x0256F400 跳表 #3（0xb51f）：神枪手(男)"),
+        new(32006, SupportEquipment, "辅助装备·神枪手(女)", SpecialEquipmentLeaf(22, "[at gunner]"), "ARAD.exe 0x0256F400 跳表 #4（0xb520）：神枪手(女)"),
+        new(32007, SupportEquipment, "辅助装备·魔法师(女)", SpecialEquipmentLeaf(22, "[mage]"), "ARAD.exe 0x0256F400 跳表 #5（0xb65e）：魔法师(女)"),
+        new(32008, SupportEquipment, "辅助装备·魔法师(男)", SpecialEquipmentLeaf(22, "[at mage]"), "ARAD.exe 0x0256F400 跳表 #6（0x186f8）：魔法师(男)"),
+        new(32009, SupportEquipment, "辅助装备·圣职者(男)", SpecialEquipmentLeaf(22, "[priest]"), "ARAD.exe 0x0256F400 跳表 #7（0x186ac）：圣职者(男)"),
+        new(32010, SupportEquipment, "辅助装备·暗夜使者", SpecialEquipmentLeaf(22, "[thief]"), "ARAD.exe 0x0256F400 跳表 #8（0xb521）：暗夜使者"),
+        new(32011, SupportEquipment, "辅助装备·缔造者", SpecialEquipmentLeaf(22, "[creator mage]"), "ARAD.exe 0x0256F400 跳表 #9（0xb3fa）：缔造者"),
+        new(32012, SupportEquipment, "辅助装备·黑暗武士", SpecialEquipmentLeaf(22, "[demonic swordman]"), "ARAD.exe 0x0256F400 跳表 #10（0xb51e）：黑暗武士"),
+        new(32013, SupportEquipment, "辅助装备·鬼剑士(女)", SpecialEquipmentLeaf(22, "[at swordman]"), "ARAD.exe 0x0256F400 跳表 #11（0x186b4）：鬼剑士(女)"),
+        new(32014, SupportEquipment, "辅助装备·守护者", SpecialEquipmentLeaf(22, "[knight]"), "ARAD.exe 0x0256F400 跳表 #12（0x186b3）：守护者"),
+        new(32015, SupportEquipment, "辅助装备·魔枪士", SpecialEquipmentLeaf(22, "[demonic lancer]"), "ARAD.exe 0x0256F400 跳表 #13（0x186ee）：魔枪士"),
+        new(32016, SupportEquipment, "辅助装备·圣职者(女)", SpecialEquipmentLeaf(22, "[at priest]"), "ARAD.exe 0x0256F400 跳表 #14（0x186f0）：圣职者(女)"),
+        new(32017, SupportEquipment, "辅助装备·枪剑士", SpecialEquipmentLeaf(22, "[gun blader]"), "ARAD.exe 0x0256F400 跳表 #15（0x186fb）：枪剑士"),
+        new(32101, MagicStone, "魔法石·鬼剑士(男)", SpecialEquipmentLeaf(23, "[swordman]"), "ARAD.exe 0x0256F400 跳表 #0（0xec67）：鬼剑士(男)"),
+        new(32102, MagicStone, "魔法石·格斗家(男)", SpecialEquipmentLeaf(23, "[fighter]"), "ARAD.exe 0x0256F400 跳表 #1（0x186a9）：格斗家(男)"),
+        new(32103, MagicStone, "魔法石·格斗家(女)", SpecialEquipmentLeaf(23, "[at fighter]"), "ARAD.exe 0x0256F400 跳表 #2（0xb65d）：格斗家(女)"),
+        new(32104, MagicStone, "魔法石·神枪手(男)", SpecialEquipmentLeaf(23, "[gunner]"), "ARAD.exe 0x0256F400 跳表 #3（0xb51f）：神枪手(男)"),
+        new(32105, MagicStone, "魔法石·神枪手(女)", SpecialEquipmentLeaf(23, "[at gunner]"), "ARAD.exe 0x0256F400 跳表 #4（0xb520）：神枪手(女)"),
+        new(32106, MagicStone, "魔法石·魔法师(女)", SpecialEquipmentLeaf(23, "[mage]"), "ARAD.exe 0x0256F400 跳表 #5（0xb65e）：魔法师(女)"),
+        new(32107, MagicStone, "魔法石·魔法师(男)", SpecialEquipmentLeaf(23, "[at mage]"), "ARAD.exe 0x0256F400 跳表 #6（0x186f8）：魔法师(男)"),
+        new(32108, MagicStone, "魔法石·圣职者(男)", SpecialEquipmentLeaf(23, "[priest]"), "ARAD.exe 0x0256F400 跳表 #7（0x186ac）：圣职者(男)"),
+        new(32109, MagicStone, "魔法石·暗夜使者", SpecialEquipmentLeaf(23, "[thief]"), "ARAD.exe 0x0256F400 跳表 #8（0xb521）：暗夜使者"),
+        new(32110, MagicStone, "魔法石·缔造者", SpecialEquipmentLeaf(23, "[creator mage]"), "ARAD.exe 0x0256F400 跳表 #9（0xb3fa）：缔造者"),
+        new(32111, MagicStone, "魔法石·黑暗武士", SpecialEquipmentLeaf(23, "[demonic swordman]"), "ARAD.exe 0x0256F400 跳表 #10（0xb51e）：黑暗武士"),
+        new(32112, MagicStone, "魔法石·鬼剑士(女)", SpecialEquipmentLeaf(23, "[at swordman]"), "ARAD.exe 0x0256F400 跳表 #11（0x186b4）：鬼剑士(女)"),
+        new(32113, MagicStone, "魔法石·守护者", SpecialEquipmentLeaf(23, "[knight]"), "ARAD.exe 0x0256F400 跳表 #12（0x186b3）：守护者"),
+        new(32114, MagicStone, "魔法石·魔枪士", SpecialEquipmentLeaf(23, "[demonic lancer]"), "ARAD.exe 0x0256F400 跳表 #13（0x186ee）：魔枪士"),
+        new(32115, MagicStone, "魔法石·圣职者(女)", SpecialEquipmentLeaf(23, "[at priest]"), "ARAD.exe 0x0256F400 跳表 #14（0x186f0）：圣职者(女)"),
+        new(32116, MagicStone, "魔法石·枪剑士", SpecialEquipmentLeaf(23, "[gun blader]"), "ARAD.exe 0x0256F400 跳表 #15（0x186fb）：枪剑士"),
+        new(Earring, Earring, "耳环", new(0, Bit(25)), "ARAD.exe 0x0371F1B0 / 0x0256F400（0x7DC8=32200，0x186f3）：耳环部位 25")
     ];
+
+    static AuctionCategoryDimensions SpecialEquipmentLeaf(byte slot, string jobTag) =>
+        new(0, Bit(slot), 0, JobMask(jobTag));
 
     /// <summary>
     /// 武器子叶维度：**本族职业位掩码** + 装备部位 12。
@@ -689,6 +760,8 @@ internal static class AuctionCategoryFilter
             if (leaf.Id == categoryId)
                 return new(categoryId, AuctionCategoryStatus.Mapped, leaf.TopLevelId, leaf.Name, leaf.Dimensions, leaf.Evidence);
         }
+        if (ResolveTitleJobOrArmorMaterialParent(categoryId) is { } specific)
+            return specific;
         // 顺序很重要：① 按**未对账区间**归族（区分 320xx 辅助装备与 321xx 魔法石）；
         // ② 再按「最长的顶层 id 前缀」归族——客户端 id 是**扁平**的（父节点 id 本身就是前缀，
         //    如辅助装备 0x7D01、魔法石 0x7D64 = 32001/32100），故前缀就是父节点，且取最长者得最具体的那个；
@@ -713,6 +786,49 @@ internal static class AuctionCategoryFilter
         Armor => AllArmorGroups,
         _ => 0
     };
+
+    static readonly (string Tag, string Name)[] TitleJobTable =
+    [
+        ("[swordman]", "称号·鬼剑士(男)"),
+        ("[at swordman]", "称号·鬼剑士(女)"),
+        ("[fighter]", "称号·格斗家(男)"),
+        ("[at fighter]", "称号·格斗家(女)"),
+        ("[gunner]", "称号·神枪手(男)"),
+        ("[at gunner]", "称号·神枪手(女)"),
+        ("[mage]", "称号·魔法师(女)"),
+        ("[at mage]", "称号·魔法师(男)"),
+        ("[priest]", "称号·圣职者(男)"),
+        ("[thief]", "称号·暗夜使者"),
+        ("[knight]", "称号·守护者"),
+        ("[demonic lancer]", "称号·魔枪士"),
+        ("[at priest]", "称号·圣职者(女)"),
+        ("[gun blader]", "称号·枪剑士")
+    ];
+
+    static AuctionCategoryResolution? ResolveTitleJobOrArmorMaterialParent(int categoryId)
+    {
+        if (categoryId is >= 12005 and <= 12018)
+        {
+            var (tag, name) = TitleJobTable[categoryId - 12005];
+            return new(categoryId, AuctionCategoryStatus.Mapped, Title, name,
+                new(0, Bit(13), 0, JobMask(tag)),
+                $"ARAD.exe 0x037180A0 称号职业子叶 #{categoryId - 12005}：{name}");
+        }
+        return categoryId switch
+        {
+            11001 => new(categoryId, AuctionCategoryStatus.Mapped, Armor, "布甲",
+                new(0, Bits(14, 15, 16, 17, 18), ArmorGroupMask(0)), "ARAD.exe 0x0371EC20 布甲材质父节点"),
+            11100 => new(categoryId, AuctionCategoryStatus.Mapped, Armor, "皮甲",
+                new(0, Bits(14, 15, 16, 17, 18), ArmorGroupMask(1)), "ARAD.exe 0x0371EC20 皮甲材质父节点"),
+            11200 => new(categoryId, AuctionCategoryStatus.Mapped, Armor, "轻甲",
+                new(0, Bits(14, 15, 16, 17, 18), ArmorGroupMask(2)), "ARAD.exe 0x0371EC20 轻甲材质父节点"),
+            11300 => new(categoryId, AuctionCategoryStatus.Mapped, Armor, "重甲",
+                new(0, Bits(14, 15, 16, 17, 18), ArmorGroupMask(3)), "ARAD.exe 0x0371EC20 重甲材质父节点"),
+            11400 => new(categoryId, AuctionCategoryStatus.Mapped, Armor, "板甲",
+                new(0, Bits(14, 15, 16, 17, 18), ArmorGroupMask(4)), "ARAD.exe 0x0371EC20 板甲材质父节点"),
+            _ => null
+        };
+    }
 
     /// <summary>
     /// 最长的顶层 id 前缀：客户端分类 id 是扁平的「父节点 id + 序号」（如辅助装备 `32001` 的叶子 `32002–32017`、
@@ -915,6 +1031,9 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
     // 模板 id → 适用职业位（[usable job]）。与 slots 同一套缓存策略、同样有界。
     readonly ConcurrentDictionary<int, ushort> jobs = new();
 
+    // 模板 id → (品级 Rarity, 最低穿戴等级 MinimumLevel)；未加载记 (-1, -1)。
+    readonly ConcurrentDictionary<int, (int Rarity, int MinimumLevel)> attributes = new();
+
     public AuctionCategoryResolution Resolve(int categoryId) => AuctionCategoryFilter.Resolve(categoryId);
 
     /// <summary>
@@ -966,7 +1085,7 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
         // 的族掩码是 0，交给部位维度决定——否则「武器族过滤 + 部位 12」会把武器时装（模板 id 落在
         // 武器族段但装备部位是 10）在武器子叶下整类挡掉，而它本来就该由部位维度判定。
         ulong groups = AuctionCategoryFilter.ItemGroupMask(templateId);
-        if (groups != 0 && (groups & dimensions.Groups) == 0)
+        if (dimensions.Groups != 0 && groups != 0 && (groups & dimensions.Groups) == 0)
             return false;
         // 职业位：判在**模板自带的 [usable job]** 上（CJob：通用装备不吃职业条件）。
         if (dimensions.Jobs == 0)
@@ -985,7 +1104,7 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
         {
             return items.Get(id).Jobs;
         }
-        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException)
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or NullReferenceException)
         {
             return 0;
         }
@@ -1001,7 +1120,7 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
         {
             return items.Get(id).EquipmentSlot;
         }
-        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException)
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or NullReferenceException)
         {
             // 坏模板不能让整个分类搜索失败：按「没有部位」处理，该行不进带部位的分类。
             // 搜索不该依赖资源完整性，但也不能因为一个坏模板把整类隐藏成空列表。
@@ -1025,6 +1144,52 @@ internal sealed class AuctionCategoryResolver(ItemCatalog items)
         foreach (var (templateId, job) in templateJobs)
             jobs[templateId] = job;
     }
+
+    /// <summary>预置模板品级与穿戴等级（**仅供核心自测**）。</summary>
+    internal void PrefillAttributes(IEnumerable<KeyValuePair<int, (int Rarity, int MinimumLevel)>> templateAttributes)
+    {
+        foreach (var (templateId, attr) in templateAttributes)
+            attributes[templateId] = attr;
+    }
+
+    public bool MatchesAttributes(AuctionSearchRequest request, AuctionListing listing)
+    {
+        if (!request.HasAttributeFilter)
+            return true;
+        if (request.MinUpgrade > 0 || (request.MaxUpgrade > 0 && request.MaxUpgrade < 31))
+        {
+            int upgrade = listing.ItemEntry.Length > 10 ? listing.ItemEntry[10] & 0x1F : 0;
+            int maxUpgrade = request.MaxUpgrade == 0 ? 31 : request.MaxUpgrade;
+            if (upgrade < request.MinUpgrade || upgrade > maxUpgrade)
+                return false;
+        }
+        if (request.Rarity is < 7 || request.MinLevel > 0 || (request.MaxLevel > 0 && request.MaxLevel < 95))
+        {
+            var (rarity, minLevel) = Attributes(listing.ItemTemplateId);
+            if (rarity >= 0 && request.Rarity is < 7 && rarity != request.Rarity.Value)
+                return false;
+            if (minLevel >= 0)
+            {
+                int maxLevel = request.MaxLevel == 0 ? int.MaxValue : request.MaxLevel;
+                if (minLevel < request.MinLevel || minLevel > maxLevel)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    (int Rarity, int MinimumLevel) Attributes(int templateId) => attributes.GetOrAdd(templateId, id =>
+    {
+        try
+        {
+            var template = items.Get(id);
+            return (template.Rarity, template.MinimumLevel);
+        }
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or NullReferenceException)
+        {
+            return (-1, -1);
+        }
+    });
 }
 
 /// <summary>

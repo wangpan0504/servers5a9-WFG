@@ -25,7 +25,7 @@ internal static class EpicExchangeTests
             That(failed, name);
         }
         var catalog = itemResources.Items;
-        var exchange = new EpicExchangeService(itemResources.EpicExchanges, catalog, itemResources.EpicPieces, itemResources.GoldLimits);
+        var exchange = new EpicExchangeService(itemResources.EpicExchanges, catalog, itemResources.EpicPieces, itemResources.GoldLimits, itemResources.Boosters);
         var now = DateTimeOffset.UtcNow;
 
         // 资源缺失由业务层拒绝，自测这里只区分“能解析”和“不能解析”。
@@ -223,6 +223,62 @@ internal static class EpicExchangeTests
         That(EpicExchangePackets.Exchanged(new(true, 0)).SequenceEqual(new byte[] { 1 }) &&
             EpicExchangePackets.Exchanged(InventoryResult.Reject(10)).SequenceEqual(new byte[] { 0, 10, 0 }),
             "reply is success byte and u16 failure code");
+
+        // CMD 1572 (REWARD_EPIC_EXCHANGE)：三组 [reward epic item] -> [exchange item] 与礼盒可选武器交换。
+        var group1Source = new InventoryItem(11, Bag(9), InventoryRewardGrantService.Create(catalog.Get(100050817)));
+        var group1Reward = exchange.ExchangeReward(current with { Inventory = new([group1Source]) }, 100050817, 1, 0, now);
+        That(group1Reward.Accepted && group1Reward.Plan!.Reason == "reward_epic_exchange" &&
+            group1Reward.Plan.After.Items.All(item => item.Core.ItemId != 100050817) &&
+            group1Reward.Plan.After.AccountWallet.Material(10306750).Balance +
+                group1Reward.Plan.After.Items.Where(item => item.Core.ItemId == 10306750).Sum(item => item.Core.Count) == 48,
+            "group 1 reward epic exchanges for 48 of 10306750");
+
+        var group2Source = new InventoryItem(12, Bag(9), InventoryRewardGrantService.Create(catalog.Get(config.Groups[1].RewardItemIds[0])));
+        var group2Material = exchange.ExchangeReward(current with { Inventory = new([group2Source]) }, config.Groups[1].RewardItemIds[0], 1, 10308559, now);
+        That(group2Material.Accepted &&
+            group2Material.Plan!.After.AccountWallet.Material(10308559).Balance +
+                group2Material.Plan.After.Items.Where(item => item.Core.ItemId == 10308559).Sum(item => item.Core.Count) == 95,
+            "group 2 reward epic exchanges for 95 of 10308559");
+
+        var group3Box = new InventoryItem(13, Bag(65), new ItemCore(10308715, boxTemplate.Kind, 2));
+        var group3Material = exchange.ExchangeReward(current with { Inventory = new([group3Box]) }, 10308715, 1, 10308559, now);
+        That(group3Material.Accepted &&
+            group3Material.Plan!.After.Find(Bag(65))?.Core.Count == 1 &&
+            group3Material.Plan.After.AccountWallet.Material(10308559).Balance +
+                group3Material.Plan.After.Items.Where(item => item.Core.ItemId == 10308559).Sum(item => item.Core.Count) == 114,
+            "group 3 weapon box consumes 1 unit and grants 114 of 10308559");
+
+        int selectableWeapon = itemResources.Boosters.Get(10308715).Selection!.Categories.SelectMany(c => c.Rewards).First().ItemId;
+        var group3Weapon = exchange.ExchangeReward(current with { Inventory = new([group3Box]) }, 10308715, 0, selectableWeapon, now);
+        That(group3Weapon.Accepted &&
+            group3Weapon.Plan!.After.Find(Bag(65))?.Core.Count == 1 &&
+            group3Weapon.Plan.After.Items.Any(item => item.Core.ItemId == selectableWeapon),
+            "group 3 weapon box mode 0 exchanges for a selectable weapon from the box");
+
+        That(EpicExchangeRequests.RewardExchange([0x81, 0xa7, 0xf6, 0x05, 0x01, 0xaf, 0x45, 0x9d, 0x00]) ==
+            new RewardEpicExchangeRequest(100050817, 1, 10306991),
+            "reward exchange request parses 9-byte sourceItemId, mode and targetItemId");
+        Reject(() => EpicExchangeRequests.RewardExchange(new byte[8]), "truncated reward exchange request rejected");
+
+        var compoundReceipt = new MonsterCardBindReceipt(65, 0, 1, 2, true, [66, 67], [new(66, 10001, 1, 0)]);
+        var compoundPacket = MonsterCardBindPackets.CompoundSuccess(compoundReceipt);
+        That(compoundPacket.Length == 21 && compoundPacket[0] == 1 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(compoundPacket.AsSpan(5)) == 10001 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(compoundPacket.AsSpan(13)) == 1,
+            "CMD 1122 compound success packet is 21 bytes with reward item id and rarity upgraded flag");
+
+        var cargoService = new InventoryCargoService(catalog, itemResources.Cargo, itemResources.GoldLimits);
+        var freeTemplate = catalog.Get(3037);
+        var accountItem = new InventoryItem(14, Bag(169), new ItemCore(3037, freeTemplate.Kind, 2));
+        var withAccountCargo = current with
+        {
+            Inventory = new([accountItem]) { AccountCargo = new(0, 8) }
+        };
+        var movedCargo = cargoService.MoveToAccountCargo(withAccountCargo, InventoryListType.Main, 169, 1);
+        That(movedCargo.Accepted &&
+            movedCargo.Plan!.After.Find(Bag(169))?.Core.Count == 1 &&
+            movedCargo.Plan.After.Find(new(InventoryListType.AccountCargo, 0))?.Core.Count == 1,
+            "CMD 935 MoveToAccountCargo moves requested count into AccountCargo");
 
         // 配置夹具只覆盖模板契约，不改运行 PVF。
         var fixture = new EpicExchangeCatalog(BaseFixture);
