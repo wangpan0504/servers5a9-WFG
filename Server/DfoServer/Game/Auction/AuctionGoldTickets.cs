@@ -50,7 +50,91 @@ internal static class AuctionGoldTickets
         }
         return false;
     }
+
+    public static bool TryGetByCategory(int categoryId, out AuctionGoldTicket ticket)
+    {
+        int index = categoryId - FirstCategoryId;
+        if ((uint)index < (uint)All.Length)
+        {
+            ticket = All[index];
+            return true;
+        }
+        ticket = default;
+        return false;
+    }
+
+    public static bool TryGetByItemId(int itemTemplateId, out AuctionGoldTicket ticket)
+    {
+        foreach (var candidate in All)
+        {
+            if (candidate.ItemId == itemTemplateId)
+            {
+                ticket = candidate;
+                return true;
+            }
+        }
+        ticket = default;
+        return false;
+    }
 }
 
 /// <param name="FaceGold">stk 名称与文件名给出的面额。购买结算仍按挂牌一口价，不按面额入账。</param>
 internal readonly record struct AuctionGoldTicket(int ItemId, int FaceGold, string Name, string ScriptPath);
+
+internal sealed record SpecialAuctionEntry(int AuctionId, int ItemTemplateId, int ItemCount, int StartingBid,
+    int CurrentBid, int BuyoutPrice, ushort? HighestBidderId, string HighestBidderName, long ExpiresAtUnix, bool Settled = false);
+
+internal sealed class SpecialAuctionBoard
+{
+    readonly System.Collections.Concurrent.ConcurrentDictionary<int, SpecialAuctionEntry> entries = new();
+
+    public void Publish(SpecialAuctionEntry entry)
+    {
+        if (entry.AuctionId <= 0 || entry.ItemTemplateId <= 0 || entry.ItemCount <= 0 || entry.StartingBid <= 0)
+            throw new InvalidDataException("特殊拍卖品参数非法");
+        entries[entry.AuctionId] = entry;
+    }
+
+    public bool TryGet(int auctionId, out SpecialAuctionEntry entry) => entries.TryGetValue(auctionId, out entry!);
+
+    public bool TryPlaceBid(int auctionId, ushort bidderId, string bidderName, int bidAmount, long now, out SpecialAuctionEntry updated)
+    {
+        updated = default!;
+        if (!entries.TryGetValue(auctionId, out var current) || current.Settled || current.ExpiresAtUnix <= now)
+            return false;
+        int minRequired = current.CurrentBid > 0 ? current.CurrentBid + 1 : current.StartingBid;
+        if (bidAmount < minRequired || (current.BuyoutPrice > 0 && bidAmount > current.BuyoutPrice))
+            return false;
+        bool buyoutTriggered = current.BuyoutPrice > 0 && bidAmount == current.BuyoutPrice;
+        var next = current with
+        {
+            CurrentBid = bidAmount,
+            HighestBidderId = bidderId,
+            HighestBidderName = bidderName,
+            Settled = buyoutTriggered
+        };
+        if (!entries.TryUpdate(auctionId, next, current))
+            return false;
+        updated = next;
+        return true;
+    }
+
+    public bool TryBuyNow(int auctionId, ushort buyerId, string buyerName, int amount, long now, out SpecialAuctionEntry updated)
+    {
+        updated = default!;
+        if (!entries.TryGetValue(auctionId, out var current) || current.Settled || current.ExpiresAtUnix <= now ||
+            current.BuyoutPrice <= 0 || amount != current.BuyoutPrice)
+            return false;
+        var next = current with
+        {
+            CurrentBid = amount,
+            HighestBidderId = buyerId,
+            HighestBidderName = buyerName,
+            Settled = true
+        };
+        if (!entries.TryUpdate(auctionId, next, current))
+            return false;
+        updated = next;
+        return true;
+    }
+}

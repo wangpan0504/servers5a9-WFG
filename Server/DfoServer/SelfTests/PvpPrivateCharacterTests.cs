@@ -64,6 +64,12 @@ internal static class PvpPrivateCharacterTests
             Reject<InvalidOperationException>(()=>repo.Create(owner,New("Duplicate")),"同账号同职业转职不能重复创建");
             var other=repo.Create(owner,New("PrivateTwo",2));
             That(other.IsPvpPrivate,"另一转职有独立创建账本");
+            var convertedNormal=repo.ConvertPvpPrivateToNormal(owner,other);
+            That(!convertedNormal.IsPvpPrivate && convertedNormal.Revision==other.Revision+1 &&
+                !repo.ListRoster(owner).Single(row=>row.Id==other.Id).IsPvpPrivate &&
+                new CharacterRepository(path).LoadCharacter(owner,other.Slot).PvpPrivate is null,
+                "专用决斗角色转换普通角色后清除专用身份并推进revision");
+            Reject<InvalidOperationException>(()=>repo.ConvertPvpPrivateToNormal(owner,convertedNormal),"已转普通的角色拒绝重复转换");
             using(var stranger=owners.Acquire("another-owner",()=>{}))
                 Reject<InvalidOperationException>(()=>repo.Create(stranger,New("OtherAccount")),"别的账号高级角色不能提供建角资格");
             Sql("CREATE TRIGGER private_delete_abort BEFORE DELETE ON characters BEGIN SELECT RAISE(ABORT,'delete rollback'); END");

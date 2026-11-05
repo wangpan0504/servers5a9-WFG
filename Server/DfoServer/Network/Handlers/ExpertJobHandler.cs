@@ -34,6 +34,15 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         commands.Register(CmdPacketType.UPGRADE_DISJOINT_MACHINE, UpgradeAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.REPAIR_DISJOINT_MACHINE, RepairDisjointerAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.REPAIR_EXPERT_JOB_STORE, RepairEnchanterAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATE_DISJOINT_STORE, CreateDisjointStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.ENTER_DISJOINT_STORE, EnterDisjointStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CLOSE_DISJOINT_STORE, CloseStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CREATE_PRIVATE_STORE, CreatePrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.REMOVE_PRIVATE_STORE, RemovePrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.ENTER_PRIVATE_STORE, EnterPrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.EXIT_PRIVATE_STORE, ExitPrivateStoreAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.VERIFY_PRIVATE_STORE_ITEM, VerifyPrivateStoreItemAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.BUY_PRIVATE_STORE_ITEM, BuyPrivateStoreItemAsync, nameof(ExpertJobHandler), UserStateRequirement.WorldReady);
     }
 
     async Task<CommandResult> GiveUpAsync(GameConnectionContext context, Packet packet)
@@ -291,13 +300,16 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         return CommandResult.Handled;
     }
 
-    async Task<CommandResult> CreateStoreAsync(GameConnectionContext context, Packet packet)
+    Task<CommandResult> CreateStoreAsync(GameConnectionContext context, Packet packet) =>
+        CreateStoreCoreAsync(context, packet.Body, CmdPacketType.CREATE_EXPERT_JOB_STORE);
+
+    async Task<CommandResult> CreateStoreCoreAsync(GameConnectionContext context, byte[] body, CmdPacketType replyOpcode)
     {
         ExpertJobCreateStoreRequest parsed;
-        try { parsed = ExpertJobRequests.ReadCreateStore(packet.Body); }
+        try { parsed = ExpertJobRequests.ReadCreateStore(body); }
         catch (InvalidDataException)
         {
-            await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_malformed");
+            await context.Reply(replyOpcode, ExpertJobPackets.Fail(19), "expert_job_store_malformed");
             return CommandResult.Handled;
         }
         var character = context.Owner.Execute(() => context.Session.Selected);
@@ -305,7 +317,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             character.ExpertJobType == 1 && parsed.Mode != 3 || context.Activity?.BlocksTownActions == true ||
             !context.Session.OpenExpertJobStore())
         {
-            await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
+            await context.Reply(replyOpcode, ExpertJobPackets.Fail(19), "expert_job_store_rejected");
             return CommandResult.Handled;
         }
         byte grade = checked((byte)(character.ExpertJobType == 3 ? character.ExpertMachineGrade
@@ -328,7 +340,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Notify(NotiPacketType.CREATE_EXPERT_JOB_STORE, notice, "expert_job_store_self", Current);
             await context.Notify(NotiPacketType.UPDATE_EXPERT_JOB_STORE, goods, "expert_job_store_self_goods", Current);
         }
-        await context.Reply(CmdPacketType.CREATE_EXPERT_JOB_STORE, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
+        await context.Reply(replyOpcode, ExpertJobPackets.CreateStoreSuccess(), "expert_job_store_opened");
         return CommandResult.Handled;
     }
 
@@ -375,6 +387,118 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             ? ExpertJobPackets.EnterStoreKind3(store.OwnerId, store.Endurance)
             : ExpertJobPackets.EnterStoreKind0(store.Grade, store.First, store.Endurance);
         await context.Reply(CmdPacketType.ENTER_EXPERT_JOB_STORE, body, "expert_job_enter");
+        return CommandResult.Handled;
+    }
+
+    Task<CommandResult> CreateDisjointStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        byte[] normalized = packet.Body.Length >= 14 && packet.Body[0] != 0
+            ? [0, .. packet.Body]
+            : packet.Body;
+        return CreateStoreCoreAsync(context, normalized, CmdPacketType.CREATE_DISJOINT_STORE);
+    }
+
+    async Task<CommandResult> EnterDisjointStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        try { _ = ExpertJobRequests.ReadEnterStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE, ExpertJobPackets.Fail(19), "disjoint_store_enter_malformed");
+            return CommandResult.Handled;
+        }
+        ushort actor = ExpertJobRequests.ReadEnterStore(packet.Body);
+        if (actor == 0 || stores is null || !stores.TryGet(actor, out var store) || store.Mode != 0)
+        {
+            await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE, ExpertJobPackets.Fail(19), "disjoint_store_enter_missing");
+            return CommandResult.Handled;
+        }
+        context.Session.QuoteExpertJobStore(store);
+        await context.Reply(CmdPacketType.ENTER_DISJOINT_STORE,
+            ExpertJobPackets.EnterStoreKind0(store.Grade, store.First, store.Endurance), "disjoint_store_enter");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> CreatePrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        PrivateStoreCreateRequest parsed;
+        try { parsed = ExpertJobRequests.ReadCreatePrivateStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_create_malformed");
+            return CommandResult.Handled;
+        }
+        var character = context.Owner.Execute(() => context.Session.Selected);
+        if (character is null || context.Activity?.BlocksTownActions == true || stores is null)
+        {
+            await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_create_rejected");
+            return CommandResult.Handled;
+        }
+        var record = new PrivateStoreRecord(character.Id, parsed.Title, character.Position.Town, character.Position.Area, [.. parsed.Offers]);
+        stores.OpenPrivateStore(record);
+        await context.Reply(CmdPacketType.CREATE_PRIVATE_STORE, ExpertJobPackets.PrivateStoreOpened(character.Id, parsed.Title), "private_store_opened");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> RemovePrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        var character = context.Owner.Execute(() => context.Session.Selected);
+        if (character is not null)
+            stores?.TryClosePrivateStore(character.Id, out _);
+        await context.Reply(CmdPacketType.REMOVE_PRIVATE_STORE, [1], "private_store_removed");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> EnterPrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        try { _ = ExpertJobRequests.ReadEnterStore(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_enter_malformed");
+            return CommandResult.Handled;
+        }
+        ushort actor = ExpertJobRequests.ReadEnterStore(packet.Body);
+        if (actor == 0 || stores is null || !stores.TryGetPrivateStore(actor, out var store))
+        {
+            await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.Fail(19), "private_store_enter_missing");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.ENTER_PRIVATE_STORE, ExpertJobPackets.PrivateStoreEntered(store), "private_store_entered");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ExitPrivateStoreAsync(GameConnectionContext context, Packet packet)
+    {
+        await context.Reply(CmdPacketType.EXIT_PRIVATE_STORE, [1], "private_store_exited");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> VerifyPrivateStoreItemAsync(GameConnectionContext context, Packet packet)
+    {
+        await context.Reply(CmdPacketType.VERIFY_PRIVATE_STORE_ITEM, [1], "private_store_item_verified");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> BuyPrivateStoreItemAsync(GameConnectionContext context, Packet packet)
+    {
+        PrivateStoreBuyRequest parsed;
+        try { parsed = ExpertJobRequests.ReadBuyPrivateStoreItem(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM, ExpertJobPackets.Fail(19), "private_store_buy_malformed");
+            return CommandResult.Handled;
+        }
+        var buyer = context.Owner.Execute(() => context.Session.Selected);
+        if (buyer is null || stores is null || !stores.TryGetPrivateStore(parsed.OwnerActor, out var store) ||
+            !store.TryPurchase(parsed.StallSlot, parsed.Count, parsed.UnitPrice, out var purchased, out var updated, out uint totalPrice) ||
+            purchased.ItemId != parsed.ItemId || buyer.Inventory.Gold < totalPrice || !stores.TryUpdatePrivateStore(store, updated))
+        {
+            await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM, ExpertJobPackets.Fail(19), "private_store_buy_rejected");
+            return CommandResult.Handled;
+        }
+        int remaining = updated.Offers.FirstOrDefault(row => row.StallSlot == parsed.StallSlot)?.Count ?? 0;
+        await context.Reply(CmdPacketType.BUY_PRIVATE_STORE_ITEM,
+            ExpertJobPackets.PrivateStoreBought(parsed.OwnerActor, parsed.StallSlot, remaining, buyer.Inventory.Gold - totalPrice),
+            "private_store_bought");
         return CommandResult.Handled;
     }
 

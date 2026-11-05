@@ -46,6 +46,22 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.CHANGE_CHARAC_NAME, RenameCharacterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHARACTER_STATUS, CharacterStatusAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_GROWTHCAPSULE, GetGrowthCapsuleAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, ChangePvpPrivateToNormalAsync, nameof(CharacterHandler));
+    }
+
+    async Task<CommandResult> ChangePvpPrivateToNormalAsync(GameConnectionContext context, Packet request)
+    {
+        var converted = context.Session.ConvertSelectedPvpPrivateToNormal();
+        if (converted is null)
+        {
+            await context.Reply(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, [0, 19, 0], "pvp_private_convert_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.CHANGE_PVP_PRIVATE_TO_NOMAL, [1], "pvp_private_converted");
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(converted, context.Session.ReadPvpGrade(converted), context.Channel,
+            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "pvp_private_converted_actor");
+        log.Write("pvp_private_converted", new { Connection = context.Id, Character = converted.Id, converted.Revision });
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> CharacterStatusAsync(GameConnectionContext context, Packet request)
