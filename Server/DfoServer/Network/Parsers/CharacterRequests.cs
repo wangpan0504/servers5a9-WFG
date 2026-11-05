@@ -74,12 +74,16 @@ internal static class CharacterRequests
         return BinaryPrimitives.ReadUInt16LittleEndian(body);
     }
 
-    public static string CheckName(ReadOnlySpan<byte> body)
+    public static string CheckName(ReadOnlySpan<byte> body) => Name(body, 0);
+
+    public static string? CheckAvailableName(ReadOnlySpan<byte> body)
     {
-        string name = Name(body, 0);
+        // 692 的客户端会把输入框中可编码但不允许的字符（例如中文输入法的“、”）送到服务端。
+        // 先完成线格式和 CP936 解码，再由 Handler 返回已核对的业务错误，不能让非法名称把连接当作坏帧关闭。
+        string name = DecodeName(body, 0);
         if (body.Length != CharacterName.Encoding.GetByteCount(name) + 4)
             throw new InvalidDataException("Name check tail");
-        return name;
+        return CharacterName.IsValid(name) ? name : null;
     }
 
     public static ChangeCharacterSlotRequest ChangeSlot(ReadOnlySpan<byte> body)
@@ -99,6 +103,14 @@ internal static class CharacterRequests
 
     public static string Name(ReadOnlySpan<byte> body, int at)
     {
+        string name = DecodeName(body, at);
+        if (!CharacterName.IsValid(name))
+            throw new InvalidDataException("Invalid name");
+        return name;
+    }
+
+    static string DecodeName(ReadOnlySpan<byte> body, int at)
+    {
         if (body.Length < at + 4)
             throw new InvalidDataException("Name length absent");
         int n = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
@@ -114,8 +126,6 @@ internal static class CharacterRequests
             throw new InvalidDataException("Invalid CP936 name", ex);
         }
 
-        if (!CharacterName.IsValid(name))
-            throw new InvalidDataException("Invalid name");
         return name;
     }
 

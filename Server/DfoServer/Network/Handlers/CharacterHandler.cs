@@ -194,7 +194,13 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
 
     async Task<CommandResult> CheckNameAsync(GameConnectionContext context, Packet request)
     {
-        string name = CharacterRequests.CheckName(request.Body);
+        string? name = CharacterRequests.CheckAvailableName(request.Body);
+        if (name is null)
+        {
+            await context.Reply(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME,
+                CharacterPackets.NameCheck(ClientCharacterNameError.InvalidSpecialCharacters), "name_check_invalid");
+            return CommandResult.Handled;
+        }
         bool exists = context.Session.NameExists(name);
         await context.Reply(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CharacterPackets.NameCheck(exists), "name_check");
         return CommandResult.Handled;

@@ -170,6 +170,14 @@ internal static class CharacterPreparationTests
         BinaryPrimitives.WriteInt32LittleEndian(request, name.Length);
         name.CopyTo(request, 4);
         That(CharacterRequests.Name(request, 0) == "剑影", "name request CP936 roundtrip");
+        byte[] punctuation = CharacterName.Encoding.GetBytes("剑、");
+        byte[] punctuationCheck = new byte[4 + punctuation.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(punctuationCheck, punctuation.Length);
+        punctuation.CopyTo(punctuationCheck, 4);
+        That(CharacterRequests.CheckAvailableName(punctuationCheck) is null,
+            "name check accepts CP936 punctuation for the handler to return a business error");
+        Reject(() => CharacterRequests.CheckName(punctuationCheck),
+            "character creation name parser still rejects special punctuation");
         byte[] create = new byte[17 + name.Length];
         request.CopyTo(create, 1);
         create[11 + name.Length] = 255;
