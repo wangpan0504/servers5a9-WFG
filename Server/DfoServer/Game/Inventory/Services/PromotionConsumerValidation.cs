@@ -246,8 +246,22 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     if (!booster.Lottery) throw new InvalidDataException("lottery_material_entry");
                     MaterialInput(lotteryCost);
                 }
-                // 符文盒的真实候选需要 runesystem 表；本中间实现尚未接完整表，绝不按 Available 通行。
-                if (booster.RuneBox is not null) throw new InvalidDataException("rune_box_consumer_not_connected");
+                if (booster.RuneBox is { } box)
+                {
+                    if (!items.RuneRandomChoices().TryGet(box.Family, box.Tier, out var choose))
+                        throw new InvalidDataException("rune_box_table");
+                    // 本职业筛选是原品级池的子集，筛空时仍回退原池；静态图不以单一角色裁掉候选。
+                    foreach (var (grade, weight) in choose.Grades.Where(row => row.Weight > 0))
+                    {
+                        var candidates = box.Family == 0 ? items.RuneCandidates(grade) : items.TalismanCandidates(grade);
+                        string runeSource = $"{source}/{id}:rune-box:{box.Family}:{box.Tier}:{grade}";
+                        if (candidates.Count == 0) { Error(runeSource, id, "rune_box_empty"); continue; }
+                        foreach (int candidate in candidates)
+                            // RuneBox沿独立容器消费者；普通袖珍罐的Main限制仍由原parent门禁处理。
+                            Edge(new(candidate, 1), runeSource, box.Family == 0 ? ItemKind.Rune : ItemKind.Talisman, freeSource: id);
+                    }
+                    return;
+                }
                 var packageTotals = new Dictionary<int, int>();
                 foreach (var row in booster.PackageRewards.IsDefault ? System.Collections.Immutable.ImmutableArray<BoosterReward>.Empty : booster.PackageRewards)
                 {
@@ -331,6 +345,14 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             {
                 case ItemKind.Equipment:
                     if (template.EquipmentSlot is < 12 or > 25) throw new InvalidDataException("equipment_slot");
+                    return;
+                case ItemKind.Rune:
+                    if (items.Rune(id) is not { } rune || rune.Item != template)
+                        throw new InvalidDataException("rune_definition");
+                    return;
+                case ItemKind.Talisman:
+                    if (items.Talisman(id) is not { IsPlaceholder: false } talisman || talisman.Item != template)
+                        throw new InvalidDataException("talisman_definition");
                     return;
                 case ItemKind.Avatar:
                     if (template.EquipmentSlot > 11 || avatars.GetAvatar(id) is { PendingRule: not null })
