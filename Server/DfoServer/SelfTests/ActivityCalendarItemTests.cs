@@ -91,6 +91,24 @@ internal static class ActivityCalendarItemTests
             await town.CalendarItemsAsync(contextA, []);
             That(framesA is [{ Opcode: 13, Body: [44, 0, 0] }, { Opcode: 13, Body: [45, 0, 0] }] && framesB.Count == 0,
                 "关闭最后一个活动清本连接完整显示，不触及另一连接的目录");
+            framesA.Clear();
+            var song = sessionA.PlanAndCommitInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
+                { AccountWallet = c.Inventory.AccountWallet.SetMaterial(other, new(100)) }, "fixture_song_shop")));
+            contextA.ActivityCalendarItems = null;
+            await town.CalendarItemsAsync(contextA, []);
+            That(framesA is [{ Opcode: 13, Body: [44, ..], Body.Length: 126 }, { Opcode: 13, Body: [45, 0, 0] }] &&
+                U16(framesA[0].Body, 1) == 1 && U32(framesA[0].Body, 5) == other && U32(framesA[0].Body, 9) == 100,
+                "无活动登记时攻坚商店读取的list44仍投影不渝之咏持有量");
+            framesA.Clear();
+            var songMore = sessionA.PlanAndCommitInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
+                { AccountWallet = c.Inventory.AccountWallet.SetMaterial(other, new(200)) }, "fixture_song_shop_delta")));
+            await town.AccountMaterialsAsync(contextA, songMore.Receipt!.Character, song.Plan!.After.AccountWallet,
+                () => sessionA.CanPublishInventory(songMore.Receipt));
+            That(framesA.Any(row => row.Opcode == 14 && row.Body is [44, ..] && row.Body.Length == 126 &&
+                    U32(row.Body, 5) == other && U32(row.Body, 9) == 200) &&
+                framesA.Any(row => row.Opcode == 1460) && framesA.Any(row => row.Opcode == 563) &&
+                !framesA.Any(row => row.Body.Length > 0 && row.Body[0] == 45 && row.Opcode is 13 or 14 or 1681),
+                "持有量从100增到200时14更新list44绝对余额，563与1460仍发，不把不渝之咏写入list45");
             await town.AccountMaterialsAsync(contextB, sessionB.Selected!);
             That(framesB.Any(row => row.Opcode == 13 && row.Body[0] == 45 && row.Body.Length == 126 && U32(row.Body, 9) == 23) &&
                 !framesB.Any(row => row.Opcode is 14 or 502), "无before的权威恢复同步日历数量，保留另一账号23且不重放获得");
