@@ -735,7 +735,9 @@ internal sealed record DungeonEntryPlan(
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
             TournamentRoundFatigue = definition.TournamentRoundFatigue ?? 0,
-            DisjointForbiddenDropRarities = definition.DisjointForbiddenDropRarities,
+            // 本服仅解除两张原活动图的史诗来源限制；模板禁分及其它来源继续保留。
+            DisjointForbiddenDropRarities = EpicRoadResourcePaths.Dungeons.GetValueOrDefault(definition.Id) == definition.Path
+                ? definition.DisjointForbiddenDropRarities.Remove(4) : definition.DisjointForbiddenDropRarities,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
