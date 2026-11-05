@@ -15,7 +15,8 @@ internal sealed partial class AntonRaidBattle
         Kind == RaidKind.Luke && lukeFlow is not null && current.Phase == 1 &&
         lukePhaseCommits.TryGetValue(1, out var committed) && committed.Members.All(member => !member.Eligible);
 
-    bool LukeMovieBarrierReadyLocked() => lukeSettlements.TryGetValue(current.Phase, out var settlement) &&
+    bool LukeMovieBarrierReadyLocked() => Kind == RaidKind.Fiendwar && fiendwarMovieElapsed ||
+        lukeSettlements.TryGetValue(current.Phase, out var settlement) &&
         settlement.Members.Where(member => member.Present).All(member =>
             lukeMovieCompleted.Contains((current.Phase, member.Character)) || lukeMovieDeparted.Contains((current.Phase, member.Character)));
 

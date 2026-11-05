@@ -29,10 +29,10 @@ internal static class FiendwarFailureTcpTests
                     CompletedQuests = [8672], InitialLearning = learning });
                 var items = resources.ItemResources;
                 InventoryService.Commit(repository, owner, role, InventoryRewardGrantService.TryGrantBatch(role,
-                    [new(scenario.Guide ? 10309054 : 10306760, 2)], items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()));
+                    [new(scenario.Guide ? 10309054 : 10306760, 3)], items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()));
             }
             using var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
-            bool failureShown = false, failureClosed = false, expectFailure = false;
+            bool failureShown = false, failureClosed = false, expectFailure = false, dungeonEntered = false, townReturned = false;
             peer.Select(); Read();
             peer.Send(1426); Read();
             peer.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name(account));
@@ -58,6 +58,7 @@ internal static class FiendwarFailureTcpTests
                 var entered = AntonTcpProbe.TakeFiendwarEntry(peer, 5350);
                 That(entered.Any(row => row is { Kind: 0, Opcode: 28 }) && entered.Any(row => row is { Kind: 0, Opcode: 29 }),
                     "失败回归先真实进入引导怪物房，覆盖图内退场推进战况版本");
+                dungeonEntered = true;
                 peer.Send(37, new byte[8]); Read();
             }
             if (scenario.Leave) { peer.Send(665, BitConverter.GetBytes(peer.Id)); Read(); }
@@ -93,6 +94,30 @@ internal static class FiendwarFailureTcpTests
                 "失败退票不伪造通关或重置日入场历史");
             if (scenario.Fault) fixture.Sql("DROP TRIGGER fiendwar_refund_rollback");
             peer.Send(665, BitConverter.GetBytes(peer.Id)); Read();
+            if (!scenario.Leave && !scenario.Fault)
+            {
+                peer.Dispose();
+                // 模拟旧客户端崩溃留下的战场坐标；全新连接选角须重新下发大厅，而非恢复失效战场。
+                fixture.Sql("UPDATE characters SET town=57,area=$p0 WHERE id=$p1", area, peer.Id);
+                using var recovered = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
+                var login = recovered.Select();
+                AntonTcpProbe.Barrier(recovered, "fiendwar failure reconnect");
+                That(recovered.SavedTownPosition() == resources.Towns.Room && login.Any(row => row is { Kind: 0, Opcode: 24 }),
+                    "失败后全新TCP连接完成选角，旧战场存档不恢复为失效战场场景");
+                recovered.Send(1426); AntonTcpProbe.Barrier(recovered, "fiendwar failure lobby");
+                That(recovered.SavedTownPosition() is { Town: 57, Area: 1 },
+                    "失败重连后沿真实1426入口进入超时空57一招募区");
+                recovered.Send(664, Build(writer => { writer.Write((byte)2); writer.Write(Name(account));
+                    writer.Write(new byte[] { scenario.Guide ? (byte)1 : (byte)0, 0, 0, 7 }); }));
+                That(AntonTcpProbe.Barrier(recovered, "fiendwar failure new raid").Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }),
+                    "失败重连后可以创建全新超时空攻坚队");
+                recovered.Send(36, Area(57, area, checked((ushort)arrival.X), checked((ushort)arrival.Y), 57, 1));
+                AntonTcpProbe.Barrier(recovered, "fiendwar failure recovered waiting");
+                recovered.Send(666);
+                That(AntonTcpProbe.Barrier(recovered, "fiendwar failure recovered start").Any(row => row is { Kind: 1, Opcode: 666, Body: [1] }),
+                    "失败重连及重建攻坚队后能够再次正式开战");
+                recovered.Send(665, BitConverter.GetBytes(recovered.Id)); AntonTcpProbe.Barrier(recovered, "fiendwar failure leave");
+            }
             List<WirePacket> Read()
             {
                 var rows = AntonTcpProbe.Barrier(peer, "fiendwar refund");
@@ -101,7 +126,15 @@ internal static class FiendwarFailureTcpTests
             }
             void Observe(WirePacket row)
             {
-                if (row is { Kind: 0, Opcode: 1523, Body: [5, 0, 0] }) failureShown = true;
+                if (dungeonEntered && row is { Kind: 0, Opcode: 24 }) townReturned = true;
+                if (row is { Kind: 0, Opcode: 1523, Body: [5, 0, 0] })
+                {
+                    That(!dungeonEntered || townReturned, "图内炸团必须先24退场，再拆除原生战场并展示失败");
+                    failureShown = true;
+                }
+                if (expectFailure && !failureClosed)
+                    That(row is not { Kind: 0, Opcode: >= 1524 and <= 1530 },
+                        "进入失败终态后不再投递战场快照，失败提示之前也不能触发旧战场事件");
                 if (expectFailure && row is { Kind: 1, Opcode: 665, Body: [1, 1] })
                 {
                     That(failureShown, "失败提醒必须先于原团强制离队回包");
