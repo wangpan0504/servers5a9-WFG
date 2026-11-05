@@ -6,7 +6,6 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.Persistence;
-using PvfLib;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.PartyDungeonTcpTests;
@@ -17,13 +16,8 @@ internal static partial class Strongway2019TcpTests
 {
     static Character PrepareSoloHero(TcpTestFixture fixture, TcpTestResources resources, CharacterAntiEvil provider)
     {
-        // 与匹配TCP共用已核实装备路径和真实强化，不向Session注入抗魔或队伍。
-        var index = PvfScript.List(resources.Archive.ReadText("equipment/equipment.lst"));
-        int Exact(string path) => index.Single(row => PvfArchive.NormalizePath("equipment/" + row.Value) == path).Key;
-        int weapon = Exact("equipment/character/swordman/weapon/ssword/101000783.equ");
-        int[] ids = [weapon, .. EquipmentIds.Skip(1),
-            Exact("equipment/character/common/magicstone/100353080.equ"),
-            Exact("equipment/character/common/earring/100390020.equ")];
+        // 真实十件装备合计4127，验证普通英雄4000门槛，不向Session注入抗魔或队伍。
+        int[] ids = EquipmentIds;
         using var owner = new AccountOwners().Acquire("swtcphero", () => { });
         var candidate = CharacterCreation.Prepare("SWSoloHero", resources.Characters.Get(0), new(65, 1, 450, 234),
             resources.Towns.InitialReturn, resources.Learning.Get);
@@ -31,7 +25,7 @@ internal static partial class Strongway2019TcpTests
         {
             var template = resources.ItemResources.Items.Get(id);
             return new InventoryItem(0, new(InventoryListType.Equipment, template.EquipmentSlot),
-                new(id, template.Kind, 0) { Durability = template.Durability, Attr = id == weapon ? (byte)10 : (byte)0 });
+                new(id, template.Kind, 0) { Durability = template.Durability });
         }).ToImmutableArray();
         var hero = new CharacterRepository(fixture.Database).Create(owner, candidate with
         {
@@ -40,10 +34,10 @@ internal static partial class Strongway2019TcpTests
             InitialLearning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
                 { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning)
         });
-        That(hero.Inventory.Items.Length == 12 && provider.Compute(hero) >= 5400 &&
+        That(hero.Inventory.Items.Length == 10 && provider.Compute(hero) == 4127 &&
             hero.Inventory.Items.All(item => InventoryMoveService.Allows(hero, item.Position, item.Core,
                 resources.ItemResources.Items, fixture.UtcNow.ToUnixTimeSeconds(), resources.ItemResources.Contracts)),
-            "英雄单人TCP角色用十二件真实合法穿戴达到5400，不把简单4127资格当作英雄资格");
+            "英雄单人TCP角色用十件真实合法穿戴达到4127，覆盖低于旧5400且满足新4000的资格");
         return hero;
     }
 
@@ -53,17 +47,27 @@ internal static partial class Strongway2019TcpTests
         using var peer = Open(fixture, "swtcphero", gamePort: entry.Port, channelNumber: entry.Number);
         peer.Select(hero.Slot, prepared: true, resumeTown: true, room: false);
         peer.Barrier();
-        BeginSelection(peer);
-        Reject(5363, "抗魔达标但未组队的英雄仍拒绝");
-        peer.Send(132);
-        That(Drain(peer).Any(packet => packet is { Kind: 1, Opcode: 132, Body: [1] }),
-            "单人英雄回归从选图真实返回城镇再建队直入");
+        byte[] direct = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(direct, 5363);
+        peer.Send(15, direct);
+        var soloSelected = Drain(peer);
+        That(soloSelected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }) &&
+            soloSelected.Any(packet => packet is { Kind: 0, Opcode: 27, Body.Length: 42 }),
+            "无Party英雄直入先通过原15/27切换场景");
+        peer.Send(16, Entry(5363));
+        var soloEntered = Drain(peer);
+        That(soloEntered.Any(packet => packet is { Kind: 0, Opcode: 28 } && U32(packet.Body) == 5363) &&
+            soloEntered.Any(packet => packet is { Kind: 0, Opcode: 29 }) &&
+            !soloEntered.Any(packet => packet is { Kind: 1, Opcode: 16 }),
+            "抗魔达标的未组队英雄沿自然16建立本人Run，不要求手工创建Party");
+        FormalDungeonTcpTests.Load(peer); Drain(peer);
+        peer.Send(42);
+        That(Drain(peer).Any(packet => packet is { Kind: 1, Opcode: 42, Body: [1] }),
+            "未组队英雄真实42返回活动准备区后仍可创建一人队伍");
 
         byte[] partyRequest = Convert.FromHexString("000304000000000500000000000007");
         byte[] created = SetParty();
         ushort partyId = U16(created, 4);
-        byte[] direct = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(direct, 5363);
         peer.Send(15, direct);
         var selected = Drain(peer).ToArray();
         int ack = Array.FindIndex(selected, packet => packet is { Kind: 1, Opcode: 15, Body: [1] });
@@ -89,8 +93,8 @@ internal static partial class Strongway2019TcpTests
         byte[] map = entered.Single(packet => packet is { Kind: 0, Opcode: 29 }).Body;
         That(info.Length == 36 && U32(info) == 5363 && info[4] == 2 &&
             !entered.Any(packet => packet is { Kind: 1, Opcode: 16 }) &&
-            fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
-            "真实一人英雄16发送完整28/29并只预留一次原Run尝试");
+            fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[2L]],
+            "未组队与一人队伍各一次真实英雄16发送完整28/29，共预留两次原Run尝试");
         var dungeon = SelfTestCatalogs.Dungeons(resources.Archive).Get(5363);
         var maze = dungeon.Mazes[info[7]];
         var path = Route(maze, new(map[0], map[1]), new(info[8], info[9]));

@@ -16,10 +16,11 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class Strongway2019DungeonHandlerTests
+internal static partial class Strongway2019DungeonHandlerTests
 {
     public static async Task RunResourcesAsync(PvfArchive pvf, TownCatalog towns, ItemResources items)
     {
+        await RunEntryFeedbackResourcesAsync(pvf, towns, items);
         int before = Count;
         var activity = new Strongway2019Catalog(pvf);
         using var f = new Strongway2019MatchingTests.Fixture(towns, activity);
