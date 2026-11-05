@@ -54,6 +54,10 @@ internal static partial class AntonRaidGapTcpTests
                     map[19 + index * 22 + 13] == 3 && map[19 + index * 22 + 21] != 1))
             {
                 TestCheck.Skip("anton.battery-boss-on-route", "218本局通往电池格的房间含Boss，清Boss即通关，按机制跳过电池格观测");
+                peer.Send(42);
+                That(AntonTcpProbe.Barrier(peer, "电池观测跳过后回候战室").Any(packet =>
+                    packet is { Kind: 1, Opcode: 42, Body: [1] }),
+                    "电池观测因Boss跳过后先回候战室，不能把房内状态带到后续阶段夹具");
                 return;
             }
             AntonTcpProbe.ClearRoom(peer, map, report, out _, out _, false);
