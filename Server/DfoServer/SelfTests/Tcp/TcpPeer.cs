@@ -1468,6 +1468,19 @@ internal sealed partial class TcpPeer : IDisposable
         {
             var events = Expect(0, 108);
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
+            // 已有不渝之咏余额时，108 后会补 list44/45，商店才能读到持有量；全零不插包。
+            while (true)
+            {
+                var material = Read();
+                if (material is { Kind: 0, Opcode: 13, Body: [44 or 45, ..] })
+                {
+                    TestCheck.That(material.Body.Length >= 3 && material.Body.Length == 3 + U16(material.Body, 1) * 123,
+                        "选角攻坚材料投影按 list44/45 的完整行到达");
+                    continue;
+                }
+                pushedBack = material;
+                break;
+            }
             if (ExpectedOpenEvents.Contains(ServerEventService.MileageShopId))
                 MileageLimits = Expect(0, 706).Body;
             // 312不属于108目录；按隔离库的原始开关/时段独立计算，不能用收到的action自证。
