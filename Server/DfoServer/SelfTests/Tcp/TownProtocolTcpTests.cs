@@ -69,6 +69,8 @@ internal static partial class TownProtocolTcpTests
                 if (i == 0)
                 {
                     peer.Send(8, [255, 255, 2]);
+                    peer.Send(692, Name("剑、"));
+                    peer.Expect(1, 692, [0, 23, 0]);
                     peer.Send(692, Name("DoorTest"));
                     peer.Expect(1, 692, [0, 24, 0]);
                 }
