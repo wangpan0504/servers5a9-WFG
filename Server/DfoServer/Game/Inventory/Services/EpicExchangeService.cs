@@ -10,8 +10,88 @@ namespace DfoServer.Game.Inventory.Services;
 // etc 的三组 [reward epic item] 并集属于 190307_preyraid 的史诗交换窗，与本命令无关。
 // 确认窗构包首字段是源实例的主背包槽位（实机抓包 18/19/9 与库里槽位一致），优先按它定位，槽位不可用时退回最小槽位。
 internal sealed class EpicExchangeService(EpicExchangeCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces,
-    GoldLimitCatalog goldLimits)
+    GoldLimitCatalog goldLimits, BoosterCatalog? boosters = null)
 {
+    public InventoryResult ExchangeReward(Character character, int sourceItemId, byte mode, int targetItemId,
+        DateTimeOffset? utcNow = null)
+    {
+        if (sourceItemId <= 0 || mode > 1 || targetItemId < 0)
+            return InventoryResult.Reject(4);
+        var group = catalog.Groups.FirstOrDefault(row => row.RewardItemIds.Contains(sourceItemId));
+        if (group is null)
+            return InventoryResult.Reject(4);
+
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        long utcSeconds = now.ToUnixTimeSeconds();
+        var before = character.Inventory;
+        var source = before.Items
+            .Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == sourceItemId &&
+                item.Core.EquipmentLockId == 0 && !item.IsExpired(utcSeconds) && item.Core.Count >= 1)
+            .OrderBy(item => item.Position.Index)
+            .FirstOrDefault();
+        if (source is null)
+            return InventoryResult.Reject(4);
+
+        var deleted = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, 1);
+        if (!deleted.Accepted)
+            return InventoryResult.Reject(4);
+        var after = deleted.Plan!.After;
+
+        if (mode == 1 || targetItemId == 0 || targetItemId == group.ExchangeItem.ItemId)
+        {
+            var materialGrant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after },
+                [new(group.ExchangeItem.ItemId, group.ExchangeItem.Count)], items, goldLimits, pieces, now);
+            if (!materialGrant.Accepted)
+                return InventoryResult.Reject(materialGrant.Error == 0 ? (ushort)4 : materialGrant.Error);
+            return new(true, 0, new(before, materialGrant.Plan!.After, "reward_epic_exchange"));
+        }
+
+        bool eligibleTarget = group.RewardItemIds.Contains(targetItemId) ||
+            boosters?.Get(sourceItemId).Selection is { } selection &&
+            selection.Categories.SelectMany(category => category.Rewards).Any(reward => reward.ItemId == targetItemId);
+        if (!eligibleTarget)
+            return InventoryResult.Reject(4);
+
+        ItemTemplate targetTemplate;
+        try
+        {
+            targetTemplate = items.Get(targetItemId);
+        }
+        catch (Exception error) when (error is InvalidDataException or IOException)
+        {
+            return InventoryResult.Reject(4);
+        }
+
+        InventoryResult granted;
+        if (targetTemplate.Kind == ItemKind.Equipment)
+        {
+            ItemCore core;
+            try
+            {
+                core = InventoryRewardGrantService.Create(targetTemplate, utcNow: now) with
+                {
+                    DisjointForbidden = source.Core.DisjointForbidden,
+                    DestructionSoulForbidden = source.Core.DestructionSoulForbidden
+                };
+            }
+            catch (Exception error) when (error is InvalidDataException or IOException)
+            {
+                return InventoryResult.Reject(4);
+            }
+            granted = InventoryRewardGrantService.TryGrantItems(character with { Inventory = after },
+                [new(0, new(InventoryListType.Main, 0), core)], items, goldLimits, pieces, now);
+        }
+        else
+        {
+            granted = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after },
+                [new(targetItemId, 1)], items, goldLimits, pieces, now);
+        }
+
+        if (!granted.Accepted)
+            return InventoryResult.Reject(granted.Error == 0 ? (ushort)4 : granted.Error);
+        return new(true, 0, new(before, granted.Plan!.After, "reward_epic_exchange"));
+    }
+
     public InventoryResult Exchange(Character character, int sourceItemId, int targetItemId, int sourceSlot,
         DateTimeOffset? utcNow = null)
     {

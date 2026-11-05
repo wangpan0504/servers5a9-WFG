@@ -574,6 +574,9 @@ internal static class AuctionPackets
     public static byte[] CancelFailure(byte errorCode) => RegisterFailure(errorCode);
     public static byte[] BuySuccess() => RegisterSuccess();
     public static byte[] BuyFailure(byte errorCode) => RegisterFailure(errorCode);
+    // CMD 334 AUCTION_BUY_ITEM_APIECE：ARAD.exe 0x0235A590 在成功（flag != 0）时不读 mode:u8，直接传 1 给 0x037295D0。
+    public static byte[] BuyApieceSuccess() => [RegisterSuccessFlag];
+    public static byte[] BuyApieceFailure(byte errorCode) => BuyFailure(errorCode);
 
 
     // —— CMD 182 `AUCTION_ASK_AVERAGE_PRICE`（均价查询）应答 ——

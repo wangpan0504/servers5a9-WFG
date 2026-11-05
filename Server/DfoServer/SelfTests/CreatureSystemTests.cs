@@ -172,10 +172,24 @@ internal static class CreatureSystemTests
             !usedCapsule.Plan.CharacterPrecondition!.Matches(capsuleRole, 1010),
             "胶囊只消费一份并复用自动进化，保留UID和完整扩展；非战斗经验不受饱食阻拦，期限仍约束提交");
         That(!service.Feed(capsuleRole, new(experienceSource.Position, 32768, 200, 0), 1000).Accepted &&
-            !service.Feed(capsuleRole, new(experienceSource.Position, 1, 200, 1), 1000).Accepted &&
             !service.Feed(capsuleRole, new(experienceSource.Position, 1, 200, 0), 1010).Accepted &&
+            !service.Feed(capsuleRole, new(experienceSource.Position, 1, 200, 1), 1000).Accepted &&
             !service.Feed(capsuleRole with { Inventory = new([experienceSource]) }, new(experienceSource.Position, 1, 200, 0), 1000).Accepted,
             "胶囊拒绝畸形校验值、额外参数、过期源和无穿戴宠物，不产生空成功");
+        var fillResult = service.FillPoint(character, 25, 1000);
+        That(fillResult.Accepted && fillResult.Plan!.After.Find(pet.Position)?.Creature?.Satiety == 35 &&
+            !service.FillPoint(character, 0, 1000).Accepted,
+            "CMD 555 FillPoint 恢复穿戴宠物饱食度并拒绝非正数点数");
+        var expBookResult = service.UseExpBook(capsuleRole, experienceSource.Position, 1000);
+        That(expBookResult.Accepted && expBookResult.Plan!.After.Find(experienceSource.Position) is null &&
+            expBookResult.Plan.After.Find(pet.Position)?.Core.ItemId == 7002,
+            "CMD 1101 UseExpBook 复用宠物经验道具计算与自动进化");
+        var readyToEvolve = character with { Inventory = new([pet with { Creature = detail with { Level = 2 } }, food]) };
+        var evolvedItem = service.UseEvolutionItem(readyToEvolve, food.Position, 1000);
+        That(evolvedItem.Accepted && evolvedItem.Plan!.After.Find(food.Position)?.Core.Count == 2 &&
+            evolvedItem.Plan.After.Find(pet.Position)?.Core.ItemId == 7002 &&
+            CreaturePackets.EvolutionItemAck(true, 7002, 189).SequenceEqual(new byte[] { 1, 0x5a, 0x1b, 0, 0, 189, 0 }),
+            "CMD 323 UseEvolutionItem 消耗一件进化道具并将满足等级的穿戴宠物进化为目标模板");
         Console.WriteLine($"PASS {Count - before} 宠物资源、成长、饱食与匹配原生协议断言");
     }
 

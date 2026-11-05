@@ -76,7 +76,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         // 一口价购买：185 是本仓库唯一的跨账号钱货转移路径（买方扣款 + 挂牌成交 + 两封托管邮件同事务）；
         // 334 的请求布局仍只有参考实现（前导与挂牌 id 偏移自标未定），保持「只抓请求体」的桩。
         commands.Register(CmdPacketType.AUCTION_BIDDING, Bidding, nameof(AuctionHandler));
-        commands.Register(CmdPacketType.AUCTION_BUY_ITEM_APIECE, BuyItemApieceCapture, nameof(AuctionHandler));
+        commands.Register(CmdPacketType.AUCTION_BUY_ITEM_APIECE, BuyItemApiece, nameof(AuctionHandler));
     }
 
     Task<CommandResult> SearchByItemKey(GameConnectionContext context, Packet packet) => SearchAsync(context, packet, byItemKey: true);
@@ -108,7 +108,7 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
                 Note = "金币寄售窗口：只检索金币券挂牌，不返回普通拍卖装备"
             });
             return await ListingsAsync(context, mode, (byte)mode, offset, categoryId, itemId, byItemKey,
-                AuctionProbeSettings.Disabled, goldWindow: true, "auction_search_consignment_reply");
+                AuctionProbeSettings.Disabled, goldWindow: true, "auction_search_consignment_reply", body);
         }
         if (mode != AuctionMyListReply.NormalWindowMode)
         {
@@ -166,11 +166,11 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         if (probe.Enabled)
             return await ProbeAsync(context, replyMode, probe, probeReply);
         return await ListingsAsync(context, mode, replyMode, offset, categoryId, itemId, byItemKey, probe, goldWindow: false,
-            "auction_search_reply");
+            "auction_search_reply", body);
     }
     /// <summary>真实挂牌读路径：186/187 都按 186 应答，返回分类过滤后的匹配总数与本页（10 条）记录。</summary>
     async Task<CommandResult> ListingsAsync(GameConnectionContext context, int mode, byte replyMode, int offset, int categoryId,
-        int itemId, bool byItemKey, AuctionProbeSettings probe, bool goldWindow, string replyAction)
+        int itemId, bool byItemKey, AuctionProbeSettings probe, bool goldWindow, string replyAction, byte[]? packetBody = null)
     {
         var character = context.Session.Selected;
         if (character is null)
@@ -182,7 +182,8 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         // 分类搜索不带 itemId；按道具搜索的 itemId 为 0 时同样不过滤，避免用无效模板过滤掉全部挂牌。
         int? itemTemplateId = byItemKey && itemId > 0 ? itemId : null;
-        var page = auctions.Search(new(offset, itemTemplateId, categoryId), character.Id, now, goldWindow);
+        var searchRequest = BuildSearchRequest(offset, itemTemplateId, categoryId, byItemKey, packetBody);
+        var page = auctions.Search(searchRequest, character.Id, now, goldWindow);
         // Search 一定带回分类过滤说明（仓储不解释分类，由读用例补上），日志与过滤因此共用同一份解析结果：
         // 分类名、是否命中顶层大类、实际下推的维度都来自这里，
         // 「客户端点了哪个节点 / 服务端到底过滤了什么」可以直接对照。
@@ -226,6 +227,29 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         await context.Reply(CmdPacketType.AUCTION_SEARCH_BY_ITEMKEY,
             AuctionPackets.SearchReply(replyMode, page.TotalCount, page.Listings, probe.SearchRecord, now), replyAction);
         return CommandResult.Handled;
+    }
+
+    static AuctionSearchRequest BuildSearchRequest(int offset, int? itemTemplateId, int categoryId, bool byItemKey, byte[]? body)
+    {
+        if (body is null)
+            return new(offset, itemTemplateId, categoryId);
+        if (!byItemKey && body.Length >= 12)
+        {
+            byte rarityByte = body[7];
+            byte minUpgrade = body[8];
+            byte maxUpgrade = body[9] == 0 && body[8] == 0 ? (byte)31 : body[9];
+            byte minLevel = body[10];
+            byte maxLevel = body[11];
+            return new(offset, itemTemplateId, categoryId)
+            {
+                Rarity = rarityByte is > 0 and < 7 || (rarityByte == 0 && body[9] == 31) ? rarityByte : null,
+                MinUpgrade = minUpgrade,
+                MaxUpgrade = maxUpgrade,
+                MinLevel = minLevel,
+                MaxLevel = maxLevel
+            };
+        }
+        return new(offset, itemTemplateId, categoryId);
     }
 
     /// <summary>
@@ -811,14 +835,117 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
     }
 
     /// <summary>
-    /// CMD 334 `AUCTION_BUY_ITEM_APIECE` 的**请求抓取桩**（参考实现里的另一入口，该版本未走）。
-    ///
-    /// 两个实机样本证实「购买」按钮发的是 **185**（30B：`[26..29]` 才是物品模板 id），
-    /// 而 334 连前导字节的精确偏移都只有参考实现自标「无法 100% 静态确定」⇒ 保持桩形态：
-    /// 只记日志、不回任何应答、不改任何状态。等实机点出 334 的请求体再按同一套流程接入。
+    /// CMD 334 `AUCTION_BUY_ITEM_APIECE`（单件/拆分购买堆叠挂牌）。
+    /// 由 `ARAD.exe` `0x03701720` 与 `0x0235A590` 反汇编定案：
+    /// 请求体 33B（`TotalPrice:i32` + `Count:i32` + `ListingId:i32` + `ExpiresAtUnix:i32` + `Reserved:13B` + `ItemTemplateId:i32`）；
+    /// 成功应答 `[0x01]`（1B），失败应答 `[0x00, errLow, errHigh]`（3B）。
+    /// 对短于 33B 或全 0 抓包探测样本仍回落 <see cref="CaptureBuyRequest"/>。
     /// </summary>
-    Task<CommandResult> BuyItemApieceCapture(GameConnectionContext context, Packet packet) =>
-        CaptureBuyRequest(context, packet, AuctionBuyCommand.BuyItemApiece);
+    async Task<CommandResult> BuyItemApiece(GameConnectionContext context, Packet packet)
+    {
+        byte[] body = packet.Body;
+        if (body.Length != AuctionBuyApieceRequest.BodySize ||
+            (BitConverter.ToInt32(body, AuctionBuyApieceRequest.ListingIdOffset) <= 0 &&
+             BitConverter.ToInt32(body, AuctionBuyApieceRequest.ItemTemplateIdOffset) <= 0 &&
+             BitConverter.ToInt32(body, AuctionBuyApieceRequest.AmountOffset) <= 0))
+        {
+            return await CaptureBuyRequest(context, packet, AuctionBuyCommand.BuyItemApiece);
+        }
+        var request = AuctionBuyApieceRequest.Parse(body);
+        var character = context.Session.Selected;
+        if (character is null || !context.Session.Ready || context.Session.Phase != Game.Session.SessionPhase.Town ||
+            context.BlocksTownActions)
+        {
+            log.Write("auction_buy_apiece_unavailable", new
+            {
+                Connection = context.Id,
+                Length = body.Length,
+                Body = Convert.ToHexString(body),
+                Ready = context.Session.Ready,
+                Phase = context.Session.Phase.ToString(),
+                Blocked = context.BlocksTownActions
+            });
+            await context.Reply(CmdPacketType.AUCTION_BUY_ITEM_APIECE,
+                AuctionPackets.BuyApieceFailure(AuctionBuyErrors.Generic), "auction_buy_apiece_rejected");
+            return CommandResult.Handled;
+        }
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var listing = auctions.FindListing(request.ListingId);
+        var decision = auctions.PlanBuyApiece(character, listing, request, now);
+        if (decision.Options is null)
+        {
+            byte code = AuctionBuyErrors.ToClientCode(decision.Error);
+            log.Write("auction_buy_apiece_rejected", new
+            {
+                Reason = decision.Error.ToString(),
+                Detail = decision.Detail,
+                ClientCode = code,
+                Length = body.Length,
+                Body = Convert.ToHexString(body),
+                RequestAmount = request.Amount,
+                RequestCount = request.Count,
+                request.ListingId,
+                RequestExpiresAtUnix = request.ExpiresAtUnix,
+                request.ItemTemplateId,
+                ListingTemplateId = listing?.ItemTemplateId ?? 0,
+                UnitPrice = listing?.BuyoutPrice ?? 0,
+                ItemCount = listing?.ItemCount ?? 0,
+                CharacterId = character.Id,
+                CharacterGold = character.Inventory.Gold
+            });
+            await context.Reply(CmdPacketType.AUCTION_BUY_ITEM_APIECE,
+                AuctionPackets.BuyApieceFailure(code), "auction_buy_apiece_rejected");
+            return CommandResult.Handled;
+        }
+        var plan = decision.Options;
+        var commit = context.Session.BuyListing(auctions, character, plan);
+        if (commit.Buy.Character is null)
+        {
+            byte code = AuctionBuyErrors.ToClientCode(commit.Buy.Error);
+            log.Write("auction_buy_apiece_rejected", new
+            {
+                Reason = commit.Buy.Error.ToString(),
+                Detail = commit.Buy.Detail,
+                ClientCode = code,
+                Stale = true,
+                request.ListingId,
+                RequestAmount = request.Amount,
+                RequestCount = request.Count,
+                plan.UnitPrice,
+                plan.TotalPrice,
+                plan.ItemCount,
+                plan.RemainingCount,
+                CharacterId = character.Id,
+                CharacterGold = character.Inventory.Gold
+            });
+            await context.Reply(CmdPacketType.AUCTION_BUY_ITEM_APIECE,
+                AuctionPackets.BuyApieceFailure(code), "auction_buy_apiece_rejected");
+            return CommandResult.Handled;
+        }
+        log.Write("auction_buy_apiece", new
+        {
+            Buyer = commit.Buy.Character.Id,
+            BuyerName = commit.Buy.Character.Name,
+            Revision = commit.Buy.Character.Revision,
+            Gold = commit.Buy.Character.Inventory.Gold,
+            plan.ListingId,
+            plan.ItemTemplateId,
+            plan.ItemKind,
+            ListingItemCountBefore = plan.ItemCount,
+            PurchaseCount = plan.EffectivePurchaseCount,
+            plan.RemainingCount,
+            plan.UnitPrice,
+            plan.TotalPrice,
+            plan.SellerProceeds,
+            Seller = plan.SellerCharacterId,
+            plan.SellerName,
+            SettledAtUnix = plan.SettledAtUnix
+        });
+        await context.Reply(CmdPacketType.AUCTION_BUY_ITEM_APIECE,
+            AuctionPackets.BuyApieceSuccess(), "auction_buy_apiece");
+        context.Session.NotifyMailbox(commit.Buy.Character.Id);
+        return CommandResult.Handled;
+    }
 
     /// <summary>
     /// CMD 334 的请求抓取桩。**本方法只写一条日志：不改任何状态，也不回任何应答。**

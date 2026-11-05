@@ -11,11 +11,15 @@ namespace DfoServer.Network.Handlers.Inventory;
 internal sealed class MonsterCardBindHandler(InventoryMonsterCardBindService compounds,
     InventoryProjection projection, ServerLog log) : IGameCommandModule
 {
-    public void Register(GameCommandRegistry commands) =>
-        commands.Register(CmdPacketType.MONSTERCARD_BIND, Handle, nameof(MonsterCardBindHandler));
-
-    async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
+    public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.MONSTERCARD_BIND, (context, packet) => Handle(context, packet, false), nameof(MonsterCardBindHandler));
+        commands.Register(CmdPacketType.CARD_COMPOUND, (context, packet) => Handle(context, packet, true), nameof(MonsterCardBindHandler));
+    }
+
+    async Task<CommandResult> Handle(GameConnectionContext context, Packet packet, bool legacyCompound)
+    {
+        var opcode = legacyCompound ? CmdPacketType.CARD_COMPOUND : CmdPacketType.MONSTERCARD_BIND;
         MonsterCardBindRequest request;
         try { request = MonsterCardBindRequests.Read(packet.Body); }
         catch (InvalidDataException)
@@ -27,7 +31,7 @@ internal sealed class MonsterCardBindHandler(InventoryMonsterCardBindService com
                 Accepted = false,
                 Reason = "malformed"
             });
-            await context.Reply(CmdPacketType.MONSTERCARD_BIND, MonsterCardBindPackets.Failure(),
+            await context.Reply(opcode, MonsterCardBindPackets.Failure(),
                 "monster_card_bind_malformed");
             return CommandResult.Handled;
         }
@@ -62,7 +66,7 @@ internal sealed class MonsterCardBindHandler(InventoryMonsterCardBindService com
         });
         if (!result.Accepted)
         {
-            await context.Reply(CmdPacketType.MONSTERCARD_BIND,
+            await context.Reply(opcode,
                 MonsterCardBindPackets.Failure(result.Error == 23 ? (ushort)23 : (ushort)22),
                 "monster_card_bind_rejected", CanSend);
             return CommandResult.Handled;
@@ -70,7 +74,8 @@ internal sealed class MonsterCardBindHandler(InventoryMonsterCardBindService com
         if (receipt is null)
             throw new InvalidOperationException("怪物卡片合成成功缺少业务回执");
 
-        await context.Reply(CmdPacketType.MONSTERCARD_BIND, MonsterCardBindPackets.Success(receipt),
+        await context.Reply(opcode,
+            legacyCompound ? MonsterCardBindPackets.CompoundSuccess(receipt) : MonsterCardBindPackets.Success(receipt),
             "monster_card_bind_committed", CanSend);
         try
         {
