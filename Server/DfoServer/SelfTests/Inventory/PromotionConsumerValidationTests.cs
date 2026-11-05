@@ -49,6 +49,7 @@ internal static class PromotionConsumerValidationTests
     public static void RunResources(ItemResources resources)
     {
         PromotionLevelUpByTableConsumerTests.RunResources(resources);
+        PromotionDimensionEntryConsumerTests.RunResources(resources);
         var shipped = JsonSerializer.Deserialize<PromotionConfiguration[]>(ServerRuntime.ReadShippedPromotionConfig())
             ?? throw new InvalidDataException("shipped promotion missing");
         var enabled = ServerRuntime.LoadCashShopPromotions(resources,
