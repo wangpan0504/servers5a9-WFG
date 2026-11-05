@@ -104,6 +104,7 @@ internal static class ShopTests
                 That(ItemShopPrice.Parse(new("[value]\n" + value), true, 200).GetSellGold(1, 1) == 0, "zero sale does not invent a one-gold minimum " + value);
             That(ItemShopPrice.Parse(new("[value]\n2147483647"), true, int.MaxValue).GetSellGold(1, 1) == int.MaxValue,
                 "large equipment price cannot wrap into a cheap sale");
+            VerifyMedalPurchases(current, itemResources, shop, items);
             var bought = shop.Buy(current, new(3175, 10, 2, 1), out var receipt);
             var ack = ShopPackets.Bought(bought, receipt);
             That(ack.Length == 141 && ack[0] == 1 && I32(ack, 1) == 999900 && I32(ack, 19) == 3175 && I32(ack, 23) == 10 && ack[140] == 0,
@@ -371,6 +372,39 @@ internal static class ShopTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} NPC shop assertions");
+    }
+    static void VerifyMedalPurchases(Character current, ItemResources resources, InventoryShopService shop, InventoryService items)
+    {
+        var medalIds = new[] { 0, 1, 2, 3, 6 }.SelectMany(grade => resources.Items.GuildCompoundCandidates(ItemKind.GuildMedal, grade)).ToHashSet();
+        var offers = resources.Shops.Shops.SelectMany(pair => pair.Value.Items.Where(medalIds.Contains)
+            .Select(id => new BuyItemRequest(id, 0, pair.Key, pair.Value.NpcId))).ToArray();
+        That(offers.Length > 0, "匹配资源存在勋章商店，不能空跑购买回归");
+        foreach (var offer in offers)
+        {
+            var template = resources.Items.Get(offer.ItemId);
+            var source = current with { Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } };
+            var funded = items.Grant(source, template.ShopPrice.Materials.Select(cost => new InventoryReward(cost.ItemId, cost.Count)).ToArray());
+            That(funded.Accepted, "准备勋章原价兑换材料 " + offer.ItemId);
+            source = source with { Inventory = funded.Plan!.After };
+            foreach (int count in new[] { 0, 1, 2 })
+            {
+                var purchase = shop.Buy(source, offer with { Count = count }, out var receipt);
+                That(purchase.Accepted && receipt is { Count: 1, Position.List: InventoryListType.GuildMedal, Position.Index: 0,
+                        Core.Kind: ItemKind.GuildMedal, Core.Value: 1 } &&
+                    receipt.Core.ItemId == offer.ItemId && purchase.Plan!.After.Gold == source.Inventory.Gold - template.ShopPrice.Gold &&
+                    purchase.Plan.After.Items.Count(item => item.Core.Kind == ItemKind.GuildMedal) == 1 &&
+                    template.ShopPrice.Materials.All(cost => purchase.Plan.After.Items.All(item => item.Core.ItemId != cost.ItemId)),
+                    "每件在售勋章接受装备零数量合同，复数也只扣一份材料并发一件到勋章页 " + offer.ItemId + "/" + count);
+            }
+            foreach (int count in new[] { -1, 1_000_001 })
+                That(shop.Buy(source, offer with { Count = count }, out var receipt) is { Accepted: false, Error: 0x85, Plan: null } && receipt is null,
+                    "非法勋章数量仍拒绝且不产生扣费计划 " + offer.ItemId);
+            if (!template.ShopPrice.Materials.IsEmpty)
+                That(shop.Buy(source with { Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } }, offer, out var receipt)
+                    is { Accepted: false, Error: 10, Plan: null } && receipt is null,
+                    "零数量勋章购买仍必须足额支付兑换材料 " + offer.ItemId);
+        }
+        Console.WriteLine($"PASS {offers.Length} medal shop offers (zero/one/multiple count, invalid count and payment)");
     }
     sealed class Clock(DateTimeOffset now) : TimeProvider
     {

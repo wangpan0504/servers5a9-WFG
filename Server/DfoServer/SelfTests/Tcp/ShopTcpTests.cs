@@ -24,6 +24,11 @@ internal static partial class ShopTcpTests
         var limitedShop = itemResources.Shops.Shops.First(pair => pair.Value.Items.Contains(10099885));
         var starter = InventoryRewardGrantService.CreateStarter(characters.Get(0));
         ushort specialRoleId;
+        const int medalId = 100380038;
+        var medalShop = itemResources.Shops.Shops.First(pair => pair.Value.Items.Contains(medalId));
+        var medalPrice = itemResources.Items.Get(medalId).ShopPrice;
+        ushort medalRoleId;
+        InventorySlot[] medalMaterialSlots;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.Create(owner, new("ShopTcp", towns.Room, towns.InitialReturn)
@@ -53,6 +58,16 @@ internal static partial class ShopTcpTests
                     SpecialItem(63022, InventoryListType.Pet, 0),
                     SpecialItem(63023, InventoryListType.Pet, 1)], Gold: 1000)
             }).Id;
+            var medalBuyer = repo.Create(owner, new("ShopMedal", towns.Room, towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 }
+            });
+            medalRoleId = medalBuyer.Id;
+            var fundedMedalBuyer = InventoryService.Commit(repo, owner, medalBuyer,
+                new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces).Grant(medalBuyer,
+                    medalPrice.Materials.Select(cost => new InventoryReward(cost.ItemId, cost.Count)).ToArray()));
+            medalMaterialSlots = fundedMedalBuyer.Inventory.Items.Select(item => item.Position).ToArray();
         }
         int gold = 1_000_000;
         long uid;
@@ -323,6 +338,39 @@ internal static partial class ShopTcpTests
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", specialRoleId) is [[long savedGold]] && savedGold == specialGold &&
                 fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid") == avatars,
                 "重连后保留宠物出售结果与原时装详情，不恢复已售实例");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            Buy(peer, medalId, 0, medalShop.Key, medalShop.Value.NpcId);
+            var ack = peer.Expect(1, 21).Body;
+            That(ack[0] == 1 && U32(ack, 1) == 1_000_000 - medalPrice.Gold && U16(ack, 17) == 0 &&
+                U32(ack, 19) == medalId && U32(ack, 23) == 1,
+                "勋章零数量购买返回单件成功ACK及实际扣费后余额");
+            var paymentDelta = peer.Expect(0, 14).Body;
+            That(paymentDelta[0] == 0, "先发布Main中的实际材料扣除差量");
+            foreach (var slot in medalMaterialSlots)
+                Entry(paymentDelta, slot.Index, -1, 0);
+            var medalDelta = peer.Expect(0, 14).Body;
+            That(medalDelta[0] == 38 && U16(medalDelta, 1) == 1, "随后发布勋章专用容器的单件差量");
+            Entry(medalDelta, 0, medalId, 1);
+            peer.Barrier();
+            That(fixture.Query("SELECT s.list_type,s.slot_index,json_extract(i.item_core,'$.Value') FROM character_inventory_slots s " +
+                "JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1",
+                medalRoleId, medalId) is [[38L, 0L, 1L]], "勋章购买持久化到专用容器的一格单件实例");
+            string paid = Snapshot();
+            Buy(peer, medalId, 0, medalShop.Key, medalShop.Value.NpcId);
+            peer.Expect(1, 21, [0, 10, 0]);
+            peer.Barrier();
+            That(Snapshot() == paid, "材料耗尽后的勋章购买不变更任何资产和审计");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            var list = peer.SpecialContainers[3].Body;
+            That(list[0] == 38 && U16(list, 1) == 1 && U16(list, 3) == 0 && U32(list, 5) == medalId && U32(list, 9) == 1,
+                "重连完整恢复已购买的勋章专用页和单件数量");
+            peer.Barrier();
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");
