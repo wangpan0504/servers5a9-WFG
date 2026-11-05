@@ -24,7 +24,7 @@ internal sealed partial class InventoryProjection
             lists.Add(InventoryListType.Main);
         if (plan.Before.AvatarExpansion != plan.After.AvatarExpansion) lists.Add(InventoryListType.Avatar);
         if (lists.Count != 0) await SynchronizeItemSpaceContentsAsync(context, snapshot, lists);
-        foreach (var list in new[] { InventoryListType.GuildMedal, InventoryListType.Talisman })
+        foreach (var list in new[] { InventoryListType.GuildMedal, InventoryListType.Talisman, InventoryListType.AccountCommon })
             if (plan.ChangedSlots.Any(slot => slot.List == list))
             {
                 await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current, list),

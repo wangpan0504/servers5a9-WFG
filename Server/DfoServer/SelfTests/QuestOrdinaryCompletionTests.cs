@@ -38,6 +38,7 @@ internal static class QuestOrdinaryCompletionTests
         PvpTrainingProgressTests.RunResources(quests);
         PvpTrainingManualTests.Run(towns,characters,items,learning,growth,parameters,quests);
         QuestAccountSynchronizationTests.Run(towns,characters,items,learning,growth,parameters,quests);
+        EpicRoadQuestSessionTests.RunResources(pvf,items);
         QuestLegacyAwakeningTests.Run(towns,pvf,characters,items,quests,learning,growth,parameters);
         var bloodAwakening = quests.Get(990);
         using (var legacy = new Fixture(towns,characters,learning,growth,parameters,items,bloodAwakening,
@@ -1281,7 +1282,8 @@ internal static class QuestOrdinaryCompletionTests
         public Fixture(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, CharacterGrowthCatalog growth,
             QuestRewardParameterCatalog parameters, ItemResources items, StoryQuest quest, int materialCount = 5, bool locked = false,
             bool fullEquipment = false, bool loseResult = false, StoryQuest[]? definitions = null, ActiveMainQuest[]? active = null,
-            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false,bool loseLifecycleResult=false, QuestStageGraph? stages=null)
+            Func<NewCharacter,NewCharacter>? configure = null, bool useCycles = false,QuestSkipEffects? questEffects=null,bool resumeTown=false,bool loseLifecycleResult=false, QuestStageGraph? stages=null,
+            TimeProvider? timeProvider=null, Func<string,DfoServer.Game.Events.ServerEventService>? createEvents=null)
         {
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
@@ -1301,7 +1303,8 @@ internal static class QuestOrdinaryCompletionTests
             }
             Repository.Create(Owner, candidate with { ActiveMainQuests = active ?? [new(0, (ushort)quest.Id, 1)], Inventory = candidate.Inventory with { Items = inventory.ToImmutable() } });
             Lost = loseResult || loseLifecycleResult ? new(Repository) { LoseCompletionResult = loseResult, LoseLifecycleResult = loseLifecycleResult } : null;
-            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects,stageGraph:stages);
+            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog: useCycles ? Catalog : null,questEffects:questEffects,stageGraph:stages,
+                timeProvider:timeProvider,serverEvents:createEvents?.Invoke(Database));
             Session.Select(0,resumeTown: resumeTown); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner, 0);

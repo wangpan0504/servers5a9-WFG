@@ -48,6 +48,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
           --session-ttl <秒>         认证元数据有效期，默认 300
           --promotion-page <Off|On>  自制累计赠礼页面协议，默认 Off；独立于活动购买开关
+          --epic-road-2019 <Off|On>  星河裂缝活动入口和准入，默认 Off
+          --epic-road-2019-simulated-drops <Off|On>  本服模拟末房一件95史诗，默认 Off，须同时开启活动
           --hosted-dungeon-eligibility <Off|On>  普通副本加载后只读资格探测，默认 Off；不切换战斗权威
           --hosted-dungeon-eligibility-host <文件>  可选独立宿主可执行文件；未配置时 On 仅进程内拒绝缺失 CombatProfile
           --hosted-eligibility-fake-host <scenario>  测试用假宿主：读 stdin JSON 写 stdout，不加载资源
@@ -107,7 +109,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
             "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or
-            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--battle-pass-season" or "--battle-pass-start" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
+            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--epic-road-2019" or "--epic-road-2019-simulated-drops" or "--hosted-dungeon-eligibility" or "--hosted-dungeon-eligibility-host" or "--battle-pass-season" or "--battle-pass-start" or "--recharge-web-port" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

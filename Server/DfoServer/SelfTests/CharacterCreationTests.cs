@@ -5,6 +5,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using System.Buffers.Binary;
@@ -19,6 +20,10 @@ internal static class CharacterCreationTests
     {
         var computer = new CharacterStatComputer(characters);
         int checks = Count;
+        DfoServer.Testing.TestCheck.Reject<InvalidDataException>(() => new NewCharacter("CommonStarter", towns.Room, towns.InitialReturn)
+        {
+            Inventory = InventorySnapshot.Empty with { Items = [new(0, new(InventoryListType.AccountCommon, 0), new(716, ItemKind.Material, 1))] }
+        }.Validate(), "建角不能初始化或覆盖账号公共45资产");
 
         void Reject(Action action, string name)
         {

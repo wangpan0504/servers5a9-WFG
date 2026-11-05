@@ -31,8 +31,9 @@ internal sealed partial class CharacterRepository
             return CommitAltarQuestDeath(owner, expected, run, prepared, reward, catalog, questDrops);
         }
         ulong amount = reward.Amount;
+        bool noKillExperience = run.Entry.DisableMonsterAndClearExperience || run.Entry.ExperienceWeight == 0;
         if (run.TagEvildomLife is not null || !run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||
-            (run.Entry.DisableMonsterAndClearExperience ? amount != 0 : amount == 0) ||
+            (noKillExperience ? amount != 0 : amount == 0) ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.MonsterId != prepared.Monster.MonsterId ||
             reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");

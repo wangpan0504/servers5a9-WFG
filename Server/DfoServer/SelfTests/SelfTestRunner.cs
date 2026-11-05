@@ -255,6 +255,10 @@ internal static class SelfTestRunner
         BlackDiamondTests.RunCore();
         ServerEventTests.RunCore();
         DailyAttendanceTests.RunCore();
+        EpicRoadAdmissionTests.RunCore();
+        EpicRoad2019NpcRestoreTests.RunCore();
+        EpicRoad2019ItemLifetimeTests.RunCore();
+        await EpicRoadProjectionTests.RunCoreAsync();
         DungeonClearExperienceCatalogTests.Run();
         DungeonLuckyStarTests.RunCore();
         DungeonKillExperienceCatalogTests.RunCore();
@@ -464,6 +468,7 @@ internal static class SelfTestRunner
         DungeonSpecialDropCatalogTests.RunCore();
         DungeonItemDropCatalogTests.RunCore();
         DungeonDropGenerationPlanTests.RunCore();
+        EpicRoad2019SimulatedDropTests.RunCore();
         DungeonDropControlTests.RunCore();
         EquipmentAmplificationDropTests.RunCore();
         GrowthPacketsTests.Run();
@@ -532,6 +537,11 @@ internal static class SelfTestRunner
         AntiEvilUpgradeTests.RunMemberSetCompatibilityResources(itemResources);
         AntiEvilUpgradeTests.RunEquipmentBaseTailResources(itemResources);
         Strongway2019ShopTests.RunResources(towns, itemResources);
+        EpicRoad2019ShopTests.RunResources(towns, itemResources);
+        EpicRoad2019ShopHandlerTests.RunResources(itemResources, characters);
+        EpicRoadFixedBoosterTests.RunResources(towns, itemResources);
+        EpicRoadRecoveryTests.RunResources(towns, characters, itemResources, pvf);
+        EpicRoadServiceItemTests.RunResources(towns, characters, itemResources);
         Strongway2019RewardTests.RunFullInventoryResources(itemResources);
         AuraSkinTests.RunEventTicketResources(towns, itemResources);
         Strongway2019AppearanceResourceTests.RunResources(pvf, towns, itemResources);
@@ -655,6 +665,12 @@ internal static class SelfTestRunner
         await TownPresenceTests.Run(towns);
         await TownPresenceIndexTests.RunAsync(towns);
         DungeonCatalogTests.Run(pvf);
+        EpicRoadResourceTests.RunResources(pvf);
+        EpicRoad2019CatalogTests.RunResources(pvf);
+        EpicRoad2019NpcRestoreTests.RunResources(pvf);
+        EpicRoad2019ItemLifetimeTests.RunResources(itemResources);
+        EpicRoadAdmissionSessionTests.RunResources(pvf, itemResources);
+        Testing.Inventory.EpicRoadBoosterTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
         AssaultModePacketTests.RunResources(pvf);
         RiftDailyPacketTests.RunResources(pvf);
         ParticularHellPartyTests.RunResources(pvf);
@@ -771,6 +787,10 @@ internal static class SelfTestRunner
         DungeonSpecialDropCatalogTests.RunResources(itemResources.DungeonSpecialDrops);
         DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
+        EpicRoad2019SimulatedDropTests.RunResources(pvf, itemResources);
+        EpicRoad2019SimulatedSessionTests.RunResources(pvf, itemResources);
+        EpicRoad2019NativeTownSessionTests.RunResources(pvf, itemResources);
+        EpicRoad2019ClosedRunSessionTests.RunResources(pvf, itemResources);
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
         DungeonDropCollectionRepositoryTests.RunDurableReceipts(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);

@@ -4,14 +4,16 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Events;
 using DfoServer.Game.Strongway2019;
+using DfoServer.Game.EpicRoad2019;
 using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null,
-    ServerItemUsageCatalog? serverItems = null)
+    ServerItemUsageCatalog? serverItems = null, bool epicRoadAvailable = false)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    public bool EpicRoadAvailable { get; } = epicRoadAvailable;
     static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
 
     public InventoryResult Buy(Character character, BuyItemRequest request, out ShopPurchaseReceipt? receipt, DateTimeOffset? utcNow = null,
@@ -20,6 +22,10 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         receipt = null;
         if (Strongway2019ShopRules.Handles(request.ShopId) &&
             (requiredEvent is null || requiredEvent.Schedule.EventId != ServerEventService.Strongway2019Id || !requiredEvent.Matches(requiredEvent.Schedule)))
+            return InventoryResult.Reject(17);
+        if (EpicRoad2019ShopRules.Handles(request.ShopId) &&
+            (!EpicRoadAvailable || requiredEvent is null || requiredEvent.Schedule.EventId != ServerEventService.EpicRoadId ||
+             !requiredEvent.Matches(requiredEvent.Schedule)))
             return InventoryResult.Reject(17);
         if (!shops.Allows(request.NpcId, request.ShopId, request.ItemId))
             return InventoryResult.Reject(17);
@@ -63,7 +69,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 if (currency < CurrencyKind.Cera)
                     materials.Add(new(itemId, CurrencyWallet.Get(paid, currency)));
             }
-            else if (!pieces.ByPiece.ContainsKey(itemId) && catalog.Get(itemId).AccountMaterial is null)
+            else if (!pieces.ByPiece.ContainsKey(itemId) &&
+                catalog.Get(itemId) is { AccountMaterial: null, AccountCommonItem: false })
             {
                 var first = before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == itemId)
                     .OrderBy(item => item.Position.Index).First();
@@ -72,7 +79,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
                 if (remaining != first)
                     materials.Add(new(itemId, remaining?.Core.Count ?? 0));
             }
-            // 图鉴和非Main钱包不伪装成实物材料，统一投影发送各自的最终余额。
+            // 图鉴、账号余额及公共实体不写Main材料尾段；公共实体由提交后的精确槽位差量同步。
         }
         if (materials.Count > byte.MaxValue)
             return InventoryResult.Reject(17); // 本版ACK的材料条数使用u8，必须在提交之前验证。

@@ -241,7 +241,7 @@ internal sealed partial class QuestCompletionPlan
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
         GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false,
         ExpertJobScriptCatalog? expertJobs = null, int? pvpGrade = null, QuestClearReceipt? terminalClear = null,
-        bool strongway2019Active = false, QuestTicketSource? coupon = null)
+        bool strongway2019Active = false, QuestTicketSource? coupon = null, bool epicRoad2019Active = false)
     {
         try
         {
@@ -256,10 +256,10 @@ internal sealed partial class QuestCompletionPlan
             // 地区每日上限只约束分配；同日原接取不因后续升级失去领奖资格，其余资格与目标仍逐项复验。
             if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(expected,quest) || active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
-                QuestEligibility.InspectResource(quest, strongway2019Active).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest, strongway2019Active, epicRoad2019Active).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
                 coupon is null && completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests,
-                    allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest), strongway2019Active: strongway2019Active).Eligible)
+                    allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest), strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
             if (completedParent is not null)
             {

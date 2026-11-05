@@ -3,7 +3,7 @@ using PvfLib;
 namespace DfoServer.GameWorld.Dungeons;
 
 // 只保存匹配地图的资源行；整数和标记尚未全部映射到生成规则、战斗状态或 wire 字段。
-internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string RankKind, string Path)
+internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawValues, string PlacementKind, string? RankKind, string Path)
 {
     public int? Team { get; init; }
     public bool ScriptedRetirement { get; init; }
@@ -124,7 +124,7 @@ internal sealed class DungeonRoomCatalog
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
             || source is null)
             throw new InvalidDataException("房间地图路径或索引无效");
-        var tokens = geometry.ReadTokens(source, path);
+        var tokens = NativeResourcePrefix(geometry.ReadTokens(source, path), source.ResolveString);
         var roomMonsters = ReferenceEquals(source, archive) ? monsters : DungeonCatalog.ParseDirectory(source.ReadTokens("monster/monster.lst"), source.ResolveString, "monster");
         var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
         var room = ParseResource(map with { Path = path }, tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
@@ -469,6 +469,7 @@ internal sealed class DungeonRoomCatalog
         bool requirePassiveDefinitions = true, Func<PvfAiCharacterSpawn,DungeonRoomAiCharacter?>? resolveAiCharacter = null,
         bool allowUnresolvedSpecialMetadata = false)
     {
+        tokens = NativeResourcePrefix(tokens, resolve);
         var sections = new Dictionary<string, IReadOnlyList<PvfToken>>(StringComparer.Ordinal);
         string? declaredType = null;
         bool typeSeen = false;
@@ -507,6 +508,12 @@ internal sealed class DungeonRoomCatalog
         {
             for (int at = 0; at < monsterTokens.Count;)
             {
+                if (MissingRankTail(monsterTokens, at, monsterTokens.Count, resolve))
+                {
+                    var raw = Integers(monsterTokens.Skip(at).Take(8));
+                    monsterRows.Add(new(raw[0],raw,"[fixed]",null,Resolve(raw[0],monsterPaths,"monster")));
+                    break;
+                }
                 if (monsterTokens.Count - at < 10)
                     throw new NotSupportedException("unsupported: 房间 monster 缺少八整数和完整字符串标记");
                 var values = Integers(monsterTokens.Skip(at).Take(8));
@@ -634,6 +641,47 @@ internal sealed class DungeonRoomCatalog
                 throw new InvalidDataException("房间资源引用不存在: " + kind + " " + id);
             return path;
         }
+    }
+
+    // 原生读者保留已追加的缺rank末行，随后停止MAP分派；所有附属读者共用同一有效前缀。
+    private static IReadOnlyList<PvfToken> NativeResourcePrefix(IReadOnlyList<PvfToken> tokens, Func<int,string> resolve)
+    {
+        for (int at = 0; at < tokens.Count; at++)
+        {
+            if (tokens[at].Type != 3 || !resolve(tokens[at].Value).Equals("[monster]",StringComparison.OrdinalIgnoreCase)) continue;
+            int end = at + 1;
+            while (end < tokens.Count && tokens[end].Type != 3) end++;
+            if (end < tokens.Count && resolve(tokens[end].Value).Equals("[/monster]",StringComparison.OrdinalIgnoreCase) &&
+                end - 9 >= at + 1 && MissingRankTail(tokens,end - 9,end,resolve))
+            {
+                var prefix = end + 1 == tokens.Count ? tokens : Freeze(tokens.Take(end + 1));
+                // 以原输入的闭合声明识别外层块，不能因截断删掉外层闭合后把条件演员提升为顶层。
+                var blocks = tokens.Where(token => token.Type == 3).Select(token => resolve(token.Value))
+                    .Where(tag => tag.StartsWith("[/",StringComparison.Ordinal) && tag.EndsWith(']'))
+                    .Select(tag => tag[2..^1].Trim().ToLowerInvariant()).Distinct(StringComparer.Ordinal)
+                    .ToDictionary(name => name,name => name,StringComparer.Ordinal);
+                blocks.TryAdd("condition","condition");
+                try
+                {
+                    if (!new PvfTokenDocument(prefix,resolve,blocks,preserveExtraEndTags:true).Sections.Any(section => section.Name == "monster"))
+                        throw new NotSupportedException("unsupported: 缺rank怪物不是顶层声明");
+                }
+                catch (InvalidDataException error)
+                {
+                    throw new NotSupportedException("unsupported: 缺rank怪物的外层声明未确认",error);
+                }
+                return prefix;
+            }
+        }
+        return tokens;
+    }
+
+    private static bool MissingRankTail(IReadOnlyList<PvfToken> tokens, int start, int end, Func<int,string> resolve)
+    {
+        if (end - start != 9 || tokens[end - 1].Type != 6 || resolve(tokens[end - 1].Value) != "[fixed]") return false;
+        for (int at = start; at < end - 1; at++)
+            if (tokens[at].Type != 0) return false;
+        return true;
     }
 
     private static IReadOnlyList<int> Integers(IEnumerable<PvfToken> source)

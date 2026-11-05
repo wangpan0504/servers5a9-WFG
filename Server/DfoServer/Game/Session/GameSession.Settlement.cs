@@ -134,6 +134,9 @@ internal sealed partial class GameSession
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
             Prepared: formalDungeon?.Settlement is not null,
             ValidReport: formalDungeon is { } current && ValidSettlementReport(current, actorId, rankPoint, maximumRankPoint, reportMembers)));
+        // 无普通结果页的资源仍保留清图事实；不由迟到或越界报告启动经验、宠物或翻牌准备。
+        if (capture.Dungeon?.Entry.SuppressOrdinaryResultBoard == true)
+            return new(DungeonRunOutcome.Rejected);
         Events.DailyAttendancePlan? attendance = null;
         uint attendanceMailId = 0;
         if (!capture.Prepared && capture.ValidReport && capture.Character is { } attendee && capture.Dungeon is { } attendanceDungeon &&
@@ -189,7 +192,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
     {
-        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null ||
+        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null || dungeon.Entry.SuppressOrdinaryResultBoard ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene ||
             !ValidSettlementReport(dungeon, actorId, rankPoint, maximumRankPoint, reportMembers))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
@@ -582,7 +585,7 @@ internal sealed partial class GameSession
 
     bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null || formalDungeon?.Settlement?.TournamentClaim is not null;
     static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
-        (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
+        (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo || dungeon.Entry.SuppressOrdinaryResultBoard) &&
             dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);
 
     bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&

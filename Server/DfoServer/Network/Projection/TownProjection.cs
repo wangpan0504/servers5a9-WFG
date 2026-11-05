@@ -23,7 +23,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
     Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null,
-    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null)
+    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null, bool epicRoadAvailable = false)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal const ushort BattlePassEventId = 2520;
@@ -33,6 +33,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         BattlePassMissions is { } policy && !policy.Active(now).IsEmpty;
     internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
+    internal bool EpicRoadAvailable => epicRoadAvailable;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
         DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
     {
@@ -94,6 +95,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         long eventEpoch = context.Session.SelectionEpoch;
         bool battlePass = IsBattlePassEventActive(now);
         if (battlePass) openEvents = [.. openEvents, BattlePassEventId];
+        bool epicRoad = EpicRoadAvailable && events?.Read(ServerEventService.EpicRoadId).Active == true;
+        if (epicRoad) openEvents = [.. openEvents, ServerEventService.EpicRoadId];
         IReadOnlyList<EventInfoDesignPage> designPages = [];
         Func<bool>? publish = () => canSend?.Invoke() != false && context.Session.EndlessAdventureActive == endless;
         if (promotionCatalog is not null && promotionPages is not null)
@@ -172,7 +175,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 throw new IOException("Strongway NPC send queue unavailable");
         }
         if (NpcCurrent() && context.Session.EndlessAdventureActive == endless) context.ServerEvents?.Queued(mileage, strongway?.Active == true, npcEpoch, npcRevision ?? 0,
-            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled);
+            nolanVisible, seriaLuck, hongbao, jonathan, promotionRevision, attendanceEnabled, epicRoadValue: epicRoad);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }
@@ -282,6 +285,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Pet), "pet_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.GuildMedal), "medal_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Talisman), "talisman_inventory_initialize");
+        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.AccountCommon), "account_common_inventory_initialize");
         if (Math.Max(c.TeleportCooldowns.PartyAuraUntil, Math.Max(c.TeleportCooldowns.AuraUntil, c.TeleportCooldowns.UpgradeAuraUntil)) >
             timer.GetUtcNow().ToUnixTimeMilliseconds())
             await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(c, timer.GetUtcNow().ToUnixTimeMilliseconds()),

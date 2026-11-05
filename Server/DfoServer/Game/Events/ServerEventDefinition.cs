@@ -31,7 +31,9 @@ internal sealed record ServerEventDefinition(ushort Id, string Name, string Purp
         new(2208, "周周惊喜乐开怀", "推荐地下城周签到、补签和累计签到奖励通过系统邮件发放。",
             "同账号共享进度；首次激活冻结赛季，关闭保留进度，过期不自动换季。", true, "默认开启"),
         new(228, "累积在线得好礼", "按当前客户端资源累计在线并通过系统邮件发放每日和累计奖励。",
-            "活动关闭时暂停计时但保留账号进度；奖励按账号幂等领取。", false, "默认开启")
+            "活动关闭时暂停计时但保留账号进度；奖励按账号幂等领取。", false, "默认开启"),
+        new(10005, "星河裂缝配置", "管理星河裂缝活动时段和新入场资格。",
+            "需要完整接入活动资源、城镇入口、NPC及专属奖励链后开放；命令成功仅表示配置已提交。", true, "未设置时间时关闭")
     ];
 
     public static ServerEventDefinition? Find(int id) => Registered.FirstOrDefault(entry => entry.Id == id);

@@ -139,7 +139,8 @@ internal sealed partial class GameSession
 
     public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
         DfoServer.Game.Strongway2019.Strongway2019ShopRules.Handles(shopId) ||
-        shopId == Game.Events.EndlessAdventurePolicy.ShopId ? InventoryResult.Reject(17) :
+        shopId == Game.Events.EndlessAdventurePolicy.ShopId ||
+        DfoServer.Game.EpicRoad2019.EpicRoad2019ShopRules.Handles(shopId) ? InventoryResult.Reject(17) :
         PlanAndCommitInventory(plan, 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
             additionalGuard: shopId switch
             {

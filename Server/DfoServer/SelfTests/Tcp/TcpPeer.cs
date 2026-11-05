@@ -1267,11 +1267,15 @@ internal sealed partial class TcpPeer : IDisposable
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
         var talismans = Expect(0, 13);
+        var accountCommon = Expect(0, 13);
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
         TestCheck.That(talismans.Body[0] == 46 && talismans.Body.Length == 3 + U16(talismans.Body, 1) * 123,
             "护石符文容器按普通123B物品行初始化");
-        SpecialContainers = [creatures, avatars, pets, medals, talismans];
+        TestCheck.That(accountCommon.Body.Length >= 3 && accountCommon.Body[0] == 45 &&
+            U16(accountCommon.Body, 1) <= 50 && accountCommon.Body.Length == 3 + U16(accountCommon.Body, 1) * 123,
+            "账号公共45在护石后严格初始化，空容器也发送3B头，最多50个完整123B实例");
+        SpecialContainers = [creatures, avatars, pets, medals, talismans, accountCommon];
         var tail = new List<WirePacket>();
         var mails = new List<byte[]>();
         ClientSettings = [];

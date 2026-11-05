@@ -408,6 +408,12 @@ internal sealed partial class CharacterRepository
             cube.Parameters.AddWithValue("$type", plan.After.CubeContract.CubeType);
             cube.ExecuteNonQuery();
         }
+        // 共享实例触发器更新账号库存标记前，账号仓库行必须已在同一事务内存在。
+        if (plan.AccountCargoChanged)
+        {
+            command.CommandText = "INSERT INTO account_cargo(account) VALUES($account) ON CONFLICT DO NOTHING";
+            command.ExecuteNonQuery();
+        }
         var inventory = WriteInventory(db, transaction, owner, expected.Id, plan, plan.After, retained, incoming);
         inventory = WriteWallet(db, transaction, owner, expected.Id, plan, inventory);
         var learning = current.Learning;
@@ -686,7 +692,7 @@ internal sealed partial class CharacterRepository
                 var previous = plan.BeforeIndex.FindUid(item.Uid);
                 var old = previous ?? incoming?.GetValueOrDefault(item.Uid) ??
                     throw new InvalidOperationException("待转移实例不属于当前快照或已验证邮件");
-                command.Parameters.AddWithValue("$oldOwner", previous?.Position.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
+                command.Parameters.AddWithValue("$oldOwner", previous?.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon ? DBNull.Value : characterId);
                 command.CommandText = "UPDATE character_inventory_items SET character_id=$id,item_core=$core,updated_at=CURRENT_TIMESTAMP WHERE character_id IS $oldOwner AND account=$account AND item_uid=$uid";
                 if (command.ExecuteNonQuery() != 1)
                     throw new InvalidOperationException("物品更新失去所有权");
@@ -765,7 +771,7 @@ internal sealed partial class CharacterRepository
         void BindSlot(InventorySlot slot)
         {
             command.Parameters.Clear();
-            command.Parameters.AddWithValue("$id", slot.List == InventoryListType.AccountCargo ? DBNull.Value : characterId);
+            command.Parameters.AddWithValue("$id", slot.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon ? DBNull.Value : characterId);
             command.Parameters.AddWithValue("$account", owner.Account);
             command.Parameters.AddWithValue("$list", (byte)slot.List);
             command.Parameters.AddWithValue("$slot", slot.Index);

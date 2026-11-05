@@ -44,7 +44,8 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                     .Select(item => new DungeonWeightedDropItem(resolveItem(item.ItemId), item.Weight)));
                 if (pool.Entries.Any(item => !DungeonDropCreation.Supports(item.Template.Kind)))
                     throw new NotSupportedException("特殊对象掉落尚未绑定该物品类别的创建合同");
-                var random = values[2] > 0 ? RandomPlan(group.Level == -1 ? entry.BasisLevel ?? 0 : group.Level, entry.Difficulty) : null;
+                var random = values[2] > 0 ? RandomPlan(group.Level == -1 ? entry.BasisLevel ?? 0 : group.Level, entry.Difficulty)
+                    .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities) : null;
                 maximum = checked(maximum + (pool.TotalWeight == 0 ? 0 : Math.Max(0, values[1])) +
                     Math.Max(0, values[2]) * (random?.MaximumObjects ?? 0));
                 if (maximum > byte.MaxValue)
@@ -59,7 +60,13 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
                     if (roll is < 0 or > 10000)
                         throw new InvalidDataException("特殊指定掉落随机数越界");
                     if (roll < pool.TotalWeight)
-                        contents.Add(new(DungeonDropCreation.Create(pool.Select(roll), 1, draw, now, referenceQuality: true, amplification)));
+                    {
+                        var template = pool.Select(roll);
+                        var core = DungeonDropCreation.Create(template, 1, draw, now, referenceQuality: true, amplification);
+                        if (template.Kind == ItemKind.Equipment && entry.DisjointForbiddenDropRarities.Contains(template.Rarity))
+                            core = core with { DisjointForbidden = true };
+                        contents.Add(new(core));
+                    }
                 }
                 result.Add(new(parent, new(parent.Source.SourceOrdinal, checked((byte)association), action.SourceOrdinal, group.Index),
                     room.Room.Map, contents.ToImmutable(), Rule + ":" + definition.Path));

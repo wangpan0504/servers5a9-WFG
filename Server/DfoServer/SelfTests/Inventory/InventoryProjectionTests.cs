@@ -35,6 +35,31 @@ internal static class InventoryProjectionTests
             "穿戴全量无扩展头，仅当前两件且有序，真实时装保留RAW30和RAW4");
         TestCheck.That(InventoryPackets.SpecialFull(InventorySnapshot.Empty, InventoryListType.Equipment).SequenceEqual(new byte[] { 3, 0, 0 }),
             "空穿戴仍发送零计数以清理客户端幽灵装备");
+        var commonInventory = new InventorySnapshot([
+            new(80, new(InventoryListType.AccountCommon, 49), new(717, ItemKind.Material, 9)),
+            new(81, new(InventoryListType.Main, 121), new(716, ItemKind.Material, 5)),
+            new(82, new(InventoryListType.AccountCommon, 0), new(716, ItemKind.Material, 100)
+                { EnchantCardId = 7, SortLockFlag = 1, EquipmentLockId = 2 })]);
+        byte[] commonFull = InventoryPackets.SpecialFull(commonInventory, InventoryListType.AccountCommon, 0);
+        TestCheck.That(commonFull.Length == 3 + 2 * 123 && commonFull[0] == 45 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(commonFull.AsSpan(1)) == 2 &&
+            BinaryPrimitives.ReadInt16LittleEndian(commonFull.AsSpan(3)) == 0 &&
+            BinaryPrimitives.ReadInt16LittleEndian(commonFull.AsSpan(3 + 123)) == 49 &&
+            BinaryPrimitives.ReadInt32LittleEndian(commonFull.AsSpan(3 + 2)) == 716 &&
+            BinaryPrimitives.ReadInt32LittleEndian(commonFull.AsSpan(3 + 6)) == 100 &&
+            BinaryPrimitives.ReadInt32LittleEndian(commonFull.AsSpan(3 + 123 + 6)) == 9,
+            "45全量使用3B头与完整123B实例，排序保留边界槽0/49且不混入旧Main同模板");
+        TestCheck.That(commonFull[3 + 95] == 1 && commonFull[3 + 96] == 2 &&
+            BinaryPrimitives.ReadInt32LittleEndian(commonFull.AsSpan(3 + 14)) == 7,
+            "45实例投影保留原完整核心和锁，不退化成模板余额短行");
+        TestCheck.That(InventoryPackets.SpecialFull(InventorySnapshot.Empty, InventoryListType.AccountCommon, 0)
+            .SequenceEqual(new byte[] { 45, 0, 0 }), "45空全量仍发送真实零计数头");
+        byte[] commonEmpty = InventoryPackets.Delta(InventorySnapshot.Empty, InventoryListType.AccountCommon,
+            [new(InventoryListType.AccountCommon, 49)], 0);
+        TestCheck.That(commonEmpty.Length == 126 && commonEmpty[0] == 45 &&
+            BinaryPrimitives.ReadInt16LittleEndian(commonEmpty.AsSpan(3)) == 49 &&
+            BinaryPrimitives.ReadInt32LittleEndian(commonEmpty.AsSpan(5)) == -1,
+            "45差量清槽复用普通完整条目和itemId负一，不制造余额通知");
         var random = new Random(1702);
         foreach (ushort expansion in new ushort[] { 0, 8, 16, 24 })
             for (int sample = 0; sample < 30; sample++)

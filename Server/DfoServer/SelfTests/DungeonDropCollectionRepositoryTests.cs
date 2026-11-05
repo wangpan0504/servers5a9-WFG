@@ -47,13 +47,15 @@ internal static class DungeonDropCollectionRepositoryTests
             var entry = new DungeonEntryPlan(reserved.Id, reserved.Revision, 3, 3145, 0, 0, maze, map, map);
             var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
                 "[fixed]", "[normal]", "monster/collection-fixture.mob");
-            var plan = new DungeonMonsterPlan(new(map, [source, source], [], []), [new(0, 20, 1, 3, source), new(1, 21, 1, 3, source)]);
+            var plan = new DungeonMonsterPlan(new(map, [source, source, source], [], []),
+                [new(0, 20, 1, 3, source), new(1, 21, 1, 3, source), new(2, 22, 1, 3, source)]);
             var authority = new FixtureAuthority();
             That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([plan], []), authority, out var run, out _),
                 "集合仓储fixture使用原Run与可信事件入口");
             var reservations = Enumerable.Range(0, 5).Select(index => new DungeonGroundReservation(20,
                 checked((uint)(400 + index)), map, 100, 100, 0, index))
-                .Append(new DungeonGroundReservation(21, 405, map, 100, 100, 0)).ToArray();
+                .Append(new DungeonGroundReservation(21, 405, map, 100, 100, 0))
+                .Append(new DungeonGroundReservation(22, 406, map, 100, 100, 0)).ToArray();
             var ground = new DungeonGroundState(run!, [plan], reservations, "明确合成集合来源");
             run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
             var death = authority.Death(run.Snapshot.Identity, 20);
@@ -198,6 +200,63 @@ internal static class DungeonDropCollectionRepositoryTests
                 "怪物掉落的64位内部UID原样入库和重放，不写入客户端装备品级或改变完整Core");
             That(ground.ConfirmPickup(highPickup) && SkillRepositoryTests.Equal(new CharacterRepository(path)
                 .LoadCharacter(owner, highResult.Character.Slot), highResult.Character), "高UID怪物拾取重开恢复完整资产");
+            // 第三只正常collection来源使用真实716，先证明合法45规划，再进入原仓储提交。
+            var commonTemplate = resources.Items.Get(490013716);
+            That(commonTemplate.AccountCommonItem, "716真实Catalog声明公共物品，不替换模板或猜容器");
+            var commonCore = InventoryRewardGrantService.Create(commonTemplate, 3, now) with
+            { Marker16 = 33, Extension97 = 0x12345678, Extension114 = new(1, 333) };
+            var commonPending = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 22)).Pending!;
+            var commonLoot = ground.GetOrFreezeAssets(commonPending, () => [new(commonCore)]);
+            var commonGrowth = repository.CommitDungeonGrowth(owner, highResult.Character, run, commonPending, reward, growth, commonLoot);
+            run.ConfirmCommittedDeath(commonPending);
+            That(ground.PublishCommitted(commonPending, commonLoot), "716正常冻结集合在死亡事务后发布来源");
+            var commonGround = commonLoot.Grounds.Single();
+            var commonPickup = ground.PreparePickup(run.Snapshot.Identity, commonGround)!;
+            var commonPlan = DungeonPickupPlanning.Item(commonGrowth.Character, commonGround.Content, commonTemplate,
+                resources.GoldLimits, resources.EpicPieces, now);
+            var commonSlot = new InventorySlot(InventoryListType.AccountCommon, 0);
+            That(commonGround.UsesCollectionLedger && commonPickup is not null && commonPlan.Accepted &&
+                commonPlan.Plan is { } legalCommon && legalCommon.ChangedSlots.SequenceEqual(new[] { commonSlot }) &&
+                legalCommon.After.Find(commonSlot)?.Core == commonCore,
+                "716真实来源与发奖前置成立，合法计划明确目的45/0并保完整Core");
+            var commonExpected = commonGrowth.Character;
+            var mainRange = ItemSlotBoundService.Range(commonTemplate.Kind, commonExpected.Inventory);
+            var wrongSlot = Enumerable.Range(mainRange.Start, mainRange.End - mainRange.Start + 1)
+                .Select(index => new InventorySlot(InventoryListType.Main, checked((short)index)))
+                .First(slot => commonExpected.Inventory.Find(slot) is null);
+            var plannedCommon = commonPlan.Plan!.After.Find(commonSlot)!;
+            var wrongAfter = commonPlan.Plan.After with
+            { Items = commonPlan.Plan.After.Items.Replace(plannedCommon, plannedCommon with { Position = wrongSlot }) };
+            wrongAfter.Validate(allocating: true);
+            var wrongContainer = new InventoryPlan(commonPlan.Plan.Before, wrongAfter, commonPlan.Plan.Reason,
+                commonPlan.Plan.CharacterPrecondition);
+            That(wrongContainer.ChangedSlots.SequenceEqual(new[] { wrongSlot }) &&
+                wrongAfter.Find(wrongSlot)?.Core == commonCore &&
+                commonExpected.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main)
+                    .All(item => wrongAfter.Find(item.Position) == item),
+                "负例仅把同一完整716奖励挪到合法Main空材料槽，保单槽增量和全部原Main实例");
+            long beforeWrongReceipts = Query("SELECT count(*) FROM character_dungeon_drop_pickups");
+            Reject<InvalidDataException>(() => repository.CommitDungeonPickup(owner, commonExpected, commonPickup!,
+                wrongContainer, resources.EpicPieces, resources.Items), "真实common模板禁止借合法Main槽提交同一冻结物品");
+            That(SkillRepositoryTests.Equal(repository.LoadCharacter(owner, commonExpected.Slot), commonExpected) &&
+                Query("SELECT count(*) FROM character_dungeon_drop_pickups") == beforeWrongReceipts,
+                "错误目的容器拒绝不改库存或拾取回执，原合法45计划仍可继续");
+            // 修复前此处在PickupSlot按Material猜Main时抛异常；不是无资源、无合法计划或伪造来源的RED。
+            var commonResult = repository.CommitDungeonPickup(owner, commonGrowth.Character, commonPickup!, commonPlan.Plan!,
+                resources.EpicPieces, resources.Items);
+            var commonReplay = repository.CommitDungeonPickup(owner, commonGrowth.Character, commonPickup!, commonPlan.Plan!,
+                resources.EpicPieces, resources.Items);
+            That(commonResult.Destination == commonSlot && commonResult.ItemUid > 0 &&
+                commonResult.Character.Inventory.Find(commonSlot) is { } commonItem && commonItem.Uid == commonResult.ItemUid &&
+                commonItem.Core == commonCore && commonReplay.Duplicate && commonReplay.ProjectionCurrent &&
+                commonReplay.Destination == commonSlot && commonReplay.ItemUid == commonResult.ItemUid &&
+                SkillRepositoryTests.Equal(commonResult.Character, commonReplay.Character),
+                "716集合提交真实45同UID及完整Core，原key重放不增发且不伪造Main槽");
+            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE destination_list=45 AND destination_slot=0") == 1 &&
+                Query($"SELECT count(*) FROM character_inventory_items WHERE item_uid={commonResult.ItemUid} AND character_id IS NULL") == 1 &&
+                ground.ConfirmPickup(commonPickup!) && ground.FindAvailable(run.Snapshot.Identity, 406) is null &&
+                new CharacterRepository(path).LoadCharacter(owner, commonResult.Character.Slot).Inventory.Find(commonSlot)?.Core == commonCore,
+                "716实际目的容器持久化，提交后消除原地面源，仓储重开不重复发物");
             // 满级角色的击杀经验不进经验条，但必须等额进入角色熟练度。
             var seeded = SkillLearning.Initialize(0, characters.Get(0).Skills.ToArray(), learning);
             That(seeded.Success, "熟练度fixture使用真实职业技能初始化");

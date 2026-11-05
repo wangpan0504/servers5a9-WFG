@@ -94,8 +94,10 @@ internal sealed partial class GameSession
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
                 return Reject(definition.SummonsApc ? "summon_requires_living_dungeon_character" : "projectile_requires_living_dungeon_character");
             var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
-            if (definition.RevivalBlessing && formalDungeon is { } instance && definition.ExcludedDungeons.Contains(instance.Entry.DungeonId))
+            if (formalDungeon is { } instance && definition.ExcludedDungeons.Contains(instance.Entry.DungeonId))
                 return Reject("potion_dungeon_excluded");
+            if (definition.RaidUseForbidden && formalDungeon?.Entry.RaidEntry is not null)
+                return Reject("potion_raid_excluded");
             if (previous is { EnforceCooldown: true } && previous.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(definition.CoolTime))
             {
                 return Reject("cooldown");

@@ -182,6 +182,19 @@ internal static class CommandLineTests
     {
         int checks = Count;
         That(!ServerOptions.Load().EnablePromotionPage, "页面协议未配置时默认关闭");
+        That(!ServerOptions.Load().EpicRoad2019Enabled, "星河裂缝未配置时默认关闭");
+        That(ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On"]).Options).EpicRoad2019Enabled,
+            "星河裂缝可通过正式运行参数显式开启");
+        var simulated = ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On",
+            "--epic-road-2019-simulated-drops", "On"]).Options);
+        That(simulated.EpicRoad2019Enabled && simulated.EpicRoad2019SimulatedDropsEnabled, "模拟掉落开关可与活动开关共同装载");
+        That(!ServerOptions.Load().EpicRoad2019SimulatedDropsEnabled &&
+            !ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019", "On"]).Options).EpicRoad2019SimulatedDropsEnabled,
+            "默认和仅开启活动都不自动开启模拟掉落");
+        That(!ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019-simulated-drops", "Off"]).Options).EpicRoad2019SimulatedDropsEnabled,
+            "模拟掉落可以显式关闭");
+        Reject<InvalidDataException>(() => ServerOptions.Load(ServerCommand.Parse(["--epic-road-2019-simulated-drops", "true"]).Options),
+            "模拟开关拒绝未知值");
         That(!ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "Off"]).Options).EnablePromotionPage,
             "页面协议可显式关闭");
         That(ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "On"]).Options).EnablePromotionPage,

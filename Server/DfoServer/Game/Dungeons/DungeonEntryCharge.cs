@@ -23,6 +23,8 @@ internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsa
 internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, DungeonRunIdentity Identity, int MapId,
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
+    // 只约束本次新入场提交；不带到已安装实例的死亡、奖励或回城流程。
+    public InventoryEventPrecondition? RequiredEvent { get; init; }
     // 训练费独立于副本门票表达，付款仍在原入场事务中合并为一次背包提交。
     public TimeProvider BattlePassMissionClock { get; init; } = TimeProvider.System;
     public InventoryPlan? GuildTraining { get; init; }
@@ -51,6 +53,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
     public int FatigueAccelerationPercent { get; init; }
-    public InventoryEventPrecondition? RequiredEvent { get; init; }
     public bool IsEmpty => RequiredEvent is null && Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null && PreyNormalEntry is null && AntonNormalEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }
+
+internal sealed class DungeonEventAdmissionRejectedException() : InvalidOperationException("副本活动已关闭、到期或版本变化");

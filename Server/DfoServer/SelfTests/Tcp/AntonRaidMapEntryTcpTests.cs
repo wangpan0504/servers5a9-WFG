@@ -151,6 +151,7 @@ internal static partial class AntonRaidMapEntryTcpTests
             clients[0].Expect(0, 3, [1, (byte)id0, (byte)(id0 >> 8), 1]);
             That(sessions[0].Phase == SessionPhase.Dungeon && sessions[0].DungeonSnapshot!.CurrentMap.Id == 32200,
                 "真实37完成加载后按ACK37→NOTI30→USER_STATE进入正式黑雾房间");
+            EpicRoadRecoveryTests.RunRaid(sessions[0], repository, leases[0], resources.ItemResources);
             clients[0].Send(37, new byte[8]); Barrier(clients[0]);
             That(fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == committed &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]],

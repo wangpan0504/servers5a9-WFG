@@ -16,7 +16,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
     bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false,
     DungeonItemDropPool? EpicReplacementItems = null, DungeonDropCategory Category = DungeonDropCategory.Special,
-    ImmutableDictionary<int, int>? ItemStackSizes = null);
+    ImmutableDictionary<int, int>? ItemStackSizes = null,
+    ImmutableHashSet<int>? DisjointForbiddenRarities = null, bool EpicRoad2019Simulated = false);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -30,6 +31,15 @@ internal sealed class DungeonDropGenerationPlan
     public bool ExcludeLowEquipment { get; init; }
     public bool ExcludeLowMaterials { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
+    public DungeonDropGenerationPlan WithDisjointRestrictions(ImmutableHashSet<int> rarities)
+    {
+        if (rarities.IsEmpty) return this;
+        return new(ResourceSource, Trials.Select(trial => trial with
+        {
+            DisjointForbiddenRarities = (trial.DisjointForbiddenRarities ?? ImmutableHashSet<int>.Empty).Union(rarities)
+        }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource,
+            ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials };
+    }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
     // added/scale：1136 为百分数（100/100）；星空 1271 为万分比（6520/10000）。
     public DungeonDropGenerationPlan WithEpicDropBonus(int added, int scale = 100)
@@ -111,6 +121,7 @@ internal sealed class DungeonDropGenerationPlan
             int sources = (trial.Items is not null ? 1 : 0) + (trial.Gold is not null ? 1 : 0) + (!trial.RarityPools.IsDefaultOrEmpty ? 1 : 0);
             if (trial.ProbabilityDenominator <= 0 || trial.Threshold < 0 || trial.Threshold > trial.ProbabilityDenominator ||
                 trial.MinimumCount <= 0 || trial.MaximumCount < trial.MinimumCount ||
+                trial.DisjointForbiddenRarities?.Any(rarity => rarity is < 0 or > 6) == true ||
                 sources != 1 || trial.GoldMultiplier <= 0 || trial.ReferenceGold && trial.Gold is null || trial.Attempts is < 1 or > ushort.MaxValue)
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
@@ -177,12 +188,13 @@ internal sealed class DungeonDropGenerationPlan
         MaximumObjects = maximum;
     }
 
-    public ImmutableArray<DungeonGroundContent> Generate(Func<int, int> draw, DateTimeOffset now)
+    public ImmutableArray<DungeonGroundContent> Generate(Func<int, int> draw, DateTimeOffset now, bool epicRoad2019Available = true)
     {
         var result = ImmutableArray.CreateBuilder<DungeonGroundContent>();
         foreach (var trial in Trials)
         for (int attempt = 0; attempt < trial.Attempts; attempt++)
         {
+            if (!epicRoad2019Available && trial.EpicRoad2019Simulated) continue;
             // 参考服先计算金币波动，再判定金币概率；即使未命中也保留这一抽样次序。
             int? preparedGold = trial.ReferenceGold ? GoldAmount(trial) : null;
             if (Sample(trial.ProbabilityDenominator) >= trial.Threshold)
@@ -232,7 +244,12 @@ internal sealed class DungeonDropGenerationPlan
             if (template.Kind == ItemKind.Equipment)
             {
                 for (int index = 0; index < count; index++)
-                    result.Add(new(DungeonDropCreation.Create(template, 1, Sample, now, ReferenceQuality, Amplification)));
+                {
+                    var core = DungeonDropCreation.Create(template, 1, Sample, now, ReferenceQuality, Amplification);
+                    if (trial.DisjointForbiddenRarities?.Contains(template.Rarity) == true)
+                        core = core with { DisjointForbidden = true };
+                    result.Add(new(core));
+                }
             }
             else
             {
@@ -249,7 +266,8 @@ internal sealed class DungeonDropGenerationPlan
                 }
             }
         }
-        return result.ToImmutable();
+        return epicRoad2019Available ? result.ToImmutable() : result.Where(content =>
+            content.Item is null || !EpicRoad2019ItemLifetime.Includes(content.Item.ItemId)).ToImmutableArray();
 
         int GoldAmount(DungeonDropTrial trial)
         {

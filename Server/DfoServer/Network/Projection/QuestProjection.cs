@@ -117,5 +117,7 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
     }
 
     private byte[] Prepare(GameConnectionContext context, Character character) => QuestPackets.AvailableList(character.Level,
-        QuestEligibility.Candidates(character, quests, strongway2019Active: context.Session.Strongway2019QuestActive));
+        QuestEligibility.Candidates(character, quests,
+            strongway2019Active: context.Session.Strongway2019QuestActive,
+            epicRoad2019Active: context.Session.EpicRoad2019QuestActive));
 }

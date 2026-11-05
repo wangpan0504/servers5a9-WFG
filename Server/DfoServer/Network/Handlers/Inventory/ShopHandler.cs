@@ -13,6 +13,7 @@ using DfoServer.Game.Marriage;
 using DfoServer.Network.Projection;
 using DfoServer.Game.Events;
 using DfoServer.Game.Strongway2019;
+using DfoServer.Game.EpicRoad2019;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Handlers.Inventory;
@@ -218,6 +219,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         else if (Strongway2019ShopRules.Handles(request.ShopId))
             result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
                 context.Session.PlanAndCommitStrongway2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);
+        else if (EpicRoad2019ShopRules.Handles(request.ShopId))
+            result = serverEvents is null || strongwayShops is null ? InventoryResult.Reject(17) :
+                context.Session.PlanAndCommitEpicRoad2019ShopBuy(request, shop, strongwayShops, serverEvents, out receipt);
         else if (marriageShop?.Handles(request.ItemId) == true)
         {
             result = InventoryResult.Reject(17);

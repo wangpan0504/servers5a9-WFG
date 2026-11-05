@@ -807,11 +807,11 @@ CREATE TABLE inventory_creature_details(
 CREATE TABLE "character_inventory_slots"(
     character_id INTEGER,
     account TEXT NOT NULL,
-    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,46)),
+    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,45,46)),
     owner_character_id INTEGER GENERATED ALWAYS AS (COALESCE(character_id,0)) STORED,
     slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419)),
     item_uid INTEGER NOT NULL UNIQUE,
-    CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type<>12 AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264))),
+    CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264))),
     CHECK(list_type<>1 OR slot_index<420),
     CHECK(list_type<>7 OR slot_index<240),
     CHECK(list_type<>38 OR slot_index<98),
@@ -820,6 +820,7 @@ CREATE TABLE "character_inventory_slots"(
 );
 
 CREATE UNIQUE INDEX account_cargo_slot ON character_inventory_slots(account,slot_index) WHERE list_type=12;
+CREATE UNIQUE INDEX account_common45_slot ON character_inventory_slots(account,slot_index) WHERE list_type=45;
 
 -- 邮箱 v4：附件沿用完整物品实例与详情，只变更持久所有者和所在位置。
 CREATE TABLE mailbox_messages(

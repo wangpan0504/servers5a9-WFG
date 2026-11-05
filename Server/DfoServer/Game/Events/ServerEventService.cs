@@ -56,6 +56,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     ServerEventSchedule endlessAdventureSchedule = store.Read(EndlessAdventurePolicy.EventId);
     public bool IsEndlessAdventureActive(DateTimeOffset now) => Volatile.Read(ref endlessAdventureSchedule).IsActive(now);
     public const ushort BattlePassId = 2520;
+    public const ushort EpicRoadId = 10005;
     ServerEventSchedule battlePassSchedule = new(BattlePassId);
     DateTimeOffset? battlePassStart, battlePassEnd;
     bool battlePassDefaultEnabled, battlePassMissionsPrepared;

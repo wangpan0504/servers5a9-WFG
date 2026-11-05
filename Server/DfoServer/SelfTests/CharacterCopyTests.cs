@@ -38,7 +38,13 @@ internal static partial class CharacterCopyTests
             var shared = source.Inventory.Items.Single(item => item.Position.List == InventoryListType.AccountCargo);
             That(copy.Inventory.Find(shared.Position) == shared && copy.Inventory.AccountCargo == source.Inventory.AccountCargo &&
                 copy.Inventory.AccountWallet.Same(source.Inventory.AccountWallet), "共享仓库和钱包不复制或递增版本");
-            var privateItems = source.Inventory.Items.Where(item => item.Position.List != InventoryListType.AccountCargo).ToArray();
+            var common45 = source.Inventory.Items.Single(item => item.Position.List == InventoryListType.AccountCommon);
+            That(copy.Inventory.Find(common45.Position) == common45 &&
+                f.Scalar($"SELECT count(*) FROM character_inventory_items WHERE item_uid={common45.Uid} AND character_id IS NULL") == 1 &&
+                f.Scalar("SELECT count(*) FROM character_inventory_slots WHERE list_type=45") == 1,
+                "复制复用45原UID、完整核心和账号owner，不克隆或递增共享版本");
+            var privateItems = source.Inventory.Items.Where(item => item.Position.List is not
+                (InventoryListType.AccountCargo or InventoryListType.AccountCommon)).ToArray();
             That(privateItems.All(item => copy.Inventory.Find(item.Position) is { } next && next.Uid != item.Uid) &&
                 !privateItems.Select(item => item.Uid).Intersect(copy.Inventory.Items.Select(item => item.Uid)).Any(), "所有角色物品UID重新分配且不与原件重叠");
             foreach (var item in privateItems)
@@ -262,7 +268,8 @@ internal static partial class CharacterCopyTests
             {
                 AccountCargo = created.Inventory.AccountCargo with { Capacity = 8 },
                 Items = created.Inventory.Items.Replace(clone, clone with { Avatar = clone.Avatar! with { ClearAvatarId = sourceAvatar.Core.ItemId, ClearAvatarSourceUid = sourceAvatar.Uid } })
-                    .Add(new(0, new(InventoryListType.AccountCargo, 0), new(3175, ItemKind.Material, 7))),
+                    .Add(new(0, new(InventoryListType.AccountCargo, 0), new(3175, ItemKind.Material, 7)))
+                    .Add(new(0, new(InventoryListType.AccountCommon, 0), new(490013716, ItemKind.Material, 9) { Extension97 = 1234, Attr = 32 })),
                 AvatarPresets = new(1, [new(0, "套装", [new(0, clone.Uid, (uint)clone.Core.ItemId, (uint)sourceAvatar.Core.ItemId, 0, 0, sockets, sourceAvatar.Uid)])])
             };
             Source = Repository.CommitInventory(Owner, created, new(created.Inventory, after, "test_copy_source"));

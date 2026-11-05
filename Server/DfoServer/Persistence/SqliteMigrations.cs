@@ -371,7 +371,35 @@ internal static class SqliteMigrations
         new(196, "周签到冻结赛季与账号进度", static (db, tx) => Execute(db, tx,
             WeeklyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(197, "战令豪华044一次性订单", BattlePassDeluxeSchema.Upgrade),
+        new(198, "账号公共物品容器45", UpgradeAccountCommon45),
     ];
+
+    const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
+    const string AccountCommon45OwnershipConstraint = "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type=45 AND character_id IS NULL AND slot_index<50) OR (list_type NOT IN(12,45) AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))";
+    const string AccountCommon45SlotIndex = "CREATE UNIQUE INDEX account_common45_slot ON character_inventory_slots(account,slot_index) WHERE list_type=45";
+
+    static void UpgradeAccountCommon45(SqliteConnection db, SqliteTransaction tx)
+    {
+        ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK(list_type IN (0,1,2,3,7,12,38,46))", AccountCommon45ListConstraint);
+        ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK((list_type=12 AND character_id IS NULL AND slot_index<240) OR (list_type<>12 AND character_id IS NOT NULL AND (list_type<>2 OR slot_index<264)))", AccountCommon45OwnershipConstraint);
+        Execute(db, tx, AccountCommon45SlotIndex.Replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", StringComparison.Ordinal));
+    }
+
+    static void ValidateAccountCommon45(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_inventory_slots'";
+        if (query.ExecuteScalar() is not string slots || !slots.Contains(AccountCommon45ListConstraint, StringComparison.Ordinal) ||
+            !slots.Contains(AccountCommon45OwnershipConstraint, StringComparison.Ordinal))
+            throw new InvalidDataException("账号公共物品容器45的槽位或归属约束不兼容");
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='index' AND name='account_common45_slot'";
+        if (query.ExecuteScalar() is not string index || NormalizeTable(index, "character_inventory_slots") !=
+            NormalizeTable(AccountCommon45SlotIndex, "character_inventory_slots"))
+            throw new InvalidDataException("账号公共物品容器45的唯一槽位索引不兼容");
+    }
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
 
@@ -2581,6 +2609,7 @@ internal static class SqliteMigrations
         }
         ValidateTeleportCooldownColumn(db, tx, "privilege_until");
         InventoryItemRevisionSchema.Validate(db, tx);
+        ValidateAccountCommon45(db, tx);
         BeastDungeonReservationSchema.Validate(db, tx);
         BeastStageRewardSchema.Validate(db, tx);
         // 基线标识不能代替必需列检查；损坏或残缺结构不得进入监听阶段。
