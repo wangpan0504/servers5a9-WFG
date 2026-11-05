@@ -367,6 +367,11 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 if (mileage.Item != template) throw new InvalidDataException("mileage_template_changed");
                 return;
             }
+            if (items.LevelUpByTable(id) is { } levelTable)
+            {
+                if (levelTable.Item != template) throw new InvalidDataException("level_up_by_table_definition");
+                return;
+            }
             if (template.OpensCreatureSkinSlot || template.OpensAuraSkinSlot)
             {
                 if (template.UseForbidden || template.Jobs == 0 || template.MinimumLevel > template.MaximumLevel ||
