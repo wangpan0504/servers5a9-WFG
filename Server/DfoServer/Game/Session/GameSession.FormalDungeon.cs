@@ -313,7 +313,8 @@ internal sealed partial class GameSession
             var floor = catalog.Despair.Floors[progress.NextLayer - 1];
             despair = DungeonDespairEntryPolicy.Prepare(dungeonId, expected, day, progress,
                 repository.LoadSpecialEntryUsage(owner, expected, day, DungeonSpecialEntryKind.Despair),
-                catalog.Despair, catalog.Get(floor.DungeonId), repository.ReadAdventureLevel(owner));
+                catalog.Despair, catalog.Get(floor.DungeonId), repository.ReadAdventureLevel(owner),
+                repository.AdventureCatalog);
             if (despair is null) return RejectFormal("despair-entry-count-or-progress-rejected");
             optionDungeon = checked((uint)catalog.Despair.RootDungeonId);
             dungeonId = checked((uint)despair.DungeonId);
@@ -1504,8 +1505,11 @@ internal sealed partial class GameSession
                     // 个人掉落沿用第一档；队内有效成长契约人数对应的其余档位尚未接入。
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
+                    int antoniumBonus = !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom
+                        ? DfoServer.Game.Adventure.AdventureBenefitPolicy.AntoniumDropBasisPoints(ReadAdventureLevel(), repository.AdventureCatalog)
+                        : 0;
                     int epicBonus = EpicDropPotionBonus(Selected, now);
-                    var boosted = generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus);
+                    var boosted = generation.WithGrowthContract(bonus).WithAntoniumDropBonus(antoniumBonus).WithEpicDropBonus(epicBonus);
                     if (dungeon.Entry.IsHellLegend)
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);

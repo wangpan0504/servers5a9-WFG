@@ -78,8 +78,21 @@ internal static class AdventureCoreTests
             AdventureBenefitPolicy.ClearExperienceBonus(1000, 2, catalog) == 100 &&
             AdventureBenefitPolicy.ClearExperienceBonus(1009, 2, catalog) == 100 &&
             AdventureBenefitPolicy.ClearExperienceBonus(0, 2, catalog) == 0 &&
-            AdventureBenefitPolicy.ClearExperienceBonus(1000, 4, catalog) == 0,
-            "冒险团通关经验加成只取当前等级成长项，按百分比向下取整且缺级不臆造");
+            AdventureBenefitPolicy.ClearExperienceBonus(1000, 4, catalog) == 0 &&
+            AdventureBenefitPolicy.DespairTowerExtraEntries(1, catalog) == 0 &&
+            AdventureBenefitPolicy.DespairTowerExtraEntries(2, catalog) == 1 &&
+            AdventureBenefitPolicy.DespairTowerExtraEntries(3, catalog) == 0 &&
+            AdventureBenefitPolicy.AntoniumDropBasisPoints(1, catalog) == 0 &&
+            AdventureBenefitPolicy.AntoniumDropBasisPoints(2, catalog) == 60 &&
+            AdventureBenefitPolicy.AntoniumDropBasisPoints(3, catalog) == 0,
+            "冒险团通关经验加成、绝望之塔额外入场次数与安徒恩魔能石掉落率加成只取当前等级，缺级不臆造");
+        var antoniumTemplate = new DfoServer.GameWorld.Items.ItemTemplate(
+            AdventureBenefitPolicy.AntoniumItemId, DfoServer.GameWorld.Items.ItemKind.Material, 0, 2, 1, 1000, 0, 0, 0, "魔能石", 0, 0, "[free]", "");
+        var antoniumPlan = new DfoServer.Game.Dungeons.DungeonDropGenerationPlan("antonium-benefit-test",
+            [new(100000, new(new[] { new DfoServer.GameWorld.Dungeons.DungeonWeightedDropItem(antoniumTemplate, 1) }), 1, 1, ProbabilityDenominator: 1000000)]);
+        That(antoniumPlan.WithAntoniumDropBonus(60).Trials[0].Threshold == 100600 &&
+            antoniumPlan.WithAntoniumDropBonus(0).Trials[0].Threshold == 100000,
+            "安徒恩魔能石独立掉落阈值按冒险团万分比加成放大");
         That(AdventurePeriod.LoginDay(new DateTimeOffset(2026, 10, 12, 5, 59, 0, TimeSpan.FromHours(8))) == 20261011 &&
             AdventurePeriod.LoginDay(new DateTimeOffset(2026, 10, 12, 6, 0, 0, TimeSpan.FromHours(8))) == 20261012,
             "连续登录日期按UTC+8的06:00切换");
@@ -153,7 +166,7 @@ internal static class AdventureCoreTests
         var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, ack: true);
         That(ack[0] == 1 && ack.AsSpan(1, 2).SequenceEqual(new byte[2]) && ack.Length == info.Length + 1,
             "ACK1403保留成功前缀与选角owner0");
-        var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue), DespairTowerClears = 5, LamentTowerClears = 8 };
+        var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue), DuelWins = 9, DespairTowerClears = 5, LamentTowerClears = 8 };
         foreach (bool isAck in new[] { false, true })
         {
             byte[] content = AdventurePackets.Information(42, raids, catalog, [], ack: isAck);
@@ -161,11 +174,11 @@ internal static class AdventureCoreTests
             That(BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LukeRaidClearOffset)) == 65536 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.MetroRaidClearOffset)) == 70000 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.PreyRaidClearOffset)) == uint.MaxValue &&
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DuelWinOffset)) == 9 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DespairTowerClearOffset)) == 5 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LamentTowerClearOffset)) == 8 &&
-                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.RecommendedClearOffset)) == 12 &&
-                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.DuelWinOffset)) == 0,
-                "通知和ACK的三类团本与双塔100层使用完整u32，空代表不清通关累计，不串写推荐与未接内容");
+                BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.RecommendedClearOffset)) == 12,
+                "通知和ACK的三类团本、决斗胜场与双塔100层使用完整u32，空代表不清通关累计，不串写推荐与未接内容");
         }
         byte[] refresh = AdventurePackets.Refresh(42, snapshot.State, catalog);
         That(refresh.Length == 50 && BinaryPrimitives.ReadUInt32LittleEndian(refresh.AsSpan(2)) == 40 &&
@@ -293,9 +306,23 @@ internal static class AdventureCoreTests
             """);
         var towerSnapshot = repo.ReadAdventure(owner, catalog, now);
         var otherTowerSnapshot = repo.ReadAdventure(other, catalog, now);
-        That(towerSnapshot is { DespairTowerClears: 2, LamentTowerClears: 1 } &&
-            otherTowerSnapshot is { DespairTowerClears: 0, LamentTowerClears: 0 },
+        That(towerSnapshot is { DespairTowerClears: 2, LamentTowerClears: 1, DuelWins: 0 } &&
+            otherTowerSnapshot is { DespairTowerClears: 0, LamentTowerClears: 0, DuelWins: 0 },
             "绝望之塔与悲叹之塔按账号只统计100层通关回执，不混入非100层且严格按账号隔离");
+        Execute(db, """
+            INSERT INTO pvp_arena_match_results(match_id,result_json,finished_at) VALUES
+              ('50000000000000000000000000000001','{}',1000),
+              ('50000000000000000000000000000002','{}',1001),
+              ('50000000000000000000000000000003','{}',1002);
+            INSERT INTO character_pvp_rating_claims(match_id,character_id,account,rating_mode,outcome,receipt_json) VALUES
+              ('50000000000000000000000000000001',1,'adventure',1,0,NULL),
+              ('50000000000000000000000000000002',1,'adventure',2,0,NULL),
+              ('50000000000000000000000000000002',2,'adventure',2,0,NULL),
+              ('50000000000000000000000000000003',1,'adventure',1,1,NULL);
+            """);
+        That(repo.ReadAdventure(owner, catalog, now).DuelWins == 2 &&
+            repo.ReadAdventure(other, catalog, now).DuelWins == 0,
+            "决斗场胜利次数按账号胜局去重汇总，总力战同局多角色只计1场且不计败局");
     }
 
     static void Migrate()

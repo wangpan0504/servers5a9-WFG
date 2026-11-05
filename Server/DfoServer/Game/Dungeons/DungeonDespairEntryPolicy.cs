@@ -1,4 +1,6 @@
+using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Adventure;
 using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
@@ -22,7 +24,7 @@ internal static class DungeonDespairEntryPolicy
 
     public static DungeonDespairAdmission? Prepare(uint requested, Character character, int day,
         DungeonDespairProgress progress, DungeonSpecialEntryUsage usage, TowerOfDespairCatalog tower,
-        DungeonDefinition floor, int adventureLevel)
+        DungeonDefinition floor, int adventureLevel, AdventureCatalog? adventure = null)
     {
         progress.Validate();
         if ((requested != tower.RootDungeonId && requested != floor.Id) || day is < 1 or > 3652058 || character.Level < tower.MinimumLevel ||
@@ -32,9 +34,11 @@ internal static class DungeonDespairEntryPolicy
         if (target.Layer != progress.NextLayer || target.DungeonId != floor.Id || !floor.IsDespairTower ||
             !floor.DisableFatigueConsumption || !floor.EnterWithoutFatigue || floor.CoinLimit is null)
             throw new InvalidDataException("绝望准入没有绑定当前层的完整DGN合同");
-        int maximum = checked(tower.AccountMaximum + tower.AdventureCounts
+        int towerBonus = tower.AdventureCounts
             .Where(row => adventureLevel >= row.MinimumLevel && adventureLevel <= row.MaximumLevel)
-            .Select(row => row.AdditionalCount).DefaultIfEmpty().Single());
+            .Select(row => row.AdditionalCount).DefaultIfEmpty().Single();
+        int benefitBonus = AdventureBenefitPolicy.DespairTowerExtraEntries(adventureLevel, adventure);
+        int maximum = checked(tower.AccountMaximum + Math.Max(towerBonus, benefitBonus));
         // 已入场角色的失败重试不占用第二个账号角色名额。
         if (usage.CharacterEntries == 0 && usage.AccountCharacters >= maximum) return null;
         var ticket = floor.OrdinaryEntryTicket;

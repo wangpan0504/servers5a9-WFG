@@ -70,6 +70,13 @@ internal sealed partial class CharacterRepository : ISocialStore
             command.CommandText = "INSERT INTO character_social_links(owner_id,target_id,kind,created,memo) VALUES($owner,$target,$kind,$created,$memo)";
         }
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("社交关系提交失败");
+        if (blocked)
+        {
+            command.CommandText = remove
+                ? "UPDATE characters SET blacklist_count=max(blacklist_count-1,0) WHERE id=$target"
+                : "UPDATE characters SET blacklist_count=min(blacklist_count+1,2147483647) WHERE id=$target";
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("被拉黑计分同步失败");
+        }
         tx.Commit();
         return new SocialResult(0, target);
     });

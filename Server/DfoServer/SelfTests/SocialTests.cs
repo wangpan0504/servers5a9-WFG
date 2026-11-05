@@ -67,14 +67,16 @@ internal static class SocialTests
             void Execute(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
             long Scalar(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; return Convert.ToInt64(cmd.ExecuteScalar()); }
             That(repo.ChangeCharacterLink(actor, "SocialB", false, false, "", now).Accepted &&
-                repo.CharacterLinks(other.Character.Id, false).Length == 0, "普通好友只修改添加者单向关系");
+                repo.CharacterLinks(other.Character.Id, false).Length == 0 &&
+                repo.LoadCharacter(b, 0).BlacklistCount == 0, "普通好友只修改添加者单向关系，不改变被拉黑计分");
             That(repo.ChangeCharacterLink(actor, "SocialB", false, false, "", now).Accepted &&
                 repo.CharacterLinks(actor.Character.Id, false).Length == 1, "重复添加普通好友幂等");
             That(!repo.ChangeCharacterLink(actor, "SocialA", false, false, "", now).Accepted &&
                 !repo.ChangeCharacterLink(actor, "Absent", false, false, "", now).Accepted, "自己与不存在的好友拒绝");
             That(repo.ChangeCharacterLink(other, "SocialA", true, false, "备注", now).Accepted &&
-                repo.IsBlocked(other.Character.Id, actor.Character.Id) && repo.BlockingCharacters(actor.Character.Id).SetEquals([other.Character.Id]),
-                "黑名单真实保存并供消息过滤");
+                repo.IsBlocked(other.Character.Id, actor.Character.Id) && repo.BlockingCharacters(actor.Character.Id).SetEquals([other.Character.Id]) &&
+                repo.LoadCharacter(a, 0).BlacklistCount == 1,
+                "黑名单真实保存并同步推进目标角色被拉黑计分");
             That(repo.UpdateSocialMemo(other, "SocialA", "修改", true).Accepted &&
                 repo.CharacterLinks(other.Character.Id, true).Single().Memo == "修改" &&
                 !repo.UpdateSocialMemo(other, "Absent", "", true).Accepted, "备注只修改真实关系，缺失不能返回成功");
@@ -87,7 +89,8 @@ internal static class SocialTests
             That(named.Send(sa,send,[0x7f,0x7f,(byte)'X',0x7f],new byte[148]).Rejection=="blacklisted" && received is null,
                 "物品引用不能绕过具名私聊的黑名单资格");
             repo.ChangeCharacterLink(other, "SocialA", true, true, "", now);
-            That(named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后按名字只投目标，消息保留发送者身份");
+            That(repo.LoadCharacter(a, 0).BlacklistCount == 0 &&
+                named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后同步扣减被拉黑计分并恢复消息投递");
             sb.ReturnToRoster();
             That(named.Send(sa, send).TargetOffline, "切角中的旧角色不继续接收");
             sb.Select(0);
@@ -221,9 +224,12 @@ internal static class SocialTests
                 "固定双角色入口允许已持两把锁的明确重入");
             Reject<InvalidOperationException>(() => a.Execute(() => AccountOwners.Lease.ExecuteTogether(a, b, () => true)),
                 "不能在单账号锁内升级为双账号锁");
+            repo.ChangeCharacterLink(other, "SocialA", true, false, "", now);
+            That(repo.LoadCharacter(a, 0).BlacklistCount == 1, "删角前被拉黑计分为1");
             repo.Delete(b, repo.LoadDeletionTarget(b, 0));
-            That(repo.CharacterLinks(actor.Character.Id, false).Length == 0 && Scalar("SELECT count(*) FROM account_social_links") == 2,
-                "删角清理两端角色关系，同时保留账号好友");
+            That(repo.CharacterLinks(actor.Character.Id, false).Length == 0 && Scalar("SELECT count(*) FROM account_social_links") == 2 &&
+                repo.LoadCharacter(a, 0).BlacklistCount == 0,
+                "删角清理两端角色关系、回退被拉黑计分，同时保留账号好友");
             That(repo.AccountFriends(a.Account) is [{ Person.Id: 0, Person.Adventure: "TeamB" }] &&
                 repo.ResolveAccountFriend(sa.CaptureSocialActor()!, "TeamB", false, true, false).Accepted && repo.AccountFriends(a.Account).Length == 0,
                 "对方删尽角色后冒险团好友仍可展示并删除");

@@ -23,6 +23,7 @@ internal interface IExpertJobSetter
 
 internal interface ICharacterRepository
 {
+    DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => null;
     QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected);
     string ReadAdventureName(AccountOwners.Lease owner);
     bool AdventureNameExists(AccountOwners.Lease owner, string name);
