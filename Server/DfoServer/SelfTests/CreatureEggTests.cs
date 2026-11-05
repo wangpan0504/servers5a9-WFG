@@ -25,14 +25,20 @@ internal static class CreatureEggTests
         const string eggText = "[equipment type]\n`[creature]` 0\n[sub type]\n1\n[creature species]\n20\n[output index]\n7002";
         const string outputText = "[equipment type]\n`[creature]` 0\n[sub type]\n0\n[creature species]\n20";
         var definition = CreatureEggCatalog.Read(new(eggText), new(outputText), egg, output);
-        That(definition == new CreatureEggDefinition(7001, 7002, 20) { DefaultName = "宠物" }, "孵化定义来自蛋subtype1与单一output index，目标同species且subtype0");
+        That(definition == new CreatureEggDefinition(7001, 7002, 20) { DefaultName = "宠物" }, "孵化定义来自蛋subtype1与单一output index，目标为单一output index指定的subtype0");
         foreach (string invalid in new[] { eggText.Replace("7002", "7001"), eggText.Replace("\n1\n", "\n0\n"),
             eggText + "\n[output index]\n7002", eggText.Replace("7002", "7002 7003"), eggText.Replace("`[creature]` 0", "`[creature]` 1") })
             That(CreatureEggCatalog.Read(new(invalid), new(outputText), egg, output) is null,
                 "自指、非蛋、重复或多产物及未知类型参数不能被普通孵化默默补齐");
-        That(CreatureEggCatalog.Read(new(eggText), new(outputText.Replace("\n20", "\n21")), egg, output) is null &&
+        var crossSpecies = CreatureEggCatalog.Read(new(eggText), new(outputText.Replace("\n20", "\n21")), egg, output);
+        That(crossSpecies == definition, "显式产物允许源与目标各自合法species不同，关系仍保存源species");
+        foreach (string invalid in new[] { outputText.Replace("\n20", "\n-1"), outputText + "\n[creature species]\n20",
+            outputText.Replace("\n20", "\n20 21"), outputText.Replace("[creature species]", "[unknown species]") })
+            That(CreatureEggCatalog.Read(new(eggText), new(invalid), egg, output) is null,
+                "产物species必须存在且为单一非负整数，不因允许跨species而放行无效产物");
+        That(CreatureEggCatalog.Read(new(eggText.Replace("\n20", "\n-1")), new(outputText), egg, output) is null &&
             CreatureEggCatalog.Read(new(eggText), new(outputText), egg, output with { Kind = ItemKind.Equipment }) is null,
-            "species不符及非Creature产物拒绝，不生成裸普通核心");
+            "源负species及非Creature产物拒绝，不生成裸普通核心");
         var position = new InventorySlot(InventoryListType.Pet, 0);
         var detail = new CreatureDetail { Name = "试验", Satiety = 73, Experience = 55, Level = 2, TailFlag = 1, ExpireTime = 2000 };
         var core = new ItemCore(7001, ItemKind.Creature, 63) { SealFlag = 1, Attr = 3, Marker16 = 77, SortLockFlag = 1, Extension27 = 123 };
@@ -57,6 +63,8 @@ internal static class CreatureEggTests
         var growing = InventoryCreatureEggService.Plan(character, position, 1000, growingDefinition!, egg).Plan!.After.Find(position)!;
         That(growing.Creature == detail with { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5 } && growing.Uid == hatched.Uid && growing.Core == hatched.Core,
             "道具成长产物在孵化时即初始化模式和亲密度，保留其它详情，不等穿戴后再修正");
+        That(InventoryCreatureEggService.Plan(character, position, 1000, crossSpecies!, egg).Plan!.After.Find(position) == hatched,
+            "精确跨species关系按相同产物转换，完整实例与同species孵化保持一致");
         That(!InventoryCreatureEggService.Plan(character with { Inventory = result.Plan.After }, position, 1000, definition!, egg).Accepted,
             "相同请求再次检查真实源；已孵化目标不能作为蛋重复转换");
         foreach (var invalid in new[] { character with { Inventory = InventorySnapshot.Empty },
@@ -80,6 +88,12 @@ internal static class CreatureEggTests
         That(definition is { EggItemId: 63022, OutputItemId: 63023, Species: 20, DefaultName.Length: > 0 } &&
             definition.DefaultName == items.Get(63023).CreatureName && eggs.Get(63023) is null,
             "匹配波比蛋63022单向输出63023，目标subtype0不可再次孵化");
+        var crossSpecies = eggs.Get(2681358);
+        That(crossSpecies is { EggItemId: 2681358, OutputItemId: 2681359, Species: 87, DefaultName.Length: > 0 } &&
+            crossSpecies.DefaultName == items.Get(2681359).CreatureName && eggs.Get(2681359) is null,
+            "黑炭头蛋按明确output index孵化为成年宠物，源87与目标88不必相同");
+        That(items.Get(2681358) is { Kind: ItemKind.Creature, EquipmentSlot: 26 } &&
+            items.Get(2681359) is { Kind: ItemKind.Creature, EquipmentSlot: 26 }, "跨species样本双方仍须为合法Creature模板");
         That(items.Get(63022) is { Kind: ItemKind.Creature, EquipmentSlot: 26 } &&
             items.Get(63023) is { Kind: ItemKind.Creature, EquipmentSlot: 26 }, "样本来自equipment Creature而非宽泛STK消耗品");
     }
