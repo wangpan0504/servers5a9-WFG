@@ -75,6 +75,27 @@ internal sealed class DungeonDropGenerationPlan
         { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials };
     }
 
+    public DungeonDropGenerationPlan WithAntoniumDropBonus(int basisPoints)
+    {
+        if (basisPoints < 0) throw new InvalidDataException("安徒恩魔能石掉落加成不能为负");
+        if (basisPoints == 0 || !Trials.Any(trial => trial.Items?.Entries.Any(
+            row => row.Template.Id == Adventure.AdventureBenefitPolicy.AntoniumItemId) == true))
+            return this;
+        return new(ResourceSource, Trials.Select(trial =>
+            trial.Items?.Entries.Any(row => row.Template.Id == Adventure.AdventureBenefitPolicy.AntoniumItemId) != true
+                ? trial
+                : trial with
+                {
+                    Threshold = (int)Math.Min(trial.ProbabilityDenominator,
+                        (long)trial.Threshold * (10000L + basisPoints) / 10000L)
+                }), ReferenceQuality, Amplification)
+        {
+            OrdinaryLukeDailySource = OrdinaryLukeDailySource,
+            ExcludeLowEquipment = ExcludeLowEquipment,
+            ExcludeLowMaterials = ExcludeLowMaterials
+        };
+    }
+
     public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false,
         EquipmentAmplificationDropPolicy? amplification = null)
     {

@@ -21,6 +21,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
       DfoServer.Game.CashShopPromotions.ICashShopPromotionStore, DfoServer.Game.BattlePass.IBattlePassStore
 {
     readonly SqliteGameDatabase database = new(path);
+    public DfoServer.GameWorld.Adventure.AdventureCatalog? AdventureCatalog => adventureCatalog;
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>
     {
         using var db = database.Open();

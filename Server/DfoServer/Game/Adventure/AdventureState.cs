@@ -65,6 +65,7 @@ internal sealed record AdventureSnapshot(AdventureState State, ImmutableArray<Ad
     // 内容通关累计按账号汇总；默认全零，读取时由角色级计数填充。
     public ImmutableArray<ushort> ContentCounts { get; init; } = ImmutableArray.Create(new ushort[AdventureContent.Count]);
     public AdventureRaidClears RaidClears { get; init; }
+    public uint DuelWins { get; init; }
     public uint DespairTowerClears { get; init; }
     public uint LamentTowerClears { get; init; }
 

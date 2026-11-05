@@ -180,6 +180,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$now",DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         command.ExecuteNonQuery();
         command.Parameters.RemoveAt("$now");
+        command.CommandText = "UPDATE characters SET blacklist_count=max(blacklist_count-1,0) WHERE id IN (SELECT target_id FROM character_social_links WHERE owner_id=$id AND kind=1)";
+        command.ExecuteNonQuery();
         command.CommandText = "DELETE FROM characters WHERE id=$id AND account=$account AND slot=$slot AND name=$name AND revision=$revision";
         command.Parameters.AddWithValue("$slot", expected.Slot);
         command.Parameters.AddWithValue("$name", expected.Name);

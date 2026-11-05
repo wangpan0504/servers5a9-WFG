@@ -60,6 +60,7 @@ internal static class AdventurePackets
         U32(raw, LukeRaidClearOffset, snapshot.RaidClears.Luke);
         U32(raw, MetroRaidClearOffset, snapshot.RaidClears.Fiendwar);
         U32(raw, PreyRaidClearOffset, snapshot.RaidClears.Prey);
+        U32(raw, DuelWinOffset, snapshot.DuelWins);
         U32(raw, DespairTowerClearOffset, snapshot.DespairTowerClears);
         U32(raw, LamentTowerClearOffset, snapshot.LamentTowerClears);
         U16(raw, 68, checked((ushort)snapshot.Members.Length));

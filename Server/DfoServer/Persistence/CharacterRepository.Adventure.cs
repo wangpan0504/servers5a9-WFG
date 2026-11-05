@@ -236,6 +236,13 @@ internal sealed partial class CharacterRepository
                 _ => raids
             };
         }
+        query.CommandText = """
+            SELECT max(
+              (SELECT count(DISTINCT match_id) FROM character_pvp_rating_claims WHERE account=$account AND outcome=0),
+              (SELECT coalesce(sum(CAST(json_extract(state_json,'$.Wins') AS INTEGER)),0) FROM character_pvp_ratings WHERE account=$account)
+            )
+            """;
+        uint duelWins = (uint)Math.Clamp((long)query.ExecuteScalar()!, 0L, uint.MaxValue);
         query.CommandText = "SELECT count(*) FROM dungeon_despair_clear_receipts WHERE account=$account AND dungeon_id=11107";
         uint despairClears = (uint)Math.Min((long)query.ExecuteScalar()!, uint.MaxValue);
         query.CommandText = "SELECT count(*) FROM character_grief_tower_clears WHERE account=$account AND layer=100";
@@ -243,7 +250,7 @@ internal sealed partial class CharacterRepository
         return new(state, roster.ToImmutable())
         {
             ContentCounts = ImmutableArray.Create(counts), RaidClears = raids,
-            DespairTowerClears = despairClears, LamentTowerClears = lamentClears
+            DuelWins = duelWins, DespairTowerClears = despairClears, LamentTowerClears = lamentClears
         };
     }
 
