@@ -364,6 +364,7 @@ internal static class BoosterTcpTests
         PlainCooldown(fixture, resources, repo, owners, clock);
         DungeonPlaces(fixture, resources, repo, owners);
         EmptyBonus(fixture, resources, repo, owners);
+        EpicMarker(fixture, resources, repo, owners);
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -894,6 +895,66 @@ internal static class BoosterTcpTests
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
             fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id") +
             fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+    }
+
+    static void EpicMarker(TcpTestFixture fixture, TcpTestResources resources, CharacterRepository repo, AccountOwners owners)
+    {
+        const int sourceId = 490703923;
+        var items = resources.ItemResources;
+        Character actor;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            actor = repo.Create(owner, CharacterCreation.Prepare("EpicRandom", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with
+            { AcceptedStoryLevel = 1, Inventory = new([new(0, Bag(65), InventoryRewardGrantService.Create(items.Items.Get(sourceId), 2,
+                fixture.UtcNow))], Gold: 12345) });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot); peer.Barrier();
+            SendOpen(peer, 65, 2);
+            byte[] ack = peer.Expect(1, 160).Body;
+            int count = U16(ack, 16);
+            That(ack.Length == 18 + count * 8 && ack[0] == 1 && U32(ack, 2) == sourceId && U16(ack, 6) == 65,
+                "鸿运随机礼盒返回完整原生成功头和所有奖励行");
+            var rewards = Enumerable.Range(0, count).Select(index =>
+                (Id: (int)U32(ack, 18 + index * 8), Count: (int)U32(ack, 22 + index * 8))).ToArray();
+            That(rewards.Sum(row => row.Count) == 2 && rewards.All(row => row.Count > 0 &&
+                items.Boosters.Get(sourceId).Pools[0].Rewards.Any(candidate => candidate.ItemId == row.Id)),
+                "鸿运随机礼盒批量两次抽取的ACK总量与真实候选一致");
+            byte[] delta = peer.Expect(0, 14).Body;
+            Entry(delta, 65, -1, 0);
+            peer.Barrier();
+            var saved = Read();
+            That(saved.Inventory.Find(Bag(65)) is null && saved.Inventory.Gold == 12345 && saved.Inventory.Items.Length == 2 &&
+                saved.Inventory.Items.GroupBy(item => item.Core.ItemId).Select(group => (Id: group.Key, Count: group.Count()))
+                    .OrderBy(row => row.Id).SequenceEqual(rewards.OrderBy(row => row.Id)),
+                "鸿运随机盒实际落库两件完整装备、源耗尽且金币保持");
+            foreach (var reward in saved.Inventory.Items)
+            {
+                That(reward.Uid > 0 && reward.Core == (InventoryRewardGrantService.Create(items.Items.Get(reward.Core.ItemId),
+                    utcNow: fixture.UtcNow) with { EpicExchangeOrigin = new(1, sourceId) }),
+                    "随机礼盒来源与禁交换状态随完整实例落库");
+                Entry(delta, reward.Position.Index, reward.Core.ItemId, reward.Core.Value);
+            }
+            string committed = JsonSerializer.Serialize(saved);
+            SendOpen(peer, 65, 2); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(JsonSerializer.Serialize(Read()) == committed, "鸿运盒耗尽重放不再产生奖励");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(actor.Slot)[4].Body;
+            foreach (var reward in Read().Inventory.Items)
+            {
+                Entry(full, reward.Position.Index, reward.Core.ItemId, reward.Core.Value, true);
+                That(reward.Core.Extension119 == 0 && reward.Core.EpicExchangeOrigin == new EpicExchangeOrigin(1, sourceId),
+                    "随机盒重连恢复完整来源和禁止交换状态");
+            }
+            peer.Barrier();
+        }
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repo.List(owner).Single(role => role.Id == actor.Id);
+        }
     }
 
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
