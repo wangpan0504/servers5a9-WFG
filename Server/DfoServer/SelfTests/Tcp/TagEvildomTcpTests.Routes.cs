@@ -45,10 +45,14 @@ internal static partial class TagEvildomTcpTests
                 {
                     unique.Add(map.Id);
                     var plan = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), first.Id,
-                        checked((ushort)next), entry.BasisLevel, playerTeam: entry.PlayerTeam, companionRows: []);
+                        checked((ushort)next), entry.BasisLevel, playerTeam: entry.PlayerTeam, companionRows: [],
+                        suppressCompanions: entry.IsTagSystem);
                     plans.Add(plan);
                     if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0) next = plan.NextObjectKey;
                 }
+                That(plans.SelectMany(plan => plan.Monsters).All(monster =>
+                    monster.AiCharacter is not { Id: 5409, Faction: "[character]" }),
+                    "再战魔界资源路线不发布旧友方5409支援兵，由新DLL接管");
                 var route = new DungeonFixedRoute(plans, maze.StaticTopology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray());
                 var authority = new NativeDungeonCombatAuthority();
                 That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, route, authority, out var run, out reason) && authority.BindTo(run!),

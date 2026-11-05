@@ -200,7 +200,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
 
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
         bool includeSpecial = true, int? playerTeam = null, IReadOnlyList<int>? companionRows = null,
-        IReadOnlyList<SupportCompanionProfile>? companionProfiles = null)
+        IReadOnlyList<SupportCompanionProfile>? companionProfiles = null, bool suppressCompanions = false)
     {
         if (room.AltarWaves is not null)
             throw new NotSupportedException("unsupported: 祭坛波次需要专用调度，不能作为普通怪物房间生成");
@@ -281,8 +281,9 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             // 来源明确的旧5409不再放行，等资源差量原位迁到9986；未知5409保持原生演员合同。
             // 丢弃时不占用对象key，其余行号保持原索引。
             // 未放行的行不参与资源校验：部署侧地图补丁写坏的行不能影响开关关闭时的正常入场。
-            bool companion = DungeonCompanion.IsCompanionRow(room, index);
-            if (companion && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
+            bool companion = DungeonCompanion.IsCompanionRow(room, index) ||
+                suppressCompanions && DungeonCompanion.IsLegacyCompanionRow(source);
+            if (companion && (suppressCompanions || !(companionsAllowed && companionRows!.Contains(source.Id)))) continue;
             // 同种专用模板只发原序中的首行；保留SourceOrdinal，不拼出额外演员或占用被丢弃行的key。
             if (companion && !sentCompanions.Add(source.Id)) continue;
             if (source.RawValues.Count != 6 || source.RawValues[0] != source.Id || source.Id <= 0 ||

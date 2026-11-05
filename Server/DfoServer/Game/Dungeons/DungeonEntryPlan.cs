@@ -763,7 +763,8 @@ internal sealed record DungeonEntryPlan(
             IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
-            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null && !lostLand,
+            // 帝国竞技场与再战魔界的旧支援兵由新 DLL 全权接管，服务端不得注入任何通用支援兵。
+            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null && imperialArena is null && !lostLand,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
