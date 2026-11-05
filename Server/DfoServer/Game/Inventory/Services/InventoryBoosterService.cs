@@ -420,10 +420,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     catalog.Get(id).Kind != ItemKind.Equipment)
                 {
                     var childTemplate = catalog.Get(id);
-                    bool fixedOrdinary = !definition.Lottery && definition.PackageRewards.IsDefaultOrEmpty &&
-                        !definition.Pools.IsEmpty && definition.Pools.All(pool => pool is
-                            { Draws: 1, JobTag: null, Rewards: [{ Weight: > 0, Count: > 0 }] });
-                    if (definition.SetsEpicExchangeInstanceType || (definition.Selection is null && !fixedOrdinary) ||
+                    if (definition.SetsEpicExchangeInstanceType || (definition.Selection is null && !definition.HasFixedOrdinaryRewards) ||
                         childTemplate.Kind != ItemKind.Consumable || CurrencyWallet.RewardKind(id) is not null ||
                         pieces.ByPiece.ContainsKey(id) || childTemplate.HasAcquisitionEffect ||
                         childTemplate.IsPremiumService || contracts?.Recognizes(id) == true ||

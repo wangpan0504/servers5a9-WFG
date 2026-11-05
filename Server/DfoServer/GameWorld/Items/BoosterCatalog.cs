@@ -57,6 +57,9 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool UnsealsRandomOptions { get; init; }
     public int? CustomAbilityGrade { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
+    public bool HasFixedOrdinaryRewards => !Lottery && PackageRewards.IsDefaultOrEmpty &&
+        !Pools.IsEmpty && Pools.All(pool => pool is
+            { Draws: 1, JobTag: null, Rewards: [{ Weight: > 0, Count: > 0 }] });
     public bool ForbidsDestructionSouls { get; init; }
     public bool SetsEpicExchangeInstanceType { get; init; }
     // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
