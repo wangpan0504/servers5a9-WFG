@@ -1,4 +1,4 @@
-﻿using DfoServer.Game.Characters;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Raids;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Raids;
@@ -66,7 +66,8 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         var body = RaidPackets.SearchResults((uint)matches.Length, offset, rows.Select(p =>
             (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                 p.Members.Single(m => m.Actor.Character == p.Leader).Squad, RaidProjection.CanStart(p, lukeStart is not null),
-                checked((byte)p.Members.Length), p.RecruitRoles)).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet());
+                checked((byte)p.Members.Length), p.RecruitRoles)).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet(),
+                rows.ToDictionary(p => p.Key, RaidProjection.LeaderPreySlot));
         log.Write("raid_search_request", new { Connection = context.Id, parsed.RaidType, parsed.Offset,
             Total = matches.Length, Returned = rows.Length });
         // 查询回复是请求时的只读快照；目录并发变化不能吞掉唯一756、令原生窗口继续等待。
@@ -386,7 +387,8 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidPackets.RaidListBatch(rows.Select(p =>
                 (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                     p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null), p.RecruitRoles)).ToArray(),
-                    rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet()), "raid_recruiting_list",
+                    rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet(),
+                rows.ToDictionary(p => p.Key, RaidProjection.LeaderPreySlot)), "raid_recruiting_list",
                 () => actor.IsCurrent && registry.IsListSnapshot(actor.Channel, type, rows));
             var waitRows = registry.Waiting(actor.Channel, type);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_WAITING_LIST, RaidPackets.WaitingList(waitRows
@@ -444,7 +446,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         }
         bool Guard() => context.Session.CanPublishRaid(actor!, party);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidProjection.List(party, lukeStart is not null), "raid_created_record", Guard);
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, RaidPackets.OpenWithSquads(party.Key, RaidProjection.Members(party)), "raid_created_open", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, RaidPackets.OpenWithSquads(party.Key, RaidProjection.Members(party), preySlots: RaidProjection.PreySlots(party)), "raid_created_open", Guard);
         var replied = context.Reply(CmdPacketType.CREATE_RAID, RaidPackets.CreateSuccess(party.Key), "raid_created",
             () => context.Session.HasRaidKey(actor!, party.Key));
         registry.PublishDirectory(new(Party: party));
@@ -474,12 +476,13 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         try { parsed = RaidRequests.Manager(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (Actor(context) is not { } actor || parsed.Character > ushort.MaxValue ||
-            parsed.Operation == 0 && parsed.Argument > byte.MaxValue ||
-            parsed.Operation == 1 && parsed.Argument != 0 || parsed.Operation > 1)
+            parsed.Operation is 0 or 2 && parsed.Argument > byte.MaxValue ||
+            parsed.Operation == 1 && parsed.Argument != 0 || parsed.Operation > 2)
             return CommandResult.Unhandled;
-        // 菜单145「委任团长」在03990155写operation=1、目标u32和argument=0；不猜其它管理操作。
+        // op2为普雷独立槽位编码；op1仍为菜单145的委任团长。
         var change = parsed.Operation == 0
             ? registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument)
+            : parsed.Operation == 2 ? registry.AssignPrey(actor, (ushort)parsed.Character, (byte)parsed.Argument)
             : registry.TransferLeadership(actor, (ushort)parsed.Character);
         log.Write("raid_modify_request", new { Connection = context.Id, parsed.Operation, parsed.Character, Squad = parsed.Argument,
             Accepted = change is not null, Reason = change is null ? "member-squad-or-leader-mismatch" : null,
@@ -487,7 +490,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         if (change is null) return CommandResult.Handled;
         registry.Publish(change);
         await context.Reply(CmdPacketType.RAID_MANAGER_WORK, [1],
-            parsed.Operation == 0 ? "raid_squad_changed" : "raid_leader_changed", () => actor.IsCurrent);
+            parsed.Operation == 2 ? "raid_prey_slot_changed" : parsed.Operation == 0 ? "raid_squad_changed" : "raid_leader_changed", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
 
@@ -505,7 +508,8 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             combat is { } current ? (byte)current.View.State : party.Started is null ? (byte)0 : (byte)2,
             checked((byte)(combat?.View.Phase ?? party.Started?.Phase ?? 0)), RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide,
             clearCounts: combat is { } snapshot ? snapshot.Battle.RosterClears(snapshot.View) : RaidProjection.ClearCounts(party),
-            recruitRoles: party.RecruitRoles) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+            recruitRoles: party.RecruitRoles, leaderPreySlot: RaidProjection.LeaderPreySlot(party),
+            preySlots: RaidProjection.PreySlots(party)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
         await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)) &&
             (combat is null || combat.Value.Battle.IsCurrent(combat.Value.View)));
         return CommandResult.Handled;

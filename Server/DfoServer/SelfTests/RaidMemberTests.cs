@@ -68,20 +68,35 @@ internal static class RaidMemberTests
             var owners = new AccountOwners();
             var repository = new CharacterRepository(Path.Combine(root, "game.db"));
             var registry = new RaidRegistry();
-            RaidActor Make(int index)
+            RaidActor Make(int index, bool preyChannel = false)
             {
                 var owner = owners.Acquire("raid-member-" + index, () => { }); leases.Add(owner);
                 var role = repository.ListRoster(owner).FirstOrDefault();
-                if (role is null) repository.Create(owner, new("RaidM" + index, point, point) { Level = 85, CompletedQuests = [12829,3779] });
-                var session = new GameSession(repository, towns, owner, entry: new(new(2,19),23,"[raid]"));
+                if (role is null) repository.Create(owner, new("RaidM" + index, point, point) { Level = preyChannel ? (byte)95 : (byte)85, CompletedQuests = preyChannel ? [8935] : [12829,3779] });
+                var session = new GameSession(repository, towns, owner, entry: preyChannel ? new(new(2,42),50,"[prey]") : new(new(2,19),23,"[raid]"));
                 sessions.Add(session); session.Select(0); session.MarkReady();
                 return session.CaptureRaidActor(registry)!;
             }
-            var actors = Enumerable.Range(0, 21).Select(Make).ToArray();
+            var actors = Enumerable.Range(0, 21).Select(index => Make(index)).ToArray();
             var leader = actors[0];
             foreach (byte invalid in new byte[] { 0, 8, 255 })
                 That(registry.Create(leader, 0, "invalid", [], 20, recruitRoles: invalid) is null && registry.Count == 0,
                     "非法招募对象不建团、不分配key或污染目录");
+            var preyLeader = Make(30, true);
+            var preyMember = Make(31, true);
+            var prey = registry.Create(preyLeader, 3, "prey", "prey"u8.ToArray(), 12)!;
+            That(registry.AssignPrey(preyLeader, preyLeader.Character, 11)?.After?.Members[0] is { Squad: 1, PreySlot: 11 }, "普雷编码11提交红队首槽");
+            var preyCurrent = registry.Find(preyLeader)!;
+            That(ReferenceEquals(registry.AssignPrey(preyLeader, preyLeader.Character, 11)?.After, preyCurrent), "重复槽位不推进revision");
+            foreach (byte invalid in new byte[] { 0, 1, 10, 15, 30, 35, 41, 255 })
+                That(registry.AssignPrey(preyLeader, preyLeader.Character, invalid) is null && registry.IsCurrent(preyCurrent), "非法普雷槽位不改变聚合");
+            That(registry.Invite(preyMember, preyLeader, 0) is not null && registry.Respond(preyLeader, preyMember.Character, true).Accepted, "普雷编制使用原团成员");
+            That(registry.AssignPrey(preyLeader, preyMember.Character, 11) is null && registry.AssignPrey(preyMember, preyLeader.Character, 21) is null,
+                "重复占位与非团长编制均拒绝");
+            That(registry.AssignPrey(preyLeader, preyMember.Character, 12)?.After?.Members.Single(m => m.Actor.Character == preyMember.Character) is { Squad: 1, PreySlot: 12 },
+                "同分队不同槽位可共存");
+            registry.Leave(preyMember, preyMember.Character);
+            registry.Leave(preyLeader, preyLeader.Character);
             var first = registry.Create(leader, 0, "a", "a"u8.ToArray(), 20, recruitRoles: 5)!;
             That(first.Key == 0x02130001 && first.Members.Length == 1 && registry.Count == 1, "真实频道key及单人创建");
             That(registry.Create(leader,0,"b","b"u8.ToArray(),20) is null && registry.IsCurrent(first), "重复创建不丢已有聚合");

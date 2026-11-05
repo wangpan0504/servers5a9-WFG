@@ -69,8 +69,11 @@ internal static class RaidCreateTcpTests
             { writer.Write(1); writer.Write(id); writer.Write((byte)0); writer.Write((short)0); }));
             peer.Expect(1, 658, [1]);
             peer.Send(669, Build(writer => { writer.Write(2u); writer.Write((uint)id); writer.Write(11u); }));
-            peer.Barrier(packet => That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6,
-                "类型3的operation2只恢复了客户端槽编码，未闭合服务端合同不能回成功或修改团记录"));
+            var formation = AntonTcpProbe.Barrier(peer, "prey formation");
+            That(formation.Any(packet => packet is { Kind: 1, Opcode: 669, Body: [1] }) &&
+                formation.Any(packet => packet.Kind == 0 && packet.Opcode == 591 && U32(packet.Body, 4) == 3 &&
+                    packet.Body[42 + NameWidth("Raid42")] == 11),
+                "类型3的operation2提交真实槽位并通过完整名册及ACK解除忙标记");
             peer.Send(666, []);
             peer.Expect(1, 666, [0, 0x13, 0]);
             peer.Send(667, [0, 3]);
