@@ -70,6 +70,8 @@ internal static partial class LotteryTcpTests
             peer.Barrier();
             That(before == Snapshot(), "罐子耗尽后重放不重复发奖");
         }
+        await BoosterSelectionTcpTests.WaitForInitialDisconnectAsync(fixture,
+            Convert.ToUInt16(fixture.Query("SELECT id FROM characters WHERE name='PotTcp'").Single()[0]));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
