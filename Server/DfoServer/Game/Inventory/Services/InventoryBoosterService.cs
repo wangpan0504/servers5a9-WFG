@@ -629,6 +629,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             if (avatars is null)
                 return InventoryResult.Reject(19) with { RejectReason = "avatar_pool_catalog_missing" };
+            var range = ItemSlotBoundService.Range(ItemKind.Avatar, paid);
+            int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Avatar &&
+                item.Position.Index >= range.Start && item.Position.Index <= range.End);
+            // 按已抽出的显式份数检查实际页容量，不能先展开不可能容纳的大批量实例。
+            if (avatarRolls.Sum(row => (long)row.Copies) > range.End - range.Start + 1 - occupied)
+                return InventoryResult.Reject(4);
             try
             {
                 foreach (var (row, copies) in avatarRolls)
