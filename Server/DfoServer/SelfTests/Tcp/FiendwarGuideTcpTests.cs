@@ -213,6 +213,17 @@ internal static class FiendwarGuideTcpTests
             That(!Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && beforeSkip ==
                 fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
                 "引导跳过尚未真实确认，提前660拒绝且资产收据不变");
+            if (route == 0)
+            {
+                clock.Advance(19); Read();
+                That(!cardsShown && beforeSkip == fixture.Snapshot(
+                    "SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                    "缺失电影确认时，演出期限之前不提前翻牌或发奖");
+                clock.Advance(1); Read();
+                That(cardsShown && cardChoices.SetEquals(new byte[] { 1, 0 }) && beforeSkip == fixture.Snapshot(
+                    "SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                    "引导缺失659一时按原20秒演出期限开放两类牌，实际资产仍等待660领取");
+            }
             peer.Send(659, [1]);
             var completedMovie = Read();
             That(completedMovie.Any(row => row is { Kind: 1, Opcode: 659, Body: [1] }) && cardsShown &&

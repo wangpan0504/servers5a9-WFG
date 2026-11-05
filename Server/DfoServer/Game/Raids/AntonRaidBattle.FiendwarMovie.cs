@@ -3,6 +3,27 @@ namespace DfoServer.Game.Raids;
 internal sealed partial class AntonRaidBattle
 {
     readonly Dictionary<ushort, byte> fiendwarRewardCards = [];
+    bool fiendwarMovieElapsed;
+
+    // 客户端电影回调丢失时，按资源演出期限开放牌面；不补造任何成员的659确认。
+    TimeSpan? FiendwarMovieRemainingLocked()
+    {
+        if (!HasFiendwarMovieBarrierLocked() || current.State != AntonRaidBattleState.Reward ||
+            current.ClockFaulted || LukeMovieBarrierReadyLocked()) return null;
+        _ = LukeRewardRemainingLocked();
+        int seconds = script.Headers.Single(row => row.Tag == "[movie end time]").Values.Max(row => row.Number);
+        return TimeSpan.FromTicks(Math.Max(0, (TimeSpan.FromSeconds(seconds) -
+            lukeClock.GetElapsedTime(lukeRewardAnchor!.Value)).Ticks));
+    }
+
+    bool ExpireFiendwarMovieLocked()
+    {
+        if (FiendwarMovieRemainingLocked() != TimeSpan.Zero) return false;
+        fiendwarMovieElapsed = true;
+        current = current with { Revision = checked(current.Revision + 1) };
+        _ = AdvanceAfterRewards(Instance, current.Revision);
+        return true;
+    }
 
     // 只给正式完成事务已密封Present集合的漩涡创建演出义务；无资格不是失败或空奖励。
     bool HasFiendwarMovieBarrierLocked() => Kind == RaidKind.Fiendwar && lukeCompletion is not null &&

@@ -294,6 +294,17 @@ internal static partial class FiendwarRaidTcpTests
             That(dynamicSpawnRooms > 0, "每种人数的团队真实终房均完成动态召唤生成及零奖励退休");
             MoveTeam(first, 30);
             var blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
+            if (count == 8)
+            {
+                uint elementBeforeDeath = symbols[(first[0].Id, 92)];
+                ClearMap(first, blackRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body, true);
+                WaitReturn(first);
+                That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", first[0].Id) is [[1L]],
+                    "机制尚未完成就击杀单侧本体，只安全退出原房间、不生成最终资格");
+                blackRoom = Clear(first, 30, Enter(first, 30), terminal: false);
+                That(symbols[(first[0].Id, 92)] == elementBeforeDeath,
+                    "提前击杀后仍可重新进入，原未完成元素不重抽、不冒充完成");
+            }
             uint firstElement = symbols[(first[0].Id, 92)];
             That(firstElement is >= 5 and <= 8, "单侧抵达真实本体即可获得元素，不等对侧上线");
             first[0].Send(1554, Build(writer => { writer.Write(1u); writer.Write(99u); }));
@@ -301,7 +312,13 @@ internal static partial class FiendwarRaidTcpTests
             for (int element = 0; element < 3; element++) BossReport(first, 1, symbols[(first[0].Id, 92)]);
             That(symbols[(first[0].Id, 92)] == 9, "本侧三个不同真实元素完成后独立开原窗口");
             BossReport(first, 0, 0);
-            clock.Advance(15); BossReport(first, 2, 0);
+            if (count == 4) { clock.Advance(15); BossReport(first, 2, 0); }
+            else
+            {
+                ClearMap(first, blackRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body, true);
+                That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", first[0].Id) is [[1L]],
+                    "黑世界死亡先于1554保存时只记录本侧结果，不生成整团胜利或奖励资格");
+            }
             WaitReturn(first);
             if (count == 1)
             {
@@ -316,9 +333,13 @@ internal static partial class FiendwarRaidTcpTests
             That(symbols[(white[0].Id, 93)] is >= 5 and <= 8, "另一侧保留第四个必要元素，接力不重抽已做成果");
             BossReport(white, 1, symbols[(white[0].Id, 93)]);
             That(symbols[(white[0].Id, 93)] == 9, "完成第四元素才开启另一侧原窗口");
-            BossReport(white, 0, 0); clock.Advance(15); BossReport(white, 2, 0);
-            That(symbols[(white[0].Id, 95)] == 0 && symbols[(white[0].Id, 96)] == 0,
-                "两侧真实输出结果汇合归零，尚不能用报告替代终图死亡");
+            BossReport(white, 0, 0);
+            if (count == 4)
+            {
+                clock.Advance(15); BossReport(white, 2, 0);
+                That(symbols[(white[0].Id, 95)] == 0 && symbols[(white[0].Id, 96)] == 0,
+                    "两侧真实输出结果汇合归零，尚不能用报告替代终图死亡");
+            }
             That(fixture.Query("SELECT phase0_event IS NULL FROM character_raid_runs WHERE character_id=$p0", white[0].Id) is [[1L]],
                 "纯Boss报告尚未产生胜利奖励资格");
             var bossMap = whiteRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body;
@@ -340,11 +361,13 @@ internal static partial class FiendwarRaidTcpTests
             SupportRequest(peers[0], [0], null);
             foreach (var peer in white)
                 That(fixture.Query("SELECT quest_id,total,applied FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id IN(7003,7008) ORDER BY quest_id", peer.Id)
-                        is var worldFacts && (count == 4 ? worldFacts is [[7003L, 1L, 1L]] : worldFacts is [[7003L, 1L, 1L], [7008L, 1L, 1L]]) &&
-                    fixture.Query("SELECT remaining1 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7003", peer.Id) is [[29L]] &&
+                        is var worldFacts && (count == 4 ? worldFacts is [[7003L, 1L, 1L]] : count == 1
+                            ? worldFacts is [[7003L, 2L, 2L], [7008L, 2L, 2L]] : worldFacts is [[7003L, 1L, 1L], [7008L, 1L, 1L]]) &&
+                    fixture.Query("SELECT remaining1 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7003", peer.Id)
+                        is [[long remaining]] && remaining == (count == 1 ? 28 : 29) &&
                     (count == 4 ? fixture.Query("SELECT count(*) FROM character_title_progress WHERE character_id=$p0 AND quest_id=7008", peer.Id) is [[0L]] :
                         fixture.Query("SELECT remaining1+remaining2+remaining3 FROM character_title_progress WHERE character_id=$p0 AND quest_id=7008", peer.Id) is [[0L]]),
-                    "真实白世界清图只奖励实际参与者，无币称号复验整个本场的共享用币事实");
+                    "双侧实际击杀各记一次清图，无币称号复验各自本场共享用币事实；报告退出不冒充击杀");
             That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_fiendwar_title_facts WHERE character_id=$p0 AND quest_id=7005", peer.Id)
                     is [[long facilityFacts]] && facilityFacts == (count == 4 ? 1 : 0)),
                 "真实未拆设施通关记一次，拆过雷达的场次不记成就");
@@ -389,6 +412,13 @@ internal static partial class FiendwarRaidTcpTests
                 That(!Drain(peer).Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && beforeSkip ==
                     fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
                     "659零值不解除演出屏障，提前660不提交资产");
+            }
+            if (count == 8)
+            {
+                clock.Advance(20);
+                foreach (var peer in peers) Drain(peer);
+                That(peers.All(peer => movieCards.Contains(peer.Id) && movieChoices.Contains((peer.Id, 1)) && movieChoices.Contains((peer.Id, 0))),
+                    "整团电影确认缺失时原演出期限也可开放两类牌面");
             }
             foreach (var peer in peers)
             {

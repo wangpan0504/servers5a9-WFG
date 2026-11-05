@@ -72,7 +72,9 @@ internal sealed partial class GameSession
             var view = firstRaid.Battle.View;
             change = new(view, view) { LukeClear = cleared };
         }
-        return facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
+        // 漩涡单侧终杀也会提交安全退场，但不授予整团/副本奖励贡献；仍须发布原Run的退场事实。
+        return firstRaid.Battle.Kind == RaidKind.Fiendwar && change is not null ||
+            facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
     }
 
     // 输入来自原共享实例全部已安装/加载确认的正式投影；不能用客户端地图号直接触发规则。

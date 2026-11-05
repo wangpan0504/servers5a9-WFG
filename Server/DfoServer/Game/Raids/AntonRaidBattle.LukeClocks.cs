@@ -78,7 +78,11 @@ internal sealed partial class AntonRaidBattle
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
         if (LukeRewardRemainingLocked() is { } lukeReward)
-        { lease.Schedule(lukeReward > TimeSpan.Zero ? lukeReward : TimeSpan.FromSeconds(1)); return; }
+        {
+            lease.Schedule(FiendwarMovieRemainingLocked() is { } movie && movie < lukeReward ? movie :
+                lukeReward > TimeSpan.Zero ? lukeReward : TimeSpan.FromSeconds(1));
+            return;
+        }
         if (AntonRewardWaitRemainingLocked() is { } rewardWait)
         { lease.Schedule(AntonMovieRemainingLocked() is { } movie && movie < rewardWait ? movie : rewardWait); return; }
         if (AntonWaitRemainingLocked() is { } wait)
@@ -125,6 +129,8 @@ internal sealed partial class AntonRaidBattle
             }
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
             if (Kind == RaidKind.Luke && current.State == AntonRaidBattleState.Intermission) return false;
+            if (Kind == RaidKind.Fiendwar && current.State == AntonRaidBattleState.Reward)
+                return ExpireFiendwarMovieLocked();
             if (TerminalRequested(current)) return false;
             if (Kind == RaidKind.Fiendwar) return TickFiendwarLocked();
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
