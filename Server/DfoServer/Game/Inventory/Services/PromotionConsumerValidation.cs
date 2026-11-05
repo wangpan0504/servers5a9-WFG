@@ -156,7 +156,8 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 }
                 if (parent is { } box && (box.SetsDisjointInstanceType || box.SetsEpicExchangeInstanceType) && template.Kind != ItemKind.Equipment)
                 {
-                    if (box.SetsEpicExchangeInstanceType || box.Selection is null || template.Kind != ItemKind.Consumable ||
+                    if (box.SetsEpicExchangeInstanceType || (box.Selection is null && !box.HasFixedOrdinaryRewards) ||
+                        template.Kind != ItemKind.Consumable ||
                         boosters.Get(reward.ItemId) is not { Available: true, Selection: not null })
                         throw new InvalidDataException("unsupported_instance_type_reward");
                 }
