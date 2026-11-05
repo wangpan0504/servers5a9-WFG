@@ -54,6 +54,8 @@ internal sealed partial class CharacterRepository
         if (quests is not null)
             WriteQuestConditions(db, tx, expected.Id, committed.ActiveMainQuests,
                 QuestStateProgress.Refresh(committed.ActiveMainQuests, committed with { Level = growth.TargetLevel, Learning = growth.Learning }, quests));
+        ApplyBattlePassExperienceGain(db, tx, owner.Account, "experience_consumable",
+            FormattableString.Invariant($"{expected.Id}:{plan.Source.Uid}:{expected.Revision}"), growth.GainedExperience, now);
         committed = Require(db, tx, owner.Account, expected.Name);
         tx.Commit();
         return committed;

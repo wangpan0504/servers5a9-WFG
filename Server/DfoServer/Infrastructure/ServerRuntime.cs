@@ -727,7 +727,8 @@ internal static class ServerRuntime
                 dungeonCatalog, rooms, drops, itemResources.Items, itemResources.EpicPieces, strongwayCatalog, clock,
                 context => ((DungeonHandler)dungeon).DepartStrongway2019Async(context), PrepareDrops, online: online);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
-            var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
+            var clearRewardLimits = ClearRewardLimitCatalog.Load(pvf);
+            var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items, clearRewardLimits);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,

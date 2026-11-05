@@ -36,6 +36,21 @@ internal static class TayberrsCardRewardTests
         var prices = DfoServer.Testing.SelfTestCatalogs.CardPrices(archive);
         var dungeons = DfoServer.Testing.SelfTestCatalogs.Dungeons(archive);
         var rules = DfoServer.Testing.SelfTestCatalogs.DropRules(archive);
+        var clearLimits = ClearRewardLimitCatalog.Load(archive);
+        That(clearLimits.ItemLimits.SequenceEqual([new(10305620, 3, 6), new(10306736, 3, 6)]) &&
+            clearLimits.DungeonLimits.Length == 2 &&
+            clearLimits.FindDungeon(291100320) is { GroupId: 1, DailyLimit: 3, WeeklyLimit: 6 } group1 &&
+            group1.Dungeons.SequenceEqual([291100320, 291100322, 5349]) &&
+            clearLimits.FindDungeon(400000105) is { GroupId: 2, DailyLimit: 1, WeeklyLimit: 2 } group2 &&
+            group2.Dungeons.SequenceEqual([400000105]),
+            "clearrewardlimit.etc完整解析道具上限与泰波尔斯/魔界大战英雄两组通关奖励上限");
+        var limitedTayberrs = new TayberrsCardRewardPolicy(prices, items.Boosters, items.Items, clearLimits);
+        var sampleDungeon = dungeons.Get(291100320);
+        var now = DateTimeOffset.Parse("2026-10-30T00:00:00Z");
+        That(limitedTayberrs.Prepare(sampleDungeon, 1000, _ => 0, now, new(2, 5)) is { Item: not null, TayberrsWish: not null } &&
+            limitedTayberrs.Prepare(sampleDungeon, 1000, _ => 0, now, new(3, 3)) is { Gold: 1000, Item: null, TayberrsWish: null } &&
+            limitedTayberrs.Prepare(sampleDungeon, 1000, _ => 0, now, new(1, 6)) is { Gold: 1000, Item: null, TayberrsWish: null },
+            "泰波尔斯通关奖励达到每日3次或每周6次上限后仅保留金币，不再冻结材料");
         That(prices.TayberrsPaidRewards.Select(row => (row.ItemId,row.Weight,row.Count)).SequenceEqual(
             new[] { (10158700,7000,1), (10158700,2000,2), (10158700,500,3), (10305821,500,1) }),
             "真实类型71金币奖励组完整保留四行");

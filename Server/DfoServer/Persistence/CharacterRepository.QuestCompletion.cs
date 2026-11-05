@@ -302,6 +302,10 @@ internal sealed partial class CharacterRepository
             resourceMailId = mailId;
         }
         ApplyBattlePassQuestCompletion(db, tx, owner.Account, plan);
+        if (plan.TotalRequestedExperience > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "quest_completion",
+                FormattableString.Invariant($"{expected.Id}:{plan.AcceptanceId:N}"), plan.TotalRequestedExperience,
+                plan.BattlePassCompletion?.Clock.GetUtcNow());
         tx.Commit();
         return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));
 

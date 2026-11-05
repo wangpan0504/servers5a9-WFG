@@ -39,6 +39,26 @@ internal static class BattlePassColorlessSkillTests
         That(blue.Accepted && blue.Plan!.ColorlessSkill is null, "有色晶体技能不推进无色任务");
         That(!(fact with { Id = Guid.Empty }).Matches(plan, plan.After) &&
             !(fact with { Spent = 4 }).Matches(plan, plan.After), "空来源或与实际扣款不符不计进度");
+        var quickRebound = new BattlePassMission(5, 1, 100, 4, "使用[受身蹲伏]技能", 190);
+        That(BattlePassQuickReboundSource.Matches(quickRebound) &&
+            !BattlePassQuickReboundSource.Matches(quickRebound with { Id = 4 }) &&
+            !BattlePassQuickReboundSource.Matches(quickRebound with { RawTypeCode = 15 }) &&
+            !BattlePassQuickReboundSource.Matches(quickRebound with { RawParameter = 191 }) &&
+            !BattlePassQuickReboundSource.Matches(quickRebound with { RequiredCount = 2 }) &&
+            !BattlePassQuickReboundSource.Matches(quickRebound with { Experience = 1000 }),
+            "受身蹲伏任务只匹配日任务5：raw4、技能190、需求1、100经验");
+        var dailyExp = new BattlePassMission(14, 3_000_000, 100, 14, "获得经验值", -1);
+        var weeklyExp = new BattlePassMission(27, 10_000_000, 1000, 14, "获得经验值", -1);
+        var seasonExp = new BattlePassMission(52, 2_000_000_000, 1600, 14, "获得经验值", -1);
+        That(BattlePassExperienceGainSource.Matches(0, dailyExp) &&
+            BattlePassExperienceGainSource.Matches(1, weeklyExp) &&
+            BattlePassExperienceGainSource.Matches(2, seasonExp) &&
+            !BattlePassExperienceGainSource.Matches(1, dailyExp) &&
+            !BattlePassExperienceGainSource.Matches(0, weeklyExp) &&
+            !BattlePassExperienceGainSource.Matches(0, seasonExp) &&
+            !BattlePassExperienceGainSource.Matches(0, dailyExp with { RawParameter = 0 }) &&
+            !BattlePassExperienceGainSource.Matches(0, dailyExp with { RawTypeCode = 13 }),
+            "角色经验获得来源按类别精确匹配日14、周27与季52");
         Console.WriteLine($"PASS BattlePassColorlessSkillTests core ({Count - before} checks)");
     }
 }

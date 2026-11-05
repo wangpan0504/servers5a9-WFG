@@ -14,6 +14,13 @@ internal sealed record DungeonTournamentRewards(ImmutableArray<uint> Experience,
     ImmutableDictionary<int, TournamentCardWeights> Cards, ImmutableArray<TournamentRewardItem> Items, decimal GoldRate)
 {
     public const string Rule = "pvf-tournament-rewards-v1";
+    public ushort RoundFatigue { get; init; }
+
+    public uint ExperienceForRound(int clearedRounds) =>
+        clearedRounds is >= 0 and <= 4 ? Experience[clearedRounds] : throw new InvalidDataException("大会已通关轮数越界");
+
+    public ushort TotalFatigueForRounds(int roundsPlayed) =>
+        roundsPlayed is >= 0 and <= 4 ? checked((ushort)(RoundFatigue * roundsPlayed)) : throw new InvalidDataException("大会已进行轮数越界");
 
     public static DungeonTournamentRewards Parse(DungeonDefinition dungeon)
     {
@@ -73,7 +80,15 @@ internal sealed record DungeonTournamentRewards(ImmutableArray<uint> Experience,
             gold = token.Type == 0 ? token.Value : (decimal)BitConverter.Int32BitsToSingle(token.Value);
             if (gold < 0) gold = 1;
         }
-        return new([.. experience], cards.ToImmutable(), items.ToImmutable(), gold);
+        var roundFatigueFields = sections.Where(row => row.Tag == "tournament round fatigue").ToArray();
+        ushort roundFatigue = 0;
+        if (roundFatigueFields.Length > 0)
+        {
+            if (roundFatigueFields.Length != 1 || roundFatigueFields[0].Tokens is not [{ Type: 0, Value: >= 0 and <= ushort.MaxValue } rf])
+                throw new InvalidDataException("大会每轮疲劳必须为唯一非负整数");
+            roundFatigue = checked((ushort)rf.Value);
+        }
+        return new([.. experience], cards.ToImmutable(), items.ToImmutable(), gold) { RoundFatigue = roundFatigue };
 
         int[] Field(string tag)
         {

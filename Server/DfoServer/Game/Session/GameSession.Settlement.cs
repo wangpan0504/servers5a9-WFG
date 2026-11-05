@@ -232,19 +232,26 @@ internal sealed partial class GameSession
         bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
             dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
         DungeonCardReward? normalCard = null;
+        var settlementNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        DungeonIncountUsage? clearRewardUsage = null;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
+        {
+            if (cards.ClearRewardLimits?.FindDungeon(checked((int)dungeon.Entry.DungeonId)) is { } rewardLimit)
+                clearRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit, ClearRewardLimitPolicy.Period(settlementNow));
             normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
-                fact.ConfirmedDeathEvents.Count, job: Selected!.Job, grow: Selected.GrowType, ancientBonus: ancientGate?.Bonus == true);
+                fact.ConfirmedDeathEvents.Count, utcNow: settlementNow, job: Selected!.Job, grow: Selected.GrowType,
+                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage);
+        }
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
-            ? cards!.PrepareAssault(normalCard.Gold, (timeProvider ?? TimeProvider.System).GetUtcNow())
+            ? cards!.PrepareAssault(normalCard.Gold, settlementNow)
             : normalCard);
         var options = dungeon.Settlement?.Pending.Options;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
-            var now = DateTimeOffset.UtcNow;
-            var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
+            var membership = repository.LoadCardMembership(owner,Selected!.Id,settlementNow);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
-                fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent,Selected.Job,Selected.GrowType);
+                fact.ConfirmedDeathEvents.Count,membership,settlementNow,goldCardEvent,Selected.Job,Selected.GrowType,
+                clearRewardUsage: clearRewardUsage);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
             dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);

@@ -98,6 +98,7 @@ internal sealed record DungeonEntryPlan(
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
+    public ushort TournamentRoundFatigue { get; init; }
     public int? GriefLayer { get; init; }
     public bool IsBossRush { get; init; }
     public int TimeoutMilliseconds { get; init; }
@@ -709,6 +710,7 @@ internal sealed record DungeonEntryPlan(
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
+            TournamentRoundFatigue = definition.TournamentRoundFatigue ?? 0,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],

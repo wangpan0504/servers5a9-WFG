@@ -21,10 +21,11 @@ internal static partial class DungeonSpecificCardRewardsTests
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var prices = Testing.SelfTestCatalogs.CardPrices(pvf);
         var rules = Testing.SelfTestCatalogs.DropRules(pvf);
+        var clearLimits = ClearRewardLimitCatalog.Load(pvf);
         int draws = 0;
         var policy = new DungeonCardRewardPolicy(rules, items.DungeonDropItems, items.Items, items.GoldLimits,
             items.EpicPieces, _ => { draws++; return 0; }, prices,
-            tayberrsRewards: new(prices, items.Boosters, items.Items));
+            tayberrsRewards: new(prices, items.Boosters, items.Items, clearLimits));
         var withoutTable = new DungeonCardRewardPolicy(rules, items.DungeonDropItems, items.Items, items.GoldLimits, items.EpicPieces);
         var now = DateTimeOffset.Parse("2026-10-30T00:00:00Z");
         var membership = new CardMembership(now.AddDays(1).ToUnixTimeSeconds(), now.AddDays(1).ToUnixTimeSeconds());
@@ -133,5 +134,9 @@ internal static partial class DungeonSpecificCardRewardsTests
         That(fixture.Session.SelectFormalDungeonFreeCard(0, 0) is { Duplicate: true, Inventory: null } &&
             QuestCompletionRepositoryTests.Same(afterClaim, fixture.Read()),
             "泰波尔斯重复选牌不再次增加物品、金币或角色版本");
+        var limitUsage = fixture.Repository.LoadClearRewardLimitUsage(fixture.Owner, afterClaim.Id,
+            clearLimits.FindDungeon(representative)!, ClearRewardLimitPolicy.Period(clock.GetUtcNow()));
+        That(limitUsage == new DungeonIncountUsage(1, 1),
+            "泰波尔斯通关后按clearrewardlimit组1持久统计当日1次、当周1次材料奖励");
     }
 }

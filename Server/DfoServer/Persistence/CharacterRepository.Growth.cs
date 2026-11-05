@@ -232,6 +232,11 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("持久成长结果与候选不一致");
         ApplyBattlePassDungeonDeath(db,tx,owner.Account,run,prepared);
         ApplyBattlePassHellCosmoCompletion(db, tx, owner.Account, run, prepared);
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial &&
+            !run.Entry.IsClassExperience && !run.Entry.IsQuestReplay && amount > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "dungeon_growth",
+                FormattableString.Invariant($"{expected.Id}:{death.EventId:N}"), amount,
+                prepared.BattlePassActivity?.Clock.GetUtcNow());
         var itemRead = PrepareInventoryItemRead(db, tx, owner.Account, committed.Id, current.Inventory, committed.Inventory);
         var directPickupCommit = SaveDirectPickupCommit(db, tx, owner, committed, appliedDirectPickup);
         tx.Commit();
