@@ -515,7 +515,8 @@ internal static class Strongway2019MatchingTests
                 new(0, [], []), [], new Dictionary<uint, uint[]>());
             Parties = new(repository, Clock);
         }
-        public GameSession[] Team(byte channel = 49, int reviveCoins = 0, int count = 4)
+        public GameSession[] Team(byte channel = 49, int reviveCoins = 0, int count = 4,
+            Func<Character, int>? antiEvil = null)
         {
             var team = Enumerable.Range(0, count).Select(_ =>
             {
@@ -526,7 +527,7 @@ internal static class Strongway2019MatchingTests
                     DungeonState = new(256, 0, 0, 0, 0) });
                 if (reviveCoins > 0) Sql($"UPDATE characters SET revive_coins={reviveCoins} WHERE id={created.Id}");
                 var session = new GameSession(repository, towns, lease, entry: new(new(2, channel), 55, "[dpl_pve]"),
-                    timeProvider: Clock, strongway2019Catalog: activity, strongway2019AntiEvil: _ => 5400, serverEvents: events);
+                    timeProvider: Clock, strongway2019Catalog: activity, strongway2019AntiEvil: antiEvil ?? (_ => 5400), serverEvents: events);
                 sessions.Add(session); session.Select(0, resumeTown: activity is not null); session.MarkReady(); return session;
             }).ToArray();
             if (count == 1)

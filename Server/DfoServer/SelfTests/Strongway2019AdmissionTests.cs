@@ -28,12 +28,15 @@ internal static class Strongway2019AdmissionTests
             ReferenceEquals(simple.Character, character) && simple.Schedule == schedule,
             "首期简单模式在真实频道城镇、95级和4000抗魔边界冻结原角色及完整活动版本");
         foreach (int members in Enumerable.Range(1, 4))
-            That(Plan(count: members) is not null && Plan(5363, members, 5400) is { Mode: Strongway2019Mode.Hero } &&
+            That(Plan(count: members) is not null && Plan(5363, members, 4000) is { Mode: Strongway2019Mode.Hero } &&
                 Plan(5360, members, 5400, matched: true) is { Mode: Strongway2019Mode.Matching },
                 "简单、英雄与匹配授权支持原队伍一至四人：" + members);
+        That(Plan(5363, antiEvil: 4000) is { Mode: Strongway2019Mode.Hero, AntiEvil: 4000 } &&
+            Plan(5363, antiEvil: 4415) is { Mode: Strongway2019Mode.Hero, AntiEvil: 4415 },
+            "英雄普通挑战使用4000抗魔门槛，4000边界与4415均可准入");
         foreach (var invalid in new[]
         {
-            Plan(count: 0), Plan(count: 5), Plan(antiEvil: 3999), Plan(5363, 0, 5400), Plan(5363, 5, 5400), Plan(5363, 1, 5399),
+            Plan(count: 0), Plan(count: 5), Plan(antiEvil: 3999), Plan(5363, 0, 4000), Plan(5363, 5, 4000), Plan(5363, 1, 3999),
             Plan(5360, 4, 5400), Plan(5360, 0, 5400, matched: true), Plan(5360, 5, 5400, matched: true),
             Plan(5360, 1, 5399, matched: true), Plan(5364, 4, 9999), Plan(5362, 4, 9999),
             Plan(actor: character with { Level = 94 }), Plan(actor: character with { Position = new(65, 0, 0, 0) }),

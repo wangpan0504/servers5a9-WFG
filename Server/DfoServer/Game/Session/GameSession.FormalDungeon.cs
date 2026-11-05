@@ -190,8 +190,10 @@ internal sealed partial class GameSession
                 !catalog.Get(checked((int)dungeonId)).TryGetDesignatedDifficulty(out byte strongwayDifficulty) ||
                 difficulty != strongwayDifficulty)
                 return RejectFormal("strongway2019-mode-conflict");
-            strongway = strongwayAdmission ?? PrepareStrongway2019Admission(dungeonId);
-            if (strongway is null || !ReferenceEquals(strongway.Character, expected) || strongway.DungeonId != dungeonId ||
+            string? strongwayRejection = null;
+            strongway = strongwayAdmission ?? PrepareStrongway2019Admission(dungeonId, out strongwayRejection);
+            if (strongway is null) return RejectFormal(strongwayRejection ?? "strongway2019-admission-required");
+            if (!ReferenceEquals(strongway.Character, expected) || strongway.DungeonId != dungeonId ||
                 !IsCurrentStrongway2019Admission(strongway) ||
                 strongway.Mode == DfoServer.Game.Strongway2019.Strongway2019Mode.Matching &&
                     (strongwayAdmission is null || !partyAdmission || !CanPrepareStrongway2019Matching(strongway)))

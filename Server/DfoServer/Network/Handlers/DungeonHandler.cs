@@ -430,7 +430,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 RejectReason = entryReason ?? context.Session.LastFormalDungeonRejection ?? "selection-rejected", MemberSlot = memberSlot, CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
-            // 结束本次入场等待，保留原选图和回城锚点；不发送成功或自动回城通知。
+            // 先结束本次入场等待；普通选图保留原锚点，首期直入失败由下方恢复准备区。
             // 区域任务提示由NOTI27的未完成队员名单驱动；强制入场只恢复等待，不误用次数上限0xAD。
             string? hellReason = hell || legend ? entryReason : null;
             DungeonSelectionError? altarError = selection.DungeonIndex is 11006 or 11007 ? entryReason switch
@@ -452,6 +452,20 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 ? DungeonPackets.SelectionRejected(party ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.RequiredMaterials, memberSlot ?? 0)
                 : DungeonPackets.SelectionRejected();
             await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
+            if (!party && selection.DungeonIndex is 5359 or 5363 &&
+                entryReason?.StartsWith("strongway2019-", StringComparison.Ordinal) == true)
+            {
+                // ACK写出期间可能发生换角或接管，必须在同一owner内复核旧选择再消费返回锚点。
+                var returned = context.Owner.Execute(() => context.Owner.IsCurrent && CanSend()
+                    ? context.Session.ReturnFromDungeonSelection() : null);
+                if (returned is not null)
+                {
+                    await town.ReturnFromDungeonSelectionAsync(context, returned);
+                    await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("强者之路",
+                        Strongway2019EntryRejectionText(entryReason)), "strongway2019_entry_rejected_notice",
+                        () => context.Session.CanPublishDungeonSelection(returned, returning: true));
+                }
+            }
             return CommandResult.Handled;
         }
     }
