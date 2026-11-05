@@ -62,9 +62,32 @@ internal static class PreyGuideTcpTests
         }
         peer.Select();
         Read("selected");
+        if (!death)
+        {
+            peer.Send(664, Build(writer => { writer.Write((byte)3); writer.Write(6u); writer.Write("normal"u8); writer.Write(new byte[] { 0, 0, 0, 7 }); }));
+            That(Read("normal created").Any(row => row is { Kind: 1, Opcode: 664, Body: [1, ..] }), "普通普雷创建不转换为引导");
+            foreach (byte slot in new byte[] { 11, 21, 34, 34 })
+            {
+                peer.Send(669, Build(writer => { writer.Write(2u); writer.Write((uint)peer.Id); writer.Write((uint)slot); }));
+                var assigned = Read("prey formation");
+                That(assigned.Any(row => row is { Kind: 1, Opcode: 669, Body: [1] }), "普雷真实op2反复编制均有成功ACK，解除客户端忙标记");
+                var roster = assigned.Last(row => row is { Kind: 0, Opcode: 591 } && U32(row.Body, 4) == 3).Body;
+                int length = checked((int)U32(roster, 12));
+                That(roster[18 + length] == slot / 10 && roster[42 + length] == slot,
+                    "591完整成员同时携带真实分队与独立普雷槽位");
+            }
+            peer.Send(666);
+            That(Read("normal unsupported").Any(row => row is { Kind: 1, Opcode: 666, Body: [0, 19, 0] }) &&
+                fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[0L]],
+                "普通攻坚战仍明确拒绝，不借引导资源扣票或伪造开战");
+            peer.Send(665, BitConverter.GetBytes(peer.Id));
+            That(Read("normal left").Any(row => row is { Kind: 1, Opcode: 665, Body: [1, 0] }), "退出普通团后可继续创建引导");
+        }
         peer.Send(664, Build(writer => { writer.Write((byte)3); writer.Write(5u); writer.Write("guide"u8); writer.Write(new byte[] { 1, 0, 0, 7 }); }));
         var created = Read("created");
         That(created.Any(packet => packet is { Kind: 1, Opcode: 664, Body: [1, ..] }), "TCP真实664创建单人引导团");
+        var guideRoster = created.Single(row => row is { Kind: 0, Opcode: 591 } && U32(row.Body, 4) == 3).Body;
+        That(guideRoster[42 + checked((int)U32(guideRoster, 12))] == 11, "引导首次名册已落红队首槽");
         peer.Send(666);
         var started = Read("started");
         That(started.Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }), "TCP真实666启动普雷引导");

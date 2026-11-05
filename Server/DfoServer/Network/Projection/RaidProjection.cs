@@ -33,6 +33,9 @@ internal static class RaidProjection
     }
     public static (ushort Character, byte[] Name, byte Squad)[] Members(RaidParty party) =>
         party.Members.OrderBy(m => m.Slot).Select(m => (m.Actor.Character, CharacterName.Encoding.GetBytes(m.Actor.Name), m.Squad)).ToArray();
+    internal static IReadOnlyDictionary<ushort, byte> PreySlots(RaidParty party) =>
+        party.Members.ToDictionary(m => m.Actor.Character, m => m.PreySlot);
+    internal static byte LeaderPreySlot(RaidParty party) => party.Members.Single(m => m.Actor.Character == party.Leader).PreySlot;
     internal static IReadOnlyDictionary<ushort, byte>? ClearCounts(RaidParty party)
     {
         if (party.Started is not { } started) return null;
@@ -54,7 +57,7 @@ internal static class RaidProjection
         return RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type, party.Leader,
             CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
             view is null ? party.Started is null ? (byte)0 : (byte)2 : (byte)view.State,
-            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles);
+            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles, LeaderPreySlot(party));
     }
 
     public static byte[] List(RaidParty party, bool enableLuke = false)
@@ -63,7 +66,7 @@ internal static class RaidProjection
         return RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type, party.Leader,
             CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
             view is null ? party.Started is null ? (byte)0 : (byte)2 : (byte)view.State,
-            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles);
+            checked((byte)(view?.Phase ?? party.Started?.Phase ?? 0)), CanStart(party, enableLuke), party.Guide, party.RecruitRoles, LeaderPreySlot(party));
     }
 
     internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type is 0 or 2 || party.Type == 1 && enableLuke || party.Type == 3 && party.Guide) && party.Started is null &&
@@ -184,7 +187,7 @@ internal static class RaidProjection
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, List(after, enableLuke), "raid_member_record", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(after, enableLuke), "raid_member_record_updated", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
-            RaidPackets.OpenWithSquads(after.Key, Members(after), ClearCounts(after)), "raid_members_updated", Guard);
+            RaidPackets.OpenWithSquads(after.Key, Members(after), ClearCounts(after), PreySlots(after)), "raid_members_updated", Guard);
         // 每次最新名册变更携带完整状态，避免并发改名/入团淘汰先前状态增量后留下旧显示。
         States(context, after, recipient);
     }
