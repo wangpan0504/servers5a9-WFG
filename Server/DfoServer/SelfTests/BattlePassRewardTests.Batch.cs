@@ -45,9 +45,27 @@ internal static partial class BattlePassRewardTests
         That(type2.Rewards.SequenceEqual([new BattlePassRewardKey(0, 4)]) &&
             Totals(type2.Inventory.After).SequenceEqual(new[] { (15, 1) }),
             "type2 authoritative snapshot remains basic-only and never acquires premium privileges");
-        Refuse(role, premium, 1, 0, 4, "stale type cannot authorize full claim");
-        Refuse(role, premium, 1, 1, 3, "stale lower view level is refused rather than partially claiming");
-        Refuse(role, premium, 1, 1, 5, "client higher view level cannot raise eligible level");
+        var staleLevel = fixture.Service.Plan(role, premium, 1, 1, 3).Plan ??
+            throw new InvalidOperationException("stale lower view plan missing");
+        That(staleLevel.Rewards.SequenceEqual(expected) && staleLevel.After.Claims.SetEquals(expected) &&
+            Totals(staleLevel.Inventory.After).SequenceEqual(new[] { (15, 1), (490705101, 3), (490705120, 3), (490705122, 1) }),
+            "stale lower view level grants the full authoritative set and does not stop at the old level");
+        var deluxe = fixture.State(40, 1) with { Claims = ImmutableHashSet.Create(new BattlePassRewardKey(0, 4)) };
+        var retro = fixture.Service.Plan(role, deluxe, 1, 0, 4).Plan ??
+            throw new InvalidOperationException("deluxe stale claim plan missing");
+        BattlePassRewardKey[] deluxeKeys = Enumerable.Range(1, 40).Select(level => new BattlePassRewardKey(1, level)).ToArray();
+        That(retro.Rewards.SequenceEqual(deluxeKeys) && retro.After.Claims.SetEquals(deluxeKeys.Append(new BattlePassRewardKey(0, 4))) &&
+            retro.After.PassType == 1 && retro.After.TotalExperience == deluxe.TotalExperience && retro.After.Revision == deluxe.Revision &&
+            Totals(retro.Inventory.After).SequenceEqual(new[] { (490705101, 3), (490705120, 39), (490705122, 1) }),
+            "deluxe purchase keeps the old button type and level, then one click grants every unclaimed premium reward through level 40");
+        var fresh = fixture.Service.Plan(role, deluxe, 1, 1, 40).Plan ??
+            throw new InvalidOperationException("fresh deluxe claim plan missing");
+        That(fresh.Rewards.SequenceEqual(retro.Rewards) && fresh.After.Claims.SetEquals(retro.After.Claims),
+            "a refreshed type1 level40 click grants the same deluxe set as the stale button");
+        Refuse(role, retro.After, 1, 0, 4, "deluxe replay refuses without duplicate rewards or claims");
+        Refuse(role, premium, 1, 2, 4, "client type above authoritative pass cannot raise the premium track");
+        Refuse(role, premium, 1, 0, 5, "client higher view level cannot raise eligible level");
+        Refuse(role, premium, 1, 1, 5, "matching type with a higher view level cannot raise eligible level");
         Refuse(role, premium, 1, 1, uint.MaxValue, "full claim unsigned key cannot wrap");
         Refuse(role, fixture.State(1, 0), 1, 0, 1, "empty basic reward set refuses without empty success");
         Refuse(role, all.After, 1, 1, 4, "complete replay refuses without duplicate rewards or claims");
