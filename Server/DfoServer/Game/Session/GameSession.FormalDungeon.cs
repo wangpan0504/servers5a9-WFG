@@ -322,8 +322,8 @@ internal sealed partial class GameSession
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
-        // 乔安菜单只建立本次普通选图身份；旧选择、直接16、任务/练习/深渊和重试不能借用NPC入口。
-        if (dungeonId == 4000 && (questId != 0 || difficulty != 0 || retry is not null || practice || classExperience ||
+        // 乔安菜单只建立本次普通选图身份。已接取且声明4000的任务可以携带任务号；直接16、练习、深渊和重试不能借用。
+        if (dungeonId == 4000 && (difficulty != 0 || retry is not null || practice || classExperience ||
             hellParty || hellLegend || sealDoor || assault is not null || selection is null || selection.IsTutorial ||
             selection.IsClassExperience || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("lost-land-selection-mismatch");

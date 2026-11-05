@@ -384,11 +384,12 @@ internal sealed partial class SinglePlayerDungeonRun
         if (approvedRoute is null || combatAuthority is null)
             return false;
         if ((entry.DungeonId == 4000 || entry.Maze.IsLostLand || entry.LostLand is not null) &&
-            (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null || entry.QuestId != 0 ||
+            (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null ||
+                entry.QuestId != 0 && !entry.IsOrdinaryHunt ||
                 entry.Difficulty != 0 || entry.IsPractice || entry.IsQuestReplay || entry.HellPartyMode != 0 || entry.PartyRoute is not null ||
                 !entry.DisableFatigueConsumption || !entry.DisableGiveupPenalty || !entry.DisableClearReward ||
                 entry.AllowsCompanionAi || !entry.Maze.StaticTopology.Supported ||
-                entry.Maze.ClearConditions is not [{ Type: "limit time", TargetId: 600, Count: > 0 } timeLimit] ||
+                entry.Maze.ClearConditions is not [{ Type: "limit time", TargetId: LostLandAdmission.ResourceSeconds, Count: > 0 } timeLimit] ||
                 entry.LostLand.OpaqueValue != timeLimit.Count))
         { reason = "invalid: 遗忘之地专用准入不完整"; return false; }
         // 此字段只由本Run依据完整批准路线派生，调用方不能预先声明一个任意末层。

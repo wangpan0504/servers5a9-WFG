@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
@@ -111,9 +112,9 @@ internal static partial class FormalDungeonTcpTests
             }
             if (slot < 2)
             {
-                // 精确等待本实例600秒到期，不依赖活动边界等其他一次性定时器的总数。
-                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(600));
-                clock.Advance(TimeSpan.FromSeconds(599)); peer.Barrier();
+                // 精确等待本实例1800秒到期，不依赖活动边界等其他一次性定时器的总数。
+                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(LostLandAdmission.InitialSeconds));
+                clock.Advance(TimeSpan.FromSeconds(LostLandAdmission.InitialSeconds - 1)); peer.Barrier();
                 clock.Advance(TimeSpan.FromSeconds(1)); peer.Expect(0, 31, []);
             }
             if (slot == 0)
@@ -145,7 +146,7 @@ internal static partial class FormalDungeonTcpTests
             That(U32(map, 14) == 11200, "正式起始房使用匹配PVF地图11200");
             peer.Expect(0, 550);
             Load(peer);
-            peer.Expect(0, 603, [0x58, 0x02, 0, 0, 0xB0, 0x04, 0, 0]);
+            peer.Expect(0, 603, [0x08, 0x07, 0, 0, 0xB0, 0x04, 0, 0]);
             return map;
         }
         void Town(TcpPeer peer)

@@ -223,7 +223,7 @@ internal sealed record DungeonEntryPlan(
         bool lostLand = dungeonId == 4000 || string.Equals(definition.DungeonType?.Trim(), "lost land", StringComparison.OrdinalIgnoreCase);
         if (lostLand && (dungeonId != 4000 || definition.DungeonType != "lost land" ||
             !definition.DisableFatigueConsumption || !definition.DisableGiveupPenalty ||
-            questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+            difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
             grief is not null || hope is not null || tagEvildom is not null || raid is not null))
         {
             reason = "lost-land-mode-unsupported";
@@ -472,6 +472,18 @@ internal sealed record DungeonEntryPlan(
                 layoutQuest = null;
             }
         }
+        // 遗忘之地没有任务专用迷宫。副本内会面同样沿唯一普通迷宫，并保留本次接取身份。
+        if (!isReplay && lostLand && candidates.Length == 0 && questId != 0 && quest is not null &&
+            DeclaresLostLand(quest) && LostLandMeetNpc(definition, character, quest, questId))
+        {
+            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
+            if (candidates.Length == 1)
+            {
+                ordinaryHunt = true;
+                routeQuest = 0;
+                layoutQuest = null;
+            }
+        }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
         // 时空裂缝（[inferno dungeon]）没有密门，整条路线就是深渊场地：候选是该副本全部无任务连接 maze，不换图、不加房间。
         bool infernoParty = hellParty && definition.IsInfernoDungeon;
@@ -528,6 +540,12 @@ internal sealed record DungeonEntryPlan(
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
             if (questId != 0 || quests is not null) reason = candidates.Length == 0 ? "quest-maze-unavailable" : "quest-maze-ambiguous";
+            return false;
+        }
+        // 只放行 dungeon info 明确指向4000的已接取寻物、猎杀或会面；其它任务不能借普通迷宫进入。
+        if (lostLand && questId != 0 && (quest is null || !ordinaryHunt || !DeclaresLostLand(quest)))
+        {
+            reason = "lost-land-mode-unsupported";
             return false;
         }
 
@@ -775,6 +793,20 @@ internal sealed record DungeonEntryPlan(
             else notes.Add("start-fatigue-shape-unsupported");
         }
         return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
+    }
+
+    static bool DeclaresLostLand(StoryQuest quest) =>
+        quest.Definition is { Diagnostics.Length: 0 } declared &&
+        declared.Dungeons.Any(row => row.DungeonId == 4000 && row.Parameter is -1 or 0);
+
+    static bool LostLandMeetNpc(DungeonDefinition definition, Character character, StoryQuest quest, uint questId)
+    {
+        if (definition.IsTutorial || definition.IsClassExperience || quest.Id != questId ||
+            quest.Condition != "[meet npc]" || quest.SubType != -1 || quest.IntData is not [> 0] ||
+            !QuestCoverage.HasOrdinaryDeclarations(quest)) return false;
+        var active = character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId);
+        return active is { AcceptanceId: var acceptance } && acceptance != Guid.Empty &&
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == acceptance) == 1;
     }
 
     static bool CanUseOrdinaryQuestRoute(DungeonDefinition definition, Character character, StoryQuest quest,

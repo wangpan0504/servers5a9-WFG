@@ -13,12 +13,12 @@ internal static partial class SinglePlayerDungeonRunTests
         var time = new LostLandTestClock();
         var clock = new LostLandRunClock(new(1200), time);
         time.Advance(TimeSpan.FromHours(1));
-        That(clock.Remaining.TotalSeconds == 600 && !clock.TryExpire(), "遗忘之地加载前不消耗时限");
+        That(clock.Remaining.TotalSeconds == LostLandAdmission.InitialSeconds && !clock.TryExpire(), "遗忘之地加载前不消耗时限");
         That(clock.Start() && !clock.Start(), "首个加载仅启动一次计时");
-        time.Advance(TimeSpan.FromMilliseconds(599999));
-        That(!clock.Elapsed && !clock.TryExpire() && clock.Remaining == TimeSpan.FromMilliseconds(1), "600秒之前不提前结束");
+        time.Advance(TimeSpan.FromMilliseconds(LostLandAdmission.InitialSeconds * 1000 - 1));
+        That(!clock.Elapsed && !clock.TryExpire() && clock.Remaining == TimeSpan.FromMilliseconds(1), "1800秒之前不提前结束");
         time.Advance(TimeSpan.FromMilliseconds(1));
-        That(clock.Elapsed && clock.TryExpire() && !clock.TryExpire() && !clock.Start(), "600秒边界只结束一次，不能重启");
+        That(clock.Elapsed && clock.TryExpire() && !clock.TryExpire() && !clock.Start(), "1800秒边界只结束一次，不能重启");
 
         var start = new DungeonMap("map", new(0, 0), 101, "map/lost-start.map");
         var middle = new DungeonMap("map", new(1, 0), 102, "map/lost-middle.map");
@@ -65,14 +65,14 @@ internal static partial class SinglePlayerDungeonRunTests
         That(run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position) is
             { Outcome: DungeonRunOutcome.Accepted, Snapshot.MapPayload: DungeonMapPayload.Cached }, "带怪往返继续复用原邻房缓存");
         run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
-        That(!run.LostLandClock.Start() && run.LostLandClock.Remaining.TotalSeconds == 500, "过房及重复加载不能重置总时长");
+        That(!run.LostLandClock.Start() && run.LostLandClock.Remaining.TotalSeconds == LostLandAdmission.InitialSeconds - 100, "过房及重复加载不能重置总时长");
         run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 11, 2));
         run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss.Position);
         run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
         run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity, 12, 3));
         That(run.ClearFact is null && run.Phase == SinglePlayerDungeonPhase.Dungeon, "合法Boss击杀不结束限时模式，不生成普通通关事实");
         run.Move(run.Snapshot.Identity, Guid.NewGuid(), middle.Position);
-        time.Advance(TimeSpan.FromSeconds(500));
+        time.Advance(TimeSpan.FromSeconds(LostLandAdmission.InitialSeconds - 100));
         That(run.Phase == SinglePlayerDungeonPhase.TimedOut && run.CurrentLivingMonster(11) is null &&
             run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Rejected &&
             run.Move(run.Snapshot.Identity, Guid.NewGuid(), start.Position).Outcome == DungeonRunOutcome.Rejected && run.ClearFact is null,
@@ -107,7 +107,7 @@ internal static partial class SinglePlayerDungeonRunTests
         var pending = late.PrepareConfirmedDeath(authority.Death(late.Snapshot.Identity, 10, 1)).Pending!;
         That(late.Move(late.Snapshot.Identity, Guid.NewGuid(), middle.Position).Outcome == DungeonRunOutcome.Rejected,
             "遗忘之地带怪换房不能越过尚未提交的死亡事务");
-        time.Advance(TimeSpan.FromSeconds(600));
+        time.Advance(TimeSpan.FromSeconds(LostLandAdmission.InitialSeconds));
         That(late.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted &&
             late.CurrentLivingMonster(13) is null &&
             late.PrepareConfirmedDeath(authority.Death(late.Snapshot.Identity, 13, 2)).Outcome == DungeonRunOutcome.Rejected &&

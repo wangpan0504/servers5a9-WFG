@@ -2,10 +2,12 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-// 本服规则：初始挑战600秒；第二标量按匹配资源透传，不解释为延长上限。
+// 资源 [limit time] 首值必须是600，第二标量原样透传，不解释为延长上限。
+// 本服倒计时按玩法要求使用1800秒；603首项发送该倒计时，不改写资源里的600。
 internal sealed record LostLandAdmission
 {
-    public const uint InitialSeconds = 600;
+    public const int ResourceSeconds = 600;
+    public const uint InitialSeconds = 1800;
     public uint OpaqueValue { get; }
 
     public LostLandAdmission(uint opaqueValue)
@@ -20,7 +22,7 @@ internal sealed record LostLandAdmission
         if (definition.Id != 4000 || definition.DungeonType != "lost land" || definition.Mazes.Count != 1 ||
             !definition.DisableFatigueConsumption || !definition.DisableGiveupPenalty ||
             !maze.IsLostLand || maze.ResourceError is not null || !maze.StaticTopology.Supported ||
-            maze.ClearConditions is not [{ Type: "limit time", TargetId: (int)InitialSeconds, Count: > 0 } condition])
+            maze.ClearConditions is not [{ Type: "limit time", TargetId: ResourceSeconds, Count: > 0 } condition])
             return false;
         admission = new(checked((uint)condition.Count));
         return true;
