@@ -54,6 +54,7 @@ internal static class PromotionConsumerValidationTests
             JsonSerializer.Serialize(shipped.Select(configuration => configuration with { Enabled = true }).ToArray()));
         That(enabled.Activities.Length == shipped.Length && enabled.Activities.All(entry => entry.Availability == PromotionAvailability.Active),
             "真实唯一loader已启用原配置完整图: " + string.Join("; ", enabled.Activities.Select(entry => entry.Error ?? entry.Availability.ToString())));
+        PromotionRuneConsumerTests.RunResources(resources);
         RealEmptySelectionCoordinates(resources);
         RealFixedDisjointParents(resources, shipped);
         // 仅fixture隔离目录使用已有archive；不重读PVF、不覆盖真实模板和目录缓存。
