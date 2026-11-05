@@ -22,8 +22,8 @@ internal static partial class RaidCombatProjection
     {
         var rows = battle.StatusSnapshot(view);
         bool Guard() => current() && battle.IsCurrent(view);
-        // Luke的op4由正式Run单次事件独立发布；位置快照仍严格复验当前view。
-        bool notifyClears = !restore && battle.Kind != RaidKind.Luke;
+        // Luke独立发布op4；普通普雷已有586/op5原生提示，584只静默同步参与位置。
+        bool notifyClears = !restore && battle.Kind != RaidKind.Luke && (battle.Kind != RaidKind.Prey || battle.PreyGuide);
         byte[] next = RaidCombatPackets.Participation([], rows);
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_DUNGEON_PARTICIPATION_INFO, 561, () =>
             !restore && context.RaidParticipationBody is { } displayed && next.AsSpan().SequenceEqual(displayed) &&

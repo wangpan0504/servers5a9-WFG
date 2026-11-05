@@ -12,7 +12,9 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             var prepared = receipt.Prepared;
-            if (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) || !actor.IsCurrent || !members.ContainsKey(actor) ||
+            if (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) && !HasPreyTeamAutomaticRewards ||
+                Kind == RaidKind.Prey && prepared.Source != PreyGuideRewards.TeamSource ||
+                !actor.IsCurrent || !members.ContainsKey(actor) ||
                 prepared.Instance != Instance || prepared.RaidType != Kind || prepared.Phase != current.Phase ||
                 current.State != AntonRaidBattleState.Reward || prepared.Character != actor.Character ||
                 LukeEligibility(actor.Character, current.Phase) is not { Eligible: true } eligibility ||

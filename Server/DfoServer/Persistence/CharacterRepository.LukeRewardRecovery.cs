@@ -31,9 +31,14 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
         {
             if (!row.Read() || row.IsDBNull(0)) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
             eligibility = DecodeLukeEligibility(row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1),
-                row.IsDBNull(2) ? null : row.GetInt64(2), target.Instance, target.Phase, character.Id, raidType: target.RaidType);
+                row.IsDBNull(2) ? null : row.GetInt64(2), target.Instance, target.Phase, character.Id,
+                validateAllGrants: target.RaidType == RaidKind.Prey, raidType: target.RaidType);
             if (target.RaidType == RaidKind.Fiendwar && (eligibility.Source != row.GetString(3) || eligibility.Week <= 0))
                 throw new InvalidDataException("漩涡历史资格来源或周期不属于原开战实例");
+            if (target.RaidType == RaidKind.Prey && (eligibility.Source != PreyGuideRewards.TeamSource ||
+                eligibility.Source != row.GetString(3) || eligibility.Week <= 0 ||
+                eligibility.Offers.Any(offer => offer.Kind is not (0 or 1) || offer.Card != 0)))
+                throw new InvalidDataException("普雷普通历史资格来源或牌面不属于原开战实例");
             if (!eligibility.Eligible) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
         }
         var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == target.Kind &&
@@ -44,7 +49,7 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
         var prepared = new PreparedRaidReward(target.Instance, target.Phase, target.Kind, target.Card, character.Id,
             eligibility.Source, offer.Grants, target.RaidType == RaidKind.Fiendwar || target.Phase == 1, eligibility.Week)
             { RaidType = target.RaidType };
-        command.CommandText = "SELECT plan_json,mail_ids,account,raid_type FROM character_raid_reward_receipts WHERE character_id=$id AND instance_id=$instance AND phase=$phase AND kind=$kind";
+        command.CommandText = "SELECT plan_json,mail_ids,account,raid_type,card FROM character_raid_reward_receipts WHERE character_id=$id AND instance_id=$instance AND phase=$phase AND kind=$kind";
         bool claimed = false; ImmutableArray<uint> mails = [];
         using (var row = command.ExecuteReader())
             if (row.Read())
@@ -58,6 +63,7 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
                 }
                 if (row.GetString(0).Length > 262144 || row.GetString(1).Length > 65536 ||
                     row.GetString(2) != owner.Account || row.GetInt32(3) != (int)target.RaidType ||
+                    target.RaidType == RaidKind.Prey && row.GetInt32(4) != 0 ||
                     !RecoveryPlanMatches(row.GetString(0), prepared))
                     throw new InvalidDataException("该权益已选其它牌面或原领取回执不一致");
                 mails = Decode<ImmutableArray<uint>>(row.GetString(1));

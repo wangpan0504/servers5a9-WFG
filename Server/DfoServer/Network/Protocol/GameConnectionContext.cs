@@ -26,6 +26,16 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
+    // 仅记录本连接已写出的开局飞鸟及登船场景，不改变原Battle准备时钟或准入。
+    internal (long Epoch, ushort Character, Guid Instance)? PreyFlightDisplay { get; set; }
+    internal (long Epoch, ushort Character, Guid Instance)? PreyBoardingDisplay { get; set; }
+    // 重返已绑定但落位尚未完成时，原668重试必须继续位置提交与初始化。
+    internal (long Epoch, ushort Character, Guid Instance)? PreyRejoinPending { get; set; }
+    // 失败601和结束587各自按实际写帧去重；不保存业务终态或奖励资格。
+    internal (long Epoch, ushort Character, Guid Instance, int Phase, bool Ended)? PreyFailureDisplay { get; set; }
+    internal bool PreyBoardingPending(Guid instance) => Session.Selected is { } character &&
+        Session.StartedRaid?.InstanceId == instance &&
+        PreyBoardingDisplay != (Session.SelectionEpoch, character.Id, instance);
     internal byte[]? RaidRosterDisplay { get; set; }
     internal DfoServer.Game.Raids.RaidWeeklyCycle? RaidClearLukeCycle { get; init; }
     internal (long Epoch, byte[] Body)? RaidClearDisplay { get; set; }
@@ -39,6 +49,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Dictionary<int, bool> LukeNamedDisplays { get; } = [];
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMoviePrompt { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidMovieCards { get; set; }
+    // 同一实例/阶段一份合并个人结果及一张完整团队表，按实际写帧位图去重。
+    internal (DfoServer.Network.Projection.RaidCombatDisplayIdentity Identity, byte Mask)? PreyResultDisplay { get; set; }
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? AntonCardsDisplay { get; set; }
     internal HashSet<DfoServer.GameWorld.Raids.RaidTimer> AntonTimerDisplays { get; } = [];
     // 最多保留当前团本的节点展示；只在写帧成功后记录，避免重复Clear触发原生横幅。
@@ -62,6 +74,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Dictionary<int, long> FiendwarWarningDisplays { get; } = [];
     internal Dictionary<int, DfoServer.GameWorld.Raids.RaidDungeonState> AntonDungeonDisplays { get; } = [];
     internal Dictionary<DfoServer.GameWorld.Raids.RaidTimer, DfoServer.Network.Projection.LukeTimerDisplay> LukeTimerDisplays { get; } = [];
+    internal Dictionary<byte, (Guid Instance, int Phase, int Target)> PreyMarkerDisplays { get; } = [];
+    internal DfoServer.Network.Projection.PreyBoardingProjection? PreyBoarding { get; set; }
     internal DfoServer.Network.Projection.LukePhaseExitProjection? LukePhaseExit { get; set; }
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;

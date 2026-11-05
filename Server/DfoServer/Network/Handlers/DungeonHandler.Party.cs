@@ -20,12 +20,21 @@ internal sealed partial class DungeonHandler
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
         context.Session.FiendwarAreaTravelArrived = receipt => town.TravelFiendwarAsync(context, receipt);
         context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
-        if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
+        if (partyDungeons is not null)
+        {
+            context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
+            if (preyRaid is not null)
+                context.PreyBoarding = new(context,
+                    (view, actor) => EnterPreyLandingAsync(context, view, actor),
+                    error => log.Write("prey_landing_failed", new { Connection = context.Id,
+                        Stage = "dispatch", Error = error.GetType().Name, error.Message }));
+        }
     }
 
     static Task PublishPartyHostAsync(GameConnectionContext context, PartyMember[] members, Func<bool> guard)
     {
-        byte? slot = context.Session.PartyDungeon?.Leader ?? context.Session.CurrentParty?.Invoke()?.Leader;
+        byte? slot = context.Session.PartyDungeon?.Leader ?? context.Session.CurrentParty?.Invoke()?.Leader ??
+            (context.Session.IsPreySoloRaid && members.Length == 1 ? (byte?)0 : null);
         if (slot is null || !members.Any(m => m.Slot == slot))
             throw new InvalidOperationException("组队场景缺少当前主机成员");
         return context.Notify(NotiPacketType.UDP_HOST, PartyPackets.Host(slot.Value), "party_dungeon_host", guard);
@@ -44,6 +53,7 @@ internal sealed partial class DungeonHandler
                 TownPackets.Player(identity.Character, (partyStats ?? throw new InvalidOperationException("组队副本缺少属性目录")).Compute(identity.Character),
                     identity.AdventureLevel, identity.Channel), "party_dungeon_player", guard);
         }
+        if (context.Session.IsPreySoloRaid && members.Length == 1) return;
         var endpoints = PartyPackets.Endpoints(members.Where(m => m.Actor.Session.PartyEndpoint is not null)
             .Select(m => new PartyEndpointRow(m.Actor.Character.Id, m.Actor.Session.PartyEndpoint!, m.Actor.Session.PeerAccount)).ToArray());
         // 名册处理会立即按Actor端点创建peer；必须先恢复地址和账号，避免以0.0.0.0/账号0启动连接。
@@ -143,6 +153,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.Departure && notice.Travel is { } departure)
         {
             if (context.Death is not null) await context.Death.StopAsync();
+            await UpdatePreyBoardingPartyAsync(context);
             await town.ReturnFromFormalDungeonAsync(context, departure, "party_departure_town");
             log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "party_departure",
                 departure.Character.Id, departure.Character.Position });
@@ -166,11 +177,13 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind == PartyDungeonNoticeKind.SelectionReturn && notice.Selection is { } returning)
         {
+            await UpdatePreyBoardingPartyAsync(context);
             await town.ReturnFromDungeonSelectionAsync(context, returning);
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.ResultReturn && notice.Travel is { } travel)
         {
+            await UpdatePreyBoardingPartyAsync(context);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.ReturnTown),
                 "party_result_return", () => context.Session.CanPublishTravel(travel));
             await town.ReturnFromFormalDungeonAsync(context, travel, "party_result_town");
@@ -363,6 +376,7 @@ internal sealed partial class DungeonHandler
                 await PublishEpicPieceShopAsync(context, prepare: false);
                 // 首次场景安装在30之后才完整可用；重放真实参与表和HP，不沿用加载前已写帧的去重缓存。
                 RaidCombatProjection.RestoreStatusForScene(context, Current);
+                RaidCombatProjection.PostPreyDungeonTime(context, scene);
                 if(scene.BattlePassMissionClock is {} loadingClock) await BattlePassMissionProjection.RefreshAsync(context,loadingClock.GetUtcNow());
                 break;
             case PartyDungeonNoticeKind.Move:

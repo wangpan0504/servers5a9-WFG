@@ -20,6 +20,7 @@ internal sealed partial class AntonRaidBattle
     int PreyHeader(string tag, int index = 0) => script.Headers.Single(row => row.Tag == tag).Values[index].Number;
     ImmutableDictionary<string, int> InitializePreySymbols(int phase, ImmutableDictionary<string, int> symbols)
     {
+        if (!PreyGuide) return InitializePreyTeamSymbols(phase, symbols);
         if (phase == 0)
         {
             // 单人布局在实例创建时冻结；两阶段沿原symbol继承，不把分支改成另一套圣地。
@@ -38,6 +39,7 @@ internal sealed partial class AntonRaidBattle
     // 普雷的ON CLEAR是正式Run事件，9999不是需要重复通关的次数。
     internal AntonRaidBattleChange? CompletePreyDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
     {
+        if (!PreyGuide) return CompletePreyTeamDungeon(facts);
         lock (gate)
         {
             if (Kind != RaidKind.Prey || facts is not [var row] || !row.Actor.IsCurrent ||
@@ -73,6 +75,7 @@ internal sealed partial class AntonRaidBattle
 
     internal bool AllowsPreyEntry(int dungeon)
     {
+        if (!PreyGuide) return AllowsPreyTeamEntry(dungeon);
         lock (gate) return Kind == RaidKind.Prey && pendingTransition is null && !TerminalRequested(current) &&
             !LukePhaseDueLocked() && current.Symbols.GetValueOrDefault("[prepare raid]") == 1 &&
             current.Dungeons.GetValueOrDefault(dungeon, RaidDungeonState.Hide) == RaidDungeonState.Open &&
@@ -82,6 +85,7 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView EvaluatePrey(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, int? clear = null)
     {
+        if (!PreyGuide) return EvaluatePreyTeam(state, dungeon, symbol, timer, clear);
         if (timer == new RaidTimer(9000, 0))
         {
             state = state with { Symbols = state.Symbols.SetItem("[prepare raid]", 1) };
@@ -212,11 +216,12 @@ internal sealed partial class AntonRaidBattle
             TimerAnchors = state.TimerAnchors.SetItem(key, lukeClock.GetTimestamp()), TimerSequence = generation };
     }
 
-    static AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon)
+    AntonRaidBattleView RemovePreyArea(AntonRaidBattleView state, int dungeon)
     {
         for (int slot = 1; slot <= (state.Phase == 0 ? 16 : 20); slot++)
             if (state.Symbols[$"[area_{slot}]"] == dungeon)
-                return state with { Symbols = state.Symbols.SetItem($"[area_{slot}]", 0).SetItem($"[area_{slot}_dgn_type]", 0) };
+                return state with { Symbols = state.Symbols.SetItem($"[area_{slot}]", 0)
+                    .SetItem($"[area_{slot}_dgn_type]", PreyGuide ? 0 : 7) };
         return state;
     }
 

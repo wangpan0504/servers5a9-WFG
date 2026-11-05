@@ -92,6 +92,18 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
         var participant = parsed!.Participants.SingleOrDefault(member => member.ActorId == context.Session.Selected?.Id);
         if (participant is null) return CommandResult.Unhandled;
+        if (context.Session.ClearedPreyTeamResultRun() is { } preyRun && partyDungeons is not null &&
+            context.Session.PartyDungeon is { } preyInstance)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, preyInstance.Members);
+            if (!ReferenceEquals(context.Session.PartyDungeon, preyInstance) ||
+                context.Session.ClearedPreyTeamResultRun() != preyRun) return CommandResult.Handled;
+            var departure = partyDungeons.Depart(context.Session);
+            log.Write("prey_dungeon_result_return", new { Connection = context.Id, Run = preyRun,
+                Accepted = departure.Error == 0, departure.Error, Reason = "cleared-run-result" });
+            if (departure.Error == 0) await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
+            return CommandResult.Handled;
+        }
         var reportMembers = parsed.Participants.Select(member => member.ActorId).ToArray();
         if (context.Session.AcceptFiendwarPlayResult(participant.ActorId, participant.RankPoint,
             parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } raid } reported)

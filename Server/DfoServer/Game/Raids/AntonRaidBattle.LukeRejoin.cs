@@ -5,8 +5,13 @@ namespace DfoServer.Game.Raids;
 internal sealed partial class AntonRaidBattle
 {
     readonly Dictionary<ushort, long> lukeDisconnectAnchors = [];
-    internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => Kind is RaidKind.Luke or RaidKind.Fiendwar ? script.WaitingRoom : null;
-    bool LukeRejoinOpenLocked() => Kind is RaidKind.Luke or RaidKind.Fiendwar && current.State != AntonRaidBattleState.Completed &&
+    internal TimeSpan LukeRejoinWindow => Kind != RaidKind.Prey ? TimeSpan.FromSeconds(300) :
+        script.Headers.Where(row => row.Tag == "[disconn member wait time]").ToArray() is
+            [{ Values: [{ Type: 0, Number: > 0 } seconds] }] ? TimeSpan.FromSeconds(seconds.Number) : TimeSpan.Zero;
+    internal bool SupportsLukeRejoin => Kind is RaidKind.Luke or RaidKind.Fiendwar ||
+        Kind == RaidKind.Prey && !PreyGuide && LukeRejoinWindow > TimeSpan.Zero;
+    internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => SupportsLukeRejoin ? script.WaitingRoom : null;
+    bool LukeRejoinOpenLocked() => SupportsLukeRejoin && current.State != AntonRaidBattleState.Completed &&
         !current.ClockFaulted && !current.PhaseExpired && !LukePhaseDueLocked();
 
     internal void ReserveLukeDisconnect(RaidActor actor)
@@ -14,10 +19,10 @@ internal sealed partial class AntonRaidBattle
 
     TimeSpan? LukeRejoinRemainingLocked()
     {
-        foreach (var row in lukeDisconnectAnchors.Where(row => lukeClock.GetElapsedTime(row.Value) >= TimeSpan.FromSeconds(300)).ToArray())
+        foreach (var row in lukeDisconnectAnchors.Where(row => lukeClock.GetElapsedTime(row.Value) >= LukeRejoinWindow).ToArray())
             lukeDisconnectAnchors.Remove(row.Key);
         return lukeDisconnectAnchors.Count == 0 ? null : lukeDisconnectAnchors.Values
-            .Select(anchor => TimeSpan.FromSeconds(300) - lukeClock.GetElapsedTime(anchor)).Min();
+            .Select(anchor => LukeRejoinWindow - lukeClock.GetElapsedTime(anchor)).Min();
     }
 
     internal bool IsLukeWaitingRoom(RaidActor actor)

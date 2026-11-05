@@ -9,14 +9,38 @@ internal sealed partial class GameSession
 {
     RaidDungeonAdmission? raidDungeonAdmission;
 
+    internal bool IsPreySoloRaid => raidDungeonAdmission is { Kind: RaidKind.Prey, PreyGuide: false, PreyPartyId: null, PreySoloCharacter: { } solo } &&
+        Selected?.Id == solo && CurrentParty?.Invoke() is null;
+
+    internal bool MatchesPreySoloSelection(Game.Party.PartySnapshot scene) => owner.Execute(() =>
+        IsPreySoloRaid && raidDungeonAdmission!.Current && scene.Id == ushort.MaxValue && scene.Members.Length == 1 &&
+        scene.PreyBattleId == raidDungeonAdmission.InstanceId && scene.Members[0].Actor.Session == this &&
+        scene.Members[0].IsCurrent() && CurrentDungeonSelection?.Raid?.Admission == raidDungeonAdmission);
+
+    internal (Guid Instance, byte Area)? CapturePreySoloSceneIdentity() => owner.Execute<(Guid, byte)?>(() =>
+    {
+        if (!Ready || Phase is not (SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading) ||
+            CurrentParty?.Invoke() is not null || Selected?.Position is not { Town: 59, Area: 4 or 5 } position ||
+            raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid ||
+            !HasPreyTeamTownAccess || raid.Battle.View.State != AntonRaidBattleState.Fighting) return null;
+        if (Phase == SessionPhase.Loading)
+        {
+            // Loading只描述尚未37的原单人Run，不在此签发新授权或重建场景。
+            if (!IsPreySoloRaid || formalDungeon is not { } dungeon || PartyDungeon is not { } instance ||
+                instance.Members is not [var member] || !ReferenceEquals(member.Actor.Session, this) ||
+                instance.Id != dungeon.Run.Snapshot.Identity.InstanceId || ReplayAntonLoading(checked((int)dungeon.Entry.DungeonId)) is null) return null;
+        }
+        else if (formalDungeon is not null || PartyDungeon is not null || Phase == SessionPhase.Town && !CanChangeTownParty) return null;
+        return (raid.Battle.Instance, position.Area);
+    });
+
     // 只能由已提交开战的领域协调者调用；授权仍随原owner/选角epoch与原实例一起失效。
     public bool AuthorizeRaidDungeon(RaidDungeonAdmission admission) => owner.Execute(() =>
     {
         if (admission.Kind is not (RaidKind.Anton or RaidKind.Prey or RaidKind.Fiendwar) || !ReferenceEquals(admission.Actor.Session, this) || !ReferenceEquals(admission.Actor.Owner, owner) ||
             !admission.Current || ChannelEntry?.Identity != admission.Actor.Channel || RaidTypes.FromChannelType(ChannelEntry.Type) != (byte)admission.Kind ||
             !Ready || !(Phase == SessionPhase.Town || admission.Kind == RaidKind.Luke && Phase == SessionPhase.MapSelect) || formalDungeon is not null ||
-            admission.Catalog.Script.WaitingRoom is not { } room || Selected?.Position is not { } position ||
-            position.Town != room.Town || (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) != position.Area : position.Area != room.Area)) return false;
+            Selected?.Position is not { } position || !IsRaidDungeonTownArea(admission, position)) return false;
         raidDungeonAdmission = admission;
         return true;
     });
@@ -27,8 +51,17 @@ internal sealed partial class GameSession
         ReferenceEquals(admission.Actor.Owner, owner) && ChannelEntry?.Identity == admission.Actor.Channel &&
         RaidTypes.FromChannelType(ChannelEntry.Type) == (byte)admission.Kind && Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
         formalDungeon is null && pendingRental is null && !HasPendingTownQuestCommit &&
-        admission.Catalog.Script.WaitingRoom is { } room && Selected?.Position is { } position &&
-        position.Town == room.Town && (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) == position.Area : position.Area == room.Area));
+        Selected?.Position is { } position && IsRaidDungeonTownArea(admission, position) && RaidSelectionReturn(admission) is not null);
+
+    GameWorld.Towns.Location? RaidSelectionReturn(RaidDungeonAdmission admission) =>
+        admission.Kind == RaidKind.Prey && !admission.PreyGuide && Selected is { } character
+            ? towns.Entrance(character.Position, new(59, 3, 0, 0), completed) ?? towns.Spawn(new(59, 3, 0, 0), completed)
+            : Selected?.Position;
+
+    static bool IsRaidDungeonTownArea(RaidDungeonAdmission admission, GameWorld.Towns.Location position) =>
+        admission.Catalog.Script.WaitingRoom is { } room && position.Town == room.Town &&
+        (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) == position.Area :
+            admission.Kind == RaidKind.Prey && !admission.PreyGuide ? position.Area is 4 or 5 : position.Area == room.Area);
 
     internal DungeonSelectionReceipt InstallRaidDungeonMenu(RaidDungeonAdmission admission) => InstallRaidSelection(admission, null);
 
@@ -40,7 +73,7 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("团本选图安装前身份已变化");
         InvalidateFiendwarKeyPreparation(preserveScene: true);
         raidDungeonAdmission = admission;
-        CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position)
+        CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, RaidSelectionReturn(admission)!)
             { Raid = selection };
         SetState(SessionPhase.MapSelect);
         return new DungeonSelectionReceipt(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
@@ -90,7 +123,9 @@ internal sealed partial class GameSession
 
     bool IsCurrentRaidDungeon(DungeonEntryPlan entry) => entry.RaidEntry is not { } raid ||
         raidDungeonAdmission is { } admission && admission.InstanceId == raid.InstanceId && admission.Phase == raid.Phase &&
-        admission.Squad == raid.Squad && admission.Kind == raid.Kind && admission.Current;
+        admission.Squad == raid.Squad && admission.PreyPartyId == raid.PreyPartyId &&
+        admission.PreySoloCharacter == raid.PreySoloCharacter && admission.Kind == raid.Kind &&
+        (raid.Kind != RaidKind.Prey || admission.PreyGuide == raid.PreyGuide) && admission.Current;
 
     bool CanInstallRaidDungeon(DungeonEntryPlan entry) => IsCurrentRaidDungeon(entry) &&
         (entry.RaidEntry is null || raidDungeonAdmission!.Allows(checked((int)entry.DungeonId)));
@@ -98,11 +133,7 @@ internal sealed partial class GameSession
     DungeonSelectionReceipt? BeginRaidDungeonSelection(bool partyAdmission)
     {
         if (!HasRaidDungeonAdmission || Selected is not { } character ||
-            raidDungeonAdmission!.Catalog.Script.WaitingRoom is not { } room ||
-            character.Position.Town != room.Town ||
-            (raidDungeonAdmission.Kind == RaidKind.Fiendwar
-                ? raidDungeonAdmission.Battle?.FiendwarPosition(character.Id) != character.Position.Area
-                : character.Position.Area != room.Area) ||
+            !IsRaidDungeonTownArea(raidDungeonAdmission!, character.Position) ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true) return null;
         if (CurrentDungeonSelection is null)
             CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, character.Id, character.Position, character.Position);
@@ -132,7 +163,8 @@ internal sealed partial class GameSession
                 ? admission.Battle?.IsLukeRouteCurrent(route) != true || route.Dungeon != selected.Dungeon || route.MazeOrdinal != selected.MazeOrdinal
                 : admission.Battle?.UsesLukeRoute(admission.Phase) == true || admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal)))
             return RejectFormal(prefix + "-entry-selection-changed");
-        var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind);
+        var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind)
+            { PreyGuide = admission.PreyGuide, PreyPartyId = admission.PreyPartyId, PreySoloCharacter = admission.PreySoloCharacter };
         var sharedEntry = shared?.Session.PreparedParty(shared).Dungeon.Entry;
         if (sharedEntry is not null && sharedEntry.RaidEntry != identity)
             return RejectFormal(prefix + "-entry-squad-mismatch");

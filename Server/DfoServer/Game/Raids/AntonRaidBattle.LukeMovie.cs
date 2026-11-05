@@ -2,7 +2,7 @@ namespace DfoServer.Game.Raids;
 
 internal sealed partial class AntonRaidBattle
 {
-    // 各阶段分别记录真实演出确认，P1确认不能代替P2；最多两阶段八人。
+    // 各阶段分别记录真实演出确认，P1确认不能代替P2；人数沿原团本资源约束。
     readonly HashSet<(int Phase, ushort Character)> lukeMovieCompleted = [];
     readonly HashSet<(int Phase, ushort Character)> lukeMovieDeparted = [];
 
@@ -11,7 +11,7 @@ internal sealed partial class AntonRaidBattle
 
     // P2全员无资格时也须先播放成功演出，不能直接把业务Completed当成原生翻牌state4。
     // 有资格的P2仍沿原个人电影/选牌合同，不增加全团选牌前置条件。
-    bool HasLukeMovieBarrierLocked() => HasFiendwarMovieBarrierLocked() || HasLukeFirstMovieLocked() && current.Phase == 0 ||
+    bool HasLukeMovieBarrierLocked() => HasFiendwarMovieBarrierLocked() || HasPreyMovieBarrierLocked() || HasLukeFirstMovieLocked() && current.Phase == 0 ||
         Kind == RaidKind.Luke && lukeFlow is not null && current.Phase == 1 &&
         lukePhaseCommits.TryGetValue(1, out var committed) && committed.Members.All(member => !member.Eligible);
 
@@ -60,6 +60,11 @@ internal sealed partial class AntonRaidBattle
                     current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired &&
                     HasFiendwarMovieBarrierLocked() && (LukeMovieBarrierReadyLocked() ||
                         automaticLuke && LukeRewardRemainingLocked() == TimeSpan.Zero);
+            if (Kind == RaidKind.Prey && !PreyGuide && phase == 1)
+                return actor.IsCurrent && members.ContainsKey(actor) && current.Phase == phase &&
+                    current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired &&
+                    (lukeMovieCompleted.Contains((phase, actor.Character)) ||
+                        automaticLuke && (PreyMovieRewardsRequestedLocked() || LukeRewardGraceRemainingLocked() == TimeSpan.Zero));
             if (!HasLukeFirstMovieLocked() || phase != 0) return true;
             if (!actor.IsCurrent || !members.ContainsKey(actor) || current.Phase != phase ||
                 current.State != AntonRaidBattleState.Reward || current.ClockFaulted || current.PhaseExpired) return false;
@@ -70,7 +75,7 @@ internal sealed partial class AntonRaidBattle
 
     void LeaveLukeFirstMovieLocked(RaidActor actor, bool disconnected)
     {
-        if (disconnected || Kind is not (RaidKind.Luke or RaidKind.Fiendwar) || !HasLukeMovieBarrierLocked() ||
+        if (disconnected || (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) && !HasPreyMovieBarrierLocked()) || !HasLukeMovieBarrierLocked() ||
             !lukeSettlements.TryGetValue(current.Phase, out var settlement) || !settlement.Members.Any(member =>
                 member.Character == actor.Character && member.Present)) return;
         bool before = LukeMovieBarrierReadyLocked();

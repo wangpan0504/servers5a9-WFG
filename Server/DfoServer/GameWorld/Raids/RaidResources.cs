@@ -16,7 +16,10 @@ internal sealed record RaidResources(RaidScript Script, ImmutableArray<RaidDunge
     public LukeCardSetCatalog? LukeCardSet { get; init; }
     public FiendwarScript? Fiendwar { get; init; }
     public RaidResources? FiendwarGuide { get; init; }
+    public RaidResources? PreyTeam { get; init; }
     public bool ResourcesReady => Issues.IsEmpty && MissingFormalDungeons.IsEmpty && MissingFormalMaps.IsEmpty && MissingItems.IsEmpty;
+    // 普通普雷开战检查业务声明及计费/奖励物品；地图缺项保留诊断，由入图目录逐目标拒绝。
+    public bool PreyTeamStartReady => Script.Issues.IsEmpty && MissingItems.IsEmpty && EntryCatalog is { Type: 3 };
     // 即使资源完整，计费、候战室迁移及阶段权威输入仍未闭合，不能把此结果当作开战许可。
     public string StartBlocker => !Issues.IsEmpty ? "formal-raid-definition-unsupported" :
         !MissingFormalDungeons.IsEmpty ? "formal-raid-dungeon-index-missing" :
@@ -33,7 +36,7 @@ internal static class RaidResourceLoader
         => LoadMode(pvf, raid, dungeons, items, mapPath, supplementalMaps, false);
 
     static RaidResources LoadMode(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items,
-        Func<int, string?>? mapPath, IReadOnlyDictionary<int, string>? supplementalMaps, bool guide)
+        Func<int, string?>? mapPath, IReadOnlyDictionary<int, string>? supplementalMaps, bool guide, bool preyTeam = false)
     {
         mapPath ??= dungeons.MapPath;
         var fiendwar = raid.Type == 2 ? guide
@@ -41,7 +44,9 @@ internal static class RaidResourceLoader
                 pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString)
             : FiendwarScript.Parse(raid.Path, pvf.ReadTokens(raid.Path),
                 pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString) : null;
-        var script = fiendwar?.Script ?? (raid.Type == 3 ? PreyGuideScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString) :
+        var script = fiendwar?.Script ?? (raid.Type == 3 ? preyTeam
+            ? PreyTeamScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString)
+            : PreyGuideScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString) :
             RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
             pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString,
             raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton));
@@ -59,7 +64,9 @@ internal static class RaidResourceLoader
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
         result = result with { Issues = result.Issues.AddRange(issues), Fiendwar = fiendwar };
         if (raid.Type is 0 or 1 or 2 or 3)
-            result = result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) };
+            result = result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps, preyTeam) };
+        if (raid.Type == 3 && !preyTeam)
+            return result with { PreyTeam = LoadMode(pvf, raid, dungeons, items, mapPath, supplementalMaps, false, true) };
         return raid.Type == 2 && !guide
             ? result with { FiendwarGuide = LoadMode(pvf, raid, dungeons, items, mapPath, supplementalMaps, true) } : result;
 

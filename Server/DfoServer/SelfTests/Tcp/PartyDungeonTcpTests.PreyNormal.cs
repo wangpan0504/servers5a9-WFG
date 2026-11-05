@@ -7,7 +7,7 @@ namespace DfoServer.Testing;
 
 internal static partial class PartyDungeonTcpTests
 {
-    static async Task RunPreyNormalAsync(ServerOptions source,string root,TcpTestResources resources)
+    internal static async Task RunPreyNormalAsync(ServerOptions source,string root,TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"party-prey-normal"),resources:resources);
         await fixture.StartAsync();

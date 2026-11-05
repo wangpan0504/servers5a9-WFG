@@ -119,17 +119,19 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             (context.Session.StartedRaid is not null || entry.DungeonIndex <= int.MaxValue && raidService.Contains((int)entry.DungeonIndex)))
         {
             var party = context.Session.CurrentParty?.Invoke();
+            var scene = party ?? raidService.CapturePreySoloScene(context.Session);
             string? reason = "anton-entry-party-dispatch-gate-mismatch";
             DfoServer.Game.Dungeons.PartyDungeonNotice[] selected = [];
-            if (party is not null && context.DispatchGates?.Holds(context, party.Commands) == true)
+            if (scene is not null && context.DispatchGates?.Holds(context, party?.Commands ?? context.CommandGate) == true)
             {
-                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, scene.Members);
                 if (entry.DungeonIndex <= int.MaxValue)
-                    selected = raidService.Select(context.Session, (int)entry.DungeonIndex, party, out reason,
+                    selected = raidService.Select(context.Session, (int)entry.DungeonIndex, scene, out reason,
                         replayLoading: context.Session.Phase == SessionPhase.Loading);
             }
-            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = true,
-                RaidType = 0, Replay = selected.Any(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay),
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = party is not null,
+                RaidType = context.Session.ChannelEntry?.Type == 50 ? 3 : 0,
+                Replay = selected.Any(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay),
                 Dungeon = entry.DungeonIndex, Members = selected.Length, RejectReason = reason, MissingMaps = raidService.MissingMaps });
             if (selected.Length == 0)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "anton_selection_rejected");

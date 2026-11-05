@@ -64,6 +64,41 @@ internal static class TcpRegressionTests
             await PreyGuideTests.RunBattlePassNoticeAsync(options, Path.Combine(root, "battle-pass-notice"), resources);
         }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
+        ("prey-team-flow", PreyTeamTcpTests.RunAsync),
+        ("prey-team-lobby", PreyTeamTcpTests.RunLobbyAsync),
+        ("prey-team-landing", PreyTeamTcpTests.RunLandingAsync),
+        ("prey-team-landing-squads", PreyTeamTcpTests.RunTeamLandingAsync),
+        ("prey-team-defence-landing", PreyTeamTcpTests.RunDefenceLandingAsync),
+        ("prey-team-lobby-squads", PreyTeamTcpTests.RunTeamLobbyAsync),
+        ("prey-team-exit", PreyTeamTcpTests.RunExitAsync),
+#if DEBUG
+        ("debug-dungeon-kill", DebugDungeonKillTcpTests.RunAsync),
+#endif
+        ("prey-team-rejoin-party", PreyTeamTcpTests.RunRejoinPartyAsync),
+        ("prey-team-side-capacity", PreyTeamTcpTests.RunSideCapacityAsync),
+        ("prey-normal-party", PartyDungeonTcpTests.RunPreyNormalAsync),
+        ("prey-team-squads", PreyTeamTcpTests.RunTeamAsync),
+        ("prey-team-phase1", PreyTeamTcpTests.RunPhaseOneAsync),
+        ("prey-team-auto-reward", (_, root, resources) => PreyAutomaticRewardTests.RunAsync(root, resources)),
+        ("prey-team-phases", PreyTeamTcpTests.RunPhasesAsync),
+        ("prey-team-rejoin", (_, root, resources) =>
+        {
+            PreyTeamRejoinTests.Run(root, resources);
+            return Task.CompletedTask;
+        }),
+        ("prey-team-core", (_, _, _) =>
+        {
+            PreyTeamResourceTests.RunCore();
+            PreyTeamBattleTests.RunCore();
+            PreyTeamProtocolTests.RunCore();
+            return Task.CompletedTask;
+        }),
+        ("prey-team-rules", (_, _, resources) =>
+        {
+            PreyTeamResourceTests.Run(resources.Archive);
+            PreyTeamResourceTests.RunRewards(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("prey-guide-battlepass-death", PreyGuideTcpTests.RunBattlePassDeathAsync),
         ("battle-pass-luke-raid-death", LukeRaidRunTcpTests.RunBattlePassDeathAsync),
         ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),

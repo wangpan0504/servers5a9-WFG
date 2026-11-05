@@ -10,7 +10,8 @@ internal sealed partial class RaidRegistry
         lock (gate)
         {
             if (!UsesRejoinCandidates(candidates) || fact.Luke is not { } reservation ||
-                !IsCurrent(expected) || expected.Type is not (1 or 2) || expected.Type != (byte)reservation.Battle.Kind || expected.Key != fact.Key || expected.Channel != fact.Channel ||
+                !IsCurrent(expected) || expected.Type is not (1 or 2 or 3) || !reservation.Battle.SupportsLukeRejoin ||
+                expected.Type != (byte)reservation.Battle.Kind || expected.Key != fact.Key || expected.Channel != fact.Channel ||
                 expected.Started?.InstanceId != fact.Instance || fact.OldOwner.IsCurrent ||
                 expected.Members.Any(m => m.Actor.Character == fact.Character) ||
                 !reservation.Battle.CanRestoreLukeRejoin(reservation)) return false;
@@ -23,13 +24,14 @@ internal sealed partial class RaidRegistry
     {
         lock (gate)
         {
-            if (fact.Luke is null || !IsCurrent(expected) || expected.Type is not (1 or 2) || expected.Type != (byte)fact.Luke.Battle.Kind ||
+            if (fact.Luke is null || !IsCurrent(expected) || expected.Type is not (1 or 2 or 3) || !fact.Luke.Battle.SupportsLukeRejoin ||
+                expected.Type != (byte)fact.Luke.Battle.Kind ||
                 expected.Started?.InstanceId != fact.Instance || expected.Key != fact.Key || expected.Channel != fact.Channel ||
                 replacement.Character != fact.Character || replacement.Owner.Account != fact.Account ||
                 !replacement.IsCurrent || fact.OldOwner.IsCurrent || FindCore(replacement) is not null ||
                 expected.Members.Length >= expected.Capacity || expected.Members.Any(m => m.Slot == fact.Slot ||
                     m.Actor.Character == fact.Character || m.Actor.Owner.Account == fact.Account)) return null;
-            var restored = expected with { Members = expected.Members.Add(new(replacement, fact.Slot, fact.Squad)),
+            var restored = expected with { Members = expected.Members.Add(new(replacement, fact.Slot, fact.Squad) { PreyPosition = fact.Luke.PreyPosition }),
                 Leader = expected.Members.IsEmpty ? replacement.Character : expected.Leader, Revision = revision + 1 };
             if (!install()) return null;
             revision++;

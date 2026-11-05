@@ -15,6 +15,11 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<int, FiendwarTimer> FiendwarDungeonTimers { get; init; } = ImmutableDictionary<int, FiendwarTimer>.Empty;
     public ImmutableDictionary<ushort, int> FiendwarPositions { get; init; } = ImmutableDictionary<ushort, int>.Empty;
     public ImmutableHashSet<Guid> FiendwarExpiredRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
+    public ImmutableHashSet<Guid> PreyExpelledRuns { get; init; } = ImmutableHashSet<Guid>.Empty;
+    public ImmutableDictionary<byte, int> PreyMarkers { get; init; } = ImmutableDictionary<byte, int>.Empty;
+    public ImmutableDictionary<ushort, ushort> PreyMemberLocations { get; init; } = ImmutableDictionary<ushort, ushort>.Empty;
+    public ImmutableDictionary<(ushort Character, int Dungeon), uint> PreyMemberRetryDeadlines { get; init; } =
+        ImmutableDictionary<(ushort Character, int Dungeon), uint>.Empty;
     public FiendwarBossRound? FiendwarBoss { get; init; }
     public FiendwarSupportNotice? FiendwarSupport { get; init; }
     public ImmutableDictionary<int, RaidClause> Deferred { get; init; } = ImmutableDictionary<int, RaidClause>.Empty;
@@ -70,6 +75,7 @@ internal sealed partial class AntonRaidBattle
     int? rewardWeek;
     public Guid Instance { get; }
     public RaidKind Kind { get; }
+    public bool PreyGuide { get; }
     public int PhaseCount => script.Phases.Length;
     public int? RewardWeek { get { lock (gate) return rewardWeek; } }
     public AntonRaidBattleView View { get { lock (gate) return current; } }
@@ -78,7 +84,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind is RaidKind.Luke or RaidKind.Fiendwar ? 8 : 20) || policy.Length != PhaseCount ||
+            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind == RaidKind.Prey ? PreyGuide ? 1 : 12 : Kind is RaidKind.Luke or RaidKind.Fiendwar ? 8 : 20) || policy.Length != PhaseCount ||
                 policy.Any(p => string.IsNullOrWhiteSpace(p.Source) || p.Offers.IsEmpty ||
                     p.Offers.Any(o => (o.Kind is not (0 or 1) && !(HasAntonRewards && o.Kind is 2 or 3)) || o.Grants.IsEmpty) ||
                     p.Offers.Select(o => (o.Kind, o.Card)).Distinct().Count() != p.Offers.Length ||
@@ -94,7 +100,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind is RaidKind.Luke or RaidKind.Fiendwar ? 8 : 20) ||
+            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind == RaidKind.Prey ? PreyGuide ? 1 : 12 : Kind is RaidKind.Luke or RaidKind.Fiendwar ? 8 : 20) ||
                 members.Keys.Any(m => m.Character == actor.Character)) return false;
             if (lukeCompletion is { } completion)
             {
@@ -153,16 +159,24 @@ internal sealed partial class AntonRaidBattle
     public void Publish(AntonRaidBattleView view, Action<Exception>? recipientFailure = null)
     {
         RaidActor[] recipients;
+        IDisposable? preyDefence;
         lock (gate)
         {
             if (!ReferenceEquals(current, view)) return;
             recipients = members.Keys.ToArray();
+            preyDefence = BeginPreyDefencePublication(view, recipientFailure);
         }
-        foreach (var actor in recipients)
+        Exception? publicationFailure = null;
+        using (preyDefence)
         {
-            try { if (actor.IsCurrent) actor.Session.RaidBattleNoticeArrived?.Invoke(view, actor); }
-            catch (Exception error) when (recipientFailure is not null) { recipientFailure(error); }
+            foreach (var actor in recipients)
+            {
+                try { if (actor.IsCurrent) actor.Session.RaidBattleNoticeArrived?.Invoke(view, actor); }
+                catch (Exception error) when (recipientFailure is not null) { recipientFailure(error); }
+                catch (Exception error) when (preyDefence is not null) { publicationFailure ??= error; }
+            }
         }
+        if (publicationFailure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(publicationFailure);
     }
 
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
@@ -187,7 +201,10 @@ internal sealed partial class AntonRaidBattle
     }
     internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>
         script.Phases.SelectMany(phase => phase.Dungeons).Select(d => d.Id).Distinct().Order()
-            .Select(id => (id, view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
+            .Select(id => (id, Kind == RaidKind.Prey && !PreyGuide && view.Phase == 0 &&
+                script.Phases[0].Dungeons.Any(row => row.Id == id && PreyDungeonType(row) == 5) &&
+                !Enumerable.Range(1, 16).Any(slot => view.Symbols.GetValueOrDefault($"[area_{slot}]") == id)
+                    ? RaidDungeonState.Hide : view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
 
 
     readonly bool antonPhaseProgress;
@@ -201,7 +218,7 @@ internal sealed partial class AntonRaidBattle
         Random? preyRandom = null, FiendwarScript? fiendwar = null, FiendwarPacing? fiendwarPacing = null,
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null, int fiendwarRoute = 0,
         LukeCardSetCatalog? lukeCards = null, ImmutableArray<LukeRaidMazeChoice> lukeMazes = default,
-        Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null)
+        Random? fiendwarMazeRandom = null, LukeChannelCardSelection? lukeChannelCards = null, bool preyGuide = true)
     {
         if (pacing is not null && kind != RaidKind.Luke) throw new InvalidDataException("卢克统一节奏不能应用于其它团本");
         script = pacing?.Adapt(script) ?? script;
@@ -232,7 +249,7 @@ internal sealed partial class AntonRaidBattle
             completion.Phases.Length != script.Phases.Length || kind != RaidKind.Fiendwar && completion.Phases.Length != 2))
             throw new InvalidDataException("卢克阶段策略不完整");
         memberRewardPolicies = memberRewards ?? ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>.Empty;
-        if (memberRewardPolicies.Count > 8 || memberRewardPolicies.Any(row => completion is null || row.Value.IsDefault ||
+        if (memberRewardPolicies.Count > (kind == RaidKind.Prey && !preyGuide ? 12 : 8) || memberRewardPolicies.Any(row => completion is null || row.Value.IsDefault ||
             row.Value.Length != script.Phases.Length || !ValidLukeCompletion(completion with
             { Phases = completion.Phases.Select((phase, index) => phase with { Rewards = row.Value[index] }).ToImmutableArray() })))
             throw new InvalidDataException("逐角色冻结奖励策略不完整");
@@ -271,6 +288,7 @@ internal sealed partial class AntonRaidBattle
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
         Kind = kind;
+        PreyGuide = kind == RaidKind.Prey && preyGuide;
         this.preyRandom = preyRandom ?? Random.Shared;
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
@@ -319,7 +337,7 @@ internal sealed partial class AntonRaidBattle
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => Kind == RaidKind.Prey && !PreyBranchMatches(d, symbols)
                 ? RaidDungeonState.Hide : d.InitialState),
             ImmutableDictionary<RaidTimer, int>.Empty)
-            { LukePhaseCoinsUsed = SupportsLukeRevival && phase == 1 ? (byte)0 : null,
+            { LukePhaseCoinsUsed = Kind == RaidKind.Luke && SupportsLukeRevival && phase == 1 ? (byte)0 : null,
                 LukeEnergySignals = lukeEnergyObjects ? ImmutableDictionary<int, int>.Empty.Add(113, 0).Add(114, 0) :
                     ImmutableDictionary<int, int>.Empty,
                 TimerSequence = timerSequence, DungeonGenerations = Kind is RaidKind.Luke or RaidKind.Prey || antonPhaseProgress || HasAntonRewards
@@ -476,19 +494,21 @@ internal sealed partial class AntonRaidBattle
         {
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
                 HasAntonRewards && !current.AntonCardsReady ||
-                HasLukeMovieBarrierLocked() && !LukeMovieBarrierReadyLocked() && LukeRewardRemainingLocked() != TimeSpan.Zero ||
+                HasLukeMovieBarrierLocked() && !LukeMovieBarrierReadyLocked() && LukeRewardGraceRemainingLocked() != TimeSpan.Zero ||
                 members.Any(member => member.Value.Length != PhaseCount) ||
                 Kind is RaidKind.Luke or RaidKind.Prey && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;
             var before = current;
             current = before.Phase + 1 == script.Phases.Length
-                ? before with { State = AntonRaidBattleState.Completed, Revision = before.Revision + 1, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                ? before with { State = AntonRaidBattleState.Completed, PreyMarkers = ImmutableDictionary<byte, int>.Empty, Revision = before.Revision + 1, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
                     TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty }
                 : HasAntonRewards ? before with { State = AntonRaidBattleState.Intermission, Revision = before.Revision + 1,
                     AntonWaitAnchor = lukeClock.GetTimestamp(), AntonWaitSeconds = Math.Max(0, AntonHeaderSeconds("[phase break time]") - 5) }
                 : lukeFlow is not null ? before with { State = AntonRaidBattleState.Intermission, Revision = before.Revision + 1,
                     LukeWaitAnchor = lukeClock.GetTimestamp(), LukeWaitSeconds = lukeFlow.BreakSeconds }
                 : Initialize(before.Phase + 1, before.Revision + 1, Kind is RaidKind.Luke or RaidKind.Prey ? before.Symbols : null, before.TimerSequence);
+            if (Kind == RaidKind.Prey && !PreyGuide && current.Phase != before.Phase)
+                current = current with { PreyMemberLocations = before.PreyMemberLocations };
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
             AnchorLukePhaseLocked();
@@ -535,7 +555,8 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView Evaluate(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, RaidStageFact? fact = null)
     {
-        if (Kind == RaidKind.Prey) return EvaluatePrey(state, dungeon, symbol, timer);
+        if (Kind == RaidKind.Prey) return PreyGuide ? EvaluatePrey(state, dungeon, symbol, timer)
+            : EvaluatePreyTeam(state, dungeon, symbol, timer, stageFact: fact);
         state = ApplyLukeEnergyPacing(state, dungeon, timer, fact);
         var events = new Queue<(int? Dungeon, string? Symbol, RaidTimer? Timer, RaidStageFact? Fact)>();
         events.Enqueue((dungeon, symbol, timer, fact));

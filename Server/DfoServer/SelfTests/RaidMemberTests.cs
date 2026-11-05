@@ -85,16 +85,18 @@ internal static class RaidMemberTests
             var preyLeader = Make(30, true);
             var preyMember = Make(31, true);
             var prey = registry.Create(preyLeader, 3, "prey", "prey"u8.ToArray(), 12)!;
-            That(registry.AssignPrey(preyLeader, preyLeader.Character, 11)?.After?.Members[0] is { Squad: 1, PreySlot: 11 }, "普雷编码11提交红队首槽");
+            That(registry.AssignPrey(preyLeader, preyLeader.Character, 11)?.After?.Members[0] is { Squad: 1, PreyPosition: 11 }, "普雷编码11提交红队首槽");
             var preyCurrent = registry.Find(preyLeader)!;
             That(ReferenceEquals(registry.AssignPrey(preyLeader, preyLeader.Character, 11)?.After, preyCurrent), "重复槽位不推进revision");
-            foreach (byte invalid in new byte[] { 0, 1, 10, 15, 30, 35, 41, 255 })
+            foreach (byte invalid in new byte[] { 1, 10, 15, 30, 35, 41, 255 })
                 That(registry.AssignPrey(preyLeader, preyLeader.Character, invalid) is null && registry.IsCurrent(preyCurrent), "非法普雷槽位不改变聚合");
             That(registry.Invite(preyMember, preyLeader, 0) is not null && registry.Respond(preyLeader, preyMember.Character, true).Accepted, "普雷编制使用原团成员");
             That(registry.AssignPrey(preyLeader, preyMember.Character, 11) is null && registry.AssignPrey(preyMember, preyLeader.Character, 21) is null,
                 "重复占位与非团长编制均拒绝");
-            That(registry.AssignPrey(preyLeader, preyMember.Character, 12)?.After?.Members.Single(m => m.Actor.Character == preyMember.Character) is { Squad: 1, PreySlot: 12 },
+            That(registry.AssignPrey(preyLeader, preyMember.Character, 12)?.After?.Members.Single(m => m.Actor.Character == preyMember.Character) is { Squad: 1, PreyPosition: 12 },
                 "同分队不同槽位可共存");
+            That(registry.AssignPrey(preyLeader, preyMember.Character, 0)?.After?.Members.Single(m => m.Actor.Character == preyMember.Character) is { Squad: 0, PreyPosition: 0 },
+                "普通普雷0编码清除编队及位置，不影响团内身份");
             registry.Leave(preyMember, preyMember.Character);
             registry.Leave(preyLeader, preyLeader.Character);
             var first = registry.Create(leader, 0, "a", "a"u8.ToArray(), 20, recruitRoles: 5)!;

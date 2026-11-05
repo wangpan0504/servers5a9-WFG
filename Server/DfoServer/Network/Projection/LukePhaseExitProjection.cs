@@ -21,7 +21,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
     bool disposed;
     internal Task Completion { get { lock (gate) return pending; } }
 
-    internal bool FiendwarReturnPending(Guid instance)
+    internal bool ReturnPending(Guid instance)
     { lock (gate) return running && scheduled is { } exit && exit.Instance == instance; }
 
     internal void Notice(AntonRaidBattleView view, RaidActor actor)
@@ -29,8 +29,16 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         var battle = context.Session.CurrentRaidBattle(actor);
         var reason = view.PhaseExpired ? ExitReason.PhaseExpired : ExitReason.Energy;
         Guid? run = view.PhaseExpired ? null : battle?.LukeEnergyReturnRun(actor);
+        if (view.PhaseExpired && battle is { Kind: RaidKind.Prey, PreyGuide: false })
+        {
+            if (context.Session.Phase == Game.Session.SessionPhase.Town && battle.LukeWaitingRoom is { } waiting &&
+                context.Session.Selected?.Position is { } position && position.Town == waiting.Town && position.Area == waiting.Area &&
+                context.Session.CurrentParty?.Invoke()?.PreyBattleId != view.Instance) return;
+            run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
+        }
         if (!view.PhaseExpired && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } currentRun &&
-            (view.FiendwarExpiredRuns.Contains(currentRun) || battle?.Kind == RaidKind.Fiendwar && view.Fiendwar is { Cleared: true }))
+            (view.FiendwarExpiredRuns.Contains(currentRun) || view.PreyExpelledRuns.Contains(currentRun) ||
+                battle?.Kind == RaidKind.Fiendwar && view.Fiendwar is { Cleared: true }))
         { run = currentRun; reason = ExitReason.Encounter; }
         if (!view.PhaseExpired && battle?.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase) == true)
         {
@@ -72,7 +80,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             // 无需重复退场或重提交终结，补发的只是当前原Battle展示。
             if (finished)
             {
-                if (request.Actor.IsCurrent && context.Session.CurrentRaidBattle(request.Actor) is { Kind: RaidKind.Fiendwar })
+                if (request.Actor.IsCurrent && context.Session.CurrentRaidBattle(request.Actor) is { } battle &&
+                    (battle.Kind == RaidKind.Fiendwar || battle is { Kind: RaidKind.Prey, PreyGuide: false }))
                     context.Session.PublishRaidCombat();
                 return;
             }
@@ -101,9 +110,14 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         gates = await DispatchGateScope.EnterAsync(context, stop.Token);
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
                             battle.Instance != view.Instance ||
-                            (exitReason == ExitReason.PhaseCompleted
+                            (exitReason == ExitReason.PhaseExpired
+                                ? !battle.View.PhaseExpired || run is { } expiredRun &&
+                                    context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId != expiredRun
+                                : exitReason == ExitReason.PhaseCompleted
                                 ? !battle.RequiresLukeCompletedPhaseReturn(actor, view.Instance, view.Phase)
                                 : run is { } runId ? !(battle.RequiresLukeEnergyReturn(actor, runId) ||
+                                battle.Kind == RaidKind.Prey && battle.View.PreyExpelledRuns.Contains(runId) &&
+                                    context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId ||
                                 battle.Kind == RaidKind.Fiendwar && (battle.View.FiendwarExpiredRuns.Contains(runId) ||
                                     battle.View.Fiendwar is { Cleared: true }) &&
                                 context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) : !battle.View.PhaseExpired)) return;
@@ -114,16 +128,24 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     catch (InvalidOperationException) when (!context.Owner.IsCurrent) { return; }
                     if (context.Session.PartyDungeon is not { } instance)
                     {
+                        bool preyFinal = exitReason == ExitReason.PhaseCompleted &&
+                            originalBattle is { Kind: RaidKind.Prey, PreyGuide: false } prey && view.Phase == 1 &&
+                            view.Phase + 1 == prey.PhaseCount;
                         if (run is null && context.Session.Phase == Game.Session.SessionPhase.MapSelect)
                         {
-                            var returned = context.Session.ReturnFromDungeonSelection();
+                            // 末阶段选图者只消费原菜单，随后一次保存到备战区，不先中转甲板。
+                            var returned = context.Session.ReturnFromDungeonSelection(restorePosition: !preyFinal);
                             if (returned is null) { context.Disconnect(); return; }
-                            returnCommitted = true;
-                            using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
-                            await town.ReturnFromFormalDungeonAsync(context,
-                                new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
-                            if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
+                            if (!preyFinal)
+                            {
+                                returnCommitted = true;
+                                using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
+                                await town.ReturnFromFormalDungeonAsync(context,
+                                    new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
+                                if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
+                            }
                         }
+                        await CompleteWaitingAsync();
                         leaveExpired = true;
                         return;
                     }
@@ -140,6 +162,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     }
                     returnCommitted = true;
                     await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
+                    await CompleteWaitingAsync();
                     leaveExpired = true;
                     log.Write(prefix + "_" + reason + "_exit", new { Connection = context.Id, view.Instance, view.Phase, Run = run, Reason = "local-policy", State = "returned" });
                     return;
@@ -166,6 +189,35 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             }
             try { await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(failures - 1, 5))), stop.Token); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
+        }
+
+        async Task CompleteWaitingAsync()
+        {
+            if (exitReason == ExitReason.PhaseCompleted && originalBattle is { Kind: RaidKind.Prey, PreyGuide: false } prey &&
+                view.Phase == 1 && view.Phase + 1 == prey.PhaseCount && prey.LukeWaitingRoom is { } room)
+            {
+                bool arrived = context.Session.Selected?.Position is { } position && position.Town == room.Town && position.Area == room.Area;
+                if (arrived && context.Session.CurrentParty?.Invoke()?.PreyBattleId != view.Instance) return;
+                // 正式Run先完成原24；无Run成员先保存位置。两种情形均由同一实例协调者收尾临时Party。
+                var waiting = raidStart?.ReturnPreyWaiting(actor, view.Instance, completedPhase: true);
+                if (waiting is null) { context.Disconnect(); return; }
+                returnCommitted = true;
+                if (!arrived)
+                {
+                    using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
+                    await town.ReturnFromFormalDungeonAsync(context, waiting, "prey_completed_waiting_return");
+                }
+                log.Write("prey_phase_waiting_return", new { Connection = context.Id, view.Instance, view.Phase,
+                    State = "returned", Reason = "raid-completed" });
+                return;
+            }
+            if (exitReason != ExitReason.PhaseExpired || originalBattle is not { Kind: RaidKind.Prey, PreyGuide: false }) return;
+            if (raidStart?.ReturnPreyWaiting(actor, view.Instance) is { } returned)
+            {
+                returnCommitted = true;
+                await town.ReturnFromFormalDungeonAsync(context, returned, "prey_failed_waiting_return");
+                log.Write("prey_phase_waiting_return", new { Connection = context.Id, view.Instance, view.Phase, State = "returned", Reason = "raid-failed" });
+            }
         }
 
         async Task LeaveExpiredAntonAsync()

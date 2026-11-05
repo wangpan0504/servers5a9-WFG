@@ -18,7 +18,8 @@ internal sealed record RaidActor(GameSession Session, AccountOwners.Lease Owner,
 }
 internal sealed record RaidMember(RaidActor Actor, byte Slot, byte Squad = 0, bool Inactive = false)
 {
-    public byte PreySlot { get; init; }
+    // 普雷原生编队使用分队*10+座次；Slot仍是攻坚成员加入顺序。
+    public byte PreyPosition { get; init; }
 }
 internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] TitleBytes, ChannelIdentity Channel,
     ushort Leader, ImmutableArray<RaidMember> Members, int Capacity, long Revision)
@@ -133,7 +134,7 @@ internal sealed partial class RaidRegistry
 
     void PruneEmptyLukeLocked()
     {
-        foreach (var row in parties.Where(row => row.Value.Type is 1 or 2 && row.Value.Members.IsEmpty &&
+        foreach (var row in parties.Where(row => (row.Value.Type is 1 or 2 || row.Value is { Type: 3, Guide: false }) && row.Value.Members.IsEmpty &&
             rejoin?.HasLukeParty(row.Key) != true).ToArray()) parties.Remove(row.Key);
     }
     public int Count { get { lock (gate) { PruneEmptyLukeLocked(); return parties.Count; } } }
@@ -214,7 +215,9 @@ internal sealed partial class RaidRegistry
                 parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
             uint key = Allocate(actor.Channel);
             var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
-                [new(actor, 0, guide ? (byte)1 : (byte)0) { PreySlot = type == 3 && guide ? (byte)11 : (byte)0 }], capacity, ++revision) { StartMinimum = startMinimum, Guide = guide, RecruitRoles = recruitRoles };
+                [new(actor, 0, guide || type == 3 ? (byte)1 : (byte)0)
+                    { PreyPosition = type == 3 ? (byte)11 : (byte)0 }], capacity, ++revision)
+                { StartMinimum = startMinimum, Guide = guide, RecruitRoles = recruitRoles };
             parties.Add(key, party);
             waiting.Remove(actor.Character);
             return party;
@@ -263,24 +266,26 @@ internal sealed partial class RaidRegistry
         }
     });
 
-    // 普雷669/op2使用十位分队、个位槽位；与普通op0的分队字节分别保存。
-    public RaidChange? AssignPrey(RaidActor actor, ushort target, byte slot) => actor.Owner.Execute<RaidChange?>(() =>
+    public RaidChange? AssignPrey(RaidActor actor, ushort target, byte position) => actor.Owner.Execute<RaidChange?>(() =>
     {
         lock (gate)
         {
             var old = FindCore(actor);
-            int squad = slot / 10, seat = slot % 10;
+            int squad = position / 10, seat = position % 10;
             if (!actor.CanManage || old is not { Type: 3, Started: null } || old.Leader != actor.Character ||
-                squad < 1 || squad > (old.Capacity + 3) / 4 || seat is < 1 or > 4 ||
-                old.Guide && slot != 11) return null;
+                old.Guide && position != 11 ||
+                position != 0 && (squad < 1 || squad > (old.Capacity + 3) / 4 || seat is < 1 or > 4)) return null;
             int index = -1;
             for (int at = 0; at < old.Members.Length; at++)
                 if (old.Members[at].Actor.Character == target && old.Members[at].Actor.IsCurrent) { index = at; break; }
-            if (index < 0 || old.Members.Any(m => m.Actor.Character != target && m.PreySlot == slot) ||
-                old.Members.Count(m => m.Actor.Character != target && m.Squad == squad) >= 4) return null;
-            if (old.Members[index].PreySlot == slot) return new(old, old);
-            var updated = old with { Members = old.Members.SetItem(index,
-                old.Members[index] with { Squad = checked((byte)squad), PreySlot = slot }), Revision = ++revision };
+            if (index < 0 || position != 0 && (old.Members.Any(member => member.Actor.Character != target && member.PreyPosition == position) ||
+                old.Members.Count(member => member.Actor.Character != target && member.Squad == squad) >= 4)) return null;
+            if (old.Members[index].PreyPosition == position && old.Members[index].Squad == squad) return new(old, old);
+            var updated = old with
+            {
+                Members = old.Members.SetItem(index, old.Members[index] with { Squad = (byte)squad, PreyPosition = position }),
+                Revision = ++revision
+            };
             parties[old.Key] = updated;
             return new(old, updated);
         }
@@ -324,7 +329,7 @@ internal sealed partial class RaidRegistry
     RaidChange RemoveCore(RaidParty old, RaidActor actor, bool kicked = false)
     {
         var members = old.Members.Where(m => !Same(m.Actor, actor)).ToImmutableArray();
-        bool keepLuke = old.Type is 1 or 2 && old.Started is not null && rejoin?.HasLukeParty(old.Key) == true;
+        bool keepLuke = (old.Type is 1 or 2 || old is { Type: 3, Guide: false }) && old.Started is not null && rejoin?.HasLukeParty(old.Key) == true;
         RaidParty? updated = members.IsEmpty && !keepLuke ? null : old with
         {
             Members = members,

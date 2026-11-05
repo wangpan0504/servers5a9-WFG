@@ -1,4 +1,5 @@
 using DfoServer.Game.Raids;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
@@ -33,6 +34,12 @@ internal static partial class RaidCombatProjection
             if (battle.CompleteFiendwarMovie(actor, view)) battle.Publish(battle.View);
             return true;
         }
+        if (battle is { Kind: RaidKind.Prey, PreyGuide: false })
+        {
+            bool changed = battle.CompletePreyMovie(actor, view);
+            if (changed && !battle.IsCurrent(view)) battle.Publish(battle.View);
+            return PostPreyResults(context, actor, battle, view);
+        }
         if (view.Phase == 0 || battle.LukeEligibility(actor.Character, view.Phase) is { Eligible: false })
         {
             bool changed = battle.CompleteLukeFirstMovie(actor, view);
@@ -40,6 +47,33 @@ internal static partial class RaidCombatProjection
             return true;
         }
         return PostLukeMovieCards(context, actor, battle, view);
+    }
+
+    static bool PostPreyResults(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view)
+    {
+        if (!battle.PreyMovieCardsReady(actor, view) ||
+            battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
+            battle.RewardPolicy(actor, view.Phase) is not { Offers.IsEmpty: false } policy ||
+            battle.PreyTeamCommittedRewards(actor, view) is not { } team) return true;
+        var identity = RaidCombatDisplayIdentity.Capture(actor, view) with { State = AntonRaidBattleState.Reward };
+        bool Current()
+        {
+            var latest = battle.View;
+            return context.Session.CanPublishRaidBattle(actor, latest) && context.RaidDisplay == identity &&
+                latest.Phase == 1 && battle.PreyMovieCardsReady(actor, latest) && context.RaidMovieCards != identity;
+        }
+        byte Written() => context.PreyResultDisplay is { } display && display.Identity == identity ? display.Mask : (byte)0;
+        void Record(byte bit) => context.PreyResultDisplay = (identity, (byte)(Written() | bit));
+        // 原生0x10C只揭示结果，不发送660；全部实际个人数据和完整kind3表必须先于开窗。
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
+            PreyRewardPackets.Personal(actor.Character, policy.Offers), "prey_result_personal",
+            () => Current() && (Written() & 1) == 0, () => Record(1))) return false;
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Team(team),
+            "prey_result_team", () => Current() && (Written() & 4) == 0, () => Record(4))) return false;
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, 1], "prey_result_open",
+            () => Current() && (Written() & 5) == 5, () => context.RaidMovieCards = identity)) return false;
+        return true;
     }
 
     static bool PostLukeMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,

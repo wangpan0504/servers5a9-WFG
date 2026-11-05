@@ -119,6 +119,14 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
     public PartyDungeonDeparture Depart(GameSession caller, byte? kickSlot = null, bool preserveSolo = false)
     {
         var party = parties.Current(caller);
+        if (party is null && kickSlot is null && caller.IsPreySoloRaid && caller.PartyDungeon is { } solo &&
+            solo.Members is [var soloMember] && ReferenceEquals(soloMember.Actor.Session, caller))
+        {
+            var soloTravel = solo.Execute(_ => caller.ReturnFromFormalDungeon());
+            if (soloTravel is null) return new(19, [], []);
+            return new(0, [], [..solo.Detach(caller),
+                new(PartyDungeonNoticeKind.Departure, soloMember, solo.Members, Travel: soloTravel)]);
+        }
         var own = party?.Members.SingleOrDefault(m => ReferenceEquals(m.Actor.Session, caller));
         if (party is null || own is null || !parties.IsCurrent(party)) return new(19, [], []);
         if (kickSlot is not null && (party.Leader != own.Slot || kickSlot == own.Slot)) return new(4, [], []);
@@ -166,11 +174,14 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false,
-        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null)
+        Action<string, byte>? onRejected = null, bool allowDimensionHidden = true, FiendwarEntryPreparation? fiendwarPrepared = null,
+        PartySnapshot? preySolo = null)
     {
-        var party = fiendwarPrepared?.Party ?? parties.Current(leader);
+        // 单人普雷只借本次场景快照复用正式Run与事务，不向普通队伍目录登记。
+        var party = preySolo ?? fiendwarPrepared?.Party ?? parties.Current(leader);
         bool soloHeroEntry = party?.Members.Length == 1 && dungeon is 5363 or 400000105;
-        if (party is null || party.Members.Length < 2 && !soloHeroEntry && leader.PartyDungeon is null &&
+        if (party is null || preySolo is not null && (fiendwarPrepared is not null || !leader.MatchesPreySoloSelection(preySolo)) ||
+            party.Members.Length < 2 && !soloHeroEntry && leader.PartyDungeon is null &&
             leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
@@ -210,7 +221,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
             }
             return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
             {
-                if (!parties.IsCurrent(party) || fiendwarPrepared is { Active: false }) return [];
+                if ((preySolo is null ? !parties.IsCurrent(party) : !leader.MatchesPreySoloSelection(preySolo)) ||
+                    fiendwarPrepared is { Active: false }) return [];
                 if (dungeon == EvildomWarChallengeEntryPolicy.DungeonId)
                 {
                     if (!EvildomWarChallengeEntryPolicy.AllowsPartyCount(prepared.Count) ||

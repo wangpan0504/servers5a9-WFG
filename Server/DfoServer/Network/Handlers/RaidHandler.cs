@@ -67,7 +67,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                 p.Members.Single(m => m.Actor.Character == p.Leader).Squad, RaidProjection.CanStart(p, lukeStart is not null),
                 checked((byte)p.Members.Length), p.RecruitRoles)).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet(),
-                rows.ToDictionary(p => p.Key, RaidProjection.LeaderPreySlot));
+                RaidProjection.PreyLeaderPositions(rows));
         log.Write("raid_search_request", new { Connection = context.Id, parsed.RaidType, parsed.Offset,
             Total = matches.Length, Returned = rows.Length });
         // 查询回复是请求时的只读快照；目录并发变化不能吞掉唯一756、令原生窗口继续等待。
@@ -81,16 +81,28 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         try { key = RaidRequests.Rejoin(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
+        if (registry.Find(actor) is { Type: 3, Guide: false, Started: { } currentStart } currentRaid && currentRaid.Key == key &&
+            context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } currentPrey &&
+            currentPrey.Instance == currentStart.InstanceId &&
+            context.PreyRejoinPending != (actor.Epoch, actor.Character, currentStart.InstanceId))
+        {
+            // 同连接的668只恢复当前展示，不能把已经登船的人再次迁回候战区或重播飞鸟。
+            RaidCombatProjection.Notice(context, currentPrey.View, actor);
+            await context.Reply(CmdPacketType.REJOIN_RAID, [1], "prey_rejoin_replayed", () =>
+                actor.IsCurrent && context.Session.StartedRaid?.InstanceId == currentStart.InstanceId);
+            return CommandResult.Handled;
+        }
         if (lukeRejoin is not null && rejoin?.Peek(actor.Character) is { Luke: { } reservation })
         {
             var before = registry.Find(key, actor.Channel);
             // Restore会立即把新actor加入战场，必须先拦截该连接Notice；迁城及落位也会产生新revision。
             // 该连接Notice必须排在重返START之后，避免断线前事件先进入空缓存。
-            var rejoinBattle = reservation.Battle.Kind == RaidKind.Fiendwar ? reservation.Battle : null;
+            bool preyRejoin = reservation.Battle is { Kind: RaidKind.Prey, PreyGuide: false };
+            var rejoinBattle = reservation.Battle.Kind == RaidKind.Fiendwar || preyRejoin ? reservation.Battle : null;
             Action<AntonRaidBattleView, RaidActor>? previousBattleNotice = null;
             Action<AntonRaidBattleView, RaidActor>? heldBattleNotice = null;
             int battleNoticeHeld = 0;
-            if (rejoinBattle is { Kind: RaidKind.Fiendwar })
+            if (rejoinBattle is { Kind: RaidKind.Fiendwar } || preyRejoin)
             {
                 previousBattleNotice = context.Session.RaidBattleNoticeArrived;
                 heldBattleNotice = (noticeView, noticeActor) =>
@@ -128,6 +140,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                     restored.Accepted, restored.Reason, Phase = restored.Battle?.Phase, Contract = "waiting-room-rejoin" });
                 if (restored is { Accepted: true, Raid: { } raid, Battle: { } view })
                 {
+                    if (preyRejoin) context.PreyRejoinPending = (actor.Epoch, actor.Character, view.Instance);
                     var travel = town is null ? null : context.Session.ReturnLukeRejoinToWaiting(actor);
                     if (travel is null)
                     {
@@ -145,6 +158,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                         return CommandResult.Handled;
                     }
                     view = landedBattle.View;
+                    if (preyRejoin) context.PreyRejoinPending = null;
                     if (before is not null) registry.Publish(new(before, raid));
                     if (restored.Party is { } squad)
                         parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
@@ -161,8 +175,12 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                     }
                     bool Current() => rejoinBattle is { Kind: RaidKind.Fiendwar } ? RejoinCurrent() :
                         actor.IsCurrent && actor.Session.CanPublishRaid(actor, raid) && actor.Session.CanPublishRaidBattle(actor, view);
-                    context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
-                        [], "raid_rejoin_prepare", Current);
+                    if (raid is not { Type: 3, Guide: false })
+                        context.Sender.Post(0, (ushort)(raid.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID),
+                            [], "raid_rejoin_prepare", Current);
+                    if (raid.Type == 3)
+                        context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(1),
+                            "prey_rejoin_initialized", Current);
                     if (raid.Type == 2)
                     {
                         // 释放共享/本人命令门禁后，由原reader等待真实START；补Notice可能读SQL，
@@ -201,8 +219,9 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                         };
                         return CommandResult.Handled;
                     }
-                    // 卢克重返替换了全团view，补齐其它连接被旧view守卫过滤的排队展示。
-                    if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle) battle.Publish(view);
+                    // 重返替换了全团view，补齐其它连接被旧view守卫过滤的排队展示。
+                    if (preyRejoin) ReleaseBattleNotice(false);
+                    if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke or RaidKind.Prey } battle) battle.Publish(view);
                     else if (rejoinBattle is not { Kind: RaidKind.Fiendwar }) RaidCombatProjection.Notice(context, view, actor);
                     await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
                 }
@@ -332,7 +351,9 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         }
         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
         int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
-        bool supported = definition?.Type is 0 or 2 or 3 && start is not null && (definition.Type is 0 or 2 || party!.Guide && definition.Resources?.EntryCatalog?.Ready == true) || definition?.Type == 1 && lukeStart is not null;
+        bool supported = definition?.Type is 0 or 2 or 3 && start is not null && (definition.Type is 0 or 2 ||
+            (party!.Guide ? definition.Resources?.EntryCatalog?.Ready == true :
+                definition.Resources?.PreyTeam?.PreyTeamStartReady == true)) || definition?.Type == 1 && lukeStart is not null;
         bool mayStart = party is not null && supported && party.Leader == actor.Character &&
             (party.Started is not null || members >= definition!.StartMinimum);
         bool creating = mayStart && party!.Started is null;
@@ -346,7 +367,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
                 ? commands is null ? new RaidStartResult(19, "raid-member-command-busy") : start!.Start(actor, party!, definition)
                 : lukeCommands is null ? new RaidStartResult(19, "raid-member-command-busy")
                     : lukeStart!.Start(actor, party!, definition, lukeCommands.Parties, lukeCommands.IsCurrent);
-        var resources = definition?.Resources;
+        var resources = definition?.Type == 3 && party is { Guide: false } ? definition.Resources?.PreyTeam : definition?.Resources;
         log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = party?.Key.ToString("X8"), Members = members,
             definition?.StartMinimum, Accepted = result.Error == 0, result.Error, result.Reason, result.Replay,
             Instance = result.Receipt?.Party.Started?.InstanceId, BattleInstance = result.Receipt?.Battle?.Instance,
@@ -387,8 +408,7 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidPackets.RaidListBatch(rows.Select(p =>
                 (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                     p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null), p.RecruitRoles)).ToArray(),
-                    rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet(),
-                rows.ToDictionary(p => p.Key, RaidProjection.LeaderPreySlot)), "raid_recruiting_list",
+                    rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet(), RaidProjection.PreyLeaderPositions(rows)), "raid_recruiting_list",
                 () => actor.IsCurrent && registry.IsListSnapshot(actor.Channel, type, rows));
             var waitRows = registry.Waiting(actor.Channel, type);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_WAITING_LIST, RaidPackets.WaitingList(waitRows
@@ -445,8 +465,9 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             return CommandResult.Handled;
         }
         bool Guard() => context.Session.CanPublishRaid(actor!, party);
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidProjection.List(party, lukeStart is not null), "raid_created_record", Guard);
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, RaidPackets.OpenWithSquads(party.Key, RaidProjection.Members(party), preySlots: RaidProjection.PreySlots(party)), "raid_created_open", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidProjection.List(party, lukeStart is not null, context), "raid_created_record", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
+            RaidPackets.OpenWithSquads(party.Key, RaidProjection.Members(party), preyPositions: RaidProjection.PreyPositions(party)), "raid_created_open", Guard);
         var replied = context.Reply(CmdPacketType.CREATE_RAID, RaidPackets.CreateSuccess(party.Key), "raid_created",
             () => context.Session.HasRaidKey(actor!, party.Key));
         registry.PublishDirectory(new(Party: party));
@@ -479,11 +500,15 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
             parsed.Operation is 0 or 2 && parsed.Argument > byte.MaxValue ||
             parsed.Operation == 1 && parsed.Argument != 0 || parsed.Operation > 2)
             return CommandResult.Unhandled;
-        // op2为普雷独立槽位编码；op1仍为菜单145的委任团长。
-        var change = parsed.Operation == 0
-            ? registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument)
-            : parsed.Operation == 2 ? registry.AssignPrey(actor, (ushort)parsed.Character, (byte)parsed.Argument)
-            : registry.TransferLeadership(actor, (ushort)parsed.Character);
+        if (parsed.Operation == 0 && registry.Find(actor) is { Type: 3, Guide: false }) return CommandResult.Unhandled;
+        // 普雷015B610C发送operation=2，argument为分队*10+座次；0只清除编队。
+        var change = parsed.Operation switch
+        {
+            0 => registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument),
+            1 => registry.TransferLeadership(actor, (ushort)parsed.Character),
+            2 => registry.AssignPrey(actor, (ushort)parsed.Character, (byte)parsed.Argument),
+            _ => null
+        };
         log.Write("raid_modify_request", new { Connection = context.Id, parsed.Operation, parsed.Character, Squad = parsed.Argument,
             Accepted = change is not null, Reason = change is null ? "member-squad-or-leader-mismatch" : null,
             Leader = change?.After?.Leader, Revision = change?.After?.Revision });
@@ -505,11 +530,12 @@ internal sealed partial class RaidHandler(ServerLog log, RaidCatalog catalog, Ra
         var combat = accepted ? RaidProjection.CombatSnapshot(party!) : null;
         byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
             CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party),
-            combat is { } current ? (byte)current.View.State : party.Started is null ? (byte)0 : (byte)2,
+            RaidProjection.DisplayState(party, combat?.View, context),
             checked((byte)(combat?.View.Phase ?? party.Started?.Phase ?? 0)), RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide,
             clearCounts: combat is { } snapshot ? snapshot.Battle.RosterClears(snapshot.View) : RaidProjection.ClearCounts(party),
-            recruitRoles: party.RecruitRoles, leaderPreySlot: RaidProjection.LeaderPreySlot(party),
-            preySlots: RaidProjection.PreySlots(party)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+            recruitRoles: party.RecruitRoles, preyPositions: RaidProjection.PreyPositions(party),
+            preyLocations: RaidProjection.PreyLocations(party, combat?.View),
+            preyRetryDeadlines: RaidProjection.PreyRetryDeadlines(party, combat?.View)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
         await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)) &&
             (combat is null || combat.Value.Battle.IsCurrent(combat.Value.View)));
         return CommandResult.Handled;

@@ -41,6 +41,10 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
     DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null,
     Func<GameSession, bool>? isChatBlocked = null) : IGameCommandModule
 {
+#if DEBUG
+    internal Func<GameConnectionContext, Task>? DebugDungeonKill { get; init; }
+#endif
+
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
 
@@ -183,6 +187,14 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         }
 
         // 页面机器请求沿用限流和封禁；能力关闭仍吞掉其保留空间，不广播或泄漏机器文本。
+#if DEBUG
+        if (DebugDungeonKill is not null && DungeonHandler.IsDebugKillCommand(send))
+        {
+            await DebugDungeonKill(context);
+            return CommandResult.Handled;
+        }
+#endif
+
         if (PromotionPageProjection.MachineNamespace(send))
         {
             string? nonce = PromotionPageProjection.MachineNonce(send);
