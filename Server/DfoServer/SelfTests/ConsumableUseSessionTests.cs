@@ -798,6 +798,7 @@ internal static partial class ConsumableUseSessionTests
     sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-potion-session-" + Guid.NewGuid().ToString("N"));
+        public string DatabasePath => Path.Combine(root, "game.db");
         public AccountOwners Owners { get; } = new();
         public AccountOwners.Lease Owner { get; }
         public CharacterRepository Repository { get; }

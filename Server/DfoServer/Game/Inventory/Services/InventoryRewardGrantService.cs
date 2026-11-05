@@ -305,9 +305,12 @@ internal static class InventoryRewardGrantService
         public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
             bool usePickupSlotPolicy = false, bool splitLegacyRune = false)
         {
-            var range = ItemSlotBoundService.Range(template.Kind, inventory);
-            var list = ItemSlotBoundService.List(template.Kind);
-            bool pickupQuickSlots = usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
+            // 新发公共物品只进真实45容器，不合旧Main实体或借用快捷栏。
+            (short Start, short End) range = template.AccountCommonItem
+                ? ((short)0, checked((short)(ItemSlotBoundService.AccountCommonCapacity - 1)))
+                : ItemSlotBoundService.Range(template.Kind, inventory);
+            var list = template.AccountCommonItem ? InventoryListType.AccountCommon : ItemSlotBoundService.List(template.Kind);
+            bool pickupQuickSlots = !template.AccountCommonItem && usePickupSlotPolicy && ItemSlotBoundService.Allows(inventory,
                 new(InventoryListType.Main, ItemSlotBoundService.QuickSlotStart), template.Kind);
             if (prototype.IsStackable)
             {

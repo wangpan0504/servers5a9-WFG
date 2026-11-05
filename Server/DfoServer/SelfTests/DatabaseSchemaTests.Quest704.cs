@@ -112,6 +112,7 @@ internal static partial class DatabaseSchemaTests
     // 回退合成夹具到护石发布前的真实容器约束，不能只改版本号伪造历史库。
     static void RewindTalismanInventory(Microsoft.Data.Sqlite.SqliteConnection db)
     {
+        RewindAccountCommon45(db);
         using var tx = db.BeginTransaction();
         SqliteMigrations.ReplaceTableConstraint(db, tx, "character_inventory_slots",
             "CHECK(list_type IN (0,1,2,3,7,12,38,46))", "CHECK(list_type IN (0,1,2,3,7,12,38))");

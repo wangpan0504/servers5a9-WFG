@@ -112,7 +112,7 @@ internal static class ServerRuntime
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
-        Func<int, ItemTemplate>? promotionItemResolver = null)
+        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -257,7 +257,9 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService, parties, presence);
-        var dungeonCatalog = DungeonCatalog.Load(pvf);
+        var dungeonCatalog = epicRoad2019Enabled
+            ? DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
+            : DungeonCatalog.Load(pvf);
         var marriageSupply = dungeonCatalog.ContainsDungeon((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)
             ? Game.Marriage.MarriageDungeonDailySupply.Create(dungeonCatalog.Get((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)) : null;
         if (marriageSupply is not null && !itemResources.Items.TryGet(marriageSupply.ItemId, out _))
@@ -302,6 +304,11 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Cumulative online rewards", Daily = onlineCatalog.Daily.Length,
                 Period = onlineCatalog.Period.Length, Resource = GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath });
         }
+        if (epicRoad2019Enabled)
+        {
+            var state = events.Override(Game.Events.ServerEventService.EpicRoadId, true);
+            log.Write("activity", new { EventId = Game.Events.ServerEventService.EpicRoadId, state.Active, Mode = "runtime-option" });
+        }
         if (promotionConfiguration is not null) promotionConfiguration.Changed += events.NotifyPromotionChanged;
         var promotionItem = promotionItemResolver ?? itemResources.Items.Get;
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, promotionItem);
@@ -312,7 +319,7 @@ internal static class ServerRuntime
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -671,7 +678,9 @@ internal static class ServerRuntime
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics,
                 regional: new PandemoniumRegionalDropPolicy(dungeonCatalog.Get, itemResources.Items.Get, specialDrops),
-                assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get));
+                assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
+                epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
+                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null);
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = 1000;
@@ -695,6 +704,8 @@ internal static class ServerRuntime
             var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry) => resourceDrops.PrepareEntry(entry, hellRewards);
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
+                EpicRoadSimulatedEnabled = epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled,
+                EpicRoadSimulatedRule = EpicRoad2019SimulatedDropPolicy.Rule,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 RegionalMaterialRule = PandemoniumRegionalDropPolicy.Rule, RegionalCardSource = DungeonSpecialDropCatalog.CardPath,
                 SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
@@ -877,7 +888,7 @@ internal static class ServerRuntime
             new InventoryExpansionHandler(new InventoryExpansionService(itemResources.Items, clock), inventoryProjection, log),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection),
             new ShopHandler(
-                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules),
+                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules, epicRoadAvailable: epicRoad2019Enabled),
                 cashShop,
                 inventoryProjection, log,
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,

@@ -22,8 +22,12 @@ internal static class MapGeometryCapabilities
         var tokens = new Dictionary<string, PvfToken[]>(StringComparer.Ordinal);
         PvfToken[] Read(string path)
         {
-            if (!contains(path)) throw new InvalidDataException("Map geometry dependency missing: " + path);
-            if (!tokens.TryGetValue(path, out var value)) tokens.Add(path, value = read(path));
+            if (tokens.TryGetValue(path, out var value)) return value;
+            if (contains(path)) value = read(path);
+            else if (config.EpicRoadEntrySource(path) is { } source && contains(source))
+                value = config.Apply(path, read(source), resolve);
+            else throw new InvalidDataException("Map geometry dependency missing: " + path);
+            tokens.Add(path, value);
             return value;
         }
         foreach (var repair in config.ExtensionRepairs())

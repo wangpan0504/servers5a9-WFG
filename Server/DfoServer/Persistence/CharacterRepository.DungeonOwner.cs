@@ -136,9 +136,16 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue,
         DungeonIncountUsage? partyCounted = null)
     {
-        if (charge.RequiredEvent is { } required &&
-            !required.Matches(ServerEventRepository.Read(db, tx, required.Schedule.EventId)))
+        var requiredEvent = charge.RequiredEvent;
+        bool epicRoad = charge.DungeonId is 400000097 or 400000098;
+        if (epicRoad && requiredEvent?.Schedule.EventId != Game.Events.ServerEventService.EpicRoadId)
+            throw new DungeonEventAdmissionRejectedException();
+        // 所有活动复用同一次事务内复验，仍由各自入口处理拒绝。
+        if (requiredEvent is not null && !requiredEvent.Matches(ServerEventRepository.Read(db, tx, requiredEvent.Schedule.EventId)))
+        {
+            if (epicRoad) throw new DungeonEventAdmissionRejectedException();
             throw new DfoServer.Game.Inventory.Models.InventoryEventRejectedException();
+        }
         var state = ReservationState(expected, nextObjectKey);
         var identity = charge.Identity;
         if (identity.CharacterId != expected.Id || identity.InstanceId == Guid.Empty || identity.Epoch <= 0 ||

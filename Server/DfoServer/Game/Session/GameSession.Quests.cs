@@ -80,6 +80,11 @@ internal sealed partial class GameSession
         if (strongwayQuest && captured.Pending is null && !IsCurrentStrongway2019QuestSchedule(strongwaySchedule))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动未开启" };
+        bool epicRoadQuest = QuestEpicRoad2019Entry.Supports(quest);
+        var epicRoadSchedule = epicRoadQuest ? CaptureEpicRoad2019QuestSchedule() : null;
+        if (epicRoadQuest && captured.Pending is null && !IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule))
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "星河裂缝活动未开启" };
         if (QuestEligibility.Completed(expected).Contains(questId))
             return new(QuestFinishOutcome.AlreadyCompleted, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
         bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
@@ -163,10 +168,12 @@ internal sealed partial class GameSession
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, coupon is null ? DateTimeOffset.UtcNow : DateTimeOffset.FromUnixTimeSeconds(coupon.UtcSeconds), captured.Clear, multiplier,contracts?.Growth, coupon is null ? stageGraph : null,
                 coupon is not null || stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
-                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest,coupon:coupon);
+                rank is null ? null : pvpRatings!.Grade(rank), captured.TerminalClear, strongway2019Active: strongwayQuest,coupon:coupon, epicRoad2019Active: epicRoadQuest);
             if (preparation.Plan is { } planned) planned.PvpRating = rank;
             if (strongwayQuest && preparation.Plan is { } strongwayPlan)
                 strongwayPlan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
+            if (epicRoadQuest && preparation.Plan is { } epicRoadPlan)
+                epicRoadPlan.RequiredEvent = new(epicRoadSchedule!, timeProvider ?? TimeProvider.System);
         }
         return owner.Execute(() =>
         {
@@ -185,6 +192,10 @@ internal sealed partial class GameSession
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                     { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "强者之路活动前提已变化" };
+            if (epicRoadQuest && captured.Pending is null && (!IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule) ||
+                plan.RequiredEvent is not { } epicRequired || !epicRequired.Matches(epicRoadSchedule!)))
+                return new QuestFinishResult(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                    { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "星河裂缝活动前提已变化" };
             plan.BattlePassCompletion ??= DfoServer.Game.BattlePass.BattlePassQuestCompletion.Prepare(plan, timeProvider ?? TimeProvider.System);
             // 不明提交结果保留这份冻结计划；精确查询同接取receipt，不生成新的领奖身份。
             pendingQuestCompletion = new(plan, captured.SelectionEpoch, captured.Phase, captured.Identity);

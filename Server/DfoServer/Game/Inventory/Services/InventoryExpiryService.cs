@@ -26,11 +26,17 @@ internal static class InventoryExpiryService
 
     static InventoryItem RepairZeroPeriodItem(InventoryItem item, ItemCatalog catalog)
     {
-        if (item.Core.ExpireTime != 0 || item.Core.Kind is ItemKind.Avatar or ItemKind.Creature)
+        bool legacyEpic = !item.Core.IsRental && item.Core.Kind is not (ItemKind.Avatar or ItemKind.Creature) &&
+            EpicRoad2019ItemLifetime.Applies(item.Core.ItemId, item.Core.ExpireTime);
+        if (!legacyEpic && (item.Core.ExpireTime != 0 || item.Core.Kind is ItemKind.Avatar or ItemKind.Creature))
             return item;
         ItemTemplate template;
         try { template = catalog.Get(item.Core.ItemId); }
         catch (InvalidDataException) { return item; }
+        if (legacyEpic)
+            return template.EpicRoad2019FixedExpirationRestored && template.Kind == item.Core.Kind &&
+                template.Expiration is { AbsoluteTime: ItemExpiration.MaximumUnixTime, Days: 0, DailyDelete: 0, WeeklyDeleteDay: null }
+                ? item with { Core = item.Core with { ExpireTime = ItemExpiration.MaximumUnixTime } } : item;
         // 周删除旧实例没有已冻结截止，不能借历史修复写成永久或重算下一周。
         // 纯 daily（无 usable/absolute）同样保留历史 0：6 点钩子与选角都不追溯。
         if (template.Expiration.WeeklyDeleteDay is not null ||

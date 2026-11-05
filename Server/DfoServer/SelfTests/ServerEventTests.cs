@@ -17,6 +17,7 @@ internal static class ServerEventTests
         Directory.CreateDirectory(root);
         try
         {
+            VerifyEpicRoad(Path.Combine(root, "epic-road.db"));
             string path = Path.Combine(root, "game.db");
             var clock = new ConsumableUseSessionTests.FakeClock();
             var now = clock.GetUtcNow();
@@ -338,5 +339,44 @@ internal static class ServerEventTests
             competingWrite();
             return inner.Save(expected, desired);
         }
+    }
+
+    static void VerifyEpicRoad(string path)
+    {
+        const ushort epicRoad = 10005;
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var now = clock.GetUtcNow();
+        var store = new ServerEventRepository(path);
+        var events = new ServerEventService(store, clock);
+        var unrelated = new ushort[] { 64, 266, 2532 }.Select(events.Read).ToArray();
+        var initial = DevelopmentRequest.Parse("event status 10005", "10000").Event!.Execute(events);
+        That(initial is { Active: false, Schedule: { Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } },
+            "星河裂缝10005未配置默认关闭，不借积分商城或诺兰的常驻策略开放");
+        That(DevelopmentRequest.Parse("event auto 10005", "10000").Event!.Execute(events) == initial,
+            "星河裂缝无时间表auto保持关闭且不创建无变化版本");
+        var enabled = DevelopmentRequest.Parse("event on 10005", "10000").Event!.Execute(events);
+        That(enabled is { Active: true, Schedule.Revision: 1 } && events.Override(epicRoad, true) == enabled &&
+            new ServerEventService(new ServerEventRepository(path), clock).Read(epicRoad) == enabled,
+            "星河裂缝GM覆盖沿已有持久化恢复，同值开启不增加版本");
+        var disabled = DevelopmentRequest.Parse("event off 10005", "10000").Event!.Execute(events);
+        That(disabled is { Active: false, Schedule.Revision: 2 } &&
+            new ServerEventService(new ServerEventRepository(path), clock).Read(epicRoad) == disabled,
+            "星河裂缝显式关闭在仓储和服务重建后保持");
+        Reject<InvalidOperationException>(() => store.Save(enabled.Schedule, enabled.Schedule with { OverrideActive = false }),
+            "星河裂缝旧revision不能覆盖较新的关闭配置");
+        That(events.Override(epicRoad, null) is { Active: false, Schedule: { Revision: 3, OverrideActive: null } },
+            "星河裂缝无时间表auto恢复默认关闭");
+        var request = DevelopmentRequest.Parse(
+            $"event schedule 10005 {now.AddSeconds(1):yyyy-MM-ddTHH:mm:sszzz} {now.AddSeconds(3):yyyy-MM-ddTHH:mm:sszzz}", "10000");
+        That(request.Event!.Execute(events) is { Active: false, Schedule.Revision: 4 },
+            "星河裂缝GM时间表复用显式时区解析及已有配置事务，开始前保持关闭");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        That(events.Read(epicRoad).Active, "星河裂缝时间表包含开始端点");
+        clock.Advance(TimeSpan.FromSeconds(2));
+        That(!events.Read(epicRoad).Active && events.Override(epicRoad, true).Active &&
+            !DevelopmentRequest.Parse("event auto 10005", "10000").Event!.Execute(events).Active,
+            "星河裂缝时间表排除结束端点，显式on覆盖时段，auto不复活已结束活动");
+        That(unrelated.SequenceEqual(new ushort[] { 64, 266, 2532 }.Select(events.Read)),
+            "星河裂缝开关和时间表不改变黄金牌、积分商城或诺兰的状态与版本");
     }
 }

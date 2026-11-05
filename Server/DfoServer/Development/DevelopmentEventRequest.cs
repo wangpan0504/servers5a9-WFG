@@ -6,7 +6,7 @@ namespace DfoServer.Development;
 internal sealed record DevelopmentEventRequest(string Operation, ushort EventId, DateTimeOffset Start = default,
     DateTimeOffset End = default)
 {
-    public const string Usage = "event status|on|off|auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | event initialize-default <312|2520>；活动及时间表能力见当前活动目录，包含228累积在线得好礼；时间须带Z或+08:00等时区；312/2520初始化仅在尚无配置时开启，2520需要启动前装配有效冻结季，已有关闭及时间表保持；228默认关闭且不支持时间表，2532未配置或auto默认显示，266无强制状态且未配置时间表时默认常驻，显式off和已有时间表仍生效。";
+    public const string Usage = "event status|on|off|auto <活动ID> | event schedule <活动ID> <开始ISO8601> <结束ISO8601> | event initialize-default <312|2520>；活动及时间表能力见当前活动目录，包含228累积在线得好礼；时间须带Z或+08:00等时区；312/2520初始化仅在尚无配置时开启，2520需要启动前装配有效冻结季，已有关闭及时间表保持；228默认关闭且不支持时间表，2532未配置或auto默认显示，266无强制状态且未配置时间表时默认常驻，显式off和已有时间表仍生效。10005星河裂缝未配置时默认关闭。";
 
     public static DevelopmentEventRequest Parse(string[] tokens)
     {

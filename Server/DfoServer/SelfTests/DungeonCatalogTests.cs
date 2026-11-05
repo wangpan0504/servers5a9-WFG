@@ -10,6 +10,64 @@ namespace DfoServer;
 
 internal static class DungeonCatalogTests
 {
+    static void VerifyResultBoardSuppression()
+    {
+        var start = new DungeonRawSection("dungeon clear result", []);
+        var end = new DungeonRawSection("/dungeon clear result", []);
+        var board = new DungeonRawSection("result board", [new(0, 0)]);
+        var reward = new DungeonRawSection("reward card", [new(0, 0)]);
+        var dungeon = new DungeonDefinition(3, "dungeon/test.dgn", 1, 1, [], [start, reward, board, end]);
+        That(dungeon.HasNoResultBoard, "完整结果块内显式result board=0保留无结果页事实");
+        foreach (var sections in new IReadOnlyList<DungeonRawSection>[]
+        {
+            [], [board], [start, board], [board, start, end], [end, board, start],
+            [start, board, board, end], [start, board, end, start, end],
+            [start with { Tokens = [new(0, 0)] }, board, end],
+            [start, board, end with { Tokens = [new(0, 0)] }],
+            [start, board with { Tokens = [new(0, 1)] }, end],
+            [start, board with { Tokens = [new(2, 0)] }, end],
+            [start, board with { Tokens = [new(0, 0), new(0, 0)] }, end],
+            [start, new("unknown result option", []), board, end]
+        })
+            That(!(dungeon with { RawSections = sections }).HasNoResultBoard,
+                "缺省、块外、重复、未闭合或未知结果声明不推导禁用结果页");
+        var first = new DungeonMap("map", new(0, 0), 1, "map/start.map");
+        var last = new DungeonMap("boss", new(1, 0), 2, "map/boss.map");
+        var maze = new DungeonMaze(0, 2, 1, "BB EE", [first.Position], [last.Position], [first, last], []);
+        var role = new Character(1, 0, "ResultBoard", 0, new(1, 0, 1, 1), null) { Level = 95 };
+        foreach (var (id, weight, disable, suppressed) in new[]
+        {
+            (400000097, 0, true, true), (400000098, 0, true, true), (3, 0, true, false),
+            (400000097, 1, true, false), (400000097, 0, false, false)
+        })
+        {
+            var source = dungeon with { Id = id, Mazes = [maze], RawSections =
+                [start, reward, board, end, new("experience increasing point", [new(0, weight)]),
+                    ..disable ? new[] { new DungeonRawSection("disable clear reward", []) } : []] };
+            That(DungeonEntryPlan.TryCreate(source, role, (uint)id, 0, 0, out var entry, out var reason) &&
+                entry!.SuppressOrdinaryResultBoard == suppressed,
+                "仅两张星河图的无结果页/禁奖励/零权重完整合同抑制普通结算，不扩大到其它模式：" + reason);
+        }
+        var originalPath = EpicRoadResourcePaths.Dungeons[400000097];
+        var flags = new[] { new DungeonRawSection("experience increasing point", [new(0, 0)]), new("disable clear reward", []) };
+        foreach (var (path, declaration, expected) in new[]
+        {
+            (originalPath, Array.Empty<DungeonRawSection>(), true),
+            ("dungeon/another.dgn", Array.Empty<DungeonRawSection>(), false),
+            (originalPath, new[] { start, board with { Tokens = [new(0, 1)] }, end }, false),
+            (originalPath, new[] { start, board }, false),
+            (originalPath, new[] { board }, false),
+            (originalPath, new[] { start, board, board, end }, false)
+        })
+        {
+            byte difficulty = path == originalPath ? (byte)2 : (byte)0;
+            var source = dungeon with { Id = 400000097, Path = path, Mazes = [maze],
+                RawSections = [..declaration, ..flags, new("difficulty", [new(0, difficulty)])] };
+            That(DungeonEntryPlan.TryCreate(source, role, 400000097, 0, difficulty, out var entry, out _) &&
+                entry!.SuppressOrdinaryResultBoard == expected,
+                "具名原图只恢复完全缺失的原结果块，不覆盖显式或畸形声明");
+        }
+    }
     static void VerifyChampionRates()
     {
         var row = new DungeonRawSection("champion", [new(0, 4), new(0, 33), new(0, 50), new(0, 70), new(0, 80)]);
@@ -79,10 +137,13 @@ internal static class DungeonCatalogTests
 
     public static void RunCore()
     {
+        VerifySupplementalDirectories();
+        VerifyDisjointDropRarity();
         VerifyRetiredSectionIsolation();
         DungeonEntryPlanTests.RunCore();
         int checks = Count;
         VerifyChampionRates();
+        VerifyResultBoardSuppression();
         var size = new DungeonRawSection("difficulty size",[new(0,1)]);
         var start = new DungeonRawSection("story mode",[]);
         var end = new DungeonRawSection("/story mode",[]);
@@ -248,6 +309,100 @@ internal static class DungeonCatalogTests
         Console.WriteLine($"PASS {Count-checks} 无资源副本难度、作用域及退图豁免断言");
 
         static DungeonDefinition Definition(params DungeonRawSection[] sections) => new(17,"dungeon/difficulty-fixture.dgn",1,1,[],sections);
+    }
+
+    static void VerifySupplementalDirectories()
+    {
+        var fixture = new Fixture();
+        foreach (var (root, extension) in new[] { ("dungeon", "dgn"), ("map", "map") })
+        {
+            PvfToken[] tokens = [fixture.Int(3), fixture.String($"ordinary/existing.{extension}"),
+                fixture.Int(4), fixture.String($"ordinary/unrelated.{extension}")];
+            string existing = $"{root}/ordinary/existing.{extension}";
+            var baseline = DungeonCatalog.ParseDirectory(tokens, fixture.Resolve, root);
+            var empty = DungeonCatalog.ParseDirectory(tokens, fixture.Resolve, root, new Dictionary<int, string>());
+            That(empty.Count == baseline.Count && baseline.All(row => empty.GetValueOrDefault(row.Key) == row.Value),
+                $"{root}空补充表保留原目录全部登记");
+
+            var supplemental = new Dictionary<int, string>
+            {
+                [3] = existing.ToUpperInvariant().Replace('/', '\\'),
+                [5] = $"{root.ToUpperInvariant()}\\event\\sub\\..\\extra.{extension}"
+            };
+            var merged = DungeonCatalog.ParseDirectory(tokens, fixture.Resolve, root, supplemental);
+            That(merged.Count == 3 && merged[3] == baseline[3] && merged[4] == baseline[4] &&
+                merged.GetValueOrDefault(5) == $"{root}/event/extra.{extension}" && !merged.ContainsKey(6),
+                $"{root}同路径原登记优先，补充路径沿既有规则归一化且不改变无关项或制造未知登记");
+            That(baseline.Count == 2 && !baseline.ContainsKey(5) && supplemental[5].Contains('\\'),
+                $"{root}装配不修改原目录快照或调用方补充表");
+
+            Reject<InvalidDataException>(() => DungeonCatalog.ParseDirectory(tokens, fixture.Resolve, root,
+                new Dictionary<int, string> { [3] = $"{root}/event/conflict.{extension}" }),
+                $"{root}同ID不同路径拒绝装配，不能覆盖原登记");
+            foreach (var (id, path) in new[]
+            {
+                (-1, $"{root}/event/extra.{extension}"),
+                (5, $"event/extra.{extension}"),
+                (5, $"{(root == "dungeon" ? "map" : "dungeon")}/event/extra.{extension}"),
+                (5, $"{root}/../other/extra.{extension}"),
+                (5, root + "/"),
+                (5, "")
+            })
+                Reject<InvalidDataException>(() => DungeonCatalog.ParseDirectory(tokens, fixture.Resolve, root,
+                    new Dictionary<int, string> { [id] = path }),
+                    $"{root}补充登记拒绝负编号、未限定资源根、越界或空叶路径");
+        }
+    }
+
+    static void VerifyDisjointDropRarity()
+    {
+        var fixture = new Fixture();
+        var declaration = fixture.Tag("no disjoint drop rarity", fixture.String("epic"));
+        var end = fixture.Tag("/no disjoint drop rarity");
+        var definition = fixture.Parse([..fixture.Tag("minimum required level", fixture.Int(95)),
+            ..fixture.Maze(), ..declaration, ..end]);
+        That(definition.DisjointForbiddenDropRarities.SetEquals([4]),
+            "星河裂缝DGN的no disjoint drop rarity epic解析成冻结稀有度4");
+        var character = new Character(1, 0, "DropRestriction", 1, new(1, 0, 1, 1, 0), null) { Level = 95 };
+        That(DungeonEntryPlan.TryCreate(definition, character, 3, 0, 0, out var entry, out var reason) &&
+            entry!.DisjointForbiddenDropRarities.SetEquals([4]),
+            "正式准入冻结原副本的掉落限制，不靠地图编号硬编码活动来源：" + reason);
+        foreach (var source in EpicRoadResourcePaths.Dungeons)
+        {
+            var activity = definition with
+            {
+                Id = source.Key,
+                Path = source.Value,
+                RawSections = [..definition.RawSections,
+                    new("difficulty level", [new(0, 1), new(0, 1), new(0, 1), new(0, 1), new(0, 1)])],
+                DisjointForbiddenDropRarities = definition.DisjointForbiddenDropRarities.Add(3).Add(5)
+            };
+            That(DungeonEntryPlan.TryCreate(activity, character, (uint)source.Key, 0, 0, out var unlocked, out reason) &&
+                unlocked!.DisjointForbiddenDropRarities.SetEquals([3, 5]) &&
+                activity.DisjointForbiddenDropRarities.SetEquals([3, 4, 5]),
+                "本服两图仅解除史诗来源限制，保留其它稀有度及原始资源集合：" + reason);
+            foreach (var control in new[]
+            {
+                activity with { Path = "dungeon/other.dgn" },
+                activity with { Path = EpicRoadResourcePaths.Dungeons.Single(row => row.Key != source.Key).Value },
+                activity with { Id = 3 }
+            })
+                That(DungeonEntryPlan.TryCreate(control, character, (uint)control.Id, 0, 0, out var restricted, out reason) &&
+                    restricted!.DisjointForbiddenDropRarities.SetEquals([3, 4, 5]),
+                    "其它编号、其它路径及两图交叉配对不能解除来源限制：" + reason);
+        }
+        That(fixture.Parse(fixture.Maze()).DisjointForbiddenDropRarities.IsEmpty,
+            "未声明的普通副本不附加禁止分解规则");
+        foreach (var invalid in new PvfToken[][]
+        {
+            [..fixture.Tag("no disjoint drop rarity"), ..end],
+            [..fixture.Tag("no disjoint drop rarity", fixture.String("unknown")), ..end],
+            [..fixture.Tag("no disjoint drop rarity", fixture.Int(4)), ..end],
+            declaration,
+            [..declaration, ..end, ..declaration, ..end]
+        })
+            Reject<InvalidDataException>(() => fixture.Parse([..fixture.Maze(), ..invalid]),
+                "非法或未闭合的掉落分解限制不能静默变成可分解");
     }
 
     static void VerifyGiveupPenaltyFlags()

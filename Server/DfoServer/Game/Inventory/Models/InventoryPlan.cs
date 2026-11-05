@@ -121,7 +121,7 @@ internal sealed class InventoryPlan
         !Before.EpicPieces.Same(After.EpicPieces) || !DailyBoosterUsage.Same(Before.DailyBoosterUses, After.DailyBoosterUses) ||
         !Before.AccountSkins.Same(After.AccountSkins);
     public bool AccountCargoChanged => Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
-        Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List == InventoryListType.AccountCargo);
+        Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon);
     public bool AccountSkinsChanged => !Before.AccountSkins.Same(After.AccountSkins);
 }
 

@@ -64,6 +64,7 @@ internal sealed record DungeonEntryPlan(
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
+    public bool SuppressOrdinaryResultBoard { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public DfoServer.Game.Raids.FiendwarCombatScale? FiendwarScale { get; init; }
     // 仅由团本准入根据当前maze和精确OBJ/ACT证据冻结，不以模板号单独授予清图资格。
@@ -78,6 +79,7 @@ internal sealed record DungeonEntryPlan(
     public bool IsAltar => DungeonId is 11006 or 11007;
     public bool IsDespair => DungeonId is >= 11008 and <= 11107;
     public bool DisableFatigueConsumption { get; init; }
+    public ImmutableHashSet<int> DisjointForbiddenDropRarities { get; init; } = ImmutableHashSet<int>.Empty;
     public Guid QuestAcceptanceId { get; init; }
     // 队长已批准的物理路线，只供分层、演出和物件终点核验；个人任务始终读取本人的 QuestAcceptances。
     public DungeonEntryPlan? PartyRoute { get; init; }
@@ -701,6 +703,7 @@ internal sealed record DungeonEntryPlan(
         if (definition.IsBossRushDungeon)
             planMaze = planMaze with { IsBossRush = true };
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
+        float experienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             RequestedDifficulty = requestedDifficulty == difficulty ? null : requestedDifficulty,
@@ -720,6 +723,11 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward || lostLand,
+            // 原活动两条具名DGN已证不出普通结果页；保留叶删去该块时恢复此活动合同，不推广到其它副本。
+            SuppressOrdinaryResultBoard = dungeonId is 400000097 or 400000098 &&
+                (definition.HasNoResultBoard || EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path &&
+                    !definition.RawSections.Any(section => section.Tag is "dungeon clear result" or "/dungeon clear result" or "result board" or "reward card")) &&
+                definition.DisableClearReward && experienceWeight == 0,
             IsTagEvildom = tagEvildom is not null,
             IsImperialArena = imperialArena is not null,
             DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null || imperialArena is not null,
@@ -727,6 +735,7 @@ internal sealed record DungeonEntryPlan(
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
             TournamentRoundFatigue = definition.TournamentRoundFatigue ?? 0,
+            DisjointForbiddenDropRarities = definition.DisjointForbiddenDropRarities,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
             BaseBossMap = bosses[0],
@@ -746,7 +755,9 @@ internal sealed record DungeonEntryPlan(
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
                 { "tower of death" => "dead tower", "advance altar" => "advanced altar", null or "" => "dungeon", var module => module },
-            ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
+            // 本服重开两活动图采用星空裂缝所在黑暗都市的缺省击杀权重1；清图禁奖仍按原资源判定。
+            ExperienceWeight = dungeonId is 400000097 or 400000098 &&
+                EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path ? 1 : experienceWeight,
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
             ChampionPercents = practice || raid is not null || tagEvildom is not null || hope is not null
                 ? default : DungeonChampionRates.For(definition),

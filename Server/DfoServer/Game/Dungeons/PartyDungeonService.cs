@@ -249,6 +249,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 return war is null ? entered : [..entered, ..EvildomWarNotices(party.Members, war)];
             });
         }
+        catch (DungeonEventAdmissionRejectedException)
+        {
+            onRejected?.Invoke("epic-road-event-closed", party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
+            return [];
+        }
         catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
         {
             return [];

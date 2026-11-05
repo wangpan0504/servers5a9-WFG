@@ -24,6 +24,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool OpensPortableCargo { get; init; }
     public int TownGiftItem { get; init; }
     public bool RevivalBlessing { get; init; }
+    public bool RaidUseForbidden { get; init; }
     public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
     public EpicDropBuffDefinition? EpicDropBuff { get; init; }
     public HellLegendEpicDropBuffDefinition? HellLegendEpicDropBuff { get; init; }
@@ -118,6 +119,7 @@ internal sealed class RecoveryConsumableCatalog
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null || file.CoolGroup < 0 ||
             file.DeclaredFields.Contains("sub type") && file.SubType is null ||
             file.DeclaredFields.Contains("action usable dungeon") && file.ActionUsableDungeons is null ||
+            file.LimitDungeons.IsDefault || file.LimitDungeons.Any(id => id <= 0) || file.ImpossibleContents.IsDefault ||
             ConsumableSpecialItems.IsStaminaRecovery(file.TemplateId) &&
                 (file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 }) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is null ||
@@ -188,7 +190,8 @@ internal sealed class RecoveryConsumableCatalog
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
             RevivalBlessing = revival,
             AllowedDungeons = file.ActionUsableDungeons?.Select(id => checked((uint)id)).ToImmutableHashSet(),
-            ExcludedDungeons = revival ? file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet() : ImmutableHashSet<uint>.Empty };
+            ExcludedDungeons = file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet(),
+            RaidUseForbidden = file.ImpossibleContents.Contains("raid dungeon", StringComparer.OrdinalIgnoreCase) };
     }
 
     public bool TryGet(int id, out RecoveryConsumableDefinition definition)

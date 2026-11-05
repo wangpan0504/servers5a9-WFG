@@ -54,7 +54,8 @@ internal static class InventoryMaterialConsumptionService
                     for (int index = 0; index < before.Items.Length; index++)
                     {
                         var item = before.Items[index];
-                        if (item.Position.List != InventoryListType.Main || !totals.ContainsKey(item.Core.ItemId) ||
+                        if (item.Position.List is not (InventoryListType.Main or InventoryListType.AccountCommon) ||
+                            !totals.ContainsKey(item.Core.ItemId) ||
                             item.Core.EquipmentLockId != 0 || item.Core.IsExpired(utcNow.ToUnixTimeSeconds()))
                             continue;
                         if (!candidates.TryGetValue(item.Core.ItemId, out var indexes))
@@ -62,7 +63,14 @@ internal static class InventoryMaterialConsumptionService
                         indexes.Add(index);
                     }
                     foreach (var indexes in candidates.Values)
-                        indexes.Sort((left, right) => before.Items[left].Position.Index.CompareTo(before.Items[right].Position.Index));
+                        indexes.Sort((left, right) =>
+                        {
+                            var first = before.Items[left].Position;
+                            var second = before.Items[right].Position;
+                            // 旧Main先于公共容器，两类内部均按槽位稳定消费，不迁移原实例。
+                            int byList = ((byte)first.List).CompareTo((byte)second.List);
+                            return byList != 0 ? byList : first.Index.CompareTo(second.Index);
+                        });
                     planned = before.Items.Select(item => (InventoryItem?)item).ToArray();
                 }
                 int remaining = count;
@@ -74,7 +82,7 @@ internal static class InventoryMaterialConsumptionService
                     int consumed = Math.Min(remaining, item.Core.Count);
                     if (consumed == 0)
                         break;
-                    if (!InventoryDeleteService.TryDelete(item, item.Core.Value, consumed, out var replacement))
+                    if (!InventoryDeleteService.TryDelete(item, item.Core.Value, consumed, out var replacement, includeAccountCommon: true))
                         return InventoryResult.Reject();
                     planned![index] = replacement;
                     remaining -= consumed;

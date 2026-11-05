@@ -158,6 +158,7 @@ internal static class CargoTests
 
     public static void RunCore()
     {
+        VerifyAccountCommon45Persistence();
         VerifySortRules();
         var template = new DfoServer.GameWorld.Items.ItemTemplate(50, DfoServer.GameWorld.Items.ItemKind.Consumable,
             0, 10, 0, 100, 0, 0, 0, "[free]", 1, 0, "仓库资格测试") { MaximumLevel = 20, PersonalCargoUpgradeTarget = 24 };
@@ -620,6 +621,93 @@ internal static class CargoTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} cargo assertions");
+    }
+
+    // 只验证正式仓储合同；发奖路由与716真实资源由对应资源测试验证。
+    static void VerifyAccountCommon45Persistence()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "account-common45-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "game.db");
+        try
+        {
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("common45-account", () => { });
+            var room = new Location(1, 1, 100, 100);
+            var core = new ItemCore(490013716, GameWorld.Items.ItemKind.Material, 7) { Extension97 = 1234, Attr = 32 };
+            var first = repo.Create(owner, new("CommonFirst", room, room)
+            {
+                Inventory = InventorySnapshot.Empty with { Items = [new(0, new(InventoryListType.Main, 145), core)] }
+            });
+            var sibling = repo.Create(owner, new("CommonSecond", room, room));
+            var oldMain = first.Inventory.Find(new(InventoryListType.Main, 145))!;
+            That(Query("SELECT count(*) FROM account_cargo") is 0L, "首次45提交前未预建账号仓库行");
+            var sharedSlot = new InventorySlot(InventoryListType.AccountCommon, 0);
+            first = repo.CommitInventory(owner, first, new(first.Inventory,
+                first.Inventory with { Items = first.Inventory.Items.Add(new(0, sharedSlot, core)) }, "common45_first"));
+            var shared = first.Inventory.Find(sharedSlot)!;
+            That(shared.Uid > 0 && shared.Core == core && first.Inventory.AccountCargo.Revision == 1 &&
+                Query("SELECT inventory_items_revision FROM account_cargo") is long itemsRevision && itemsRevision > 0 &&
+                Query($"SELECT count(*) FROM character_inventory_items WHERE item_uid={shared.Uid} AND character_id IS NULL") is 1L &&
+                Query($"SELECT count(*) FROM character_inventory_slots WHERE item_uid={shared.Uid} AND character_id IS NULL AND list_type=45") is 1L,
+                "首个45物品同事务创建账号行，保完整核心并更新共享CAS与库存标记");
+            That(first.Inventory.Find(oldMain.Position) == oldMain, "新45提交不搬迁或合并旧Main实例");
+            sibling = repo.LoadCharacter(owner, sibling.Slot);
+            That(sibling.Inventory.Find(sharedSlot) == shared && sibling.Inventory.AccountCargo == first.Inventory.AccountCargo,
+                "同账号另一角色加载相同45实例UID、完整核心及共享revision");
+            var stale = sibling;
+            var changed = shared with { Core = core with { Value = 6 } };
+            first = repo.CommitInventory(owner, first, new(first.Inventory,
+                first.Inventory with { Items = first.Inventory.Items.Replace(shared, changed) }, "common45_consume"));
+            string stable = Snapshot();
+            DfoServer.Testing.TestCheck.Reject<InvalidOperationException>(() => repo.CommitInventory(owner, stale,
+                new(stale.Inventory, stale.Inventory with { Items = stale.Inventory.Items.Replace(shared, shared with { Core = core with { Value = 5 } }) }, "common45_stale")),
+                "另一角色旧共享版本不能覆盖45已提交的数量");
+            That(Snapshot() == stable, "45旧版本拒绝不改变资产、角色或任何审计");
+            first = repo.CommitInventory(owner, first, new(first.Inventory, first.Inventory with
+            {
+                AccountCargo = first.Inventory.AccountCargo with { Capacity = 8 },
+                Items = first.Inventory.Items.Add(new(0, new(InventoryListType.AccountCargo, 0), new(3175, GameWorld.Items.ItemKind.Material, 3)))
+            }, "common45_cargo12"));
+            That(first.Inventory.Find(sharedSlot) == changed && first.Inventory.Find(new(InventoryListType.AccountCargo, 0)) is not null,
+                "12和45的同号槽在同账号持久化后同时存在");
+            Sql("CREATE TRIGGER fail_common45 BEFORE INSERT ON cargo_audit_log BEGIN SELECT RAISE(FAIL,'common45 late failure'); END");
+            string before = Snapshot();
+            var failing = first.Inventory with
+            {
+                Gold = first.Inventory.Gold + 1,
+                Items = first.Inventory.Items.Replace(changed, changed with { Core = changed.Core with { Value = 4 } })
+                    .Add(new(0, new(InventoryListType.AccountCommon, 1), core))
+            };
+            DfoServer.Testing.TestCheck.Reject<SqliteException>(() => repo.CommitInventory(owner, first,
+                new(first.Inventory, failing, "common45_rollback")), "45末段仓库审计失败整笔拒绝");
+            That(Snapshot() == before, "45末段失败回滚两角色、共享数量、新UID、自增、金币、库存标记及全部审计");
+            Sql("DROP TRIGGER fail_common45");
+            var reopened = new CharacterRepository(path);
+            That(JsonSerializer.Serialize(reopened.List(owner)) == JsonSerializer.Serialize(repo.List(owner)) &&
+                reopened.LoadCharacter(owner, sibling.Slot).Inventory.Find(sharedSlot) == changed &&
+                reopened.LoadCharacter(owner, first.Slot).Inventory.Find(oldMain.Position) == oldMain,
+                "仓储重开恢复共享45、12及旧Main原实例，不依赖内存快照");
+
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+            void Sql(string sql) => Query(sql);
+            string Snapshot() => JsonSerializer.Serialize(repo.List(owner)) + ":" +
+                Query("SELECT group_concat(item_uid||':'||COALESCE(character_id,0)||':'||item_core,'|') FROM (SELECT * FROM character_inventory_items ORDER BY item_uid)") + ":" +
+                Query("SELECT group_concat(account||':'||revision||':'||inventory_items_revision,'|') FROM account_cargo") + ":" +
+                Query("SELECT group_concat(id||':'||revision||':'||inventory_items_revision,'|') FROM (SELECT * FROM characters ORDER BY id)") + ":" +
+                Query("SELECT count(*) FROM inventory_audit_log") + ":" + Query("SELECT count(*) FROM currency_audit_log") + ":" +
+                Query("SELECT count(*) FROM cargo_audit_log") + ":" +
+                Query("SELECT group_concat(name||':'||seq,'|') FROM (SELECT * FROM sqlite_sequence ORDER BY name)");
+        }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     static void VerifyAccountPurchases(Character source, ItemResources resources)

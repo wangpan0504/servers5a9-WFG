@@ -37,7 +37,8 @@ internal static class ServerLifetime
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests,
                 adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions,
                 promotionConfiguration: promotionConfiguration,
-                enablePromotionPage: options.EnablePromotionPage).RunAsync(stop.Token);
+                enablePromotionPage: options.EnablePromotionPage,
+                epicRoad2019Enabled: options.EpicRoad2019Enabled).RunAsync(stop.Token);
         }
         finally
         {

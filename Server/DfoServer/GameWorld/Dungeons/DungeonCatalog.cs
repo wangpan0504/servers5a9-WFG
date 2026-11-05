@@ -144,6 +144,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
 {
     public int? LimitTimeSeconds => RawSections.Where(row => row.Tag == "limit time").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } seconds] }] ? seconds.Value : null;
+    public ImmutableHashSet<int> DisjointForbiddenDropRarities { get; init; } = ImmutableHashSet<int>.Empty;
     // 客户端逐段覆盖；舰炮先声明4，raid段再声明12，取最后一段而非拒绝重复标签。
     public int? CoinLimit => RawSections.LastOrDefault(row => row.Tag == "coin limit") is
         { Tokens: [{ Type: 0, Value: >= 0 } count] } ? count.Value : null;
@@ -279,6 +280,21 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public DungeonRequiredItem? RequiredItem => RawSections.Where(row => row.Tag == "required item").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } item, { Type: 0, Value: > 0 } count, { Type: 0 } flag] }] ? new(item.Value, count.Value, flag.Value) : null;
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    // 只采用完整结果块中的唯一整数0；缺省或未确认形状不改变原结算入口。
+    public bool HasNoResultBoard
+    {
+        get
+        {
+            var markers = RawSections.Select((section, index) => (Section: section, Index: index))
+                .Where(row => row.Section.Tag is "dungeon clear result" or "/dungeon clear result").ToArray();
+            if (markers is not [{ Section: { Tag: "dungeon clear result", Tokens.Count: 0 } },
+                { Section: { Tag: "/dungeon clear result", Tokens.Count: 0 } }])
+                return false;
+            var block = RawSections.Skip(markers[0].Index + 1).Take(markers[1].Index - markers[0].Index - 1).ToArray();
+            return block.All(section => section.Tag is "reward card" or "result board") &&
+                block.Where(section => section.Tag == "result board").ToArray() is [{ Tokens: [{ Type: 0, Value: 0 }] }];
+        }
+    }
     public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
         RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);
     // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
@@ -359,6 +375,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
                 return difficulty == locked.Value && (plain.Length == 0 || plain is [{ Tokens: [{ Type: 0, Value: var shown }] }] && shown == locked.Value);
             // 普雷妮十五图仅声明difficulty 2，匹配客户端正常16请求也发2；不能按缺省0拒绝。
             if (IsOrdinaryPrey && designated.Length == 0)
+                return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
+            // 星河两图只声明固定难度2，真实选图请求也发2；不套用缺省零难度。
+            if (EpicRoadResourcePaths.Dungeons.GetValueOrDefault(Id) == Path && designated.Length == 0)
                 return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
             // 月轮山巨龙三图只声明固定难度1，没有普通五档难度表，不能按缺省0拒绝。
             if (Id is >= 3200 and <= 3202 && Path.StartsWith("dungeon/event/dragon_kurun_kor/", StringComparison.OrdinalIgnoreCase) && designated.Length == 0)
@@ -474,12 +493,13 @@ internal sealed class DungeonCatalog
     public GriefTowerCatalog GriefTower => griefTower.Value;
     public BossRushCatalog BossRush => bossRush.Value;
 
-    public static DungeonCatalog Load(PvfArchive pvf)
+    public static DungeonCatalog Load(PvfArchive pvf, IReadOnlyDictionary<int, string>? supplementalDungeons = null,
+        IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
 
         // 这里只加载两个目录；未知副本的脚本不会因加载目录而被强制解析。
-        var dungeons = ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
-        var maps = ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map");
+        var dungeons = ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon", supplementalDungeons);
+        var maps = ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map", supplementalMaps);
         return new(pvf, dungeons, maps);
     }
 
@@ -614,7 +634,8 @@ internal sealed class DungeonCatalog
         return Freeze(maps);
     }
 
-    internal static IReadOnlyDictionary<int, string> ParseDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string root)
+    internal static IReadOnlyDictionary<int, string> ParseDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string root,
+        IReadOnlyDictionary<int, string>? supplemental = null)
     {
         if (tokens.Count == 0 || tokens.Count % 2 != 0)
             throw new InvalidDataException("PVF 目录记录不完整: " + root);
@@ -629,6 +650,22 @@ internal sealed class DungeonCatalog
             if (!result.TryAdd(tokens[i].Value, path))
                 throw new InvalidDataException("重复 PVF 目录 ID: " + tokens[i].Value);
         }
+
+        if (supplemental is not null)
+            foreach (var (id, sourcePath) in supplemental)
+            {
+                if (id < 0)
+                    throw new InvalidDataException("PVF 补充目录 ID 无效: " + id);
+                string path = PvfArchive.NormalizePath(sourcePath);
+                if (!path.StartsWith(root + "/", StringComparison.Ordinal) || path.Length == root.Length + 1)
+                    throw new InvalidDataException("PVF 补充目录路径越过资源根: " + root);
+                if (result.TryGetValue(id, out var existing))
+                {
+                    if (existing != path)
+                        throw new InvalidDataException("PVF 补充目录与原登记冲突: " + id);
+                }
+                else result.Add(id, path);
+            }
 
         return result.AsReadOnly();
     }
@@ -718,6 +755,7 @@ internal sealed class DungeonCatalog
         {
             DungeonType = dungeonType,
             PersonalCoinInfoLimits = ReadPersonalCoinInfoLimits(),
+            DisjointForbiddenDropRarities = ReadDisjointDropRarities(sections, resolve),
             WarriorsDungeon = sections.Where(section => section.Tag == "warriors dungeon").ToArray() is
                 [{ Tokens: [{ Type: 6 } warriors] }] ? resolve(warriors.Value) : null,
             RoomMoveKeepState = Flag("room move keep state"),
@@ -1026,6 +1064,28 @@ internal sealed class DungeonCatalog
         }
 
         return Freeze(sections);
+    }
+
+    private static ImmutableHashSet<int> ReadDisjointDropRarities(IReadOnlyList<DungeonRawSection> sections, Func<int, string> resolve)
+    {
+        var declarations = sections.Select((row, index) => (row, index))
+            .Where(pair => pair.row.Tag is "no disjoint drop rarity" or "/no disjoint drop rarity").ToArray();
+        if (declarations.Length == 0) return ImmutableHashSet<int>.Empty;
+        if (declarations is not [{ row.Tag: "no disjoint drop rarity" }, { row: { Tag: "/no disjoint drop rarity", Tokens.Count: 0 } }] ||
+            declarations[1].index != declarations[0].index + 1 || declarations[0].row.Tokens.Count == 0)
+            throw new InvalidDataException("[no disjoint drop rarity] 必须为唯一的完整稀有度块");
+        var result = ImmutableHashSet.CreateBuilder<int>();
+        foreach (var token in declarations[0].row.Tokens)
+        {
+            int rarity = token.Type == 6 ? resolve(token.Value) switch
+            {
+                "common" => 0, "uncommon" => 1, "rare" => 2, "unique" => 3,
+                "epic" => 4, "chronicle" => 5, "legendary" => 6, _ => -1
+            } : -1;
+            if (rarity < 0) throw new InvalidDataException("[no disjoint drop rarity] 含未知稀有度");
+            result.Add(rarity);
+        }
+        return result.ToImmutable();
     }
 
     private static IReadOnlyList<T> Freeze<T>(IEnumerable<T> values) => Array.AsReadOnly(values.ToArray());

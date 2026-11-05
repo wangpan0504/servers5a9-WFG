@@ -202,6 +202,16 @@ internal static class DungeonDropRuleCatalogTests
         var prepare = specialPolicy.PrepareEntry(entry, hell);
         var monster = new DungeonPlannedMonster(0, 10, 42, 1, null) { SpawnType = 3 };
         var cached = prepare(monster);
+        var restricted = specialPolicy.PrepareEntry(entry with
+        {
+            DisjointForbiddenDropRarities = System.Collections.Immutable.ImmutableHashSet.Create(4)
+        }, hell)(monster);
+        That(restricted.Trials.All(trial => trial.DisjointForbiddenRarities?.SetEquals([4]) == true) &&
+            cached.Trials.All(trial => trial.DisjointForbiddenRarities is null) &&
+            restricted.Trials.Select(trial => (trial.Threshold, trial.MinimumCount, trial.MaximumCount, trial.Attempts, trial.ProbabilityDenominator))
+                .SequenceEqual(cached.Trials.Select(trial => (trial.Threshold, trial.MinimumCount, trial.MaximumCount, trial.Attempts, trial.ProbabilityDenominator))) &&
+            restricted.Generate(_ => 0, DateTimeOffset.UnixEpoch).SequenceEqual(cached.Generate(_ => 0, DateTimeOffset.UnixEpoch)),
+            "正式入图掉落准备传递来源限制，保留普通/独立/世界各通道及共享缓存隔离");
         That(ReferenceEquals(cached, prepare(monster with { ObjectKey = 11, SourceOrdinal = 1 })),
             "同次入图相同掉落输入复用不可变规则，对象编号与位置不产生第二份候选池");
         foreach (var different in new[] { monster with { MonsterId = 43 }, monster with { CandidateLevel = 2 },
@@ -273,6 +283,7 @@ internal static class DungeonDropRuleCatalogTests
             "哨兵兼容不能掩盖负数稀有度资源");
         LegacyHellDropTests.RunCore(parsed, entry, fragmentCatalog, fragmentHell);
         RiftEpicDropTests.RunCore(parsed, entry);
+        EpicRoad2019SimulatedDropTests.RunCache(parsed, entry);
         That(levelPlan.Trials.Single().RarityPools[0].Items.Entries.IsEmpty &&
             new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
                 [dungeon difficulty drop prob] 90 90 335 875 1000 1400 1000

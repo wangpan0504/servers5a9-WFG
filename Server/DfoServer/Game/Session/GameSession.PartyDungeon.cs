@@ -145,6 +145,7 @@ internal sealed partial class GameSession
         var dungeon = plan.Dungeon;
         if (dungeon.EvildomWarChallengeEntry is { } challenge && !IsCurrentEvildomWarChallengeAdmission(challenge)) return null;
         if (dungeon.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;
+        if (!CanInstallDungeonEvent(plan)) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
             CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
@@ -205,7 +206,7 @@ internal sealed partial class GameSession
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
                 FatigueAccelerationPercent = accelerationPercent,
-                RequiredEvent = Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
+                RequiredEvent = plan.RequiredEvent ?? Strongway2019RequiredEvent(dungeon.Strongway2019Admission) }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,

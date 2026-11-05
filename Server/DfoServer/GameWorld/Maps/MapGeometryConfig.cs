@@ -18,6 +18,16 @@ internal sealed class MapGeometryConfig
     public static MapGeometryConfig Empty { get; } = new([],[]);
     public IReadOnlyCollection<string> Paths => maps.Keys;
     public IReadOnlyDictionary<string, string> Aliases => aliases;
+    // 只为原入口的两种加载名建立同源能力，不放宽其他地图的缺失检查。
+    internal string? EpicRoadEntrySource(string path)
+    {
+        const string canonical = "map/common/gate_seria.map", regional = "map/common/(r)gate_seria.map";
+        if (path != canonical || !maps.TryGetValue(canonical, out var left) || !maps.TryGetValue(regional, out var right) ||
+            left.Length != 1 || right.Length != 1 || left[0].Kind != "epic_road_npc_restore" || right[0].Kind != "epic_road_npc_restore" ||
+            !left[0].To.SequenceEqual(right[0].To) || !Enumerable.Range(0, 3).All(i => left[0].From[i].SequenceEqual(right[0].From[i])))
+            return null;
+        return regional;
+    }
     internal IEnumerable<(string Missing, string Empty)> ExtensionRepairs()
     {
         foreach (var row in maps)
@@ -87,6 +97,23 @@ internal sealed class MapGeometryConfig
                 throw new InvalidDataException("World anchor special child");
             if (kind == "dungeon_ai10_npc_monster_boss" && (before[start + 4].Text != "[monster]" || before[start + 5].Text != "[NPC]" || before[start + 7].Text != "[boss]"))
                 throw new InvalidDataException("World anchor NPC AI tail");
+        }
+    }
+
+    private static void ValidateEpicRoadNpc(Atom[] before, Atom[] after)
+    {
+        Atom[] original = [new(0,400001102,null),new(6,0,"[right]"),new(0,535,null),new(0,165,null),new(0,0,null)];
+        if (before.Length == 0 || before.Length % 5 != 0 || after.Length != before.Length + 5 ||
+            !before.SequenceEqual(after.Take(before.Length)) || !original.SequenceEqual(after.Skip(before.Length)))
+            throw new InvalidDataException("World epic NPC restore must preserve prefix and original placement");
+        for (int at = 0; at < before.Length; at += 5)
+        {
+            if (before[at].Kind != 0 || before[at].Number < 0 || before[at].Number == 400001102 ||
+                before[at + 1].Kind != 6 || before[at + 1].Text is not ("[left]" or "[right]"))
+                throw new InvalidDataException("World epic NPC restore source identity");
+            for (int n = 2; n < 5; n++)
+                if (before[at + n].Kind != 0 || before[at + n].Number is < -1048576 or > 1048576)
+                    throw new InvalidDataException("World epic NPC restore source coordinates");
         }
     }
     private static void ValidateAnimationAppend(Atom[] before, Atom[] after)
@@ -176,6 +203,7 @@ internal sealed class MapGeometryConfig
                 ("town_gate", "[town movable area]") => 6,
                 ("walk_area", "[virtual movable area]") => 4,
                 ("npc_position", "[npc]") => 5,
+                ("epic_road_npc_restore", "[npc]") => 5,
                 ("gate_points8", "[pathgate pos]") => 8,
                 ("gate_recognize8", "[pathgate recognize range]") => 8,
                 ("tile_pass14", "[pass type]") => 14,
@@ -201,6 +229,9 @@ internal sealed class MapGeometryConfig
             };
             var from = Profiles(row.GetProperty("from"));
             var to = Profiles(row.GetProperty("to"));
+            if (kind == "epic_road_npc_restore" && (occurrence != 0 ||
+                path is not ("map/common/gate_seria.map" or "map/common/(r)gate_seria.map")))
+                throw new InvalidDataException("World epic NPC restore map/occurrence");
             if (!to[0].SequenceEqual(to[1]) || !to[0].SequenceEqual(to[2])) throw new InvalidDataException("Ratio-dependent world geometry");
             bool gate = kind is "gate_points8" or "gate_recognize8", tile = kind == "tile_pass14";
             bool anchor = AnchorLayout(kind).Stride != 0, metadata = kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append";
@@ -212,6 +243,7 @@ internal sealed class MapGeometryConfig
                 throw new InvalidDataException("World mechanism resource kind/alias");
             foreach (var before in from)
             {
+                if (kind == "epic_road_npc_restore") { ValidateEpicRoadNpc(before,to[0]); continue; }
                 if (kind == "dungeon_animation5_append") { ValidateAnimationAppend(before,to[0]); continue; }
                 if (anchor) { ValidateAnchor(kind,before,to[0]); continue; }
                 if (metadata)
@@ -326,7 +358,7 @@ internal sealed class MapGeometryConfig
                 { begin = i + 1; break; }
             if (begin < 0) throw new InvalidDataException($"Unmatched world tag: {path} {rule.Id}");
             for (int i = begin; i < input.Length; ++i) if (input[i].Type == 3) { end = i; break; }
-            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append")
+            if (MapGeometrySignature.AnchorTags.Contains(rule.Tag) || rule.Kind is "dungeon_movable_xywh3" or "dungeon_virtual_xywh1" or "dungeon_virtual_xywh4_append" or "epic_road_npc_restore")
             {
                 string close = "[/" + rule.Tag[1..];
                 if (end == input.Length || Resolve(input[end].Value).ToLowerInvariant() != close ||

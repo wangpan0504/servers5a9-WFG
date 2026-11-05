@@ -124,6 +124,7 @@ internal sealed partial class GameSession
         formalDungeon?.Entry.HasFreeCombatConsumption == true;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
     {
+        public InventoryEventPrecondition? RequiredEvent { get; init; }
         public DungeonSelectionContext? ClassExperienceSelection { get; init; }
         // 本次入场计入的冒险团每周地下城列；练习、训练、职业体验与比赛为 null。
         public WeeklyDungeonEntry? Weekly { get; init; }
@@ -168,6 +169,13 @@ internal sealed partial class GameSession
         AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null)
     {
         if (hellParty) questId = 0;
+        InventoryEventPrecondition? requiredEvent = null;
+        if (dungeonId is 400000097 or 400000098)
+        {
+            var activity = serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId);
+            if (activity?.Active != true) return RejectFormal("epic-road-event-closed");
+            requiredEvent = new(activity.Schedule, timeProvider ?? TimeProvider.System);
+        }
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
@@ -299,7 +307,7 @@ internal sealed partial class GameSession
                 difficulty != designated && difficulty != AssaultModeEntryPolicy.ClientAssaultDifficulty) return RejectFormal("assault-difficulty-mismatch");
             difficulty = designated;
             if (!AssaultModeEntryPolicy.ConsumptionPlan(expected.Inventory, assault.Selection.Requirement, assault.Pieces,
-                DateTimeOffset.UtcNow).Accepted) return RejectFormal("assault-consumption-rejected");
+                (timeProvider ?? TimeProvider.System).GetUtcNow()).Accepted) return RejectFormal("assault-consumption-rejected");
         }
         uint optionDungeon = assault?.Selection.Parent ?? selectionDungeon;
         DungeonDespairAdmission? despair = null;
@@ -322,8 +330,8 @@ internal sealed partial class GameSession
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
-        // 乔安菜单只建立本次普通选图身份。已接取且声明4000的任务可以携带任务号；直接16、练习、深渊和重试不能借用。
-        if (dungeonId == 4000 && (difficulty != 0 || retry is not null || practice || classExperience ||
+        // 乔安菜单只建立本次普通选图身份；旧选择、直接16、任务/练习/深渊和重试不能借用NPC入口。
+        if (dungeonId == 4000 && (questId != 0 || difficulty != 0 || retry is not null || practice || classExperience ||
             hellParty || hellLegend || sealDoor || assault is not null || selection is null || selection.IsTutorial ||
             selection.IsClassExperience || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("lost-land-selection-mismatch");
@@ -369,7 +377,7 @@ internal sealed partial class GameSession
         // 悲叹/绝望之塔与祭坛的入场券、邀请函由各自准入策略规划，不再按频道城镇 [required item] 先行拒绝。
         bool specialAdmission = strongway is not null || war is not null || tagEntry is not null || imperialEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
         if (channelTown && !specialAdmission &&
-            ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, DateTimeOffset.UtcNow) is { } missingItem)
+            ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, (timeProvider ?? TimeProvider.System).GetUtcNow()) is { } missingItem)
             return RejectFormal(missingItem);
         // DungeonIncountInfo 次数：任意城镇、非练习的普通入场（含任务与结算再挑战）；新手训练、训练室、职业体验、强袭、深渊派对不计。
         // 悲叹之塔、绝望之塔与血之/究极祭坛已由各自专表（账号日额度、特殊入场账本）计次扣费，这里不再叠加一次。
@@ -577,7 +585,7 @@ internal sealed partial class GameSession
             // #510/#511 普通入场票：准入阶段只按当前背包规划，不写库；入场提交时重算并与尝试号同事务扣除。
             if (pieces is null) return RejectFormal("entry-item-catalog-unavailable");
             var entrySpent = InventoryMaterialConsumptionService.Plan(expected.Inventory,
-                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], pieces, DateTimeOffset.UtcNow);
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], pieces, (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!entrySpent.Accepted || entrySpent.Plan is null) return RejectFormal("entry-item-required:" + entryItem.ItemId);
         }
         if (entry.QuestId != 0 && entry.QuestAcceptanceId == Guid.Empty)
@@ -611,7 +619,7 @@ internal sealed partial class GameSession
         if (tagEntry is null && imperialEntry is null && war?.Charged != true && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
-        return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
+        return prepared is null ? null : prepared with { RequiredEvent = requiredEvent, ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, ImperialArenaEntry = imperialEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
@@ -773,9 +781,10 @@ internal sealed partial class GameSession
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
-                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
-                        suppressCompanions: entry.IsTagSystem);
-                if (entry.ChampionPercents.IsEnabled)
+                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                if (EpicRoad2019MonsterPolicy.Matches(entry))
+                    plan = EpicRoad2019MonsterPolicy.Apply(plan, entry);
+                else if (entry.ChampionPercents.IsEnabled)
                     plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
                         entry.NamedMonsters);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。
@@ -945,11 +954,21 @@ internal sealed partial class GameSession
         Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null :
         CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry, partyAdmission) && !HasPendingQuestScene && !HasPendingFormalCard);
 
+    bool CanInstallDungeonEvent(PreparedFormalDungeon prepared)
+    {
+        var required = prepared.RequiredEvent;
+        if (required is null && prepared.Dungeon.Entry.DungeonId is not (400000097 or 400000098)) return true;
+        if (required is not null && serverEvents is not null && required.Matches(serverEvents.Read(required.Schedule.EventId).Schedule)) return true;
+        LastFormalDungeonRejection = "epic-road-event-closed";
+        return false;
+    }
+
     FormalDungeonReceipt? InstallFormalDungeon(PreparedFormalDungeon prepared)
     {
         if (prepared.Dungeon.EvildomWarChallengeEntry is not null) return null;
         if (HasMultiplePartyMembers?.Invoke() == true) return null;
         if (HasPendingTownQuestCommit || !Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
+        if (!CanInstallDungeonEvent(prepared)) return null;
         if (!CanInstallRaidDungeon(prepared.Dungeon.Entry)) return null;
         if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
@@ -980,7 +999,7 @@ internal sealed partial class GameSession
             // #233 入场提交才扣强袭材料：授权必须仍是同一份选择，按当前背包重新规划后先提交扣除，再重基入场revision。
             if (assaultAuthorization is not { } authorization || !ReferenceEquals(authorization.Selection, assault) ||
                 authorization.CharacterId != character.Id) return null;
-            var spent = AssaultModeEntryPolicy.ConsumptionPlan(character.Inventory, assault.Requirement, authorization.Pieces, DateTimeOffset.UtcNow);
+            var spent = AssaultModeEntryPolicy.ConsumptionPlan(character.Inventory, assault.Requirement, authorization.Pieces, (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!spent.Accepted || spent.Plan is not { } plan) return null;
             character = repository.CommitInventory(owner, character, plan);
             assaultSlots = plan.ChangedSlots;
@@ -1007,7 +1026,7 @@ internal sealed partial class GameSession
             // 次数落库前先按当前背包核对普通入场票，避免票已不足却先记了次数。
             if (installing.EntryPieces is not { } checkPieces) return null;
             var check = InventoryMaterialConsumptionService.Plan(character.Inventory,
-                [new ItemMaterialCost(pendingEntryItem.ItemId, pendingEntryItem.Count)], checkPieces, DateTimeOffset.UtcNow);
+                [new ItemMaterialCost(pendingEntryItem.ItemId, pendingEntryItem.Count)], checkPieces, (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!check.Accepted || check.Plan is null) return null;
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
@@ -1026,10 +1045,10 @@ internal sealed partial class GameSession
                 if (!spent.Accepted || spent.Plan is not { } plan) return null;
                 consumption = plan;
             }
-            if (installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
+            if (prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
                 installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
             {
-                // 专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
+                // 活动前置、专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
                 entryItems ??= consumption;
                 int countKey = cost.Incount?.CountKey ?? cost.DungeonId;
@@ -1073,7 +1092,7 @@ internal sealed partial class GameSession
             // #510/#511 入场提交时按最新背包重算入场票；prepare 之后变少则整个入场作废。
             if (installing.EntryPieces is not { } entryPieces) return null;
             var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
-                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], entryPieces, DateTimeOffset.UtcNow);
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], entryPieces, (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!spent.Accepted || spent.Plan is not { } entryPlan) return null;
             entryItems = entryPlan;
         }
@@ -1117,7 +1136,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (prepared.RequiredEvent is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1127,7 +1146,12 @@ internal sealed partial class GameSession
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
                         prepared.Weekly,installing.GriefAdmission) { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
-                RequiredEvent = Strongway2019RequiredEvent(installing.Strongway2019Admission) });
+                RequiredEvent = prepared.RequiredEvent ?? Strongway2019RequiredEvent(installing.Strongway2019Admission) });
+            }
+            catch (DungeonEventAdmissionRejectedException)
+            {
+                LastFormalDungeonRejection = "epic-road-event-closed";
+                return null;
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {
@@ -1514,7 +1538,9 @@ internal sealed partial class GameSession
                     if (dungeon.Entry.IsHellLegend)
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);
-                    var ordinary = boosted.Generate(dungeon.Draw, now);
+                    bool epicRoadAvailable = dungeon.Entry.DungeonId is not (400000097 or 400000098) ||
+                        serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active == true;
+                    var ordinary = boosted.Generate(dungeon.Draw, now, epicRoadAvailable);
                     if (springTreasure is null || !SpringTreasureDropPolicy.MayDrop(dungeon.Entry, pending.Monster)) return ordinary;
                     return ordinary.Concat(springTreasure.Generate(Selected, dungeon.Entry, pending.Monster, dungeon.Draw, now,
                         debugSettings?.IgnoreCashShopAbsoluteExpiration == true, debugSettings?.IgnoreCashShopUsablePeriod == true)).ToArray();
@@ -1669,7 +1695,7 @@ internal sealed partial class GameSession
             var after = clearedHell ? before : StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
                 PremiumPcRoom);
             after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
-            if (RaidDungeonExitPosition(dungeon, Selected) is not { } back) return null;
+            var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
             if (dungeon.Run.TagEvildomAdmission is not null && repository is DfoServer.Game.TagEvildom.ITagEvildomConfigurationStore tagStore)
                 Selected = tagStore.CommitTagEvildomReturn(owner, Selected, dungeon.Run.Snapshot.Identity.InstanceId,
                     back, Selected.Return, after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)),
@@ -1693,7 +1719,7 @@ internal sealed partial class GameSession
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
-        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = RecordPreyTownLocation(raidChange) };
+        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange };
     });
 
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>

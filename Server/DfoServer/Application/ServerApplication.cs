@@ -194,7 +194,7 @@ public static class ServerApplication
             }
 
             var geometry = Load("Common map geometry", () => DfoServer.GameWorld.Maps.MapGeometryConfig.ReadFile(Path.Combine(options.DataDirectory, "DisplayCompat.world.json")));
-            var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry));
+            var towns = Load("Town resources", () => TownCatalog.Load(pvf, geometry, options.EpicRoad2019Enabled));
             if (command.Kind == ServerCommandKind.InspectTowns)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new { Room = towns.Room, Return = towns.InitialReturn, Areas = towns.Areas.Values }));
@@ -232,7 +232,7 @@ public static class ServerApplication
                 return 0;
             }
 
-            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(itemResources.Creatures).WithItems(itemResources.Items));
+            var quests = Load("Quest resources", () => DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf, options.EpicRoad2019Enabled).WithCreatures(itemResources.Creatures).WithItems(itemResources.Items));
             // 冒险团经验账本与角色成长共用同一份等级经验表，必须在仓储建立前装配。
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));

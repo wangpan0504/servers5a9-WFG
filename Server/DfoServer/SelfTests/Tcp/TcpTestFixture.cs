@@ -362,7 +362,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

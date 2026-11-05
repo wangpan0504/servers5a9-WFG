@@ -59,11 +59,12 @@ internal static class QuestCoverage
         .Where(field => !KnownFields.Contains(field.Name) && !QuestTargetSchema.IsTargetField(quest, field) &&
             !(field.Name is "episode town use" or "npc visivility not revert" && QuestEpisodeEntry.Supports(quest)) &&
             !(field.Name == "npc dialog" && QuestHiddenEntry.NpcDialogueShape(quest)) &&
+            !(field.Name == "show quest on event" && QuestEpicRoad2019Entry.Supports(quest)) &&
             !(field.Name is "stand by area" or "hidden set" && QuestStandbyEntry.Supports(quest)) &&
             !(field.Name == "cleared quest" && QuestHiddenEntry.ClearedNpcDialogueShape(quest)) &&
             !(field.Name == "pvp private expose" && DfoServer.Game.Pvp.PvpTrainingExposure.TryRead(quest,out _)) &&
             !(field.Name == "sub reward" && DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest)) &&
-            !(field.Name == "synchronization account quest" && QuestAccountPolicy.PaidSynchronization(quest)) &&
+            !(field.Name == "synchronization account quest" && QuestAccountPolicy.ExplicitSynchronization(quest)) &&
             !(field.Name == "appear map" && QuestMarriageProgress.Supports(quest) && field is
                 { Children.Length: 0, Values: [{ Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }] }) &&
             !(QuestMailPlan.IsField(field.Name) && (QuestMailPlan.CompletionDeclaration(quest) || QuestEligibilityMailPlan.Declaration(quest))) &&

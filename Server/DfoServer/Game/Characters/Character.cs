@@ -123,7 +123,7 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
         Inventory.Validate(allocating: true);
         if (!Inventory.AccountWallet.Same(DfoServer.Game.Currency.AccountWallet.Empty))
             throw new InvalidDataException("建角只初始化角色资产，账号余额由当前账号装载");
-        if (Inventory.AccountCargo != new AccountCargoState() || Inventory.Items.Any(item => item.Position.List == InventoryListType.AccountCargo))
+        if (Inventory.AccountCargo != new AccountCargoState() || Inventory.Items.Any(item => item.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon))
             throw new InvalidDataException("建角不能初始化或覆盖账号仓库");
         if (!Inventory.EpicPieces.Same(EpicPieceBook.Empty))
             throw new InvalidDataException("建角不能初始化或覆盖账号史诗图鉴");

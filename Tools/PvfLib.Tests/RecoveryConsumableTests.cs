@@ -6,6 +6,7 @@ internal static class RecoveryConsumableTests
 {
     public static void Run()
     {
+        UseRestrictionDeclarations();
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
             "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]",
@@ -126,6 +127,43 @@ internal static class RecoveryConsumableTests
         {
             result = RecoveryConsumableFile.Parse(1, "stackable/example.stk", [..valid,..tail], Resolve);
             That(result.TotalUsableCount is null && !result.Diagnostics.IsEmpty, "畸形或重复日次数不能被解释为无限使用");
+        }
+    }
+
+    static void UseRestrictionDeclarations()
+    {
+        string[] strings = ["[cool time]", "[cooltime group]", "[limit dungeon]", "[/limit dungeon]",
+            "[impossible contents]", "[/impossible contents]", "gift", "raid dungeon"];
+        string Resolve(int at) => strings[at];
+        PvfToken[] header = [new(3, 0), new(0, 30000), new(3, 1), new(0, 865)];
+        RecoveryConsumableFile Read(params PvfToken[] restrictions) => RecoveryConsumableFile.Parse(490013727,
+            "stackable/restriction-fixture.stk", [.. header, .. restrictions], Resolve);
+        var absent = Read();
+        That(absent.LimitDungeons.IsEmpty && absent.ImpossibleContents.IsEmpty && absent.Diagnostics.IsEmpty,
+            "未声明使用限制保持空集合，不给普通药补禁图或禁止用途");
+        That(Read(new(3, 2), new(3, 3)).LimitDungeons is { IsDefault: false, IsEmpty: true },
+            "完整空禁图块保持原有无限制含义，不因本次名单传递收窄普通药资格");
+        var complete = Read(new(3, 2), new(0, 210), new(0, 5313), new(3, 3),
+            new(3, 4), new(6, 6), new(3, 5), new(3, 4), new(6, 7), new(6, 6), new(3, 5));
+        That(complete.LimitDungeons.SequenceEqual(new[] { 210, 5313 }) &&
+            complete.ImpossibleContents.SequenceEqual(new[] { "gift", "raid dungeon" }) && complete.Diagnostics.IsEmpty,
+            "显式禁图完整保留，多个完整禁止用途块按原序并集读取，不丢第二块raid声明");
+        foreach (PvfToken[] tail in new PvfToken[][] {
+            [new(3, 2), new(0, 0), new(3, 3)],
+            [new(3, 2), new(0, -1), new(3, 3)], [new(3, 2), new(0, 210), new(6, 6), new(3, 3)],
+            [new(3, 2), new(0, 210), new(3, 3), new(3, 2), new(0, 5313), new(3, 3)] })
+        {
+            var malformed = Read(tail);
+            That(malformed.LimitDungeons.IsDefault && !malformed.Diagnostics.IsEmpty,
+                "非正、混合类型或重复禁图声明明确无效，不过滤坏项成为部分或空名单");
+        }
+        foreach (PvfToken[] tail in new PvfToken[][] {
+            [new(3, 4), new(0, 1), new(3, 5)], [new(3, 4), new(6, 7)],
+            [new(3, 4), new(3, 2), new(0, 210), new(3, 3), new(3, 5)] })
+        {
+            var malformed = Read(tail);
+            That(malformed.ImpossibleContents.IsDefault && !malformed.Diagnostics.IsEmpty,
+                "错误类型、未闭合或嵌套禁止用途声明保留失败状态，不能默认为无限制");
         }
     }
 }

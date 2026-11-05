@@ -43,12 +43,14 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }
     public AccountMaterialDefinition? AccountMaterial { get; init; }
+    public bool AccountCommonItem { get; init; }
     public bool AccountBoundAfterTrade { get; init; }
     public int AccountBindingTradeLimit { get; init; }
     public ushort PersonalCargoUpgradeTarget { get; init; }
     public bool AdvancesPersonalCargo { get; init; }
     public ItemShopPrice ShopPrice { get; init; } = new(0, 0, [], null);
     public ItemExpiration Expiration { get; init; } = new();
+    public bool EpicRoad2019FixedExpirationRestored { get; init; }
     public int RepairPrice { get; init; }
     public int CreationRate { get; init; }
     public EchonEquipmentDefinition? Echon { get; init; }

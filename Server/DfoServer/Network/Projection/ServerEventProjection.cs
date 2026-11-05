@@ -30,6 +30,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     bool battlePassActive;
     bool queuedEndless;
     bool queuedAttendance;
+    bool queuedEpicRoad;
 
     public ServerEventProjection(GameConnectionContext context, ServerEventService events, TownProjection town, ServerLog log, TimeProvider time)
     {
@@ -44,7 +45,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         if (id == ServerEventService.DailyAttendanceId) context.DailyAttendance?.Invalidate();
         if (id is ServerEventService.MileageShopId or ServerEventService.Strongway2019Id or ServerEventService.NolanVisibilityId or
             ServerEventService.BattlePassId or ServerEventService.SeriaLuckId or ServerEventService.GuildHongbaoId or
-            ServerEventService.JonathanVisibilityId or Game.Events.EndlessAdventurePolicy.EventId or
+            ServerEventService.JonathanVisibilityId or ServerEventService.EpicRoadId or Game.Events.EndlessAdventurePolicy.EventId or
             ServerEventService.DailyAttendanceId or ServerEventService.WeeklyAttendanceId or 10999)
             pending.Writer.TryWrite(true);
     }
@@ -53,7 +54,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
     // 这里只去重已接受的快照，不表示客户端已显示；版本变化仍须重发被发送守卫丢弃的旧包。
     public void Queued(bool value, bool strongway, long selectionEpoch, long revision, bool nolanVisible = true,
         bool seriaLuck = true, bool hongbao = true, bool jonathan = true, long promotionRevision = 0,
-        bool attendance = false)
+        bool attendance = false, bool epicRoadValue = false)
     {
         queuedEpoch = selectionEpoch;
         queuedMileage = value;
@@ -66,6 +67,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
         queuedPromotionRevision = promotionRevision;
         queuedEndless = context.Session.EndlessAdventureActive;
         queuedAttendance = attendance;
+        queuedEpicRoad = epicRoadValue;
         pending.Writer.TryWrite(true);
     }
     public void Refresh() => pending.Writer.TryWrite(true);
@@ -101,15 +103,16 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                 var hongbao = events.Read(ServerEventService.GuildHongbaoId);
                 var jonathan = events.Read(ServerEventService.JonathanVisibilityId);
                 var strongway = events.Read(ServerEventService.Strongway2019Id);
+                var epicRoad = events.Read(ServerEventService.EpicRoadId);
                 var now = time.GetUtcNow();
                 if (queuedEpoch >= 0 && context.Session.Ready &&
                     (queuedMileage != (state.Active && town.MileageAvailable) ||
                      queuedEndless != context.Session.EndlessAdventureActive ||
                      queuedNolan != nolanVisible || queuedSeriaLuck != seriaLuck.Active ||
                      queuedHongbao != hongbao.Active || queuedJonathan != jonathan.Active || queuedPromotionRevision != events.PromotionRevision ||
-                     NeedsStrongwayDisplay(strongway.Active) ||
+                     NeedsStrongwayDisplay(strongway.Active) || queuedEpicRoad != (epicRoad.Active && town.EpicRoadAvailable) ||
                      battlePassEpoch != context.Session.SelectionEpoch || battlePassActive != town.IsBattlePassEventActive(now))) pending.Writer.TryWrite(true);
-                long? next = new[] { state.Schedule, strongway.Schedule, seriaLuck.Schedule, hongbao.Schedule,
+                long? next = new[] { state.Schedule, strongway.Schedule, seriaLuck.Schedule, hongbao.Schedule, epicRoad.Schedule,
                     events.Read(ServerEventService.BattlePassId).Schedule,
                     events.Read(Game.Events.EndlessAdventurePolicy.EventId).Schedule,
                     events.Read(ServerEventService.WeeklyAttendanceId).Schedule }.Where(schedule => schedule.OverrideActive is null)
@@ -143,6 +146,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                     bool currentHongbao = events.Read(ServerEventService.GuildHongbaoId).Active;
                     bool currentJonathan = events.Read(ServerEventService.JonathanVisibilityId).Active;
                     bool strongwayCurrent = events.Read(ServerEventService.Strongway2019Id).Active;
+                    bool currentEpicRoad = events.Read(ServerEventService.EpicRoadId).Active && town.EpicRoadAvailable;
                     if (!selection.Ready || selection.Selected is null) continue;
                     bool currentAttendance = context.DailyAttendance?.Enabled == true;
                     bool CanSend() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == selection.SelectionEpoch);
@@ -150,7 +154,7 @@ internal sealed class ServerEventProjection : IAsyncDisposable
                         current == queuedMileage && currentNolan == queuedNolan && currentSeriaLuck == queuedSeriaLuck &&
                         currentHongbao == queuedHongbao && currentJonathan == queuedJonathan && queuedPromotionRevision == events.PromotionRevision &&
                         queuedEndless == context.Session.EndlessAdventureActive && queuedAttendance == currentAttendance &&
-                        !NeedsStrongwayDisplay(strongwayCurrent) &&
+                        !NeedsStrongwayDisplay(strongwayCurrent) && currentEpicRoad == queuedEpicRoad &&
                         battlePassEpoch == selection.SelectionEpoch && currentBattlePass == battlePassActive)
                     {
                         // 签到进度待刷新不代表整张活动目录变化，首次入城仍保持原有包序。

@@ -91,6 +91,10 @@ internal sealed partial class GameSession
         var strongwaySchedule = strongwayQuest ? CaptureStrongway2019QuestSchedule() : null;
         if (strongwayQuest && capture.Pending is null && !IsCurrentStrongway2019QuestSchedule(strongwaySchedule))
             return refusal with { Reason = "强者之路活动未开启" };
+        bool epicRoadQuest = QuestEpicRoad2019Entry.Supports(quest) && action != QuestLifecycleAction.Giveup;
+        var epicRoadSchedule = epicRoadQuest ? CaptureEpicRoad2019QuestSchedule() : null;
+        if (epicRoadQuest && capture.Pending is null && !IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule))
+            return refusal with { Reason = "星河裂缝活动未开启" };
         if (action == QuestLifecycleAction.Accept && !CanAcceptHiddenQuest(expected,quest,quests,capture.SelectionEpoch,capture.Phase))
             return refusal with {Reason="隐藏对话任务缺少当前场景开启许可"};
         // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
@@ -124,7 +128,7 @@ internal sealed partial class GameSession
                 plan = action switch
                 {
                     QuestLifecycleAction.Accept => QuestLifecyclePlan.Accept(expected, quest, quests, items, goldLimits, pieces, DateTimeOffset.UtcNow, grade,
-                        strongway2019Active: strongwayQuest),
+                        strongway2019Active: strongwayQuest, epicRoad2019Active: epicRoadQuest),
                     QuestLifecycleAction.Giveup => QuestLifecyclePlan.Giveup(expected, quest, quests, DateTimeOffset.UtcNow),
                     QuestLifecycleAction.Condition => ConditionPlan(),
                     _ => throw new NotSupportedException("客户端条件需经过类型及场景事实校验")
@@ -132,6 +136,8 @@ internal sealed partial class GameSession
                 plan.PvpRating = rank;
                 if (strongwayQuest)
                     plan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
+                if (epicRoadQuest)
+                    plan.RequiredEvent = new(epicRoadSchedule!, timeProvider ?? TimeProvider.System);
                 if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter))
                     return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "当前条件已由实际场景或库存满足，无需再次保存" };
             }
@@ -147,6 +153,9 @@ internal sealed partial class GameSession
             if (strongwayQuest && capture.Pending is null && (!IsCurrentStrongway2019QuestSchedule(strongwaySchedule) ||
                 plan.RequiredEvent is not { } required || !required.Matches(strongwaySchedule!)))
                 return refusal with { Reason = "强者之路活动前提已变化" };
+            if (epicRoadQuest && capture.Pending is null && (!IsCurrentEpicRoad2019QuestSchedule(epicRoadSchedule) ||
+                plan.RequiredEvent is not { } epicRequired || !epicRequired.Matches(epicRoadSchedule!)))
+                return refusal with { Reason = "星河裂缝活动前提已变化" };
             pendingQuestLifecycle = new(plan, capture.SelectionEpoch, capture.Phase, capture.Identity, condition);
             var commit = repository.CommitQuestLifecycle(owner, plan);
             var receipt = refusal with { Character = commit.Character, Commit = commit, Outcome = QuestLifecycleOutcome.Committed, Reason = "任务事务已提交" };
@@ -272,7 +281,8 @@ internal sealed partial class GameSession
                 condition is { Value: 1 } && quest.Condition != "[seeking]" ||
                 capture.Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 quest.Definition is not { Diagnostics.Length: 0 } || !QuestLifecyclePlan.SeekingSubtype(quest) ||
-                QuestEligibility.InspectResource(quest, strongway2019Active: strongwayQuest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
+                QuestEligibility.InspectResource(quest, strongway2019Active: strongwayQuest,
+                    epicRoad2019Active: epicRoadQuest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestHiddenEntry.Direct(quest,quests))
                 throw new InvalidDataException("客户端条件需要已确认类型和当前真实场景");
             uint scalar;

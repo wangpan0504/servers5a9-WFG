@@ -43,6 +43,10 @@ internal sealed record ServerOptions
     public int SessionTtlSeconds { get; init; } = 300;
     // 自制累计赠礼页面协议独立开关，不改变活动购买资格。
     public bool EnablePromotionPage { get; init; }
+    // 星河裂缝运行开关；默认关闭，开启后由 Runtime 显式装配活动目录、商店门禁和 10005 状态。
+    public bool EpicRoad2019Enabled { get; init; }
+    // 本服模拟装备奖励独立开关；活动与此开关同时开启才装配。
+    public bool EpicRoad2019SimulatedDropsEnabled { get; init; }
     // 普通副本加载后只读独立宿主资格探测；默认 Off，不改变入场、权威或结算。
     public bool EnableHostedDungeonEligibility { get; init; }
     public string? HostedDungeonEligibilityHost { get; init; }
@@ -83,6 +87,18 @@ internal sealed record ServerOptions
                     "--battle-pass-season" => value with { BattlePassSeasonKey = !string.IsNullOrWhiteSpace(argument) && argument == argument.Trim()
                         ? argument : throw new InvalidDataException(name + " 必须为非空且无首尾空白的稳定赛季标识") },
                     "--promotion-page" => value with { EnablePromotionPage = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--epic-road-2019" => value with { EpicRoad2019Enabled = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--epic-road-2019-simulated-drops" => value with { EpicRoad2019SimulatedDropsEnabled = argument switch
                     {
                         "Off" => false,
                         "On" => true,

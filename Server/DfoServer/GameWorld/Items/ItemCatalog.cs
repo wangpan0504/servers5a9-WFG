@@ -678,6 +678,7 @@ internal sealed partial class ItemCatalog
             cargoTarget = 120;
         var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
+        var expiration = ItemExpiration.Parse(text);
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
@@ -703,13 +704,15 @@ internal sealed partial class ItemCatalog
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
             AccountMaterial = ReadAccountMaterial(id, isEquipment, kind, text, stackLimit),
+            AccountCommonItem = !isEquipment && StackableDefinition(id)?.HasCommonInventory == true,
             AccountBoundAfterTrade = accountTrade is not null,
             AccountBindingTradeLimit = accountTrade?.Count ?? 0,
             PersonalCargoUpgradeTarget = cargoTarget,
             AdvancesPersonalCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var cargoAction) &&
                 StackableActionCatalog.Arguments(cargoAction) is { Label: "[upgrade cargo]", Parameters.Count: 0 },
-            ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
-            Expiration = ItemExpiration.Parse(text),
+            ShopPrice = EpicRoad2019ShopLimits.Apply(id, ItemShopPrice.Parse(text, isEquipment, equipmentSellRate)),
+            Expiration = EpicRoad2019ItemLifetime.Restore(id, expiration),
+            EpicRoad2019FixedExpirationRestored = EpicRoad2019ItemLifetime.Applies(id, expiration.AbsoluteTime),
             RefinementTicket = isEquipment ? null : RefinementTicketDefinition.Parse(text),
             CharacterSlotMaximum = name == "角色栏扩展券" &&
                 int.TryParse(Regex.Match(text.Section("explain"), @"总上限为\s*(\d+)").Groups[1].Value, out int maxSlots) ? maxSlots : 0,

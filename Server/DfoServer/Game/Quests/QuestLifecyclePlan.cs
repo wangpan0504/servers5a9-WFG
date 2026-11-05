@@ -160,9 +160,10 @@ internal sealed class QuestLifecyclePlan
 
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null,
-        bool strongway2019Active = false)
+        bool strongway2019Active = false, bool epicRoad2019Active = false)
     {
-        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog, strongway2019Active: strongway2019Active);
+        var eligibility = QuestEligibility.Evaluate(expected, quest, catalog,
+            strongway2019Active: strongway2019Active, epicRoad2019Active: epicRoad2019Active);
         if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
             !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
             throw new InvalidDataException(eligibility.Reason);

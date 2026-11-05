@@ -65,7 +65,43 @@ internal static class DungeonDropGenerationPlanTests
         Reject<InvalidDataException>(() => DungeonDropCreation.Create(expired, 1, _ => 0, deadline),
             "底层创建仍拒绝过期资产，不借掉落容错延长其它入口期限");
         EpicDropBonus(stack, equipment);
+        SourceRestrictions(stack, equipment);
         Console.WriteLine($"PASS {Count - before} 完整掉落生成数量、未命中及独立装备属性断言");
+    }
+
+    static void SourceRestrictions(ItemTemplate stack, ItemTemplate equipment)
+    {
+        var epic = equipment with { Rarity = 4 };
+        var rare = equipment with { Id = 2001, Rarity = 2 };
+        var material = stack with { Rarity = 4 };
+        DungeonDropTrial Drop(ItemTemplate item, int count = 1) => new(10000,
+            new DungeonItemDropPool([new DungeonWeightedDropItem(item, 1)]), count, count, GrowthContractEligible: true);
+        var original = new DungeonDropGenerationPlan("星河裂缝来源限制合成夹具",
+            [Drop(epic, 2), Drop(rare), Drop(material), new(10000, null, 1, 1, new DungeonDropGoldReference(95, 100, 0))]);
+        var restricted = original.WithDisjointRestrictions(ImmutableHashSet.Create(4));
+        int draws = 0, normalDraws = 0;
+        var drops = restricted.WithGrowthContract(10).WithEpicDropBonus(100)
+            .Generate(_ => { draws++; return 0; }, DateTimeOffset.UnixEpoch);
+        var normal = original.WithGrowthContract(10).WithEpicDropBonus(100)
+            .Generate(_ => { normalDraws++; return 0; }, DateTimeOffset.UnixEpoch);
+        That(drops.Take(2).All(row => row.Item!.DisjointForbidden) &&
+            drops.Skip(2).Where(row => !row.IsGold).All(row => !row.Item!.DisjointForbidden),
+            "活动来源只限制声明稀有度的装备，多件逐一标记，材料和金币不附加限制");
+        That(normal.Where(row => !row.IsGold).All(row => !row.Item!.DisjointForbidden) && !epic.DisjointForbidden &&
+            original.MaximumObjects == restricted.MaximumObjects && draws == normalDraws &&
+            normal.Zip(drops).All(pair => pair.First.IsGold ? pair.First == pair.Second :
+                pair.First.Item == pair.Second.Item! with { DisjointForbidden = false }),
+            "来源限制不改共享模板、普通掉落、数量、品质、金币或抽样次数，加成后仍保留");
+        var restored = System.Text.Json.JsonSerializer.Deserialize<DfoServer.Game.Inventory.Models.ItemCore>(
+            System.Text.Json.JsonSerializer.Serialize(drops[0].Item));
+        That(restored == drops[0].Item && restored!.DisjointForbidden && !restored.DestructionSoulForbidden,
+            "活动史诗来源限制沿已有Core序列化恢复，不借用未知客户端字段或禁止出售");
+        var filtered = new DungeonDropGenerationPlan("活动来源保留玩家掉落过滤",
+            [Drop(equipment with { Rarity = 0 }), Drop(stack with { Kind = ItemKind.Material, Rarity = 0 })])
+            { ExcludeLowEquipment = true, ExcludeLowMaterials = true };
+        That(filtered.Generate(_ => 0, DateTimeOffset.UnixEpoch).IsEmpty &&
+            filtered.WithDisjointRestrictions(ImmutableHashSet.Create(4)).Generate(_ => 0, DateTimeOffset.UnixEpoch).IsEmpty,
+            "附加活动禁分解来源不恢复玩家已过滤的低稀有度装备和材料");
     }
 
     static void EpicDropBonus(ItemTemplate stack, ItemTemplate equipment)

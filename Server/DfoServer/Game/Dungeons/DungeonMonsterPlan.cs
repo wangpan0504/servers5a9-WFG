@@ -217,7 +217,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             var source = room.Monsters[index];
             var raw = source.RawValues;
             if (raw.Count != 8 || raw[0] != source.MonsterId || source.MonsterId < 0
-                || source.PlacementKind != "[fixed]" || source.RankKind is not ("[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
+                || source.PlacementKind != "[fixed]" || source.RankKind is not (null or "[normal]" or "[named]" or "[champion]" or "[super champion]" or "[boss]") ||
+                source.RankKind is null && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
                 source.RankKind == "[named]" && (source.NpcParameter.HasValue || source.Modifiers.Count != 0 || source.RankParameterCount.HasValue) ||
                 !(source.NpcParameter.HasValue
                     ? source.Modifiers is ["[NPC]"] || source.Modifiers is ["[NPC]", "[dummy]"]
@@ -245,6 +246,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (nextKey > ushort.MaxValue)
                 throw new DungeonObjectKeyOverflowException("房间怪物对象 key 超出 ushort 容量");
             // Full03 0425C88D先置模板+24=0；0425D27B的未匹配rank成功尾部保留0。
+            // 缺rank闭合末行同样保留原生初值0；资源字段仍为null，不补normal或未消费后缀。
             // 仅兼容真实450001的裸[named]，保留原标记；不放开任意未知品级或附加效果。
             // 资源品级经模板+24进入客户端记录+14：普通0、精英1/2、Boss3。
             // 绝对等级保留完整整数，相对等级使用已核验基准；原始行始终保留。

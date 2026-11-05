@@ -8,6 +8,7 @@ internal static partial class DatabaseSchemaTests
     // 只用于把当前空团本夹具还原为真实v108及更早结构；禁止丢弃业务事实。
     internal static void RewindRaidLifecycle(SqliteConnection db)
     {
+        RewindAccountCommon45(db);
         RemovePcRoomSchema(db);
         Execute(db, "DROP INDEX IF EXISTS character_raid_reward_epoch");
         if (Query(db, "SELECT count(*) FROM pragma_table_info('character_raid_reward_receipts') WHERE name='reward_epoch'") is 1L)

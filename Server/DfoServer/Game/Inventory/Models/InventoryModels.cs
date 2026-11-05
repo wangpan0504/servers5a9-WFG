@@ -21,6 +21,7 @@ internal enum InventoryListType : byte
     TitleDespair = 21,
     TitleEvent = 22,
     GuildMedal = 38,
+    AccountCommon = 45,
     Talisman = 46
 }
 

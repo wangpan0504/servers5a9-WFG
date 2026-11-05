@@ -9,6 +9,7 @@ internal static class ItemSlotBoundService
     public const short QuickSlotStart = 3;
     public const short QuickSlotEnd = 8;
     public const ushort AvatarCapacity = 210;
+    public const short AccountCommonCapacity = 50;
     public const short GuildMedalEquipmentSlot = 32;
     public const short TalismanEquipmentStart = 34, TalismanEquipmentEnd = 35;
     public const short EquippedRuneStart = 210, EquippedRuneEnd = 215;
@@ -66,6 +67,10 @@ internal static class ItemSlotBoundService
 
     public static bool Allows(ushort expansion, InventorySlot slot, ItemKind kind)
     {
+        if (slot.List == InventoryListType.AccountCommon)
+            return slot.Index is >= 0 and < AccountCommonCapacity && kind is
+                ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or ItemKind.CreatureConsumable or
+                ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem or ItemKind.Rune;
         // 实际分类容量与允许的称号模板由称号簿用例再校验。
         if (slot.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
             return kind == ItemKind.Equipment && slot.Index is >= 0 and < 256;

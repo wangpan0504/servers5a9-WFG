@@ -272,6 +272,7 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public Action<DfoServer.Game.Dungeons.DungeonEntryCharge>? BeforeDungeonEntryCommit { get; set; }
         public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
             inner.ResetDailyFatigue(owner, expected, day, now);
         public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);
@@ -446,7 +447,22 @@ internal static class QuestCompletionRepositoryTests
             inner.ResetRewardLimits(owner);
         public DfoServer.Game.Dungeons.DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonEntry(owner, expected, nextObjectKey, weekly);
-        public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge)
+        {
+            BeforeDungeonEntryCommit?.Invoke(charge);
+            return inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        }
+        public DfoServer.Game.Dungeons.DungeonIncountUsage LoadDungeonIncount(AccountOwners.Lease owner,
+            ushort characterId, int dungeon, DfoServer.Game.Dungeons.DungeonIncountPeriod now) =>
+            inner.LoadDungeonIncount(owner, characterId, dungeon, now);
+        public int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) =>
+            inner.LoadAccountDungeonIncount(owner, dungeon, period);
+        public DfoServer.Game.Dungeons.DungeonIncountCommit? CommitDungeonIncountEntry(AccountOwners.Lease owner,
+            Character expected, int dungeon, DfoServer.Game.Dungeons.DungeonIncountPeriod now,
+            DfoServer.GameWorld.Dungeons.DungeonIncountRow? row, InventoryPlan? consumption,
+            System.Collections.Immutable.ImmutableArray<DfoServer.Game.Dungeons.AccountIncountCharge> account = default,
+            bool increment = true, bool check = true) =>
+            inner.CommitDungeonIncountEntry(owner, expected, dungeon, now, row, consumption, account, increment, check);
         public DfoServer.Game.Guild.GuildDungeonAdmission? PrepareGuildDungeonEntry(AccountOwners.Lease owner, ushort characterId,
             uint dungeonId, DfoServer.GameWorld.Guilds.GuildDungeonCatalog catalog) => inner.PrepareGuildDungeonEntry(owner, characterId, dungeonId, catalog);
         public int ReadGuildDungeonPartyCount(AccountOwners.Lease owner, ushort characterId,

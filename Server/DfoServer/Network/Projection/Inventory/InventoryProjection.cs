@@ -82,7 +82,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             // 与登录全量同一套编码：清空条目为目标 slot + itemId=-1，因此解引用走既有 Delta 语义，不手搓包体。
             changedSlots = changedSlots
                 .Concat(current.Inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.Avatar or
-                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.PersonalCargo).Select(item => item.Position))
+                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.AccountCommon or InventoryListType.PersonalCargo).Select(item => item.Position))
                 .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
                 .Distinct().ToArray();
         }
@@ -108,6 +108,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Pet), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
+            if (slots.Any(slot => slot.List == InventoryListType.AccountCommon))
+                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
         }
         else if (plan.Reason == "rune_box_open")
         {
@@ -115,6 +117,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             // 只发差量会留下客户端预置的奖励槽。
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
+            if (slots.Any(slot => slot.List == InventoryListType.AccountCommon))
+                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
         }
         else if (reloadPersonalCargo)
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_sorted", CanSend);
@@ -217,7 +221,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             plan.Reason is "magic_box_open" or "rune_box_open";
         var lockSlots = reloadLocks ? changedSlots.Concat(current.Inventory.Items.Where(item =>
             plan.Reason == "magic_box_open" && item.Position.List is (InventoryListType.Main or InventoryListType.PersonalCargo or
-                InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman) ||
+                InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.AccountCommon) ||
             rebuildMoveList && item.Position.List == silentMoveList ||
             (mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
             plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion && item.Position.List == InventoryListType.Avatar ||

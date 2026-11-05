@@ -440,14 +440,18 @@ internal sealed class TownCatalog
         area.Map(completed).Links.Any(l => l.Gate.Door && l.Town == target.Town && l.Area == target.Area);
 
     public bool CanTravel(Location current, Location target, int level, IReadOnlySet<int>? completed = null, Location? roomReturn = null) => Admission(current, target, level, completed, roomReturn) == "ready";
-    public static TownCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null)
+    public static TownCatalog Load(PvfArchive pvf, DfoServer.GameWorld.Maps.MapGeometryConfig? geometry = null,
+        bool epicRoad2019Enabled = false)
     {
         geometry ??= DfoServer.GameWorld.Maps.MapGeometryConfig.Empty;
         var areas = new Dictionary<(byte, byte), TownArea>();
         var maps = new Dictionary<string, TownMap>();
         var texts = new Dictionary<string, MapText>();
         var episodes = new HashSet<byte>();
-        foreach (var entry in List(pvf.ReadText("town/town.lst")))
+        var townIndex = List(pvf.ReadText("town/town.lst"));
+        if (epicRoad2019Enabled)
+            townIndex = Events.EpicRoad2019ResourceIndex.Restore(pvf, "town", townIndex, relativePaths: true);
+        foreach (var entry in townIndex)
         {
             byte town = checked((byte)entry.Key);
             string text = pvf.ReadText("town/" + entry.Value);
@@ -487,6 +491,8 @@ internal sealed class TownCatalog
         var equipmentTransportNpcs = new HashSet<uint>();
         var equipmentResealNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
+        if (epicRoad2019Enabled)
+            npcList = Events.EpicRoad2019ResourceIndex.Restore(pvf, "npc", npcList, relativePaths: true);
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
         {
             if (!npcList.TryGetValue(checked((int)id), out var npcPath))
@@ -512,6 +518,8 @@ internal sealed class TownCatalog
         }
 
         var worldPaths = List(pvf.ReadText("worldmap/worldmap.lst"));
+        if (epicRoad2019Enabled)
+            worldPaths = Events.EpicRoad2019ResourceIndex.Restore(pvf, "worldmap", worldPaths, relativePaths: true);
         var dungeonMaps = new Dictionary<int,TownDungeonMap>();
         foreach (int id in areas.Values.Select(area => area.DungeonWorldMap).OfType<int>().Distinct())
         {
