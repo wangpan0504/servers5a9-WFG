@@ -488,7 +488,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         var totals = new Dictionary<int, int>();
         var avatarRolls = new List<(BoosterReward Row, int Copies)>();
-        var avatarRewardIds = new HashSet<int>();
+        var avatarRewardCounts = new Dictionary<int, int>();
         byte[]? trace = null;
         try
         {
@@ -620,8 +620,13 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             }
         }
         else
-            grants.AddRange(totals.Where(pair => !avatarRewardIds.Contains(pair.Key))
-                .Select(pair => new InventoryReward(pair.Key, pair.Value)));
+            foreach (var (id, total) in totals)
+            {
+                // 同ID可以同时命中普通行与带修饰行，只扣除稍后单独发放的显式实例份数。
+                int count = total - avatarRewardCounts.GetValueOrDefault(id);
+                if (count > 0)
+                    grants.Add(new(id, count));
+            }
         var avatarInstances = new List<InventoryItem>();
         if (avatarRolls.Count > 0)
         {
@@ -800,8 +805,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 return;
             if (row.AvatarAbility is not null || row.AvatarPeriodDays is not null)
             {
-                avatarRolls.Add((row, checked((int)checked((long)row.Count * draws))));
-                avatarRewardIds.Add(row.ItemId);
+                int copies = checked((int)checked((long)row.Count * draws));
+                avatarRolls.Add((row, copies));
+                avatarRewardCounts[row.ItemId] = checked(avatarRewardCounts.GetValueOrDefault(row.ItemId) + copies);
             }
             Add(row.ItemId, row.Count, draws);
         }
