@@ -175,4 +175,6 @@ internal interface ICharacterRepository
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
     Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = 10_000_000) =>
         throw new NotSupportedException("仓库不支持角色成长胶囊");
+    Character ConvertPvpPrivateToNormal(AccountOwners.Lease owner, Character expected) =>
+        throw new NotSupportedException("仓库不支持决斗专用角色转普通角色");
 }

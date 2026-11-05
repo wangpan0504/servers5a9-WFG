@@ -28,6 +28,30 @@ internal sealed class PvpArenaHandler(PvpArenaService arena, PvpTrainingHandler 
         commands.Register(CmdPacketType.PVP_TIME_OUT, TimeoutAsync, nameof(PvpArenaHandler));
         commands.Register(CmdPacketType.END_PVP_RESULT, ResultEndAsync, nameof(PvpArenaHandler));
         commands.Register(CmdPacketType.SET_PVP_TOTAL_MATCH_CHARAC_ORDER, TotalOrderAsync, nameof(PvpArenaHandler));
+        commands.Register(CmdPacketType.DISJOINT_COLOSSEUM_ITEM, DisjointColosseumItemAsync, nameof(PvpArenaHandler));
+        commands.Register(CmdPacketType.COLOSSEUM_SEASON3_REQUEST_GARAPON_JPN, ColosseumGaraponAsync, nameof(PvpArenaHandler));
+    }
+
+    async Task<CommandResult> DisjointColosseumItemAsync(GameConnectionContext context, Packet packet)
+    {
+        if (context.Session.Selected is null || packet.Body.Length < 2)
+        {
+            await context.Reply(CmdPacketType.DISJOINT_COLOSSEUM_ITEM, [0, 19, 0], "colosseum_disjoint_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.DISJOINT_COLOSSEUM_ITEM, [1], "colosseum_disjoint_ack");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ColosseumGaraponAsync(GameConnectionContext context, Packet packet)
+    {
+        if (context.Session.Selected is null)
+        {
+            await context.Reply(CmdPacketType.COLOSSEUM_SEASON3_REQUEST_GARAPON_JPN, [0, 19, 0], "colosseum_garapon_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.COLOSSEUM_SEASON3_REQUEST_GARAPON_JPN, [1, 0, 0, 0, 0], "colosseum_garapon_ack");
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> CreateAsync(GameConnectionContext context, Packet packet)

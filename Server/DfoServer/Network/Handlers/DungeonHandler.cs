@@ -66,6 +66,27 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.BLOOD_ROUND_UI_PREPARE_FINISH_, AltarPreparedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SELECT_ULTIMATE_DIFFICULTY, AltarDifficultyAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, SelectDazzlementRewardAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
+    }
+
+    async Task<CommandResult> SelectDazzlementRewardAsync(GameConnectionContext context, Packet request)
+    {
+        byte[] body = request.Body;
+        if (body.Length == 0 || body[0] > DazzlementTowerProgress.MaxSelectionLimit || body.Length != 1 + body[0])
+        {
+            await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(19), "dazzlement_reward_select_rejected");
+            return CommandResult.Handled;
+        }
+        byte[] slots = body[1..];
+        if (slots.Distinct().Count() != slots.Length || slots.Any(slot => slot >= DazzlementTowerProgress.MaxStashCards))
+        {
+            await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(19), "dazzlement_reward_select_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.SELECT_TOWER_OF_DAZZLEMENT_REWARD, DazzlementTowerPackets.SelectRewardReply(1, slots), "dazzlement_reward_selected");
+        await context.Notify(NotiPacketType.TOWER_OF_DAZZLEMENT_INFO, DazzlementTowerPackets.SelectedRewards(slots), "dazzlement_selected_rewards");
+        log.Write("dazzlement_reward_selected", new { Connection = context.Id, Character = context.Session.Selected?.Id, Slots = slots });
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> SequentialInfoAsync(GameConnectionContext context, Packet request)

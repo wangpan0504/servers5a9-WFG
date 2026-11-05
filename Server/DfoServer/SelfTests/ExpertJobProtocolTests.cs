@@ -92,6 +92,25 @@ internal static class ExpertJobProtocolTests
         Reject<InvalidDataException>(() => ExpertJobRequests.ReadEmpty([1]), "C2S 239/600 拒绝多余字节");
         Reject<InvalidDataException>(() => ExpertJobRequests.ReadCreateStore([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
             "C2S 598 模式只接受 0 或 3");
+        var board = new DfoServer.Game.ExpertJob.ExpertJobStoreBoard();
+        var privateCreate = ExpertJobRequests.ReadCreatePrivateStore([
+            4, 0, 0, 0, (byte)'S', (byte)'h', (byte)'o', (byte)'p',
+            1,
+            0, 0, 9, 0, 0xD5, 0x0B, 0, 0, 5, 0, 0, 0, 0xE8, 0x03, 0, 0
+        ]);
+        That(privateCreate.Title == "Shop" && privateCreate.Offers is [{ StallSlot: 0, SourceSlot: 9, ItemId: 3029, Count: 5, UnitPrice: 1000 }],
+            "C2S 85 个人摆摊请求解析标题与上架栏位");
+        var privateRecord = new DfoServer.Game.ExpertJob.PrivateStoreRecord(77, privateCreate.Title, 38, 1, [.. privateCreate.Offers]);
+        board.OpenPrivateStore(privateRecord);
+        That(board.TryGetPrivateStore(77, out var loadedPrivate) &&
+            loadedPrivate.TryPurchase(0, 2, 1000, out var boughtOffer, out var updatedPrivate, out uint totalPaid) &&
+            boughtOffer.Count == 2 && totalPaid == 2000 && updatedPrivate.Offers.Single().Count == 3 &&
+            board.TryUpdatePrivateStore(loadedPrivate, updatedPrivate),
+            "个人摆摊部分购买扣减余量并更新摊位看板");
+        var buyReq = ExpertJobRequests.ReadBuyPrivateStoreItem([77, 0, 0, 0xD5, 0x0B, 0, 0, 2, 0, 0, 0, 0xE8, 0x03, 0, 0]);
+        That(buyReq is { OwnerActor: 77, StallSlot: 0, ItemId: 3029, Count: 2, UnitPrice: 1000 }, "C2S 82 个人摆摊购买请求解析");
+        That(ExpertJobPackets.PrivateStoreBought(77, 0, 3, 8000) is [1, 77, 0, 0, 3, 0, 0, 0, 0x40, 0x1F, 0, 0],
+            "ACK 82 个人摆摊购买应答包体");
         Console.WriteLine($"PASS {Count - checks} 副职业 C2S/ACK 闭合包体断言");
     }
 }

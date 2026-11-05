@@ -77,6 +77,43 @@ internal sealed class AuctionHandler(ItemCatalog items, AuctionService auctions,
         // 334 的请求布局仍只有参考实现（前导与挂牌 id 偏移自标未定），保持「只抓请求体」的桩。
         commands.Register(CmdPacketType.AUCTION_BIDDING, Bidding, nameof(AuctionHandler));
         commands.Register(CmdPacketType.AUCTION_BUY_ITEM_APIECE, BuyItemApiece, nameof(AuctionHandler));
+        commands.Register(CmdPacketType.BID_LEGENDARY_AUCTION, BidLegendaryAuction, nameof(AuctionHandler));
+        commands.Register(CmdPacketType.ROGER_LEVINE_AUCTION_BUYNOW, RogerLevineBuyNow, nameof(AuctionHandler));
+        commands.Register(CmdPacketType.ROGER_LEVINE_AUCTION_BIDDING, RogerLevineBidding, nameof(AuctionHandler));
+    }
+
+    readonly SpecialAuctionBoard specialAuctions = new();
+
+    async Task<CommandResult> BidLegendaryAuction(GameConnectionContext context, Packet packet) =>
+        await HandleSpecialAuctionAsync(context, packet, CmdPacketType.BID_LEGENDARY_AUCTION, buyNow: false);
+
+    async Task<CommandResult> RogerLevineBuyNow(GameConnectionContext context, Packet packet) =>
+        await HandleSpecialAuctionAsync(context, packet, CmdPacketType.ROGER_LEVINE_AUCTION_BUYNOW, buyNow: true);
+
+    async Task<CommandResult> RogerLevineBidding(GameConnectionContext context, Packet packet) =>
+        await HandleSpecialAuctionAsync(context, packet, CmdPacketType.ROGER_LEVINE_AUCTION_BIDDING, buyNow: false);
+
+    async Task<CommandResult> HandleSpecialAuctionAsync(GameConnectionContext context, Packet packet, CmdPacketType opcode, bool buyNow)
+    {
+        var character = context.Session.Selected;
+        if (character is null || packet.Body.Length < 8)
+        {
+            await context.Reply(opcode, [0, AuctionBuyErrors.Generic, 0], "special_auction_rejected");
+            return CommandResult.Handled;
+        }
+        int auctionId = BitConverter.ToInt32(packet.Body, 0);
+        int amount = BitConverter.ToInt32(packet.Body, 4);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        bool ok = buyNow
+            ? specialAuctions.TryBuyNow(auctionId, character.Id, character.Name, amount, now, out _)
+            : specialAuctions.TryPlaceBid(auctionId, character.Id, character.Name, amount, now, out _);
+        if (!ok || amount <= 0 || character.Inventory.Gold < (uint)amount)
+        {
+            await context.Reply(opcode, [0, AuctionBuyErrors.Generic, 0], "special_auction_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(opcode, [1], "special_auction_accepted");
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> SearchByItemKey(GameConnectionContext context, Packet packet) => SearchAsync(context, packet, byItemKey: true);

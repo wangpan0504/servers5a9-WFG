@@ -33,7 +33,28 @@ internal static class AuctionListingTests
         SpecialAndTitleLeavesAndSort();
         SeedPool();
         InvalidDraft();
+        GoldConsignmentAndSpecialAuction();
         Console.WriteLine($"PASS {Count - checks} auction listing read assertions");
+    }
+
+    static void GoldConsignmentAndSpecialAuction()
+    {
+        That(AuctionGoldTickets.TryGetByCategory(40101, out var firstTicket) && firstTicket.ItemId == 2681725 && firstTicket.FaceGold == 1_000_000 &&
+            AuctionGoldTickets.TryGetByCategory(40117, out var lastTicket) && lastTicket.ItemId == 2683073 && lastTicket.FaceGold == 200_000_000 &&
+            AuctionGoldTickets.TryGetByItemId(2681734, out var tenMillion) && tenMillion.FaceGold == 10_000_000 &&
+            !AuctionGoldTickets.TryGetByCategory(40100, out _),
+            "金币寄售17档面额分类(40101..40117)与金币券模板ID精确双向映射");
+        var board = new SpecialAuctionBoard();
+        board.Publish(new(1, 101010912, 1, 50_000, 0, 100_000, null, "", 2000));
+        That(!board.TryPlaceBid(1, 10, "BidderA", 49_999, 1000, out _) &&
+            board.TryPlaceBid(1, 10, "BidderA", 60_000, 1000, out var afterBid) &&
+            afterBid.CurrentBid == 60_000 && afterBid.HighestBidderId == 10 && !afterBid.Settled,
+            "特殊拍卖竞价校验最低起拍与递增出价");
+        That(!board.TryPlaceBid(1, 11, "BidderB", 60_000, 1000, out _) &&
+            board.TryBuyNow(1, 11, "BidderB", 100_000, 1000, out var afterBuyout) &&
+            afterBuyout.Settled && afterBuyout.HighestBidderId == 11 &&
+            !board.TryPlaceBid(1, 12, "BidderC", 100_000, 1000, out _),
+            "特殊拍卖一口价成交后锁定拍品并拒绝后续竞价");
     }
 
     static void Seed()

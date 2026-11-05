@@ -7,6 +7,8 @@ internal readonly record struct ExpertJobEnchantStoreRequest(ushort First, uint 
 internal readonly record struct ExpertJobDisjointRequest(ushort OwnerActor, ushort SourceSlot, byte SourceList);
 internal readonly record struct ExpertJobCreateStoreRequest(byte Mode, string Name, uint First, ushort Second, ushort Third, ushort Fourth);
 internal readonly record struct ExpertJobExtractionRequest(byte ExtractorType, short ExtractorSlot, byte TargetList, short TargetSlot);
+internal readonly record struct PrivateStoreCreateRequest(string Title, DfoServer.Game.ExpertJob.PrivateStoreOffer[] Offers);
+internal readonly record struct PrivateStoreBuyRequest(ushort OwnerActor, byte StallSlot, int ItemId, int Count, uint UnitPrice);
 
 internal static class ExpertJobRequests
 {
@@ -78,6 +80,47 @@ internal static class ExpertJobRequests
     public static void ReadEmpty(byte[] body)
     {
         if (body.Length != 0) throw new InvalidDataException("该副职业命令正文必须为空");
+    }
+
+    public static PrivateStoreCreateRequest ReadCreatePrivateStore(byte[] body)
+    {
+        using var reader = Open(body, 5);
+        int titleLen = reader.ReadInt32();
+        if (titleLen is < 0 or > 64 || reader.BaseStream.Length - reader.BaseStream.Position < titleLen + 1)
+            throw new InvalidDataException("个人摆摊标题长度非法");
+        string title = titleLen == 0 ? "" : CharacterName.Encoding.GetString(reader.ReadBytes(titleLen));
+        byte count = reader.ReadByte();
+        if (count == 0 || count > DfoServer.Game.ExpertJob.PrivateStoreRecord.MaxOffers ||
+            reader.BaseStream.Length - reader.BaseStream.Position != count * 16)
+            throw new InvalidDataException("个人摆摊商品列表长度非法");
+        var offers = new DfoServer.Game.ExpertJob.PrivateStoreOffer[count];
+        for (int i = 0; i < count; i++)
+        {
+            byte stallSlot = reader.ReadByte();
+            byte sourceList = reader.ReadByte();
+            short sourceSlot = reader.ReadInt16();
+            int itemId = reader.ReadInt32();
+            int itemCount = reader.ReadInt32();
+            uint unitPrice = reader.ReadUInt32();
+            if (itemId <= 0 || itemCount <= 0 || unitPrice == 0)
+                throw new InvalidDataException("个人摆摊商品条目非法");
+            offers[i] = new(stallSlot, sourceList, sourceSlot, itemId, itemCount, unitPrice);
+        }
+        RequireEnd(reader);
+        return new(title, offers);
+    }
+
+    public static PrivateStoreBuyRequest ReadBuyPrivateStoreItem(byte[] body)
+    {
+        using var reader = Open(body, 15);
+        var request = new PrivateStoreBuyRequest(
+            reader.ReadUInt16(),
+            reader.ReadByte(),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadUInt32());
+        RequireEnd(reader);
+        return request;
     }
 
     static BinaryReader Open(byte[] body, int minimum)
