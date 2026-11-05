@@ -77,8 +77,9 @@ internal sealed class BattlePassRewardService(BattlePassCatalog catalog, ItemCat
     BattlePassRewardResult PlanAll(Character character, BattlePassSeasonState state, byte passType, uint viewLevel)
     {
         int currentLevel = catalog.LevelAtTotalExperience((ulong)state.TotalExperience);
-        // 原生全领携带点击时的type/当前等级；它们不能提高权威资格。
-        if (passType != state.PassType || viewLevel != (uint)currentLevel)
+        // 2017一键按钮在页面创建时复制type和等级。豪华购买把资格改成1并把经验抬到40级后，
+        // 按钮仍发送旧快照。旧值不能提高权威资格，也不能截断或拒绝已解锁的全集。
+        if (passType > state.PassType || viewLevel > (uint)currentLevel)
             return BattlePassRewardResult.Reject(reason: "battle_pass_state_changed");
         var keys = ImmutableArray.CreateBuilder<BattlePassRewardKey>();
         var rewards = new List<InventoryReward>();
