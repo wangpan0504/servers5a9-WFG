@@ -173,4 +173,6 @@ internal interface ICharacterRepository
         DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period) => default;
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
+    Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = 10_000_000) =>
+        throw new NotSupportedException("仓库不支持角色成长胶囊");
 }

@@ -68,6 +68,38 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("熟练度状态已变化");
     }
 
+    public const uint GrowthCapsuleFullExperience = 10_000_000;
+
+    public Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = GrowthCapsuleFullExperience) => owner.Execute(() =>
+    {
+        var state = expected.DungeonState ?? throw new InvalidOperationException("成长胶囊缺少角色附属状态");
+        if (state.GrowthCapsuleExperience < requiredExperience)
+            throw new InvalidOperationException("成长胶囊经验未满");
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.ClaimGrowthCapsule");
+        using var tx = write.Transaction;
+        var current = Require(db, tx, owner.Account, expected.Name);
+        if (current.Id != expected.Id || current.Revision != expected.Revision || current.DungeonState != state)
+            throw new InvalidOperationException("成长胶囊角色状态已变化");
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", expected.Id);
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$revision", expected.Revision);
+        command.Parameters.AddWithValue("$oldCapsule", state.GrowthCapsuleExperience);
+        command.Parameters.AddWithValue("$newCapsule", state.GrowthCapsuleExperience - requiredExperience);
+        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("成长胶囊revision冲突");
+        command.CommandText = """
+            UPDATE character_dungeon_state SET capsule_experience=$newCapsule
+            WHERE character_id=$id AND account=$account AND capsule_experience=$oldCapsule
+            """;
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("成长胶囊经验已变化");
+        var committed = Require(db, tx, owner.Account, expected.Name);
+        tx.Commit();
+        return committed;
+    });
+
     public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null) => ReserveDungeonEntry(owner, expected, nextObjectKey, weekly).Character;
 

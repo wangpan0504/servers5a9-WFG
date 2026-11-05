@@ -14,6 +14,7 @@ internal sealed record TitleAchievementPlan(Character Before, InventoryPlan Inve
     ImmutableArray<int> Completed, ImmutableArray<TitlePostal> Postals, ImmutableArray<InventoryItem> PostalItems)
 {
     public ImmutableArray<FiendwarTitleCounter> FiendwarFacts { get; init; } = [];
+    public ImmutableArray<int> UnlockedEmotions { get; init; } = [];
     public bool Changed => Inventory.Changed || Before.TitleProgress.Count != Progress.Count ||
         Before.TitleProgress.Any(pair => Progress.GetValueOrDefault(pair.Key) != pair.Value) || !Before.TitleSections.SetEquals(Sections);
 }

@@ -44,6 +44,48 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.USE_RENAME_CARD, UseRenameCardAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHANGE_CHARAC_NAME, RenameCharacterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHARACTER_STATUS, CharacterStatusAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.GET_GROWTHCAPSULE, GetGrowthCapsuleAsync, nameof(CharacterHandler));
+    }
+
+    async Task<CommandResult> CharacterStatusAsync(GameConnectionContext context, Packet request)
+    {
+        if (context.Session.Selected is not { } character) return CommandResult.Unhandled;
+        if (request.Body.Length == 111)
+        {
+            if (!context.Session.RecordCharacterStatusSnapshot(request.Body)) return CommandResult.Unhandled;
+            await context.Reply(CmdPacketType.CHARACTER_STATUS, [1], "character_status_reported");
+            log.Write("character_status_reported", new { Connection = context.Id, Character = character.Id, Bytes = request.Body.Length });
+            return CommandResult.Handled;
+        }
+        if (request.Body.Length != 0) return CommandResult.Unhandled;
+        await context.Reply(CmdPacketType.CHARACTER_STATUS, [1], "character_status_ack");
+        await context.Notify(NotiPacketType.CHARACTER_STATUS, [], "character_status_request");
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> GetGrowthCapsuleAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 0) return CommandResult.Unhandled;
+        var result = context.Session.ClaimCharacterGrowthCapsule();
+        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.Phase == DfoServer.Game.Session.SessionPhase.Town &&
+            context.Owner.Generation == result.Generation && context.Session.SelectionEpoch == result.Epoch &&
+            ReferenceEquals(context.Session.Selected, result.Character));
+        if (!result.Accepted || result.Character is not { } character)
+        {
+            await context.Reply(CmdPacketType.GET_GROWTHCAPSULE, [0, (byte)result.Error, (byte)(result.Error >> 8)], "growth_capsule_rejected");
+            return CommandResult.Handled;
+        }
+        await context.Reply(CmdPacketType.GET_GROWTHCAPSULE, [1], "growth_capsule_claimed", Guard);
+        if (character.DungeonState is { } state && DfoServer.Game.Characters.CharacterExperienceNotice.ShouldPublish(character.Level))
+        {
+            var auxiliary = new DfoServer.Game.Characters.CharacterGrowthAuxiliaryState(
+                checked((uint)character.Inventory.WinPoints), state.GrowthCapsuleExperience, state.ProficiencyLevel, state.ProficiencyExperience);
+            await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(character.Level, character.Learning, auxiliary,
+                DfoServer.Game.Characters.CharacterExperienceDisplay.Ordinary), "growth_capsule_experience", Guard);
+        }
+        log.Write("growth_capsule_claimed", new { Connection = context.Id, Character = character.Id, character.Revision });
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> StoryDigestAsync(GameConnectionContext context, Packet request)

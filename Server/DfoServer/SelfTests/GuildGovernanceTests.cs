@@ -44,6 +44,22 @@ internal static class GuildGovernanceTests
         byte[] callback = GuildGovernancePackets.MemberGrade(2, "Member", 3);
         Bytes(callback, [1, 0, 2, 6, 0, 0, 0, (byte)'M', (byte)'e', (byte)'m', (byte)'b', (byte)'e', (byte)'r', 3],
             "126成功回调包含额外通知字节，不能只回请求正文");
+        That(GuildGovernanceRequests.TryMasterDelegate(Text("Member"), out region, out name) && region == 0 && name == "Member" &&
+            GuildGovernanceRequests.TryMasterDelegate([2, .. Text("Member")], out region, out name) && region == 2 && name == "Member" &&
+            !GuildGovernanceRequests.TryMasterDelegate([250, .. Text("Member")], out _, out _) &&
+            !GuildGovernanceRequests.TryMasterDelegate(Text(""), out _, out _),
+            "会长转让解析支持纯角色名与带区服前缀两种合同");
+        That(GuildGovernanceRequests.TryBoardPage([], out byte boardPage) && boardPage == 0 &&
+            GuildGovernanceRequests.TryBoardPage([3, 0, 0, 0], out boardPage) && boardPage == 3 &&
+            GuildGovernanceRequests.TryBoardWrite(Text("公会留言测试"), out string boardText) && boardText == "公会留言测试" &&
+            GuildGovernanceRequests.TryBoardDelete([7, 0, 0, 0], out uint postId) && postId == 7 &&
+            !GuildGovernanceRequests.TryBoardDelete([0, 0, 0, 0], out _),
+            "公会留言板翻页、发帖与删帖请求解析校验");
+        That(AgitWarRequests.IsTownInformation([2, 0, 0, 0]) &&
+            AgitWarRequests.TryQueryMode([0, 0, 0, 0], out uint agitMode) && agitMode == 0 &&
+            AgitWarPackets.Information(2, 99).SequenceEqual<byte>([1]) &&
+            AgitWarPackets.Information(0, 99).Length == 14,
+            "领地战详情查询保留子型2入城屏障单字节回包，同时支持子型0/1查询");
     }
 
     static void RunRepository()
@@ -240,6 +256,22 @@ internal static class GuildGovernanceTests
             That(Change(ordinary, transfer with { Target = new(master.Id, masterOwner.Account, master.Name) }).Success &&
                 State().MasterId == master.Id && repository.ReadGuildManagement(peerOwner, peer.Id)!.Grade == 4,
                 "新会长能转回原会长，身份以后续真实公会字段为准");
+
+            var online = new OnlineSessionDirectory();
+            var invitations = new GuildInvitations();
+            var permits = new GuildPermitRegistry();
+            var managementService = new GuildManagementService(repository, online, invitations, permits);
+            var governanceService = new GuildGovernanceService(repository, managementService);
+            var post1 = governanceService.WriteBoard(ordinary, "第一条会员留言");
+            var post2 = governanceService.WriteBoard(actor, "第二条会长置顶留言");
+            That(post1.Success && post2.Success && governanceService.OpenBoard(actor, 0) is { TotalCount: 2 } board &&
+                board.Posts[0].Content == "第二条会长置顶留言" && board.Posts[1].Content == "第一条会员留言",
+                "公会留言板按最新倒序分页返回帖子");
+            That(governanceService.DeleteBoard(ordinary, post2.Post!.PostId).Error == 36 &&
+                governanceService.DeleteBoard(ordinary, post1.Post!.PostId).Success &&
+                governanceService.DeleteBoard(actor, post2.Post.PostId).Success &&
+                governanceService.OpenBoard(actor, 0) is { TotalCount: 0 },
+                "普通会员仅能删除本人留言，会长与管理员可管理全部公会留言");
         }
         finally
         {

@@ -32,4 +32,33 @@ internal static class GuildGovernancePackets
         }
         return stream.ToArray();
     }
+
+    public static byte[] BoardPage(GuildBoardPage page)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(page.Page);
+        writer.Write(page.TotalCount);
+        writer.Write((byte)page.Posts.Count);
+        foreach (var post in page.Posts)
+        {
+            writer.Write(post.PostId);
+            writer.Write(post.AuthorCharacterId);
+            writer.Write(post.Grade);
+            writer.Write(post.CreatedAtUnix);
+            PacketEncoding.WriteString(writer, post.AuthorName);
+            PacketEncoding.WriteString(writer, post.Content);
+        }
+        return stream.ToArray();
+    }
+
+    public static byte[] BoardPostAck(uint postId)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write(postId);
+        return stream.ToArray();
+    }
 }
