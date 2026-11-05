@@ -62,9 +62,11 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
 {
     public const string Rule = "pvf-free-clear-card-v1";
     static readonly decimal[] DifficultyRates = [1.02m, 1.38m, 1.60m, 1.90m, 2.00m];
+    public ClearRewardLimitCatalog? ClearRewardLimits => tayberrsRewards?.Limits;
 
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
-        Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true, bool ancientBonus = false)
+        Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true,
+        bool ancientBonus = false, DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null)
     {
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
@@ -81,7 +83,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         var now = utcNow ?? DateTimeOffset.UtcNow;
         if (dungeon.IsTayberrs)
             return (tayberrsRewards ?? throw new NotSupportedException("泰波尔斯缺少材料奖励策略"))
-                .Prepare(dungeon, checked((int)Math.Max(1, amount)), Next, now);
+                .Prepare(dungeon, checked((int)Math.Max(1, amount)), Next, now, clearRewardUsage, itemRewardUsage);
         if (dungeon.IsModernDimension || dungeon.IsAncientInfinite)
         {
             var policy = dimensionRewards ?? throw new NotSupportedException("异界远古缺少专属翻牌策略");
@@ -170,10 +172,12 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     }
 
     public DungeonTournamentReward PrepareTournament(DungeonDefinition dungeon, byte difficulty,
-        Func<int, int>? draw = null, DateTimeOffset? utcNow = null)
+        Func<int, int>? draw = null, DateTimeOffset? utcNow = null, int clearedRounds = DungeonTournamentPlan.RoundCount)
     {
         var definition = dungeon.TournamentRewards ?? throw new InvalidDataException("大会缺少专属奖励表");
         if (dungeon.BasisLevel is not > 0) throw new InvalidDataException("大会缺少基准等级");
+        if (clearedRounds is < 0 or > DungeonTournamentPlan.RoundCount)
+            throw new InvalidDataException("大会已通关轮数越界");
         var randomSource = draw ?? random ?? Random.Shared.Next;
         int Next(int bound)
         {
@@ -210,11 +214,15 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             }
             return result.MoveToImmutable();
         }
-        return new(Row(4), Row(5));
+        ImmutableArray<DungeonCardReward> EmptyRow() =>
+            [new(0, null, DungeonTournamentRewards.Rule, dungeon.Path, now.ToUnixTimeSeconds()),
+             new(0, null, DungeonTournamentRewards.Rule, dungeon.Path, now.ToUnixTimeSeconds())];
+        return new(Row(clearedRounds), clearedRounds == DungeonTournamentPlan.RoundCount ? Row(5) : EmptyRow());
     }
 
     public DungeonCardOptions? PrepareOptions(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
-        CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null, byte job = 0, byte grow = 0)
+        CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null, byte job = 0, byte grow = 0,
+        DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null)
     {
         if (prices is null) return null;
         if (dungeon.BasisLevel is not > 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
@@ -228,12 +236,14 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         bool golden = !dungeon.DisablePaidCard && membership.GoldCardAvailable(now.ToUnixTimeSeconds());
         bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
         var paid = dungeon.IsTayberrs ? PrepareTayberrsPaid(dungeon, now)
-            : Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false) with { Gold = 0 };
+            : Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
+                clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
             membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
-                ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false) : null)
+                ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
+                    clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage) : null)
         {
             PaidDisabled = dungeon.DisablePaidCard,
             DoublePaidItems = doubled,

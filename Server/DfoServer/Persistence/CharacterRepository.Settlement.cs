@@ -227,6 +227,11 @@ internal sealed partial class CharacterRepository
         ApplyBattlePassTayberrsClear(db, tx, owner.Account, run, prepared);
         ApplyBattlePassFormalClear(db, tx, owner.Account, run, prepared);
         ApplyBattlePassDazzlementClear(db, tx, owner.Account, run, prepared);
+        if (!run.Entry.IsPractice && !run.Entry.IsTrainingRoom && !run.Entry.IsTutorial &&
+            !run.Entry.IsClassExperience && !run.Entry.IsQuestReplay && reward.TotalExperience > 0)
+            ApplyBattlePassExperienceGain(db, tx, owner.Account, "dungeon_settlement",
+                FormattableString.Invariant($"{expected.Id}:{identity.InstanceId:N}"), reward.TotalExperience,
+                prepared.BattlePassFormalClear?.Clock.GetUtcNow());
         ClearOrdinaryLuke(db, tx, owner, run);
         ClearPreyNormal(db, tx, owner, run);
         ClearAntonNormal(db, tx, owner, run);
@@ -377,4 +382,38 @@ internal sealed partial class CharacterRepository
             after.Core.Count - (before?.Core.Count ?? 0) != reward.Item.Count)
             throw new InvalidDataException("翻牌新增量、完整核心或原UID与冻结奖励不一致");
     }
+
+    public DungeonIncountUsage LoadClearRewardLimitUsage(AccountOwners.Lease owner, ushort characterId,
+        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period) => owner.Execute<DungeonIncountUsage>(() =>
+    {
+        if (limit.Dungeons.IsEmpty) return default;
+        using var db = database.Open();
+        using var command = db.CreateCommand();
+        command.Parameters.AddWithValue("$id", characterId);
+        command.Parameters.AddWithValue("$account", owner.Account);
+        string dungeonIn = string.Join(",", limit.Dungeons.Select((id, idx) =>
+        {
+            string name = "$d" + idx;
+            command.Parameters.AddWithValue(name, id);
+            return name;
+        }));
+        command.CommandText = $"""
+            SELECT r.plan_json
+            FROM character_dungeon_card_rewards r
+            JOIN character_dungeon_settlement_receipts s
+              ON s.character_id=r.character_id AND s.instance_id=r.instance_id
+            WHERE r.character_id=$id AND r.account=$account AND s.dungeon_id IN({dungeonIn})
+            """;
+        int daily = 0, weekly = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var card = JsonSerializer.Deserialize<DungeonCardReward>(reader.GetString(0));
+            if (card?.Item is null) continue;
+            var rowPeriod = DungeonIncountPolicy.Period(DateTimeOffset.FromUnixTimeSeconds(card.CreatedAt));
+            if (rowPeriod.Day == period.Day) daily++;
+            if (rowPeriod.Week == period.Week) weekly++;
+        }
+        return new(daily, weekly);
+    });
 }
