@@ -20,6 +20,7 @@ internal sealed partial class ItemCatalog
     readonly GameWorld.Creatures.CreatureCatalog? creatures;
     readonly EchonEquipmentCatalog? echon;
     readonly EchonEquipmentCatalog? newEchon;
+    readonly EquipmentQuestDropSetCatalog? questDropSets;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly object dropCandidatesGate = new();
     ImmutableArray<ItemTemplate> dropCandidateSnapshot;
@@ -90,7 +91,8 @@ internal sealed partial class ItemCatalog
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
         IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null,
         EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null,
-        IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null)
+        IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null,
+        EquipmentQuestDropSetCatalog? questDropSets = null)
     {
         pvf = archive;
         accountMaterialLimits = new(() => ReadAccountMaterialLimits(archive));
@@ -104,6 +106,7 @@ internal sealed partial class ItemCatalog
         this.creatures = creatures;
         this.echon = echon;
         this.newEchon = newEchon;
+        this.questDropSets = questDropSets;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
         ordinaryHellPasses = new(() => OrdinaryHellPassCost.Load(archive));
         runeSystem = new(() => RuneSystemFile.Parse(
@@ -679,6 +682,7 @@ internal sealed partial class ItemCatalog
         var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
         var expiration = ItemExpiration.Parse(text);
+        var partSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [];
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
@@ -689,7 +693,10 @@ internal sealed partial class ItemCatalog
                     pvf.ReadTokens(source), pvf.ResolveString),
                     pvf.ResolveString, "equipment/" + path) : 0,
             UsableExpired = isEquipment && text.Has("usable expired item"),
-            PartSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [],
+            PartSetIds = partSetIds,
+            QuestItemDropRateBonus = isEquipment || kind == ItemKind.Rune ? EquipmentQuestDropBonusFile.Read(text) : 0,
+            QuestItemDropSetBonuses = isEquipment && questDropSets is not null
+                ? partSetIds.Where(setId => setId > 0).SelectMany(setId => questDropSets.Get(setId)).ToImmutableArray() : [],
             UsableWorlds = GameWorld.Items.StackableUseRules.ParseWorlds(ItemUseFields.UsableWorlds(text)),
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),

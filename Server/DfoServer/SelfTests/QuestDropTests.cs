@@ -133,6 +133,7 @@ internal static class QuestDropTests
 
     public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
+        EquipmentQuestDropBonusTests.RunResources(items.Items);
         int before = Count;
         var original = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf); var skills = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         That(original.All.All(quest => quest.TargetRegistration is not null), "当前注册PVF的全部任务类型都有明确注册，不等同全部业务已实现");

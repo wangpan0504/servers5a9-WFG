@@ -14,6 +14,8 @@ namespace DfoServer.Game.Quests;
 internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Quests,
     IReadOnlyDictionary<int,ItemTemplate> Items, EpicPieceCatalog Pieces, GrowthContractBenefits? Growth = null)
 {
+    public ItemCatalog? EquipmentItems { get; init; }
+
     public static QuestDropResources Create(Character character, DungeonEntryPlan entry, QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces,
         GrowthContractBenefits? growth = null)
     {
@@ -28,11 +30,17 @@ internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Qu
             if (template.Kind is not (ItemKind.Quest or ItemKind.Material or ItemKind.Consumable) ||
                 CurrencyWallet.RewardKind(template.Id) is not null || pieces.ByPiece.ContainsKey(template.Id))
                 throw new NotSupportedException("任务掉落需要尚未接入的持有域: " + template.Id);
-        return new(definitions,templates,pieces,growth);
+        // 入场准备在owner锁外装载穿戴模板及套装；穿戴新物品仍由原库存规划装载模板。
+        foreach (var item in character.Inventory.Items.Where(item => EquipmentQuestDropBonusPolicy.AttributeSlot(item.Position)))
+            _ = items.Get(item.Core.ItemId);
+        return new(definitions,templates,pieces,growth) { EquipmentItems = items };
     }
 }
 
-internal sealed record QuestDropOutcome(ushort QuestId, Guid AcceptanceId, QuestDropDefinition Definition, int Rolled, int Granted, ushort Error);
+internal sealed record QuestDropOutcome(ushort QuestId, Guid AcceptanceId, QuestDropDefinition Definition, int Rolled, int Granted, ushort Error)
+{
+    public int? AppliedRate { get; init; }
+}
 
 internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRunIdentity identity, int mapId, int templateId,
     int enemyType, bool clear, DateTimeOffset frozenAt, ImmutableArray<QuestDropOutcome> outcomes, InventoryPlan inventory)
@@ -60,6 +68,7 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
             mapId <= 0 || templateId <= 0 || enemyType is not (1 or 2 or 3)) throw new InvalidDataException("任务掉落需要真实场景事件");
         var after = character.Inventory;
         int potionBonus = TreasureHunterPotionPolicy.ActiveBonus(after.ConsumableStates, potions, now.ToUnixTimeMilliseconds());
+        ImmutableArray<int> equipmentBonus = default;
         bool readsInventory = false;
         var outcomes = ImmutableArray.CreateBuilder<QuestDropOutcome>();
         foreach (var active in character.ActiveMainQuests.OrderBy(row => row.Slot))
@@ -80,8 +89,13 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                 }
                 if (limit >= 0 && held >= limit) continue;
                 int rolled = 0;
-                int rate = GrowthContractPolicy.QuestDropRate(character,row.Rate,resources.Growth,now.ToUnixTimeSeconds());
-                rate = TreasureHunterPotionPolicy.AdjustedRate(row.Rate, rate, potionBonus);
+                if (equipmentBonus.IsDefault)
+                    equipmentBonus = resources.EquipmentItems is { } equipmentItems
+                        ? EquipmentQuestDropBonusPolicy.Capture(character, id => equipmentItems.TryGetLoaded(id, out var definition)
+                            ? definition : throw new InvalidOperationException("任务取物缺少已装载的穿戴模板"), now.ToUnixTimeSeconds()) : [];
+                long additionalRate = GrowthContractPolicy.QuestDropBonus(character,row.Rate,resources.Growth,now.ToUnixTimeSeconds()) +
+                    EquipmentQuestDropBonusPolicy.AdditionalRate(row.Rate, equipmentBonus);
+                int rate = TreasureHunterPotionPolicy.AdjustedRate(row.Rate, row.Rate, potionBonus, additionalRate);
                 if (rate == 100) rolled = row.Count;
                 else if (rate != 0)
                     for (int at = 0; at < row.Count; at++)
@@ -117,7 +131,7 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                         else error = grant.Error;
                     }
                 }
-                outcomes.Add(new(active.QuestId,active.AcceptanceId,row,rolled,error == 0 ? count : 0,error));
+                outcomes.Add(new(active.QuestId,active.AcceptanceId,row,rolled,error == 0 ? count : 0,error) { AppliedRate = rate });
             }
         }
         return new(character,eventId,identity,mapId,templateId,enemyType,cleared,now,outcomes.ToImmutable(),
