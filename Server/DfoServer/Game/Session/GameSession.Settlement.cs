@@ -40,8 +40,10 @@ internal sealed partial class GameSession
         public byte? PaidCard { get; set; }
         public uint GainedExperience { get; set; }
         public uint ProficiencyGained { get; set; }
+        public bool LuckyStarEligible { get; set; }
         public bool LuckyStarGained { get; set; }
         public int LuckyStarTotal { get; set; }
+        public int ClearPartyBuffId { get; init; }
         public DungeonCardRewardPolicy? CardPolicy { get; init; }
         public DungeonCardClaimPreparation? Claim { get; set; }
         public DungeonTournamentReward? Tournament => Pending.Tournament;
@@ -297,7 +299,12 @@ internal sealed partial class GameSession
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = dungeon.Entry.IsTournament || !noClearCards ? cards : null };
+            {
+                CardPolicy = dungeon.Entry.IsTournament || !noClearCards ? cards : null,
+                ClearPartyBuffId = !noClearCards
+                    ? DungeonMazeConditions.RollClearPartyBuffCard(dungeon.Entry.Maze.ClearPartyBuffCards, dungeon.Draw)
+                    : 0
+            };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -328,6 +335,7 @@ internal sealed partial class GameSession
                 // 幸运星只按 ±5 等级区间；冒险团「推荐地下城通关」另按 95 规则加入剧情路线、地轨中心与哈林全图，团本排除。
                 var definition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
                 bool luckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
+                settlement.LuckyStarEligible = luckyStar && luckyStarLimit > 0;
                 bool recommendedClear = DungeonLuckyStarPolicy.IsRecommendedClear(
                     definition, dungeon.Entry.QuestId, dungeon.Entry.RouteQuestId, expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
@@ -398,8 +406,10 @@ internal sealed partial class GameSession
                 AssaultClear = assaultClear, CrackClear = crackClear,
                 GainedExperience = settlement.GainedExperience,
                 ProficiencyGained = settlement.ProficiencyGained,
+                LuckyStarEligible = settlement.LuckyStarEligible,
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
+                ClearPartyBuffId = settlement.ClearPartyBuffId,
                 Adventure = adventureCommit,
                 EndlessAdventureAmount = endlessAdventureAmount,
                 GuildMileageGuildId = guildMileageGuildId,

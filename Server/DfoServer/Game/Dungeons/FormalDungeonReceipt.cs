@@ -110,8 +110,10 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public uint GainedExperience { get; init; }
     // 通关结算的熟练度到账额度；展示位统一使用两者之和，不把满级入口线的实际收益显示成 0。
     public uint ProficiencyGained { get; init; }
+    public bool LuckyStarEligible { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
+    public int ClearPartyBuffId { get; init; }
     public DungeonCardReward? Card { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
     public InventoryResult? Inventory { get; init; }

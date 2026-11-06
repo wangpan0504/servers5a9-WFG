@@ -427,6 +427,14 @@ internal static partial class FormalDungeonTcpTests
                         peer.ReadCardMembershipState(packet);
                         continue;
                     }
+                    if (packet is { Kind:1,Opcode:1002 })
+                    {
+                        That(packet.Body.Length == 13 && packet.Body[0] == 1 && U64(packet.Body,1) == 1 &&
+                            U32(packet.Body,9) == Convert.ToInt64(fixture.Query(
+                                "SELECT rental_points FROM account_wallets WHERE account=$p0",account).Single()[0]),
+                            "结算幸运星获得/上限应答对应实际账号余额");
+                        continue;
+                    }
                     if (packet is { Kind:0,Opcode:988 })
                     {
                         That(packet.Body.Length == 8 && U32(packet.Body,4) == 0 &&

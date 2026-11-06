@@ -158,6 +158,19 @@ internal sealed class QuestLifecyclePlan
             after,inventory,sceneEvent) { SceneClear = sceneClear, SceneClearRun = run };
     }
 
+    internal static QuestLifecyclePlan SetCinematicPassiveClear(Character expected, StoryQuest quest, QuestCatalog quests,
+        DfoServer.Game.Dungeons.DungeonEntryPlan entry, QuestSceneEvent sceneEvent, PreparedDungeonPassiveClear sceneClear,
+        SinglePlayerDungeonRun run)
+    {
+        var conditionPlan = SetCondition(expected, quest, 0, quests);
+        var passivePlan = ObservePassive(conditionPlan.Expected with { ActiveMainQuests = [.. conditionPlan.ActiveAfter] },
+            quests, entry, sceneEvent, drops: null, sceneClear, run)
+            ?? throw new InvalidDataException("演出终末场景清图需要有效迷宫单物件目标");
+        return new(expected, QuestLifecycleAction.Condition, conditionPlan.QuestId, conditionPlan.AcceptanceId,
+            passivePlan.ActiveAfter, conditionPlan.Inventory, passivePlan.SceneEvent)
+            { SceneClear = sceneClear, SceneClearRun = run };
+    }
+
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null,
         bool strongway2019Active = false, bool epicRoad2019Active = false)

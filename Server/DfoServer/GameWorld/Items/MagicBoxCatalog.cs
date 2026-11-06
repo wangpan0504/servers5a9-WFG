@@ -5,7 +5,7 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed record MagicBoxReward(int ItemId, long Weight, int Count);
+internal sealed record MagicBoxReward(int ItemId, long Weight, int Count, bool Broadcast = false);
 internal sealed record MagicBoxPool(ImmutableArray<MagicBoxReward> Rewards);
 internal sealed record MagicBoxDefinition(ImmutableArray<MagicBoxPool> Pools, int MaterialItemId, int MaterialCount,
     string? PendingRule = null)
@@ -52,7 +52,7 @@ internal sealed class MagicBoxCatalog(PvfArchive archive, IReadOnlyDictionary<in
                 if (values[i] <= 0 || values[i + 1] <= 0 || values[i + 2] <= 0)
                     return new([], 0, 0, "随机盒奖励字段无效");
                 else
-                    rewards.Add(new(values[i], values[i + 1], values[i + 2]));
+                    rewards.Add(new(values[i], values[i + 1], values[i + 2], values[i + 3] != 0));
             if (rewards.Count != 0)
                 pools.Add(new(rewards.ToImmutable()));
         }

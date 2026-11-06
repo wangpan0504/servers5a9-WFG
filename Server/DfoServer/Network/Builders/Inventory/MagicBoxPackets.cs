@@ -87,4 +87,18 @@ internal static class MagicBoxPackets
     // 直接生效的奖励没有背包行，结果读取器不能接收 -1 槽位，否则成功发奖后仍可能断开；虚拟货币保留有效显示槽位。
     static IReadOnlyList<MagicBoxGrantedItem> VisibleRewards(IReadOnlyList<MagicBoxGrantedItem> rewards) =>
         rewards.Where(reward => reward.Slot >= 0).ToArray();
+
+    // NOTI86 (SERVER_BROADCAST) subType 18：客户端 023C1B33 读取角色名、随机盒ID、奖励物品ID并输出 dstr 70435 公告。
+    public static byte[] Broadcast(string characterName, int boxItemId, int rewardItemId)
+    {
+        byte[] name = DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(characterName);
+        using var stream = new MemoryStream(1 + 1 + name.Length + 8);
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)18);
+        writer.Write(checked((byte)name.Length));
+        writer.Write(name);
+        writer.Write(boxItemId);
+        writer.Write(rewardItemId);
+        return stream.ToArray();
+    }
 }

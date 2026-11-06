@@ -2160,6 +2160,12 @@ internal static partial class QuestLifecycleTcpTests
                 observe?.Invoke(packet);
                 continue;
             }
+            if (packet is { Kind: 1, Opcode: 1002 })
+            {
+                That(packet.Body.Length == 13 && packet.Body[0] == 1 && BinaryPrimitives.ReadUInt64LittleEndian(packet.Body.AsSpan(1)) == 1,
+                    "推荐地下城结算发送幸运星获得/上限充值应答");
+                continue;
+            }
             if (packet.Kind == 0 && packet.Opcode == 1760)
             {
                 peer.ReadCardMembershipState(packet);

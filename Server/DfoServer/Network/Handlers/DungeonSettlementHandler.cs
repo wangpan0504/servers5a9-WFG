@@ -207,9 +207,22 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 cardBody = DungeonSettlementPackets.PartyCardReward(cardBody, receipt.PartySlot, instance.CardSnapshot());
             }
             await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, cardBody, "formal_clear_reward", Guard);
+            if (result.ClearPartyBuffId > 0)
+            {
+                await context.Notify(NotiPacketType.CLEAR_PARTY_BUFF_CARD,
+                    DungeonSettlementPackets.ClearPartyBuffCard(result.ClearPartyBuffId),
+                    "formal_clear_party_buff_card", Guard);
+                await context.Notify(NotiPacketType.CHARACTER_ADD_BUFF,
+                    GuildEconomyPackets.AddedBuffs([new(Type: 0, Value: checked((uint)result.ClearPartyBuffId), ExpiresUnix: 0)], 0),
+                    "formal_clear_party_buff_added", Guard);
+            }
         }
         if (dungeons.Get(checked((int)receipt.Entry.DungeonId)).IsDazzlementTower)
             await DazzlementTowerProjection.StateAsync(context, Guard);
+        if (result.Outcome == DungeonRunOutcome.Accepted && result.LuckyStarEligible)
+            await context.Reply(CmdPacketType.CHARGE_RENTPOINT,
+                RentalPackets.ChargeSuccess(1, result.LuckyStarTotal),
+                "formal_clear_lucky_star_charge", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),

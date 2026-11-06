@@ -46,6 +46,13 @@ internal static class MetroQuestEntryTcpTests
                     conditionUpdates[peer.Id]=conditionUpdates.GetValueOrDefault(peer.Id)+1;
                     continue;
                 }
+                if (packet is { Kind: 1, Opcode: 1002 })
+                {
+                    That(packet.Body.Length == 13 && packet.Body[0] == 1 &&
+                        System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(packet.Body.AsSpan(1, 8)) == 1,
+                        "推荐地下城结算幸运星充值应答");
+                    continue;
+                }
                 if (packet.Kind==0 && packet.Opcode==1760) { peer.ReadCardMembershipState(packet); continue; }
                 That(packet.Kind==0,"竞技场事件后无遗漏失败ACK");
                 observe?.Invoke(packet);

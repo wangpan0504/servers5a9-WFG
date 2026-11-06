@@ -131,8 +131,15 @@ internal static class MagicBoxTcpTests
                 Bytes(packet.Body, [1], "十连刷新后连接继续处理同连接请求");
                 break;
             }
-            That(packet.Kind == 0 && packet.Opcode is 53 or 412 or 1760 or 66 or 901 or 2 or 950 or 99,
-                "十连仅发布已提交钱包、幸运值、契约及邮件的真实通知");
+            That(packet.Kind == 0 && packet.Opcode is 53 or 412 or 1760 or 66 or 901 or 2 or 950 or 99 or 86,
+                "十连仅发布已提交钱包、幸运值、契约、邮件及极品广播的真实通知");
+            if (packet.Opcode == 86)
+            {
+                That(packet.Body.Length == 18 && packet.Body[0] == 18 && packet.Body[1] == 8 &&
+                    Encoding.GetEncoding(936).GetString(packet.Body, 2, 8) == "SeriaBox" &&
+                    U32(packet.Body, 10) == 2682272 && U32(packet.Body, 14) > 0,
+                    "十连命中极品候选时广播NOTI 86子类型18");
+            }
             if (packet.Opcode == 412) { Bytes(packet.Body, [0, 5], "十连0→1幸运值投影"); gauge = true; }
         }
         That(gauge, "十连提交后发布幸运值");

@@ -737,6 +737,7 @@ internal static partial class FormalDungeonTcpTests
         fixture.Sql("DELETE FROM character_active_main_quests WHERE character_id=$p0", peer.Id);
         fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
         fixture.Sql("UPDATE character_fatigue SET used=maximum-1,remaining=1 WHERE character_id=$p0", peer.Id);
+        fixture.Sql("UPDATE account_wallets SET rental_points=400 WHERE account=$p0", fixture.Options.DevelopmentAccount);
         peer.Select(2, prepared: true);
         EntryTown(peer);
         SelectMap(peer);
@@ -767,10 +768,16 @@ internal static partial class FormalDungeonTcpTests
         }
         peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
         var settled = Drain(peer);
+        int chargeIndex = Array.FindIndex(settled, packet => packet is { Kind: 1, Opcode: 1002 });
+        int listIndex = Array.FindIndex(settled, packet => packet is { Kind: 0, Opcode: 988 });
         That(settled.Any(packet => packet is { Kind: 0, Opcode: 34 }) &&
             settled.Any(packet => packet is { Kind: 0, Opcode: 35 }) &&
+            chargeIndex >= 0 && listIndex > chargeIndex &&
+            settled[chargeIndex].Body.SequenceEqual(DfoServer.Network.Builders.RentalPackets.ChargeSuccess(1, 400)) &&
+            U32(settled[listIndex].Body, 0) == 400 &&
+            fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount) is [[400L]] &&
             fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]],
-            "普通副本在真实零疲劳下完成结算");
+            "普通副本在真实零疲劳下完成结算，且400满上限推荐通关仍先发1002触发超出上限公告再发988");
         peer.Send(69); Drain(peer);
         peer.Send(70); Drain(peer);
         peer.Send(71, [0, 0]);
@@ -1449,6 +1456,7 @@ internal static partial class FormalDungeonTcpTests
     static int DrainCardInventory(TcpPeer peer, TcpTestFixture? fixture = null)
     {
         int inventoryNotices = 0;
+        bool chargeAckSeen = false;
         bool luckyStarSeen = false;
         peer.SendBarrier();
         while (true)
@@ -1458,6 +1466,16 @@ internal static partial class FormalDungeonTcpTests
             {
                 TestCheck.Bytes(packet.Body,[1],"翻牌库存更新后同步屏障");
                 return inventoryNotices;
+            }
+            if (packet.Kind == 1 && packet.Opcode == 1002 && fixture is not null)
+            {
+                That(!chargeAckSeen && !luckyStarSeen && inventoryNotices == 0 && packet.Body.Length == 13 &&
+                    packet.Body[0] == 1 && U64(packet.Body,1) == 1 &&
+                    U32(packet.Body,9) == Convert.ToInt64(fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0",
+                        fixture.Options.DevelopmentAccount).Single()[0]),
+                    "推荐地下城首次结算在988前发送1002幸运星获得/上限提示，重复回放不重发");
+                chargeAckSeen = true;
+                continue;
             }
             if (packet.Kind == 0 && packet.Opcode == 988 && fixture is not null)
             {
@@ -1522,6 +1540,12 @@ internal static partial class FormalDungeonTcpTests
                 int found = Enumerable.Range(0, materialSet[1]).Select(index => 2 + index * 8)
                     .Where(at => U32(materialSet, at) == itemId).DefaultIfEmpty(-1).First();
                 That(found >= 0 && U32(materialSet, found + 4) >= value, "账号材料拾取后563实发该项余额");
+                foreach (byte calendarList in new byte[] { 44, 45 })
+                {
+                    byte[] calendar = peer.Expect(0, 13).Body;
+                    That(calendar.Length >= 3 && calendar[0] == calendarList && calendar.Length == 3 + U16(calendar, 1) * 123,
+                        "选角后账号材料拾取同步list44/45完整行");
+                }
                 foreach (ushort limitOpcode in new ushort[] { 1460, 1461 })
                 {
                     byte[] limits = peer.Expect(0, limitOpcode).Body;

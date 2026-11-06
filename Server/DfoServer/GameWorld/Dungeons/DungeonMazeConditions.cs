@@ -6,9 +6,44 @@ internal sealed record DungeonEntranceHunt(int TargetId, int Opaque, int Count);
 internal sealed record DungeonBossEntrance(int TimeMode, int TimeValue, IReadOnlyList<DungeonEntranceHunt> Targets);
 internal sealed record DungeonWarpMap(DungeonPoint Source, DungeonPoint Destination);
 internal sealed record DungeonClearCondition(string Type, int TargetId, int Count);
+internal readonly record struct DungeonClearPartyBuffCard(int BuffId, int Weight);
 
 internal static class DungeonMazeConditions
 {
+    // ARAD 0409D174..0409D21F解析[clear_party_buff_card]的(buffId,weight)整数对；039EFF80消费NOTI615翻出月溪镇Buff奖励。
+    public static IReadOnlyList<DungeonClearPartyBuffCard> ClearPartyBuffCards(IReadOnlyList<DungeonRawSection> sections)
+    {
+        var rows = sections.Where(section => section.Tag == "clear_party_buff_card").ToArray();
+        if (rows.Length == 0) return [];
+        if (rows.Length != 1 || rows[0].Tokens.Count == 0 || rows[0].Tokens.Count % 2 != 0 ||
+            rows[0].Tokens.Any(token => token.Type != 0 || token.Value <= 0))
+            throw new InvalidDataException("通关队伍Buff翻牌声明无效");
+        var result = new List<DungeonClearPartyBuffCard>(rows[0].Tokens.Count / 2);
+        var seen = new HashSet<int>();
+        for (int at = 0; at < rows[0].Tokens.Count; at += 2)
+        {
+            int buffId = rows[0].Tokens[at].Value, weight = rows[0].Tokens[at + 1].Value;
+            if (!seen.Add(buffId)) throw new InvalidDataException("重复通关队伍Buff翻牌编号");
+            result.Add(new(buffId, weight));
+        }
+        return result.AsReadOnly();
+    }
+
+    public static int RollClearPartyBuffCard(IReadOnlyList<DungeonClearPartyBuffCard> cards, Func<int, int> draw)
+    {
+        if (cards.Count == 0) return 0;
+        int total = checked(cards.Sum(card => card.Weight));
+        if (total <= 0) return 0;
+        int roll = draw(total);
+        if (roll < 0 || roll >= total) throw new InvalidDataException("通关队伍Buff翻牌权重随机值越界");
+        foreach (var card in cards)
+        {
+            if (roll < card.Weight) return card.BuffId;
+            roll -= card.Weight;
+        }
+        throw new InvalidDataException("通关队伍Buff翻牌权重抽取未命中候选");
+    }
+
     public static IReadOnlyList<DungeonClearCondition> Clear(IReadOnlyList<DungeonRawSection> sections, Func<int,string> _)
     {
         var result = new List<DungeonClearCondition>();

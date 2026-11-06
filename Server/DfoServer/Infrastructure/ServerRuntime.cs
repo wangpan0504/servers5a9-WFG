@@ -968,7 +968,7 @@ internal static class ServerRuntime
             new VendingHandler(new InventoryVendingService(itemResources.VendingMachines, itemResources.Items, itemResources.GoldLimits,
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
-                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock, events: events), inventoryProjection),
+                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock, events: events), inventoryProjection, online, log),
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun, fiendwarRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),

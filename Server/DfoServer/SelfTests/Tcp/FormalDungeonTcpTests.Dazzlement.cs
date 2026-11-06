@@ -151,7 +151,7 @@ internal static partial class FormalDungeonTcpTests
             {
                 var packet = peer.Read();
                 if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "眩惑命令屏障"); return packets; }
-                That(packet.Kind == 0, "眩惑请求后的通知保持完整包序"); packets.Add(packet);
+                That(packet.Kind == 0 || packet is { Kind: 1, Opcode: 1002, Body.Length: 13 }, "眩惑请求后的通知保持完整包序"); packets.Add(packet);
             }
             throw new InvalidOperationException("眩惑响应超过预算");
         }
