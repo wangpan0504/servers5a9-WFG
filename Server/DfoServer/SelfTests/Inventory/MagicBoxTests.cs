@@ -38,7 +38,7 @@ internal static class MagicBoxTests
 [/stackable type]
 [RANDOMBOX]
 [int data]
-2600014 2 0 2600014 18000 2 0 2600015 5000 1 0
+2600014 2 0 2600014 18000 2 1 2600015 5000 1 0
 [/int data]
 [int data]
 2682272 1 0 2682272 50000 1 0
@@ -49,9 +49,11 @@ internal static class MagicBoxTests
 [/RANDOMBOX]
 ");
         Check(definition.Available && definition.MaterialItemId == 10007367 && definition.MaterialCount == 1 &&
-            definition.Pools.Length == 2 && definition.Pools[0].Rewards[0] == new MagicBoxReward(2600014, 18000, 2) &&
-            definition.Pools[0].Rewards[1] == new MagicBoxReward(2600015, 5000, 1),
-            "random box parser reads independent reward pools and material");
+            definition.Pools.Length == 2 && definition.Pools[0].Rewards[0] == new MagicBoxReward(2600014, 18000, 2, true) &&
+            definition.Pools[0].Rewards[1] == new MagicBoxReward(2600015, 5000, 1, false) &&
+            MagicBoxPackets.Broadcast("123", 2682272, 2600014).SequenceEqual(
+                new byte[] { 18, 3, (byte)'1', (byte)'2', (byte)'3', 0xA0, 0xED, 0x28, 0x00, 0x4E, 0xAC, 0x27, 0x00 }),
+            "random box parser reads independent reward pools, broadcast flag and NOTI 86 subType 18 packet");
         var samsung = MagicBoxCatalog.Parse(@"
 [stackable type]
 `[random ss upgradable legacy]` 1
@@ -244,6 +246,7 @@ internal static class MagicBoxTests
             };
             int cases = 0;
             int datedRewards = 0;
+            int broadcastCandidates = 0;
             var failures = new List<string>();
             for (int pool = 0; pool < seriaDefinition.Pools.Length; pool++)
             {
@@ -251,6 +254,7 @@ internal static class MagicBoxTests
                 foreach (var row in seriaDefinition.Pools[pool].Rewards)
                 {
                     if (row.Weight <= 0) continue;
+                    if (row.Broadcast) broadcastCandidates++;
                     var settings = new GameDebugSettings();
                     var forced = new PoolRandom(seriaDefinition.Pools.Length, pool, offset);
                     var targeted = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits,
@@ -263,8 +267,9 @@ internal static class MagicBoxTests
                         else
                             Check(result.Plan!.After.Find(noMaterial.BoxSlot) is { Core.Count: 989 } &&
                                 actual.OpenCount == 10 && actual.SeriaLuckAfter == 1 && forced.Calls == 30 &&
-                                actual.Rewards.Any(reward => reward.ItemId == row.ItemId && reward.Count >= row.Count * 11),
-                                $"每个正权重候选十连完整交付且包含第九次双倍：pool={pool} item={row.ItemId} count={row.Count}");
+                                actual.Rewards.Any(reward => reward.ItemId == row.ItemId && reward.Count >= row.Count * 11) &&
+                                (pool != 0 || actual.BroadcastRewards.Contains(row.ItemId) == row.Broadcast),
+                                $"每个正权重候选十连完整交付且包含第九次双倍与极品广播标记：pool={pool} item={row.ItemId} count={row.Count}");
                         if (resources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiry &&
                             expiry.AbsoluteTime < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                         {

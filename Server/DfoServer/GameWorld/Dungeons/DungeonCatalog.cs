@@ -63,6 +63,7 @@ internal sealed record DungeonMaze(
     public IReadOnlyList<DungeonWarpMap> WarpMaps { get; init; } = Array.Empty<DungeonWarpMap>();
     public IReadOnlyList<DungeonMap> ConditionalMaps { get; init; } = Array.Empty<DungeonMap>();
     public IReadOnlyList<DungeonClearCondition> ClearConditions { get; init; } = [];
+    public IReadOnlyList<DungeonClearPartyBuffCard> ClearPartyBuffCards { get; init; } = [];
     public IReadOnlyList<DungeonRandomizedObject> RandomizedObjects { get; init; } = [];
     public IReadOnlyList<DungeonRandomizedObjectGroup> RandomizedObjectGroups { get; init; } = [];
     public string? ResourceError { get; init; }
@@ -102,6 +103,7 @@ internal sealed record DungeonMaze(
         SameMaps(MapAlternatives, other.MapAlternatives) && SameMaps(DummyStages, other.DummyStages) &&
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
+        ClearPartyBuffCards.SequenceEqual(other.ClearPartyBuffCards) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
         SameObjectGroups(RandomizedObjectGroups, other.RandomizedObjectGroups) &&
         IsBossRush == other.IsBossRush && IsInfernoSpecial == other.IsInfernoSpecial && SameEntrance(BossEntrance, other.BossEntrance);
@@ -977,6 +979,7 @@ internal sealed class DungeonCatalog
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
             { IsBossRush = allowOffGridBoss, LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
+                ClearPartyBuffCards = DungeonMazeConditions.ClearPartyBuffCards(mazeSections),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
                 RandomizedObjectGroups = DungeonRandomizedObjectGroups.Parse(mazeSections, resolve),
                 IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),

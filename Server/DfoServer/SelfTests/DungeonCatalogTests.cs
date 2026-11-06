@@ -614,6 +614,23 @@ internal static class DungeonCatalogTests
                 Enumerable.Range(0, 5).All(value => legend.AllowsDifficulty((byte)value, false) == (value == 2)),
                 "艾肯传奇副本只放行重复声明的难度 2：" + ekern);
         }
+        foreach (var (mooncreek, expectedWeights) in new (int Id, (int BuffId, int Weight)[] Cards)[]
+            {
+                (3200, [(110, 10), (111, 10), (112, 20), (113, 20), (114, 20), (115, 20)]),
+                (3201, [(110, 20), (111, 20), (112, 10), (113, 10), (114, 20), (115, 20)]),
+                (3202, [(110, 20), (111, 20), (112, 20), (113, 20), (114, 10), (115, 10)]),
+            })
+        {
+            var dragon = catalog.Get(mooncreek);
+            var cards = dragon.Mazes.Single().ClearPartyBuffCards;
+            That(cards.Select(card => (card.BuffId, card.Weight)).SequenceEqual(expectedWeights) &&
+                DungeonMazeConditions.RollClearPartyBuffCard(cards, _ => 0) == 110 &&
+                DungeonMazeConditions.RollClearPartyBuffCard(cards, _ => expectedWeights[0].Weight - 1) == 110 &&
+                DungeonMazeConditions.RollClearPartyBuffCard(cards, _ => expectedWeights[0].Weight) == 111 &&
+                DungeonMazeConditions.RollClearPartyBuffCard(cards, _ => 99) == 115 &&
+                DfoServer.Network.Builders.DungeonSettlementPackets.ClearPartyBuffCard(114).SequenceEqual(new byte[] { 1, 114, 0, 0, 0 }),
+                "月轮山三图解析完整月溪镇Buff奖励卡权重并构造615翻牌通知：" + mooncreek);
+        }
         That(Enumerable.Range(0, 5).All(value => !catalog.Get(1).AllowsDifficulty((byte)value, false)),
             "洛兰同时声明指定难度 0 和 1 时普通路线仍全部拒绝");
         Reject(() => catalog.Get(-1), "negative dungeon index rejected");

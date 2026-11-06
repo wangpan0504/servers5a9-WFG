@@ -780,7 +780,7 @@ internal static class Strongway2019MatchingTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "匹配TCP有界收包屏障"); return rows.ToArray(); }
-            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 15 or 16 or 37 or 39 or 41 or 45 or 46 or 72 or 520 or 521 or 1525 ||
+            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 15 or 16 or 37 or 39 or 41 or 45 or 46 or 72 or 520 or 521 or 1002 or 1525 ||
                 packet is { Kind: 1, Opcode: 905, Body.Length: 77 } && packet.Body[0] == 1 && U16(packet.Body, 1) == 1 &&
                     packet.Body.AsSpan(3).IndexOfAnyExcept((byte)0) == -1,
                 "匹配收包只允许通知与本链已登记应答，实际" + packet.Kind + "/" + packet.Opcode);

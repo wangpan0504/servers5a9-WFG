@@ -36,6 +36,15 @@ internal static class DungeonSettlementPackets
     // NOTI261读取u8写入结算页资格；9开放再挑战，0保留禁用状态，不负责切换场景。
     public static byte[] RetryEligibility(bool available) => [(byte)(available ? DungeonRetryAvailability.Available : DungeonRetryAvailability.Unavailable)];
 
+    // ARAD 039EFF80消费NOTI615：flag:u8(1) + buffId:u32，按variousbufflist.etc将月轮山底部Buff牌翻面。
+    public static byte[] ClearPartyBuffCard(int buffId)
+    {
+        byte[] body = new byte[5];
+        body[0] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), checked((uint)buffId));
+        return body;
+    }
+
     public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation, IReadOnlyList<ushort>? members = null)
     {
         if (members is null || members.Count == 0) members = [actorId];

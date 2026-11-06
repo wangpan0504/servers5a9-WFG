@@ -64,7 +64,10 @@ internal sealed partial class GameSession
             Character? character = !AntonRejoinPresentationPending && Ready && Selected is not null && Phase != SessionPhase.Unselected &&
                 (Phase != SessionPhase.Loading || cinematicTransition) &&
                 pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
-                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true && formalDungeon?.Run.HasPendingDeath != true &&
+                !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true &&
+                (formalDungeon?.Run.HasPendingDeath != true ||
+                    formalDungeon.Run.HasPendingPassiveClear && pendingQuestLifecycle?.Plan.SceneClear is { } pendingClear &&
+                    formalDungeon.Run.IsPendingPassiveClear(pendingClear)) &&
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement || cinematicTransition ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
@@ -138,7 +141,8 @@ internal sealed partial class GameSession
                     plan.RequiredEvent = new(strongwaySchedule!, timeProvider ?? TimeProvider.System);
                 if (epicRoadQuest)
                     plan.RequiredEvent = new(epicRoadSchedule!, timeProvider ?? TimeProvider.System);
-                if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter))
+                if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) &&
+                    plan.SceneClear is null)
                     return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "当前条件已由实际场景或库存满足，无需再次保存" };
             }
         }
@@ -168,6 +172,17 @@ internal sealed partial class GameSession
             {
                 dungeon.Run.BindQuestAcceptance(commit.Character.ActiveMainQuests.Single(row => row.AcceptanceId == plan.AcceptanceId));
                 formalDungeon = dungeon with { Entry = dungeon.Run.Entry };
+            }
+            if (plan.SceneClear is { } preparedClear && formalDungeon is { } sceneDungeon)
+            {
+                var clearResult = sceneDungeon.Run.ConfirmCommittedPassiveClear(preparedClear);
+                if (clearResult.Outcome != DungeonRunOutcome.Accepted)
+                    throw new InvalidOperationException("已提交场景清图的原实例准备无法确认");
+                if (plan.SceneEvent is { } committedScene)
+                    sceneDungeon.QuestSceneEvents[(sceneDungeon.Run.Snapshot.CurrentMap, committedScene.TemplateId, committedScene.SourceOrdinal)] =
+                        new PendingQuestScene(plan) { Committed = true };
+                SetState(SessionPhase.Settlement);
+                receipt = receipt with { Phase = Phase, DungeonIdentity = sceneDungeon.Run.Snapshot.Identity };
             }
             pendingQuestLifecycle = null;
             return receipt;
@@ -261,14 +276,59 @@ internal sealed partial class GameSession
             if (condition is { Channel: null, Value: 0, Reserved: 0 } && capture.Phase == SessionPhase.Town &&
                 QuestClientSceneProgress.Matches(expected,quest,towns))
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
-            // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份，也不签发清图。
+            // 0102A20F→0203D070→event42→02011B80：33是演出终末/关闭通知，不含CMT或接取身份；
+            // 3858在70487按ESC跳过CMT2710时，0102BFE0只发33而不触发ON END CINEMATIC销毁69292，故已加载物件末层的33同时提交唯一物件清图。
             if (condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 QuestClientSceneProgress.DungeonCinematic(quest) && (capture.Loaded || capture.CinematicTransition) &&
                 (capture.Phase is SessionPhase.Dungeon or SessionPhase.Settlement || capture.CinematicTransition) && capture.Entry is { } cinematicEntry &&
                 capture.Room is { } cinematicRoom && QuestClientSceneProgress.OnDungeonCinematicMap(quest,cinematicEntry,cinematicRoom.Map) &&
                 quest.Definition!.Dungeons.Any(row => row.DungeonId == cinematicEntry.DungeonId) &&
                 expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,cinematicEntry)))
+            {
+                if (PartyDungeon is null && capture.Loaded && capture.Phase == SessionPhase.Dungeon &&
+                    capture.Identity is { } sceneIdentity &&
+                    cinematicEntry.PassiveClearTerminalMap == cinematicRoom.Map &&
+                    cinematicEntry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } clearCondition])
+                {
+                    int passiveOrdinal = -1;
+                    for (int idx = 0; idx < cinematicRoom.PassiveObjects.Count; idx++)
+                        if (cinematicRoom.PassiveObjects[idx].ObjectId == clearCondition.TargetId)
+                        {
+                            passiveOrdinal = idx;
+                            break;
+                        }
+                    if (passiveOrdinal >= 0)
+                    {
+                        var cinematicPassive = owner.Execute(() =>
+                        {
+                            if (!Ready || Phase != capture.Phase || SelectionEpoch != capture.SelectionEpoch ||
+                                !ReferenceEquals(Selected, expected) || formalDungeon is not { } current ||
+                                current.Run.Snapshot.Identity != sceneIdentity ||
+                                !current.Run.CanPreparePassiveClear(sceneIdentity, clearCondition.TargetId, passiveOrdinal))
+                                return null;
+                            string fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                                System.Text.Encoding.UTF8.GetBytes($"cinematic-passive:{quest.Id}:{sceneIdentity.InstanceId:N}:{cinematicRoom.Map.Id}:{clearCondition.TargetId}:{passiveOrdinal}")));
+                            var source = new QuestSceneEvent(Guid.NewGuid(), sceneIdentity, checked((int)cinematicEntry.DungeonId),
+                                cinematicRoom.Map.Id, clearCondition.TargetId, passiveOrdinal, fingerprint);
+                            var prepared = current.Run.PreparePassiveClear(sceneIdentity, source.OperationId,
+                                source.TemplateId, source.SourceOrdinal);
+                            if (prepared is null) return null;
+                            try
+                            {
+                                return QuestLifecyclePlan.SetCinematicPassiveClear(expected, quest, quests, current.Run.Entry,
+                                    source, prepared, current.Run);
+                            }
+                            catch
+                            {
+                                current.Run.CancelUncommittedPassiveClear(prepared);
+                                throw;
+                            }
+                        });
+                        if (cinematicPassive is not null) return cinematicPassive;
+                    }
+                }
                 return QuestLifecyclePlan.SetCondition(expected,quest,0);
+            }
             // 6401 的条件文案是在希莫娜菜单开启贮藏箱。33 只在该任务 NPC 所在城镇地图上归零。
             // 0155C6F8 发事件 0x28（载荷 6401,0），02011CB0 按通道 0 的低 9 位次数调用 0200EE50；
             // kind 0 时 0200F0BB 写通道 0x10、value 归 0，02280690 发 7 字节 33。无通道形状不是这条路径。

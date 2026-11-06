@@ -1,5 +1,7 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
@@ -7,7 +9,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class MagicBoxHandler(InventoryMagicBoxService magicBox, InventoryProjection projection) : IGameCommandModule
+internal sealed class MagicBoxHandler(InventoryMagicBoxService magicBox, InventoryProjection projection,
+    OnlineSessionDirectory? online = null, ServerLog? log = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -42,6 +45,22 @@ internal sealed class MagicBoxHandler(InventoryMagicBoxService magicBox, Invento
             seriaBatch ? MagicBoxPackets.OpenedSeriaExpand(receipt) : MagicBoxPackets.OpenedSingle(receipt);
         await context.Reply(responseOpcode, response, result.Accepted ? "magic_box_opened" : "magic_box_rejected");
         await projection.RefreshAsync(context, result);
+        if (result.Accepted && result.Receipt is { } committed && receipt is { BroadcastRewards.Count: > 0 } && online is not null)
+        {
+            byte server = context.Channel.ServerIndex;
+            if (context.Session.CaptureServerBroadcastGuard(server, committed) is { } current)
+            {
+                foreach (int itemId in receipt.BroadcastRewards)
+                {
+                    byte[] body = MagicBoxPackets.Broadcast(committed.Character.Name, receipt.BoxItemId, itemId);
+                    int recipients = online.PostServerGroup(server, (ushort)NotiPacketType.SERVER_BROADCAST, body,
+                        "magic_box_announcement", current);
+                    log?.Write("magic_box_announcement", new { Connection = context.Id, Character = committed.Character.Id,
+                        Server = server, receipt.BoxItemId, ItemId = itemId, Recipients = recipients,
+                        Revision = committed.Character.Revision });
+                }
+            }
+        }
         return CommandResult.Handled;
     }
 }

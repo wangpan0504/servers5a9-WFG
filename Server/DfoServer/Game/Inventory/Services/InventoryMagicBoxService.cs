@@ -64,6 +64,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
 
         var totals = new Dictionary<int, int>();
         var doubleTotals = new Dictionary<int, int>();
+        var broadcastItems = new List<int>();
         bool seriaSource = box.Core.ItemId == 2682272;
         var luckEvent = seriaSource ? events?.Read(DfoServer.Game.Events.ServerEventService.SeriaLuckId) : null;
         bool luckEnabled = seriaSource && (luckEvent?.Active ?? true);
@@ -85,6 +86,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                         if (value < row.Weight)
                         {
                             drawn[row.ItemId] = checked(drawn.GetValueOrDefault(row.ItemId) + row.Count);
+                            if (row.Broadcast)
+                                broadcastItems.Add(row.ItemId);
                             break;
                         }
                         value -= row.Weight;
@@ -189,7 +192,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         }
         // 赛丽亚无材料协议使用客户端约定的 -1 哨兵；回显盒子槽位会让结果读取器错位到奖励行，成功发奖后触发客户端崩溃。
         receipt = new(box.Core.ItemId, box.Position.Index, material?.Position.Index ?? (short)-1, opens, rows,
-            request.RawListType, doubleRows, seriaSource ? luckBefore : 0, seriaSource ? luck : 0, displayRows);
+            request.RawListType, doubleRows, seriaSource ? luckBefore : 0, seriaSource ? luck : 0, displayRows,
+            broadcastItems.Count == 0 ? Array.Empty<int>() : broadcastItems.ToArray());
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(box, material is null ? [] : [material]);
         if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
             deadline = acquiredUntil;
