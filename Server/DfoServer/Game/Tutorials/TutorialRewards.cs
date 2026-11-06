@@ -28,7 +28,7 @@ internal static class TutorialRewards
         var source = character.Inventory.Find(position);
         if (source is null || source.Core.ItemId != itemId || source.Core.Kind != ItemKind.Consumable || template.Kind != ItemKind.Consumable ||
             source.Core.EquipmentLockId != 0 || source.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) || template.UseForbidden ||
-            character.Level < template.MinimumLevel || (template.Jobs & (1 << character.Job)) == 0)
+            character.Level < template.MinimumLevel)
             return InventoryResult.Reject(17);
         return InventoryDeleteService.Plan(character.Inventory, position, source.Core.Value, 1);
     }

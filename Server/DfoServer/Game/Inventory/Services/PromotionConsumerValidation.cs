@@ -421,7 +421,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             }
             if (template.OpensCreatureSkinSlot || template.OpensAuraSkinSlot)
             {
-                if (template.UseForbidden || template.Jobs == 0 || template.MinimumLevel > template.MaximumLevel ||
+                if (template.UseForbidden || template.MinimumLevel > template.MaximumLevel ||
                     template.OpensCreatureSkinSlot && template.Kind != ItemKind.Consumable ||
                     template.OpensAuraSkinSlot &&
                         (template.Kind != ItemKind.Consumable || template.StackableType != "[etc] 1"))
@@ -485,7 +485,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             if (consumables.TryGet(id, out var consumable))
             {
                 if (template.Kind != ItemKind.Consumable || consumable.ItemId != id || consumable.UseForbidden ||
-                    consumable.Jobs == 0 || consumable.MinimumLevel > consumable.MaximumLevel)
+                    consumable.MinimumLevel > consumable.MaximumLevel)
                     throw new InvalidDataException("recovery_consumable_definition");
                 if (consumable.TownGiftItem > 0) Edge(new(consumable.TownGiftItem, 1), source + "/town-gift", freeSource: id);
                 return;

@@ -18,7 +18,7 @@ internal sealed partial class InventoryCashShopService
             !shop.Mileage.CeraOnly.Contains(BattlePassCertificatePurchase.Item))
             return InventoryResult.Reject(17) with { RejectReason = "battle_pass_certificate_request" };
         var template = catalog.Get(BattlePassCertificatePurchase.Item);
-        if (!template.IsPremiumService || template.HasAcquisitionEffect || !template.AllowsUse(character.Level, character.Job) ||
+        if (!template.IsPremiumService || template.HasAcquisitionEffect || !template.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17) with { RejectReason = "battle_pass_certificate_template" };
         return BuyCore(character, request, out receipt, now, battlePassCertificate: true);
@@ -31,7 +31,7 @@ internal sealed partial class InventoryCashShopService
         if (!BattlePassDeluxePurchase.IsRequest(request, BattlePassDeluxeOffer) ||
             BattlePassDeluxeOffer is not { } offer ||
             catalog.Get(BattlePassDeluxePurchase.Item) is not { IsPremiumService: true, HasAcquisitionEffect: false } template ||
-            !template.AllowsUse(character.Level, character.Job) ||
+            !template.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17) with { RejectReason = "battle_pass_deluxe_request" };
         if (offer.CeraPrice <= 0 || !Mileage.CeraOnly.Contains(offer.ItemId))

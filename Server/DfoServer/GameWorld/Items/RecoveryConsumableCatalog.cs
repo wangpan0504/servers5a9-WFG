@@ -30,11 +30,12 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public HellLegendEpicDropBuffDefinition? HellLegendEpicDropBuff { get; init; }
     public VillageMoveSpeedBuffDefinition? VillageMoveSpeedBuff { get; init; }
     public EnhancementPotionDefinition? EnhancementPotion { get; init; }
+    public TreasureHunterPotionDefinition? TreasureHunterPotion { get; init; }
     public ConsumableDisguiseDefinition? Disguise { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
     public ImmutableHashSet<uint>? AllowedDungeons { get; init; }
-    public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
-        job < 16 && (Jobs & (1 << job)) != 0;
+    // 原生客户端负责职业及模板副本名单；服务端保留本流程仍需处理的等级与禁用状态。
+    public bool Allows(byte level) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel;
 }
 
 internal sealed record ConsumableDisguiseDefinition(byte Type, int FormId, int Seconds)
@@ -60,6 +61,8 @@ internal sealed class RecoveryConsumableCatalog
     internal IReadOnlyDictionary<int, HellLegendEpicDropBuffDefinition> HellLegendEpicDropBuffs => hellLegendEpicDrop.Value;
     internal IReadOnlyDictionary<int, VillageMoveSpeedBuffDefinition> VillageMoveSpeedBuffs => villageMoveSpeed.Value;
     internal IReadOnlyDictionary<int, EnhancementPotionDefinition> EnhancementPotions => enhancementPotions.Value;
+    internal IReadOnlyDictionary<int, int> AlchemistPotionInfo { get; }
+    internal IReadOnlyDictionary<int, TreasureHunterPotionDefinition> TreasureHunterPotions { get; }
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, ItemCatalog items)
     {
@@ -71,11 +74,20 @@ internal sealed class RecoveryConsumableCatalog
         hellLegendEpicDrop = new(() => HellLegendEpicDropBuffDefinition.Load(archive));
         villageMoveSpeed = new(() => VillageMoveSpeedBuffDefinition.Load(archive));
         enhancementPotions = new(() => EnhancementPotionDefinition.Load(archive, stackable));
+        // 监听前完成小型参数表与已知变体的装配；击杀和道具使用不扫描归档。
+        AlchemistPotionInfo = archive.Contains(TreasureHunterPotionDefinition.AlchemistPath)
+            ? AlchemistPotionInfoFile.Parse(archive.ReadTokens(TreasureHunterPotionDefinition.AlchemistPath), archive.ResolveString).PotionInfo
+            : ImmutableDictionary<int, int>.Empty;
+        TreasureHunterPotions = TreasureHunterPotionDefinition.Load(archive, stackable, AlchemistPotionInfo);
     }
 
     internal RecoveryConsumableCatalog(IEnumerable<RecoveryConsumableDefinition> source)
     {
         var rows = source.ToArray();
+        TreasureHunterPotions = rows.Where(row => row.TreasureHunterPotion is not null)
+            .ToImmutableDictionary(row => row.ItemId, row => row.TreasureHunterPotion!);
+        AlchemistPotionInfo = TreasureHunterPotions.Where(row => row.Value.FromExj)
+            .ToImmutableDictionary(row => row.Key, row => row.Value.BonusRate);
         bossSelection = new(() => ImmutableDictionary<int, BossSelectionBuffDefinition>.Empty);
         epicDrop = new(() => rows.Where(row => row.EpicDropBuff is not null).ToImmutableDictionary(row => row.ItemId, row => row.EpicDropBuff!));
         hellLegendEpicDrop = new(() => rows.Where(row => row.HellLegendEpicDropBuff is not null)
@@ -90,7 +102,8 @@ internal sealed class RecoveryConsumableCatalog
 
     internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file, BossSelectionBuffDefinition? bossBuff = null,
         EpicDropBuffDefinition? epicBuff = null, EnhancementPotionDefinition? enhancementPotion = null,
-        HellLegendEpicDropBuffDefinition? hellLegendBuff = null, VillageMoveSpeedBuffDefinition? villageSpeedBuff = null)
+        HellLegendEpicDropBuffDefinition? hellLegendBuff = null, VillageMoveSpeedBuffDefinition? villageSpeedBuff = null,
+        TreasureHunterPotionDefinition? treasureHunter = null)
     {
         var raw = file.Stackable;
         // 原生工厂优先构造普通持续属性对象；use action packet并不将它改成515动作类。
@@ -189,6 +202,7 @@ internal sealed class RecoveryConsumableCatalog
             Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]" || nativeDisguise && file.UnlimitedWaste == 1,
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
             RevivalBlessing = revival,
+            TreasureHunterPotion = treasureHunter,
             AllowedDungeons = file.ActionUsableDungeons?.Select(id => checked((uint)id)).ToImmutableHashSet(),
             ExcludedDungeons = file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet(),
             RaidUseForbidden = file.ImpossibleContents.Contains("raid dungeon", StringComparer.OrdinalIgnoreCase) };
@@ -214,6 +228,9 @@ internal sealed class RecoveryConsumableCatalog
             return null;
         var tokens = archive.ReadTokens("stackable/" + path);
         var file = RecoveryConsumableFile.Parse(id, "stackable/" + path, tokens, archive.ResolveString);
+        var treasure = TreasureHunterPotions.GetValueOrDefault(id);
+        // 身份已知但资源声明不完整时，不按普通空效果药消费；缺少EXJ行已由目录显式兜底。
+        if (TreasureHunterPotionDefinition.FamilyItems.Contains(id) && treasure is null) return null;
         var buff = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? bossSelection.Value.GetValueOrDefault(id) : null;
         var epic = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? epicDrop.Value.GetValueOrDefault(id) : null;
         var hellLegend = file.Stackable.TypeDeclaration?.Label == "[expert town potion]"
@@ -227,7 +244,7 @@ internal sealed class RecoveryConsumableCatalog
             if (events.Length != 0 && events is not [{ Children.Length: 0, Values: [{ Type: 0, Value: 2284 }] }]) return null;
         }
         var enhancement = enhancementPotions.Value.GetValueOrDefault(id);
-        var definition = Read(file, buff, epic, enhancement, hellLegend, villageSpeed);
+        var definition = Read(file, buff, epic, enhancement, hellLegend, villageSpeed, treasure);
         if (definition is null)
             return null;
         var template = items!.Get(id);

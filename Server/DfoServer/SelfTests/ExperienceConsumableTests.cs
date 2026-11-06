@@ -142,10 +142,10 @@ internal static class ExperienceConsumableTests
         foreach (int id in new[] { 490012478, 490012481 })
             That(items.Items.ExperienceConsumable(id) is null, "地点修复不放行重复限制字段的月饼 " + id);
         That(items.Items.ExperienceConsumable(490003969) is { } maleMage &&
-            maleMage.Allows(60, 8, 0x23) && !maleMage.Allows(60, 8, 2) && !maleMage.Allows(60, 3, 3) &&
+            maleMage.Allows(60, 8, 0x23) && !maleMage.Allows(60, 8, 2) && maleMage.Allows(60, 3, 3) &&
             items.Items.ExperienceConsumable(490005503) is { } knight &&
             knight.Allows(60, 12, 0x24) && !knight.Allows(60, 12, 1) && !knight.Allows(87, 12, 4),
-            "实际男法三分支与守护者两分支胶囊同时保留职业、转职与最高等级限制");
+            "经验胶囊保留转职与最高等级限制，usable job由客户端判断");
         foreach (byte branch in new byte[] { 2, 0x23 })
         {
             using var f = Make(60, 490003969, job: 8, growType: branch);

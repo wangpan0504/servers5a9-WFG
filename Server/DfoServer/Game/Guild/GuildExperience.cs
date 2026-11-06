@@ -36,7 +36,7 @@ internal sealed class GuildExperienceService(IGuildExperienceStore store, ItemCa
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable))
             throw new InvalidDataException("公会经验书源实例无效");
         var definition = items.GuildExperienceGift(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job))
             throw new InvalidDataException("公会经验书资源或使用资格无效");
         var membership = store.ReadGuildExperienceMembership(actor)
             ?? throw new InvalidDataException("公会经验书缺少当前会籍");

@@ -37,7 +37,7 @@ internal sealed class GuildDungeonScrollService(IGuildDungeonScrollStore store, 
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable))
             throw new InvalidDataException("公会净化卷轴源实例无效");
         var definition = items.GuildDungeonClearScroll(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job) ||
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job) ||
             catalog.Find(definition.DungeonId) is null)
             throw new InvalidDataException("公会净化卷轴资源或使用资格无效");
         var membership = store.ReadGuildDungeonScrollMembership(actor)

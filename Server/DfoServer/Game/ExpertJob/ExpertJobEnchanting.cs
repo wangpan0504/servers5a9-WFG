@@ -34,7 +34,7 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
         if (definition is null || definition.CardItemId != source.Core.ItemId ||
             source.Core.EnchantUpgrade != 0 && !enchantments.CanEnchantCard(source.Core.ItemId, level, targetTemplate) ||
             target.Core.EnchantCardId == source.Core.ItemId && target.Core.EnchantUpgrade == level || sourceTemplate.UseForbidden ||
-            character.Level < sourceTemplate.MinimumLevel || (sourceTemplate.Jobs & (1 << character.Job)) == 0 ||
+            character.Level < sourceTemplate.MinimumLevel ||
             sourceTemplate.Kind != source.Core.Kind || targetTemplate.Kind != target.Core.Kind ||
             !definition.AllowsTarget(targetTemplate) ||
             !ItemSlotBoundService.Allows(character.Inventory, sourceSlot, source.Core.Kind) ||

@@ -624,10 +624,12 @@ internal sealed partial class GameSession
             !HasFinishedDungeon(formalDungeon))
             return null;
         // 普通结算复用自己的退场合同；不借用深渊清波或祭坛免虚弱资格。
-        if (ReturnFromFormalDungeon() is null) return null;
+        var returning = ReturnFromFormalDungeon();
+        if (returning is null) return null;
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position);
         SetState(SessionPhase.MapSelect);
-        return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
+        return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId)
+        { ConsumableCooldowns = returning.ConsumableCooldowns, ConsumableEffects = returning.ConsumableEffects };
     });
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,

@@ -42,7 +42,7 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
         else recipeId = (int)source;
         var definition = recipes.Get(recipeId);
         if (definition is null || mode == 1 && !definition.CatalogDirect ||
-            !items.Get(recipeId).AllowsUse(character.Level, character.Job) ||
+            !items.Get(recipeId).AllowsActivation(character.Level, character.Job) ||
             mode == 0 && definition.Skills.Any(required => !character.Skills.Any(skill => skill.Id == required.ItemId && skill.Level >= required.Count)) ||
             definition.MakingType is not null && !makingSkills.Available)
             return Reject(Rejection, "recipe-resource-or-qualification");

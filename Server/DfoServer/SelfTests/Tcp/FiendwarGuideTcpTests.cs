@@ -105,7 +105,6 @@ internal static class FiendwarGuideTcpTests
         bool inDungeonScene = false, returnedToField = false, resultShown = false, victoryShown = false, cardsShown = false;
         var cardChoices = new HashSet<byte>();
         Select();
-        FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 10);
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
         That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "引导普通药使用真实目录声明");
         clock.Advance(checked((ordinary.CoolTime + 999) / 1000));
@@ -350,7 +349,7 @@ internal static class FiendwarGuideTcpTests
                 if (FiendwarRaidTcpTests.VerifyDynamicSpawns(fixture, [peer], map, new() { [peer.Id] = ai! })) dynamicSpawnRooms++;
                 if (dungeon == 5350 && route == 0 && step == 0)
                 {
-                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 21, 1114);
+                    FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 21, 1114);
                     FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, false, 22, 1114);
                     FiendwarRaidTcpTests.VerifyBlockedLegacyConsumable(fixture, peer);
                     FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 11);

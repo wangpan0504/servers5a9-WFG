@@ -18,6 +18,8 @@ internal sealed record TownTravelReceipt(Character Character, long Generation, l
 {
     public DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange { get; init; }
     public DateTimeOffset? BattlePassMissionAt { get; init; }
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableCooldowns { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableEffects { get; init; } = [];
 }
 
 internal static class TownTravel

@@ -324,6 +324,8 @@ internal sealed partial class GameSession
             throw new InvalidOperationException("组队退场提交后身份变化");
         Selected = committed;
         DfoServer.Game.Raids.AntonRaidBattleChange? raidChange = null;
+        var consumableStates = (Cooldowns: System.Collections.Immutable.ImmutableArray<ConsumableStateUpdate>.Empty,
+            Effects: System.Collections.Immutable.ImmutableArray<ConsumableStateUpdate>.Empty);
         if (formalDungeon is { } dungeon)
         {
             if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted)
@@ -333,6 +335,7 @@ internal sealed partial class GameSession
             ReleaseCurrentEvildomWarDungeon();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
+            consumableStates = RestoreAfterFreeConsumables(dungeon);
         }
         CancelDungeonContinuation();
         pendingQuestReplay = null;
@@ -347,7 +350,8 @@ internal sealed partial class GameSession
         return prepared.Kind switch
         {
             PartyDungeonExitKind.ResultReturn or PartyDungeonExitKind.EvildomWarRetreat or PartyDungeonExitKind.FiendwarKeyRecovery => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
-                Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange }),
+                Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange,
+                    ConsumableCooldowns = consumableStates.Cooldowns, ConsumableEffects = consumableStates.Effects }),
             _ => new PartyDungeonNotice(prepared.Kind == PartyDungeonExitKind.SelectionReturn ? PartyDungeonNoticeKind.SelectionReturn :
                 prepared.Kind == PartyDungeonExitKind.ResultSelection ? PartyDungeonNoticeKind.ResultSelection : PartyDungeonNoticeKind.Selection,
                 member, members, Selection: new(committed, owner.Generation, SelectionEpoch, dungeonSelectionId), RaidBattleChange: raidChange)

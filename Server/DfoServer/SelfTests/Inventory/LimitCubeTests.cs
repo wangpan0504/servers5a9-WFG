@@ -156,12 +156,15 @@ internal static class LimitCubeTests
             service.Apply(changed, request, out _, out _, now.AddMilliseconds(1000)).Accepted,
             "变更券冷却在抽取前拒绝，精确到期后允许剩余目标和券继续使用");
         var template = fixture.Items.Get(Fixture.GenericTicket);
-        foreach (var restricted in new[] { template with { MinimumLevel = 96 }, template with { Jobs = 2 },
+        fixture.Items.PrefillTemplates(new Dictionary<int, ItemTemplate> { [Fixture.GenericTicket] = template with { Jobs = 2 } });
+        That(service.Apply(character, request, out _, out _, now).Accepted,
+            "变更券源STK不重复校验客户端usable job限制");
+        foreach (var restricted in new[] { template with { MinimumLevel = 96 },
             template with { RequiredSkill = 1234 }, template with { UseForbidden = true } })
         {
             fixture.Items.PrefillTemplates(new Dictionary<int, ItemTemplate> { [Fixture.GenericTicket] = restricted });
             That(!service.Apply(character, request, out _, out var restriction, now).Accepted && restriction == "qualification",
-                "变更券的等级、职业、技能和禁用标记不能因专用入口被绕过");
+                "变更券的等级、技能和禁用标记不能因专用入口被绕过");
         }
         foreach (string value in new[] { "-1", "1000 2", "1000\n[cool time]\n2000" })
         {

@@ -132,7 +132,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
             definition.SealedOnly && target.Core.SealFlag == 0 || !AllowsPart(targetTemplate.EquipmentSlot, definition.SlotClass) ||
             !definition.AllowedItems.IsEmpty && !definition.AllowedItems.Contains(target.Core.ItemId) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) ||
-            !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+            !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate))
             return InventoryResult.Reject(Rejection);
         if (request.Mode is EnhancementMode.Reinforce or EnhancementMode.RandomReinforce ? target.Core.AmplifyType != 0 :

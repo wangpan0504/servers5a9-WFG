@@ -49,7 +49,7 @@ internal sealed class CreatureChangeService(Func<int, ItemTemplate> items, Func<
                 definition.AllowedItems.Count > 0 && !definition.AllowedItems.Contains(target.Core.ItemId))
                 return InventoryResult.Reject(0);
             var book = items(source.Core.ItemId);
-            if (book.UseForbidden || (book.Jobs & (1 << character.Job)) == 0 ||
+            if (book.UseForbidden ||
                 book.RequiredSkill > 0 && !character.Skills.Any(skill => skill.Id == book.RequiredSkill && skill.Level > 0) ||
                 !ValidCreature(target.Core.ItemId)) return InventoryResult.Reject(0);
             // 抽取前核对整个奖池，缺失候选不能被静默过滤并改变其他候选的概率。

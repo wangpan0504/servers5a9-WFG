@@ -79,7 +79,7 @@ internal static class ConsumableUseTests
             ActionUsableDungeons = [291100339, 5350] };
         That(RecoveryConsumableCatalog.Read(dungeonRestricted)?.AllowedDungeons is { } allowed &&
             allowed.SetEquals(new uint[] { 291100339, 5350 }) && RecoveryConsumableCatalog.Read(raw)?.AllowedDungeons is null,
-            "可用地下城名单独立进入使用资格，未声明的普通药不受新增限制");
+            "保留资源副本名单元数据；实际匹配由原生客户端完成，不为普通药另建资格分支");
         That(RecoveryConsumableCatalog.Read(dungeonRestricted with { ActionUsableDungeons = null }) is null,
             "存在但解析失败的可用地下城声明不能回退成任意场景使用");
         var nativeStat = dungeonRestricted with
@@ -242,8 +242,8 @@ internal static class ConsumableUseTests
             Stackable = declaration with
             { HasMaximumLevel = true, DeclaredMaximumLevel = 20, DeclaredUsableJobs = ["[mage]"] }
         })!;
-        That(limited.Allows(16, 3) && !limited.Allows(21, 3) && !limited.Allows(16, 0),
-            "物品等级与职业仍是服务端使用资格，不与客户端恢复效果混为一谈");
+        That(limited.Allows(16) && !limited.Allows(21) && limited.Jobs == 1 << 3,
+            "保留等级上下限和职业元数据，使用流程不重复客户端的职业匹配");
         var core = new ItemCore(1108, ItemKind.Consumable, 2) { SortLockFlag = 1, Marker16 = 44, ExpireTime = 2000 };
         Character character = new(1, 0, "Potion", 7, new(1, 0, 10, 10), null)
         {
@@ -346,7 +346,7 @@ internal static class ConsumableUseTests
         foreach (int id in fixedPeers)
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.EpicDropBuff is { BuffId: 1136, Percent: 100 } &&
                 peer.EpicDropBuff.IsFamilyItem(490000413) && peer.EffectMilliseconds == (id == 490005778 ? 1800000 : 600000) &&
-                peer.EffectMaintenance > 0 && !peer.RequiresDungeon && peer.Allows(95, 0),
+                peer.EffectMaintenance > 0 && !peer.RequiresDungeon && peer.Allows(95),
                 "全部固定1136同类真实药剂沿各自时长与资格，旧版不强求可选事件标签：" + id);
         That(!resources.RecoveryConsumables.TryGet(10008219, out _),
             "随机倍率药剂不借固定1136或缺尾修复取得使用资格");
@@ -362,8 +362,8 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.HellLegendEpicDropBuff is { BuffId: 1271, Param: 6520 } &&
                 peer.HellLegendEpicDropBuff.IsFamilyItem(490704393) && peer.EpicDropBuff is null &&
                 peer.EffectMilliseconds == 300000 && peer.EffectMaintenance == 7 && peer.CooltimeMaintenance == 7 &&
-                peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95, 0) &&
-                (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94, 0)),
+                peer.CoolGroup == 253 && !peer.RequiresDungeon && peer.Allows(95) &&
+                (id != 490704393 || peer.MinimumLevel == 95 && !peer.Allows(94)),
                 "全部星空1271同类真实药剂沿五分钟、组253和资格，截图490704393保留95级门槛：" + id);
         That(resources.RecoveryConsumables.TryGet(490006630, out var villageSample) && villageSample is
             { VillageMoveSpeedBuff: { BuffId: 1244, Percent: 20 }, EpicDropBuff: null, HellLegendEpicDropBuff: null,
@@ -380,7 +380,7 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var peer) && peer.VillageMoveSpeedBuff is { } speed &&
                 speed.BuffId == buff && speed.Percent == percent && speed.IsFamilyItem(490006630) &&
                 peer.EffectMilliseconds == duration && peer.CoolGroup == group && peer.EffectMaintenance == 7 &&
-                !peer.RequiresDungeon && peer.Allows(1, 0),
+                !peer.RequiresDungeon && peer.Allows(1),
                 "全部已核STK时长的城镇移速药剂沿各自时长、组和资格：" + id);
         int[] villagePeers = [490006630, 490007529, 490008899, 10306776, 10309246, 490010229, 490011339, 490703721];
         That(villageSample!.VillageMoveSpeedBuff!.ItemIds!.SetEquals(villagePeers) &&
@@ -414,7 +414,7 @@ internal static class ConsumableUseTests
                     new(92689, strong ? 0 : 40), new(92690, strong ? 0 : 40), new(92697, strong ? 100 : 20) }),
                 "19款实际来源逐项保留普通、强力和一次药型的完整权重、次数、等级及冷却 " + id);
             That(template.Kind == ItemKind.Consumable, "已绑定白斯药剂保留消耗品类型 " + id);
-            That(Enumerable.Range(0, 16).All(job => extra!.Allows(95, (byte)job)), "已绑定白斯药剂允许正常95级角色使用 " + id);
+            That(extra!.Allows(95), "已绑定白斯药剂允许正常95级角色使用 " + id);
             var position = new InventorySlot(InventoryListType.Main, 3);
             // 本用例只验证正常使用和完整实例保留，不把历史活动截止日期当作药剂识别条件。
             var core = new ItemCore(id, ItemKind.Consumable, 2)

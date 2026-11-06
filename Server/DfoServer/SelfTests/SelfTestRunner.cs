@@ -368,6 +368,7 @@ internal static class SelfTestRunner
         QuestThresholdRelationTests.RunCore();
         QuestCycleContinuationTests.RunCore();
         QuestDropTests.RunCore();
+        TreasureHunterPotionTests.RunCore();
         QuestClearEligibilityTests.Run();
         QuestRewardParameterTests.Run();
         PvpTrainingProgressTests.Run();
@@ -625,6 +626,7 @@ internal static class SelfTestRunner
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
         EnhancementPotionTests.RunResources(itemResources.RecoveryConsumables.EnhancementPotions);
+        TreasureHunterPotionTests.RunResources(itemResources.RecoveryConsumables);
         ConsumableUseSessionTests.RunDisguiseInventoryLifetime(towns, characters, itemResources.RecoveryConsumables);
         ConsumableUseSessionTests.RunDisguiseUpgradeLuck(towns, characters, itemResources);
         ConsumableUseSessionTests.Run(towns, characters, pvf);

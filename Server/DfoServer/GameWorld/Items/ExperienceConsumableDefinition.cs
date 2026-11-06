@@ -41,7 +41,7 @@ internal sealed record ExperienceConsumableDefinition(ItemTemplate Item, bool Pe
         };
     }
 
-    public bool Allows(byte level, byte job, byte growType) => Item.AllowsUse(level, job) &&
+    public bool Allows(byte level, byte job, byte growType) => Item.AllowsActivation(level, job) &&
         (FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15))) &&
         !ExcludedJobs.Contains("[all]") && !ExcludedJobs.Contains(ItemCatalog.JobTag(job));
 

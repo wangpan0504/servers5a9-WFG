@@ -37,6 +37,9 @@ internal sealed partial class GameSession
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
+        public Dictionary<int, RecoveryConsumableDefinition> FreeEffectDefinitions { get; } = new();
+        public HashSet<int> FreeTouchedNormalCooldowns { get; } = new();
+        public HashSet<int> FreeTouchedNormalEffects { get; } = new();
         public BossSelectionBuff? BossSelectionBuff { get; init; }
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
@@ -1569,7 +1572,7 @@ internal sealed partial class GameSession
         if (dungeon.QuestDrops is { } resources)
             dungeon.PendingQuestDrop ??= QuestDropPlan.Create(Selected,dungeon.Run.Entry,resources,pending.Death.EventId,
                 pending.Death.Identity,pending.Result.Snapshot.CurrentMap.Id,pending.Monster.MonsterId,pending.Monster.EnemyType,pending.Result.ClearFact is not null,
-                dungeon.Draw,frozen.At);
+                dungeon.Draw,frozen.At,consumables?.TreasureHunterPotions);
         var questDrop = dungeon.PendingQuestDrop;
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop);
         if (committed.Commit.CommittedBonuses is { } actualBonuses)
@@ -1716,10 +1719,12 @@ internal sealed partial class GameSession
         ReleaseCurrentEvildomWarDungeon();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
+        var consumableStates = RestoreAfterFreeConsumables(dungeon);
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
-        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange };
+        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange,
+            ConsumableCooldowns = consumableStates.Cooldowns, ConsumableEffects = consumableStates.Effects };
     });
 
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>

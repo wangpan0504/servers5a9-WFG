@@ -181,7 +181,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 if (catalog.IsSkillTreeExpansion(product.ItemId))
                 {
                     if (unlockSkillTree || product.Count != 1 || !character.Learning.Initialized ||
-                        character.Learning.SelectedTree >= 0 || template is null || !template.AllowsUse(character.Level, character.Job) ||
+                        character.Learning.SelectedTree >= 0 || template is null || !template.AllowsActivation(character.Level, character.Job) ||
                         !InventoryMoveService.RequiredSkillSatisfied(character, template)) return InventoryResult.Reject(17);
                     unlockSkillTree = true;
                     // 历史误发的有效背包券优先兑换一张；仓库物品不由商城跨容器消费。
@@ -223,14 +223,14 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 else if (template is { AvatarExpansionStage: > 0 })
                 {
                     if (product.Count != 1 || template.AvatarExpansionStage != avatarExpansion / 7 + 1 ||
-                        template.AvatarExpansionStage > 45 || !template.AllowsUse(character.Level, character.Job))
+                        template.AvatarExpansionStage > 45 || !template.AllowsActivation(character.Level, character.Job))
                         return InventoryResult.Reject(17);
                     avatarExpansion = checked((ushort)(template.AvatarExpansionStage * 7));
                 }
                 else if (template is { PersonalCargoUpgradeTarget: > 0 })
                 {
                     if (product.Count != 1 || template.PersonalCargoUpgradeTarget <= cargoCapacity || !CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) ||
-                        !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+                        !template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
                         return InventoryResult.Reject(17);
                     cargoCapacity = template.PersonalCargoUpgradeTarget;
                 }

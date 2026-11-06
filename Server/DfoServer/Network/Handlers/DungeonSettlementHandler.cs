@@ -737,6 +737,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_result_selector_wake", OpeningGuard);
             await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(opening.Character.Id), "formal_result_selection_state", OpeningGuard);
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"formal_result_selection_notice",OpeningGuard);
+            await TownProjection.RestoreFreeConsumablesAsync(context, opening.ConsumableCooldowns, opening.ConsumableEffects, OpeningGuard);
             log.Write("formal_dungeon_other_selection", new { Connection = context.Id, current.Entry.DungeonId,
                 opening.Character.Id, opening.SelectionId, LegendDungeon = legendTarget });
             return CommandResult.Handled;

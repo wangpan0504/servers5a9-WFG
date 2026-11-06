@@ -803,8 +803,8 @@ internal static class DungeonSettlementSessionTests
             Unavailable("选图");
             Enter(f);
             Unavailable("加载");
-            ClearRun(f,whileDungeon: () => Unavailable("战斗"));
-            Unavailable("清图未提交结算");
+            ClearRun(f,whileDungeon: () => Unavailable("战斗",repairBlocked:false));
+            Unavailable("清图未提交结算",repairBlocked:false);
             f.Sql("CREATE TRIGGER delilah_clear_fail BEFORE UPDATE OF experience ON characters BEGIN SELECT RAISE(ABORT,'pending settlement'); END");
             Reject<SqliteException>(() => Settle(f,[31,32,33]),"待提交结算测试注入真实SQL回滚");
             Unavailable("结算回滚后仍待提交");
@@ -876,11 +876,13 @@ internal static class DungeonSettlementSessionTests
             Reject<InvalidOperationException>(() => f.Session.DisjointEquipment(new(Bag(13),-1,0),disjoint,out _),"被接管的原owner不能分解");
             Check(Same(durable,f.Read(replacement)),"接管及重开库保留已提交资产，不允许旧会话追加或覆盖");
 
-            void Unavailable(string phase)
+            void Unavailable(string phase,bool repairBlocked=true)
             {
                 var saved = f.Read();
-                Check(!f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair).Accepted &&
-                    !f.Session.DisjointEquipment(new(Bag(10),-1,0),disjoint,out var rejectedReceipt).Accepted && rejectedReceipt is null &&
+                // 战斗/清图本身不阻止商店修理；未就绪和未决提交仍须拒绝，正向由RepairTcpTests覆盖。
+                if(repairBlocked)
+                    Check(!f.Session.RepairEquipment(new(Bag(3),-1,0,false),repair).Accepted,phase+"拒绝未就绪商店修理");
+                Check(!f.Session.DisjointEquipment(new(Bag(10),-1,0),disjoint,out var rejectedReceipt).Accepted && rejectedReceipt is null &&
                     Same(saved,f.Read()),phase+"拒绝德利拉物品服务并保留资产");
             }
             static InventorySlot Bag(short slot) => new(InventoryListType.Main,slot);

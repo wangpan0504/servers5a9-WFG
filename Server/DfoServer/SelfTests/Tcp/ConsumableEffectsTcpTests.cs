@@ -49,7 +49,8 @@ internal static partial class ConsumableUseTcpTests
             That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
                 fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
                 "史诗药重选恢复实际剩余时限，不再扣源或重新起算");
-            Use(peer,66,2,490002458); Accepted(peer,66,2,490002458); peer.Barrier();
+            Use(peer,66,2,490002458); Accepted(peer,66,2,490002458);
+            Replacement(peer,490000413,490002458); peer.Barrier();
             That(fixture.Query("SELECT item_id FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[490002458L]],
                 "同类固定史诗药替换旧效果，不叠加多份掉率");
             foreach (var (slot, id, duration) in new[] { (67,490004594,1800000), (68,10004688,180000) })
@@ -101,7 +102,8 @@ internal static partial class ConsumableUseTcpTests
             Use(peer,65,1,490006630); Refused(peer,1,490006630); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
                 "城镇移速药新token冷却拒绝不重扣、不续期");
-            Use(peer,66,2,10306776); Accepted(peer,66,2,10306776); peer.Barrier();
+            Use(peer,66,2,10306776); Accepted(peer,66,2,10306776);
+            Replacement(peer,490006630,10306776); peer.Barrier();
             That(fixture.Query("SELECT item_id FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[10306776L]] &&
                 fixture.Query("SELECT until_ms FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[var replaced]] &&
                 Convert.ToInt64(replaced) == clock.GetUtcNow().ToUnixTimeMilliseconds() + 1200000,
@@ -194,6 +196,19 @@ internal static partial class ConsumableUseTcpTests
                     fixture.Snapshot("SELECT * FROM character_consumable_states WHERE account='beta'"),
                 "无限使用礼物保留原物品、实际保存十二小时冷却，周边短期增益不变成收件人的物品或离线资产");
             Use(source,65,1,7789); Refused(source,1,7789); source.Barrier(); target.Barrier();
+        }
+
+        byte[] EffectTimes(params (int Id,int Seconds)[] rows) => Build(w =>
+        { w.Write((byte)rows.Length); foreach(var row in rows) { w.Write(row.Id); w.Write(row.Seconds); } });
+
+        void Replacement(TcpPeer peer,int oldId,int newId)
+        {
+            That(resources.ItemResources.RecoveryConsumables.TryGet(oldId,out var previous),"替换通知按真实旧资源维护位核对");
+            if((previous.EffectMaintenance & 8)==0)
+            {
+                That(resources.ItemResources.RecoveryConsumables.TryGet(newId,out _),"新编号已由普通成功ACK按真实模板起算");
+                peer.Expect(0,174,EffectTimes((oldId,0)));
+            }
         }
 
         Character Create(AccountOwners.Lease owner, string name, byte level, (int Id,int Count)[] contents)

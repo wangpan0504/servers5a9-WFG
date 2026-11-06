@@ -40,7 +40,7 @@ internal sealed partial class GameSession
             if (pendingDisguise?.UntilMilliseconds <= now) pendingDisguise = null;
             if (blocked || !CanUseConsumable() || pendingConsumableUse is not null || pendingDisguise is not null ||
                 Phase != SessionPhase.Town || Selected is not { } character || character.Disguise?.Active(now) == true ||
-                definition.RequiresDungeon || definition.SummonsApc || definition.AllowedDungeons is not null)
+                definition.RequiresDungeon || definition.SummonsApc)
                 return null;
             var previous = usedConsumables.GetValueOrDefault(definition.CoolGroup);
             if (previous is { EnforceCooldown: true } &&
@@ -48,7 +48,7 @@ internal sealed partial class GameSession
                 character.Inventory.ConsumableStates.Any(row => row.Kind == ConsumableStateKind.Cooldown &&
                     row.CoolGroup == definition.CoolGroup && row.Active(now)))
                 return null;
-            // 211没有源槽；在同一owner门内复用Plan的UID、主背包、锁、期限及职业等级校验。
+            // 211没有源槽；在同一owner门内复用Plan的UID、主背包、锁、期限及等级校验。
             var source = character.Inventory.Items.FirstOrDefault(row => row.Core.ItemId == itemId &&
                 service.Plan(character, new(row.Position, 0, itemId, 0), now / 1000).Accepted);
             now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();

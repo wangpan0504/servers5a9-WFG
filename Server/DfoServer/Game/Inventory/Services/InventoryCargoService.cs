@@ -72,7 +72,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             tier.Capacity <= before.AccountCargo.Capacity)
             return InventoryResult.Reject(17);
         var template = catalog.Get(tier.ToolItemId);
-        if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+        if (!template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         tool = before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == tier.ToolItemId &&
             item.Core.Kind == template.Kind && item.Core.IsStackable && item.Core.EquipmentLockId == 0 && !item.IsExpired(now.ToUnixTimeSeconds()))
@@ -112,7 +112,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 || item.Core.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()))
             return InventoryResult.Reject(17);
         var template = catalog.Get(item.Core.ItemId);
-        if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+        if (!template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         ushort target = template.PersonalCargoUpgradeTarget;
         if (template.AdvancesPersonalCargo)

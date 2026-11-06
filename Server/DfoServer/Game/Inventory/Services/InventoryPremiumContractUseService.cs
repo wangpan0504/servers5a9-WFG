@@ -33,7 +33,7 @@ internal sealed class InventoryPremiumContractUseService(ItemCatalog items, Prem
             source.Core.Count <= 0 || !ItemSlotBoundService.Allows(before, request.Position, ItemKind.Consumable) ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now) ||
             contract.ItemId != request.ItemId || contract.DurationSeconds <= 0 ||
-            template.Id != request.ItemId || template.Kind != ItemKind.Consumable || !template.AllowsUse(character.Level, character.Job) ||
+            template.Id != request.ItemId || template.Kind != ItemKind.Consumable || !template.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(123);
 

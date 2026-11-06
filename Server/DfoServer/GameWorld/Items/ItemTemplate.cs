@@ -70,8 +70,10 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public int CharacterSlotMaximum { get; init; }
     public int MaximumLevel { get; init; } = int.MaxValue;
     public int AvatarExpansionStage { get; init; }
-    public bool AllowsUse(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
-        job < 16 && (Jobs & (1 << job)) != 0;
+    // STK激活的职业与模板副本名单由客户端判断；装备穿戴和本职业候选仍使用AllowsUse。
+    public bool AllowsActivation(byte level, byte job) => job < 16 && !UseForbidden && level >= MinimumLevel && level <= MaximumLevel;
+    public bool AllowsUse(byte level, byte job) => AllowsActivation(level, job) &&
+        (Jobs & (1 << job)) != 0;
     public RefinementTicketDefinition? RefinementTicket { get; init; }
     public EquipmentQualityBox? QualityBox { get; init; }
     public AvatarAbilityChangeDefinition? AvatarAbilityChange { get; init; }

@@ -30,9 +30,9 @@ internal sealed partial class GameSession
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
         bool blessing = formalDungeon!.Entry.RaidEntry?.Kind is not (Raids.RaidKind.Luke or Raids.RaidKind.Fiendwar) && !formalDungeon.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
             GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId) && row.Active(now));
-        var after = ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death,
-            now);
-        if (blessing)
+        bool free = PreservesDungeonConsumables;
+        var after = free ? character.Inventory : ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death, now);
+        if (blessing && !free)
             after = after with { ConsumableStates = after.ConsumableStates.Where(row => row.Kind != ConsumableStateKind.Effect ||
                 !GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId)).ToImmutableArray() };
         if (after != character.Inventory)
@@ -42,7 +42,7 @@ internal sealed partial class GameSession
         if (blessing)
             formalDungeon.FreeConsumableEffects = formalDungeon.FreeConsumableEffects.Where(row => row.Kind != ConsumableStateKind.Effect ||
                 !GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId)).ToImmutableArray();
-        CrossConsumableCooldownBoundary(ConsumableMaintenance.Death);
+        if (!free) CrossConsumableCooldownBoundary(ConsumableMaintenance.Death);
         formalDungeon!.Run.CancelRidable();
         formalDungeon!.CharacterDead = !blessing;
         formalDungeon.DeathSerial++;

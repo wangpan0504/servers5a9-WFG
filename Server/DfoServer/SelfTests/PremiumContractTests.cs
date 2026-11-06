@@ -137,10 +137,12 @@ internal static class PremiumContractTests
             character with { Inventory = new([new(11, position, core with { ExpireTime = 1000 })]) },
             character with { Inventory = new([new(11, position, core with { Value = 0 })]) } })
             That(!Plan(invalid, request).Accepted, "空槽、临时UID、安全锁、期限边界和零数量不能消费");
-        foreach (var invalid in new[] { template with { MinimumLevel = 2 }, template with { MaximumLevel = 0 }, template with { Jobs = 2 }, template with { UseForbidden = true },
+        That(InventoryPremiumContractUseService.Plan(character, request, 1000, usable, template with { Jobs = 2 }).Accepted,
+            "契约源STK不重复校验客户端usable job限制");
+        foreach (var invalid in new[] { template with { MinimumLevel = 2 }, template with { MaximumLevel = 0 }, template with { UseForbidden = true },
             template with { Id = 30 }, template with { Kind = ItemKind.Material } })
             That(!InventoryPremiumContractUseService.Plan(character, request, 1000, usable, invalid).Accepted,
-                "真实模板的等级、职业、禁止使用和类别独立参与资格");
+                "真实模板的等级、禁止使用和类别独立参与资格");
         That(InventoryPremiumContractUseService.Plan(character, request, 1000, usable, template with { MaximumLevel = 1 }).Accepted &&
             !InventoryPremiumContractUseService.Plan(character with { Level = 2 }, request, 1000, usable,
                 template with { MaximumLevel = 1 }).Accepted, "契约最高等级边界包含本级并拒绝超过有效上限的角色");

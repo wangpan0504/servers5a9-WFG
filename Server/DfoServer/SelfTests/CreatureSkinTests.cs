@@ -82,7 +82,7 @@ internal static class CreatureSkinTests
             That(!InventoryCreatureSkinService.PlanUnlock(invalid, 65, 33, 1000, template).Accepted,
                 "已开栏、空槽、临时实例、安全锁及精确到期拒绝且不扣券");
         foreach (var invalid in new[] { template with { Id = 1 }, template with { OpensCreatureSkinSlot = false },
-            template with { UseForbidden = true }, template with { MinimumLevel = 2 }, template with { Jobs = 0 } })
+            template with { UseForbidden = true }, template with { MinimumLevel = 2 } })
             That(!InventoryCreatureSkinService.PlanUnlock(sourceRole, 65, 33, 1000, invalid).Accepted,
                 "模板身份、资源动作、禁用和角色合法资格不能绕过");
         That(InventoryCreatureSkinService.PlanUnlock(character, -1, 33, 1000, null).Error == 1 &&

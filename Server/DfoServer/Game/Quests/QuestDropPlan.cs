@@ -54,11 +54,12 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
 
     public static QuestDropPlan Create(Character character, DungeonEntryPlan entry, QuestDropResources resources,
         Guid eventId, DungeonRunIdentity identity, int mapId, int templateId, int enemyType, bool cleared,
-        Func<int,int> draw, DateTimeOffset now)
+        Func<int,int> draw, DateTimeOffset now, IReadOnlyDictionary<int, TreasureHunterPotionDefinition>? potions = null)
     {
         if (eventId == Guid.Empty || identity.CharacterId != character.Id || identity.QuestId != entry.QuestId ||
             mapId <= 0 || templateId <= 0 || enemyType is not (1 or 2 or 3)) throw new InvalidDataException("任务掉落需要真实场景事件");
         var after = character.Inventory;
+        int potionBonus = TreasureHunterPotionPolicy.ActiveBonus(after.ConsumableStates, potions, now.ToUnixTimeMilliseconds());
         bool readsInventory = false;
         var outcomes = ImmutableArray.CreateBuilder<QuestDropOutcome>();
         foreach (var active in character.ActiveMainQuests.OrderBy(row => row.Slot))
@@ -80,6 +81,7 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                 if (limit >= 0 && held >= limit) continue;
                 int rolled = 0;
                 int rate = GrowthContractPolicy.QuestDropRate(character,row.Rate,resources.Growth,now.ToUnixTimeSeconds());
+                rate = TreasureHunterPotionPolicy.AdjustedRate(row.Rate, rate, potionBonus);
                 if (rate == 100) rolled = row.Count;
                 else if (rate != 0)
                     for (int at = 0; at < row.Count; at++)

@@ -1060,11 +1060,14 @@ internal static class AvatarPackageTests
         var template = new ItemTemplate(990301, ItemKind.Consumable, 0, 80, 0, 1000, 1, 0, 1, "[free]", 1 << 15, 77, "AvatarBox");
         Character character = new(1, 0, "AvatarUse", 0, new(0, 0, 0, 0), null)
         { Job = 15, Level = 80, Skills = [new(77, 1)], Inventory = new([source]) };
-        That(InventoryAvatarPackageService.SourceEligible(character, source, template), "源礼盒的资源等级、职业和已学技能同时满足；排序锁允许使用");
+        That(InventoryAvatarPackageService.SourceEligible(character, source, template) &&
+            InventoryAvatarPackageService.SourceEligible(character with { Job = 0 }, source, template) &&
+            InventoryAvatarPackageService.SourceEligible(character, source, template with { Jobs = 1 }),
+            "源礼盒的等级和已学技能同时满足；排序锁和usable job不另阻止使用");
         foreach (var denied in new[] { template with { UseForbidden = true }, template with { MinimumLevel = 81 },
-            template with { Jobs = 1 }, template with { RequiredSkill = 78 }, template with { Id = 990302 }, template with { Kind = ItemKind.Avatar } })
-            That(!InventoryAvatarPackageService.SourceEligible(character, source, denied), "禁用、等级、职业、技能和模板身份资格拒绝");
-        foreach (var denied in new[] { character with { Level = 79 }, character with { Job = 0 }, character with { Job = 47 },
+            template with { RequiredSkill = 78 }, template with { Id = 990302 }, template with { Kind = ItemKind.Avatar } })
+            That(!InventoryAvatarPackageService.SourceEligible(character, source, denied), "禁用、等级、技能和模板身份资格拒绝");
+        foreach (var denied in new[] { character with { Level = 79 }, character with { Job = 47 },
             character with { Skills = [] }, character with { Skills = [new(77, 0)] } })
             That(!InventoryAvatarPackageService.SourceEligible(denied, source, template), "角色未满足真实使用资格不能开启礼盒");
         var permanent = new InventoryItem(0, new(InventoryListType.Avatar, 0), new(990303, ItemKind.Avatar, 0)) { Avatar = new() };

@@ -21,7 +21,7 @@ internal static class InventoryAcquisitionService
             catch (OverflowException) { return InventoryResult.Reject(19); }
         }
         // 扩容工具每张对应一次合法提升；不能提升时拒绝整笔，不退成实体或静默吞掉多张。
-        if (count != 1 || !template.AllowsUse(character.Level, character.Job) ||
+        if (count != 1 || !template.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template)) return InventoryResult.Reject(19);
         InventorySnapshot upgraded;
         if (CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) && template.PersonalCargoUpgradeTarget > before.CargoCapacity)

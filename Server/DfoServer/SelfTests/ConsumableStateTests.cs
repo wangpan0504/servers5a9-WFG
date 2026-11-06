@@ -37,7 +37,45 @@ internal static class ConsumableStateTests
             That(ConsumableStatePolicy.CrossBoundary(transient, boundary, now).ConsumableStates.IsEmpty,
                 "未声明保留的临时效果和冷却在对应边界清除，不被持久行重新复活");
         var shorter = ConsumableStatePolicy.Activate(active, potion with { EffectMilliseconds = 60000, CoolTime = 60000 }, now + 1000)!;
-        That(shorter.ConsumableStates.SequenceEqual(active.ConsumableStates), "重复同ID不缩短已有持续效果，也不按剩余时间叠加期限");
+        That(shorter.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == now + 61000 &&
+            shorter.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Cooldown).UntilMilliseconds == now + 1800000,
+            "合法续药按本次时长覆盖效果，不叠加旧剩余时间，也不缩短尚在生效的冷却");
+        var refreshed = ConsumableStatePolicy.RefreshEffects(potion, active.ConsumableStates,
+            shorter.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect), now + 1000, explicitTimeRefresh:true);
+        That(refreshed is [{ ItemId: 10087825, RemainingSeconds: 60 }] &&
+            ConsumableStatePolicy.RefreshEffects(potion, [], shorter.ConsumableStates[0], now, explicitTimeRefresh:true).IsEmpty,
+            "只在覆盖已有药效时明确刷新计时；首次使用不重复发效果通知");
+        var guarded = ConsumableStatePolicy.RefreshEffects(potion with { ItemId = 490003621 },
+            active.ConsumableStates.Select(row => row.Kind == ConsumableStateKind.Effect ? row with { Maintenance = 15 } : row),
+            new(ConsumableStateKind.Effect,490003621,now+10000,7,5),now,explicitTimeRefresh:true);
+        That(guarded is [{ ItemId: 490003621, RemainingSeconds: 10 }],
+            "第四维护位的特殊旧效果不套零秒结束，不能误用同ID冷却行的维护位放行");
+        That(ConsumableStatePolicy.RefreshEffects(potion,active.ConsumableStates,
+            shorter.ConsumableStates[0],now,explicitTimeRefresh:false).IsEmpty,
+            "普通成功ACK自行刷新同ID，不重复补174完整时长");
+        var ordinaryReplacement=ConsumableStatePolicy.RefreshEffects(potion with {ItemId=490003621},active.ConsumableStates,
+            new(ConsumableStateKind.Effect,490003621,now+10000,7,5),now,explicitTimeRefresh:false);
+        That(ordinaryReplacement is [{ItemId:10087825,RemainingSeconds:0}],
+            "跨编号普通成功只结束旧计时，新编号已由ACK起算，不重复触发新药播报");
+        var replacement = potion with { ItemId=490003621, EffectMilliseconds=10000 };
+        var independent = new ConsumableState(ConsumableStateKind.Effect,1113,now+60000,7,1);
+        var replaced = ConsumableStatePolicy.Activate(active with { ConsumableStates=active.ConsumableStates.Add(independent) },
+            replacement,now)!;
+        var actualEffect = replaced.ConsumableStates.Single(row=>row.Kind==ConsumableStateKind.Effect && row.ItemId==replacement.ItemId);
+        That(actualEffect.UntilMilliseconds==now+10000 && replaced.ConsumableStates.Contains(independent) &&
+            !replaced.ConsumableStates.Any(row=>row.Kind==ConsumableStateKind.Effect && row.ItemId==potion.ItemId) &&
+            ConsumableStatePolicy.RefreshEffects(replacement,active.ConsumableStates,actualEffect,now,explicitTimeRefresh:true)
+                is [{ItemId:10087825,RemainingSeconds:0},{ItemId:490003621,RemainingSeconds:10}],
+            "长药换短药仍按本次十秒覆盖并保留无关药效；免扣没有成功ACK时仍完整结束旧项并同步新时长");
+        That(ConsumableStatePolicy.RefreshEffects(potion with {ItemId=490003621},
+            active.ConsumableStates.Select(row=>row.Kind==ConsumableStateKind.Effect?row with{Maintenance=15}:row),
+            new(ConsumableStateKind.Effect,490003621,now+10000,7,5),now,explicitTimeRefresh:false).IsEmpty,
+            "无需安全清旧时由普通ACK起算，不重复补新计时");
+        Bytes(ConsumableStatePackets.Updates([new(10087825, 0)]), [1,0x91,0xED,0x99,0,0,0,0,0],
+            "零秒结束为显式更新，不调用普通恢复逻辑重启完整时长");
+        Reject<InvalidDataException>(() => ConsumableStatePackets.Updates([new(1,-1)]), "计时更新拒绝负秒数");
+        Reject<InvalidDataException>(() => ConsumableStatePackets.Updates(Enumerable.Repeat(new ConsumableStateUpdate(1,1),256).ToArray()),
+            "单包更新不截断协议容量");
         var blessing = new RecoveryConsumableDefinition(2600020, 1, 1200000, -2600020)
             { EffectMilliseconds = 1200000, RevivalBlessing = true };
         var firstBlessing = ConsumableStatePolicy.Activate(InventorySnapshot.Empty, blessing, now)!;

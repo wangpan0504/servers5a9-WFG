@@ -29,7 +29,7 @@ internal sealed class InventoryExpansionService(ItemCatalog items, TimeProvider?
         if (source is null || source.Uid <= 0 || source.Core.Kind != ItemKind.Consumable || source.Core.Count <= 0 ||
             source.Core.EquipmentLockId != 0 || source.IsExpired(now) || source.Core.ItemId != template.Id ||
             template.Kind != source.Core.Kind || !ItemSlotBoundService.Allows(before, position, source.Core.Kind) ||
-            !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+            !template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(Rejection);
         var consumed = InventoryDeleteService.Plan(before, position, source.Core.ItemId, 1);
         if (!consumed.Accepted || consumed.Plan is null)
