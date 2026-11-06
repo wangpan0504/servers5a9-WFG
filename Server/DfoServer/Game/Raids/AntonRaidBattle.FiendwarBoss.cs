@@ -147,7 +147,12 @@ internal sealed partial class AntonRaidBattle
         foreach (var encounter in fiendwarEncounters)
             if (encounter.Value.Area is 30 or 31 && boss.Side(BossSide(encounter.Value.Area)).Stage == FiendwarWorldStage.Saved &&
                 !(boss.Joined && boss.RemainingHp == 0))
-                candidate = candidate with { FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(encounter.Key) };
+                candidate = candidate with
+                {
+                    FiendwarExpiredRuns = candidate.FiendwarExpiredRuns.Add(encounter.Key),
+                    FiendwarBridgeReturns = candidate.FiendwarBridgeReturns.SetItem(encounter.Key, encounter.Value.Area == 30 ? 31 : 30),
+                    FiendwarDungeonTimers = candidate.FiendwarDungeonTimers.Remove(encounter.Value.Area)
+                };
         CommitBattleCandidate(before, candidate);
     }
 

@@ -1,5 +1,9 @@
 @echo off
 setlocal DisableDelayedExpansion
+if exist "%~dp0build\server-dll\start-server.bat" (
+  call "%~dp0build\server-dll\start-server.bat" %*
+  exit /b
+)
 set "SERVER_EXE="
 if exist "%~dp0DfoServer.exe" set "SERVER_EXE=%~dp0DfoServer.exe"
 if not defined SERVER_EXE if exist "%~dp0dist\win-x64\DfoServer.exe" set "SERVER_EXE=%~dp0dist\win-x64\DfoServer.exe"

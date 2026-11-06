@@ -283,6 +283,7 @@ internal static class Strongway2019AdmissionSessionTests
             var owners = new AccountOwners();
             using var owner = owners.Acquire("sw-formal-session", () => { });
             var events = new ServerEventService(new ServerEventRepository(path));
+            events.Override(ServerEventService.Strongway2019Id, false);
             var growth = CharacterGrowthCatalog.Load(pvf);
             var role = repository.Create(owner, new("SWFormal", new(65, 1, 450, 234), towns.InitialReturn)
                 { Level = 95, InitialLearning = new(growth.GetLevelStartExperience(95),
@@ -401,7 +402,8 @@ internal static class Strongway2019AdmissionSessionTests
                 }, serverEvents: events);
             session.Select(role.Slot, resumeTown: true); session.MarkReady();
             sessionActor = session.Selected;
-            That(session.PrepareStrongway2019Admission(5359) is null, "312默认关闭时正式Session不授予准入");
+            events.Override(312, false);
+            That(session.PrepareStrongway2019Admission(5359) is null, "312显式关闭时正式Session不授予准入");
             var enabled = events.Override(312, true).Schedule;
             var admission = session.PrepareStrongway2019Admission(5359);
             That(admission is { Mode: Strongway2019Mode.Simple, MemberCount: 1, AntiEvil: 4000 } &&

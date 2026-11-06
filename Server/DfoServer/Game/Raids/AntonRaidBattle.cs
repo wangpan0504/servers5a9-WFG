@@ -20,6 +20,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<ushort, ushort> PreyMemberLocations { get; init; } = ImmutableDictionary<ushort, ushort>.Empty;
     public ImmutableDictionary<(ushort Character, int Dungeon), uint> PreyMemberRetryDeadlines { get; init; } =
         ImmutableDictionary<(ushort Character, int Dungeon), uint>.Empty;
+    public ImmutableDictionary<Guid, int> FiendwarBridgeReturns { get; init; } = ImmutableDictionary<Guid, int>.Empty;
     public FiendwarBossRound? FiendwarBoss { get; init; }
     public FiendwarSupportNotice? FiendwarSupport { get; init; }
     public ImmutableDictionary<int, RaidClause> Deferred { get; init; } = ImmutableDictionary<int, RaidClause>.Empty;

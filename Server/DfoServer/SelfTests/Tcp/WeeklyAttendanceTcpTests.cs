@@ -23,10 +23,10 @@ internal static class WeeklyAttendanceTcpTests
         Boundaries(catalog);
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-11-03T04:00:00Z"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "weekly-attendance"), gm: true, resources: resources,
-            clock: clock, useDefaultActivities: true);
+            clock: clock, useDefaultActivities: true, monsterMockBattle: false);
         var repository = new CharacterRepository(fixture.Database);
         var events = new ServerEventService(new ServerEventRepository(fixture.Database), clock);
-        foreach (ushort id in new ushort[] { 2257, 228, 2370 }) events.Override(id, false);
+        foreach (ushort id in new ushort[] { 64, 312, 2520, 10005, 2257, 228, 2370 }) events.Override(id, false);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var candidate = CharacterCreation.Prepare("WeeklyGiftA", resources.Characters.Get(0),
@@ -36,7 +36,7 @@ internal static class WeeklyAttendanceTcpTests
         }
         await fixture.StartAsync();
         using var client = Open(fixture);
-        client.ExpectedOpenEvents = [2532, 266, 2208];
+        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2208];
         client.ExpectedActiveEvents = [2395, 2208];
         client.Select();
         byte[]? state = null;
@@ -60,12 +60,25 @@ internal static class WeeklyAttendanceTcpTests
         var sign = Exchange(1115, new byte[13]);
         Bytes(sign.Single(row => row.Kind == 1 && row.Opcode == 1115).Body, [1, 0, 0, 0, 0], "C1115真实领取成功ACK");
         That(U32(state!, 4) == 1 && U32(state!, 0x1b4) == 0 && Count() == 1 && alarms == 1, "真实领取先ACK再1096和99，进度邮件一起落库");
-        var ordered = sign.Where(row => row.Opcode is 1115 or 1096 or 99).Select(row => row.Opcode).ToArray();
-        That(ordered.SequenceEqual(new ushort[] { 1115, 1096, 99 }), "成功领取包序完整");
+        var ordered = sign.Where(row => row.Opcode is 1115 or 1096 or 99).ToArray();
+        int acknowledgement = Array.FindIndex(ordered, row => row is { Kind: 1, Opcode: 1115 });
+        That(acknowledgement is 0 or 1, "唯一成功ACK前至多一条未领取状态");
+        // 活动worker可先发布Seed后的未领取状态；逐字节验证，不能跳过任意旧包或提前邮件。
+        byte[] unclaimed = new byte[459];
+        unclaimed[0x1b4] = 4;
+        unclaimed[0x1c4] = 1;
+        unclaimed[0x1c8] = 1;
+        foreach (var packet in ordered.Take(acknowledgement))
+        {
+            That(packet is { Kind: 0, Opcode: 1096 }, "领奖ACK前仅允许未领取状态，没有邮件或额外应答");
+            Bytes(packet.Body, unclaimed, "领奖ACK前状态完整保留零总次数、四通关余额与第一周可领资格");
+        }
+        That(ordered.Skip(acknowledgement).Select(row => (row.Kind, row.Opcode)).SequenceEqual(
+            new (byte, ushort)[] { (1, 1115), (0, 1096), (0, 99) }), "成功领取包序完整");
         Exchange(1115, new byte[13]);
         That(Count() == 1 && alarms == 1, "重复签到不重发邮件和提醒");
         client.Send(7); client.Expect(1, 7, [1]); client.Expect(0, 2);
-        client.ExpectedOpenEvents = [2532, 266, 2208];
+        client.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2208];
         client.ExpectedActiveEvents = [2395, 2208];
         client.Select(1);
         Exchange(1115, new byte[13]);

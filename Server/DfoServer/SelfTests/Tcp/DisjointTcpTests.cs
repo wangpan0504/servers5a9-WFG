@@ -125,6 +125,8 @@ internal static class DisjointTcpTests
             Receive(peer, mailedSlot, -1, 0, [3037, 10158124, 10305633]);
             peer.Barrier();
         }
+        await BoosterSelectionTcpTests.WaitForInitialDisconnectAsync(fixture,
+            Convert.ToUInt16(fixture.Query("SELECT id FROM characters WHERE name='DisjointTcp'").Single()[0]));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -322,7 +324,7 @@ internal static class DisjointTcpTests
         long BookRevision() => fixture.Query("SELECT revision FROM account_epic_books") is { Length: > 0 } rows ? Convert.ToInt64(rows[0][0]) : 0;
         using (var peer = Open(fixture))
         {
-            peer.ExpectedOpenEvents = [2532, 266, 2520];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
             peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
             peer.Select(); peer.Expect(0, 1800); peer.Expect(0, 1801); peer.Expect(0, 1802); peer.Barrier();
             int targets = policy.Active(at).Count(row => DfoServer.Game.BattlePass.BattlePassEquipmentDisjointSource.Matches(row.Definition));

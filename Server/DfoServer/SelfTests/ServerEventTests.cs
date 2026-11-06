@@ -24,6 +24,7 @@ internal static class ServerEventTests
             var store = new ServerEventRepository(path);
             var events = new ServerEventService(store, clock);
             const ushort strongway = 312;
+            VerifyRegisteredDefaults(root, clock);
             VerifyStrongwayDefault(root);
             VerifyBattlePassDefault(root);
             foreach (ushort id in new ushort[] { 2037, 2378, 2395, 2257, 228, 2370, 2208 })
@@ -41,9 +42,9 @@ internal static class ServerEventTests
             ServerEventState? strongwayInitial = null;
             try { strongwayInitial = events.Read(strongway); }
             catch (InvalidDataException) { }
-            That(strongwayInitial is { Active: false, Schedule: { EventId: strongway, Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } } &&
+            That(strongwayInitial is { Active: true, Schedule: { EventId: strongway, Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } } &&
                 store.Read(strongway) == new ServerEventSchedule(strongway),
-                "强者之路312已登记但未配置默认关闭，只读不补写活动版本");
+                "强者之路312已登记且未配置默认开启，只读不补写活动版本");
             var strongwayOn = DevelopmentRequest.Parse("event on 312", "10000").Event!.Execute(events);
             That(strongwayOn is { Active: true, Schedule: { Revision: 1, OverrideActive: true } } &&
                 DevelopmentRequest.Parse("event on 312", "10000").Event!.Execute(events) == strongwayOn,
@@ -52,8 +53,8 @@ internal static class ServerEventTests
             That(strongwayOff is { Active: false, Schedule: { Revision: 2, OverrideActive: false } },
                 "312 GM off关闭活动并提交独立revision");
             var strongwayAuto = DevelopmentRequest.Parse("event auto 312", "10000").Event!.Execute(events);
-            That(strongwayAuto is { Active: false, Schedule: { Revision: 3, OverrideActive: null } },
-                "312没有时间表时auto恢复默认关闭");
+            That(strongwayAuto is { Active: true, Schedule: { Revision: 3, OverrideActive: null } },
+                "312没有时间表时auto恢复默认开启");
             var strongwayScheduled = DevelopmentRequest.Parse($"event schedule 312 {now.AddSeconds(1):yyyy-MM-ddTHH:mm:sszzz} {now.AddSeconds(3):yyyy-MM-ddTHH:mm:sszzz}", "10000").Event!.Execute(events);
             That(!strongwayScheduled.Active && strongwayScheduled.Schedule.Revision == 4,
                 "312未来时间表持久提交revision，开始前不激活");
@@ -97,9 +98,9 @@ internal static class ServerEventTests
                 "显式时间表结束端点关闭，事务前置不恢复默认常驻");
             That(mileageEvents.Override(266, true).Active && !mileageEvents.Override(266, false).Active &&
                 !mileageEvents.Override(266, null).Active, "显式on和off覆盖时段，auto保留已结束的显式时段");
-            That(!mileageEvents.Read(64).Active && mileageEvents.Read(ServerEventService.NolanVisibilityId).Active,
-                "积分默认策略不改变黄金牌默认关闭或诺兰默认可见");
-            That(events.Read(64) is { Active: false, Schedule.Revision: 0 }, "未配置活动保持关闭，不将PVF2011文案当作时间表");
+            That(mileageEvents.Read(64).Active && mileageEvents.Read(ServerEventService.NolanVisibilityId).Active,
+                "积分默认策略保留黄金牌及诺兰默认开启");
+            That(events.Read(64) is { Active: true, Schedule.Revision: 0 }, "未配置已登记活动默认开启，不将PVF2011文案当作时间表");
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
             db.Open();
             void Sql(string text)
@@ -265,6 +266,29 @@ internal static class ServerEventTests
         That(failing.InitializeStrongwayDefault().Initialized, "失败后能够重新初始化");
     }
 
+    static void VerifyRegisteredDefaults(string root, TimeProvider clock)
+    {
+        string path = Path.Combine(root, "registered-defaults.db");
+        var now = clock.GetUtcNow();
+        var events = new ServerEventService(new ServerEventRepository(path), clock);
+        events.ConfigureBattlePass(now.AddDays(-1), now.AddDays(1), true);
+        foreach (var definition in ServerEventService.Definitions)
+        {
+            var state = events.Read(definition.Id);
+            That(state is { Active: true, Schedule.Revision: 0 }, "所有已登记活动缺省开启且只读不写库");
+            var off = events.Override(definition.Id, false);
+            var restored = new ServerEventService(new ServerEventRepository(path), clock);
+            restored.ConfigureBattlePass(now.AddDays(-1), now.AddDays(1), true);
+            That(restored.Read(definition.Id) == off && !off.Active, "人工关闭重启保留，不被缺省全开覆盖");
+            That(restored.Override(definition.Id, null).Active, "无时间表auto恢复所有已登记活动的开启默认");
+            if (!definition.SupportsSchedule) continue;
+            var scheduled = restored.Schedule(definition.Id, now.AddHours(1), now.AddHours(2));
+            That(!scheduled.Active && restored.Override(definition.Id, null) == scheduled,
+                "人工未来时间表和auto保留原时段，不因默认全开提前开放");
+        }
+        That(!ServerEventService.DefaultActive(74), "资源公告编号不因默认全开变成已登记业务");
+    }
+
     static void VerifyBattlePassDefault(string root)
     {
         string directory = Path.Combine(root, "pass-default"); Directory.CreateDirectory(directory);
@@ -350,10 +374,10 @@ internal static class ServerEventTests
         var events = new ServerEventService(store, clock);
         var unrelated = new ushort[] { 64, 266, 2532 }.Select(events.Read).ToArray();
         var initial = DevelopmentRequest.Parse("event status 10005", "10000").Event!.Execute(events);
-        That(initial is { Active: false, Schedule: { Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } },
-            "星河裂缝10005未配置默认关闭，不借积分商城或诺兰的常驻策略开放");
+        That(initial is { Active: true, Schedule: { Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } },
+            "星河裂缝10005未配置默认开启，独立配置及版本保持不变");
         That(DevelopmentRequest.Parse("event auto 10005", "10000").Event!.Execute(events) == initial,
-            "星河裂缝无时间表auto保持关闭且不创建无变化版本");
+            "星河裂缝无时间表auto保持默认开启且不创建无变化版本");
         var enabled = DevelopmentRequest.Parse("event on 10005", "10000").Event!.Execute(events);
         That(enabled is { Active: true, Schedule.Revision: 1 } && events.Override(epicRoad, true) == enabled &&
             new ServerEventService(new ServerEventRepository(path), clock).Read(epicRoad) == enabled,
@@ -364,8 +388,8 @@ internal static class ServerEventTests
             "星河裂缝显式关闭在仓储和服务重建后保持");
         Reject<InvalidOperationException>(() => store.Save(enabled.Schedule, enabled.Schedule with { OverrideActive = false }),
             "星河裂缝旧revision不能覆盖较新的关闭配置");
-        That(events.Override(epicRoad, null) is { Active: false, Schedule: { Revision: 3, OverrideActive: null } },
-            "星河裂缝无时间表auto恢复默认关闭");
+        That(events.Override(epicRoad, null) is { Active: true, Schedule: { Revision: 3, OverrideActive: null } },
+            "星河裂缝无时间表auto恢复默认开启");
         var request = DevelopmentRequest.Parse(
             $"event schedule 10005 {now.AddSeconds(1):yyyy-MM-ddTHH:mm:sszzz} {now.AddSeconds(3):yyyy-MM-ddTHH:mm:sszzz}", "10000");
         That(request.Event!.Execute(events) is { Active: false, Schedule.Revision: 4 },

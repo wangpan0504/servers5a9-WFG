@@ -286,7 +286,7 @@ internal static class ChannelEntryTcpTests
         await fixture.StartAsync();
         using var peer = Open(fixture);
         peer.Create("NoPromo2520");
-        peer.ExpectedOpenEvents = [2532, 266, 2520];
+        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
         peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
         for (int attempt = 0; attempt < 2; attempt++)
         {
@@ -323,7 +323,7 @@ internal static class ChannelEntryTcpTests
         using var observerOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
         byte[] ReadMissions() => repository.ReadBattlePassMissions(observerOwner, clock.GetUtcNow())!.ToPayload();
         using var peer = Open(fixture);
-        peer.ExpectedOpenEvents = [2532, 266];
+        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266];
         peer.Select();
         CashShopTcpTests.AssertPromotionNativeEvents(peer.EventInfoPayload, 0L, null, peer.ExpectedOpenEvents);
         // 尚未开始的赛季不发布战令页，屏障不跳过任何战令通知。
@@ -365,7 +365,7 @@ internal static class ChannelEntryTcpTests
                 {
                     That(++refreshes <= expectedRefreshes, "赛季边界只发布一次完整108");
                     CashShopTcpTests.AssertPromotionNativeRefresh(packet, 0, false,
-                        active ? [2532, 266, 2520] : [2532, 266],
+                        active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266],
                         active ? checked((uint)end.ToUnixTimeSeconds()) : null);
                 }
                 else if (packet is { Kind: 0, Opcode: 706 })

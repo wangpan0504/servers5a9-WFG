@@ -31,7 +31,8 @@ internal sealed record QuestDropResources(IReadOnlyDictionary<int,StoryQuest> Qu
                 CurrencyWallet.RewardKind(template.Id) is not null || pieces.ByPiece.ContainsKey(template.Id))
                 throw new NotSupportedException("任务掉落需要尚未接入的持有域: " + template.Id);
         // 入场准备在owner锁外装载穿戴模板及套装；穿戴新物品仍由原库存规划装载模板。
-        foreach (var item in character.Inventory.Items.Where(item => EquipmentQuestDropBonusPolicy.AttributeSlot(item.Position)))
+        foreach (var item in character.Inventory.Items.Where(item => EquipmentQuestDropBonusPolicy.AttributeSlot(item.Position) &&
+            items.Contains(item.Core.ItemId)))
             _ = items.Get(item.Core.ItemId);
         return new(definitions,templates,pieces,growth) { EquipmentItems = items };
     }
@@ -92,7 +93,8 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
                 if (equipmentBonus.IsDefault)
                     equipmentBonus = resources.EquipmentItems is { } equipmentItems
                         ? EquipmentQuestDropBonusPolicy.Capture(character, id => equipmentItems.TryGetLoaded(id, out var definition)
-                            ? definition : throw new InvalidOperationException("任务取物缺少已装载的穿戴模板"), now.ToUnixTimeSeconds()) : [];
+                            ? definition : !equipmentItems.Contains(id) ? null :
+                                throw new InvalidOperationException("任务取物缺少已装载的穿戴模板"), now.ToUnixTimeSeconds()) : [];
                 long additionalRate = GrowthContractPolicy.QuestDropBonus(character,row.Rate,resources.Growth,now.ToUnixTimeSeconds()) +
                     EquipmentQuestDropBonusPolicy.AdditionalRate(row.Rate, equipmentBonus);
                 int rate = TreasureHunterPotionPolicy.AdjustedRate(row.Rate, row.Rate, potionBonus, additionalRate);

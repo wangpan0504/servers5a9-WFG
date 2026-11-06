@@ -43,6 +43,7 @@ internal static class EpicRoadProjectionTests
             session.Select(0);
             session.MarkReady();
             var events = new ServerEventService(new ServerEventRepository(path), clock);
+            events.Override(ServerEventService.EpicRoadId, false);
             var stats = new CharacterStatComputer(new CharacterCatalog([]));
             var pieces = new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]");
             const string normalShop = "[item]\n1001 101 1 0 0 100 `1个` 0 0\n[/item]";

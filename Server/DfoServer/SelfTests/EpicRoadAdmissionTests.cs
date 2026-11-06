@@ -53,10 +53,11 @@ internal static class EpicRoadAdmissionTests
             }
 
             // 两图关闭时，连带费用的直接存储调用也不能扣费或预留尝试号。
+            events.Override(ServerEventService.EpicRoadId, false);
             foreach (uint dungeon in new uint[] { 400000097, 400000098 })
             {
                 Reject<DungeonEventAdmissionRejectedException>(() => repository.CommitDungeonEntry(firstOwner, first, 100,
-                    Charge(first, dungeon, Guard(), payment: true)), "10005缺省关闭时事务拒绝星河裂缝新入场");
+                    Charge(first, dungeon, Guard(), payment: true)), "10005明确关闭时事务拒绝星河裂缝新入场");
                 Same(firstOwner, first, "活动关闭不扣金币、疲劳或副本尝试号");
                 var session = new GameSession(repository, null!, firstOwner);
                 That(session.EnterFormalDungeon(dungeon, 0, 0, null!, null!) is null &&

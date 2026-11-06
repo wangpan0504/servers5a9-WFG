@@ -105,6 +105,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             return CommandResult.Handled;
         }
         var reportMembers = parsed.Participants.Select(member => member.ActorId).ToArray();
+        if (context.Session.AcceptAntonPlayResult(participant.ActorId, participant.RankPoint,
+            parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } anton } reportedAnton)
+        {
+            log.Write("raid_dungeon_play_result_received", new { Connection = context.Id, Character = participant.ActorId,
+                reportedAnton.Snapshot.Identity, RaidInstance = anton.InstanceId, reportedAnton.Entry.DungeonId,
+                RaidKind = anton.Kind.ToString(), Members = reportMembers.Length, participant.RankPoint,
+                parsed.MaximumRankPoint, parsed.ClearTime });
+            return CommandResult.Handled;
+        }
         if (context.Session.AcceptFiendwarPlayResult(participant.ActorId, participant.RankPoint,
             parsed.MaximumRankPoint, reportMembers) is { Entry.RaidEntry: { } raid } reported)
         {
@@ -217,13 +226,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     "formal_clear_party_buff_added", Guard);
             }
         }
-        if (dungeons.Get(checked((int)receipt.Entry.DungeonId)).IsDazzlementTower)
+        // 安徒恩等团本使用独立的 Raid DungeonId（例如 210），不一定存在于普通 dungeon.lst。
+        // 眩惑之塔资格在入场回执中已冻结，结算阶段不能再把团本编号当普通副本索引解析。
+        if (receipt.Dazzlement is not null)
             await DazzlementTowerProjection.StateAsync(context, Guard);
         if (result.Outcome == DungeonRunOutcome.Accepted && result.LuckyStarEligible)
             await context.Reply(CmdPacketType.CHARGE_RENTPOINT,
                 RentalPackets.ChargeSuccess(1, result.LuckyStarTotal),
                 "formal_clear_lucky_star_charge", Guard);
-        if (result.LuckyStarGained)
+        if (result.LuckyStarEligible || result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),
                 "formal_clear_lucky_star", Guard);

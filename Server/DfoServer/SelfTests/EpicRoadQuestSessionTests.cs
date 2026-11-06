@@ -50,6 +50,7 @@ internal static class EpicRoadQuestSessionTests
             That(!QuestEpicRoad2019Entry.Supports(unsupported) && QuestCoverage.Unconfirmed(unsupported).Contains("show quest on event"),
                 "重复、子节点及未知活动号仍作为未确认声明拒绝");
         }
+        events.Override(ServerEventService.EpicRoadId, false);
         var initial = f.Read();
         That(f.Change(8712, QuestLifecycleAction.Accept)?.Commit is null && Same(initial, f.Read()) && f.Receipts == 0,
             "10005关闭时真实8712接取不改变角色或奖励回执");

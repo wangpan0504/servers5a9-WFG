@@ -343,7 +343,17 @@ internal sealed partial class AntonRaidBattle
             lukeCompletion is not null && !lukePhaseCommits.ContainsKey(pending.Phase)) return null;
         var before = current;
         current = pending with { Revision = current.Revision + 1, LukePhaseCoinsUsed = current.LukePhaseCoinsUsed };
+        // 终局资格等待期间已有成员完成返回；冻结的终局快照不能把已提交的位置和Run释放记录倒退。
+        if (Kind == RaidKind.Fiendwar)
+            current = current with { FiendwarPositions = before.FiendwarPositions, Fiendwar = before.Fiendwar,
+                FiendwarExpiredRuns = before.FiendwarExpiredRuns, FiendwarBridgeReturns = before.FiendwarBridgeReturns,
+                FiendwarDungeonTimers = before.FiendwarDungeonTimers };
         pendingTransition = null;
+        // 终局桥返回可能晚于电影时钟到期：时钟回调会先被 pendingTransition 门禁挡住，
+        // 最后一名成员返回后必须立即补做同一次到期检查，否则只会发601/1523=3而没有翻牌页。
+        if (Kind == RaidKind.Fiendwar && current.State == AntonRaidBattleState.Reward &&
+            FiendwarMovieRemainingLocked() == TimeSpan.Zero)
+            _ = ExpireFiendwarMovieLocked();
         if (lukeCompletion is not null && current.State == AntonRaidBattleState.Reward &&
             !HasLukeMovieBarrierLocked() &&
             lukePhaseCommits.TryGetValue(current.Phase, out var committed) && committed.Members.All(row => !row.Eligible))
@@ -388,7 +398,8 @@ internal sealed partial class AntonRaidBattle
                 antonEvents.RemoveRun(run.Id);
                 RemoveAntonConstructorRun(run.Id);
                 if (current.FiendwarExpiredRuns.Contains(run.Id))
-                    current = current with { FiendwarExpiredRuns = current.FiendwarExpiredRuns.Remove(run.Id), Revision = current.Revision + 1 };
+                    current = current with { FiendwarExpiredRuns = current.FiendwarExpiredRuns.Remove(run.Id),
+                        FiendwarBridgeReturns = current.FiendwarBridgeReturns.Remove(run.Id), Revision = current.Revision + 1 };
                 if (current.PreyExpelledRuns.Contains(run.Id))
                     current = current with { PreyExpelledRuns = current.PreyExpelledRuns.Remove(run.Id), Revision = current.Revision + 1 };
             }

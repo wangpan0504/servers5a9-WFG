@@ -335,8 +335,8 @@ internal sealed partial class GameSession
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
-        // 乔安菜单只建立本次普通选图身份；旧选择、直接16、任务/练习/深渊和重试不能借用NPC入口。
-        if (dungeonId == 4000 && (questId != 0 || difficulty != 0 || retry is not null || practice || classExperience ||
+        // 乔安菜单只建立本次普通选图身份。已接取且声明4000的任务可以携带任务号；直接16、练习、深渊和重试不能借用。
+        if (dungeonId == 4000 && (difficulty != 0 || retry is not null || practice || classExperience ||
             hellParty || hellLegend || sealDoor || assault is not null || selection is null || selection.IsTutorial ||
             selection.IsClassExperience || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("lost-land-selection-mismatch");
@@ -438,7 +438,8 @@ internal sealed partial class GameSession
             if (questId >= 30000 || !questCatalog.TryGet((int)questId, out quest) ||
                 !QuestCoverage.HasOrdinaryDeclarations(quest) ||
                 !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != questId).ToArray() },
-                    quest, questCatalog).Eligible) return RejectFormal("quest-not-eligible-or-undeclared");
+                    // 地区每日上限只约束新分配；已接任务的进图与领奖采用同一升级兼容规则。
+                    quest, questCatalog, allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest)).Eligible) return RejectFormal("quest-not-eligible-or-undeclared");
         }
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
@@ -598,9 +599,13 @@ internal sealed partial class GameSession
         if (entry.IsClassExperience != classExperience) return RejectFormal("class-experience-mismatch");
         if (entry.IsTutorial && !training) return RejectFormal("tutorial-entry-not-training");
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
-            expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
-            !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
-                questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
+            expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId))
+        {
+            var routeQuest = questCatalog.Get((int)entry.RouteQuestId);
+            if (!QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
+                routeQuest,questCatalog,allowAboveMaximum: QuestAutoDailyPlan.Hunt(routeQuest)).Eligible)
+                return RejectFormal("route-quest-not-eligible");
+        }
         if (partyAdmission && (entry.IsPractice || entry.IsTournament || entry.IsTrainingRoom || entry.IsClassExperience ||
             entry.IsTutorial || entry.IsQuestReplay || assault is not null)) return RejectFormal("party-mode-unsupported");
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
@@ -788,7 +793,8 @@ internal sealed partial class GameSession
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
-                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
+                        suppressCompanions: entry.IsTagSystem);
                 if (EpicRoad2019MonsterPolicy.Matches(entry))
                     plan = EpicRoad2019MonsterPolicy.Apply(plan, entry);
                 else if (entry.ChampionPercents.IsEnabled)
@@ -1693,6 +1699,8 @@ internal sealed partial class GameSession
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
             dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
+        using var fiendwarReturn = raidCombat is { Battle.Kind: DfoServer.Game.Raids.RaidKind.Fiendwar } raid
+            ? raid.Battle.ReserveFiendwarReturn(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId) : null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。
         if (dungeon.Entry.IsTutorial && Selected.Tutorial is { Completed: false })
             Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
@@ -1704,7 +1712,8 @@ internal sealed partial class GameSession
             var after = clearedHell ? before : StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
                 PremiumPcRoom);
             after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
-            var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
+            if ((fiendwarReturn is null ? RaidDungeonExitPosition(dungeon, Selected) :
+                FiendwarReturnPosition(fiendwarReturn.Destination)) is not { } back) return null;
             if (dungeon.Run.TagEvildomAdmission is not null && repository is DfoServer.Game.TagEvildom.ITagEvildomConfigurationStore tagStore)
                 Selected = tagStore.CommitTagEvildomReturn(owner, Selected, dungeon.Run.Snapshot.Identity.InstanceId,
                     back, Selected.Return, after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)),
@@ -1722,6 +1731,7 @@ internal sealed partial class GameSession
         dungeon.Ground.ExpireRun();
         // 原生离图保留双成员并恢复队首；返城提交只更新主角记录，不能据此作废已安装的备用资料。
         var raidChange = ReleaseCurrentRaidDungeon();
+        if (fiendwarReturn is not null) raidChange = fiendwarReturn.Install();
         ReleaseCurrentEvildomWarDungeon();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
@@ -1729,6 +1739,7 @@ internal sealed partial class GameSession
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
+        raidChange = RecordPreyTownLocation(raidChange);
         return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange,
             ConsumableCooldowns = consumableStates.Cooldowns, ConsumableEffects = consumableStates.Effects };
     });
@@ -1772,6 +1783,7 @@ internal sealed partial class GameSession
             PartyActors = dungeon.PartyActors,
             GuildMemberships = dungeon.GuildMemberships,
             PartySlot = dungeon.PartySlot,
+            Dazzlement = dungeon.Dazzlement,
             ClearTimeMilliseconds = dungeon.ClearTimeMilliseconds
         };
     }

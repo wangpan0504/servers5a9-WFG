@@ -41,6 +41,8 @@ Debug Runtime还为普通及引导普雷省略角色周通关及各阶段奖励�
 
 ## 黄金卡牌双倍活动
 
+已登记活动在无配置且资源、有效期等业务条件满足时默认开启；GM人工关闭和显式时间表继续持久保留。无时间表的auto恢复开启；有时间表的auto仍按原区间运行。新活动沿同一目录接入GM及默认策略，资源公告编号不自动获得业务开关。
+
 ```powershell
 ./dist/win-x64/DfoServer.exe --gm-port 23102 --gm event status 64
 ./dist/win-x64/DfoServer.exe --gm-port 23102 --gm event on 64
@@ -49,15 +51,15 @@ Debug Runtime还为普通及引导普雷省略角色周通关及各阶段奖励�
 ./dist/win-x64/DfoServer.exe --gm-port 23102 --gm event auto 64
 ```
 
-活动是全服配置，禁止account前缀；登记64黄金卡牌双倍奖励、266积分商城、312首期强者之路、2520阿拉德探险记、2532诺兰常驻状态和10005星河裂缝准入，公告编号74不是活动ID。64/266/312/2520/10005的时间必须带Z或显式时区，开始包含、结束不包含；on/off为持久立即覆盖，auto恢复时间表，schedule保存新区间并清除覆盖。64只影响下一份通关冻结计划，不修改已展示奖励；312未配置时只读仍返回关闭，新启动器连接后执行`event initialize-default 312`仅为无配置存档默认开启，任何既有配置均保留。HTTP入口`POST /api/events/default`携带`id=312`或`2520`、`confirm=true`，可带`expectedPid`防止目标进程变化，写请求须有`X-GM-Request: 1`。初始化只允许这两项并保留任何已有配置；回执含真实状态及`initialized`，2520未装配或已过期返回实际原因，不热注册模块。流程和奖励见[首期强者之路](../模块/强者之路.md)。
+活动是全服配置，禁止account前缀；登记64黄金卡牌双倍奖励、266积分商城、312首期强者之路、2520阿拉德探险记、2532诺兰常驻状态和10005星河裂缝准入，公告编号74不是活动ID。64/266/312/2520/10005的时间必须带Z或显式时区，开始包含、结束不包含；on/off为持久立即覆盖，auto恢复时间表，schedule保存新区间并清除覆盖。64只影响下一份通关冻结计划，不修改已展示奖励；312未配置时只读默认开启，新启动器兼容执行`event initialize-default 312`仅为无配置存档默认开启，任何既有配置均保留。HTTP入口`POST /api/events/default`携带`id=312`或`2520`、`confirm=true`，可带`expectedPid`防止目标进程变化，写请求须有`X-GM-Request: 1`。初始化只允许这两项并保留任何已有配置；回执含真实状态及`initialized`，2520未装配或已过期返回实际原因，不热注册模块。流程和奖励见[首期强者之路](../模块/强者之路.md)。
 
 2532在活动管理中显示为“阿拉德谋略战”，只支持status/on/off/auto，拒绝schedule；未配置或auto默认开启玩法及诺兰显示，显式off持久关闭新召唤、新入场与活动商店购买，并隐藏诺兰；关闭前已入场的战斗仍可结算。资源存在时无需独立设置文件即可开放。默认值只用于读取，不自动补写配置或清除已有off；已保存的历史日期不参与2532开关判断，也不改变64的状态或版本。入城和换频道投影当前状态，保留2037与当前团本事件。重启保留配置，停服后的离线GM仍遵守原实例锁，玩法及PVF限制见[怪物模拟战](../模块/怪物模拟战.md)。
 
-管理页面通过`GET /api/events/catalog`读取已接通活动及能力：每项包含`id/name/purpose/conditions/supportsControl/supportsSchedule/controlReason/defaultState/endpoint/state/stateError`。可写活动为64/266/312/2532/10005；64、266、312和10005支持时间表。`state`包含`eventId/active/mode/revision/startsAt/endsAt`，时间点是Unix秒，读取失败时为null并提供`stateError`，不能把失败当关闭。`on/off`立即覆盖时间表，`auto`按现有时间表或默认值运行，`schedule`保存起止时间并清除强制开关。
+管理页面通过`GET /api/events/catalog`读取已接通活动及能力：每项包含`id/name/purpose/conditions/supportsControl/supportsSchedule/controlReason/defaultState/endpoint/state/stateError`。可写活动为64、266、312、2520、2037、2378、2395、2532、2257、2370、2208、228和10005；其中2395、2532、2370、228仅支持开关，其余支持时间表。`state`包含`eventId/active/mode/revision/startsAt/endsAt`，时间点是Unix秒，读取失败时为null并提供`stateError`，不能把失败当关闭。`on/off`立即覆盖时间表，`auto`按现有时间表或默认值运行，`schedule`保存起止时间并清除强制开关。
 
 原`GET /api/events?id=编号`与`POST /api/events`同样接通上述注册活动；写入正文为`id/op/start/end/confirm`，只支持`on/off/auto/schedule`，设置时间必须带时区。积分商城、诺兰及星河裂缝变化沿有界唤醒队列重发完整EVENT_INFO，不定时轮询、不清除其他活动目录；黄金卡牌只影响之后生成的奖励计划。
 
-目录同时说明2037幸运值、2378公会红包、2395乔纳森与10999礼包累计的真实业务和缺少通用控制的原因；这些条目禁用通用写操作。`relatedBusiness`提供礼包配置可用状态及关联掉落、售货机、租赁、公会出勤说明，不把关联玩法计为新增可运营活动。
+目录同时说明10999礼包累计的真实业务和缺少通用控制的原因，该条目不开放通用写操作；2037幸运值、2378公会红包和2395乔纳森使用各自已登记的独立开关。`relatedBusiness`提供礼包配置可用状态及关联掉落、售货机、租赁、公会出勤说明，不把关联玩法计为新增可运营活动。
 
 `GET /api/events/resources?offset=0&limit=50&kind=definition&q=关键字`只读查询当前已加载PVF中的活动资源。`kind`可选`all/definition/component/directory/list`，单页最多100项；第一次打开管理资源目录时扫描并缓存，游戏启动及战斗不扫描。仅直接存在的中文标题用作名称；未确认名称为null。条目统一禁止控制，原文活动编号只作为声明证据，不扩大服务端活动白名单。
 
@@ -65,7 +67,7 @@ Debug Runtime还为普通及引导普雷省略角色周通关及各阶段奖励�
 
 沿同一GM命令管理266：`event status 266`、`event on 266`、`event off 266`、`event auto 266`和`event schedule 266 <开始> <结束>`。命令入口、显式时区和覆盖优先级与64相同；266未配置时间表且无强制状态时默认常驻，显式off仍关闭。auto保留已有时间表；没有时间表时恢复常驻默认，不清空积分、消费累计或已购份数。在线已选角色在开关及时间边界接收完整108和开启后的706，不要求重登；返回选角的连接在下次入城恢复。关闭会阻止新积分购买及消费返分，不删除原积分、购买记录或重置累计；普通点券购买仍可继续。266使用上述命令入口。资源、消费与额度见[积分商城](../模块/背包与装备.md#积分商城)。
 
-10005复用`event status|on|off|auto 10005`和`event schedule 10005 <开始> <结束>`管理星河裂缝配置。未配置时默认关闭；无时间表的auto保持关闭，有时间表的auto恢复原时段。配置和版本沿现有活动存储持久化，重启后保留。两图的新入场在准备及原费用事务中检查活动版本和时段，关闭不重新校验进行中实例的奖励或回城。活动目录、资源装配、城镇入口、NPC投影和专属奖励链仍需完整接入后开放，命令成功表示配置已提交。
+10005复用`event status|on|off|auto 10005`和`event schedule 10005 <开始> <结束>`管理星河裂缝配置。未配置时默认开启；无时间表的auto恢复开启，有时间表的auto保留原时段。配置和版本沿现有活动存储持久化，重启后保留。两图的新入场在准备及原费用事务中检查活动版本和时段，关闭不重新校验进行中实例的奖励或回城。活动目录、资源装配、城镇入口、NPC投影和专属奖励链仍需完整接入后开放，命令成功表示配置已提交。
 
 ## 开发模拟充值
 
@@ -280,7 +282,8 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 
 ## 团本入场时段（团队频道卡）
 
-- `GET /api/raid-windows` 读表；`POST /api/raid-windows`（需请求头 `X-GM-Request: 1`，JSON 正文里带 `"confirm": true`）整表替换，写入存档目录 `gm-raid-windows.json` 并审计。键为 `luke` / `hyperspace` / `prey`，每行 `{"weekday":1..7,"start":"HH:mm","end":"HH:mm"}`，UTC+8，结束时刻不含，`24:00` 表示到当天结束；空表全关。
+- `GET /api/raid-windows` 读表；`POST /api/raid-windows`（需请求头 `X-GM-Request: 1`，JSON 正文里带 `"confirm": true`）整表替换，写入存档目录 `gm-raid-windows.json`。键为 `luke` / `hyperspace` / `prey` / `anton`，每行 `{"weekday":1..7,"start":"HH:mm","end":"HH:mm"}`，UTC+8，结束时刻不含，`24:00` 表示到当天结束。缺配置及首次默认升级时四类均为七天全天；后续保留显式配置，空表全关。默认升级边界见[一次默认配置升级](环境与配置.md#一次默认配置升级)。
+- GM文本审计只在 `--file-logs On` 时追加，默认不写；开关不影响业务配置保存及数据库资产审计，已有历史记录仍可读取。完整开关说明见[控制台日志](环境与配置.md#控制台日志)。
 - 时段内的卡在入城/换频道时通过 `NOTI EVENT_INFO` 下发事件 282 / 2449 / 414，去掉「非可入场时间」。已在城镇的角色要换一次频道或重新选角才刷新。
 - 例：全天开放超时空漩涡（每天 00:00–24:00）：`{"luke":[],"hyperspace":[{"weekday":1,"start":"00:00","end":"24:00"},…,{"weekday":7,"start":"00:00","end":"24:00"}],"prey":[]}`。协议细节见[帧与频道](../协议/帧与频道.md#团队频道三张卡卢克--超时空漩涡--普雷伊希斯)。
 
@@ -352,7 +355,7 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 `guild-create-info <角色名>` 只读返回当前PVF建会费用。`guild-create <角色名> <UTF-8公会名的Base64> <预期金币费用>` 要求账号完全离线，使用拒绝接管租约，按原GuildDirectory规划并原子扣费、建会及写入会长成员。费用与当前PVF不同、名字无效或被占用、金币不足、已有公会或仍在入会冷却均拒绝。地址沿原客户端回退为公会名，不伪造认可人、邀请或第二成员；成功返回实际guildId、guildName、characterId、createCost及余额，重新登录后读取公会。
 ## 累积在线得好礼与活动目录
 
-活动228支持`event status/on/off/auto 228`，默认关闭，不支持schedule。
+活动228支持`event status/on/off/auto 228`，默认开启，不支持schedule。
 关闭暂停计时与新领取，保留账号进度；开启后在线客户端即时刷新。
 每日30/60/90/120分钟、累计5/10/15/20合格日的奖励读取当前客户端资源，领取后发送系统邮件。
 历史模板绝对到期日期沿用原期限调试开关，详情见[活动模块](../模块/累积在线得好礼.md)。

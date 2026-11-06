@@ -138,7 +138,7 @@ internal static partial class FormalDungeonTcpTests
                 if (room == 0)
                 {
                     movedSkill = VerifyDungeonActions(fixture, peer);
-                    RejectDelilahServices(fixture,peer,"Dungeon");
+                    RejectDelilahServices(fixture,peer,"Dungeon",acceptFullRepair:true);
                     VerifyDungeonShop(fixture,peer,"Dungeon");
                 }
                 if (room == 0)
@@ -267,7 +267,7 @@ internal static partial class FormalDungeonTcpTests
                 "Lv1零经验起步完整六房得到2868经验，升级后逐次调整击杀倍率");
             That(upgradedRoomMoves > 0, "副本升级只发Player后仍能清完当前房间、成功换房并加载下一房");
             var clearCatalog = SelfTestCatalogs.ClearExperience(resources.Archive);
-            RejectDelilahServices(fixture,peer,"Settlement before commit");
+            RejectDelilahServices(fixture,peer,"Settlement before commit",acceptFullRepair:true);
             // 修复后击杀XP为2868；最高评分456使首次通关跨过Lv3边界3315。
             var clearReward = clearCatalog.Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 99);
             uint clearExperience = clearReward.TotalExperience;
@@ -737,7 +737,9 @@ internal static partial class FormalDungeonTcpTests
         fixture.Sql("DELETE FROM character_active_main_quests WHERE character_id=$p0", peer.Id);
         fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
         fixture.Sql("UPDATE character_fatigue SET used=maximum-1,remaining=1 WHERE character_id=$p0", peer.Id);
-        fixture.Sql("UPDATE account_wallets SET rental_points=400 WHERE account=$p0", fixture.Options.DevelopmentAccount);
+        int rentalLimit = resources.ItemResources.Rental.LuckyStarStackLimit;
+        That(rentalLimit > 0, "满额幸运星回归使用实际资源正上限");
+        fixture.Sql("UPDATE account_wallets SET rental_points=$p1 WHERE account=$p0", fixture.Options.DevelopmentAccount, rentalLimit);
         peer.Select(2, prepared: true);
         EntryTown(peer);
         SelectMap(peer);
@@ -773,11 +775,11 @@ internal static partial class FormalDungeonTcpTests
         That(settled.Any(packet => packet is { Kind: 0, Opcode: 34 }) &&
             settled.Any(packet => packet is { Kind: 0, Opcode: 35 }) &&
             chargeIndex >= 0 && listIndex > chargeIndex &&
-            settled[chargeIndex].Body.SequenceEqual(DfoServer.Network.Builders.RentalPackets.ChargeSuccess(1, 400)) &&
-            U32(settled[listIndex].Body, 0) == 400 &&
-            fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount) is [[400L]] &&
+            settled[chargeIndex].Body.SequenceEqual(DfoServer.Network.Builders.RentalPackets.ChargeSuccess(1, rentalLimit)) &&
+            U32(settled[listIndex].Body, 0) == rentalLimit &&
+            fixture.Query("SELECT rental_points FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount) is [[long points]] && points == rentalLimit &&
             fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]],
-            "普通副本在真实零疲劳下完成结算，且400满上限推荐通关仍先发1002触发超出上限公告再发988");
+            "普通副本在真实零疲劳下完成结算，且资源满上限推荐通关仍先发1002触发超出上限公告再发988");
         peer.Send(69); Drain(peer);
         peer.Send(70); Drain(peer);
         peer.Send(71, [0, 0]);
@@ -1540,43 +1542,42 @@ internal static partial class FormalDungeonTcpTests
                 int found = Enumerable.Range(0, materialSet[1]).Select(index => 2 + index * 8)
                     .Where(at => U32(materialSet, at) == itemId).DefaultIfEmpty(-1).First();
                 That(found >= 0 && U32(materialSet, found + 4) >= value, "账号材料拾取后563实发该项余额");
-                // 当前连接登记活动材料时，正式全量刷新在563和额度之间依次发布list44/45。
-                // 只接受这一对完整快照；未知包、错序、重复第三包仍由后续断言拒绝。
-                var accountLimit = peer.Read();
-                That(accountLimit is { Kind: 0, Opcode: 13 }, "选角后账号材料拾取必须同步list44/45完整快照");
-                if (accountLimit is { Kind: 0, Opcode: 13 })
+                // 这些拾取调用均使用关闭2257的业务夹具；活动页未登记材料，仍须恢复资源中的攻坚材料槽。
+                That(fixture.Query("SELECT override_active FROM server_events WHERE event_id=2257") is [[long endless]] && endless == 0,
+                    "共用拾取夹具明确关闭材料日历活动，活动开启另由专用TCP覆盖");
+                var items = resources.ItemResources.Items;
+                int[] projected = items.RaidAccountMaterialLimits.Keys.Order()
+                    .Where(id => items.TryGet(id, out var material) && material.AccountMaterial is not null).ToArray();
+                if (projected.Length != 0)
                 {
                     var balances = fixture.Query("""
-                        SELECT m.item_id,m.balance FROM account_material_balances m
-                        JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.balance>0
-                        """, peer.Id).ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt64(row[1]));
+                        SELECT item_id,balance FROM account_material_balances
+                        WHERE account=(SELECT account FROM characters WHERE id=$p0)
+                        """, peer.Id).ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt32(row[1]));
                     foreach (byte list in new byte[] { 44, 45 })
                     {
-                        byte[] calendar = list == 44 ? accountLimit.Body : peer.Expect(0, 13).Body;
-                        That(calendar.Length >= 3 && calendar[0] == list &&
-                            calendar.Length == 3 + U16(calendar, 1) * 123,
-                            "账号材料拾取按list44/45顺序同步完整原生材料快照");
-                        var slots = new HashSet<short>();
-                        var ids = new HashSet<int>();
-                        for (int index = 0; index < U16(calendar, 1); index++)
+                        int[] registered = projected.Where(id => items.Get(id).AccountMaterial!.CommonInventory == (list == 45)).ToArray();
+                        That(registered.Length <= (list == 44 ? 64 : 50), "日历模板按资源归属和原生容量固定槽序");
+                        int[] occupied = Enumerable.Range(0, registered.Length)
+                            .Where(slot => balances.GetValueOrDefault(registered[slot]) > 0).ToArray();
+                        byte[] expected = new byte[3 + 123 * occupied.Length];
+                        expected[0] = list;
+                        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(1), checked((ushort)occupied.Length));
+                        for (int row = 0; row < occupied.Length; row++)
                         {
-                            int at = 3 + index * 123;
-                            short slot = BinaryPrimitives.ReadInt16LittleEndian(calendar.AsSpan(at));
-                            int projectedId = checked((int)U32(calendar, at + 2));
-                            uint balance = U32(calendar, at + 6);
-                            That(slot >= 0 && slot < (list == 44 ? 64 : 50) && slots.Add(slot) && ids.Add(projectedId) &&
-                                resources.ItemResources.Items.TryGet(projectedId, out var projectedTemplate) &&
-                                projectedTemplate.AccountMaterial is { } definition && definition.CommonInventory == (list == 45) &&
-                                balance > 0 && balances.GetValueOrDefault(projectedId, -1) == balance,
-                                "材料快照槽位和模板唯一、容器声明正确、绝对余额等于本账号已提交资产");
+                            int slot = occupied[row], at = 3 + 123 * row, id = registered[slot];
+                            BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(at), checked((ushort)slot));
+                            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(at + 2), id);
+                            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(at + 6), balances[id]);
                         }
+                        peer.Expect(0, 13, expected);
                     }
-                    accountLimit = peer.Read();
                 }
-                That(accountLimit is { Kind: 0, Opcode: 1460 }, "账号材料快照之后发送账号攻坚周额度");
-                foreach (byte[] limits in new[] { accountLimit.Body, peer.Expect(0, 1461).Body })
-                    That(limits.Length >= 2 && limits.Length == 2 + 12 * U16(limits, 0),
-                        "账号材料额度1460/1461保留已获得与上限二元组整表");
+                foreach (ushort limitOpcode in new ushort[] { 1460, 1461 })
+                {
+                    byte[] limits = peer.Expect(0, limitOpcode).Body;
+                    That(limits.Length == 2 + 12 * U16(limits, 0), "账号材料额度1460/1461保留已获得与上限二元组整表");
+                }
             }
             else peer.Expect(0, 14);
             peer.Expect(1, 43, [1]);

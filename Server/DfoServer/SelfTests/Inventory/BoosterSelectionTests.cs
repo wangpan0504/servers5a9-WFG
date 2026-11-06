@@ -1615,7 +1615,7 @@ internal static class BoosterSelectionTests
                 definition.Dimensions.SequenceEqual(expectedDimensions[sourceIndex]) && definition.FirstGrowTypes.IsEmpty &&
                 source.Jobs == expectedMasks[sourceIndex] && source.MinimumLevel == 1 && source.MaximumLevel == int.MaxValue &&
                 source.RequiredSkill == 0 && !source.UseForbidden && Permanent(source.Expiration),
-                "四源精确形状、职业门、等级技能与期限保持metadata合同 " + sourceId);
+                "四源精确形状、职业声明、等级技能与期限保持metadata合同 " + sourceId);
             That(!source.AllowsUse(0, 0), "0级不满足源门；不伪造NewCharacter不支持的等级 " + sourceId);
             for (int grow = 0; grow <= byte.MaxValue; grow++)
                 That(definition.AllowsFirstGrowType((byte)grow), "四源未限制FirstGrowType，字节门不推断职业实现 " + sourceId + ":" + grow);
@@ -1673,20 +1673,19 @@ internal static class BoosterSelectionTests
             foreach (int sourceId in sourceIds)
             {
                 var entry = cases.First(row => row.SourceId == sourceId);
-                int sourceIndex = Array.IndexOf(sourceIds, sourceId);
                 foreach (byte job in characters.Jobs)
-                    Consume(entry, job, 1, 0, expectedAccepted: (expectedMasks[sourceIndex] & (1 << job)) != 0);
+                    Consume(entry, job, 1, 0, expectedAccepted: true);
                 // 建角仅允许1..95级，正式消费检查两个合法端点；0级只核纯门。
                 Consume(entry, 0, 1, 0, expectedAccepted: true);
                 Consume(entry, 0, 95, 0, expectedAccepted: true);
-                // 低四位0已由职业门覆盖；16另经会话核对高四位编码。
+                // 低四位0已由合法职业激活覆盖；16另经会话核对高四位编码。
                 for (byte grow = 1; grow <= 16; grow++) Consume(entry, 0, 1, grow, expectedAccepted: true);
             }
             var noChoice = cases.Single(row => row.SourceId == 490705422);
             Consume((noChoice.SourceId, noChoice.Category, noChoice.Subcategory, noChoice.RowIndex, noChoice.Row, (byte?)0), 0, 1, 0, expectedAccepted: true);
             Consume((noChoice.SourceId, noChoice.Category, noChoice.Subcategory, noChoice.RowIndex, noChoice.Row, (byte?)byte.MaxValue), 0, 1, 0, expectedAccepted: true);
-            That(requests == 15603 && accepted == 15598 && rejected == 5 && Query("PRAGMA integrity_check") is "ok",
-                "15465选项+64职业+8级别+64Grow+2哨兵；真实五个源职业负门，单库完整");
+            That(requests == 15603 && accepted == 15603 && rejected == 0 && Query("PRAGMA integrity_check") is "ok",
+                "15465选项+64合法职业激活+8级别+64Grow+2哨兵；保留源职业声明，单库完整");
             Console.WriteLine($"SPRING_AVATAR_OPTIONS_COMPLETE semantic=15465 requests={requests} accepted={accepted} rejected={rejected} keyHash={keyHash}");
             completed = true;
 
@@ -1762,7 +1761,7 @@ internal static class BoosterSelectionTests
                     {
                         That(!result.Accepted && result.Plan is null && receipt is null && ReferenceEquals(before, session.Selected) &&
                             JsonSerializer.Serialize(repository.List(owner)) == persistedBefore && Counters() == countersBefore,
-                            "源职业负门保持整份库存、角色、版本、审计及UID序列 " + index);
+                            "源资格拒绝保持整份库存、角色、版本、审计及UID序列 " + index);
                         rejected++;
                     }
                     That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),

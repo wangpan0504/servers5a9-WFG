@@ -42,7 +42,7 @@ internal static class CommandLineTcpTests
             await TcpTestFixture.CopyOutputAsync(reader, output);
         TestCheck.That(File.ReadAllText(output) == text, "server output above the CLI reply limit is fully streamed to disk");
 
-        await using var failed = new TcpTestFixture(noResources, Path.Combine(root, "startup-failure"));
+        await using var failed = new TcpTestFixture(noResources with { FileLogsEnabled = true }, Path.Combine(root, "startup-failure"));
         bool rejected = false;
         try
         {

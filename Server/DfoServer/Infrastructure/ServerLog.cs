@@ -3,24 +3,26 @@ using System.Text;
 
 namespace DfoServer.Infrastructure;
 
-internal sealed class ServerLog(string directory, TextWriter? output = null) : IDisposable
+internal sealed class ServerLog(string directory, TextWriter? output = null, bool fileEnabled = true) : IDisposable
 {
-    readonly BufferedLogFile file = new(Path.Combine(directory, "server.jsonl"), error => Console.Error.WriteLine("Server log failed: " + error.Message));
+    readonly BufferedLogFile? file = fileEnabled
+        ? new(Path.Combine(directory, "server.jsonl"), error => Console.Error.WriteLine("Server log failed: " + error.Message)) : null;
     readonly TextWriter? console = output is null ? null : TextWriter.Synchronized(output);
     int consoleFailed;
 
     public void Write(string kind, object detail)
     {
+        if (file is null && console is null) return;
         var time = DateTimeOffset.Now;
         string line = JsonSerializer.Serialize(new { Time = time, Kind = kind, Detail = detail }) + "\n";
-        file.Append(line);
+        file?.Append(line);
         if (console is null || Volatile.Read(ref consoleFailed) != 0 || !ShowsOnConsole(kind))
             return;
 
         using var json = JsonDocument.Parse(line);
         var fields = json.RootElement.GetProperty("Detail");
         string level = kind is "server_failed" or "listener_failed" ? "ERROR" :
-            kind is "unimplemented" or "resource_warning" or "closed" or "auth_rejected" or "owner_rejected" or "db_busy" or "db_slow" ||
+            kind is "unimplemented" or "resource_warning" or "closed" or "auth_rejected" or "owner_rejected" or "db_busy" or "db_slow" or "battle_pass_default_unavailable" ||
             kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal) ||
             fields.TryGetProperty("Accepted", out var accepted) && accepted.ValueKind == JsonValueKind.False ? "WARN" : "INFO";
         string message = ConsoleMessage(kind, fields);
@@ -91,6 +93,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "character_deleted" => "Character deleted", "character_delete_rejected" => "Character deletion rejected",
             "auth_rejected" => "Authentication rejected", "owner_rejected" => "Account owner rejected",
             "closed" => "Connection closed", "db_busy" => "Database busy", "db_slow" => "Database slow",
+            "battle_pass_default_unavailable" => "Default battle pass unavailable; server continues without battle pass",
             "channel" => "Channel handshake completed",
             "pcroom_reward" => "PC room reward committed", "pcroom_reward_rejected" => "PC room reward rejected",
             "daily_attendance_claimed" => "Daily attendance reward committed",
@@ -166,7 +169,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
     }
 
     static bool ShowsOnConsole(string kind) => kind is
-        "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
+        "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or "battle_pass_default_unavailable" or
         "connected" or "disconnected" or "closed" or "db_busy" or "db_slow" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
         "selected" or "fatigue_daily_reset" or "pcroom_reward" or "daily_attendance_claimed" or "pcroom_weapon" or "fatigue_acceleration" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_tournament_reward_selected" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
@@ -175,6 +178,6 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "quest_ticket_use" or "creature_hatch" or "enhancement" or "chronicle_enchant" or "booster_open" or "random_option_change" or "equipment_texture_change" or "cash_shop_buy" or "avatar_dye" or "avatar_socket" or "avatar_emblem" or "gm" or "unimplemented" or "raid_rejoin_notice" or "raid_rejoin_candidate" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);
 
-    public void Flush() => file.Flush();
-    public void Dispose() => file.Dispose();
+    public void Flush() => file?.Flush();
+    public void Dispose() => file?.Dispose();
 }

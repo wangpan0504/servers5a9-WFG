@@ -89,7 +89,7 @@ internal static class PcRoomTimePointTcpTests
         Request();
         State(2400, 0, 1, 0, "重新开启继续原账号40分钟进度，不重新清零");
         client.Send(7); client.Expect(1, 7, [1]); client.Expect(0, 2);
-        client.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
+        client.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
         client.ExpectedActiveEvents = [2395, 228];
         client.Select(1);
         Request();
@@ -115,7 +115,7 @@ internal static class PcRoomTimePointTcpTests
         catch (IOException error) when (error.InnerException is SocketException
             { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted })
         { That(true, "接管后旧连接明确重置"); }
-        replacement.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
+        replacement.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
         replacement.ExpectedActiveEvents = [2395, 228];
         replacement.Select(1);
         client = replacement;
@@ -236,7 +236,7 @@ internal static class PcRoomTimePointTcpTests
         clock.Advance(TimeSpan.FromDays(2));
         await fixture.StartAsync("reopened");
         using var reopened = Open(fixture);
-        reopened.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
+        reopened.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 228];
         reopened.ExpectedActiveEvents = [2395, 228];
         reopened.Select(1);
         client = reopened;
@@ -310,7 +310,7 @@ internal static class PcRoomTimePointTcpTests
         That(packet.Protected, "热开关EVENT_INFO保持保护压缩帧");
         using var compressed = new MemoryStream(packet.Body);
         using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
-        ushort[] extra = enabled ? [2037, 2378, 2395, 2532, 266, 228] : [2037, 2378, 2395, 2532, 266];
+        ushort[] extra = enabled ? [2037, 2378, 2395, 282, 2449, 414, 181, 2532, 266, 228] : [2037, 2378, 2395, 282, 2449, 414, 181, 2532, 266];
         ushort[] active = enabled ? [2037, 2395, 228] : [2037, 2395];
         byte[] expected = Build(writer =>
         {
@@ -333,7 +333,7 @@ internal static class PcRoomTimePointTcpTests
         byte[] actual = bounded[..length];
         if (U16(actual, 0) == extra.Length + 1)
             CashShopTcpTests.AssertPromotionNativeEvents(actual, (long?)0, (bool?)false,
-                enabled ? [2532, 266, 228] : [2532, 266], activeEvents: enabled ? [2395, 228] : [2395]);
+                enabled ? [282, 2449, 414, 181, 2532, 266, 228] : [282, 2449, 414, 181, 2532, 266], activeEvents: enabled ? [2395, 228] : [2395]);
         else
             Bytes(actual, expected, "228同时进入extra与active全零12字段，关闭只移除228并保留全部原活动");
     }

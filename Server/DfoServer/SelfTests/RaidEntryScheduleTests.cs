@@ -26,8 +26,9 @@ internal static class RaidEntryScheduleTests
 
         string directory = Path.Combine(Path.GetTempPath(), "raid-windows-" + Guid.NewGuid().ToString("N"));
         var store = new RaidEntryStore(directory);
-        That(!store.IsOpen("luke", At(DayOfWeek.Tuesday, 18, 0)) && !store.IsOpen("hyperspace", At(DayOfWeek.Tuesday, 18, 0)) && !store.IsOpen("prey", At(DayOfWeek.Tuesday, 18, 0)),
-            "新目录默认三张团本都关");
+        That(RaidEntrySchedule.Names.All(raid => Enum.GetValues<DayOfWeek>().All(day =>
+            store.IsOpen(raid, At(day, 0, 0)) && store.IsOpen(raid, At(day, 23, 59)))),
+            "新目录默认全部已支持团本七天全天开放");
         store.Replace("""{"luke":[{"weekday":2,"start":"18:00","end":"22:00"}],"hyperspace":[],"prey":[{"weekday":6,"start":"12:00","end":"24:00"}]}""");
         var again = new RaidEntryStore(directory);
         That(again.IsOpen("luke", At(DayOfWeek.Tuesday, 18, 0)) && !again.IsOpen("luke", At(DayOfWeek.Tuesday, 22, 0)), "重新打开后卢克时段仍在");

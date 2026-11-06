@@ -49,6 +49,7 @@ EvildomWarFileTests.Run();
 CustomAbilityFileTests.Run();
 TalismanFileTests.Run();
 LukeCardSetFileTests.Run();
+RaidObjectGeometryTests.Run();
 PcRoomTimePointFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

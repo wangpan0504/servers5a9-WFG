@@ -128,6 +128,17 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly bool enablePromotionPage;
     readonly bool useDefaultActivities;
     readonly bool monsterMockBattle;
+    internal bool IsolatedMockBattleSuppressed { get; private set; }
+
+    internal void PrepareIsolatedMockBattle()
+    {
+        if (monsterMockBattle) return;
+        // 独立宿主按正式默认值装配谋略战；无关业务夹具显式关闭，保持重启前后的资产准备。
+        var store = new ServerEventRepository(Database);
+        var initial = store.Read(DfoServer.Game.Events.ServerEventService.NolanVisibilityId);
+        if (initial.OverrideActive != false) store.Save(initial, initial with { OverrideActive = false });
+        IsolatedMockBattleSuppressed = true;
+    }
     readonly Random? fiendwarMazeRandom;
     int cliSequence;
     readonly string pvfSource;
@@ -138,7 +149,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false,
-        bool monsterMockBattle = false)
+        bool? monsterMockBattle = null)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
@@ -151,7 +162,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         this.fiendwarMazeRandom = fiendwarMazeRandom;
         this.useDefaultActivities = useDefaultActivities;
         // 无关业务夹具显式不装配谋略战，防止登录日补给改写其资产准备；默认活动专项仍走正式默认值。
-        this.monsterMockBattle = monsterMockBattle || useDefaultActivities;
+        this.monsterMockBattle = monsterMockBattle ?? useDefaultActivities;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -171,6 +182,19 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             LogDirectory = Path.Combine(Root, "Logs"),
             SessionTtlSeconds = 300
         };
+        if (resources is not null && !Directory.Exists(Options.DataDirectory)) InitializeNewSharedDefaults();
+    }
+
+    // 仅全新共享资源夹具在调用方seed前完成真实发行升级；已有Data及CLI冷启动保持原路径。
+    void InitializeNewSharedDefaults()
+    {
+        Directory.CreateDirectory(Options.DataDirectory);
+        using var gate = new FileStream(Path.Combine(Options.DataDirectory, "server.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
+        if (ServerDefaultsUpgrade.Apply(Options.DataDirectory, Options.EpicRoad2019Enabled))
+            // 业务夹具明确使用空活动控制表测试auto及各自开关；不修改真实升级完成代次。
+            Sql("DELETE FROM server_events");
     }
 
     static ServerOptions AllocatePorts(ServerOptions source, bool gm, bool packetHttp)
@@ -215,7 +239,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         info.WorkingDirectory = Root;
         foreach (string argument in new[] { "--server-ip", Options.AdvertisedAddress, "--listen-ip", Options.ListenAddress,
             "--channel-port", Options.ChannelPort.ToString(), "--game-port", Options.GamePort.ToString(),
-            "--gm-port", Options.GmPort.ToString(), "--recharge-web-port", Options.RechargeWebPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString() })
+            "--gm-port", Options.GmPort.ToString(), "--recharge-web-port", Options.RechargeWebPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString(),
+            "--file-logs", Options.FileLogsEnabled ? "On" : "Off" })
             info.ArgumentList.Add(argument);
         if (Options.PacketHttpPort != 0)
         {
@@ -330,10 +355,12 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (!useDefaultActivities)
         {
             var eventStore = new ServerEventRepository(Database);
-            foreach (ushort id in new ushort[] { 2257, 228, 2370, 2208 })
+            foreach (ushort id in new ushort[] { 64, 312, 10005, 2257, 228, 2370, 2208 }
+                .Concat(Options.BattlePassSeasonKey is null ? [DfoServer.Game.Events.ServerEventService.BattlePassId] : Array.Empty<ushort>()))
                 if (eventStore.Read(id) is { Revision: 0 } initial)
                     eventStore.Save(initial, initial with { OverrideActive = false });
         }
+        if (isolatedProcess) PrepareIsolatedMockBattle();
         if (File.Exists(pvfSource) && !File.Exists(Options.PvfPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);

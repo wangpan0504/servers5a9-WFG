@@ -25,6 +25,7 @@ internal static partial class CashShopTests
         DailyItemExpirationTests.RunCore();
         ItemExpirationTests.RunCore();
         AvatarCore();
+        PackagePurchaseCore();
         MappedCouponCore();
         int checks = Count;
         var now = new DateTimeOffset(2026, 10, 11, 10, 0, 0, TimeSpan.FromHours(8));
@@ -174,6 +175,7 @@ internal static partial class CashShopTests
 
     static void RunWithLegacyExpirations(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
+        VerifyPackagePurchases(towns, resources);
         var now = DateTimeOffset.UtcNow;
         var ordinaryProducts = resources.CashShop.Products.Values.Where(row => !resources.CashShop.IsCouponProduct(row.CommodityId));
         var product = ordinaryProducts

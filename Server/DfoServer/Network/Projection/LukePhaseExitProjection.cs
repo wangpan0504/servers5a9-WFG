@@ -36,6 +36,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                 context.Session.CurrentParty?.Invoke()?.PreyBattleId != view.Instance) return;
             run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
         }
+        if (!view.PhaseExpired && battle?.Kind == RaidKind.Fiendwar && context.Session.NeedsFiendwarFinalReturn())
+            reason = ExitReason.Encounter;
         if (!view.PhaseExpired && context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId is { } currentRun &&
             (view.FiendwarExpiredRuns.Contains(currentRun) || view.PreyExpelledRuns.Contains(currentRun) ||
                 battle?.Kind == RaidKind.Fiendwar && view.Fiendwar is { Cleared: true }))
@@ -45,7 +47,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             run = context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId;
             reason = ExitReason.PhaseCompleted;
         }
-        if (!view.PhaseExpired && run is null && reason != ExitReason.PhaseCompleted) return;
+        if (!view.PhaseExpired && run is null && reason is not (ExitReason.PhaseCompleted or ExitReason.Encounter)) return;
         lock (gate)
         {
             var identity = (view.Instance, view.Phase, run, reason);
@@ -120,7 +122,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                                     context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId ||
                                 battle.Kind == RaidKind.Fiendwar && (battle.View.FiendwarExpiredRuns.Contains(runId) ||
                                     battle.View.Fiendwar is { Cleared: true }) &&
-                                context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) : !battle.View.PhaseExpired)) return;
+                                context.Session.CurrentFormalDungeonScene()?.Snapshot.Identity.InstanceId == runId) :
+                                !(battle.View.PhaseExpired || exitReason == ExitReason.Encounter && context.Session.NeedsFiendwarFinalReturn()))) return;
                         originalBattle = battle;
                         prefix = battle.Kind.ToString().ToLowerInvariant();
                     }
@@ -128,6 +131,15 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     catch (InvalidOperationException) when (!context.Owner.IsCurrent) { return; }
                     if (context.Session.PartyDungeon is not { } instance)
                     {
+                        if (run is null && exitReason == ExitReason.Encounter && context.Session.Phase == Game.Session.SessionPhase.Town)
+                        {
+                            var returned = context.Session.ReturnFromFiendwarBattlefield();
+                            if (returned is null) return;
+                            returnCommitted = true;
+                            await town.ReturnFromFormalDungeonAsync(context, returned, "fiendwar_final_return");
+                            context.Session.PublishRaidCombat();
+                            return;
+                        }
                         bool preyFinal = exitReason == ExitReason.PhaseCompleted &&
                             originalBattle is { Kind: RaidKind.Prey, PreyGuide: false } prey && view.Phase == 1 &&
                             view.Phase + 1 == prey.PhaseCount;
@@ -142,7 +154,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                                 using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
                                 await town.ReturnFromFormalDungeonAsync(context,
                                     new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
-                                if (exitReason == ExitReason.PhaseCompleted) context.Session.PublishRaidCombat();
+                                if (exitReason is ExitReason.PhaseCompleted or ExitReason.Encounter) context.Session.PublishRaidCombat();
                             }
                         }
                         await CompleteWaitingAsync();

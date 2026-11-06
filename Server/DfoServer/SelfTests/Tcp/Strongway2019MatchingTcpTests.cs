@@ -507,6 +507,7 @@ internal static class Strongway2019MatchingTcpTests
             DateTimeOffset preparedAt = clock.GetUtcNow();
             await fixture.StopAsync();
             // 停服后的最终提交状态为基准；下一阶段必须是正式独立子进程加载同一Data。
+            fixture.PrepareIsolatedMockBattle();
             string committed = RestartState();
             await fixture.StartAsync("strongway-reopened", isolatedProcess: true);
             entry = ContentEntry(fixture);

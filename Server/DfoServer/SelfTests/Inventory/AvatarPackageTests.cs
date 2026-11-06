@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -653,7 +654,24 @@ internal static class AvatarPackageTests
             {
                 Reject(character with { Level = 0 }, request, "未满足原minimum level1");
                 if (sample.SourceId == 10309321)
-                    Reject(character with { Job = 0 }, request, "未满足原mage/creator职业");
+                {
+                    var coatTemplate = resources.Items.Get(sample.CoatId);
+                    That(sourceTemplate.Jobs == ((1 << 3) | (1 << 10)) &&
+                        coatTemplate.Jobs == sourceTemplate.Jobs && !sourceTemplate.AllowsUse(character.Level, 0) &&
+                        !coatTemplate.AllowsUse(character.Level, 0),
+                        label + "原mage/creator资源声明与装备穿戴职业限制保持，源激活不沿用穿戴门");
+                    var otherJob = character with { Job = 0 };
+                    var opened = service.Open(otherJob, request, out var openedReceipt, now);
+                    That(opened.Accepted && opened.Plan is not null && openedReceipt is not null &&
+                        otherJob.Inventory == before && character.Inventory == before && before.Find(Bag()) == source &&
+                        before.Items.Length == 1 && source.Core.Count == 1 && opened.Plan.Before == before &&
+                        opened.Plan.After.Find(Bag()) is null && opened.Plan.After.Items.Length == 9 &&
+                        opened.Plan.OverflowItems.Length == 0 &&
+                        JsonSerializer.Serialize(opened.Plan.After) == JsonSerializer.Serialize(result.Plan!.After) &&
+                        openedReceipt.ItemId == sample.SourceId && openedReceipt.Rewards.SequenceEqual(receipt!.Rewards),
+                        label + "合法Job0按上游激活规则完整规划同份九奖、核心、永久孔位与扣源，不修改原输入");
+                    Reject(character with { Job = 47 }, request, "非法职业编号");
+                }
             }
 
             void Reject(Character denied, AvatarPackageOpenRequest invalid, string reason)

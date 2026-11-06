@@ -61,17 +61,27 @@ public static class RaidObjectEvidence
         var shadow = document.Sections.Where(row => row.Name == "shadow type").ToArray();
         bool ShadowValue(PvfTokenSection row) => !row.IsBlock && row.Children.IsEmpty &&
             row.Values is [{ Type: 6 } value] && resolve(value.Value).Equals("[mirror]", StringComparison.Ordinal);
-        // 根几何声明不改变对象出生条件；按已知形状接纳，仍拒绝重复、嵌套和残缺声明。
-        bool GeometryValue(PvfTokenSection row) => row.Children.IsEmpty && (row.Name == "force map width"
-            ? !row.IsBlock && row.Values is [{ Type: 0, Value: > 0 }]
-            : row.IsBlock && row.Values.Length == 4 && row.Values.All(token => token.Type == 0));
-        bool GeometryRoot(string name) => tokens.Count(token => token.Type == 3 &&
-            resolve(token.Value).Equals("[" + name + "]", StringComparison.OrdinalIgnoreCase)) ==
-            document.Sections.Count(row => row.Name == name) && document.Sections.Count(row => row.Name == name) <= 1;
-        return document.Diagnostics.IsEmpty && shadowCount == shadow.Length && shadow.Length <= 1 &&
-            GeometryRoot("force map width") && GeometryRoot("virtual movable area") && document.Sections.All(row =>
-                row.Name is "force map width" or "virtual movable area" ? GeometryValue(row) :
-                row.Name == "shadow type" ? ShadowValue(row) : blocks.Contains(row.Name) ? row.IsBlock : scalar.Contains(row.Name) && !row.IsBlock) &&
+        // 纯几何声明不改变对象出生条件；仍逐字段核验根层、唯一性、整数边界及矩形宽高，不能作为未知块的旁路。
+        string[] geometry = ["force map width", "virtual movable area"];
+        bool GeometryValue(PvfTokenSection row)
+        {
+            if (!row.Children.IsEmpty || row.Values.Any(token => token.Type != 0 || token.Value is < -1048576 or > 1048576))
+                return false;
+            if (row.Name == "force map width")
+                return !row.IsBlock && row.Values is [{ Value: > 0 }];
+            return row.IsBlock && row.Values.Length > 0 && row.Values.Length % 4 == 0 &&
+                Enumerable.Range(0, row.Values.Length / 4).All(index =>
+                    row.Values[index * 4 + 2].Value > 0 && row.Values[index * 4 + 3].Value > 0);
+        }
+        bool geometryRoots = geometry.All(name =>
+        {
+            int occurrences = tokens.Count(token => token.Type == 3 && resolve(token.Value).Equals("[" + name + "]", StringComparison.OrdinalIgnoreCase));
+            int roots = document.Sections.Count(row => row.Name == name);
+            return occurrences == roots && roots <= 1;
+        });
+        return document.Diagnostics.IsEmpty && shadowCount == shadow.Length && shadow.Length <= 1 && geometryRoots && document.Sections.All(row =>
+                row.Name == "shadow type" ? ShadowValue(row) : geometry.Contains(row.Name) ? GeometryValue(row) :
+                    blocks.Contains(row.Name) ? row.IsBlock : scalar.Contains(row.Name) && !row.IsBlock) &&
             count == roots.Length && roots.Length <= 1 &&
             roots.All(row => row.IsBlock && row.Children.IsEmpty && row.Values.Length % 4 == 0 && row.Values.All(token => token.Type == 0));
     }

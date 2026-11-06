@@ -36,22 +36,39 @@ internal static class EpicRoad2019ItemLifetimeTests
             That(!created.IsExpired(now.ToUnixTimeSeconds()) && created.ExpireTime != old,
                 "明确活动名册的新道具不沿用旧活动固定删除日：" + id);
             var legacy = new InventoryItem(id, new(InventoryListType.Main, 60), created with { ExpireTime = old, Attr = 3 });
-            var repaired = InventoryExpiryService.RepairZeroPeriod(new([legacy]), resources.Items).Plan!.After.Items.Single();
-            That(repaired == legacy with { Core = legacy.Core with { ExpireTime = ItemExpiration.MaximumUnixTime } } &&
-                InventoryExpiryService.Plan(new([repaired]), now.ToUnixTimeSeconds()).Plan is { Changed: false },
-                "旧删期实例保留UID、数量及属性，关闭后不再因旧日期删除：" + id);
+            if (!template.EpicRoad2019FixedExpirationRestored)
+                That(InventoryExpiryService.RepairZeroPeriod(new([legacy]), resources.Items).Plan!.After.Items.Single() == legacy,
+                    "实际资源没有历史删期恢复标记时，不凭活动ID延长实例期限：" + id);
+            try
+            {
+                // 候选资源可能已移除旧日期，显式提供匹配过历史日期的模板，保留存量修复正向合同。
+                resources.Items.PrefillTemplates([KeyValuePair.Create(id, template with
+                {
+                    Expiration = new(ItemExpiration.MaximumUnixTime), EpicRoad2019FixedExpirationRestored = true
+                })]);
+                var repaired = InventoryExpiryService.RepairZeroPeriod(new([legacy]), resources.Items).Plan!.After.Items.Single();
+                That(repaired == legacy with { Core = legacy.Core with { ExpireTime = ItemExpiration.MaximumUnixTime } } &&
+                    InventoryExpiryService.Plan(new([repaired]), now.ToUnixTimeSeconds()).Plan is { Changed: false },
+                    "旧删期实例保留UID、数量及属性，关闭后不再因旧日期删除：" + id);
+            }
+            finally { resources.Items.PrefillTemplates([KeyValuePair.Create(id, template)]); }
             var custom = legacy with { Core = legacy.Core with { ExpireTime = old + 1 } };
             That(InventoryExpiryService.RepairZeroPeriod(new([custom]), resources.Items).Plan!.After.Items.Single() == custom,
                 "同活动道具的其它明确期限不被覆盖");
         }
-        var original = resources.Items.Get(490013728);
+        var actualOriginal = resources.Items.Get(490013728);
+        var original = actualOriginal with
+        {
+            Expiration = new(ItemExpiration.MaximumUnixTime), EpicRoad2019FixedExpirationRestored = true
+        };
         var prior = new InventoryItem(42, new(InventoryListType.Main, 60),
             InventoryRewardGrantService.Create(original, 1, now) with { ExpireTime = old });
         var rented = prior with { Core = prior.Core with { IsRental = true } };
-        That(InventoryExpiryService.RepairZeroPeriod(new([rented]), resources.Items).Plan!.After.Items.Single() == rented,
-            "租赁实例即使日期巧合也不延长");
         try
         {
+            resources.Items.PrefillTemplates([KeyValuePair.Create(original.Id, original)]);
+            That(InventoryExpiryService.RepairZeroPeriod(new([rented]), resources.Items).Plan!.After.Items.Single() == rented,
+                "租赁实例即使日期巧合也不延长");
             resources.Items.PrefillTemplates([KeyValuePair.Create(original.Id, original with { EpicRoad2019FixedExpirationRestored = false })]);
             That(InventoryExpiryService.RepairZeroPeriod(new([prior]), resources.Items).Plan!.After.Items.Single() == prior,
                 "同ID原模板未匹配历史删除日时不修实例");
@@ -64,7 +81,7 @@ internal static class EpicRoad2019ItemLifetimeTests
                     "同ID未匹配原模板或另有相对周期期限时保留原实例期限");
             }
         }
-        finally { resources.Items.PrefillTemplates([KeyValuePair.Create(original.Id, original)]); }
+        finally { resources.Items.PrefillTemplates([KeyValuePair.Create(actualOriginal.Id, actualOriginal)]); }
         var ordinary = new InventoryItem(999, new(InventoryListType.Main, 60), new(10308559, ItemKind.Material, 1) { ExpireTime = old });
         That(InventoryExpiryService.RepairZeroPeriod(new([ordinary]), resources.Items).Plan!.After.Items.Single() == ordinary,
             "普通产出材料即便同截止也不取消期限");

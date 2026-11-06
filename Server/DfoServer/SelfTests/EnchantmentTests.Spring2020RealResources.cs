@@ -101,7 +101,7 @@ internal static partial class EnchantmentTests
                     bool accepted601 = ExpertJobCraft.TryPlanEnchant(role, service, resources.ExpertJobs,
                         (byte)target.Position.List, checked((ushort)target.Position.Index),
                         (byte)source.Position.List, checked((ushort)source.Position.Index), now,
-                        out var planned601, out int experience, out ushort error601);
+                        out var planned601, out int experience, out ushort error601, next: _ => 0);
                     Check(accepted601, planned601, "601本人宝珠回退");
                     int expectedExperience = role.ExpertJobExperience + (allowed ? resources.ExpertJobs.MonsterCardExp(1,
                         resources.ExpertJobs.Level(1, role.ExpertJobExperience)).Min : 0);

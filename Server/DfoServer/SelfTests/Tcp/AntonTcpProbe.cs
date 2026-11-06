@@ -457,7 +457,7 @@ internal static partial class AntonTcpProbe
             throw new InvalidOperationException("Boss 房没有可击杀对象");
     }
 
-    internal static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY)
+    internal static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY, bool avoidBossRooms = false)
     {
         var definition = catalog.Find(dungeon) ?? throw new InvalidOperationException("团本目录没有副本 " + dungeon);
         var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)
@@ -466,7 +466,11 @@ internal static partial class AntonTcpProbe
         maze = catalog.ResolveMaze(definition, maze, _ => 0);
         if (!maze.StaticTopology.Supported)
             throw new InvalidOperationException($"{dungeon} 静态路线不可用：{maze.StaticTopology.UnsupportedReason}");
-        return QuestStoryRouteTests.Path(maze.StaticTopology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
+        var topology = maze.StaticTopology;
+        if (avoidBossRooms)
+            topology = topology with { Links = topology.Links!.Where(link =>
+                !maze.Bosses.Contains(link.First) && !maze.Bosses.Contains(link.Second)).ToArray() };
+        return QuestStoryRouteTests.Path(topology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
     }
 
     static List<WirePacket> Flush(TcpPeer peer, string why)
@@ -558,7 +562,8 @@ internal static partial class AntonTcpProbe
     }
 
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
-        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null)
+        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true, Action? loaded = null,
+        bool sendPlayResult = false)
     {
         int leaderConfirmations = leaderReport.Opcode115, leaderPermissions = leaderReport.Opcode31;
         int memberConfirmations = memberReport.Opcode115, memberPermissions = memberReport.Opcode31;
@@ -641,6 +646,14 @@ internal static partial class AntonTcpProbe
         }
         if (memberReport.Symbols.Count == memberSymbolsBefore && memberReport.States.Count == memberStatesBefore)
             throw new InvalidOperationException("队员没有收到本次清图的583血量或586状态更新");
+        if (sendPlayResult)
+        {
+            // 安徒恩每张正式图清图后客户端都会上传46；必须在仍处于结算阶段时验证两名成员均可安全消费。
+            leader.Send(46, DungeonSettlementProtocolTests.Report((leader.Id, 99), (member.Id, 98)));
+            member.Send(46, DungeonSettlementProtocolTests.Report((leader.Id, 99), (member.Id, 98)));
+            _ = Barrier(leader, "46 安徒恩图 " + dungeon);
+            _ = Barrier(member, "46 安徒恩图队员 " + dungeon);
+        }
         if (!leave) return;
         leader.Send(42);
         member.Send(42);

@@ -115,7 +115,7 @@ internal static class Strongway2019NpcTests
             Gm("event off 266");
             foreach (var peer in new[] { normal, special })
             {
-                CashShopTcpTests.AssertPromotionNativeRefresh(peer.Expect(0, 108), 0, false, [2532]);
+                CashShopTcpTests.AssertPromotionNativeRefresh(peer.Expect(0, 108), 0, false, [282, 2449, 414, 181, 2532]);
                 peer.Barrier(packet => That(packet.Opcode != 639 && packet.Opcode != 706,
                     "同epoch纯积分入口关闭不重复NPC639或残留706"));
             }
@@ -125,7 +125,7 @@ internal static class Strongway2019NpcTests
         ushort switchedCharacter;
         using (var normal = Open(fixture, "swnpcnormal"))
         {
-            normal.ExpectedOpenEvents = [2532]; normal.Select(prepared: true);
+            normal.ExpectedOpenEvents = [282, 2449, 414, 181, 2532]; normal.Select(prepared: true);
             AssertDisplay(normal.StrongwayNpcDisplay, false);
             That(normal.MileageLimits.Length == 0, "积分关闭时108后直接639删除，未伪造706");
             normal.Barrier();
@@ -136,7 +136,7 @@ internal static class Strongway2019NpcTests
         Gm("event on 312");
         using (var special = Open(fixture, "swnpcnormal", gamePort: contentPort, channelNumber: contentNumber))
         {
-            special.ExpectedOpenEvents = [2532]; special.Select(prepared: true, nativeSwitch: true);
+            special.ExpectedOpenEvents = [282, 2449, 414, 181, 2532]; special.Select(prepared: true, nativeSwitch: true);
             That(special.Id == switchedCharacter && special.LoginEndpoint[3] == 55,
                 "普通频道退出后，同账号原角色以原生直接C2S4进入type55频道");
             AssertDisplay(special.StrongwayNpcDisplay, true);
@@ -147,7 +147,7 @@ internal static class Strongway2019NpcTests
         Gm("event off 312");
         using (var normal = Open(fixture, "swnpcnormal"))
         {
-            normal.ExpectedOpenEvents = [2532]; normal.Select(prepared: true, nativeSwitch: true);
+            normal.ExpectedOpenEvents = [282, 2449, 414, 181, 2532]; normal.Select(prepared: true, nativeSwitch: true);
             That(normal.Id == switchedCharacter && normal.LoginEndpoint[3] != 55,
                 "同账号原角色从强者频道以原生直接C2S4切回普通频道");
             AssertDisplay(normal.StrongwayNpcDisplay, false);
@@ -163,7 +163,7 @@ internal static class Strongway2019NpcTests
         void Refresh(TcpPeer peer, bool active, bool mileage)
         {
             var info = peer.Expect(0, 108);
-            CashShopTcpTests.AssertPromotionNativeRefresh(info, 0, false, mileage ? [2532, 266] : [2532]);
+            CashShopTcpTests.AssertPromotionNativeRefresh(info, 0, false, mileage ? [282, 2449, 414, 181, 2532, 266] : [282, 2449, 414, 181, 2532]);
             if (mileage) Bytes(peer.Expect(0, 706).Body, initialMileage, "312变化保留原七条706限购值与先后顺序");
             var display = peer.Expect(0, 639);
             That(!display.Protected, "在线639仍使用普通原生帧"); AssertDisplay(display.Body, active);

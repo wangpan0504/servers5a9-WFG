@@ -42,6 +42,24 @@ internal static class EpicRoadBoosterTests
             }
 
             var sample = Role(parentRoles[0], entry.Parent);
+            var existingChild = new InventoryItem(10003, Bag(66),
+                InventoryRewardGrantService.Create(resources.Items.Get(entry.Child), 5, now));
+            var stacked = sample with { Inventory = sample.Inventory with { Items = sample.Inventory.Items.SetItem(0,
+                sample.Inventory.Items[0] with { Core = sample.Inventory.Items[0].Core with { Value = 3 } }).Add(existingChild) } };
+            string stackedBefore = JsonSerializer.Serialize(stacked);
+            var batch = service.Open(stacked, new(3, 2, new(0, 0, [entry.Child])), out var batchReceipt, now);
+            That(batch.Accepted && batch.Plan is not null && batchReceipt is not null,
+                "星河父盒批量选择仍按普通消耗品计数发放，实际error=" + batch.Error);
+            var expectedSource = stacked.Inventory.Find(Bag(3))! with
+                { Core = stacked.Inventory.Find(Bag(3))!.Core with { Value = 1 } };
+            var expectedStack = existingChild with { Core = existingChild.Core with { Value = 7 } };
+            That(batch.Plan!.After.Find(Bag(3)) == expectedSource && batch.Plan.After.Find(Bag(66)) == expectedStack &&
+                batch.Plan.After.Items.Length == stacked.Inventory.Items.Length &&
+                batch.Plan.After.Find(Bag(4)) == stacked.Inventory.Find(Bag(4)) &&
+                batch.Plan.After.Find(Bag(65)) == stacked.Inventory.Find(Bag(65)) &&
+                batchReceipt!.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(entry.Child, 2) }) &&
+                JsonSerializer.Serialize(stacked) == stackedBefore,
+                "星河父盒一次开两个仅扣两个源，合并既有子盒堆并保留UID、完整核心、哨兵和输入 " + entry.Parent + ":" + entry.Child);
             var equipmentRange = ItemSlotBoundService.Range(ItemKind.Equipment, sample.Inventory);
             var fullEquipment = sample with { Inventory = sample.Inventory with { Items = sample.Inventory.Items.AddRange(
                 Enumerable.Range(equipmentRange.Start, equipmentRange.End - equipmentRange.Start + 1).Select(slot =>
@@ -115,6 +133,8 @@ internal static class EpicRoadBoosterTests
             var after = opened.Plan.After;
             var granted = after.Items.Single(item => item.Core.ItemId == childId);
             var expected = InventoryRewardGrantService.Create(resources.Items.Get(childId), utcNow: now);
+            That(InventoryCargoService.AllowsInsert(expected, InventoryListType.AccountCargo, resources.Items.Get(childId)),
+                "星河子盒按自身账号绑定模板允许账号仓，不借父盒实例补绑定 " + childId);
             var range = ItemSlotBoundService.Range(ItemKind.Consumable, role.Inventory);
             That(granted.Uid == 0 && granted.Core == expected && granted.Core.Count == 1 &&
                 granted.Position.List == InventoryListType.Main && granted.Position.Index >= range.Start && granted.Position.Index <= range.End &&
@@ -140,17 +160,19 @@ internal static class EpicRoadBoosterTests
             var after = opened.Plan.After;
             var granted = after.Items.Single(item => item.Core.ItemId == leafId);
             var plain = InventoryRewardGrantService.Create(resources.Items.Get(leafId), utcNow: now);
+            That(!InventoryCargoService.AllowsInsert(plain, InventoryListType.AccountCargo, resources.Items.Get(leafId)),
+                "星河最终装备按自身不可交易模板拒绝账号仓，不继承源礼盒的账号绑定 " + leafId);
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, role.Inventory);
             // 这里只核两项资源声明；毁装灵魂说明与其独立合同另行核定，不反推或抹去该实例字段。
             var unmarked = granted.Core with { DisjointForbidden = false, DestructionSoulForbidden = false,
                 EpicExchangeOrigin = null, Extension119 = 0 };
             That(granted.Uid == 0 && unmarked == plain && granted.Core.DisjointForbidden &&
-                granted.Core.EpicExchangeOrigin == new EpicExchangeOrigin(1, childId) && granted.Core.Extension119 == 1 &&
+                granted.Core.EpicExchangeOrigin == new EpicExchangeOrigin(1, childId) && granted.Core.Extension119 == 0 &&
                 granted.Position.List == InventoryListType.Main && granted.Position.Index >= range.Start && granted.Position.Index <= range.End &&
                 after.Find(Bag(3)) is null && after.Find(Bag(4)) == role.Inventory.Find(Bag(4)) &&
                 after.Find(Bag(65)) == role.Inventory.Find(Bag(65)) && after.Items.Length == 3 && after.Gold == role.Inventory.Gold &&
                 receipt.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(leafId, 1) }) && opened.Plan.OverflowItems.IsEmpty,
-                "星河子盒每次仅选原池一件，最终装备双限制来自该子盒且其它核心保持 " + childId + ":" + leafId);
+                "星河子盒每次仅选原池一件，最终装备保留来源、禁止分解和史诗交换且其它核心保持 " + childId + ":" + leafId);
         }
     }
 

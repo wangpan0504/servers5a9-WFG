@@ -30,6 +30,19 @@ internal static class PreyRewardPackets
         return body;
     }
 
+    // 漩涡 wire3 是完整团队页，数据来自已密封权益；不能用尚未领取的本人 kind0/1 结果代替。
+    internal static byte[] FiendwarTeamResults(IReadOnlyList<(ushort Owner, RaidRewardOffer Offer)> rows)
+    {
+        if (rows.Count is < 1 or > 8 || rows.Select(row => row.Owner).Distinct().Count() != rows.Count ||
+            rows.Any(row => row.Offer.Kind != 0)) throw new InvalidDataException("漩涡团队权益表无效");
+        var bodies = rows.Select(row => Reward(row.Owner, row.Offer, RaidKind.Fiendwar)).ToArray();
+        byte[] body = new byte[checked(2 + bodies.Sum(row => row.Length - 2))];
+        body[0] = 3; body[1] = checked((byte)rows.Count);
+        int at = 2;
+        foreach (var row in bodies) { row.AsSpan(2).CopyTo(body.AsSpan(at)); at += row.Length - 2; }
+        return body;
+    }
+
     // 023CA1B0/023CA3D4..023CA56F：普雷走通用600，每个物品16B，不能套安徒恩8B。
     internal static byte[] Reward(ushort character, RaidRewardOffer offer, RaidKind raidType = RaidKind.Prey)
     {

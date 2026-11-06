@@ -61,16 +61,16 @@ internal static class ServerRuntime
     // 外置文件优先，任何部署形态都一样：运维直接改安装目录里的配置即可生效，不必重建程序；
     // 文件缺失才回退同版本内置资源。外置文件同时是运维关闭某个频道的唯一开关
     // （2026-10-30 实机：单文件发行包若绕过它就会把已关闭的频道又带回来），不能按部署形态跳过。
-    static Stream OpenDefaultOrShipped(string shippedFile, string logicalName)
+    static Stream OpenDefaultOrShipped(string shippedFile, string logicalName, string? resourcesDirectory = null)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        string path = Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), shippedFile);
         return File.Exists(path) ? File.OpenRead(path) : OpenShipped(logicalName);
     }
 
     // 把实际生效的来源写进日志：改了外置文件却没生效时，能一眼看出读的是哪一份。
-    static void LogResourceSource(ServerLog log, string stage, string shippedFile)
+    static void LogResourceSource(ServerLog log, string stage, string shippedFile, string? resourcesDirectory = null)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        string path = Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), shippedFile);
         log.Write("resource_source", new { Stage = stage, Source = File.Exists(path) ? "external" : "bundled", Path = path });
     }
 
@@ -89,9 +89,9 @@ internal static class ServerRuntime
     }
 
     // 漏掉内置回退会让服务端在「Cash shop promotions」阶段直接以 FileNotFoundException 结束（2026-10-30 实机）。
-    internal static string ReadShippedPromotionConfig()
+    internal static string ReadShippedPromotionConfig(string? resourcesDirectory = null)
     {
-        using var stream = OpenDefaultOrShipped("cash-shop-promotions.json", "DfoServer.Resources.cash-shop-promotions.json");
+        using var stream = OpenDefaultOrShipped("cash-shop-promotions.json", "DfoServer.Resources.cash-shop-promotions.json", resourcesDirectory);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
@@ -122,12 +122,12 @@ internal static class ServerRuntime
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
         itemResources.Creatures.PrepareEvolutions();
-        var channels = LoadChannels();
+        var channels = LoadChannels(Path.Combine(options.ResourcesDirectory, "channel.txt"));
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
-        LogResourceSource(log, "Channel script", "channel.txt");
-        LogResourceSource(log, "Cash shop promotions", "cash-shop-promotions.json");
-        LogResourceSource(log, "Independent attribute pairs", "independent-attribute-pairs.json");
+        LogResourceSource(log, "Channel script", "channel.txt", options.ResourcesDirectory);
+        LogResourceSource(log, "Cash shop promotions", "cash-shop-promotions.json", options.ResourcesDirectory);
+        LogResourceSource(log, "Independent attribute pairs", "independent-attribute-pairs.json", options.ResourcesDirectory);
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
@@ -168,7 +168,8 @@ internal static class ServerRuntime
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
         // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
-        var debugSettings = new GameDebugSettings { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
+        var supportStore = new Game.Settings.SupportCompanionStore(options.DataDirectory);
+        var debugSettings = new GameDebugSettings(supportStore.Read(), supportStore.Write) { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory),
             SupportProfiles = GameWorld.Dungeons.SupportCompanionCatalog.Load(pvf) };
         var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
         monsterBattleLevels.Reload();
@@ -323,11 +324,6 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Cumulative online rewards", Daily = onlineCatalog.Daily.Length,
                 Period = onlineCatalog.Period.Length, Resource = GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath });
         }
-        if (epicRoad2019Enabled)
-        {
-            var state = events.Override(Game.Events.ServerEventService.EpicRoadId, true);
-            log.Write("activity", new { EventId = Game.Events.ServerEventService.EpicRoadId, state.Active, Mode = "runtime-option" });
-        }
         if (promotionConfiguration is not null) promotionConfiguration.Changed += events.NotifyPromotionChanged;
         var promotionItem = promotionItemResolver ?? itemResources.Items.Get;
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, promotionItem);
@@ -425,7 +421,7 @@ internal static class ServerRuntime
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
             marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices,
-            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop));
+            deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop), packages: itemResources.Boosters);
         var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);
@@ -809,7 +805,7 @@ internal static class ServerRuntime
                     (clock ?? TimeProvider.System).GetUtcNow());
                 battlePassSeason = defaults.SeasonKey; battlePassStart = defaults.Start;
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+            catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
             {
                 log.Write("battle_pass_default_unavailable", new { Error = error.Message });
             }
@@ -825,19 +821,19 @@ internal static class ServerRuntime
                 if (battlePassSeason is null || battlePassCatalog is null)
                     throw new InvalidDataException("任务周期需要显式battle-pass-season");
                 var battlePassMissionPolicy = new Game.BattlePass.BattlePassMissionPolicy(battlePassSeason, start, battlePassCatalog,
-                    events.IsBattlePassActive, options.BattlePassSeasonKey is not null);
+                    events.IsBattlePassActive, true);
                 repository.ConfigureBattlePassMissions(battlePassMissionPolicy, clock);
-                events.ConfigureBattlePass(battlePassMissionPolicy.Start, battlePassMissionPolicy.End, options.BattlePassSeasonKey is not null);
+                events.ConfigureBattlePass(battlePassMissionPolicy.Start, battlePassMissionPolicy.End, true);
                 projection.BattlePassMissions = battlePassMissionPolicy;
             }
             if (battlePassSeason is not null)
             {
                 if (battlePassStart is null) events.ConfigureBattlePass(DateTimeOffset.MinValue, DateTimeOffset.MaxValue, true, missionsPrepared: false);
-                repository.ConfigureBattlePassEvents(events.IsBattlePassActive, options.BattlePassSeasonKey is not null, clock);
+                repository.ConfigureBattlePassEvents(events.IsBattlePassActive, true, clock);
             }
         }
         catch (Exception error) when (options.BattlePassSeasonKey is null &&
-            error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
+            error is InvalidDataException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Data.Common.DbException)
         {
             battlePassSeason = null; battlePassStart = null; battlePassCatalog = null; battlePassProjection = null;
             log.Write("battle_pass_default_unavailable", new { Error = error.Message });
@@ -1098,7 +1094,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Common map geometry capability", State = "complete", Maps = geometrySignatures.Count });
         Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows,
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl"), options.FileLogsEnabled), raidWindows,
                 new GameWorld.Events.EventResourceCatalog(pvf), promotions, promotionConfiguration), stop, capture, options,
                 available => { rechargeWebAvailable = available; webReady.TrySetResult(); },
                 error => log.Write("client_web_failed", new { Address = options.ListenAddress, Port = options.RechargeWebPort,

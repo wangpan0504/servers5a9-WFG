@@ -90,7 +90,7 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, phase,
                 preyBoarding ? (byte)0 : member.Squad, selectedCatalog, () => MemberCurrent(member),
                 id => Allows(battle, id) && (!preyBoarding || battle.PreyMemberRetryReady(member.Actor, id)), kind)
-                { Battle = battle, PreyGuide = raid.Guide, PreyLanding = landing, PreyPartyId = preyBoarding && !solo ? party.Id : null,
+                { Battle = battle, PreyGuide = kind != RaidKind.Prey || raid.Guide, PreyLanding = landing, PreyPartyId = preyBoarding && !solo ? party.Id : null,
                     PreySoloCharacter = solo ? member.Actor.Character : null },
                 dungeon, mazes[0].SourceOrdinal)).ToArray();
             reason = "anton-entry-authorization-changed";

@@ -30,11 +30,17 @@ internal static class EquipmentQuestDropBonusTests
         Character Role(params InventoryItem[] rows) => new(1, 0, "QuestEquipment", 0, new(1, 0, 0, 0), null)
             { Inventory = new([.. rows]) };
         ImmutableArray<int> Capture(Character character, long now = 100) =>
-            EquipmentQuestDropBonusPolicy.Capture(character, id => templates[id], now);
+            EquipmentQuestDropBonusPolicy.Capture(character, id => templates.GetValueOrDefault(id), now);
         var equipped = templates.Keys.Where(id => id != 10).Select(Worn).Append(
             new(10, new(InventoryListType.Talisman, 210), new(10, ItemKind.Rune, 1))).ToArray();
         That(Capture(Role(equipped)).SequenceEqual(new[] { 50, 20, 7, 5, 6, 8, 9, 4, 3, 2 }),
             "普通装备、称号、装扮、成宠、三色宠物装备、勋章、护石及已装载符文均按真实属性槽参与");
+        var absent = new InventoryItem(999, new(InventoryListType.Equipment, 3), new(int.MaxValue, ItemKind.Avatar, 999)) { Avatar = new() };
+        That(Capture(Role(Worn(1), absent)).SequenceEqual(new[] { 50 }),
+            "未登记的旧装扮模板不提供任务掉落加成，也不阻断合法装备效果");
+        Reject<InvalidDataException>(() => EquipmentQuestDropBonusPolicy.Capture(Role(Worn(1)),
+            _ => throw new InvalidDataException("invalid equipment resource"), 100),
+            "真实装备资源解析失败必须上抛，不能作为缺席模板忽略");
         That(Capture(Role(Worn(4), Worn(4) with { Uid = 11, Position = new(InventoryListType.Equipment, 33) },
             Worn(3) with { Position = new(InventoryListType.Equipment, 11) },
             Worn(1) with { Position = new(InventoryListType.Main, 9) },
@@ -88,7 +94,8 @@ internal static class EquipmentQuestDropBonusTests
         var quest = QuestEligibilityTests.Quest(active.QuestId) with { Condition = "[seeking]", IntData = [9001, 5],
             Definition = new([]) { Job = "[all]", Drops = [new(1, 1, 3, -1, 9001, 1, 40, 5)] } };
         var reward = new ItemTemplate(9001, ItemKind.Quest, 0, 1, 0, 100, 0, 0, 1, "[free]", ushort.MaxValue, 0, "QuestItem");
-        var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        const int coldItem = 1234567;
+        var items = new ItemCatalog(null!, new Dictionary<int, string> { [coldItem] = "cold.equ" }, new Dictionary<int, string>(), 0);
         items.PrefillTemplates(new[] { reward, Template(1, ItemKind.Equipment, 20, 50), Template(2, ItemKind.Equipment, 13, 20) }
             .Select(row => KeyValuePair.Create(row.Id, row)));
         var resources = new QuestDropResources(new Dictionary<int, StoryQuest> { [quest.Id] = quest },
@@ -96,7 +103,8 @@ internal static class EquipmentQuestDropBonusTests
             { EquipmentItems = items };
         var character = new Character(1, 0, "DropEquipment", 0, new(1, 0, 0, 0), null)
         { ActiveMainQuests = [active], Inventory = new([new(1, new(InventoryListType.Equipment, 20), new(1, ItemKind.Equipment, 0)),
-            new(2, new(InventoryListType.Equipment, 13), new(2, ItemKind.Equipment, 0))]) };
+            new(2, new(InventoryListType.Equipment, 13), new(2, ItemKind.Equipment, 0)),
+            new(3, new(InventoryListType.Equipment, 3), new(int.MaxValue, ItemKind.Avatar, 3)) { Avatar = new() }]) };
         var entry = new DungeonEntryPlan(1, 1, 3, 0, byte.MaxValue, 0, null!, null!, null!) { QuestAcceptances = [active] };
         var identity = new DungeonRunIdentity(1, 0, 1, Guid.NewGuid(), 1);
         QuestDropPlan Roll(Character actor, int value, QuestDropResources? facts = null, int enemy = 1, bool clear = false) =>
@@ -104,6 +112,10 @@ internal static class EquipmentQuestDropBonusTests
                 new Dictionary<int, TreasureHunterPotionDefinition> { [2600018] = new(5000) });
         That(Roll(character, 67).Outcomes is [{ Granted: 1 }] && Roll(character, 68).Outcomes is [{ Granted: 0 }],
             "40%原概率加两件装备20及8点得到68%，不是乘1.5再乘1.2");
+        var cold = character with { Inventory = character.Inventory with { Items = character.Inventory.Items.Add(
+            new(4, new(InventoryListType.Equipment, 14), new(coldItem, ItemKind.Equipment, 0))) } };
+        Reject<InvalidOperationException>(() => Roll(cold, 67),
+            "已登记但未装载的穿戴模板仍拒绝死亡规划，不在owner锁内解析资源");
         var unequipped = character with { Inventory = character.Inventory with { Items = character.Inventory.Items.Select(item =>
             item with { Position = new(InventoryListType.Main, (short)(item.Uid + 8)) }).ToImmutableArray() } };
         That(Roll(unequipped, 40).Outcomes is [{ Granted: 0 }] &&
