@@ -333,6 +333,12 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                     Product(commodity, $"{source}/{id}:paid-coupon:{coupon}", paidCoupon: true);
                 return;
             }
+            if (template.StackableType == "[creature] 1" && creatures.RenameCard(id))
+            {
+                if (template.Kind != ItemKind.CreatureConsumable)
+                    throw new InvalidDataException("creature_rename_definition");
+                return;
+            }
             if (cubes.Get(id) is { } cube)
             {
                 if (attributePairs.Resolve(id, AttributePairEntryKind.LimitCube).Kind == AttributePairResolutionKind.RequiredUnavailable)
