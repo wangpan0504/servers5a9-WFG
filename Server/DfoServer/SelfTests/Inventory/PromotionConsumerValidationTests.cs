@@ -49,6 +49,8 @@ internal static class PromotionConsumerValidationTests
 
     public static void RunResources(ItemResources resources)
     {
+        PromotionCreatureFeedConsumerTests.RunResources(resources);
+        PromotionSharedEffectConsumerTests.RunResources(resources);
         PromotionHellTicketConsumerTests.RunResources(resources);
         PromotionAvatarCompoundConsumerTests.RunResources(resources);
         PromotionCreatureRenameConsumerTests.RunResources(resources);
