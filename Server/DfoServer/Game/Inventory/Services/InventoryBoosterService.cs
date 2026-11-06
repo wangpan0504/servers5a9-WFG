@@ -163,8 +163,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         DateTimeOffset? utcNow = null)
     {
         receipt = null;
-        if (request.Choices.Length == 0)
+        var source = character.Inventory.Find(new(InventoryListType.Main, request.Slot));
+        if (request.Choices.Length == 0 && source is not null && boosters.Get(source.Core.ItemId).PackageSelections.IsDefaultOrEmpty)
             return OpenCore(character, new(request.Slot, 1), out receipt, out _, utcNow, ceraPackage: true);
+        if (request.Choices.Length == 0)
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_selection_required" };
         return OpenCeraPackageAvatars(character, request, out receipt, utcNow);
     }
 
@@ -192,25 +195,41 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty)
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
         if (HasCooldown(before, source.Core.ItemId, definition, now))
             return InventoryResult.Reject(19);
+        var selectedRewards = new List<BoosterReward>();
+        var selectionChoiceIndexes = new HashSet<int>();
+        foreach (var selection in definition.PackageSelections.IsDefault ? [] : definition.PackageSelections)
+        {
+            var matches = request.Choices.Select((choice, index) => (choice, index))
+                .Where(row => selection.Rewards.Any(reward => reward.ItemId == row.choice.ItemId)).ToArray();
+            if (matches.Length != 1 || !selectionChoiceIndexes.Add(matches[0].index))
+                return InventoryResult.Reject(19) with { RejectReason = "cera_package_selection_mismatch" };
+            var selected = selection.Rewards.First(reward => reward.ItemId == matches[0].choice.ItemId);
+            selectedRewards.Add(selected);
+        }
+        var allRewards = definition.PackageRewards.AddRange(selectedRewards);
         HashSet<int> avatarIds;
         try
         {
-            avatarIds = InventoryCeraPackageAvatarRewards.AvatarIds(definition.PackageRewards, catalog);
+            avatarIds = InventoryCeraPackageAvatarRewards.AvatarIds(allRewards, catalog);
         }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
         {
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_resource_invalid" };
         }
-        if (!InventoryCeraPackageAvatarRewards.Matches(avatarIds, request.Choices))
+        var avatarChoices = request.Choices.Where(choice => avatarIds.Contains(choice.ItemId)).ToArray();
+        if (!InventoryCeraPackageAvatarRewards.Matches(avatarIds, avatarChoices) ||
+            request.Choices.Where((_, index) => !selectionChoiceIndexes.Contains(index) && !avatarIds.Contains(request.Choices[index].ItemId)).Any())
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_choice_mismatch" };
+        if (avatarIds.Count != 0 && avatars is null)
+            return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
         long? rewardDeadline = null;
         try
         {
-            foreach (int id in definition.PackageRewards.Select(row => row.ItemId).Distinct())
+            foreach (int id in allRewards.Select(row => row.ItemId).Distinct())
             {
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
@@ -236,8 +255,10 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             return InventoryResult.Reject(19);
         }
-        if (!InventoryCeraPackageAvatarRewards.TryCreate(catalog, avatars, definition.PackageRewards, request.Choices, now,
-            shopExpiration, ignoreUsablePeriod, out var avatarItems, out string? reason))
+        InventoryItem[] avatarItems = [];
+        if (avatarIds.Count != 0 &&
+            !InventoryCeraPackageAvatarRewards.TryCreate(catalog, avatars!, allRewards, avatarChoices, now,
+                shopExpiration, ignoreUsablePeriod, out avatarItems, out string? reason))
             return InventoryResult.Reject(19) with { RejectReason = reason };
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, avatarItems);
         if (rewardDeadline is not null && (deadline is null || rewardDeadline < deadline))
@@ -245,7 +266,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var totals = new Dictionary<int, int>();
         try
         {
-            foreach (var row in definition.PackageRewards)
+            foreach (var row in allRewards)
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + row.Count);
         }
         catch (OverflowException)
