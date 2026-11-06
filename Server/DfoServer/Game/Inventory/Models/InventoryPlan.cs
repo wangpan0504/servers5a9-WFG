@@ -76,7 +76,8 @@ internal sealed class InventoryPlan
     }
     // 业务在规划完成后补写同事务状态（如装扮预设实时保存）：复制全部字段，惰性索引按新快照重算。
     public InventoryPlan WithAfter(InventorySnapshot after, InventoryCharacterPrecondition? precondition = null,
-        ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
+        ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null,
+        InventoryEventPrecondition? requiredEvent = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
     {
         PreserveMaterials = PreserveMaterials,
         UsedItems = usedItems ?? UsedItems,
@@ -86,7 +87,7 @@ internal sealed class InventoryPlan
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
         UnlockSkillTree = UnlockSkillTree,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
-        RequiredEvent = RequiredEvent,
+        RequiredEvent = requiredEvent ?? RequiredEvent,
         PromotionCatalogRevision = promotionCatalogRevision ?? PromotionCatalogRevision,
         AccountMaterialRaidWeek = AccountMaterialRaidWeek,
         AccountMaterialRaidDefinitions = AccountMaterialRaidDefinitions,

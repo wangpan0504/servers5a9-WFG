@@ -82,6 +82,11 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         var entry = DungeonRequests.ParseEntry(request.Body);
+        if (context.MonsterMockBattle is { } mockBattle && mockBattle.ContainsDungeon(entry.DungeonIndex))
+        {
+            await mockBattle.OpenSelectionAsync(entry.DungeonIndex);
+            return CommandResult.Handled;
+        }
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;

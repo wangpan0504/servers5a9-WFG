@@ -372,6 +372,7 @@ internal static class SqliteMigrations
             WeeklyAttendanceSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(197, "战令豪华044一次性订单", BattlePassDeluxeSchema.Upgrade),
         new(198, "账号公共物品容器45", UpgradeAccountCommon45),
+        new(199, "怪物模拟战账号卡册与匹配索引", MonsterMockBattleSchema.Upgrade),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2746,6 +2747,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         PvpRatingSchema.ValidateIndex(db, tx);
+        MonsterMockBattleSchema.Validate(db, tx);
         AccountMaterialSchema.ValidateIndex(db, tx);
         RaidQuotaSchema.ValidateIndexes(db, tx);
         PvpTotalRatingSchema.ValidateIndex(db, tx);

@@ -15,6 +15,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
     CancellationTokenSource? cancellation;
     Task pending = Task.CompletedTask;
     long epoch = -1;
+    DateTimeOffset scheduledWake = DateTimeOffset.MaxValue;
     (long Epoch, int Day)? localPublished;
     (long Epoch, int Day)? legacyPublished;
     int? missionDay;
@@ -65,6 +66,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         await EndlessAdventureProjection.PublishAsync(context);
         if (context.Session.NeedsEndlessAdventureRefresh) return false;
         if (context.DailyAttendance is { } attendance) await attendance.RefreshAsync();
+        if (context.MonsterMockBattle is { } mockBattle) await mockBattle.RefreshAsync();
         town.PublishLukeChannelCards(context);
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;
@@ -112,7 +114,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         await PublishAsync();
         var selection = context.Owner.Execute(() => (context.Session.Ready, context.Session.SelectionEpoch));
         if (!selection.Ready) { await StopAsync(); return; }
-        if (selection.SelectionEpoch == epoch && !pending.IsCompleted) return;
+        if (selection.SelectionEpoch == epoch && !pending.IsCompleted &&
+            (context.MonsterMockBattle?.NextRefresh ?? DateTimeOffset.MaxValue) >= scheduledWake) return;
         await StopAsync();
         epoch = selection.SelectionEpoch;
         cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.Stop);
@@ -128,6 +131,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             {
                 var now = clock.GetUtcNow();
                 var next = context.Session.NextServiceWake(now);
+                if (context.MonsterMockBattle is { } mockBattle && mockBattle.NextRefresh > now && mockBattle.NextRefresh < next)
+                    next = mockBattle.NextRefresh;
                 var missionReset = DfoServer.GameWorld.Time.ServiceDay.NextReset(now, clock.LocalTimeZone);
                 if (missions is not null && missionReset < next) next = missionReset;
                 var legacy = DailyBoosterUsage.NextReset(now);
@@ -140,6 +145,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
                     else if (boundary < next) next = boundary;
                 }
                 var delay = retrySeconds == 0 ? next - now : TimeSpan.FromSeconds(retrySeconds);
+                scheduledWake = now + delay;
                 await Task.Delay(delay, clock, stop);
                 await context.CommandGate.WaitAsync(stop);
                 try

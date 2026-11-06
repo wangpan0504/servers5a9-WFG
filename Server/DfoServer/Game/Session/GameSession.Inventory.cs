@@ -141,7 +141,8 @@ internal sealed partial class GameSession
         DfoServer.Game.Strongway2019.Strongway2019ShopRules.Handles(shopId) ||
         shopId == Game.Events.EndlessAdventurePolicy.ShopId ||
         DfoServer.Game.EpicRoad2019.EpicRoad2019ShopRules.Handles(shopId) ? InventoryResult.Reject(17) :
-        PlanAndCommitInventory(plan, 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
+        PlanAndCommitInventory(character => shopId == 400000097 && monsterMockBattle is not null
+            ? monsterMockBattle.ProtectShop(plan(character)) : plan(character), 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
             additionalGuard: shopId switch
             {
                 400000097 => () => Phase == SessionPhase.Town && Selected is { } character &&

@@ -94,6 +94,10 @@ internal sealed partial class CharacterRepository
                         ? new(expected.Inventory,current.Inventory,"boss_rush_reward") : restored.Inventory };
             if (ReadGuildDungeonReward(db, tx, owner, prepared) is { } guildMail)
                 restored = restored with { MailId = guildMail };
+            if (ReadMockBattleVictoryMail(db, tx, prepared) is { } mockMail)
+                restored = restored with { MailId = mockMail };
+            if (prepared.MockBattle?.Inventory.Changed == true)
+                restored = restored with { Inventory = new(expected.Inventory, current.Inventory, "monster_mock_battle_reward") };
             tx.Commit();
             return restored;
         }
@@ -280,6 +284,8 @@ internal sealed partial class CharacterRepository
             committed = committed with { Inventory = committed.Inventory with { AccountWallet = ReadAccountWallet(db, owner.Account, tx) } };
         uint attendanceMail = prepared.DailyAttendance is { } attendance
             ? ApplyDailyAttendance(db, tx, owner.Account, committed, attendance, claim: false).MailId : 0;
+        var mockBattle = CommitMockBattleVictory(db, tx, owner, committed, run, prepared);
+        committed = mockBattle.Character;
         tx.Commit();
         return new DungeonSettlementCommit(committed, false, reward)
         {
@@ -294,12 +300,12 @@ internal sealed partial class CharacterRepository
             GuildContribution = guildContribution,
             GuildDungeon = guildDungeon,
             Card = prepared.Card, Options = prepared.Options,
-            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail ?? bossRushMail,
+            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail ?? bossRushMail ?? (mockBattle.Mail == 0 ? null : mockBattle.Mail),
             BossRushReward = prepared.BossRush,
             BlackDiamond = prepared.Options?.BlackDiamond,
-            Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
+            Inventory = prepared.MockBattle?.Inventory.Changed == true || prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
                 prepared.BossRush?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true } || endlessAdventureAmount > 0
-                ? new(expected.Inventory, committed.Inventory, prepared.Grief is not null ? "grief_tower_reward" :
+                ? new(expected.Inventory, committed.Inventory, prepared.MockBattle is not null ? "monster_mock_battle_reward" : prepared.Grief is not null ? "grief_tower_reward" :
                     prepared.BossRush is not null ? "boss_rush_reward" : endlessAdventureAmount > 0 ? "endless_adventure" : "creature_experience") : null
         };
     });

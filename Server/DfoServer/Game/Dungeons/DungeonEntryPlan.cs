@@ -85,7 +85,7 @@ internal sealed record DungeonEntryPlan(
     public DungeonEntryPlan? PartyRoute { get; init; }
     // 带原接取身份的普通路线，含猎杀、收集及列表通关；同样核对普通入场费用。
     public bool IsOrdinaryHunt { get; init; }
-    public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
+    public bool IsOrdinary => MockBattle is null && !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
     public LostLandAdmission? LostLand { get; init; }
@@ -93,6 +93,7 @@ internal sealed record DungeonEntryPlan(
     // 材料必须与次数、疲劳、尝试号同事务提交（见 InstallFormalDungeon 的延后分支）。
     public bool IsAncientInfinite { get; init; }
     public bool IsPractice { get; init; }
+    public DfoServer.Game.MonsterMockBattle.MockBattleAdmission? MockBattle { get; init; }
     // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
     public bool IsTagEvildom { get; init; }
     public bool IsImperialArena { get; init; }
@@ -104,7 +105,7 @@ internal sealed record DungeonEntryPlan(
     public int? GriefLayer { get; init; }
     public bool IsBossRush { get; init; }
     public int TimeoutMilliseconds { get; init; }
-    public bool RequiresFatigueOwner => (IsOrdinary || RouteQuestId != 0 && !IsQuestReplay) && LostLand is null &&
+    public bool RequiresFatigueOwner => MockBattle is null && (IsOrdinary || RouteQuestId != 0 && !IsQuestReplay) && LostLand is null &&
         !IsTutorial && RaidEntry is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。

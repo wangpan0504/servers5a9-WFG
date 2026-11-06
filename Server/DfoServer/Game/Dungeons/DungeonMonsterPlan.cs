@@ -19,6 +19,7 @@ internal sealed record DungeonPlannedMonster(
     public bool IsBlocking { get; init; } = true;
     public int Team { get; init; } = Source?.Team is >= 0 ? Source.Team.Value : 100;
     public bool IsFriendly { get; init; }
+    public DfoServer.Game.MonsterMockBattle.MockBattleSpawn? MockBattleSpawn { get; init; }
     public bool IsDummyMapBoss { get; init; }
     public bool IsSpecialChild => Source?.SpecialChild is not null;
     public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
@@ -38,6 +39,30 @@ internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoom
 // 冻结房间对象身份和阵营资格；不建立战斗、死亡、清房或奖励状态。
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
+    internal static DungeonMonsterPlan FromMockBattleRoom(DungeonRoomDefinition room, ushort characterId,
+        ushort firstObjectKey, DfoServer.Game.MonsterMockBattle.MockBattleAdmission admission,
+        DfoServer.GameWorld.MonsterMockBattle.MonsterMockBattleCatalog catalog)
+    {
+        // 活动的双方卡片由独立通知创建；不把地图中额外注入的支援兵纳入卡组。
+        var source = room with { AiCharacters = [] };
+        var ordinary = FromRoom(source, characterId, firstObjectKey, 95, playerTeam: 0);
+        var monsters = ordinary.Monsters.Select(row => row with { IsFriendly = false, IsBlocking = true, Team = 1 }).ToList();
+        uint next = ordinary.NextObjectKey;
+        if (monsters.Count == 0) next = firstObjectKey;
+        void Add(DfoServer.Game.MonsterMockBattle.MockBattleCard card, uint team)
+        {
+            if (next == characterId) next++;
+            if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("怪物模拟战召唤对象key超界");
+            var definition = catalog.Cards[card.CardId];
+            var spawn = new DfoServer.Game.MonsterMockBattle.MockBattleSpawn(card, definition.MonsterId, next, team);
+            monsters.Add(new(1000 + monsters.Count, checked((ushort)next++), definition.MonsterId, 95, null)
+            { Team = checked((int)team), IsFriendly = team == 0, IsBlocking = team != 0, MockBattleSpawn = spawn, SourceMap = room.Map });
+        }
+        foreach (var card in admission.Lineup) Add(card, 0);
+        if (admission.Opponent is { } opponent)
+            foreach (var card in opponent.State.Snapshot.Cards.Where(row => !row.IsEmpty && row.Position >= 0)) Add(card, 1);
+        return ordinary with { Monsters = monsters.AsReadOnly() };
+    }
     public DungeonAltarPlan? Altar { get; init; }
     public IReadOnlyDictionary<ushort, byte> HellBattleLevelOverrides { get; init; } = System.Collections.Frozen.FrozenDictionary<ushort, byte>.Empty;
     public byte BattleLevelFor(DungeonHellWaveMonster wave) => HellBattleLevelOverrides.GetValueOrDefault(wave.ObjectKey, wave.Level);

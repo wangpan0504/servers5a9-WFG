@@ -436,7 +436,7 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
-                    "本夹具明确覆盖原私有193/194及正式195/196升级豪华197，避免混用已占用迁移号");
+                    "本夹具明确覆盖原私有193/194及正式195/196升级豪华197、公共容器198与怪物模拟战199，避免混用已占用迁移号");
                 RewindAccountCommon45(db);
                 Execute(db, """
                     INSERT INTO accounts(account_id,salt,password_hash,iterations)

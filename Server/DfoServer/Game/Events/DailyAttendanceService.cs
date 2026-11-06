@@ -29,7 +29,7 @@ internal sealed class DailyAttendanceService(IDailyAttendanceStore store, DailyA
     public ServerEventService Events => events;
     readonly TimeProvider clock = time ?? TimeProvider.System;
     public static bool IsRecommended(DungeonEntryPlan entry, DungeonDefinition definition, int level) =>
-        !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTrainingRoom &&
+        entry.MockBattle is null && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTrainingRoom &&
         !entry.IsQuestReplay && entry.LostLand is null && entry.DungeonId != 5000 &&
         DungeonLuckyStarPolicy.IsRecommendedClear(definition, entry.QuestId, entry.RouteQuestId, level);
     public DailyAttendanceSnapshot Read(AccountOwners.Lease owner) =>

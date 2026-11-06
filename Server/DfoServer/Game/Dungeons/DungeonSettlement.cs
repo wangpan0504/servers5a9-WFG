@@ -54,6 +54,11 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public GriefTowerClearReward? Grief { get; } = grief;
     public BossRushClearReward? BossRush { get; } = bossRush;
     public DfoServer.Game.Events.DailyAttendancePlan? DailyAttendance { get; private set; }
+    public DfoServer.Game.MonsterMockBattle.MockBattleVictory? MockBattle { get; private set; }
+    public void FreezeMockBattle(DfoServer.Game.MonsterMockBattle.MockBattleVictory? victory)
+    {
+        if (MockBattle is null) MockBattle = victory;
+    }
     bool dailyAttendanceFrozen;
     public void FreezeDailyAttendance(DfoServer.Game.Events.DailyAttendancePlan? plan)
     {

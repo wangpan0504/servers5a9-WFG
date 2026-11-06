@@ -324,6 +324,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0)))
             return await RejectAsync();
         bool multiplePartyMembers = context.Session.HasMultiplePartyMembers?.Invoke() == true;
+        bool mockBattle = context.MonsterMockBattle?.ContainsDungeon(selection.DungeonIndex) == true;
+        if (mockBattle && (multiplePartyMembers || direct || replay || practice || continuation || hell || legend || sealDoor || selection.Unknown16 != 0))
+            return await RejectAsync();
         // 一人真实Party也必须走共享PartyDungeonService；否则会落入单人Formal入口，英雄准入的partyAdmission被丢失。
         bool soloPartyEntry = context.Session.CurrentParty?.Invoke() is { Members.Length: 1 } soloParty &&
             selection.DungeonIndex is 5363 or 400000105 && soloParty.Members.Any(member =>
@@ -351,7 +354,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         FormalDungeonReceipt? receipt;
         try
         {
-            receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
+            receipt = mockBattle ? context.MonsterMockBattle!.Enter(selection, dungeons, rooms) :
+                continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
                 replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
                 (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
                     drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
@@ -396,6 +400,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
         else
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
+        // 28建立活动实例后先安装卡组；1767启用原生谋略战加载过渡，不能等37加载完成才发送。
+        if (context.MonsterMockBattle is { } mockBattleProjection) await mockBattleProjection.BattleInfoAsync(receipt, spawn: true);
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         if (PreyNormalProgress.Applies(receipt.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Guard);
         if (AntonNormalProgress.Applies(receipt.Entry)) await AntonNormalSequenceProjection.RefreshAsync(context, Guard);
@@ -529,6 +535,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);
             return CommandResult.Handled;
         }
+        if (context.MonsterMockBattle is { } mockBattle) await mockBattle.BattleInfoAsync(receipt, spawn: false);
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);

@@ -18,6 +18,14 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
+        // 活动原DGN在两个格重复同一战场；专用准入核对原清图目标后投影为唯一房间。
+        if (maze.MockBattleRoom is { } battlefield && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
+            grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } mock] && mock == battlefield &&
+            mock.Position == new DungeonPoint(0, 0) && maze.Starts.SequenceEqual([mock.Position]) &&
+            maze.Bosses.SequenceEqual([mock.Position]) && maze.QuestConnectionTokens.Count == 0 &&
+            maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0 &&
+            maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)
+            return new([new(mock, 0)], [], null);
         // 夫妻单房保留资源BB；身份由严格资源池绑定，不能变成普通图越界出口的豁免。
         if (maze.WeddingCoupleRoom is { } wedding && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } declared] && declared == wedding &&

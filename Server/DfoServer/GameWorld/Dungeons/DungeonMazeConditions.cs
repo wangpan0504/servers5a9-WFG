@@ -70,6 +70,12 @@ internal static class DungeonMazeConditions
                     result.Add(new(section.Tag, first.Value, second.Value));
                     continue;
                 }
+                // 活动单战场声明两个整数；其他clear map形式继续保留未知占位。
+                if (section.Tag == "clear map" && section.Tokens is [{ Type: 0, Value: >= 0 } map, { Type: 0, Value: > 0 } count])
+                {
+                    result.Add(new(section.Tag, map.Value, count.Value));
+                    continue;
+                }
                 if (section.Tag is not ("hunt monster" or "hunt boss" or "destroy object" or "hunt apc" or "seeking"))
                 {
                     // 未确认的声明保留占位，不能将混合条件误认为单目标猎杀。

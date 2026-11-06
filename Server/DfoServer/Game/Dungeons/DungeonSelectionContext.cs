@@ -9,6 +9,7 @@ internal sealed record DungeonSelectionContext(long Id, long SelectionEpoch, ush
     public bool IsTutorial { get; init; }
     public bool IsClassExperience { get; init; }
     public int? HellLegendDungeonId { get; init; }
+    public uint? MockBattleDungeon { get; init; }
 }
 internal sealed record DungeonSelectionReceipt(Character Character, long Generation, long SelectionEpoch, long SelectionId)
 {

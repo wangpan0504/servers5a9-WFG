@@ -127,6 +127,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver;
     readonly bool enablePromotionPage;
     readonly bool useDefaultActivities;
+    readonly bool monsterMockBattle;
     readonly Random? fiendwarMazeRandom;
     int cliSequence;
     readonly string pvfSource;
@@ -136,7 +137,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
         Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false,
-        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false)
+        Random? fiendwarMazeRandom = null, Func<int, DfoServer.GameWorld.Items.ItemTemplate>? promotionItemResolver = null, bool useDefaultActivities = false,
+        bool monsterMockBattle = false)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
@@ -148,6 +150,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         this.enablePromotionPage = enablePromotionPage;
         this.fiendwarMazeRandom = fiendwarMazeRandom;
         this.useDefaultActivities = useDefaultActivities;
+        // 无关业务夹具显式不装配谋略战，防止登录日补给改写其资产准备；默认活动专项仍走正式默认值。
+        this.monsterMockBattle = monsterMockBattle || useDefaultActivities;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -366,7 +370,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons, enableMonsterMockBattle: monsterMockBattle);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

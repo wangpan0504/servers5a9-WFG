@@ -45,6 +45,7 @@ internal sealed partial class TcpPeer : IDisposable
     long UnixTime => (fixture?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
     public byte[] Roster { get; private set; } = [];
     public byte[] LoginEndpoint { get; private set; } = [];
+    public WirePacket[] InitialAccountMaterialLists { get; private set; } = [];
     public byte[] StrongwayHistory { get; private set; } = [];
     public byte[] StrongwayAccountRewards { get; private set; } = [];
     public byte[] StrongwayNpcDisplay { get; private set; } = [];
@@ -106,6 +107,8 @@ internal sealed partial class TcpPeer : IDisposable
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
     public ushort[] ExpectedActiveEvents { get; set; } = [2395];
+    public IReadOnlyDictionary<ushort, IReadOnlyList<uint>> ExpectedEventValues { get; set; } =
+        new Dictionary<ushort, IReadOnlyList<uint>>();
     public uint? ExpectedBattlePassEnd { get; set; }
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
@@ -1470,6 +1473,7 @@ internal sealed partial class TcpPeer : IDisposable
 
         void ReadSeriaInitialization()
         {
+            InitialAccountMaterialLists = [];
             var events = Expect(0, 108);
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
             // 已有不渝之咏余额时，108 后会补 list44/45，商店才能读到持有量；全零不插包。
@@ -1480,6 +1484,7 @@ internal sealed partial class TcpPeer : IDisposable
                 {
                     TestCheck.That(material.Body.Length >= 3 && material.Body.Length == 3 + U16(material.Body, 1) * 123,
                         "选角攻坚材料投影按 list44/45 的完整行到达");
+                    InitialAccountMaterialLists = [.. InitialAccountMaterialLists, material];
                     continue;
                 }
                 pushedBack = material;
@@ -1517,7 +1522,7 @@ internal sealed partial class TcpPeer : IDisposable
                     validate(EventInfoPayload);
                 else if (U16(EventInfoPayload, 0) != 3 + ExpectedOpenEvents.Length)
                     CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents,
-                        activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd);
+                        activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd, eventValues: ExpectedEventValues);
                 else
                 {
                     int expectedLength = 98 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
@@ -1542,7 +1547,8 @@ internal sealed partial class TcpPeer : IDisposable
                         foreach (ushort id in ExpectedActiveEvents)
                         {
                             writer.Write(id);
-                            for (int index = 0; index < 12; index++) writer.Write(0u);
+                            for (int index = 0; index < 12; index++)
+                                writer.Write(ExpectedEventValues.TryGetValue(id, out var values) ? values[index] : 0u);
                         }
                         if (ExpectedBattlePassEnd is uint end)
                         {
