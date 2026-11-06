@@ -49,25 +49,12 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
 
         var outputs = new List<InventoryReward>();
         var failureOutputs = new List<InventoryReward>();
-        int equipmentCount = 0;
-        foreach (var branch in new[] { (Costs: definition.Outputs, Rewards: outputs), (Costs: definition.FailureOutputs, Rewards: failureOutputs) })
-        {
-            int branchEquipment = 0;
-            foreach (var output in branch.Costs)
-            {
-                long count = (long)output.Count * amount;
-                var template = items.Get(output.ItemId);
-                if (count is <= 0 or > int.MaxValue || template.Kind is not (ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material) ||
-                    template.IsPremiumService || template.AcquisitionContract is not null || pieces.ByPiece.ContainsKey(output.ItemId))
-                    return Reject(Rejection, "unsupported-output");
-                if (template.Kind == ItemKind.Equipment)
-                {
-                    if (count > 1 || ++branchEquipment > 1) return Reject(23, "multiple-equipment-output");
-                }
-                branch.Rewards.Add(new(output.ItemId, (int)count));
-            }
-            if (ReferenceEquals(branch.Rewards, outputs)) equipmentCount = branchEquipment;
-        }
+        if (RecipeCraftDefinitionRules.ValidateOutputs(definition, items, pieces, amount, out int equipmentCount) is { } outputError)
+            return Reject(outputError.Code, outputError.Reason);
+        foreach (var output in definition.Outputs)
+            outputs.Add(new(output.ItemId, checked(output.Count * amount)));
+        foreach (var output in definition.FailureOutputs)
+            failureOutputs.Add(new(output.ItemId, checked(output.Count * amount)));
 
         var paid = before;
         if (blueprint is not null)

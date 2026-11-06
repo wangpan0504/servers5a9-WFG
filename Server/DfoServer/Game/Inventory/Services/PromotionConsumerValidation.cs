@@ -17,7 +17,8 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     AmplificationCatalog amplifications, AmplifyUpgradeCatalog amplifyUpgrades,
     SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
     CreatureEggCatalog? creatureEggs = null, AvatarCompoundCatalog? avatarCompounds = null,
-    IReadOnlySet<int>? hellTicketIds = null)
+    IReadOnlySet<int>? hellTicketIds = null, ItemRecipeCatalog? recipes = null,
+    ItemMakingSkillCatalog? makingSkills = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -448,6 +449,52 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                         result.Kind == ItemKind.Equipment && cubes.IsBattleSpirit(result.Id))
                         throw new InvalidDataException("limit_cube_result");
                     Edge(new(row.ItemId, row.Count), $"{source}/{id}:cube", freeSource: id);
+                }
+                return;
+            }
+            if (template.StackableType.StartsWith("[recipe]", StringComparison.Ordinal))
+            {
+                var recipe = recipes?.Get(id);
+                if (recipe is null || recipe.BlueprintItemId != id || template.Kind != ItemKind.Consumable ||
+                    template.UseForbidden || template.Jobs == 0 || template.MinimumLevel > template.MaximumLevel ||
+                    recipe.Inputs.IsDefaultOrEmpty || recipe.Outputs.IsDefaultOrEmpty ||
+                    recipe.SuccessRate is < 0 or > 10000 || recipe.MakingType is > 10 ||
+                    recipe.MakingType is not null && recipe.MakingLevel == 0)
+                    throw new InvalidDataException("recipe_definition");
+                // 实体图沿正式 mode0；CatalogDirect 仅决定另一个 ID 模式的资格。
+                if (!recipe.Skills.IsEmpty)
+                    throw new InvalidDataException("recipe_skill_qualification_unverified");
+                if (recipe.MaintainAbility is not null || recipe.MaintainSocketStat || !recipe.UpgradeTransitions.IsEmpty)
+                    throw new InvalidDataException("recipe_preservation_unverified");
+                if (recipe.MakingType is not null && makingSkills?.Available != true)
+                    throw new InvalidDataException("recipe_making_unavailable");
+                if (RecipeCraftDefinitionRules.ValidateOutputs(recipe, items, pieces, 1, out _) is { } outputError)
+                    throw new InvalidDataException("recipe_output_definition:" + outputError.Reason);
+                var inputTotals = new Dictionary<int, long>();
+                foreach (var cost in recipe.Inputs)
+                {
+                    long total = inputTotals.GetValueOrDefault(cost.ItemId) + cost.Count;
+                    if (cost.ItemId < 0 || cost.Count <= 0 || total > int.MaxValue)
+                        throw new InvalidDataException("recipe_input_definition");
+                    inputTotals[cost.ItemId] = total;
+                    if (cost.ItemId == 0) continue; // 正式 Craft 的金币成本，不是物品编号0。
+                    if (CurrencyWallet.RewardKind(cost.ItemId) is { } currency && ItemSlotBoundService.CurrencySlot(currency) is null)
+                        throw new InvalidDataException("recipe_input_wallet_unavailable");
+                    var material = items.Get(cost.ItemId);
+                    if (material.AccountMaterial is not null || material.AccountCommonItem)
+                        throw new InvalidDataException("recipe_material_owner_unverified");
+                    MaterialInput(cost);
+                }
+                foreach (var branch in new[] { (Rows: recipe.Outputs, Name: "recipe-success"),
+                    (Rows: recipe.FailureOutputs, Name: "recipe-failure") })
+                {
+                    foreach (var group in branch.Rows.Where(row => CurrencyWallet.RewardKind(row.ItemId) is not null)
+                        .GroupBy(row => CurrencyWallet.RewardKind(row.ItemId)!.Value))
+                        if (ItemSlotBoundService.CurrencySlot(group.Key) is null || group.Sum(row => (long)row.Count) > int.MaxValue)
+                            throw new InvalidDataException("recipe_output_wallet_unavailable");
+                    // 制作真实扣图/扣料；完整两支均递归，不能登记为免费发奖边。
+                    foreach (var output in branch.Rows)
+                        Edge(new(output.ItemId, output.Count), $"{source}/{id}:{branch.Name}");
                 }
                 return;
             }
