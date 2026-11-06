@@ -378,6 +378,7 @@ internal static class QuestPassiveClearTcpTests
                 if (room+1 < path.Length) Move(path[room+1],0);
             }
             That(U32(map,14) == 70484,"3858沿完整真实拓扑抵达基础70484");
+            RejectExit(path[^2],0);
             foreach (var layer in maze.LayeredMaps.Where(row => row.Position == path[^1]))
             {
                 Move(layer.Position,1);
@@ -398,6 +399,8 @@ internal static class QuestPassiveClearTcpTests
                 enabled == 0 && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
                 "真实70487保留友方APC56501及两个独立68004特殊父对象，加载不达成演出或清图");
             string saved = State();
+            RejectExit(path[^2],0);
+            RejectExit(path[^1],1);
             if (!early)
             {
                 peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
@@ -462,6 +465,14 @@ internal static class QuestPassiveClearTcpTests
             {
                 var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;
                 peer.Send(45,request); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+            }
+            void RejectExit(DungeonPoint point,byte kind)
+            {
+                string before = State();
+                var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y); request[10] = kind;
+                peer.Send(45,request); peer.Expect(1,45,[0,19,0]);
+                drain(peer,packet => That(packet.Opcode != 29,"3858待物件终末的拒绝出门不能发布换图"));
+                That(State() == before && enabled == 0,"3858基础Boss或末层物件未完成时拒绝出门，存档与结算许可不变");
             }
             void Drain() => drain(peer,packet =>
             {

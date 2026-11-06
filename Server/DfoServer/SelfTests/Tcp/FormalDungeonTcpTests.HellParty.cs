@@ -38,7 +38,7 @@ internal static partial class FormalDungeonTcpTests
         // 实测请求：副本 291100308，[4]=4，[7]=1，[16:20]=6114。
         byte[] request = Convert.FromHexString("94D6591104000001" + "00FFFF" + "0000000000" + "E2170000" + "00" + "00000000");
         long Tickets(long characterId) => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=3330",characterId)[0][0];
-        foreach (var (name,qualified,tickets) in new[] { ("HellNoQuest",false,0), ("HellNoTicket",true,0), ("HellShort",true,29), ("HellYes",true,30) })
+        foreach (var (name,qualified,tickets) in new[] { ("HellNoQuest",false,0), ("HellNoTicket",true,0), ("HellShort",true,29), ("HellYes",true,30), ("HellRetry",true,60) })
         {
             var done = new HashSet<int>(baseDone);
             if (qualified) done.Add(6080);
@@ -89,10 +89,11 @@ internal static partial class FormalDungeonTcpTests
             // 实验性：起点房间不是深渊房间，START_MAP 只含普通 actor 行（无波次模板行），也不发 NOTI 679。
             That(map.Length == 23 + map[18] * 22, "深渊派对起点房间 START_MAP：actor 行数与长度一致（无波次模板行）");
             byte[] delta = peer.Expect(0,14).Body;
-            That(delta[0] == 0 && U16(delta,3) == 121 && Tickets(created.Id) == 0 &&
+            That(delta[0] == 0 && U16(delta,3) == 121 && Tickets(created.Id) == tickets-30 &&
                 fixture.Query("SELECT count(*) FROM character_dungeon_state WHERE character_id=$p0 AND last_attempt>0",peer.Id) is [[1L]],
                 "入场提交时扣掉 30 张 3330（NOTI 14 删除第 121 格、库内数量归零、入场状态落库）");
             Load(peer, fatigue: false); peer.Expect(0,36); peer.Barrier();
+            if (tickets == 60) VerifySealRetry(fixture,peer,resources,information,map);
         }
         // 时空裂缝（[inferno dungeon]）：地轨中心 7539，op16 [4]=2、[7]=1。整条路线是深渊场地，没有密门房间：
         // DUNGEON_INFO 的 [10,11] 保持 FF，入场一次扣 30 张 3330 与 6 点疲劳。
