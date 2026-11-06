@@ -14,6 +14,7 @@ internal sealed record BoosterReward(int ItemId, long Weight, int Count)
     public int? AvatarPeriodDays { get; init; }
     public byte? AvatarAbility { get; init; }
 }
+internal sealed record BoosterPackageSelection(ImmutableArray<BoosterReward> Rewards);
 internal sealed record BoosterUsePlacesDefinition(bool Village = false, bool SeriaRoom = false, string? PendingRule = null)
 {
     public bool Dungeon { get; init; }
@@ -50,7 +51,7 @@ internal sealed record BoosterPool(int Draws, ImmutableArray<BoosterReward> Rewa
 }
 internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, string? PendingRule = null,
     BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
-    bool NpcPocketPot = false)
+    bool NpcPocketPot = false, ImmutableArray<BoosterPackageSelection> PackageSelections = default)
 {
     public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
     public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
@@ -198,7 +199,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     {
         if (ParseUsePlaces(text).PendingRule is { } placeError) return new([], placeError);
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
-        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
+        if (type is not ("cera package" or "usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
             "upgradable legacy" or "legacy"))
             return new([], "其他开箱入口");
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
@@ -373,7 +374,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                         ForbidsDestructionSouls = setsDisjointInstanceType }
                 : new([], "袖珍罐总权重为零");
         }
-        if (type == "usable cera package")
+        // 老商城固定礼包使用 [cera package]，较新的同类资源使用 [usable cera package]；两者都由
+        // CMD518 按同一 [package data] 清单消费，不能因类型名称不同而把已购买礼包标成不可用。
+        if (type is "cera package" or "usable cera package")
         {
             var packageBlocks = Regex.Matches(text, @"\[package data\](.*?)\[/package data\]", RegexOptions.Singleline);
             if (packageBlocks.Count != 1)
@@ -388,7 +391,27 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                     return new([], "礼包内容物品或数量无效");
                 else
                     rewards.Add(new(id, 1, count));
-            return new([], null, null, rewards.ToImmutable());
+            var selectionBlocks = Regex.Matches(text, @"\[package data selection\](.*?)\[/package data selection\]",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (selectionBlocks.Count != Regex.Matches(text, @"\[package data selection\]", RegexOptions.IgnoreCase).Count ||
+                selectionBlocks.Count != Regex.Matches(text, @"\[/package data selection\]", RegexOptions.IgnoreCase).Count)
+                return new([], "礼包选择段缺失或重复");
+            var selections = ImmutableArray.CreateBuilder<BoosterPackageSelection>(selectionBlocks.Count);
+            foreach (Match block in selectionBlocks)
+            {
+                string[] selectionTokens = block.Groups[1].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (selectionTokens.Length == 0 || selectionTokens.Length % 2 != 0)
+                    return new([], "礼包选择内容缺失或行宽无效");
+                var choices = ImmutableArray.CreateBuilder<BoosterReward>(selectionTokens.Length / 2);
+                for (int i = 0; i < selectionTokens.Length; i += 2)
+                    if (!int.TryParse(selectionTokens[i], out int id) || id <= 0 ||
+                        !int.TryParse(selectionTokens[i + 1], out int count) || count <= 0)
+                        return new([], "礼包选择物品或数量无效");
+                    else
+                        choices.Add(new(id, 1, count));
+                selections.Add(new(choices.ToImmutable()));
+            }
+            return new([], null, null, rewards.ToImmutable(), PackageSelections: selections.ToImmutable());
         }
         if (type == "booster selection")
             return BoosterSelectionDefinition.Parse(text) with

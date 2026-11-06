@@ -338,6 +338,11 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 { Error(source, row.ItemId, "package_avatar_ability_unavailable"); continue; }
                 Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade), $"{source}/{id}:package", parent: booster, freeSource: id);
             }
+            foreach (var (packageSelection, selectionIndex) in (booster.PackageSelections.IsDefault
+                ? System.Collections.Immutable.ImmutableArray<BoosterPackageSelection>.Empty : booster.PackageSelections).Select((value, index) => (value, index)))
+                foreach (var row in packageSelection.Rewards)
+                    Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade),
+                        $"{source}/{id}:package-selection:{selectionIndex}", parent: booster, freeSource: id);
             foreach (var pool in booster.Pools)
             {
                 if (pool.Draws <= 0 || !pool.Rewards.Any(row => row.Weight > 0))
@@ -495,7 +500,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 return;
             }
             var booster = boosters.Get(id);
-            bool isBooster = booster.Available || new[] { "[booster]", "[booster selection]", "[cera package]" }
+            bool isBooster = booster.Available || new[] { "[booster]", "[booster selection]", "[cera package]", "[usable cera package]" }
                 .Any(type => template.StackableType.StartsWith(type, StringComparison.Ordinal));
             if (isBooster)
             {

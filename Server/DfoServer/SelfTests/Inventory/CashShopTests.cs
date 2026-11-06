@@ -202,6 +202,35 @@ internal static partial class CashShopTests
         };
         var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
+        var packagePurchaseProbe = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits,
+            resources.EpicPieces, resources.Cargo, contracts: resources.Contracts);
+        var tigerProducts = resources.CashShop.Products.Values
+            .Where(row => row.CommodityId is >= 5180 and <= 5199)
+            .ToArray();
+        That(tigerProducts.Length == 20 && tigerProducts.All(row =>
+                resources.Items.Get(row.ItemId).StackableType.StartsWith("[cera package]", StringComparison.OrdinalIgnoreCase)),
+            "虎年至尊5180-5199全部映射为可创建[cera package]商品");
+        var fixedPackageFailures = resources.CashShop.Products.Values
+            .Where(row => row.Section is "package" or "regular package" or "community package")
+            .Where(row => !resources.CashShop.IsCouponProduct(row.CommodityId))
+            .Where(row =>
+                resources.Items.Get(row.ItemId).StackableType.StartsWith("[cera package]", StringComparison.OrdinalIgnoreCase) ||
+                resources.Items.Get(row.ItemId).StackableType.StartsWith("[usable cera package]", StringComparison.OrdinalIgnoreCase))
+            .Select(row =>
+            {
+                var result = packagePurchaseProbe.Buy(character, new(0, [new(row.CommodityId, 0)]), out _, now);
+                bool placed = result.Plan?.After.Items.Any(item => item.Core.ItemId == row.ItemId) == true ||
+                    result.Plan?.OverflowItems.Any(item => item.Core.ItemId == row.ItemId) == true;
+                if (!result.Accepted || !placed)
+                {
+                    Console.WriteLine($"CASH_PACKAGE_PURCHASE_FAIL commodity={row.CommodityId} item={row.ItemId} error={result.Error} reason={result.RejectReason} placed={placed}");
+                }
+                return result.Accepted && placed ? 0 : row.CommodityId;
+            })
+            .Where(commodity => commodity != 0)
+            .ToArray();
+        That(fixedPackageFailures.Length == 0,
+            "真实[cera package]商城礼包逐商品购买成功并规划入背包或溢出邮件: " + string.Join(",", fixedPackageFailures));
         VerifyMarriagePurchases(character, resources);
         VerifyHongbaoPayment(character, product, resources);
         VerifyHongbaoStorage(towns, characters, resources);

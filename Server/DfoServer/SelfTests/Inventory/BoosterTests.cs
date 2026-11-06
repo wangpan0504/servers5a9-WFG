@@ -94,6 +94,17 @@ internal static class BoosterTests
         var package = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
         That(package.Available && package.PackageRewards.SequenceEqual(new BoosterReward[] { new(1106, 1, 2), new(1112, 1, 1) }),
             "fixed CERA packages expose every PVF package reward without dropping rows");
+        var legacyPackage = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[/stackable type]\n[package data]\n1106 2 1112 1\n[/package data]");
+        That(legacyPackage.Available && legacyPackage.PackageRewards.SequenceEqual(package.PackageRewards),
+            "legacy CERA package roots use the same fixed package reward parser");
+        var legacySelection = BoosterCatalog.Parse("[stackable type]\n`[cera package]` 0\n[/stackable type]\n[package data]\n1106 1\n[/package data]\n" +
+            "[package data selection]\n1112 1\n[/package data selection]");
+        That(legacySelection.Available && legacySelection.PackageSelections is [{ Rewards: [{ ItemId: 1112, Count: 1 }] }],
+            "legacy CERA package selection blocks are parsed as one required 518 choice group");
+        var usableSelection = BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[/stackable type]\n[package data]\n1106 1\n[/package data]\n" +
+            "[package data selection]\n1112 1\n[/package data selection]");
+        That(usableSelection.Available && usableSelection.PackageSelections.Length == 1,
+            "usable CERA package selection blocks share the same required choice parser");
         foreach (string body in new[] { "", "1106", "1106 0", "0 1", "1106 2147483648" })
             That(!BoosterCatalog.Parse("[stackable type]\n`[usable cera package]` 0\n[package data]\n" + body + "\n[/package data]").Available,
                 "固定礼包拒绝缺失、非法和超界奖励行");
@@ -110,7 +121,7 @@ internal static class BoosterTests
 
         var packageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
             itemResources.EpicPieces, debugSettings: new GameDebugSettings { IgnoreCashShopAbsoluteExpiration = true },
-            contracts: itemResources.Contracts);
+            contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages);
         foreach (int id in new[] { 490705385, 490705386, 490705483 })
         {
             var expected = itemResources.Boosters.Get(id).PackageRewards.GroupBy(row => row.ItemId)
@@ -129,6 +140,29 @@ internal static class BoosterTests
                 expiredReceipt is null && expiredSource.Inventory.Find(Bag(65))!.Core == expiredCore && expiredCore.Count == 1,
                 "忽略商城绝对期限也必须拒绝已过期源实例，保留源且不生成奖励规划 " + id);
         }
+        const int tigerPackage = 2681548;
+        var tigerDefinition = itemResources.Boosters.Get(tigerPackage);
+        var tigerTemplate = catalog.Get(tigerPackage);
+        var tigerRole = current with
+        {
+            Job = 0,
+            Inventory = new([new(1, Bag(65), InventoryRewardGrantService.Create(tigerTemplate, utcNow: now, shopExpiration: true))])
+        };
+        var tigerChoices = tigerDefinition.PackageSelections.Select(selection =>
+                new CeraPackageChoice(selection.Rewards[0].ItemId, 0))
+            .Concat(tigerDefinition.PackageRewards.Where(row => catalog.Get(row.ItemId).Kind == ItemKind.Avatar)
+                .Select(row => row.ItemId).Distinct()
+                .Select(id => new CeraPackageChoice(id, itemResources.AvatarPackages.GetAvatar(id).Abilities.Min())))
+            .ToArray();
+        var tigerEmpty = packageService.OpenCeraPackage(tigerRole, new(65, []), out var tigerEmptyReceipt, now);
+        That(!tigerEmpty.Accepted && tigerEmpty.RejectReason == "cera_package_selection_required" && tigerEmptyReceipt is null,
+            "虎年至尊礼包缺少选择时拒绝且不生成回执");
+        var tigerOpened = packageService.OpenCeraPackage(tigerRole, new(65, tigerChoices), out var tigerReceipt, now);
+        That(tigerDefinition.Available && tigerDefinition.PackageSelections.Length == 2 && tigerOpened.Accepted &&
+            tigerReceipt is { Rewards.Length: > 0 } && tigerRole.Inventory.Find(Bag(65)) is not null &&
+            tigerChoices.Take(tigerDefinition.PackageSelections.Length).All(choice => tigerReceipt!.Rewards.Any(row => row.ItemId == choice.ItemId)) &&
+            !tigerOpened.Plan!.After.Items.Any(item => item.Core.ItemId == tigerPackage),
+            "虎年至尊礼包按两个选择组和固定时装属性完整发放并原子消费源物品");
         var ordinarySource = current with { Inventory = new([new(1, Bag(65), Core(7542))]) };
         That(!packageService.OpenCeraPackage(ordinarySource, new(65, []), out _, now).Accepted, "商城开包命令不能消费普通随机盒");
         var avatarPackageService = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits,
