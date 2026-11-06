@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
@@ -15,7 +16,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     EnhancementCatalog enhancements, RecoveryConsumableCatalog consumables,
     AmplificationCatalog amplifications, AmplifyUpgradeCatalog amplifyUpgrades,
     SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
-    CreatureEggCatalog? creatureEggs = null)
+    CreatureEggCatalog? creatureEggs = null, AvatarCompoundCatalog? avatarCompounds = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -25,6 +26,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
         var freeEdges = new Dictionary<int, HashSet<int>>();
         var materialInputs = new HashSet<int>();
         var materialLeaves = new List<(int ItemId, string Source)>();
+        var validationNow = DateTimeOffset.UtcNow;
         bool springScope = rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package");
         foreach (var product in rules.Products)
             Product(product.CommodityId, $"product:{product.CommodityId}", product.ItemId);
@@ -177,6 +179,26 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             }
             catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
             { Error(source, reward.ItemId, error.Message); }
+        }
+
+        ImmutableHashSet<byte> CompoundOutput(AvatarCompoundJobDefinition definition, string part,
+            AvatarCompoundCandidate candidate, bool target, string source)
+        {
+            var output = items.Get(candidate.ItemId);
+            if (output.Id != candidate.ItemId ||
+                !InventoryAvatarCompoundService.OutputTemplateMatches(checked((byte)(definition.Job - 1)), output, part) ||
+                target && output.Grade != definition.Grade && output.Grade != definition.UpperGrade)
+                throw new InvalidDataException($"avatar_compound_output_definition:{definition.Job}/{part}/{candidate.ItemId}");
+            var avatar = avatars.GetAvatar(candidate.ItemId);
+            if (avatar.PendingRule is not null || avatar.Abilities.IsEmpty)
+                throw new InvalidDataException($"avatar_compound_output_ability:{definition.Job}/{part}/{candidate.ItemId}");
+            InventoryRewardGrantService.ValidateCreationArguments(output);
+            int deadline = output.Expiration.Resolve(validationNow);
+            if (deadline > 0 && deadline <= validationNow.ToUnixTimeSeconds())
+                throw new InvalidDataException($"avatar_compound_output_expired:{definition.Job}/{part}/{candidate.ItemId}");
+            // 另消耗双源时装，不登记为从材料免费产生的边；后续用途仍沿原图完整展开。
+            Edge(new(candidate.ItemId, 1), $"{source}/avatar-compound:{definition.Job}/{part}", ItemKind.Avatar);
+            return avatar.Abilities;
         }
 
         void Expand(int id, string source)
@@ -550,6 +572,48 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 if (enchantment.CardItemId > 0) _ = items.Get(enchantment.CardItemId);
                 if (enchantment.RandomCards is { } cards)
                     foreach (int card in cards.Positions) _ = items.Get(card);
+                return;
+            }
+            // 只完整解析实际材料关联的职业，保留共用材料的全部职业和八部位合同。
+            var compoundDefinitions = avatarCompounds?.ForMaterial(id).ToArray();
+            if (compoundDefinitions is { Length: > 0 })
+            {
+                if (template.UseForbidden || !new ItemCore(template.Id, template.Kind, 1).IsStackable ||
+                    ItemSlotBoundService.List(template.Kind) != InventoryListType.Main ||
+                    Special(id, template) || !template.Expiration.SupportsCreation)
+                    throw new InvalidDataException("avatar_compound_material_definition");
+                InventoryRewardGrantService.ValidateCreationArguments(template);
+                foreach (var definition in compoundDefinitions)
+                {
+                    if (definition.Job is < 1 or > 16 ||
+                        InventoryAvatarCompoundService.MaterialBonus(definition, id) is not { } bonus)
+                        throw new InvalidDataException("avatar_compound_material_owner");
+                    foreach (var pool in definition.Parts.Values)
+                    {
+                        // 服务允许双高级源；两档概率非负，其组合是本材料可达到的最大稀有率。
+                        bool rareReachable = !pool.RarePool.IsEmpty &&
+                            InventoryAvatarCompoundService.CombinedRareRate(definition, pool.Part,
+                                definition.UpperGrade, definition.UpperGrade, bonus) > 0;
+                        HashSet<byte>? rareAbilities = null;
+                        if (rareReachable)
+                        {
+                            foreach (var candidate in pool.RarePool)
+                            {
+                                var abilitySet = CompoundOutput(definition, pool.Part, candidate, false, source);
+                                if (rareAbilities is null) rareAbilities = abilitySet.ToHashSet();
+                                else rareAbilities.IntersectWith(abilitySet);
+                            }
+                        }
+                        foreach (var candidate in pool.TargetPool)
+                        {
+                            var abilitySet = CompoundOutput(definition, pool.Part, candidate, true, source);
+                            // 保留目标全部合法能力；仅存在一项公共能力不能保证其余选择不随机失败。
+                            if (rareAbilities is not null && !abilitySet.IsSubsetOf(rareAbilities))
+                                throw new InvalidDataException($"avatar_compound_ability_contract:{definition.Job}/{pool.Part}/{candidate.ItemId}");
+                        }
+                    }
+                }
+                materialInputs.Add(id);
                 return;
             }
             if (template.Kind == ItemKind.Material)

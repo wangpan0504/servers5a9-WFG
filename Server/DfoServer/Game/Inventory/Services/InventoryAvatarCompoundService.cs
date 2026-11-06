@@ -67,23 +67,15 @@ internal sealed class InventoryAvatarCompoundService(ItemCatalog items, AvatarCo
         if (materialTemplate.Id != material.Core.ItemId || materialTemplate.Kind != material.Core.Kind)
             return Reject("material-template", out rejection);
 
-        int materialBonus;
-        if (material.Core.ItemId == config.MaterialItemId) materialBonus = 0;
-        else if (material.Core.ItemId == config.UpperMaterialItemId) materialBonus = 200;
-        else if (material.Core.ItemId == config.MasterMaterialItemId) materialBonus = 400;
-        else return Reject("material-id", out rejection);
+        if (MaterialBonus(config, material.Core.ItemId) is not { } materialBonus)
+            return Reject("material-id", out rejection);
         if (!pool.TargetPool.Any(candidate => candidate.ItemId == request.TargetItemId) ||
-            !OutputTemplateMatches(character, targetTemplate, part) ||
+            !OutputTemplateMatches(character.Job, targetTemplate, part) ||
             targetTemplate.Grade != config.Grade && targetTemplate.Grade != config.UpperGrade ||
             !AbilityAllowed(targetTemplate.Id, request.Ability))
             return Reject("target-selection", out rejection);
 
-        int rareRate = config.RareRates[part];
-        int upperRate = config.UpperRareRates[part];
-        int combinedRate = grade0 == config.Grade && grade1 == config.Grade ? rareRate :
-            grade0 == config.UpperGrade && grade1 == config.UpperGrade ? checked(rareRate + upperRate) :
-            checked(rareRate + upperRate / 2);
-        combinedRate = Math.Clamp(checked(combinedRate + materialBonus), 0, 10000);
+        int combinedRate = CombinedRareRate(config, part, grade0, grade1, materialBonus);
         int rareRoll;
         try { rareRoll = checked((int)Next(10000)); }
         catch (InvalidDataException) { return Reject("random-range", out rejection); }
@@ -103,7 +95,7 @@ internal sealed class InventoryAvatarCompoundService(ItemCatalog items, AvatarCo
             {
                 return Reject("rare-metadata", out rejection);
             }
-            if (!OutputTemplateMatches(character, rareTemplate, part) || !AbilityAllowed(rareTemplate.Id, request.Ability))
+            if (!OutputTemplateMatches(character.Job, rareTemplate, part) || !AbilityAllowed(rareTemplate.Id, request.Ability))
                 return Reject("rare-selection", out rejection);
             outputTemplates.Add(rareTemplate);
         }
@@ -168,9 +160,24 @@ internal sealed class InventoryAvatarCompoundService(ItemCatalog items, AvatarCo
         AvatarCompoundCatalog.Part(template.EquipmentSlot) is not null && character.Job < 16 &&
         (template.Jobs & (1 << character.Job)) != 0;
 
-    static bool OutputTemplateMatches(Character character, ItemTemplate template, string part) =>
+    internal static bool OutputTemplateMatches(byte job, ItemTemplate template, string part) =>
         template.Kind == ItemKind.Avatar && AvatarCompoundCatalog.Part(template.EquipmentSlot) == part &&
-        character.Job < 16 && (template.Jobs & (1 << character.Job)) != 0;
+        job < 16 && (template.Jobs & (1 << job)) != 0;
+
+    internal static int? MaterialBonus(AvatarCompoundJobDefinition config, int itemId) =>
+        itemId == config.MaterialItemId ? 0 : itemId == config.UpperMaterialItemId ? 200 :
+        itemId == config.MasterMaterialItemId ? 400 : null;
+
+    internal static int CombinedRareRate(AvatarCompoundJobDefinition config, string part,
+        int grade0, int grade1, int materialBonus)
+    {
+        int rareRate = config.RareRates[part];
+        int upperRate = config.UpperRareRates[part];
+        int rate = grade0 == config.Grade && grade1 == config.Grade ? rareRate :
+            grade0 == config.UpperGrade && grade1 == config.UpperGrade ? checked(rareRate + upperRate) :
+            checked(rareRate + upperRate / 2);
+        return Math.Clamp(checked(rate + materialBonus), 0, 10000);
+    }
 
     bool AbilityAllowed(int itemId, ushort ability)
     {

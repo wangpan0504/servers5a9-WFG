@@ -20,7 +20,9 @@ internal sealed class AvatarCompoundCatalog
 
     readonly Func<string, PvfToken[]> readTokens;
     readonly Func<int, string> resolve;
-    readonly ImmutableDictionary<int, (string Path, Lazy<AvatarCompoundJobDefinition> Definition)> jobs;
+    readonly ImmutableDictionary<int, (string Path, Lazy<PvfTokenDocument> Document,
+        Lazy<AvatarCompoundJobDefinition> Definition)> jobs;
+    readonly Lazy<ImmutableDictionary<int, ImmutableArray<int>>> materialJobs;
 
     public AvatarCompoundCatalog(PvfArchive archive)
         : this(archive.ReadText, archive.ReadTokens, archive.ResolveString, archive.Contains) { }
@@ -33,18 +35,21 @@ internal sealed class AvatarCompoundCatalog
         var paths = PvfScript.List(readText(RootPath));
         if (paths.Count == 0)
             throw new InvalidDataException("装扮合成职业列表为空");
-        var builder = ImmutableDictionary.CreateBuilder<int, (string, Lazy<AvatarCompoundJobDefinition>)>();
+        var builder = ImmutableDictionary.CreateBuilder<int, (string, Lazy<PvfTokenDocument>, Lazy<AvatarCompoundJobDefinition>)>();
         foreach (var (job, relative) in paths)
         {
             if (job <= 0 || job > byte.MaxValue)
                 throw new InvalidDataException("装扮合成职业索引必须为正数: " + job);
             string path = ResolvePath(relative, contains);
+            var document = new Lazy<PvfTokenDocument>(() =>
+                new PvfTokenDocument(this.readTokens(path), this.resolve), LazyThreadSafetyMode.ExecutionAndPublication);
             var definition = new Lazy<AvatarCompoundJobDefinition>(() => Parse(job, path,
-                new PvfTokenDocument(this.readTokens(path), this.resolve), this.resolve), LazyThreadSafetyMode.ExecutionAndPublication);
-            if (!builder.TryAdd(job, (path, definition)))
+                document.Value, this.resolve), LazyThreadSafetyMode.ExecutionAndPublication);
+            if (!builder.TryAdd(job, (path, document, definition)))
                 throw new InvalidDataException("装扮合成职业索引重复: " + job);
         }
         jobs = builder.ToImmutable();
+        materialJobs = new(BuildMaterialJobs, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public AvatarCompoundJobDefinition ForCharacterJob(byte job)
@@ -53,6 +58,40 @@ internal sealed class AvatarCompoundCatalog
         if (!jobs.TryGetValue(oneBased, out var row))
             throw new InvalidDataException("当前职业缺少装扮合成配置: " + oneBased);
         return row.Definition.Value;
+    }
+
+    // 反查只记录根级材料段的可能编号，不在索引阶段验证无关职业的品级、概率和产物。
+    // 编号命中后仍调用同一个完整解析器；畸形声明不能借索引授予材料资格。
+    public IEnumerable<AvatarCompoundJobDefinition> ForMaterial(int itemId)
+    {
+        if (!materialJobs.Value.TryGetValue(itemId, out var owners)) yield break;
+        foreach (int job in owners)
+            yield return jobs[job].Definition.Value;
+    }
+
+    ImmutableDictionary<int, ImmutableArray<int>> BuildMaterialJobs()
+    {
+        var owners = new Dictionary<int, HashSet<int>>();
+        // 运行时模板谓词只支持0-based职业0..15；其它目录行不能授予消费者资格。
+        foreach (var (job, row) in jobs.Where(pair => pair.Key <= 16).OrderBy(pair => pair.Key))
+        {
+            foreach (var section in row.Document.Value.Sections.Where(section =>
+                section.Name is "material" or "material_upper" or "material_master"))
+            {
+                // 畸形材料声明可能把编号移位；所有正整数仅作关联线索，不解释数量或授予owner。
+                // 数量、闭合、重复和完整三档声明仍由命中职业的Parse严格验证。
+                foreach (var item in MaterialValues(section).Where(token => token is { Type: 0, Value: > 0 }))
+                {
+                    if (!owners.TryGetValue(item.Value, out var values)) owners[item.Value] = values = [];
+                    values.Add(job);
+                }
+            }
+        }
+        return owners.ToImmutableDictionary(pair => pair.Key, pair => pair.Value.Order().ToImmutableArray());
+
+        // 仅遍历已选中根材料段的内容；嵌套异常只保留关联线索，资格仍由完整Parse裁决。
+        static IEnumerable<PvfToken> MaterialValues(PvfTokenSection section) =>
+            section.Values.Concat(section.Children.SelectMany(MaterialValues));
     }
 
     internal static AvatarCompoundJobDefinition Parse(int job, string path, PvfTokenDocument document,
