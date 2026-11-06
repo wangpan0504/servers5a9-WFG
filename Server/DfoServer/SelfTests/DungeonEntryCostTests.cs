@@ -121,6 +121,7 @@ internal static class DungeonEntryCostTests
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        ImmortalCorridor(towns, characters, skills, growth, quests, dungeons, rooms);
 
         var passIds = items.Items.CosmoPasses();
         That(passIds.Length == 48 && passIds.Count(row=>row.AdditionalStones==0)==36 && passIds.Count(row=>row.AdditionalStones==2)==12 &&
@@ -340,6 +341,33 @@ internal static class DungeonEntryCostTests
                 "入场费用必须绑定本次待安装的尝试号");
         }
         Console.WriteLine($"Dungeon entry cost checks passed: {Count - checks}");
+    }
+
+    static void ImmortalCorridor(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth,
+        QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms)
+    {
+        var definition = dungeons.Get(7154);
+        var (done, position) = Selection(towns, 7154);
+        foreach (var option in towns.DungeonMaps[AreaDungeonWorldMap(towns, 7154)].Options.Where(row => row.DungeonId == 7154 && !row.InProgress && row.QuestId > 0))
+            done.Add(option.QuestId);
+        That(definition.Mazes.Count == 4 && definition.StartFatigue == 8,
+            "不灭回廊保留真实四路线和入场八点疲劳");
+        foreach (var maze in definition.Mazes)
+        {
+            using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+                done.ToArray(), position: position, fatigueRemaining: 8);
+            var before = f.Read();
+            That(f.Session.BeginDungeonSelection() is not null, "不灭回廊从克洛诺斯岛正常打开选图");
+            var entered = f.Session.EnterFormalDungeon(7154, 0, 0, dungeons, rooms, draw: count => maze.SourceOrdinal % count);
+            That(entered is not null && entered.Entry.Maze.SourceOrdinal == maze.SourceOrdinal &&
+                entered.Entry.StartMap.Id == 311290 && entered.Entry.StartMap.Path.EndsWith("c01..map", StringComparison.OrdinalIgnoreCase) &&
+                f.Read().Fatigue!.Remaining == 0 && f.Read().DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1,
+                "不灭回廊每条路线真实建立实例并只扣八点疲劳：" + f.Session.LastFormalDungeonRejection);
+            That(f.Session.CompleteFormalDungeonLoading() is not null && f.Read().Fatigue!.Remaining == 0 &&
+                f.Session.EnterFormalDungeon(7154, 0, 0, dungeons, rooms) is null &&
+                f.Read().DungeonState!.LastAttempt == before.DungeonState!.LastAttempt + 1,
+                "合法连续点文件名可完成加载，重复入场不再扣费或预留尝试号");
+        }
     }
 
     static void GateRejected(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth,

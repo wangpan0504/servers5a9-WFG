@@ -31,6 +31,17 @@ internal static partial class MapGeometryTests
         That(signature.SequenceEqual(MapGeometrySignature.Compute("map/test.map",remapped,id => Resolve(id - 100))), "池ID变化不改变签名");
         That(signature.SequenceEqual(MapGeometrySignature.Compute("map/test.map",output,id => id == 4 ? "其他中文显示文字" : Resolve(id).ToUpperInvariant())), "显示文字及标签大小写不改变签名");
         That(ReferenceEquals(config.Apply("map/elsewhere.map", input, Resolve), input), "无规则资源原样借用");
+        const string dottedPath = "map/test/311290(0,0)_c01..map";
+        var dotted = MapGeometryConfig.Parse(Doc(row.Replace("Map/Test.map", dottedPath, StringComparison.Ordinal)));
+        That(dotted.Apply(dottedPath, input, Resolve).SequenceEqual(output) &&
+            ReferenceEquals(MapGeometryConfig.Empty.Apply(dottedPath, input, Resolve), input),
+            "不灭回廊起始图文件名中的连续点不是父目录，带规则及无规则均可读取");
+        foreach (string traversal in new[] { "map/../outside.map", "map/test/../outside.map", "map/test/..", @"map\test\..\outside.map" })
+        {
+            Reject<InvalidDataException>(() => config.Apply(traversal, input, Resolve), "父目录路径段继续拒绝");
+            Reject<InvalidDataException>(() => MapGeometryConfig.Parse(Doc(row.Replace("Map/Test.map", traversal.Replace('\\','/'), StringComparison.Ordinal))),
+                "world配置同样不能声明父目录路径段");
+        }
         var bad = input.ToArray(); bad[1] = new(0,12);
         Reject<InvalidDataException>(() => config.Apply("map/test.map", bad, Resolve), "源守卫冲突拒绝");
         That(bad[1].Value == 12 && bad[5].Value == 39, "失败不修改输入");
