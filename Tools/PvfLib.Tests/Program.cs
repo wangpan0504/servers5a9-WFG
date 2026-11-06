@@ -39,6 +39,7 @@ RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
 EquipmentEmancipationTests.Run();
 ExpertRecipeFileTests.Run();
+AlchemistPotionInfoTests.Run();
 CreatureFileTests.Run();
 PvpPrivateCharacterFileTests.Run();
 TownEpisodeFileTests.Run();

@@ -72,7 +72,7 @@ internal static partial class QuestTicketTests
         foreach (byte job in Enumerable.Range(0,16).Select(value => (byte)value))
             That(definition.Allows(20,job),"普通券资源all职业资格 "+job);
         That(!definition.Allows(85,0) && !(definition with { MinimumLevel=21 }).Allows(20,0) &&
-            !(definition with { Jobs=2 }).Allows(20,0),"券自身min/max/job范围不由角色或任务编号猜测");
+            (definition with { Jobs=2 }).Allows(20,0),"券保留min/max范围，usable job由客户端判断");
         TestCheck.Reject<InvalidDataException>(() => QuestTicketSource.Create(role with
             { Inventory=new([item with { Core=item.Core with { ExpireTime=100 } }]) },Bag(65),definition,100),"到期实际实例不能准备");
         TestCheck.Reject<InvalidDataException>(() => QuestTicketSource.Create(role with

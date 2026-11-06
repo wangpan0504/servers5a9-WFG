@@ -74,7 +74,7 @@ internal sealed class InventoryCreatureSkinService(ItemCatalog items, TimeProvid
             source.Core.EquipmentLockId != 0 || source.IsExpired(utcSeconds) ||
             !ItemSlotBoundService.Allows(before, position, kind) || template is null ||
             template.Id != source.Core.ItemId || template.Kind != kind || !validTicket ||
-            !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
+            !template.AllowsActivation(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(Rejection);
         var deletion = InventoryDeleteService.Plan(before, position, source.Core.ItemId, 1);
         if (!deletion.Accepted || deletion.Plan is null)

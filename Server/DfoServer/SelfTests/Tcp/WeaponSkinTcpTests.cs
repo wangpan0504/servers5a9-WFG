@@ -288,12 +288,11 @@ internal static class WeaponSkinTcpTests
             AddCutscene(peer,77,30068);
             ChooseCutscenes(peer,[30000,30069,30068]);
             string before=Snapshot();
-            Use(peer,81);peer.Expect(1,515,[0,3,0,81,0,0,199]);
             peer.Send(1573,Build(w=>{w.Write(1);w.Write(30002);w.Write(new byte[36]);}));peer.Expect(1,1573,[0,19,0]);
             peer.Send(1573,Build(w=>{w.Write(1);w.Write(30069);w.Write(30069);w.Write(new byte[32]);}));peer.Expect(1,1573,[0,19,0]);
             peer.Barrier();
             That(State().SelectedCutscenes.SequenceEqual([30000,30069,30068]) && Snapshot()==before,
-                "多选完整保存；未拥有、重复选择和职业不符的券拒绝，不损坏武器或字体状态");
+                "多选完整保存；未拥有和重复选择拒绝，不损坏武器或字体状态");
             savedCutscenes=State().Cutscenes.ToArray();
         }
         using(var peer=Open(fixture))

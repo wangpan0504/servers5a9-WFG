@@ -29,7 +29,7 @@ internal sealed class InventoryEquipmentPeriodChangeService(ItemCatalog catalog,
             !ItemSlotBoundService.Allows(character.Inventory, targetSlot, target.Core.Kind))
             return InventoryResult.Reject(19);
         var definition = catalog.EquipmentPeriodChange(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(character.Level, character.Job) ||
+        if (definition is null || !definition.Item.AllowsActivation(character.Level, character.Job) ||
             !definition.AllowsSource(target.Core.ItemId))
             return InventoryResult.Reject(19);
         var replacementId = definition.Upgrades[target.Core.ItemId];

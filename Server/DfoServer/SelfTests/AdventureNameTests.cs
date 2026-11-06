@@ -65,6 +65,9 @@ internal static class AdventureNameTests
         var template = new ItemTemplate(2000, ItemKind.Consumable, 0, 1, 0, 2, 0, 2, 1, "account", ushort.MaxValue, 0, "Ticket", "waste");
         That(AdventureNameTicketDefinition.Parse(raw, template) is { TemplateId: 2000 } ticket && ticket.Allows(1, 15),
             "券资格来自完整动作和使用地点，不按名称、图标或物品ID猜测");
+        That(AdventureNameTicketDefinition.Parse(raw with { HasUsableJobs = true, DeclaredUsableJobs = ["[mage]"] },
+            template with { Jobs = 1 << 3 }) is { Jobs: 1 << 3 } limited && limited.Allows(1, 0),
+            "合法职业子集不影响改名券身份，使用不再复验当前职业");
         That(AdventureNameTicketDefinition.Parse(raw with { ActionDeclaration = new("[quest clear]", []) }, template) is null &&
             AdventureNameTicketDefinition.Parse(raw with { ActionDeclaration = new("[represent account name change]", [1]) }, template) is null,
             "其他动作和未确认参数不取得改名资格");

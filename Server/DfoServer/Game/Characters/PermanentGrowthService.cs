@@ -23,8 +23,8 @@ internal sealed class PermanentGrowthService(ItemCatalog items, CharacterStatCom
             expected.DungeonState is null || !expected.Learning.Initialized)
             throw new InvalidDataException("永久成长物品源实例或角色附属状态无效");
         var definition = items.PermanentGrowth(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
-            throw new InvalidDataException("永久成长物品资源、职业或等级资格不符");
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job))
+            throw new InvalidDataException("永久成长物品资源或等级资格不符");
         var (bonuses, learning) = Apply(expected, definition);
         // 不能让当前合法的属性石在日后升级或转职时才造成 Player 字段溢出。
         stats.ValidatePermanentBonuses(expected.Job, bonuses);

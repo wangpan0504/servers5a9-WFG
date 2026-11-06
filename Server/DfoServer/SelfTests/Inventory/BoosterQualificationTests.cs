@@ -60,7 +60,7 @@ internal static class BoosterQualificationTests
             foreach (byte level in new byte[] { 1, 17 })
                 That(service.OpenCeraPackage(role with { Level = level }, new(65, []), out _, now).Accepted,
                     "根礼包合法领取等级保留 " + level);
-            foreach (var invalid in new[] { template with { Jobs = 2 }, template with { RequiredSkill = ushort.MaxValue },
+            foreach (var invalid in new[] { template with { RequiredSkill = ushort.MaxValue },
                 template with { MinimumLevel = 2 }, template with { UseForbidden = true }, template with { Id = template.Id + 1 },
                 template with { Kind = ItemKind.Equipment } })
             {
@@ -68,7 +68,7 @@ internal static class BoosterQualificationTests
                 {
                     resources.Items.PrefillTemplates([new(template.Id, invalid)]);
                     That(!service.OpenCeraPackage(role with { Level = 1, Job = 0 }, new(65, []), out _, now).Accepted,
-                        "根礼包源职业、技能、最低等级、禁用及模板身份均复验");
+                        "根礼包源技能、最低等级、禁用及模板身份均复验");
                 }
                 finally { resources.Items.PrefillTemplates([new(template.Id, template)]); }
             }
@@ -81,7 +81,7 @@ internal static class BoosterQualificationTests
             That(ordinaryPlan.CharacterPrecondition!.Matches(ordinaryRole, now.AddSeconds(1).ToUnixTimeSeconds()) &&
                 !ordinaryPlan.CharacterPrecondition.Matches(ordinaryRole, now.AddSeconds(2).ToUnixTimeSeconds()),
                 "非每日普通开盒绑定源截止，等于截止即拒绝");
-            foreach (var invalid in new[] { ordinaryTemplate with { MaximumLevel = 1 }, ordinaryTemplate with { Jobs = 2 },
+            foreach (var invalid in new[] { ordinaryTemplate with { MaximumLevel = 1 },
                 ordinaryTemplate with { RequiredSkill = ushort.MaxValue }, ordinaryTemplate with { UseForbidden = true } })
             {
                 try
@@ -90,7 +90,7 @@ internal static class BoosterQualificationTests
                     That(!service.Open(ordinaryRole with { Level = 2 }, new(65, 1), out _, now).Accepted,
                         "非daily普通入口同样遵守完整源资格");
                     That(!InventoryAvatarPackageService.SourceEligible(ordinaryRole with { Level = 2 }, ordinary, invalid),
-                        "avatar及mixed518共享源资格包含最大等级、职业、技能与禁用");
+                        "avatar及mixed518共享源资格包含最大等级、技能与禁用");
                 }
                 finally { resources.Items.PrefillTemplates([new(ordinaryId, ordinaryTemplate)]); }
             }

@@ -59,7 +59,7 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
             desiredLevel = checked((byte)(oldLevel + 1));
             if (ticket is { Portable: true })
             {
-                if (!sourceTemplate!.AllowsUse(character.Level, character.Job) ||
+                if (!sourceTemplate!.AllowsActivation(character.Level, character.Job) ||
                     !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
                     template.MinimumLevel < ticket.MinimumItemLevel || template.MinimumLevel > ticket.MaximumItemLevel)
                     return InventoryResult.Reject(19);

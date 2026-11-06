@@ -202,9 +202,9 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(character => repair.Repair(character, request,
             clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null,
             inDungeon: Phase is SessionPhase.Dungeon or SessionPhase.Settlement), 19,
-            // 已加载副本允许背包／穿戴紧急修理；普通NPC及仓库修理继续要求城镇或结算资格。
+            // 背包／穿戴的普通及快速商店修理均可在已加载副本使用；不借此开放仓库服务。
             requireTown: request.Mode != 1 && request.RepairItemSlot < 0 &&
-                !(request.Quick && request.Position.List is InventoryListType.Main or InventoryListType.Equipment), allowSettlement: true,
+                request.Position.List == InventoryListType.PersonalCargo, allowSettlement: true,
             usedItem: request.RepairItemSlot >= 0 ? new(InventoryListType.Main, request.RepairItemSlot) : null);
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)

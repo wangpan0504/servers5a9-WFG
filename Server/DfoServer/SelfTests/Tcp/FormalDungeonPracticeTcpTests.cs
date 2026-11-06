@@ -146,6 +146,14 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(1, 44, Build(w => { w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write(2u); w.Write(1107); }));
                 peer.Barrier();
             }
+            else
+            {
+                That(resources.ItemResources.RecoveryConsumables.TryGet(1065,out var instant) && instant.EffectMilliseconds == 0 && instant.CoolTime > 0,
+                    "回选图冷却清理使用当前PVF中的无持续效果即时药");
+                peer.Send(44,Build(w=>{w.Write((ushort)potion);w.Write((byte)0);w.Write(3u);w.Write(1065);w.Write(0);}));
+                peer.Expect(1,44,Build(w=>{w.Write((byte)0);w.Write((ushort)0);w.Write((byte)0);w.Write(3u);w.Write(1065);}));
+                peer.Barrier();
+            }
             That(bossReport is not null && Stable() == stable && fixture.Snapshot() == entered, "完整练习通关及结果阶段使用道具仍免耗，不改变角色/资产/任务/revision");
             peer.Send(39, bossReport!);
             peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 90));
@@ -174,6 +182,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(1, 15, [1]);
                 peer.Expect(0, 3, [1, key[0], key[1], 1]);
                 peer.Expect(0, 27, new byte[42]);
+                peer.Expect(0,172,[1,0x29,0x04,0,0,0,0,0,0]);
                 peer.Barrier();
                 // 退场后迟到的1/3不能再回ACK72{1,3}改写已离开的结算页。
                 peer.Send(72, [1, 3]);

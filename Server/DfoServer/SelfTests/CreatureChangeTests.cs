@@ -112,10 +112,15 @@ internal static class CreatureChangeTests
         foreach (var restriction in new[] { definition with { MinimumLevel = 2 }, definition with { CreatureMinimumLevel = 3 } })
             That(!new CreatureChangeService(Item, _ => restriction, CreatureSystemTests.Synthetic())
                 .Plan(character, book.Position, pet.Position).Accepted, "角色与宠物最低等级独立校验");
-        foreach (var forbiddenBook in new[] { Book with { Jobs = 2 }, Book with { RequiredSkill = 123 }, Book with { UseForbidden = true } })
+        That(new CreatureChangeService(id => id == 9000 ? Book with { Jobs = 2 } : Item(id), _ => definition,
+            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(),
+            actionItems: _ => standardUse with { Item = Book with { Jobs = 2 } }).Plan(character, book.Position, pet.Position).Accepted,
+            "宠物转换源STK不重复校验客户端usable job限制");
+        foreach (var forbiddenBook in new[] { Book with { RequiredSkill = 123 }, Book with { UseForbidden = true } })
             That(!new CreatureChangeService(id => id == 9000 ? forbiddenBook : Item(id), _ => definition,
-                CreatureSystemTests.Synthetic()).Plan(character, book.Position, pet.Position).Accepted,
-                "职业、所需技能及使用禁令不能因进入515而绕过");
+                CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(),
+                actionItems: _ => standardUse with { Item = forbiddenBook }).Plan(character, book.Position, pet.Position).Accepted,
+                "所需技能及使用禁令不能因进入515而绕过");
         That(!new CreatureChangeService(id => Item(id) with { CreatureSubType = 1 }, _ => definition,
             CreatureSystemTests.Synthetic()).Plan(character, book.Position, pet.Position).Accepted, "宠物蛋不参加原UID成宠转换");
         var missing = new CreatureChangeService(Item, _ => definition with { Candidates = [new(7002,1),new(9999,1)] },

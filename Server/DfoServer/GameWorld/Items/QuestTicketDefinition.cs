@@ -83,6 +83,5 @@ internal sealed record QuestTicketDefinition(int TemplateId, int MinimumLevel, i
     }
 
     // 期限由创建时Resolve写入实例Core，使用时检查该实际实例，不再重复套资源的历史活动日期。
-    public bool Allows(byte level,byte job) => job < 16 && level >= MinimumLevel && level <= MaximumLevel &&
-        (Jobs & 1 << job) != 0;
+    public bool Allows(byte level,byte job) => job < 16 && level >= MinimumLevel && level <= MaximumLevel;
 }

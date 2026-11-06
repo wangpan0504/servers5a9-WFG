@@ -16,7 +16,7 @@ internal sealed class InventoryConsumableUseService(RecoveryConsumableCatalog co
         if (request.Argument != 0 || request.OpaqueCheck > 32767 || request.Position.List != InventoryListType.Main || source is null || source.Uid <= 0 ||
             source.Core.ItemId != request.ItemId || source.Core.Kind != ItemKind.Consumable || source.Core.Count <= 0 ||
             !ItemSlotBoundService.Allows(before, request.Position, ItemKind.Consumable) || source.Core.EquipmentLockId != 0 ||
-            source.Core.IsExpired(now) || !consumables.TryGet(request.ItemId, out var definition) || !definition.Allows(character.Level,character.Job))
+            source.Core.IsExpired(now) || !consumables.TryGet(request.ItemId, out var definition) || !definition.Allows(character.Level))
             return InventoryResult.Reject(123);
         var deletion = definition.Unlimited ? new InventoryResult(true, 0, new(before, before, "unlimited_consumable")) :
             InventoryDeleteService.Plan(before, request.Position, request.ItemId, 1);

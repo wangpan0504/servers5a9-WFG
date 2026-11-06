@@ -50,12 +50,12 @@ internal static class DailyRetainedBoosterTests
         That(service.Open(full, new(65, 1), out _, now) is { Accepted: false, Plan: null } && full.Inventory.DailyBoosterUses.IsEmpty,
             "满包不能借源格，发奖失败不增加次数");
         foreach (var template in new[] { sourceTemplate with { UseForbidden = true }, sourceTemplate with { MinimumLevel = 2 },
-            sourceTemplate with { MaximumLevel = 0 }, sourceTemplate with { Jobs = 2 }, sourceTemplate with { RequiredSkill = 123 } })
+            sourceTemplate with { MaximumLevel = 0 }, sourceTemplate with { RequiredSkill = 123 } })
         {
             try
             {
                 resources.Items.PrefillTemplates([new(Source, template)]);
-                That(!service.Open(character, new(65, 1), out _, now).Accepted, "完整源资格拒绝禁用、最小/最大等级、职业及技能不符");
+                That(!service.Open(character, new(65, 1), out _, now).Accepted, "完整源资格拒绝禁用、最小/最大等级及技能不符");
             }
             finally { resources.Items.PrefillTemplates([new(Source, sourceTemplate)]); }
         }

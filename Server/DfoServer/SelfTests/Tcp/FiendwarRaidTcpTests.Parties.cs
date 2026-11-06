@@ -90,7 +90,6 @@ internal static partial class FiendwarRaidTcpTests
                         .Any(row => row.Instance.Key.Category == 0 && row.Instance.Key.Id == 1 && row.Count == 0),
                         "团队真实死亡前由原资源政策提供活动中的每日击杀1，初始进度零");
                 }
-                VerifyConsumable(fixture, peer, false, 10);
                 VerifyConsumable(fixture, peer, true, 20, 1114);
             }
             That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "普通药使用真实目录声明");
@@ -208,7 +207,7 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var team in new[] { first, second }.Where(team => team.Length != 0))
                 foreach (var peer in team)
                 {
-                    VerifyConsumable(fixture, peer, false, 21, 1114);
+                    VerifyConsumable(fixture, peer, true, 21, 1114);
                     VerifyConsumable(fixture, peer, false, 22, 1114);
                     VerifyBlockedLegacyConsumable(fixture, peer);
                     VerifyConsumable(fixture, peer, true, 11);

@@ -12,6 +12,8 @@ internal sealed record DungeonSelectionContext(long Id, long SelectionEpoch, ush
 }
 internal sealed record DungeonSelectionReceipt(Character Character, long Generation, long SelectionEpoch, long SelectionId)
 {
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableCooldowns { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> ConsumableEffects { get; init; } = [];
     public bool Tutorial { get; init; }
     public bool OpensClientSelector { get; init; }
 }

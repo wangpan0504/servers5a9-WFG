@@ -327,7 +327,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (definition.DailyUseLimit is { } dailyLimit)
         {
             if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
-                !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+                !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
                 !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
                 !DailyBoosterUsage.TryConsume(before.DailyBoosterUses, source.Core.ItemId, request.Count, dailyLimit, now, out dailyUses))
                 return InventoryResult.Reject(19) with { RejectReason = "daily_retained_source_or_quota_ineligible" };

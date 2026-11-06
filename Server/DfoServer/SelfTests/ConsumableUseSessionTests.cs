@@ -508,34 +508,30 @@ internal static partial class ConsumableUseSessionTests
 
     static void RunDungeonRestrictions(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
+        foreach (bool inDungeon in new[] { false, true })
         foreach (bool allowed in new[] { false, true })
         using (var f = new Fixture(towns, characters, hp: ConsumableUseTests.Hp with
-            { ItemId = 10312384, AllowedDungeons = ImmutableHashSet.Create(allowed ? 3U : 5350U) }))
+            { ItemId = 10312384, Jobs = 1 << 3, AllowedDungeons = ImmutableHashSet.Create(allowed ? 3U : 5350U) }))
         {
             f.Select();
-            var before = f.Read();
-            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
-                "副本专用补给在城镇拒绝，不扣数量、不启动冷却或改变持久revision");
-            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
-                "副本专用补给回归沿真实入口旅行");
-            f.Session.BeginDungeonSelection();
-            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && f.Count == 3,
-                "选图界面没有正式副本身份时仍不能消费专用药");
-            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
-                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
-                f.Session.CompleteFormalDungeonLoading() is not null, "专用药建立真实正式副本");
-            before = f.Read();
-            var result = f.Use();
-            if (!allowed)
-                That(result.Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
-                    "真实副本不在原允许名单时完整拒绝，不以处于Dungeon代替副本资格");
-            else
+            if (inDungeon)
             {
-                That(result.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Session.CanPublishConsumable(result.Guard!),
-                    "名单内真实副本沿原事务消费一次，前面的场景拒绝不占用冷却");
-                That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && f.Count == 2,
-                    "专用品仍使用原冷却组，不能因名单允许而重复消费");
+                That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                    "药剂资格回归沿真实入口旅行");
+                f.Session.BeginDungeonSelection();
+                var before = f.Read();
+                That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
+                    "选图未就绪仍完整拒绝，资格委派不取消实际业务阶段门禁");
+                That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                    f.Session.CompleteFormalDungeonLoading() is not null, "药剂资格建立真实正式副本");
             }
+            var result = f.Use();
+            That(result.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Session.CanPublishConsumable(result.Guard!),
+                "职业及模板副本匹配交原生客户端，城镇或真实副本均复用同一消费事务");
+            var committed = f.Read();
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && Same(committed, f.Read()) && f.Count == 2,
+                "资格委派仍保留原冷却组，不重复扣源或刷新状态");
         }
     }
 
@@ -598,11 +594,61 @@ internal static partial class ConsumableUseSessionTests
                     f.Session.ReportFormalCharacterDeath() is { AutomaticRevival: false },
                     "免费神圣祝福保存在原实例内，实际免币复活一次后清除，不与持久库存建立平行快照");
             }
-            That(f.Session.ReturnFromFormalDungeon() is not null && f.Read().Inventory.ConsumableStates.IsEmpty,
+            var returned = f.Session.ReturnFromFormalDungeon();
+            That(returned is not null && f.Read().Inventory.ConsumableStates.IsEmpty &&
+                (freeDefinition.RevivalBlessing ? returned.ConsumableCooldowns.IsEmpty :
+                    returned.ConsumableCooldowns is [{ RemainingSeconds: 0 }]),
                 "离开免费玩法销毁原实例效果，不保存或带出免费资格");
             if (!freeDefinition.RevivalBlessing)
                 That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2,
                     "免费实例的临时冷却不封锁出图后新的普通有偿使用，旧完整token仍单独保护");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition with { CoolTime = 10000 }))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed, "普通模式先建立真实已扣源药效与冷却");
+            var real = f.Read();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38,2,1085,249,5,38,0,0)), "已有普通药效仍可前往练习入口");
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3,0,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive),practice:true) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "建立独立练习冷却的真实实例");
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                f.Read().Inventory.ConsumableStates.SequenceEqual(real.Inventory.ConsumableStates),
+                "普通冷却不封锁免费练习，同组练习使用也不改真实药效及截止");
+            That(f.Use(2).Outcome == ConsumableUseOutcome.Rejected, "练习自身冷却在原实例内仍然执行");
+            f.Clock.Advance(TimeSpan.FromSeconds(10));
+            var repeated = f.Use(3);
+            That(repeated.Outcome == ConsumableUseOutcome.Committed && repeated.EffectUpdates is [{ RemainingSeconds: 1800 }],
+                "练习冷却到期后合法续药，按新截止刷新客户端剩余时间");
+            var returned = f.Session.ReturnFromFormalDungeon()!;
+            That(returned.ConsumableCooldowns is [{ RemainingSeconds: 0 }] &&
+                returned.ConsumableEffects.Any(row => row.ItemId == definition.ItemId && row.RemainingSeconds == 1790) &&
+                f.Read().Inventory.ConsumableStates.SequenceEqual(real.Inventory.ConsumableStates.Where(row => row.Active(f.Clock.GetUtcNow().ToUnixTimeMilliseconds()))),
+                "退出练习只结束临时计时并恢复普通药效原剩余时间，不把免费续时保存到普通模式");
+            var paid = f.Use(4);
+            That(paid.Outcome == ConsumableUseOutcome.Committed && f.Count == 1 && paid.EffectUpdates.IsEmpty &&
+                f.Read().Inventory.ConsumableStates.Single(row=>row.Kind==ConsumableStateKind.Effect).UntilMilliseconds==
+                    f.Clock.GetUtcNow().ToUnixTimeMilliseconds()+1800000,
+                "普通冷却自然到期即可真实消费，原练习冷却不能封锁它");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition with { CoolTime = 10000, EffectMaintenance = 6, CooltimeMaintenance = 6 }))
+        {
+            f.Select();
+            That(f.Use().Outcome == ConsumableUseOutcome.Committed,"免费死亡隔离先保存普通计时");
+            var real = f.Read().Inventory.ConsumableStates;
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38,2,1085,249,5,38,0,0)),"免费死亡隔离走实际入口");
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3,0,0,global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive),practice:true) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null && f.Use(1).Outcome == ConsumableUseOutcome.Committed,
+                "死亡前建立只属于本练习的同组计时");
+            That(f.Session.ReportFormalCharacterDeath() is not null && f.Read().Inventory.ConsumableStates.SequenceEqual(real),
+                "练习死亡不消除普通冷却或药效，只按维护位结束免费实例状态");
+            var returned = f.Session.ReturnFromFormalDungeon()!;
+            That(returned.ConsumableCooldowns is [{ RemainingSeconds: 10 }] &&
+                returned.ConsumableEffects is [{ RemainingSeconds: 1800 }] && f.Use(2).Outcome == ConsumableUseOutcome.Rejected,
+                "免费状态已因死亡消失仍恢复被临时覆盖的普通计时，不能漏发或绕过真实冷却");
         }
     }
 

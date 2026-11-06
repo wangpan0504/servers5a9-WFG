@@ -67,7 +67,7 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             !definition.AllowsTarget(targetTemplate) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) || beadTemplate.UseForbidden ||
-            character.Level < beadTemplate.MinimumLevel || (beadTemplate.Jobs & (1 << character.Job)) == 0 ||
+            character.Level < beadTemplate.MinimumLevel ||
             !InventoryMoveService.RequiredSkillSatisfied(character, beadTemplate))
             return InventoryResult.Reject(Rejection);
         var consumed = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);

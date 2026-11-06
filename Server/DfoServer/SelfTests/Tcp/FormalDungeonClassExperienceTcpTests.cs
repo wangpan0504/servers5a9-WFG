@@ -110,6 +110,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(1, 42, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
             peer.Expect(0, 24);
+            peer.Expect(0,172,Build(w=>
+            {w.Write((byte)3);foreach(int id in new[]{1073,1113,6001}){w.Write(id);w.Write(0);}}));
             RefreshedQuests(peer);
             peer.Barrier();
             That(Stable() == original && fixture.Snapshot() == entered, "体验42恢复原入口位置，不改变原职业技能、资产或既有虚弱期限");

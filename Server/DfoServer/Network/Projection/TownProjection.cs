@@ -659,6 +659,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        await RestoreFreeConsumablesAsync(context, receipt.ConsumableCooldowns, receipt.ConsumableEffects, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
@@ -670,6 +671,18 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         // 先安装城镇场景，再启动本阶段演出，避免24重建场景清掉刚收到的601/587。
         if (receipt.RaidBattleChange is not null && CanSend()) context.Session.PublishRaidCombat();
         RaidCombatProjection.RestoreStatusForScene(context, CanSend);
+    }
+
+    internal static async Task RestoreFreeConsumablesAsync(GameConnectionContext context,
+        IReadOnlyList<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> cooldowns,
+        IReadOnlyList<DfoServer.Game.Inventory.Models.ConsumableStateUpdate> effects, Func<bool> guard)
+    {
+        foreach (var batch in cooldowns.Chunk(byte.MaxValue))
+            await context.Notify(NotiPacketType.LOAD_COOLTIME_ITEM_INFO, ConsumableStatePackets.Updates(batch),
+                "free_consumable_cooldowns_restored", guard);
+        foreach (var batch in effects.Chunk(byte.MaxValue))
+            await context.Notify(NotiPacketType.LOAD_EFFECT_ITEM_INFO, ConsumableStatePackets.Updates(batch),
+                "free_consumable_effects_restored", guard);
     }
 
     public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)

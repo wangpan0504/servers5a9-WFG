@@ -50,7 +50,7 @@ internal sealed class EquipmentResealService(ItemCatalog items, EquipmentResealC
                 source.Core.EquipmentLockId != 0 || !source.Core.IsStackable ||
                 !ItemSlotBoundService.Allows(before, sourceSlot, source.Core.Kind)) return InventoryResult.Reject(17);
             var material = items.Get(source.Core.ItemId);
-            if (material.ResealConsumable is not { } wax || !wax.Allows(template) || !material.AllowsUse(character.Level, character.Job) ||
+            if (material.ResealConsumable is not { } wax || !wax.Allows(template) || !material.AllowsActivation(character.Level, character.Job) ||
                 !InventoryMoveService.RequiredSkillSatisfied(character, material)) return InventoryResult.Reject(19);
             oneShot = wax.OneShot;
             int amount = oneShot ? 1 : catalog.WaxCost(template, count);

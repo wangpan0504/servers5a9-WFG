@@ -31,6 +31,17 @@ internal static class ActionConsumableTests
         var slot = new InventorySlot(InventoryListType.Main,65);
         var source = new InventoryItem(77,slot,new(9000,ItemKind.Consumable,2));
         var character = new Character(1,0,"Action",1,new(1,0,1,1),null) { Inventory = new([source]) };
+        var clientQualified = definition with { Item = item with { Jobs = 1 << 3 } };
+        That(InventoryActionConsumableService.Plan(character,slot,clientQualified,"[village]",clock).Accepted &&
+            !clientQualified.Item.AllowsUse(character.Level,character.Job),
+            "源STK不复验usable job，装备适配查询仍保留职业匹配");
+        That(!InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { UseForbidden = true } },"[village]",clock).Accepted &&
+            !InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { MinimumLevel = 2 } },"[village]",clock).Accepted &&
+            !InventoryActionConsumableService.Plan(character,slot,clientQualified with
+            { Item = clientQualified.Item with { MaximumLevel = 0 } },"[village]",clock).Accepted,
+            "委派职业资格不放宽禁用及源STK等级范围");
         var paid = InventoryActionConsumableService.Plan(character,slot,definition,"[village]",clock);
         That(paid.Accepted && paid.Plan!.After.Find(slot)!.Core.Count == 1 && paid.Plan.After.ConsumableStates.Length == 1 &&
             paid.Plan.After.DailyBoosterUses.Length == 1 && character.Inventory.Find(slot)!.Core.Count == 2,

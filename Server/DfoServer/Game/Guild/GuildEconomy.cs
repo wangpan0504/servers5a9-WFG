@@ -73,7 +73,7 @@ internal sealed class GuildEconomyService(IGuildEconomyStore store, GuildContent
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable))
             throw new InvalidDataException("公会积分礼袋源实例无效");
         var definition = items.GuildMileageGift(source.Core.ItemId);
-        if (definition is null || !definition.Item.AllowsUse(expected.Level, expected.Job))
+        if (definition is null || !definition.Item.AllowsActivation(expected.Level, expected.Job))
             throw new InvalidDataException("公会积分礼袋资源或使用资格无效");
         var deletion = InventoryDeleteService.Plan(expected.Inventory, slot, source.Core.Value, 1);
         if (!deletion.Accepted) throw new InvalidDataException("公会积分礼袋不能扣除一件");

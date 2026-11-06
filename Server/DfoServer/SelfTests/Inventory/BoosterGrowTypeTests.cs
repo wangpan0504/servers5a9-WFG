@@ -347,8 +347,8 @@ internal static class BoosterGrowTypeTests
         That(service.CountMatchingPools(role with { Level = 0 }, 490704570) == (70, 0),
             "等级越界真实转职池仍为零匹配，与源最低等级资格独立核对");
         That(service.Open(role with { Job = 15, GrowType = 0 }, new(65, 1), out _) is
-            { Accepted: false, Error: 19, Plan: null, RejectReason: "booster_source_ineligible" },
-            "真实源职业资格排除枪剑士，优先拒绝且不扣源");
+            { Accepted: false, Error: 19, Plan: null, RejectReason: "unmatched_grow_type_pool" },
+            "委派源职业匹配不为缺少该职业转职池的礼盒补造奖励，不扣源");
         That(service.Open(role with { Level = 0 }, new(65, 1), out _) is
             { Accepted: false, Error: 19, Plan: null, RejectReason: "booster_source_ineligible" },
             "低于真实源最低等级时优先拒绝，不抽其他职业或分支");

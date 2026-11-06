@@ -25,7 +25,7 @@ internal static class EvildomWarChallengeTcpTests
         EvildomWarChallengeTests.RunResources(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         const int recoveryPotionId = 1026;
         That(resources.ItemResources.RecoveryConsumables.TryGet(recoveryPotionId, out var recoveryPotion) &&
-            recoveryPotion.Allows(95, 0) && recoveryPotion.AllowedDungeons is null &&
+            recoveryPotion.Allows(95) && recoveryPotion.AllowedDungeons is null &&
             recoveryPotion.EffectMilliseconds == 600000 && (recoveryPotion.EffectMaintenance & 2) == 0,
             "英雄恢复夹具取候选真实食人魔药剂，95级可用且持续药效须在Town边界清理");
         var catalog = SelfTestCatalogs.Dungeons(resources.Archive);

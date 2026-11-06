@@ -116,7 +116,8 @@ internal static class BoosterNativeSelectionTests
                 "合法源职业与等级、快捷栏和排序锁不增加奖励资格限制 " + job);
             Reject(fixture, role with { Level = 19 }, "低于源最低等级不扣源", 3);
             Reject(fixture, role with { Level = 21 }, "高于源最高等级不扣源", 3);
-            Reject(fixture, role with { Job = (byte)((job + 1) % 16) }, "源职业不符不扣源", 3);
+            That(fixture.Service.Open(role with { Job = (byte)((job + 1) % 16) }, new(3, 1, new(0, 0, [10007742])), out _, Now).Accepted,
+                "原生选择源STK不重复校验客户端usable job限制 " + job);
         }
         fixture.Put(Template(10007740));
         foreach (var source in new[] { Template(10007740) with { UseForbidden = true },

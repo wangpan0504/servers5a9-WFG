@@ -436,6 +436,11 @@ internal static class TcpRegressionTests
                 resources.ItemResources, resources.Quests, resources.Learning);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
+        ("dungeon-settlement-session", (_, _, resources) =>
+        {
+            DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("dungeon-drop-storage", (_, _, resources) =>
         {
             EquipmentAmplificationDropTests.RunResources(resources.ItemResources);
@@ -449,6 +454,7 @@ internal static class TcpRegressionTests
         ("talisman", TalismanTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
+        ("treasure-hunter-potions", ConsumableUseTcpTests.RunTreasureHunterAsync),
         ("consumable-disguise", ConsumableUseTcpTests.RunDisguiseAsync),
         ("consumable-random-disguise", ConsumableUseTcpTests.RunRandomDisguiseAsync),
         ("teleport", TeleportTcpTests.RunAsync),

@@ -75,8 +75,7 @@ internal static class ExpertJobCraft
             recipe.RecipeId != recipeId || !scripts.IsLearned(character.ExpertJobType, level, character.ExpertJobRecipes, recipeId) || level < recipe.RequiredLevel ||
             !ItemSlotBoundService.Allows(character.Inventory, card.Position, card.Core.Kind)) return false;
         var template = items.Get(card.Core.ItemId);
-        if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel ||
-            (template.Jobs & (1 << character.Job)) == 0) return false;
+        if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel) return false;
         // 客户端238的宝珠模式按EXJ卡片映射出成品，成本包含input item和独立bead item，不接受无映射扣卡假成功。
         var consumed = InventoryDeleteService.Plan(character.Inventory, card.Position, card.Core.ItemId, count);
         if (!consumed.Accepted || consumed.Plan is null) return false;
@@ -137,7 +136,7 @@ internal static class ExpertJobCraft
             return false;
         var template = items.Get(target.Core.ItemId);
         var tool = items.Get(extractor.Core.ItemId);
-        if (template.Kind != target.Core.Kind || tool.Kind != extractor.Core.Kind || !tool.AllowsUse(character.Level, character.Job))
+        if (template.Kind != target.Core.Kind || tool.Kind != extractor.Core.Kind || !tool.AllowsActivation(character.Level, character.Job))
             return false;
         int state = EquipmentState(target.Core);
         if (!scripts.TryExtractResult(character.ExpertJobType, extractor.Core.ItemId, template.Rarity, state, out var row))

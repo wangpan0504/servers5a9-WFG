@@ -145,7 +145,7 @@ internal sealed partial class GameSession
                 dungeon.PendingQuestDrop ??= QuestDropPlan.Create(Selected, dungeon.Entry, resources, pending.Death.EventId,
                     pending.Death.Identity, pending.Result.Snapshot.CurrentMap.Id, pending.Monster.MonsterId,
                     pending.Monster.EnemyType, pending.Result.ClearFact is not null, dungeon.Draw,
-                    (timeProvider ?? TimeProvider.System).GetUtcNow());
+                    (timeProvider ?? TimeProvider.System).GetUtcNow(), consumables?.TreasureHunterPotions);
             var questDrop = dungeon.PendingQuestDrop;
             bool huntChanged = questCatalog is not null && !QuestHuntProgress.MonsterDeath(Selected.ActiveMainQuests,
                 dungeon.Entry, questCatalog, pending.Monster).SequenceEqual(Selected.ActiveMainQuests);

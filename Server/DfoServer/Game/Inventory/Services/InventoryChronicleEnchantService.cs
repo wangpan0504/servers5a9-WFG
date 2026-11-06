@@ -47,7 +47,7 @@ internal sealed class InventoryChronicleEnchantService(ItemCatalog items, Chroni
             target.Core.ItemId != request.TargetItemId || !source.Core.IsStackable || source.Core.Count is <= 0 or > ushort.MaxValue ||
             target.Core.Kind != ItemKind.Equipment || target.Core.IsRental || source.IsExpired(now) || target.IsExpired(now) ||
             sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind || template.Id != target.Core.ItemId ||
-            template.Kind != target.Core.Kind || !sourceTemplate.AllowsUse(character.Level, character.Job) ||
+            template.Kind != target.Core.Kind || !sourceTemplate.AllowsActivation(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
             return InventoryResult.Reject(Rejection);
