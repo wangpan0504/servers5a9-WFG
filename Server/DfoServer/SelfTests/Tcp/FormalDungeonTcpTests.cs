@@ -1540,17 +1540,43 @@ internal static partial class FormalDungeonTcpTests
                 int found = Enumerable.Range(0, materialSet[1]).Select(index => 2 + index * 8)
                     .Where(at => U32(materialSet, at) == itemId).DefaultIfEmpty(-1).First();
                 That(found >= 0 && U32(materialSet, found + 4) >= value, "账号材料拾取后563实发该项余额");
-                foreach (byte calendarList in new byte[] { 44, 45 })
+                // 当前连接登记活动材料时，正式全量刷新在563和额度之间依次发布list44/45。
+                // 只接受这一对完整快照；未知包、错序、重复第三包仍由后续断言拒绝。
+                var accountLimit = peer.Read();
+                That(accountLimit is { Kind: 0, Opcode: 13 }, "选角后账号材料拾取必须同步list44/45完整快照");
+                if (accountLimit is { Kind: 0, Opcode: 13 })
                 {
-                    byte[] calendar = peer.Expect(0, 13).Body;
-                    That(calendar.Length >= 3 && calendar[0] == calendarList && calendar.Length == 3 + U16(calendar, 1) * 123,
-                        "选角后账号材料拾取同步list44/45完整行");
+                    var balances = fixture.Query("""
+                        SELECT m.item_id,m.balance FROM account_material_balances m
+                        JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.balance>0
+                        """, peer.Id).ToDictionary(row => Convert.ToInt32(row[0]), row => Convert.ToInt64(row[1]));
+                    foreach (byte list in new byte[] { 44, 45 })
+                    {
+                        byte[] calendar = list == 44 ? accountLimit.Body : peer.Expect(0, 13).Body;
+                        That(calendar.Length >= 3 && calendar[0] == list &&
+                            calendar.Length == 3 + U16(calendar, 1) * 123,
+                            "账号材料拾取按list44/45顺序同步完整原生材料快照");
+                        var slots = new HashSet<short>();
+                        var ids = new HashSet<int>();
+                        for (int index = 0; index < U16(calendar, 1); index++)
+                        {
+                            int at = 3 + index * 123;
+                            short slot = BinaryPrimitives.ReadInt16LittleEndian(calendar.AsSpan(at));
+                            int projectedId = checked((int)U32(calendar, at + 2));
+                            uint balance = U32(calendar, at + 6);
+                            That(slot >= 0 && slot < (list == 44 ? 64 : 50) && slots.Add(slot) && ids.Add(projectedId) &&
+                                resources.ItemResources.Items.TryGet(projectedId, out var projectedTemplate) &&
+                                projectedTemplate.AccountMaterial is { } definition && definition.CommonInventory == (list == 45) &&
+                                balance > 0 && balances.GetValueOrDefault(projectedId, -1) == balance,
+                                "材料快照槽位和模板唯一、容器声明正确、绝对余额等于本账号已提交资产");
+                        }
+                    }
+                    accountLimit = peer.Read();
                 }
-                foreach (ushort limitOpcode in new ushort[] { 1460, 1461 })
-                {
-                    byte[] limits = peer.Expect(0, limitOpcode).Body;
-                    That(limits.Length == 2 + 12 * U16(limits, 0), "账号材料额度1460/1461保留已获得与上限二元组整表");
-                }
+                That(accountLimit is { Kind: 0, Opcode: 1460 }, "账号材料快照之后发送账号攻坚周额度");
+                foreach (byte[] limits in new[] { accountLimit.Body, peer.Expect(0, 1461).Body })
+                    That(limits.Length >= 2 && limits.Length == 2 + 12 * U16(limits, 0),
+                        "账号材料额度1460/1461保留已获得与上限二元组整表");
             }
             else peer.Expect(0, 14);
             peer.Expect(1, 43, [1]);

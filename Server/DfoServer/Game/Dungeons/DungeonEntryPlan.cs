@@ -196,6 +196,12 @@ internal sealed record DungeonEntryPlan(
             hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena,dimension:dimension);
     }
 
+    // 资源消费者登记与正式入场保持同一超星空合同，不能只凭邀请函正数推定可收费。
+    internal static bool SupportsCosmoEntryContract(DungeonDefinition definition) =>
+        definition.IsCosmoDungeon && definition.CosmoInvitationCount == 40 && definition.CosmoStoneCount == 4 &&
+        definition.CosmoQuestId == 10112 && definition.TryGetDesignatedDifficulty(out byte difficulty) && difficulty == 4 &&
+        definition.StartFatigue == 8;
+
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
@@ -255,9 +261,7 @@ internal sealed record DungeonEntryPlan(
         {
             if (!hellParty || hellLegend || practice || isReplay || questId != 0)
             { reason = "cosmo-mode-required"; return false; }
-            if (!definition.IsCosmoDungeon || definition.CosmoInvitationCount != 40 || definition.CosmoStoneCount != 4 ||
-                definition.CosmoQuestId != 10112 || !definition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) || cosmoDifficulty != 4 ||
-                definition.StartFatigue != 8)
+            if (!SupportsCosmoEntryContract(definition))
             { reason = "cosmo-entry-contract-unsupported"; return false; }
         }
         // 时空裂缝只能按深渊派对模式进入（PVF 副本头 [select dungeon normal disable] 1），普通请求不能落回普通路线白进。
