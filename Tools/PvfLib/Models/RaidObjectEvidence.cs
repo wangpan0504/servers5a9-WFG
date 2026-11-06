@@ -61,7 +61,16 @@ public static class RaidObjectEvidence
         var shadow = document.Sections.Where(row => row.Name == "shadow type").ToArray();
         bool ShadowValue(PvfTokenSection row) => !row.IsBlock && row.Children.IsEmpty &&
             row.Values is [{ Type: 6 } value] && resolve(value.Value).Equals("[mirror]", StringComparison.Ordinal);
-        return document.Diagnostics.IsEmpty && shadowCount == shadow.Length && shadow.Length <= 1 && document.Sections.All(row =>
+        // 根几何声明不改变对象出生条件；按已知形状接纳，仍拒绝重复、嵌套和残缺声明。
+        bool GeometryValue(PvfTokenSection row) => row.Children.IsEmpty && (row.Name == "force map width"
+            ? !row.IsBlock && row.Values is [{ Type: 0, Value: > 0 }]
+            : row.IsBlock && row.Values.Length == 4 && row.Values.All(token => token.Type == 0));
+        bool GeometryRoot(string name) => tokens.Count(token => token.Type == 3 &&
+            resolve(token.Value).Equals("[" + name + "]", StringComparison.OrdinalIgnoreCase)) ==
+            document.Sections.Count(row => row.Name == name) && document.Sections.Count(row => row.Name == name) <= 1;
+        return document.Diagnostics.IsEmpty && shadowCount == shadow.Length && shadow.Length <= 1 &&
+            GeometryRoot("force map width") && GeometryRoot("virtual movable area") && document.Sections.All(row =>
+                row.Name is "force map width" or "virtual movable area" ? GeometryValue(row) :
                 row.Name == "shadow type" ? ShadowValue(row) : blocks.Contains(row.Name) ? row.IsBlock : scalar.Contains(row.Name) && !row.IsBlock) &&
             count == roots.Length && roots.Length <= 1 &&
             roots.All(row => row.IsBlock && row.Children.IsEmpty && row.Values.Length % 4 == 0 && row.Values.All(token => token.Type == 0));

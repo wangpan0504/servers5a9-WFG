@@ -107,12 +107,14 @@ internal static class LukeSymbol103HandlerTests
             var stats=new CharacterStatComputer(resources.Characters);var town=new TownProjection(resources.Towns,stats,null,items.EpicPieces);
             var commands=new GameCommandRegistry();
             new DungeonSettlementHandler(log,dungeons,SelfTestCatalogs.ClearExperience(resources.Archive),resources.Growth,town,rooms,
-                SelfTestCatalogs.MonsterDrops(resources.Archive),items.Items,new(stats),partyDungeons:runs).Register(commands);
+                SelfTestCatalogs.MonsterDrops(resources.Archive),items.Items,new(stats),partyDungeons:runs,parties:parties).Register(commands);
             new DungeonHandler(log,dungeons,rooms,resources.Growth,SelfTestCatalogs.KillExperience(resources.Archive),town,new(stats),
                 partyDungeons:runs,parties:parties).Register(commands);commands.Seal();
+            // 01 02已经是正式战况回城授权；103不能代替清图授予结算焦点、重试或另选图。
+            foreach(byte[] request in new byte[][] { [2,2], [1,0], [1,1] })
             for(int repeat=0;repeat<2;repeat++)
             {
-                That(await commands.DispatchAsync(context,new Packet(1,72,[1,2]))==CommandResult.Unhandled,"103不是跨Run结算返回授权，重复请求同样拒绝");
+                That(await commands.DispatchAsync(context,new Packet(1,72,request))==CommandResult.Unhandled,"103不是跨Run结算焦点、重试或另选图授权，重复请求同样拒绝");
                 await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(3));
                 That(output.Length==0&&Snapshot()==sqlBefore&&ReferenceEquals(view,battle.View)&&ReferenceEquals(partyBefore,parties.Current(target))&&
                     ReferenceEquals(runBefore,target.PartyDungeon)&&JsonSerializer.Serialize(target.CurrentFormalDungeonScene()!.Snapshot)==runSnapshotBefore&&target.Phase==SessionPhase.Dungeon,
