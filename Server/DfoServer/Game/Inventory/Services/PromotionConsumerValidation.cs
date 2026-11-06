@@ -472,6 +472,16 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             }
             if (template.QualityBox is not null || template.AvatarAbilityChange is not null || template.ResealConsumable is not null)
                 return;
+            // 只为疲劳动作读取专用定义，避免无关叶触发资源解析；
+            // 与实际疲劳消费者保持相同的模板和源资格检查。
+            if (items.StackableAction(id) is { Label: "[add fatigue]" } &&
+                items.FatigueConsumable(id) is { } fatigue)
+            {
+                if (fatigue.Item != template || template.Kind != ItemKind.Consumable || template.UseForbidden ||
+                    fatigue.Amount <= 0 || fatigue.Places.IsDefault)
+                    throw new InvalidDataException("fatigue_consumable_definition");
+                return;
+            }
             if (consumables.TryGet(id, out var consumable))
             {
                 if (template.Kind != ItemKind.Consumable || consumable.ItemId != id || consumable.UseForbidden ||

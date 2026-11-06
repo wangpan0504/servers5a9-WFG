@@ -48,6 +48,7 @@ internal static class PromotionConsumerValidationTests
 
     public static void RunResources(ItemResources resources)
     {
+        PromotionFatigueConsumerTests.RunResources(resources);
         PromotionCreatureEggConsumerTests.RunResources(resources);
         PromotionLevelUpByTableConsumerTests.RunResources(resources);
         PromotionDimensionEntryConsumerTests.RunResources(resources);
