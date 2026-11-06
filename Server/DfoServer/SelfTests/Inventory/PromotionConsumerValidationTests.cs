@@ -50,6 +50,7 @@ internal static class PromotionConsumerValidationTests
     {
         PromotionCreatureRenameConsumerTests.RunResources(resources);
         PromotionFatigueConsumerTests.RunResources(resources);
+        PromotionAvatarGiftConsumerTests.RunResources(resources);
         PromotionCreatureEggConsumerTests.RunResources(resources);
         PromotionLevelUpByTableConsumerTests.RunResources(resources);
         PromotionDimensionEntryConsumerTests.RunResources(resources);
