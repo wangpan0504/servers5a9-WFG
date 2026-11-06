@@ -6,6 +6,10 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed partial class InventoryCashShopService
 {
+    internal static int? GiftType(ItemTemplate template, int typeIndex) =>
+        template.Grade is >= 1 and <= 3 && typeIndex is >= 1 and <= 3
+            ? (template.Grade - 1) * 3 + typeIndex : null;
+
     bool TryAvatar(Character character, CashShopPurchaseItem request, CashShopProduct product, InventorySnapshot paid,
         DateTimeOffset now, bool shopExpiration, bool ignoreUsablePeriod, out InventoryItem? reward, out AvatarPackageType? type,
         out InventorySnapshot? after, out long? sourceDeadline)
@@ -24,8 +28,7 @@ internal sealed partial class InventoryCashShopService
         if (request.PaymentMode == 1)
         {
             // 请求没有券槽；按背包槽顺序寻找同档次、同期限的有效兑换券，不绑定某个活动物品编号。
-            if (template.Grade is < 1 or > 3 || request.TypeIndex is < 1 or > 3) return false;
-            int giftType = (template.Grade - 1) * 3 + request.TypeIndex;
+            if (GiftType(template, request.TypeIndex) is not { } giftType) return false;
             InventoryItem? coupon = null;
             foreach (var item in paid.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.IsStackable)
                 .OrderBy(item => item.Position.Index))

@@ -182,6 +182,34 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
         void Expand(int id, string source)
         {
             var template = items.Get(id);
+            if (template.AvatarGiftType is { } giftType)
+            {
+                if (template.Kind != ItemKind.Consumable || template.UseForbidden)
+                    throw new InvalidDataException("avatar_gift_source");
+                bool found = false;
+                foreach (var product in shop.Products.Values)
+                {
+                    if (product.Section != "avatar" || product.IsMileage || shop.IsCouponProduct(product.CommodityId)) continue;
+                    var output = items.Get(product.ItemId);
+                    if (InventoryCashShopService.GiftType(output, product.AvatarType) != giftType) continue;
+                    found = true;
+                    var avatar = avatars.GetAvatar(product.ItemId);
+                    if (output.Id != product.ItemId || output.Kind != ItemKind.Avatar || output.EquipmentSlot > 11 ||
+                        !output.Expiration.SupportsCreation || avatar.PendingRule is not null ||
+                        product.AvatarType >= avatar.Types.Length || avatar.Abilities.IsEmpty)
+                    { Error(source, product.ItemId, "avatar_gift_definition"); continue; }
+                    // 商城按精确类型行兑换，不采用装扮礼盒的越界末档回退。
+                    var type = avatar.Types[product.AvatarType];
+                    if (type.Cera < 0 || type.Gold < 0 || type.WinPoints < 0)
+                    { Error(source, product.ItemId, "avatar_gift_cost"); continue; }
+                    string childSource = $"{source}/{id}:avatar-gift:{product.CommodityId}";
+                    Edge(new(product.ItemId, 1), childSource, ItemKind.Avatar, freeSource: id);
+                    foreach (var bonus in shop.Bonus(product.CommodityId))
+                        Edge(new(bonus.ItemId, bonus.Count), childSource + "/bonus", freeSource: id);
+                }
+                if (!found) throw new InvalidDataException("avatar_gift_consumer_not_connected");
+                return;
+            }
             // 本活动明确保留这两项的真实交付；其初夏优惠券/谋略战内部玩法不属于本活动开启验收。
             // 只在精确已批准范围内跳过内部用途；每条发放边已完整经过 Edge。
             if (springScope && id is 490705398 or 490705400) return;
