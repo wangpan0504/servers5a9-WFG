@@ -13,7 +13,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
     ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null,
     IReadOnlySet<int>? marriedOnlyCommodities = null, PrivilegeServiceCatalog? privileges = null,
-    CashShopProduct? deluxeOffer = null)
+    CashShopProduct? deluxeOffer = null, BoosterCatalog? packages = null)
 {
     internal CashShopProduct? BattlePassDeluxeOffer { get; } = deluxeOffer;
     readonly GameDebugSettings debug = debugSettings ?? new();
@@ -72,8 +72,11 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         {
             var product = shop.Product(requested.CommodityId) ?? shop.Mileage.Products.GetValueOrDefault(requested.CommodityId);
             if (product is null || product.Count <= 0 ||
-                requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0)
+                requested.FirstOptionCount != requested.AvatarChoices.Count || requested.SecondOptionCount != requested.PackageChoices.Count)
                 return InventoryResult.Reject(17);
+            bool selectedPackage = requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0;
+            if (selectedPackage && product.Section is not ("package" or "regular package" or "community package"))
+                return InventoryResult.Reject(17) with { RejectReason = "cash_shop_package_source" };
             bool marriedOnly = marriedOnlyCommodities?.Contains(product.CommodityId) == true;
             if (marriedOnly && (character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
                 return InventoryResult.Reject(17) with { RejectReason = "cash_shop_marriage_required" };
@@ -252,6 +255,18 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                             InventoryRewardGrantService.Create(visualTemplate, utcNow: now) with { ExpireTime = (int)expires });
                 }
 
+                else if (selectedPackage)
+                {
+                    if (!TryPackage(character, requested, product, now, shopExpiration, ignoreUsablePeriod,
+                        out var packageRewards, out var packageAvatars, out var packageDeadline, out string? packageError))
+                        return InventoryResult.Reject(17) with { RejectReason = packageError };
+                    if (packageRewards.Any(reward => !AllowsReward(reward.ItemId)))
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_package_reward_unavailable" };
+                    rewards.AddRange(packageRewards);
+                    avatarRewards.AddRange(packageAvatars);
+                    Deadline(packageDeadline);
+                    foreach (var avatar in packageAvatars) Deadline(avatar.ExpireTime);
+                }
                 else if (!devilProduct && !privilegeProduct && !certificateProduct && !deluxeProduct)
                     rewards.Add(new(product.ItemId, product.Count));
             }

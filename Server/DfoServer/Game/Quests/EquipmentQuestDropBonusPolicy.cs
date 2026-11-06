@@ -11,7 +11,7 @@ internal static class EquipmentQuestDropBonusPolicy
     internal static bool AttributeSlot(InventorySlot slot) =>
         slot.List == InventoryListType.Equipment && slot.Index is not (11 or 33) || ItemSlotBoundService.IsEquippedRune(slot);
 
-    public static ImmutableArray<int> Capture(Character character, Func<int, ItemTemplate> template, long now)
+    public static ImmutableArray<int> Capture(Character character, Func<int, ItemTemplate?> template, long now)
     {
         var result = ImmutableArray.CreateBuilder<int>();
         var pieces = new Dictionary<int, int>();
@@ -21,7 +21,7 @@ internal static class EquipmentQuestDropBonusPolicy
             // 只读真实属性槽，不把包裹、换装登记或克隆借用的原件再次计入。
             if (!AttributeSlot(item.Position)) continue;
             var definition = template(item.Core.ItemId);
-            if (definition.Kind != item.Core.Kind || item.IsExpired(now) && !definition.UsableExpired || definition.CreatureEgg)
+            if (definition is null || definition.Kind != item.Core.Kind || item.IsExpired(now) && !definition.UsableExpired || definition.CreatureEgg)
                 continue;
             if (definition.QuestItemDropRateBonus != 0) result.Add(definition.QuestItemDropRateBonus);
             foreach (int set in definition.PartSetIds.Where(id => id > 0).Distinct())

@@ -27,7 +27,7 @@ internal static class GmWebAcceptTcpTests
     {
         int port;
         using (var probe = new TcpListener(IPAddress.Loopback, 0)) { probe.Start(); port = ((IPEndPoint)probe.LocalEndpoint).Port; }
-        await using var fixture = new TcpTestFixture(source with { GmWebPort = port }, Path.Combine(root, "gm-accept"), resources: resources);
+        await using var fixture = new TcpTestFixture(source with { GmWebPort = port, FileLogsEnabled = true }, Path.Combine(root, "gm-accept"), resources: resources);
         var items = resources.ItemResources;
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();

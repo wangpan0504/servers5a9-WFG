@@ -56,7 +56,11 @@ internal static partial class PreyTeamTcpTests
                 "实际队长及较早成员完成37仍等待最后一人，不提前发送任一成员加载许可");
         }
         peers[^1].Send(37, new byte[8]);
-        var loaded = peers.Select(peer => Read(peer, "natural team loaded")).ToArray();
+        var loaded = new List<WirePacket>[peers.Length];
+        // 最后一个加载请求的本地屏障完成后，才读取其它连接的共享加载投影。
+        loaded[^1] = Read(peers[^1], "natural team last loader completed");
+        for (int index = 0; index < peers.Length - 1; index++)
+            loaded[index] = Read(peers[index], "natural team loaded");
         foreach (var rows in loaded)
         {
             Ack(rows, 37, [1], "原共享Run在全员37后回复加载成功");
@@ -188,9 +192,12 @@ internal static partial class PreyTeamTcpTests
                         "实际队长切房后全员继续共用同一地图、种子及怪物key");
                 clock.Advance(1);
                 foreach (var peer in peers) peer.Send(37, new byte[8]);
+                var roomLoads = peers.Select(peer => Read(peer, "natural team route load request completed")).ToArray();
                 for (int index = 0; index < peers.Length; index++)
                 {
-                    var loaded = Read(peers[index], "natural team route loaded");
+                    // 全部发送者先各自完成请求屏障，再收齐可能晚于首个成员屏障的共享响应。
+                    var loaded = roomLoads[index];
+                    loaded.AddRange(Read(peers[index], "natural team route loaded"));
                     Ack(loaded, 37, [1], "共享路线下一房正常完成全员加载");
                     var time = loaded.Single(row => row is { Kind: 0, Opcode: 785 });
                     That(time.Body.Length == 4 && U32(time.Body) == catalog.Find(dungeon)!.LimitTimeSeconds - 1 - step,

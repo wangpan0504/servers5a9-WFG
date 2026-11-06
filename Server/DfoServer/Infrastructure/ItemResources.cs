@@ -82,7 +82,7 @@ internal sealed class ItemResources
 
     public ItemResources(PvfArchive archive) : this(archive, null) { }
 
-    internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics)
+    internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics, string? resourcesDirectory = null)
     {
         vendingMachines = new(() => new(archive));
         if (archive.Contains(GameWorld.PcRoom.PcRoomCatalog.PremiumPath) && archive.Contains(GameWorld.PcRoom.PcRoomCatalog.RentalPath))
@@ -162,7 +162,7 @@ internal sealed class ItemResources
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);
         attributePairs = new(() => IndependentAttributePairCatalog.Load(
-            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            Path.Combine(resourcesDirectory ?? Path.Combine(AppContext.BaseDirectory, "Resources"), "independent-attribute-pairs.json"),
             Items, Boosters, LimitCubes, Enchantments, EpicPieces, Contracts,
             id => Game.Currency.CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true));
     }

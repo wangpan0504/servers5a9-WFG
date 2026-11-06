@@ -28,6 +28,10 @@ internal sealed record ServerOptions
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
     public string LogDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Logs");
+    public bool FileLogsEnabled { get; init; }
+    public string ResourcesDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Resources");
+    public string LauncherSession { get; init; } = "";
+    public string LogicalRoot { get; init; } = "";
     public string? PacketCaptureDirectory { get; init; }
     public string DevelopmentAccount => LoginCredentials.DevelopmentAccount;
     public DuplicateLoginPolicy DuplicateLoginPolicy => DuplicateLoginPolicy.ReplaceExisting;
@@ -71,6 +75,16 @@ internal sealed record ServerOptions
                 value = name switch
                 {
                     "--server-ip" => value,
+                    "--log-dir" => value with { LogDirectory = StoragePath(argument, name) },
+                    "--file-logs" => value with { FileLogsEnabled = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
+                    "--resources-dir" => value with { ResourcesDirectory = StoragePath(argument, name) },
+                    "--launcher-session" => value with { LauncherSession = Guid.TryParseExact(argument, "N", out _) ? argument : throw new InvalidDataException(name + " 必须为 N 格式启动代次") },
+                    "--logical-root" => value with { LogicalRoot = StoragePath(argument, name) },
                     "--listen-ip" => value with { ListenAddress = argument },
                     "--channel-port" => value with { ChannelPort = Number(argument, name) },
                     "--game-port" => value with { GamePort = Number(argument, name) },
@@ -154,6 +168,8 @@ internal sealed record ServerOptions
         }
         if (value.BattlePassSeasonStart is not null && value.BattlePassSeasonKey is null)
             throw new InvalidDataException("--battle-pass-start 需要显式 --battle-pass-season");
+        if ((value.LauncherSession.Length > 0) != (value.LogicalRoot.Length > 0))
+            throw new InvalidDataException("--launcher-session 与 --logical-root 必须同时指定");
         return value;
     }
 

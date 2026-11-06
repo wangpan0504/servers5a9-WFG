@@ -21,6 +21,9 @@ internal static class BattlePassCertificateTests
         foreach (int offset in new[] { 0, 1, 4, 11, 12, 13, 17 })
         {
             byte[] changed = (byte[])body.Clone(); changed[offset] = 1;
+            // 非零选择数量必须携带完整选择段，继续验证证书业务拒绝，不能用畸形帧代替。
+            if (offset == 11) changed = [.. changed[..12], 1, 0, 0, 0, 0, .. changed[12..]];
+            if (offset == 12) changed = [.. changed[..13], 1, 0, 0, 0, 0, 0, 0, 0, .. changed[13..]];
             var parsed = CashShopRequests.Buy(changed);
             That(BattlePassCertificatePurchase.Contains(parsed) && !BattlePassCertificatePurchase.IsRequest(parsed),
                 "含证书的代币/礼赠/支付/选项/关联物品请求保留专用路由后整拒，不回落普通购买 " + offset);

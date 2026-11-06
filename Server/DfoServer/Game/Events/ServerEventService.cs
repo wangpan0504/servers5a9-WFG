@@ -78,9 +78,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public const ushort SeriaLuckId = 2037;
     public const ushort GuildHongbaoId = 2378;
     public const ushort JonathanVisibilityId = 2395;
-    public static bool DefaultActive(ushort id) => id is MileageShopId or NolanVisibilityId or
-        SeriaLuckId or GuildHongbaoId or JonathanVisibilityId or EndlessAdventurePolicy.EventId or
-        PcRoomTimePointId or DailyAttendanceId or WeeklyAttendanceId;
+    public static bool DefaultActive(ushort id) => IsRegistered(id);
     long promotionRevision;
     public long PromotionRevision => Interlocked.Read(ref promotionRevision);
     public void NotifyPromotionChanged()

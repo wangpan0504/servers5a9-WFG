@@ -290,9 +290,17 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 }
                 if (parent is { } box && (box.SetsDisjointInstanceType || box.SetsEpicExchangeInstanceType) && template.Kind != ItemKind.Equipment)
                 {
-                    if (box.SetsEpicExchangeInstanceType || (box.Selection is null && !box.HasFixedOrdinaryRewards) ||
+                    var child = boosters.Get(reward.ItemId);
+                    if ((box.Selection is null && !box.HasFixedOrdinaryRewards) ||
                         template.Kind != ItemKind.Consumable ||
-                        boosters.Get(reward.ItemId) is not { Available: true, Selection: not null })
+                        child is not { Available: true, Selection: not null } ||
+                        box.SetsEpicExchangeInstanceType && (freeSource == reward.ItemId || box.Selection is not { SelectionCount: 1 } ||
+                            box.Lottery || !box.Pools.IsEmpty || !box.PackageRewards.IsDefaultOrEmpty ||
+                            !child.SetsEpicExchangeInstanceType || box.SetsDisjointInstanceType && !child.SetsDisjointInstanceType ||
+                            child.Lottery || !child.Pools.IsEmpty || !child.PackageRewards.IsDefaultOrEmpty ||
+                            child.Selection is not { SelectionCount: 1, Categories.IsEmpty: false } ||
+                            child.Selection.Categories.Any(category => category.PendingRule is not null || category.Rewards.IsEmpty ||
+                                category.Rewards.Any(reward => items.Get(reward.ItemId).Kind != ItemKind.Equipment))))
                         throw new InvalidDataException("unsupported_instance_type_reward");
                 }
                 if (parent is { Lottery: true } && ItemSlotBoundService.List(template.Kind) != InventoryListType.Main)

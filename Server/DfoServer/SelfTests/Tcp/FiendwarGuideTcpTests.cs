@@ -91,7 +91,7 @@ internal static class FiendwarGuideTcpTests
         using var peer = Open(fixture, "fwguide", gamePort: ChannelTcpTests.Endpoints(fixture)[39], channelNumber: 39);
         if (battlePass)
         {
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId, 2520];
             peer.ExpectedBattlePassEnd = checked((uint)new BattlePassMissionPolicy("fiendwar-notice-fixture", startAt,
                 BattlePassCatalog.Load(resources.Archive)).End.ToUnixTimeSeconds());
         }
@@ -104,6 +104,7 @@ internal static class FiendwarGuideTcpTests
         bool rollbackChecked = false, writerDeadlineChecked = false;
         bool inDungeonScene = false, returnedToField = false, resultShown = false, victoryShown = false, cardsShown = false;
         var cardChoices = new HashSet<byte>();
+        byte[]? teamReward = null;
         Select();
         FiendwarRaidTcpTests.VerifyConsumable(fixture, peer, true, 20, 1114);
         That(resources.ItemResources.RecoveryConsumables.TryGet(1114, out var ordinary), "引导普通药使用真实目录声明");
@@ -113,6 +114,7 @@ internal static class FiendwarGuideTcpTests
         {
             resultShown = victoryShown = cardsShown = false;
             cardChoices.Clear();
+            teamReward = null;
             peer.Send(1426); Read();
             Create(true);
             Move(1, 2, accepted: false);
@@ -122,6 +124,7 @@ internal static class FiendwarGuideTcpTests
             That(started.Any(row => row is { Kind: 1, Opcode: 666, Body: [1] }) &&
                 fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[57L, 33L]],
                 "官方引导在57/33正式开战，不落团队基地");
+            clock.Advance(3);
             That(symbols.GetValueOrDefault(129u) == route, "引导按同一type2周通关次数选择两条原路线");
             peer.Send(15, BitConverter.GetBytes(modes.Fiendwar!.Areas[15].DungeonId));
             That(!Read().Any(row => row is { Kind: 1, Opcode: 15, Body: [1] }), "引导拒绝借用团队地下城");
@@ -237,6 +240,8 @@ internal static class FiendwarGuideTcpTests
                     display.Body[1] == 1 && U16(display.Body, 2) == peer.Id && display.Body[4] == 3 &&
                     display.Body[5] > 0 && display.Body.Length == 6 + 16 * display.Body[5],
                     "引导独立原奖励非零卡位实际领取，原16B产物展示先于660成功");
+                if (kind == 0) That(teamReward is not null && display!.Body.AsSpan(6).SequenceEqual(teamReward),
+                    "引导第二页已准备的产物与本人真实资产领取完全一致");
                 string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
                 peer.Send(660, [kind, 3]);
                 That(Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && receipts ==
@@ -555,6 +560,8 @@ internal static class FiendwarGuideTcpTests
                 if (row is { Kind: 0, Opcode: 601, Body.Length: 10 })
                 {
                     That(!inDungeonScene && returnedToField, "引导终局实际24返城先于601，避免旧副本场景清掉演出");
+                    That(U32(row.Body, 2) >= 3 && fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[57L, 33L]],
+                        "引导结果含真实通关耗时，实际保存到原33候战房后才开演出");
                     resultShown = true;
                 }
                 if (row is { Kind: 0, Opcode: 1523, Body: [3, 0, 0] })
@@ -562,7 +569,17 @@ internal static class FiendwarGuideTcpTests
                     That(resultShown, "引导601结果先于1523成功电影");
                     victoryShown = true;
                 }
-                if (row is { Kind: 0, Opcode: 1523, Body: [4, 0, 0] }) cardsShown = true;
+                if (row is { Kind: 0, Opcode: 600, Body: [3, > 0, ..] })
+                {
+                    var table = FiendwarPacketTests.ReadTeamResults(row.Body);
+                    That(table.Count == 1 && table.ContainsKey(peer.Id), "引导完整第二页唯一owner为本人");
+                    teamReward = table[peer.Id];
+                }
+                if (row is { Kind: 0, Opcode: 1523, Body: [4, 0, 0] })
+                {
+                    That(teamReward is not null, "引导完整团队权益在state4装配页面前到达");
+                    cardsShown = true;
+                }
                 if (row is { Kind: 0, Opcode: 600, Body: [byte kind, 0] })
                 {
                     That(cardsShown, "引导1523四先于600空选择表");

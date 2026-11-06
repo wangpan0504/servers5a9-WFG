@@ -152,6 +152,30 @@ internal static class PromotionConsumerValidationTests
                 That(error is null, label + "的分解声明允许完整受支持自选子盒，真实validator无误拒: " + error);
             }
 
+            var markedParent = selectionParent with { SetsEpicExchangeInstanceType = true };
+            var markedChild = nestedSelection with { SetsDisjointInstanceType = true, SetsEpicExchangeInstanceType = true };
+            string? markedError = ValidateNested(markedParent, markedChild);
+            That(markedError is null, "双声明自选父盒与自身双声明子盒的完整消费者图可用: " + markedError);
+            foreach (var (parent, label) in new[]
+            {
+                (markedParent with { Lottery = true }, "Lottery"),
+                (markedParent with { Pools = [new(1, [new(leaf, 1000, 1)])] }, "额外奖池"),
+                (markedParent with { PackageRewards = [new(leaf, 1, 1)] }, "混合PackageRewards")
+            })
+                That(ValidateNested(parent, markedChild)?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    "双声明自选父盒不混入" + label);
+            foreach (var (child, label) in new[]
+            {
+                (markedChild with { SetsEpicExchangeInstanceType = false }, "缺史诗声明"),
+                (markedChild with { SetsDisjointInstanceType = false }, "缺分解声明"),
+                (markedChild with { PendingRule = "marked-child-pending" }, "规则未实现"),
+                (markedChild with { Selection = new(1, [new(0, 0, [new(roots[0], 1)])]) }, "A到B再到A循环"),
+                (markedChild with { Selection = new(1, [new(0, 0, [new(unsupported, 1)])]) }, "非装备叶"),
+                (markedChild with { Pools = [new(1, [new(leaf, 1000, 1)])] }, "额外奖池")
+            })
+                That(ValidateNested(markedParent, child)?.Contains(nestedChild + ": unsupported_instance_type_reward", StringComparison.Ordinal) == true,
+                    "双声明父盒不借自选子盒形状放行" + label);
+
             // 每项仅改变具名父盒边界，仍执行同一个真实校验器。
             foreach (var (parent, label) in new[]
             {

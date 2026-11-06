@@ -56,7 +56,7 @@ internal static class MileageShopTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId]; // 本夹具已明确持久off，后续单独验证on/off及时段。
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId]; // 本夹具已明确持久off，后续单独验证on/off及时段。
             peer.Select();
             var before = State();
             Buy(peer, 1000154); peer.Expect(1, 64, [0, 0, 0]); peer.Barrier();
@@ -113,7 +113,7 @@ internal static class MileageShopTcpTests
         }
         using (var peer = Open(fixture))
         {
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, 266];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, 266];
             var selected = peer.Select(1);
             Bytes(selected.Single(p => p.Opcode == 427).Body, Build(w => { w.Write((byte)0); w.Write(7500); w.Write(5); }),
                 "同账号另一角色恢复余额和消费累计，不另建角色积分");
@@ -122,7 +122,7 @@ internal static class MileageShopTcpTests
         }
         using (var peer = Open(fixture, "mileage-other"))
         {
-            peer.Create("MileageOther"); peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, 266];
+            peer.Create("MileageOther"); peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, 266];
             peer.Select(); Limits(peer.MileageLimits, 0); peer.Barrier();
             var before = State(); Buy(peer, 1000154); peer.Expect(1, 64, [0, 0, 0]); peer.Barrier();
             That(State() == before, "另一账号既不借用积分，也不继承商品已购次数");
@@ -132,7 +132,7 @@ internal static class MileageShopTcpTests
         await fixture.StartAsync("mileage-reopen");
         using (var peer = Open(fixture))
         {
-            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId, 266];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, 266];
             peer.Select(); Limits(peer.MileageLimits, 1); peer.Barrier();
             Buy(peer, 100050); Ack(peer, 100050); peer.Expect(0, 14); peer.Expect(0, 53);
             peer.Expect(0, 537, Build(w => { w.Write((byte)0); w.Write(7500); w.Write(7501); w.Write(20000); })); peer.Barrier();
@@ -287,7 +287,7 @@ internal static class MileageShopTcpTests
     static void Events(TcpPeer peer, bool active)
     {
         // 266变化只改积分入口；原生促销保持零累计，完整目录仍不得恢复退役333。
-        ushort[] extraEvents = active ? [ServerEventService.NolanVisibilityId, 266] : [ServerEventService.NolanVisibilityId];
+        ushort[] extraEvents = active ? [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, 266] : [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         CashShopTcpTests.AssertPromotionNativeRefresh(peer.Expect(0, 108), 0, false, extraEvents);
     }
 }

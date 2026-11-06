@@ -441,11 +441,21 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     catalog.Get(id).Kind != ItemKind.Equipment)
                 {
                     var childTemplate = catalog.Get(id);
-                    if (definition.SetsEpicExchangeInstanceType || (definition.Selection is null && !definition.HasFixedOrdinaryRewards) ||
+                    if ((definition.Selection is null && !definition.HasFixedOrdinaryRewards) ||
                         childTemplate.Kind != ItemKind.Consumable || CurrencyWallet.RewardKind(id) is not null ||
                         pieces.ByPiece.ContainsKey(id) || childTemplate.HasAcquisitionEffect ||
                         childTemplate.IsPremiumService || contracts?.Recognizes(id) == true ||
-                        boosters.DirectActivationItems.Contains(id) || boosters.Get(id) is not { Available: true, Selection: not null })
+                        boosters.DirectActivationItems.Contains(id))
+                        return InventoryResult.Reject(19);
+                    var child = boosters.Get(id);
+                    if (child is not { Available: true, Selection: not null } ||
+                        definition.SetsEpicExchangeInstanceType && (id == source.Core.ItemId || definition.Selection is not { SelectionCount: 1 } ||
+                            definition.Lottery || !definition.Pools.IsEmpty || !definition.PackageRewards.IsDefaultOrEmpty ||
+                            !child.SetsEpicExchangeInstanceType || definition.SetsDisjointInstanceType && !child.SetsDisjointInstanceType ||
+                            child.Lottery || !child.Pools.IsEmpty || !child.PackageRewards.IsDefaultOrEmpty ||
+                            child.Selection is not { SelectionCount: 1, Categories.IsEmpty: false } ||
+                            child.Selection.Categories.Any(category => category.PendingRule is not null || category.Rewards.IsEmpty ||
+                                category.Rewards.Any(reward => catalog.Get(reward.ItemId).Kind != ItemKind.Equipment))))
                         return InventoryResult.Reject(19);
                 }
                 // 类型0有限池的0号为金币，经钱包规划和ACK27备选数量发布，不占实体槽位。
@@ -715,12 +725,14 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             granted.Validate(allocating: true);
             grant = new(true, 0, new(paid, granted, "reward_grant"));
         }
-        else if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
+        else if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin &&
+                 grants.Any(row => catalog.Get(row.ItemId).Kind == ItemKind.Equipment))
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
                 item.Position.Index >= range.Start && item.Position.Index <= range.End);
-            if (grants.Sum(row => (long)row.Count) > range.End - range.Start + 1 - occupied)
+            if (grants.Where(row => catalog.Get(row.ItemId).Kind == ItemKind.Equipment).Sum(row => (long)row.Count) >
+                range.End - range.Start + 1 - occupied)
                 return InventoryResult.Reject(4);
             var instances = new List<InventoryItem>();
             try

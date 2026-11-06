@@ -56,6 +56,8 @@ internal static partial class MapGeometryTests
         different["rules"]![0]!["to"]!["960"]![0]![1] = 111;
         Reject<InvalidDataException>(() => MapGeometryConfig.Parse(different.ToJsonString()), "玩法目标不能随比例变化");
         RunDungeonCore();
+        RunNativeRestoreCore();
+        RunCollisionCore();
         Console.WriteLine($"PASS common map geometry core {Count - checks}");
     }
 

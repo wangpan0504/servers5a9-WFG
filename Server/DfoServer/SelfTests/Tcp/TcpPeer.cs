@@ -104,8 +104,8 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SeriaLuckInfo { get; private set; } = [];
     public byte[] RaidWeeklyClearInfo { get; private set; } = [];
     public byte[] LukeChannelCardsInfo { get; private set; } = [];
-    // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
-    public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
+    // 默认四团本全天开放：卢克、漩涡、普雷、安徒恩按目录顺序，再追加诺兰及积分商城；专项可显式覆盖。
+    public ushort[] ExpectedOpenEvents { get; set; } = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId, ServerEventService.MileageShopId];
     public ushort[] ExpectedActiveEvents { get; set; } = [2395];
     public IReadOnlyDictionary<ushort, IReadOnlyList<uint>> ExpectedEventValues { get; set; } =
         new Dictionary<ushort, IReadOnlyList<uint>>();
@@ -113,6 +113,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] EventInfoPayload { get; private set; } = [];
     // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
     internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }
+    internal Action<TcpPeer>? BeforeMileageInitialization { get; set; }
     public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
@@ -159,6 +160,8 @@ internal sealed partial class TcpPeer : IDisposable
     {
         this.fixture = fixture;
         this.channelNumber = channelNumber;
+        if (fixture?.IsolatedMockBattleSuppressed == true)
+            ExpectedOpenEvents = [.. ExpectedOpenEvents.Where(id => id != ServerEventService.NolanVisibilityId)];
         try
         {
             if (localAddress is not null)
@@ -1490,14 +1493,16 @@ internal sealed partial class TcpPeer : IDisposable
                 pushedBack = material;
                 break;
             }
+            BeforeMileageInitialization?.Invoke(this);
             if (ExpectedOpenEvents.Contains(ServerEventService.MileageShopId))
                 MileageLimits = Expect(0, 706).Body;
             // 312不属于108目录；按隔离库的原始开关/时段独立计算，不能用收到的action自证。
             var npcFixture = fixture ?? throw new InvalidOperationException("活动NPC初始化缺少隔离夹具");
             var npcSchedule = npcFixture.Query("SELECT starts_at,ends_at,override_active FROM server_events WHERE event_id=312");
-            bool npcActive = npcSchedule is [var npcRow] && (npcRow[2] is not DBNull
+            bool npcActive = npcSchedule is not [var npcRow] || (npcRow[2] is not DBNull
                 ? Convert.ToInt64(npcRow[2]) != 0
-                : npcRow[0] is not DBNull && npcRow[1] is not DBNull &&
+                : npcRow[0] is DBNull && npcRow[1] is DBNull ||
+                    npcRow[0] is not DBNull && npcRow[1] is not DBNull &&
                     Convert.ToInt64(npcRow[0]) <= UnixTime && UnixTime < Convert.ToInt64(npcRow[1]));
             var npc = Expect(0, 639);
             TestCheck.That(!npc.Protected, "639使用原生普通帧并位于108及可选706之后、36之前");

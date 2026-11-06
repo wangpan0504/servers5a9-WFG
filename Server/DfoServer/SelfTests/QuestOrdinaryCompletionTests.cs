@@ -37,7 +37,8 @@ internal static class QuestOrdinaryCompletionTests
         QuestEligibilityTests.RunFirstNpcResources(quests);
         PvpTrainingProgressTests.RunResources(quests);
         PvpTrainingManualTests.Run(towns,characters,items,learning,growth,parameters,quests);
-        QuestAccountSynchronizationTests.Run(towns,characters,items,learning,growth,parameters,quests);
+        QuestAccountSynchronizationTests.Run(towns,characters,items,learning,growth,parameters,
+            QuestCatalog.Load(pvf, epicRoad2019Enabled: true));
         EpicRoadQuestSessionTests.RunResources(pvf,items);
         QuestLegacyAwakeningTests.Run(towns,pvf,characters,items,quests,learning,growth,parameters);
         var bloodAwakening = quests.Get(990);

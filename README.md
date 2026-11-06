@@ -26,11 +26,11 @@ Copyright (C) 2026 deadbeef7799 and contributors.
 
 项目仍处于研究和完善阶段，存在未实现功能及已知或未知问题，不保证完整性、稳定性或适用性。使用前请自行评估，并妥善备份数据。
 
-客户端补丁：[S5A9ClientPatch](https://codeberg.org/deadbeef7799/S5A9ClientPatch)。
+配套仓库：[客户端补丁](https://gitgud.io/licocon/s5a9clientpatch)、[95JP 启动器](https://gitgud.io/licocon/servers5a9-launcher)。服务端独立构建和更新；客户端 DLL、显示配置、PVF 与 NPK 的版本配套见[环境与配置](Docs/开发/环境与配置.md#三端与显示资源配套)。
 
 ## 从这里开始
 
-- **只需要可运行文件**：按下面的[快速构建](#快速构建可运行包)生成自包含包，不必先阅读业务代码。
+- **只需要可运行文件**：按下面的[快速构建](#快速构建可运行包)生成独立 DLL 包，不必先阅读业务代码。
 - **准备修改代码**：阅读[贡献指南](CONTRIBUTING.md)，完成开发构建，再选择对应模块和测试。
 - **使用 agent 开发**：先读 [AGENTS](AGENTS.md)，再按[文档索引](Docs/README.md)选读；当前功能与未实现边界以所属模块文档为准。
 
@@ -46,66 +46,26 @@ Copyright (C) 2026 deadbeef7799 and contributors.
 
 ### 2. 发布目标平台的程序
 
-Windows 需要单个 EXE 分发时，双击仓库根的 [build-single-server.bat](build-single-server.bat)，或执行 `./Tools/Build-Server.ps1 -SingleFile`。输出为 `dist/win-x64-single/S5A9Server.exe`，启动界面、服务端及托管依赖直接打包在同一程序中，无需附带 DLL、Resources、Sqlite 或启动脚本。目标机器无需另装 .NET；SQLite 等原生依赖由 .NET 自动加载到系统缓存。PVF、存档、日志和启动设置外置，详见[单 EXE 分发](Docs/开发/环境与配置.md#windows-单-exe-分发)。
-
-Windows 本机反复游玩测试，可双击仓库根的 `build-server.bat`，或执行以下脚本。默认输出到 `dist/win-x64`，同时生成独立的 `DfoLauncher.exe` 游戏服务启动器；重新构建保留已有存档、PVF 和日志，并在更新前备份 `Data`。自定义目录及停服更新说明见[本机测试构建](Docs/开发/环境与配置.md#本机测试构建windows)。
+保留独立构建脚本，不再生成服务端 EXE 或服务端界面程序。安装 PowerShell 7 与 .NET 10 SDK 后执行：
 
 ```powershell
-./Tools/Build-Server.ps1
-# 首次构建时可指定资源；相对路径以仓库根目录为基准
-./Tools/Build-Server.ps1 -OutputDirectory dist/win-x64 -PvfPath "<匹配客户端的 Script.pvf 路径>"
+pwsh -NoProfile -File Tools/Build-Server.ps1
+# 使用新的隔离输出目录，构建不修改运行目录或玩家数据
+pwsh -NoProfile -File Tools/Build-Server.ps1 -OutputDirectory dist/server-dll-1 -Version v1.0.0 -Zip
+# 其他平台按需指定 -Runtime linux-x64、linux-arm64、osx-x64 或 osx-arm64
 ```
 
-Windows x64，在 PowerShell 中执行：
-
-```powershell
-dotnet publish Server/DfoServer/DfoServer.csproj -c Release -r win-x64 --self-contained true -o dist/win-x64
-./dist/win-x64/DfoServer.exe --help
-```
-
-Linux x64，在目标 Linux 的终端中执行：
-
-```bash
-dotnet publish Server/DfoServer/DfoServer.csproj -c Release -r linux-x64 --self-contained true -o dist/linux-x64
-chmod +x dist/linux-x64/DfoServer
-./dist/linux-x64/DfoServer --help
-```
-
-`--help` 不读取资源、不创建数据库，可用于确认生成的程序能够启动。其他平台同时替换命令中的 `-r` 和输出目录：
-
-| 目标系统与架构 | RID | 建议输出目录 |
-|---|---|---|
-| Windows x64 | `win-x64` | `dist/win-x64` |
-| Linux x64（glibc） | `linux-x64` | `dist/linux-x64` |
-| Linux ARM64（glibc） | `linux-arm64` | `dist/linux-arm64` |
-| macOS Intel | `osx-x64` | `dist/osx-x64` |
-| macOS Apple Silicon | `osx-arm64` | `dist/osx-arm64` |
-
-RID 选择的是**运行程序的机器**，不是游戏客户端的架构。跨平台发布后，帮助命令和实际启动需在目标系统验证；其他系统条件见 [.NET RID 说明](https://learn.microsoft.com/zh-cn/dotnet/core/rid-catalog)。
-
-上面的直接 `dotnet publish` 命令输出为[自包含目录部署](https://learn.microsoft.com/zh-cn/dotnet/core/deploying/)，已带 .NET 运行时，目标机器无需另装 .NET，但仍需满足目标系统的原生依赖要求。目录模式需复制 `dist/<RID>/` **整个目录**，保留依赖库、Resources、Sqlite 和启动脚本；Windows 单文件模式分发 `S5A9Server.exe` 及上述许可文件。公开分发不包含 PVF、玩家数据库或日志；若源码目录已有 PVF，直接目录发布会复制它，打包前需排除，单文件模式不将 PVF 打入 EXE。
+默认输出 `build/server-dll/`，包含 `DfoServer.dll`、`PvfLib.dll`、依赖、运行时配置、启动脚本、许可和 `server-module.json`。输出目录必须不存在，避免混入旧程序；重新构建选新目录。没有客户端、PVF、数据库、日志或个人配置。原 `build-single-server.bat` 兼容入口也改为构建 DLL 包。
 
 ### 3. 放入资源并启动
 
-单文件模式双击 `S5A9Server.exe`，在启动界面选择自行提供的 PVF 和存档目录后点击“启动服务”。已有进度请选择原来的存档目录；空目录会新建库。程序不附带、搬迁或合并玩家存档。
+目标机器安装与架构匹配的 [.NET 10 ASP.NET Core Runtime](https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0)。自行放置匹配客户端的 `Data/Pvf/Script.pvf`；如已有存档，继续使用原 `Data`，不要另建目录代替。
 
-把自行准备的 `Script.pvf` 放在**发布目录**的 `Data/Pvf/Script.pvf`，例如 `dist/win-x64/Data/Pvf/Script.pvf`。然后只执行当前平台对应的启动命令：
+Windows 运行构建目录中的 `start-server.bat`；Linux/macOS 运行 `bash start-server.sh`。也可直接执行 `dotnet DfoServer.dll` 并传原命令行参数，**不要求安装或打开 95JP 启动器**。脚本开启本机 GM 端口 23102/23103，参数可覆盖；停服用 Ctrl+C 等待正常保存退出。
 
-```powershell
-# Windows x64
-./dist/win-x64/start-server.bat
-```
+与新版 95JP 启动器配套时，将整个 DLL 包放到 `ServerS5A9/.95jp-runtime/`，存档、PVF、日志、显示配置和外部业务配置仍在 `ServerS5A9/Data`、`Logs`、`Resources`。包内启动脚本识别此布局，直接启动也使用同一份数据。更新前停止服务，覆盖该目录的程序及依赖，不必重新构建启动器；保留模块清单和全部依赖，不要只换一个 DLL。启动器不内置服务端，也没有内置回退。
 
-```bash
-# Linux x64；macOS / ARM64 替换目录中的 RID
-bash ./dist/linux-x64/start-server.sh
-```
-
-已有自包含包的用户可以跳过构建，解压后在包内放入同一相对路径的 PVF，运行包内的 `start-server.bat` 或 `bash ./start-server.sh` 即可。
-
-Windows 测试构建包可直接双击 `DfoLauncher.exe`，选择地址、端口、PVF 文件及存档目录后点击“启动服务”。首次构建生成程序旁的 `launcher.local.json`，默认使用相对路径；重新构建保留已有配置，成功启动后记住选择，移动整个服务包后按新程序目录解析相对路径。界面显示运行状态、连接地址及实际存档目录，支持停止服务、复制地址及查看日志；无参数的 `start-server.bat` 也会打开该启动器。GM 继续使用独立工具。目标机器无需另装 .NET 或 Python，需保留完整服务包和资源目录。
-
-首次成功启动会创建数据库，并在程序目录下生成 `Logs/ready.json`。确认其中 PID 和端口对应本次进程；启动失败先看终端输出及 `Logs/server.jsonl`。前台退出使用 **Ctrl+C**。
+构建过程只编译和打包，不启动服务、不自动测试或操作存档。构建通过与游戏验收分别记录。详细参数见[环境与配置](Docs/开发/环境与配置.md)。
 
 ### 4. 本机或局域网连接
 
@@ -119,16 +79,17 @@ Windows 测试构建包可直接双击 `DfoLauncher.exe`，选择地址、端口
 
 macOS/Linux 的 `start-server.sh` 接受相同参数。`auto` 自动选择活动网卡地址，多网卡环境应核对实际选择结果。开发 GM 端口默认关闭；全部参数、后台运行和抓包方法见[环境与配置](Docs/开发/环境与配置.md)。
 
-现有 [GM 工具](Docs/开发/GM.md)仅用于开发调试。邮件系统实现后，将另行提供独立的用户 GM 工具。
+命令行开发接口见 [GM 工具](Docs/开发/GM.md)；配套 95JP 启动器提供本机 GM 界面，以服务端实际就绪状态和能力为准。
 
 ## 运行目录与数据
 
-以下路径均相对于**服务端程序所在目录**，不是终端当前目录：
+以下是独立包平铺布局；通过启动器或 `.95jp-runtime` 内脚本运行时，Data、Logs、Resources 位于父级 `ServerS5A9/`。路径不跟随终端当前目录：
 
 ```text
 程序目录/
-  DfoServer.exe 或 DfoServer
   DfoServer.dll 及其余依赖文件
+  DfoServer.runtimeconfig.json
+  server-module.json
   Resources/
   Sqlite/game_schema.sql    首次建库使用的完整结构
   start-server.bat / start-server.sh
@@ -140,9 +101,9 @@ macOS/Linux 的 `start-server.sh` 接受相同参数。`auto` 自动选择活动
     ready.json              本次启动信息
 ```
 
-服务端只使用命令行参数，不读取 JSON 运行配置；PVF 和 Data 默认位于程序目录，可用 `--pvf-path`、`--data-dir` 指定其它位置，日志仍在程序旁的 `Logs`。启动器的本地设置仅用于生成这些参数。重复登录固定为 `ReplaceExisting`，验证凭据后替换旧连接，不校验客户端来源 IP。
+服务端启动使用命令行参数，不读取旧服务端界面的 JSON 运行配置；PVF 和 Data 默认位于程序目录，可用 `--pvf-path`、`--data-dir` 指定其它位置，宿主传入的数据、日志和资源路径优先。启动器的本地设置用于生成启动参数。重复登录固定为 `ReplaceExisting`，验证凭据后替换旧连接，不校验客户端来源 IP。
 
-账号和游戏资产统一保存在 `Data/game.db`，当前结构为 **v143**，沿用 v1 基线标识。新库按完整 SQL 建立；已有 v1 库连续迁移升级，失败整体回滚。升级前正常停服并备份 `Data/`。没有本项目基线标识的旧库不自动迁移或覆盖，使用独立程序目录创建新库。多个实例分别使用独立目录和端口；完整规则见[数据库初始化与升级](Docs/开发/数据库.md)。
+账号和游戏资产统一保存在 `Data/game.db`，沿用 v1 基线标识；结构版本与迁移以[数据库初始化与升级](Docs/开发/数据库.md)及当前代码为准。新库按完整 SQL 建立；已有受支持库连续迁移升级，失败整体回滚。升级前正常停服并备份 `Data/`。没有本项目基线标识的旧库不自动迁移或覆盖。多个实例分别使用独立目录和端口。
 
 ## 开发构建
 
@@ -157,7 +118,7 @@ dotnet run --project Server/DfoServer -c Debug --no-build -- --help
 dotnet run --project Server/DfoServer -c Debug --no-build -- --packet-capture
 ```
 
-输出在 `Server/DfoServer/bin/Debug/net10.0/`。日常调试用 `build` / `run`，分发用上面的 `publish`。仓库根的启动脚本会优先选择 `dist/<平台>/`，其次才是 Debug；开发时用上述 `dotnet run` 可明确运行刚编译的代码。具体阅读顺序、代码入口与验证要求见[贡献指南](CONTRIBUTING.md)。
+输出在 `Server/DfoServer/bin/Debug/net10.0/`。日常调试用 `build` / `run`，分发用上面的 `Tools/Build-Server.ps1`。开发时使用明确的 `dotnet run` 或 DLL 路径，避免运行旧输出。具体阅读顺序、代码入口与验证要求见[贡献指南](CONTRIBUTING.md)。
 
 ## 项目导航
 

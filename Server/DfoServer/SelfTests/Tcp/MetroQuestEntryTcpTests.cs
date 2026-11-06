@@ -153,7 +153,8 @@ internal static class MetroQuestEntryTcpTests
                 "真实地区每日资源仍为两个目标及15份奖励，不替换PVF："+id);
             var done=new HashSet<int>(); var entrance=Entrance(id,dungeonId,done);
             var created=Create(account,name,0,level,done,entrance);
-            using var peer=Open(fixture,account);
+            using var originalPeer=Open(fixture,account);
+            TcpPeer peer=originalPeer;
             Select(peer,created);
             string acceptance=Identity(peer.Id,id);
             That(Scalar(peer.Id,id)==((uint)quest.IntData[4]|(uint)quest.IntData[9]<<9),"真实选角自动创建每日任务，无测试预填目标进度");
@@ -161,6 +162,23 @@ internal static class MetroQuestEntryTcpTests
             peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]);
             var denied=peer.Expect(1,34).Body;
             That(denied[0]==0,"未击杀不能提前手动领奖"); drain(peer,null);
+            if (id==13041)
+            {
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"account "+account+" level "+name+" 95",out string reply) &&
+                    reply.StartsWith("OK ",StringComparison.Ordinal),"未完成地区每日时经真实GM等级事务升至95级");
+                drain(peer,null);
+                peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
+                peer.Dispose();
+            }
+            using var resumedPeer=id==13041 ? Open(fixture,account) : null;
+            if (resumedPeer is not null)
+            {
+                peer=resumedPeer;
+                Select(peer,created);
+                That(Identity(peer.Id,id)==acceptance && Scalar(peer.Id,id)>0 &&
+                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[95L]] && Position(peer.Id)==entrance,
+                    "95级重连保留原每日接取和未完成计数，后续显式任务入场不能按新分配上限拒绝");
+            }
             int normal=0,boss=0;
             for(int attempt=0;attempt<12 && Scalar(peer.Id,id)!=0;attempt++)
             {
@@ -208,13 +226,10 @@ internal static class MetroQuestEntryTcpTests
             That(Scalar(peer.Id,id)==0 && normal==quest.IntData[4] && boss==quest.IntData[9],"真实多实例合成死亡累计原PVF普通与Boss数量，未预填完成状态："+id);
             if (id==13041)
             {
-                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"account "+account+" level "+name+" 71",out string reply) &&
-                    reply.StartsWith("OK ",StringComparison.Ordinal),"完成安特贝鲁每日后经真实GM等级事务升至71级");
-                drain(peer,null);
                 peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
                 peer.Select(RoleIndex(peer.Roster,created),prepared:true);
                 That(Identity(peer.Id,id)==acceptance && Scalar(peer.Id,id)==0 &&
-                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[71L]],
+                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[95L]],
                     "跨地区升级及重连保留旧每日完成进度与原接取，不用SQL预填完成");
             }
             long rewardBefore=Reward();

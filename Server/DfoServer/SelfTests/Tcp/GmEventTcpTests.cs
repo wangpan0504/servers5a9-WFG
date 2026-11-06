@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -6,7 +6,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class GmEventTcpTests
+internal static partial class GmEventTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -15,6 +15,10 @@ internal static class GmEventTcpTests
         { probe.Start(); port = ((IPEndPoint)probe.LocalEndpoint).Port; }
         await using var fixture = new TcpTestFixture(source with { GmWebPort = port },
             Path.Combine(root, "gm-events"), resources: resources, useDefaultActivities: true);
+        var repository = new DfoServer.Persistence.CharacterRepository(fixture.Database);
+        using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEvents", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
         await fixture.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
         for (int attempt = 0; ; attempt++)
@@ -48,7 +52,8 @@ internal static class GmEventTcpTests
             !string.IsNullOrWhiteSpace(row.GetProperty("purpose").GetString()) &&
             !string.IsNullOrWhiteSpace(row.GetProperty("conditions").GetString())),
             "当前活动目录提供GM面板所需名称、用途和条件");
-        foreach (var (id, defaultActive) in new[] { (64, false), (2532, true), (2257, true), (228, true), (2370, true), (2208, true) })
+        foreach (var (id, defaultActive) in new[] { (64, true), (266, true), (312, true), (2520, true), (2037, true), (2378, true), (2395, true),
+            (2532, true), (2257, true), (228, true), (2370, true), (2208, true), (10005, true) })
         {
             await State(id, "auto", defaultActive);
             foreach (string op in new[] { "on", "off", "auto" })
@@ -66,6 +71,7 @@ internal static class GmEventTcpTests
             "228即使时间格式和确认合法也明确拒绝schedule");
         That(Data((await Get("/api/events?id=228")).Body).GetRawText() == before,
             "拒绝时间表不改变228开关与revision");
+        VerifyAllDefaultsLogin(fixture);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "GM目录与活动HTTP开关测试后数据库完整");

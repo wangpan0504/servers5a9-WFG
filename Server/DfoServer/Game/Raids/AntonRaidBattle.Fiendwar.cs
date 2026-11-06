@@ -47,6 +47,7 @@ internal sealed partial class AntonRaidBattle
     {
         if (current.Fiendwar is not { } field) return;
         var now = lukeClock.GetUtcNow();
+        lukePhaseAnchor = lukeClock.GetTimestamp();
         var shift = now - field.Started;
         current = current with { Fiendwar = field with { Started = now, Deadline = field.Deadline + shift,
             Timers = field.Timers.ToImmutableDictionary(row => row.Key,
@@ -177,9 +178,8 @@ internal sealed partial class AntonRaidBattle
             if (actors.Length is < 1 or > 4 || actors.Select(actor => actor.Character).Distinct().Count() != actors.Length ||
                 source == destination || fiendwarAreaTravels.Contains(source) || fiendwarAreaTravels.Contains(destination) ||
                 fiendwarMovements.Values.Any(move => move.Destination == source || move.Destination == destination) ||
-                current.FiendwarPositions.Any(row => row.Value == destination) ||
-                current.FiendwarPositions.Where(row => row.Value == source).Select(row => row.Key).Order()
-                    .SequenceEqual(actors.Select(actor => actor.Character).Order()) == false)
+                destination is not (30 or 31) && current.FiendwarPositions.Any(row => row.Value == destination) ||
+                actors.Any(actor => current.FiendwarPositions.GetValueOrDefault(actor.Character, -1) != source))
                 return null;
             var held = new List<FiendwarMovement>();
             foreach (var actor in actors)
@@ -221,7 +221,8 @@ internal sealed partial class AntonRaidBattle
                      field.Dungeons.GetValueOrDefault(source.DungeonId) is not ("clear" or "hide"))) return null;
             }
             if (destination is 30 or 31 && field.Symbols.GetValueOrDefault("[movie command center on]") != 1) return null;
-            int maximum = Math.Min(4, target.MemberMax);
+            // 黑白桥允许两队交接，副本容量仍由遭遇预留和原分队的四人上限约束。
+            int maximum = destination is 30 or 31 ? 8 : Math.Min(4, target.MemberMax);
             if (destination != FiendwarBaseArea && current.FiendwarPositions.Count(row => row.Key != actor.Character &&
                 (fiendwarMovements.GetValueOrDefault(row.Key)?.Destination ?? row.Value) == destination) >= maximum)
                 return null;
@@ -327,6 +328,9 @@ internal sealed partial class AntonRaidBattle
                     CommitBattleCandidate(before, current with
                     {
                         FiendwarExpiredRuns = current.FiendwarExpiredRuns.Add(run.Id),
+                        FiendwarBridgeReturns = current.FiendwarBoss?.Side(side).Stage == FiendwarWorldStage.Saved
+                            ? current.FiendwarBridgeReturns.SetItem(run.Id, encounter.Area == 30 ? 31 : 30)
+                            : current.FiendwarBridgeReturns,
                         FiendwarDungeonTimers = current.FiendwarDungeonTimers.Remove(encounter.Area)
                     });
                     return new(before, current);

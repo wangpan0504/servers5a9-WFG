@@ -108,6 +108,11 @@ internal static partial class RaidCombatProjection
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
         bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
             battle.FiendwarMovieCardsReady(view) && context.RaidMovieCards != identity;
+        var team = battle.FiendwarTeamEntitlements(view);
+        if (team.IsDefaultOrEmpty) return true;
+        // 原生第二页按分类2枚举完整owner表，须在state4装配子页之前准备。
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
+            PreyRewardPackets.FiendwarTeamResults(team), "fiendwar_team_reward_entitlements", Cards)) return false;
         // 00D30460读取byte2并传给036D2770→01C99AA0；0沿原生普通开牌分支，清014926D0的特殊展示状态。
         // 1523必须保留三字节，不能把587的阶段字节误当此布尔参数。
         if (!context.Sender.TryPost(0, (ushort)NotiPacketType.FIEND_WAR_STATE, [4, 0, 0], "fiendwar_movie_cards", Cards)) return false;

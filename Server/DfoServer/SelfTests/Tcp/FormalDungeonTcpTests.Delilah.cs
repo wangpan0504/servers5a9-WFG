@@ -85,7 +85,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Barrier();
     }
 
-    static void RejectDelilahServices(TcpTestFixture fixture, TcpPeer peer, string phase)
+    static void RejectDelilahServices(TcpTestFixture fixture, TcpPeer peer, string phase, bool acceptFullRepair = false)
     {
         string before = fixture.Snapshot();
         const short sourceSlot = 10;
@@ -95,8 +95,22 @@ internal static partial class FormalDungeonTcpTests
         That(sourceRows.Length == 1,phase+" rejected disjoint fixture retains one authoritative Main source");
         long sourceUid = Convert.ToInt64(sourceRows[0][0]);
         var sourceCore = JsonSerializer.Deserialize<ItemCore>((string)sourceRows[0][1])!;
-        SendDelilahRepair(peer,0,4,false);
-        peer.Expect(1,23,[0,19,0]);
+        if (acceptFullRepair)
+        {
+            long gold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
+            SendDelilahRepair(peer,0,sourceSlot,false);
+            peer.Expect(1,23,Build(writer =>
+            {
+                writer.Write((byte)1);writer.Write(checked((int)gold));writer.Write((byte)0);writer.Write(sourceSlot);writer.Write((ushort)0);
+            }));
+            peer.Barrier();
+            That(fixture.Snapshot() == before,phase+" accepts full-durability repair without fees, item changes or audit writes");
+        }
+        else
+        {
+            SendDelilahRepair(peer,0,4,false);
+            peer.Expect(1,23,[0,19,0]);
+        }
         SendDelilahDisjoint(peer,sourceSlot,-1);
         peer.Expect(1,26,[0,19,0]);
         byte[] rejected = peer.Expect(0,14).Body;
@@ -116,7 +130,7 @@ internal static partial class FormalDungeonTcpTests
         That(retained.Length == 1 && Convert.ToInt64(retained[0][0]) == sourceUid &&
             JsonSerializer.Deserialize<ItemCore>((string)retained[0][1]) == sourceCore,
             phase+" rejected disjoint preserves the original source UID and full persisted core");
-        That(fixture.Snapshot() == before,phase+" rejects NPC services without durability, gold, source or reward changes");
+        That(fixture.Snapshot() == before,phase+" preserves durability, gold, source and rewards after the verified NPC service requests");
         Console.WriteLine($"PASS Delilah rejected disjoint projection: phase={phase}, slot={sourceSlot}, uid={sourceUid}, bytes={rejected.Length}, sortLock={sourceCore.SortLockFlag}, equipmentLock={sourceCore.EquipmentLockId}");
     }
 

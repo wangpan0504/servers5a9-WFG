@@ -27,12 +27,28 @@ internal static class ServerLifetime
         AppDomain.CurrentDomain.ProcessExit += onExit;
         try
         {
+            bool resetDefaults = ServerDefaultsUpgrade.Apply(options.DataDirectory, options.EpicRoad2019Enabled);
+            log.Write("server_defaults_upgrade", new { ServerDefaultsUpgrade.Generation, Applied = resetDefaults,
+                Activities = "registered-implemented", RaidWindows = "all-supported-all-day", SupportCompanions = "off-on-upgrade" });
             Directory.CreateDirectory(options.LogDirectory);
             using var watcher = new FileSystemWatcher(options.LogDirectory, "stop.request")
             {
                 EnableRaisingEvents = true
             };
-            watcher.Created += (_, _) => stop.Cancel();
+            void RequestStop()
+            {
+                try
+                {
+                    if (options.LauncherSession.Length == 0 ||
+                        File.ReadAllText(Path.Combine(options.LogDirectory, "stop.request")).Trim() == options.LauncherSession)
+                        stop.Cancel();
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            watcher.Created += (_, _) => RequestStop();
+            watcher.Changed += (_, _) => RequestStop();
+            watcher.Renamed += (_, _) => RequestStop();
             if (File.Exists(Path.Combine(options.LogDirectory, "stop.request")))
                 throw new InvalidDataException("Remove prior stop.request before starting a new run");
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests,

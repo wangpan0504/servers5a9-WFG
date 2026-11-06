@@ -16,6 +16,7 @@ internal static partial class RaidCombatProjection
             var battle = context.Session.CurrentRaidBattle(actor);
             bool SceneReady() => !view.PhaseExpired && view.State != AntonRaidBattleState.Reward ||
                 context.Session.Phase == Game.Session.SessionPhase.Town && context.Session.PartyDungeon is null &&
+                !context.Session.NeedsFiendwarFinalReturn() &&
                 (view.PhaseExpired || context.LukePhaseExit?.ReturnPending(view.Instance) != true);
             if (!SceneReady()) return false;
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);

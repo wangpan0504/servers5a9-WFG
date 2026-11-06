@@ -1,7 +1,7 @@
-﻿#requires -Version 7.0
+#requires -Version 7.0
 <#
 .SYNOPSIS
-将干净源码生成的单 EXE 包上传为 Forgejo 预发布版本；失败保留草稿，不替换已有版本。
+将干净源码生成的独立 DLL 包上传为 Forgejo 预发布版本；失败保留草稿，不替换已有版本。
 .PARAMETER KeepLatest
 发布成功后只保留最新 N 个已发布 Release（含本次），更旧的连同附件删除；默认 3，0 表示不清理。草稿与本次版本永不删除，git 标签保留；清理失败只警告。上传遇到 HTTP 413（配额不足）时，会先按 N-1 个旧版本清理一次再重试上传。
 .PARAMETER CleanupDryRun
@@ -134,30 +134,42 @@ if (([IO.File]::ReadAllText($checksum)).Trim() -cne "$expectedHash  $archiveName
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($archive)
 try {
-    $names = @($zip.Entries | ForEach-Object FullName | Sort-Object)
-    $expectedNames = @('README.txt', 'S5A9Server.exe', 'build-info.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'THIRD-PARTY.md',
-        'LICENSES/Apache-2.0.txt', 'LICENSES/BSL-1.0.txt', 'LICENSES/ServerS4A21-MIT.txt',
-        'LICENSES/dotnet-MIT.txt', 'LICENSES/dotnet-THIRD-PARTY-NOTICES.txt', 'LICENSES/aspnetcore-THIRD-PARTY-NOTICES.txt') | Sort-Object
-    if (($names -join '|') -cne ($expectedNames -join '|')) { throw 'ZIP 文件清单不符，拒绝上传。' }
-    $reader = [IO.StreamReader]::new($zip.GetEntry('build-info.json').Open())
+    $reader = [IO.StreamReader]::new($zip.GetEntry('server-module.json').Open())
     try { $metadata = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
-    if ($metadata.commit -cne $Commit -or $metadata.version -cne $Version -or
-        $metadata.modified -ne $false -or $metadata.runtime -cne 'win-x64' -or $metadata.configuration -cne 'Release' -or
-        $metadata.windowsStartupChecked -isnot [bool] -or $zip.GetEntry('S5A9Server.exe').Length -eq 0) {
+    if ($metadata.schema -ne 1 -or $metadata.hostApi -ne 1 -or $metadata.entry -cne 'DfoServer.dll' -or
+        $metadata.commit -cne $Commit -or $metadata.version -cne $Version -or
+        $metadata.modified -isnot [bool] -or $metadata.modified -or $metadata.runtime -cne 'win-x64') {
         throw '版本包与干净源码提交不一致，拒绝上传。'
     }
+    $expected = @{}
+    foreach ($file in $metadata.files) {
+        $name = [string]$file.path
+        if (-not $name -or $name -match '[\\:]|(^|/)\.\.(/|$)|\.exe$|^(Data|Logs|Resources|Sqlite)/' -or $expected.ContainsKey($name)) {
+            throw 'ZIP 含不允许的成员。'
+        }
+        $entry = $zip.GetEntry($name)
+        if (-not $entry -or $entry.Length -ne $file.size) { throw 'ZIP 成员不完整。' }
+        $stream = $entry.Open()
+        try { $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)) }
+        finally { $stream.Dispose() }
+        if ($actual -ine $file.sha256) { throw 'ZIP 成员校验失败。' }
+        $expected[$name] = $true
+    }
+    foreach ($required in @('DfoServer.dll','DfoServer.deps.json','DfoServer.runtimeconfig.json','PvfLib.dll','start-server.bat','start-server.sh')) {
+        if (-not $expected.ContainsKey($required)) { throw 'ZIP 缺少服务端组件。' }
+    }
+    if ($zip.Entries.Count -ne $expected.Count + 1) { throw 'ZIP 含清单外文件。' }
 } finally { $zip.Dispose() }
-$startup = if ($metadata.windowsStartupChecked) { '已通过启动器/服务端帮助与内置 GM 检查' } else { 'Linux 交叉编译，未执行 Windows EXE 启动检查' }
 $body = @"
-Windows x64 自包含单 EXE 包，解压后双击 S5A9Server.exe；无需另装 .NET。
+Windows x64 独立服务端 DLL 包，不提供服务端 EXE，也不依赖 95JP 启动器。
+安装 .NET 10 ASP.NET Core Runtime x64 后，使用 start-server.bat 或 dotnet DfoServer.dll 启动。
 
 源码提交：$Commit
 对应源码：$($repo.html_url)/archive/$Commit.zip
 软件许可：AGPL-3.0-only；完整正文与第三方声明随包附带。
-Windows 检查：$startup
-本版本为预发布，自动检查不代替客户端验收。
+本版本为预发布，构建不代表客户端验收通过。
 自行准备匹配客户端的 PVF；不包含客户端、PVF、玩家数据库、日志或本机配置。
-下载 ZIP 及同名 .sha256 文件核对完整性；原有 Data、Logs 和配置应保留。
+下载 ZIP 及同名 .sha256 文件核对完整性；先停服再替换程序，保留原有 Data、Logs 和配置。
 "@
 $release = Invoke-Api 'Post' '/releases' @{
     tag_name = $Version; target_commitish = $Commit; name = "S5A9Server $Version (Windows x64)"

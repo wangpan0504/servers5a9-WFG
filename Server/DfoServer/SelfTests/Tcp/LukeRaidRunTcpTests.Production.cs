@@ -86,7 +86,7 @@ internal static partial class LukeRaidRunTcpTests
                     var peer = Open(fixture, account, gamePort: port, channelNumber: 20);
                     if (deathPolicy is not null)
                     {
-                        peer.ExpectedOpenEvents = [2532, 266, 2520];
+                        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
                         peer.ExpectedBattlePassEnd = checked((uint)deathPolicy.End.ToUnixTimeSeconds());
                     }
                     peer.Select(); peers.Add(peer);

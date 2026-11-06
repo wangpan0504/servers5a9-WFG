@@ -47,7 +47,7 @@ internal static class BattlePassOnlinePeriodTcpTests
             { Job = 0, GrowType = 33, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
         await fixture.StartAsync();
         using var peer = Open(fixture, Account);
-        peer.ExpectedOpenEvents = [2532, 266, 2520];
+        peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
         peer.ExpectedBattlePassEnd = checked((uint)policy.End.ToUnixTimeSeconds());
 
         byte[] ReadAuthoritative()

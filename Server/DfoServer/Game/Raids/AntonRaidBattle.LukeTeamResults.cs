@@ -48,4 +48,15 @@ internal sealed partial class AntonRaidBattle
             return rows.ToImmutable();
         }
     }
+
+    internal ImmutableArray<(ushort Owner, RaidRewardOffer Offer)> FiendwarTeamEntitlements(AntonRaidBattleView view)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Fiendwar || !ReferenceEquals(current, view) ||
+                !lukePhaseCommits.TryGetValue(view.Phase, out var committed)) return default;
+            return committed.Members.Where(member => member.Eligible).OrderBy(member => member.Character)
+                .Select(member => (member.Character, member.Offers.Single(offer => offer.Kind == 0))).ToImmutableArray();
+        }
+    }
 }

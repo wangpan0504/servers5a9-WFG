@@ -8,7 +8,7 @@ internal static class StartupTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "startup files"), gm: true);
+        await using var fixture = new TcpTestFixture(source with { FileLogsEnabled = true }, Path.Combine(root, "startup files"), gm: true);
         await fixture.StartAsync();
         TestCheck.That(File.Exists(fixture.Database) && Directory.GetFiles(fixture.Options.DataDirectory, "*.db").Length == 1,
             "CLI startup creates one database for accounts and game data");

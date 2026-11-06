@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        ServerDefaultsUpgradeTests.RunCore();
         PreyTeamResourceTests.RunCore();
         PreyTeamBattleTests.RunCore();
         PreyTeamProtocolTests.RunCore();

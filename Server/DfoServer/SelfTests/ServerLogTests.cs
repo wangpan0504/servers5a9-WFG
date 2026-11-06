@@ -26,6 +26,9 @@ internal static class ServerLogTests
                     (ServerBuildInfo.Commit.Length == 0 || ServerBuildInfo.Commit.Length == 40),
                     "构建标识只取自程序集：版本非空，提交号要么为空要么是完整 git 提交");
                 log.Write("server_ready", new { Pid = 1 });
+                log.Write("battle_pass_default_unavailable", new { Error = "ambiguous legacy seasons" });
+                TestCheck.That(output.ToString().Contains("[WARN] [battle_pass_default_unavailable] Default battle pass unavailable; server continues without battle pass: Error=ambiguous legacy seasons"),
+                    "默认赛季降级在关闭文件日志时也能通过英文WARN定位，保留原始原因");
                 log.Write("fatigue_daily_reset", new { Connection = 1, Character = 7, Day = 739916, Remaining = 156, Maximum = 156, Revision = 3 });
                 log.Write("fatigue_daily_reset_failed", new { Connection = 1, Epoch = 2, Error = "fixture" });
                 TestCheck.That(output.ToString().Contains("[INFO] [fatigue_daily_reset] Daily fatigue restored:") &&
@@ -136,7 +139,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 100 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
+            TestCheck.That(fileLines.Length == 101 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

@@ -153,6 +153,12 @@ internal static partial class AntonRaidGapTcpTests
         var report = AntonTcpProbe.Play(peer, catalog, "clear210");
         That(report.Entered210 && !report.Reward && report.Opcode586 == 0 && report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,
             "关闭阶段推进时清 210 不发 586/596/597/601，也不进 Reward：" + report.Summary());
+        peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
+        _ = AntonTcpProbe.Barrier(peer, "210 SET_PLAY_RESULT 结算后连接");
+        peer.Send(15, BitConverter.GetBytes(212u));
+        var followup = AntonTcpProbe.Barrier(peer, "46后继续请求安徒恩选图");
+        That(followup.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [0, 1, 0] }),
+            "独立团本210收到SET_PLAY_RESULT后连接仍可处理后续请求");
         That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],
             "关闭阶段推进仍按开战扣一张票");
         await fixture.StopAsync();
@@ -217,7 +223,7 @@ internal static partial class AntonRaidGapTcpTests
         for (int clear = 0; clear < 4; clear++)
         {
             AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear >= 2,
-                loaded: clear == 0 ? () => AssertHpProjection(leader, member) : null);
+                loaded: clear == 0 ? () => AssertHpProjection(leader, member) : null, sendPlayResult: true);
             leader.Send(1361, Build(writer => { writer.Write((byte)1); writer.Write(raidKey); }));
             var panel = AntonTcpProbe.Barrier(leader, "双人清图后的个人计数");
             var counts = RaidPanelTests.ReadClears(panel.Last(packet => packet is { Kind: 1, Opcode: 1361 }).Body);
@@ -250,7 +256,8 @@ internal static partial class AntonRaidGapTcpTests
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
         {
             for (int clear = 0; clear < (dungeon is 213 or 215 ? 2 : 1); clear++)
-                AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport, leave: dungeon != 215 || clear != 1);
+                AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport,
+                    leave: dungeon != 215 || clear != 1, sendPlayResult: true);
             byte state = dungeon == 215 ? (byte)2 : dungeon == 213 ? (byte)3 : (byte)1;
             AssertState(leaderReport, dungeon, state);
             AssertState(memberReport, dungeon, state);

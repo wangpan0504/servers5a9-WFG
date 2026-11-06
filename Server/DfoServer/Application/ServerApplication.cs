@@ -87,6 +87,7 @@ public static class ServerApplication
             return 0;
         }
 
+        using var packageLease = command.Kind == ServerCommandKind.Serve ? AcquirePackageLease() : null;
         ServerOptions options;
         try
         {
@@ -126,7 +127,8 @@ public static class ServerApplication
         }
         if (command.Kind == ServerCommandKind.AntonProbe)
             return AntonTcpProbe.Run(options, command.Arguments);
-        using var log = command.Kind == ServerCommandKind.Serve ? new ServerLog(options.LogDirectory, Console.Out) : null;
+        using var log = command.Kind == ServerCommandKind.Serve
+            ? new ServerLog(options.LogDirectory, options.FileLogsEnabled ? Console.Out : null, options.FileLogsEnabled) : null;
         // 数据库慢操作（>1000ms）诊断出口：由装配入口把统一日志交给 Persistence，仓储不持有 ServerLog 实例。
         // 只在本入口生命周期内有效，日志释放后不保留全局引用。
         SqliteDbDiagnostics.Sink = log is null ? null : log.Write;
@@ -138,6 +140,15 @@ public static class ServerApplication
         {
             SqliteDbDiagnostics.Sink = null;
         }
+    }
+
+    static FileStream? AcquirePackageLease()
+    {
+        // 独立 DLL 和启动器加载共用模块锁，防止资源加载阶段被安装器替换。
+        var directory = Path.GetDirectoryName(typeof(ServerApplication).Assembly.Location);
+        if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, "server-module.json"))) return null;
+        return new FileStream(Path.Combine(directory, ".95jp-module.lock"), FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.ReadWrite);
     }
 
     static async Task<int> RunWithResourcesAsync(ServerCommand command, ServerOptions options, ServerLog? log)
@@ -203,7 +214,7 @@ public static class ServerApplication
 
             if (command.Kind == ServerCommandKind.Gm)
                 return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
-            var itemResources = Load("Item resources", () => new ItemResources(pvf, StartupStage.DropDiagnostics(log)));
+            var itemResources = Load("Item resources", () => new ItemResources(pvf, StartupStage.DropDiagnostics(log), options.ResourcesDirectory));
             var particularHell = Load("Particular hell party table", () => ParticularHellPartyCatalog.Load(pvf, itemResources.Items.Contains));
             if (particularHell.ItemsByDungeon.Count == 0)
                 throw new InvalidDataException("particularhellparty 表是空的");
@@ -243,8 +254,8 @@ public static class ServerApplication
                 : DungeonCatalog.Load(pvf));
             var hellTicketIds = DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(towns, dungeonCatalog);
             var promotionConfiguration = Load("Cash shop promotions", () => new CashShopPromotionConfiguration(
-                Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json"),
-                ServerRuntime.ReadShippedPromotionConfig(), json => ServerRuntime.LoadCashShopPromotions(itemResources, json, hellTicketIds)));
+                Path.Combine(options.ResourcesDirectory, "cash-shop-promotions.json"),
+                ServerRuntime.ReadShippedPromotionConfig(options.ResourcesDirectory), json => ServerRuntime.LoadCashShopPromotions(itemResources, json, hellTicketIds)));
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotionConfiguration.Current;
             if (command.Kind == ServerCommandKind.Serve) SqliteDatabaseBootstrap.EnableRuntimePooling();
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,

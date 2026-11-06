@@ -60,7 +60,8 @@ internal static class RaidEntryEventsTests
         DateTimeOffset tuesday = new(2026, 10, 20, 19, 0, 0, RaidEntrySchedule.Zone);
         string directory = Path.Combine(Path.GetTempPath(), "raid-events-" + Guid.NewGuid().ToString("N"));
         var store = new RaidEntryStore(directory);
-        That(RaidEntryEvents.OpenEvents(null, tuesday).Length == 0 && RaidEntryEvents.OpenEvents(store, tuesday).Length == 0, "没有时段表时不下发团本事件");
+        That(RaidEntryEvents.OpenEvents(null, tuesday).Length == 0 && RaidEntryEvents.OpenEvents(store, tuesday).SequenceEqual(new ushort[] { 282, 2449, 414, 181 }),
+            "没有仓储时不伪造开放事件，新目录默认下发全部已支持团本事件");
         store.Replace("""{"luke":[],"hyperspace":[{"weekday":2,"start":"18:00","end":"22:00"}],"prey":[{"weekday":3,"start":"00:00","end":"24:00"}]}""");
         That(RaidEntryEvents.OpenEvents(store, tuesday).SequenceEqual(new ushort[] { 2449 }), "周二 19:00 只开超时空漩涡 → 事件 2449");
         That(RaidEntryEvents.OpenEvents(store, tuesday.AddHours(3)).Length == 0, "周二 22:00 结束时刻不含");

@@ -95,6 +95,9 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 ConfiguredRechargeWebPort = options.RechargeWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
                 options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints,
                 NativePort = native?.Port ?? 0,
+                HostRole = options.LauncherSession.Length > 0 ? "95jp-server-host" : "standalone-server",
+                options.LauncherSession, options.LogicalRoot, options.LogDirectory, options.ResourcesDirectory,
+                ProcessStartedUtc = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().ToString("O"),
                 // 构建标识：程序集版本、构建提交号（源码 zip 构建为空）与存档 schema 版本。
                 ServerVersion = ServerBuildInfo.Version, Commit = ServerBuildInfo.Commit, SaveVersion = saveVersion
             }));

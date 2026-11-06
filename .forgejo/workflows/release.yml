@@ -1,4 +1,4 @@
-name: 打包 Windows 单 EXE Release
+name: 打包 Windows DLL Release
 
 on:
   workflow_dispatch:
@@ -80,10 +80,10 @@ jobs:
           FORGEJO_TOKEN: ${{ forgejo.token }}
         run: ./Tools/Publish-Release.ps1 -Version $env:VERSION -Commit $env:SOURCE_COMMIT -CheckOnly
 
-      - name: 沿用单 EXE 构建入口生成 ZIP 与 SHA256
+      - name: 通过独立 DLL 构建入口生成 ZIP 与 SHA256
         env:
           PACKAGE_VERSION: ${{ steps.version.outputs.version }}
-        run: ./Tools/Build-Server.ps1 -SingleFile -PackageVersion $env:PACKAGE_VERSION
+        run: ./Tools/Build-Server.ps1 -PackageVersion $env:PACKAGE_VERSION
 
       - name: 上传完整附件并发布到 Releases
         env:

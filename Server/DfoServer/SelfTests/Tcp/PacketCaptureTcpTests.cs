@@ -9,7 +9,7 @@ internal static class PacketCaptureTcpTests
 
     public static async Task RunAsync(ServerOptions source, string root)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "packet-capture"));
+        await using var fixture = new TcpTestFixture(source with { FileLogsEnabled = true }, Path.Combine(root, "packet-capture"));
         await fixture.StartAsync();
         using (var peer = TcpPeer.Open(fixture))
         {
@@ -48,7 +48,7 @@ internal static class PacketCaptureTcpTests
     public static async Task RunHttpAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         string credential = Credential;
-        await using var httpFixture = new TcpTestFixture(source, Path.Combine(root, "packet-http"), resources: resources, packetHttp: true);
+        await using var httpFixture = new TcpTestFixture(source with { FileLogsEnabled = true }, Path.Combine(root, "packet-http"), resources: resources, packetHttp: true);
         // 共享资源仅用于严格核对选角回放，HTTP启动与日志仍验证真实子进程。
         await httpFixture.StartAsync(isolatedProcess: true);
         using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{httpFixture.Options.PacketHttpPort}"), Timeout = TimeSpan.FromSeconds(5) };

@@ -146,7 +146,7 @@ internal sealed partial class GameSession
             mockVictory = monsterMockBattle.PrepareVictory(owner, mockCharacter, mockDungeon.Run.Snapshot.Identity, mockAdmission);
         uint attendanceMailId = 0;
         if (!capture.Prepared && capture.ValidReport && capture.Character is { } attendee && capture.Dungeon is { } attendanceDungeon &&
-            dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
+            attendanceDungeon.Entry.RaidEntry is null && dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
                 dungeons.Get(checked((int)attendanceDungeon.Entry.DungeonId)), attendee.Level))
             attendance = dailyAttendance.Prepare(owner, claim: false);
         // 宠物资源与纯成长规划在账号锁外完成；结算事务只保存冻结结果，不重新读CRE或抽取进化目标。

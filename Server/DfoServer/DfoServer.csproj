@@ -7,6 +7,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>DfoServer</AssemblyName>
   </PropertyGroup>
+  <!-- 独立发行保留 DLL 命令入口，只移除本机可执行外壳。 -->
+  <PropertyGroup Condition="'$(ServerDllPackage)' == 'true'">
+    <UseAppHost>false</UseAppHost>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../../Tools/ArchitectureCheck/ArchitectureCheck.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Private="false" />
@@ -25,6 +31,10 @@
     <None Update="Sqlite/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="Data/Pvf/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="Data/Pvf/*" CopyToPublishDirectory="Never" Condition="'$(BundleServer)' == 'true'" />
+    <None Update="Data/DisplayCompat.world.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../start-server.bat;../../start-server.sh" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(ServerDllPackage)' == 'true'">
+    <None Update="Resources/**;Sqlite/*.sql;Data/**;../../start-server.bat;../../start-server.sh" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

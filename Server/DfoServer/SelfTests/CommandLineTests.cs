@@ -27,6 +27,18 @@ internal static class CommandLineTests
         }
 
         That(ServerCommand.Parse([]) is { Kind: ServerCommandKind.Serve, PacketCapture: false }, "default entry needs no configuration");
+        var hostSession = Guid.NewGuid().ToString("N");
+        var host = ServerOptions.Load(ServerCommand.Parse(["--log-dir", "host logs", "--resources-dir", "host resources",
+            "--launcher-session", hostSession, "--logical-root", "host root"]).Options);
+        That(host.LogDirectory == Path.GetFullPath("host logs", AppContext.BaseDirectory) &&
+            host.ResourcesDirectory == Path.GetFullPath("host resources", AppContext.BaseDirectory) &&
+            host.LauncherSession == hostSession && host.LogicalRoot == Path.GetFullPath("host root", AppContext.BaseDirectory),
+            "宿主日志、外置资源、逻辑根和启动代次均显式传递");
+        Reject(["--log-dir"]);
+        Reject(["--resources-dir", "a", "--resources-dir", "b"]);
+        Reject(["--launcher-session", hostSession]);
+        Reject(["--logical-root", "root"]);
+        Reject(["--launcher-session", "invalid", "--logical-root", "root"]);
         That(ServerCommand.Parse(["--help"]).Kind == ServerCommandKind.Help, "standalone help");
         That(ServerCommand.Parse(["--gm", "account", "--selftest", "list"]).Arguments.SequenceEqual(["account", "--selftest", "list"]), "command-like account name remains a GM argument");
         var launch = ServerCommand.Parse(["--server-ip", "auto", "--packet-http-port", "18081", "--packet-capture", "capture files"]);
@@ -103,7 +115,7 @@ internal static class CommandLineTests
             That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })
             Reject(["--selftest-tcp", selection]);
-        foreach (string name in new[] { "--pvf", "--log-dir", "--duplicate-login", "--client-ip" })
+        foreach (string name in new[] { "--pvf", "--duplicate-login", "--client-ip" })
             Reject([name, "unused"]);
         string[][] invalid =
         [

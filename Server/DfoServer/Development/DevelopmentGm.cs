@@ -37,7 +37,7 @@ internal static partial class DevelopmentGm
         {
             return Execute(repository, owners, find, DevelopmentRequest.Parse(line, defaultAccount), mailbox, items, progress, cashShop, debugSettings, events, catalog, findConnection, log, noticeSender, refreshFatigue);
         }
-        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException)
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or SqliteException or IOException or UnauthorizedAccessException)
         {
             return "ERR " + ex.Message.Replace('\n', ' ').Replace('\r', ' ');
         }

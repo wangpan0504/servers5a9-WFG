@@ -13,6 +13,32 @@ internal sealed class ServerEventRepository(string path) : IServerEventStore
         return Read(db, null, eventId);
     }
 
+    // 只由持 server.lock、尚未监听的发行升级调用；所有活动与原版本在同一写事务中提交。
+    internal void ResetDefaults(IReadOnlyList<ushort> eventIds)
+    {
+        if (eventIds.Distinct().Count() != eventIds.Count || eventIds.Any(id => !ServerEventService.IsRegistered(id)))
+            throw new InvalidDataException("默认活动必须来自真实业务白名单");
+        using var db = database.Open();
+        using var write = db.BeginWrite("ServerEventRepository.ResetDefaults");
+        using var tx = write.Transaction;
+        foreach (ushort id in eventIds)
+        {
+            var before = Read(db, tx, id);
+            before.Validate();
+            if (before is { StartsAt: null, EndsAt: null, OverrideActive: true }) continue;
+            using var command = db.CreateCommand();
+            command.Transaction = tx;
+            command.CommandText = """
+                INSERT INTO server_events(event_id,revision,starts_at,ends_at,override_active) VALUES($id,$next,NULL,NULL,1)
+                ON CONFLICT(event_id) DO UPDATE SET revision=$next,starts_at=NULL,ends_at=NULL,override_active=1
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$next", checked(before.Revision + 1));
+            command.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
     public ServerEventSchedule Save(ServerEventSchedule expected, ServerEventSchedule desired)
     {
         expected.Validate();

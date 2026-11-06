@@ -543,7 +543,7 @@ internal sealed class TownCatalog
             TownMap map;
             try
             {
-                var data = ReadMap(pvf, path, [], texts, geometry);
+                var data = ReadMap(pvf, path, [], texts, geometry, epicRoad2019Enabled);
                 var own = data.Text;
                 var bounds = Rows(own, "virtual movable area", 4).Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray();
                 var movable = Rows(own, "town movable area", 6);
@@ -633,13 +633,14 @@ internal sealed class TownCatalog
     }
 
     sealed record MapText(string Text, bool IsRoom);
-    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache, DfoServer.GameWorld.Maps.MapGeometryConfig geometry)
+    static MapText ReadMap(PvfArchive pvf, string path, HashSet<string> chain, Dictionary<string, MapText> cache, DfoServer.GameWorld.Maps.MapGeometryConfig geometry,
+        bool epicRoad2019Enabled)
     {
         if (cache.TryGetValue(path, out var cached))
             return cached;
         if (!chain.Add(path))
             throw new InvalidDataException("Recursive map import: " + path);
-        string own = geometry.ReadText(pvf, path), parent = "";
+        string own = Events.EpicRoad2019EntryNpc.RestoreText(path, geometry.ReadText(pvf, path), epicRoad2019Enabled, pvf.Contains), parent = "";
         bool room = path is "map/common/gate_seria.map" or "map/common/(r)gate_seria.map";
         foreach (Match m in Regex.Matches(Section(own, "import script"), "`([^`]+)`"))
         {
@@ -652,7 +653,7 @@ internal sealed class TownCatalog
                 imported = imported[..(slash + 1)] + "(r)" + imported[(slash + 1)..];
             }
 
-            var data = ReadMap(pvf, imported, chain, cache, geometry);
+            var data = ReadMap(pvf, imported, chain, cache, geometry, epicRoad2019Enabled);
             parent += data.Text + "\n";
             room |= data.IsRoom;
         }

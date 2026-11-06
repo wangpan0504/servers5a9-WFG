@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -14,8 +16,17 @@ internal static partial class GmWebServer
 
     internal static void MapClientGeometryBatch(WebApplication app, Func<MapGeometryHttpSnapshot?> snapshot)
     {
-        app.MapGet(GeometryVersionRoute, () => snapshot() is { } current
-            ? Results.Bytes(current.Version, "application/octet-stream") : Results.StatusCode(503));
+        // 注册时冻结真实进程身份；读取失败直接终止装配，不以默认值冒充响应归属。
+        using var process = Process.GetCurrentProcess();
+        string processId = process.Id.ToString(CultureInfo.InvariantCulture);
+        string processStartUtc = process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        app.MapGet(GeometryVersionRoute, (HttpContext context) =>
+        {
+            context.Response.Headers["X-95JP-Process-Id"] = processId;
+            context.Response.Headers["X-95JP-Process-Start-Utc"] = processStartUtc;
+            return snapshot() is { } current
+                ? Results.Bytes(current.Version, "application/octet-stream") : Results.StatusCode(503);
+        });
         // POST是有界只读查询；所有条目取自同一快照，任一失败不返回部分许可。
         app.MapPost(GeometryBatchRoute, async (HttpContext context) =>
         {

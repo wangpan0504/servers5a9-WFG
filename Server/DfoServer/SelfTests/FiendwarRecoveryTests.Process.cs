@@ -12,7 +12,7 @@ internal static partial class FiendwarRecoveryTests
 {
     static async Task RunProcessAsync(ServerOptions options, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(options, root, resources: resources);
+        await using var fixture = new TcpTestFixture(options with { FileLogsEnabled = true }, root, resources: resources);
         string checkpoint = "before-crash";
         await fixture.StartAsync(isolatedProcess: true);
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
