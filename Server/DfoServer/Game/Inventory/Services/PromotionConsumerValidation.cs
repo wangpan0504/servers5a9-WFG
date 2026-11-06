@@ -503,6 +503,10 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 case ItemKind.Equipment:
                     if (template.EquipmentSlot is < 12 or > 25) throw new InvalidDataException("equipment_slot");
                     return;
+                case ItemKind.GuardianGem:
+                    if (!InventoryGuardianGemService.SupportsDefinition(id, template))
+                        throw new InvalidDataException("guardian_gem_definition");
+                    return;
                 case ItemKind.Rune:
                     if (items.Rune(id) is not { } rune || rune.Item != template)
                         throw new InvalidDataException("rune_definition");
