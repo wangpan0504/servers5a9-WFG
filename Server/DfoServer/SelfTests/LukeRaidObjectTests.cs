@@ -51,6 +51,30 @@ internal static class LukeRaidObjectTests
         PvfToken StringValue(string value) { strings.Add(value); return new(6,strings.Count-1); }
         var shadow = Tokens("[shadow type]").Concat(new[]{StringValue("[mirror]")}).ToArray();
         var rootObjects = Tokens("[passive object]",64250,1116,174,0,"[/passive object]");
+        var width = Tokens("[force map width]", 1120);
+        var area = Tokens("[virtual movable area]", 0, 108, 1120, 600, "[/virtual movable area]");
+        foreach (var geometry in new[] { width, area, width.Concat(area).ToArray() })
+            That(RaidObjectEvidence.UnconditionalPassiveObjects(geometry.Concat(rootObjects).ToArray(), Resolve),
+                "累计卢克根几何声明不遮蔽无条件对象出生");
+        foreach (var bad in new[] {
+            Tokens("[force map width]"), Tokens("[force map width]", 1120, 1), Tokens("[force map width]", 0),
+            Tokens("[force map width]").Concat(new[] { StringValue("1120") }).ToArray(),
+            width.Concat(Tokens("[/force map width]")).ToArray(), width.Concat(width).ToArray(),
+            Tokens("[virtual movable area]", 0, 108, 1120),
+            Tokens("[virtual movable area]", 0, 108, 1120, "[/virtual movable area]"),
+            Tokens("[virtual movable area]", 0, 108, 1120, 600, 1, "[/virtual movable area]"),
+            Tokens("[virtual movable area]", 0, 108, 1120).Concat(new[] { StringValue("600"), Text("[/virtual movable area]") }).ToArray(),
+            area.Concat(area).ToArray(),
+            Tokens("[virtual movable area]", "[condition]", 0, 108, 1120, 600, "[/condition]", "[/virtual movable area]") })
+            That(!RaidObjectEvidence.UnconditionalPassiveObjects(bad.Concat(rootObjects).ToArray(), Resolve),
+                "几何声明错误类型、行宽、重复、未闭合和子块仍拒绝");
+        foreach (var geometry in new[] { width, area })
+        {
+            That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[animation]").Concat(geometry)
+                .Concat(Tokens("[/animation]")).Concat(rootObjects).ToArray(), Resolve), "嵌套几何声明不能借根字段白名单获准");
+            That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[condition]").Concat(geometry).Concat(rootObjects)
+                .Concat(Tokens("[/condition]")).ToArray(), Resolve), "几何声明不能把条件对象提升为根出生");
+        }
         That(RaidObjectEvidence.UnconditionalPassiveObjects(shadow.Concat(rootObjects).ToArray(),Resolve),
             "74113同形根shadow type单字符串mirror不包裹后续普通对象块");
         foreach(var bad in new[]{
@@ -157,6 +181,9 @@ internal static class LukeRaidObjectTests
     {
         var choices = policy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray();
         var catalog = LukeRaidObjectCatalog.Load(pvf, entry, SelfTestCatalogs.Rooms(pvf), choices);
+        var allCards = LukeRaidObjectCatalog.Load(pvf, entry, SelfTestCatalogs.Rooms(pvf), LukeSanctumRoute.ResourceChoices(entry));
+        That(allCards.RoomFailures.IsEmpty && allCards.BlockingRouteIssues.IsEmpty,
+            "累计资源全部卢克牌组对象房间可装配: " + string.Join(";", allCards.BlockingRouteIssues));
         That(catalog.BindingCount == 6, "当前受控P1三迷宫只登记六个直接前部对象候选");
         string[] expectedIssues = ["luke-object-action-reference-missing:74171:64252:2", "luke-object-action-reference-missing:74171:64287:2",
             "luke-object-action-reference-missing:74172:64252:2", "luke-object-action-reference-missing:74172:64287:2"];
