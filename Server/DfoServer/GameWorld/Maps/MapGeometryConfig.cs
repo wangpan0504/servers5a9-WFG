@@ -444,7 +444,7 @@ internal sealed class MapGeometryConfig
     private static string Normalize(string path)
     {
         path = path.Replace('\\', '/').ToLowerInvariant();
-        if (!path.StartsWith("map/", StringComparison.Ordinal) || Encoding.UTF8.GetByteCount(path) > 480 || path.Contains("..", StringComparison.Ordinal) || path.Contains(':') || path.Contains('\0'))
+        if (!path.StartsWith("map/", StringComparison.Ordinal) || Encoding.UTF8.GetByteCount(path) > 480 || path.Split('/').Contains("..", StringComparer.Ordinal) || path.Contains(':') || path.Contains('\0'))
             throw new InvalidDataException("World resource path");
         return path;
     }
