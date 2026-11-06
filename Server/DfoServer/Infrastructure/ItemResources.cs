@@ -114,7 +114,7 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures, echon: Echon,
-            newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems);
+            newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems, questDropSets: new(archive));
         // 匹配客户端02160930加载器固定读取ShieldWindowNewData.etc，不能并集旧任务表。
         KnightShields = KnightShieldCatalog.Load(archive, KnightShieldCatalog.CurrentPath, Items);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));

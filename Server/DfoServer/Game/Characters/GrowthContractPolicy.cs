@@ -10,8 +10,11 @@ internal static class GrowthContractPolicy
     public static int QuestDropRate(Character character, int basis, GrowthContractBenefits? benefits, long now)
     {
         if (basis is < 0 or > 100) throw new InvalidDataException("任务掉落概率越界");
-        return Active(character, benefits, now) ? (int)Math.Min(100, basis + (long)basis * benefits!.QuestItemDropPercent / 100) : basis;
+        return (int)Math.Min(100, basis + QuestDropBonus(character, basis, benefits, now));
     }
+
+    public static long QuestDropBonus(Character character, int basis, GrowthContractBenefits? benefits, long now) =>
+        Active(character, benefits, now) ? (long)basis * benefits!.QuestItemDropPercent / 100 : 0;
 
     public static bool Active(Character character, GrowthContractBenefits? benefits, long now) =>
         benefits is not null && character.Inventory.AccountWallet.ContractExpiry(84) > now;

@@ -369,6 +369,7 @@ internal static class SelfTestRunner
         QuestCycleContinuationTests.RunCore();
         QuestDropTests.RunCore();
         TreasureHunterPotionTests.RunCore();
+        EquipmentQuestDropBonusTests.RunCore();
         QuestClearEligibilityTests.Run();
         QuestRewardParameterTests.Run();
         PvpTrainingProgressTests.Run();

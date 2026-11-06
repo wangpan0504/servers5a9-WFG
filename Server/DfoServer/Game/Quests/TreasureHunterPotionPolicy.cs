@@ -18,10 +18,10 @@ internal static class TreasureHunterPotionPolicy
     }
 
     // df_game_r按百分制整数抽样；药剂增量以原任务概率计算，不再次放大已有契约加成。
-    public static int AdjustedRate(int basis, int current, int bonus)
+    public static int AdjustedRate(int basis, int current, int bonus, long additionalRate = 0)
     {
         if (basis is < 0 or > 100 || current is < 0 or > 100 || bonus < 0)
             throw new InvalidDataException("任务掉落概率或财宝药剂参数无效");
-        return (int)Math.Min(100, current + (long)basis * bonus / 10000);
+        return (int)Math.Clamp(checked(current + (long)basis * bonus / 10000 + additionalRate), 0, 100);
     }
 }
