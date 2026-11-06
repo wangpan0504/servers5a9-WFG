@@ -407,8 +407,8 @@ internal sealed partial class GameSession
         // 票据在下面统一规划并随实例安装原子提交；组队逐人核验并由共享入场事务扣除。
         if (hellParty)
         {
-            // 结算页再挑战对超星空与时空裂缝放行；两者都按当前背包重算门票与入场疲劳，不免费重开旧实例。
-            if (retry is not null && !retry.Entry.IsCosmo && !retry.Entry.IsInfernoParty && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
+            // 结算页只继承已结算实例的深渊模式；所有类型仍按当前背包重算门票与入场费用。
+            if (retry is not null && retry.Entry.HellParty is null && !retry.Entry.IsCosmo && !retry.Entry.IsInfernoParty && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
                 sealDoor && (hellLegend || dungeonId == DungeonCosmoRewardCatalog.DungeonId))
                 return RejectFormal("hell-party-mode-unsupported");
             if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||

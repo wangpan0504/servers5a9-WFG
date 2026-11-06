@@ -237,6 +237,12 @@ internal static class QuestPassiveClearTests
             That(receipt.Monsters.Monsters.Any(row => row.MonsterId == 70201 && row.IsBoss && !row.IsScriptedBoss) &&
                 f.Session.Phase == SessionPhase.Dungeon && f.Session.EnableFormalDungeonSettlement() is null,
                 "实际非dummy基础70201已提交仍不能代替末层物件清图");
+            var beforeExit = f.Read();
+            var bossIdentity = f.Session.DungeonSnapshot!.Identity;
+            var previous = path[^2];
+            That(f.Session.MoveFormalDungeon(checked((byte)previous.X), checked((byte)previous.Y)) is null &&
+                f.Session.DungeonSnapshot.Identity == bossIdentity && QuestCompletionRepositoryTests.Same(beforeExit, f.Read()),
+                "3858基础Boss死亡后仍须进入物件末层，不能退回邻格绕开终末演出");
             foreach (var layer in opening.Entry.Maze.LayeredMaps.Where(map => map.Position == opening.Entry.BossMap.Position))
             {
                 That(f.Session.MoveFormalDungeon(checked((byte)layer.Position.X), checked((byte)layer.Position.Y), 1) is not null,
@@ -264,6 +270,11 @@ internal static class QuestPassiveClearTests
                 receipt.Monsters.Room.PassiveObjects[5].ObjectId == 69292 && !rooms.ReportsQuestDeath(receipt.Monsters.Room.PassiveObjects[5]) &&
                 f.Session.Phase == SessionPhase.Dungeon && before.ActiveMainQuests.Single(row => row.QuestId == 3858).ConditionState == (early ? 0u : 1u),
                 "真实末层唯一目标为普通物件row5，加载不伪造69292死亡或type65达成");
+            That(f.Session.MoveFormalDungeon(checked((byte)previous.X), checked((byte)previous.Y)) is null &&
+                f.Session.MoveFormalDungeon(checked((byte)receipt.Snapshot.CurrentMap.Position.X),
+                    checked((byte)receipt.Snapshot.CurrentMap.Position.Y), 1) is null &&
+                f.Session.DungeonSnapshot.Identity == identity && QuestCompletionRepositoryTests.Same(before, f.Read()),
+                "3858末层物件尚未清图时不能离开邻格或返回已清基础房，失败不改变实例或存档");
             byte[] body = QuestPassiveClearTcpTests.PassiveDeath(69292, 74);
             That(DungeonRequests.TryParsePassiveDeath(body, out var parsed) && parsed!.ChecksumMatches,
                 "合成74B物件正文通过现有Parser，不代表原客户端producer已验证");

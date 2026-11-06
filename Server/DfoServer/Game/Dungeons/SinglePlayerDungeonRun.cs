@@ -796,6 +796,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool HasPendingLayer()
     {
+        // 已冻结的物件终末占用整个Boss格；基础Boss死亡和末层空房都不能绕开未提交的物件清图。
+        if (entry.PassiveClearTerminalMap is { } terminal && current.Plan.Room.Map.Position == terminal.Position &&
+            !HasCommittedPassiveClearCondition) return true;
         if (current.Plan.Room.Map.Kind != "layered") return false;
         var layers = entry.Maze.LayeredMaps.Where(map => map.Position == current.Plan.Room.Map.Position).ToArray();
         int index = Array.IndexOf(layers,current.Plan.Room.Map);
