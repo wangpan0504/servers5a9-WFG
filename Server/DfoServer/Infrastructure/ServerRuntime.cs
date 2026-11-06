@@ -106,7 +106,7 @@ internal static class ServerRuntime
                 items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287)),
                 creatureEggs: items.CreatureEggs, avatarCompounds: items.AvatarCompounds,
                 hellTicketIds: hellTicketIds, recipes: items.ItemRecipes,
-                makingSkills: items.ItemMakingSkills).Validate(rules));
+                makingSkills: items.ItemMakingSkills, expertJobs: () => items.ExpertJobs).Validate(rules));
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,

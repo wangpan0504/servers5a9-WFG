@@ -18,7 +18,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
     CreatureEggCatalog? creatureEggs = null, AvatarCompoundCatalog? avatarCompounds = null,
     IReadOnlySet<int>? hellTicketIds = null, ItemRecipeCatalog? recipes = null,
-    ItemMakingSkillCatalog? makingSkills = null)
+    ItemMakingSkillCatalog? makingSkills = null, Func<ExpertJobScriptCatalog>? expertJobs = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -89,6 +89,126 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 InventoryRewardGrantService.ValidateCreationArguments(material);
             }
             materialInputs.Add(cost.ItemId);
+        }
+
+        // 这里只证明当前Profession源的一个完整付费消费者，不登记其它成本或发放边。
+        bool HasExpertJobConsumer(int id, ItemTemplate template)
+        {
+            if (expertJobs is null || template.Id != id || template.Kind != ItemKind.Profession)
+                return false;
+            ExpertJobInput(id, 1);
+            var scripts = expertJobs();
+            foreach (byte job in new byte[] { 1, 2, 4 })
+            {
+                int maximum = scripts.MaxLevel(job);
+                foreach (int recipeId in scripts.UnlockedRecipes(job, maximum))
+                {
+                    if (!scripts.TryRecipe(job, recipeId, out var recipe) ||
+                        !recipe.Materials.Any(row => row.ItemId == id && row.Count > 0)) continue;
+                    if (Candidate(() =>
+                    {
+                        if (recipe.RecipeId != recipeId || recipe.RequiredLevel < 1 ||
+                            recipe.RequiredLevel > maximum || recipe.Materials.Length == 0 ||
+                            !Learnable(job, recipeId, recipe.RequiredLevel, null)) return false;
+                        foreach (var cost in recipe.Materials) ExpertJobInput(cost.ItemId, cost.Count);
+                        ExpertJobOutput(recipe.ProductId, recipe.ProductCount);
+                        for (int level = recipe.RequiredLevel; level <= maximum; level++)
+                        {
+                            var result = scripts.Outcome(job, recipe, level);
+                            if (Reachable(job, level) && result.SuccessPercent > 0 &&
+                                ExperienceRange(result.ExperienceMin, result.ExperienceMax)) return true;
+                        }
+                        return false;
+                    })) return true;
+                }
+            }
+            foreach (int cardId in scripts.KnownCards(1))
+            {
+                if (!scripts.TryCardRecipe(cardId, out var recipe) ||
+                    recipe.CardId != id && !recipe.Materials.Concat(recipe.BeadMaterials)
+                        .Any(row => row.ItemId == id && row.Count > 0)) continue;
+                if (Candidate(() =>
+                {
+                    if (recipe.CardId != cardId || recipe.RequiredLevel < 1 ||
+                        recipe.RequiredLevel > scripts.MaxLevel(1) || recipe.Materials.Length == 0 ||
+                        !Learnable(1, recipe.RecipeId, recipe.RequiredLevel, recipe.Rarity)) return false;
+                    ExpertJobUsableSource(cardId);
+                    foreach (var cost in recipe.Materials.Concat(recipe.BeadMaterials))
+                        ExpertJobInput(cost.ItemId, cost.Count);
+                    ExpertJobOutput(recipe.BeadId, 1);
+                    if (enchantments.Get(recipe.BeadId) is not { } bead || bead.BeadItemId != recipe.BeadId ||
+                        bead.CardItemId != cardId || bead.Targets.IsEmpty) return false;
+                    for (int level = recipe.RequiredLevel; level <= scripts.MaxLevel(1); level++)
+                    {
+                        var experience = scripts.MonsterCardExp(1, level);
+                        if (Reachable(1, level) && scripts.CardSuccessPercent(level, recipe.Rarity) > 0 &&
+                            ExperienceRange(experience.Min, experience.Max)) return true;
+                    }
+                    return false;
+                })) return true;
+            }
+            return false;
+
+            bool Learnable(byte job, int recipeId, int required, byte? rarity)
+            {
+                if (recipeId <= 0 || !scripts.TryLearningRecipe(recipeId, out var learning) ||
+                    learning.ItemId != recipeId || learning.Job != job || learning.RequiredLevel != required ||
+                    learning.Rarity != rarity || !scripts.IsLearned(job, scripts.MaxLevel(job), [recipeId], recipeId))
+                    return false;
+                if (!scripts.IsLearned(job, scripts.MaxLevel(job), [], recipeId))
+                    ExpertJobUsableSource(recipeId);
+                return true;
+            }
+
+            bool Reachable(byte job, int level)
+            {
+                int experience = scripts.ExperienceForLevel(job, level);
+                return experience >= 0 && scripts.Level(job, experience) == level;
+            }
+
+            static bool Candidate(Func<bool> validate)
+            {
+                try { return validate(); }
+                catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+                { return false; }
+            }
+
+            static bool ExperienceRange(int minimum, int maximum) => minimum >= 0 && maximum >= minimum &&
+                (long)maximum - minimum < int.MaxValue;
+        }
+
+        void ExpertJobInput(int id, int count)
+        {
+            if (id < 0 || count <= 0) throw new InvalidDataException("expert_job_input_count");
+            // Spend接受0金币哨兵和CurrencyWallet；EpicPieces不是该消费者的钱包。
+            if (id == 0 || CurrencyWallet.RewardKind(id) is not null) return;
+            var input = items.Get(id);
+            if (input.Id != id || ItemSlotBoundService.List(input.Kind) != InventoryListType.Main ||
+                !new ItemCore(id, input.Kind, 1).IsStackable || Special(id, input) ||
+                input.AccountMaterial is not null || !input.Expiration.SupportsCreation)
+                throw new InvalidDataException("expert_job_input_owner");
+            InventoryRewardGrantService.ValidateCreationArguments(input);
+        }
+
+        void ExpertJobUsableSource(int id)
+        {
+            ExpertJobInput(id, 1);
+            var input = items.Get(id);
+            // Learning和TryPlanCard只检查最低角色等级、Jobs与UseForbidden，不调用AllowsUse。
+            if (input.UseForbidden || input.Jobs == 0)
+                throw new InvalidDataException("expert_job_source_definition");
+        }
+
+        void ExpertJobOutput(int id, int count)
+        {
+            if (id <= 0 || count <= 0) throw new InvalidDataException("expert_job_output_count");
+            if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id)) return;
+            var output = items.Get(id);
+            if (output.Id != id || Special(id, output) || output.AccountMaterial is not null ||
+                InventoryRewardGrantService.GrantDefinitionError(output, new(id, count)) is not null)
+                throw new InvalidDataException("expert_job_output_definition");
+            InventoryRewardGrantService.ValidateCreationArguments(output);
+            _ = ItemSlotBoundService.Range(output.Kind, 0);
         }
 
         void Product(int commodity, string source, int? expectedItem = null, bool paidCoupon = false)
@@ -666,6 +786,12 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 if (enchantment.CardItemId > 0) _ = items.Get(enchantment.CardItemId);
                 if (enchantment.RandomCards is { } cards)
                     foreach (int card in cards.Positions) _ = items.Get(card);
+                return;
+            }
+            if (template.Kind == ItemKind.Profession)
+            {
+                if (!HasExpertJobConsumer(id, template))
+                    throw new InvalidDataException("expert_job_consumer_definition");
                 return;
             }
             // 只完整解析实际材料关联的职业，保留共用材料的全部职业和八部位合同。
