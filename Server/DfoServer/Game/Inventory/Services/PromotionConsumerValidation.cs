@@ -16,7 +16,8 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     EnhancementCatalog enhancements, RecoveryConsumableCatalog consumables,
     AmplificationCatalog amplifications, AmplifyUpgradeCatalog amplifyUpgrades,
     SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
-    CreatureEggCatalog? creatureEggs = null, AvatarCompoundCatalog? avatarCompounds = null)
+    CreatureEggCatalog? creatureEggs = null, AvatarCompoundCatalog? avatarCompounds = null,
+    IReadOnlySet<int>? hellTicketIds = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -620,6 +621,15 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             {
                 // 材料的用途可由队列稍后到达的真实付费/开罐消费者声明，不能依出队顺序判断未知。
                 materialLeaves.Add((id, source));
+                // 调用方从同一城镇及副本目录登记具有正数费用和可达迷宫的候选。
+                // 仅有worldmap声明不代表实际收费消费者已连接。
+                if (hellTicketIds?.Contains(id) == true)
+                {
+                    if (template.UseForbidden || !new ItemCore(template.Id, template.Kind, 1).IsStackable ||
+                        ItemSlotBoundService.List(template.Kind) != InventoryListType.Main)
+                        throw new InvalidDataException("hell_party_ticket_definition");
+                    materialInputs.Add(id);
+                }
                 return;
             }
             // 其它真实使用 owner 尚未连接；持有/发放成功不足以证明可使用。

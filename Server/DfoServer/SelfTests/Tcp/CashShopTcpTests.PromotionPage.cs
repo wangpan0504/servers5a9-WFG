@@ -115,7 +115,8 @@ internal static partial class CashShopTcpTests
 
         // 真正的唯一loader与完整资源消费者，Active目录不再依赖诊断启动参数。
         catalog = DfoServer.Infrastructure.ServerRuntime.LoadCashShopPromotions(items,
-            JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }));
+            JsonSerializer.Serialize(new[] { new PromotionConfiguration(rules, true) }),
+            DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(resources.Towns, resources.Dungeons));
         That(catalog.Activities.Single().Availability == PromotionAvailability.Active &&
             catalog.Activities.Single().Configuration.Rules.MaximumPurchases == 5000,
             "真实loader完整消费者通过并保留5000套原规则");

@@ -237,9 +237,14 @@ public static class ServerApplication
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));
             var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
+            // 促销门禁与正式副本装配共享目录，候选只在本次启动计算一次。
+            var dungeonCatalog = Load("Dungeon resources", () => options.EpicRoad2019Enabled
+                ? DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
+                : DungeonCatalog.Load(pvf));
+            var hellTicketIds = DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(towns, dungeonCatalog);
             var promotionConfiguration = Load("Cash shop promotions", () => new CashShopPromotionConfiguration(
                 Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json"),
-                ServerRuntime.ReadShippedPromotionConfig(), json => ServerRuntime.LoadCashShopPromotions(itemResources, json)));
+                ServerRuntime.ReadShippedPromotionConfig(), json => ServerRuntime.LoadCashShopPromotions(itemResources, json, hellTicketIds)));
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotionConfiguration.Current;
             if (command.Kind == ServerCommandKind.Serve) SqliteDatabaseBootstrap.EnableRuntimePooling();
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,
@@ -275,7 +280,8 @@ public static class ServerApplication
             try
             {
                 await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
-                    adventureCatalog, growthCatalog, promotions: CurrentPromotions, promotionConfiguration: promotionConfiguration);
+                    adventureCatalog, growthCatalog, promotions: CurrentPromotions, promotionConfiguration: promotionConfiguration,
+                    dungeonCatalog: dungeonCatalog);
             }
             finally
             {

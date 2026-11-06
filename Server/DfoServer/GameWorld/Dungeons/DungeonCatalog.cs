@@ -544,11 +544,56 @@ internal sealed class DungeonCatalog
             maze = maze with { MapSpecification = maps };
         }
         // 先按当前房间用途区分普通、dummy和Boss候选，不能提前将混合候选随机压成单图。
-        if (maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
-            (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
-             maze.MapAlternatives.Count != 0 || definition.DummyAppearCount > 0))
+        if (UsesOrdinaryMapPool(definition, maze))
             maze = mapPool.Value.Resolve(definition,maze,choose,hellParty);
         return ResolveMapCandidates(maze,maps,archive.Contains,choose);
+    }
+
+    static bool UsesOrdinaryMapPool(DungeonDefinition definition, DungeonMaze maze) =>
+        maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
+        (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+         maze.MapAlternatives.Count != 0 || definition.DummyAppearCount > 0);
+
+    // 仅供静态消费者证明使用；临时排除确实不可选的显式候选，不改变正式随机池。
+    internal DungeonMaze ResolveStaticConsumerMaze(DungeonDefinition definition, DungeonMaze maze, bool hellParty = false)
+    {
+        var candidate = PrepareStaticConsumerMaze(maze, maps, archive.Contains, UsesOrdinaryMapPool(definition, maze));
+        return ResolveOrdinaryMaze(definition, candidate, _ => 0, hellParty);
+    }
+
+    // 动态MapPool目前按实际kind选择、忽略显式权重；只有原静态路径才按正权重判断可达性。
+    internal static DungeonMaze PrepareStaticConsumerMaze(DungeonMaze maze, IReadOnlyDictionary<int, string> paths,
+        Func<string, bool> exists, bool dynamicPool)
+    {
+        if (maze.ResourceError is not null) return maze;
+        return maze with
+        {
+            MapSpecification = maze.MapSpecification?.Select(map => Filter(map, alternative: false)).ToArray(),
+            MapAlternatives = maze.MapAlternatives.Select(map => Filter(map, alternative: true)).ToArray()
+            // LayeredMaps是全部必需层，不是随机候选；固定story首项也不能被其它编号替换。
+        };
+
+        DungeonMap Filter(DungeonMap map, bool alternative)
+        {
+            var ids = map.CandidateIds.Count == 0 ? new[] { map.Id } : map.CandidateIds.Distinct().ToArray();
+            if (ids.Length <= 1 || !alternative && map.StoryStageIndex >= 0) return map;
+            bool alignedWeights = map.CandidateWeights.Count == ids.Length;
+            bool weighted = !dynamicPool && !alternative && alignedWeights;
+            if (weighted && (map.CandidateWeights.Any(weight => weight < 0) || checked(map.CandidateWeights.Sum()) <= 0))
+                throw new InvalidDataException("地图候选权重无效");
+            var indexes = Enumerable.Range(0, ids.Length).Where(index =>
+                (!weighted || map.CandidateWeights[index] > 0) &&
+                ids[index] >= 0 && paths.TryGetValue(ids[index], out var path) && exists(path)).ToArray();
+            // 全空行保留原错误/角色kind处理，不删除整行后启用原本不可用的fallback。
+            if (indexes.Length == 0 || indexes.Length == ids.Length) return map;
+            return map with
+            {
+                CandidateIds = indexes.Select(index => ids[index]).ToArray(),
+                CandidateWeights = alignedWeights
+                    ? indexes.Select(index => map.CandidateWeights[index]).ToArray() : []
+                // 保留原Id/Path，不让清除missing首项意外改变是否进入动态MapPool的判定。
+            };
+        }
     }
 
     internal static DungeonMaze ResolveMapCandidates(DungeonMaze maze, IReadOnlyDictionary<int,string> paths,

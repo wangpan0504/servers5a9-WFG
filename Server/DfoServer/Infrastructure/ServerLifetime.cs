@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Auth;
 using DfoServer.Persistence;
@@ -13,7 +14,7 @@ internal static class ServerLifetime
         SkillLearningCatalog learning, ItemResources itemResources, DfoServer.GameWorld.Quests.QuestCatalog quests, ServerLog log,
         DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         CharacterGrowthCatalog? growthCatalog = null, Func<CashShopPromotionCatalog>? promotions = null,
-        CashShopPromotionConfiguration? promotionConfiguration = null)
+        CashShopPromotionConfiguration? promotionConfiguration = null, DungeonCatalog? dungeonCatalog = null)
     {
         using var stop = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, args) =>
@@ -38,7 +39,7 @@ internal static class ServerLifetime
                 adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions,
                 promotionConfiguration: promotionConfiguration,
                 enablePromotionPage: options.EnablePromotionPage,
-                epicRoad2019Enabled: options.EpicRoad2019Enabled).RunAsync(stop.Token);
+                epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: dungeonCatalog).RunAsync(stop.Token);
         }
         finally
         {

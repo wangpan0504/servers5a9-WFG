@@ -141,6 +141,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
+        if (resources is not null && source.EpicRoad2019Enabled != resources.EpicRoad2019Enabled)
+            throw new InvalidOperationException("共享副本资源的补充目录模式与运行选项不一致");
         this.promotions = promotions;
         this.promotionItemResolver = promotionItemResolver;
         this.enablePromotionPage = enablePromotionPage;
@@ -336,7 +338,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (resources is not null && !isolatedProcess)
         {
             var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures).WithItems(resources.ItemResources.Items);
-            var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources) : null;
+            var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources,
+                hellTicketIds: DfoServer.Game.Dungeons.HellPartyTicketConsumers.From(townCatalog ?? resources.Towns,
+                    resources.Dungeons)) : null;
             DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotions?.Invoke() ?? promotionCatalog!;
             TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
             hostStop = new();
@@ -362,7 +366,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage, fiendwarMazeRandom: fiendwarMazeRandom, promotionItemResolver: promotionItemResolver, epicRoad2019Enabled: options.EpicRoad2019Enabled, dungeonCatalog: resources.Dungeons);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

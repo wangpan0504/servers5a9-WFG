@@ -96,14 +96,16 @@ internal static class ServerRuntime
         return reader.ReadToEnd();
     }
 
-    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items, string? json = null) =>
+    internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items, string? json = null,
+        IReadOnlySet<int>? hellTicketIds = null) =>
         CashShopPromotionCatalog.Parse(json ?? ReadShippedPromotionConfig(), items.CashShop, items.Items.Get,
             rules => new PromotionConsumerValidation(items.Items, items.Boosters, items.AvatarPackages, items.CashShop,
                 items.EpicPieces, items.Contracts, items.RandomOptions, items.AttributePairs,
                 items.Creatures, items.CollectBoxes, items.LimitCubes, items.Enchantments, items.Enhancements, items.RecoveryConsumables,
                 items.Amplifications, items.AmplifyUpgrades,
                 items.SpringTreasureAvatars, new SpringTreasureDropPolicy(items.SpringTreasureAvatars, items.Items.Get(490705287)),
-                creatureEggs: items.CreatureEggs, avatarCompounds: items.AvatarCompounds).Validate(rules));
+                creatureEggs: items.CreatureEggs, avatarCompounds: items.AvatarCompounds,
+                hellTicketIds: hellTicketIds).Validate(rules));
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
@@ -113,7 +115,7 @@ internal static class ServerRuntime
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
-        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false)
+        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false, DungeonCatalog? dungeonCatalog = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -258,7 +260,7 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService, parties, presence);
-        var dungeonCatalog = epicRoad2019Enabled
+        dungeonCatalog ??= epicRoad2019Enabled
             ? DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps)
             : DungeonCatalog.Load(pvf);
         var marriageSupply = dungeonCatalog.ContainsDungeon((int)Game.Dungeons.MarriageDungeonAdmission.DungeonId)

@@ -14,6 +14,7 @@ internal static class PromotionConsumerValidationTests
 {
     public static void RunCore()
     {
+        PromotionHellTicketConsumerCoreTests.RunCore();
         var equipment = Template(880001101, ItemKind.Equipment, 12);
         InventoryRewardGrantService.ValidateCreationArguments(equipment, upgrade: 31, refinement: 127);
         foreach (var invalid in new Action[]
@@ -48,6 +49,7 @@ internal static class PromotionConsumerValidationTests
 
     public static void RunResources(ItemResources resources)
     {
+        PromotionHellTicketConsumerTests.RunResources(resources);
         PromotionAvatarCompoundConsumerTests.RunResources(resources);
         PromotionCreatureRenameConsumerTests.RunResources(resources);
         PromotionFatigueConsumerTests.RunResources(resources);
@@ -58,7 +60,8 @@ internal static class PromotionConsumerValidationTests
         var shipped = JsonSerializer.Deserialize<PromotionConfiguration[]>(ServerRuntime.ReadShippedPromotionConfig())
             ?? throw new InvalidDataException("shipped promotion missing");
         var enabled = ServerRuntime.LoadCashShopPromotions(resources,
-            JsonSerializer.Serialize(shipped.Select(configuration => configuration with { Enabled = true }).ToArray()));
+            JsonSerializer.Serialize(shipped.Select(configuration => configuration with { Enabled = true }).ToArray()),
+            PromotionHellTicketConsumerTests.CurrentHellTicketIds(resources));
         That(enabled.Activities.Length == shipped.Length && enabled.Activities.All(entry => entry.Availability == PromotionAvailability.Active),
             "真实唯一loader已启用原配置完整图: " + string.Join("; ", enabled.Activities.Select(entry => entry.Error ?? entry.Availability.ToString())));
         PromotionRuneConsumerTests.RunResources(resources);
@@ -85,16 +88,36 @@ internal static class PromotionConsumerValidationTests
         var shop = CashShopCatalog.Parse($"[item]\n1 {roots[0]} 1 0 0 100 0 0 0\n");
         var rules = new PromotionRules(new("consumer-fixture", "period", "v1", "default", "package"),
             10, 3, 31, roots[2], 1, 5000, [new(1, roots[0], 1)], [new(2, roots[1], 1)]);
-        PromotionConsumerValidation Validator(CashShopCatalog? selected = null, AmplifyUpgradeCatalog? selectedUpgrades = null) => new(items, boosters, avatars, selected ?? shop,
+        PromotionConsumerValidation Validator(CashShopCatalog? selected = null, AmplifyUpgradeCatalog? selectedUpgrades = null,
+            IReadOnlySet<int>? hellTickets = null) => new(items, boosters, avatars, selected ?? shop,
             resources.EpicPieces, resources.Contracts, resources.RandomOptions, resources.AttributePairs,
             resources.Creatures, resources.CollectBoxes, resources.LimitCubes, resources.Enchantments, resources.Enhancements, resources.RecoveryConsumables,
-            resources.Amplifications, selectedUpgrades ?? resources.AmplifyUpgrades);
+            resources.Amplifications, selectedUpgrades ?? resources.AmplifyUpgrades, hellTicketIds: hellTickets);
         void Reset()
         {
             definitions.Clear();
             foreach (int root in roots) definitions[root] = new([new(1, [new(leaf, 1, 1)])]);
         }
         Reset();
+        // 门禁验证同时覆盖空声明与具体收费路径，不以持有材料替代消费者。
+        {
+            definitions[roots[1]] = new([new(1, [new(unsupported, 1, 1)])]);
+            string? TicketValidation(IReadOnlySet<int>? ids) => Validator(hellTickets: ids).Validate(rules);
+            foreach (var ids in new IReadOnlySet<int>?[] { null, new HashSet<int>(), new HashSet<int> { unsupported + 1 } })
+                That(TicketValidation(ids)?.Contains(unsupported + ": material_consumer_not_connected", StringComparison.Ordinal) == true,
+                    "缺集合、空集合或未声明ID均不能连接材料");
+            var hellConnected = PromotionHellTicketConsumerCoreTests.Tickets();
+            That(TicketValidation(hellConnected) is null, "非3330材料通过具体正数可达深渊收费合同连接");
+            var noCharge = PromotionHellTicketConsumerCoreTests.Tickets(
+                PromotionHellTicketConsumerCoreTests.Ordinary() with { Mazes = [] });
+            That(TicketValidation(noCharge)?.Contains(unsupported + ": material_consumer_not_connected", StringComparison.Ordinal) == true,
+                "仅有选图声明而没有收费路径仍拒绝");
+            items.PrefillTemplates([KeyValuePair.Create(unsupported, Template(unsupported, ItemKind.Material) with { UseForbidden = true })]);
+            That(TicketValidation(hellConnected)?.Contains("hell_party_ticket_definition", StringComparison.Ordinal) == true,
+                "已连接票据仍核对禁止使用属性");
+            items.PrefillTemplates([KeyValuePair.Create(unsupported, Template(unsupported, ItemKind.Material))]);
+            Reset();
+        }
         var validator = Validator();
         {
             const int nestedChild = 880001201;
