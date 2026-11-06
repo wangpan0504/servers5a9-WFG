@@ -182,6 +182,84 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             { Error(source, reward.ItemId, error.Message); }
         }
 
+        void ExpandBooster(int id, string source, BoosterDefinition booster)
+        {
+            if (!booster.Available) throw new InvalidDataException(booster.PendingRule ?? "booster_unavailable");
+            if (attributePairs.Resolve(id, AttributePairEntryKind.Booster).Kind == AttributePairResolutionKind.RequiredUnavailable)
+                throw new InvalidDataException("attribute_pair_policy_unavailable");
+            if (booster.LotteryUseNeedItem is { } lotteryCost)
+            {
+                if (!booster.Lottery) throw new InvalidDataException("lottery_material_entry");
+                MaterialInput(lotteryCost);
+            }
+            if (booster.RuneBox is { } box)
+            {
+                if (!items.RuneRandomChoices().TryGet(box.Family, box.Tier, out var choose))
+                    throw new InvalidDataException("rune_box_table");
+                // 本职业筛选是原品级池的子集，筛空时仍回退原池；静态图不以单一角色裁掉候选。
+                foreach (var (grade, weight) in choose.Grades.Where(row => row.Weight > 0))
+                {
+                    var candidates = box.Family == 0 ? items.RuneCandidates(grade) : items.TalismanCandidates(grade);
+                    string runeSource = $"{source}/{id}:rune-box:{box.Family}:{box.Tier}:{grade}";
+                    if (candidates.Count == 0) { Error(runeSource, id, "rune_box_empty"); continue; }
+                    foreach (int candidate in candidates)
+                        // RuneBox沿独立容器消费者；普通袖珍罐的Main限制仍由原parent门禁处理。
+                        Edge(new(candidate, 1), runeSource, box.Family == 0 ? ItemKind.Rune : ItemKind.Talisman, freeSource: id);
+                }
+                return;
+            }
+            var packageTotals = new Dictionary<int, int>();
+            foreach (var row in booster.PackageRewards.IsDefault ? System.Collections.Immutable.ImmutableArray<BoosterReward>.Empty : booster.PackageRewards)
+            {
+                packageTotals[row.ItemId] = checked(packageTotals.GetValueOrDefault(row.ItemId) + row.Count);
+                if (items.Get(row.ItemId).Kind == ItemKind.Avatar && avatars.GetAvatar(row.ItemId) is { } avatar &&
+                    (avatar.PendingRule is not null || avatar.Abilities.IsEmpty))
+                { Error(source, row.ItemId, "package_avatar_ability_unavailable"); continue; }
+                Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade), $"{source}/{id}:package", parent: booster, freeSource: id);
+            }
+            foreach (var pool in booster.Pools)
+            {
+                if (pool.Draws <= 0 || !pool.Rewards.Any(row => row.Weight > 0))
+                { Error(source, id, "empty_or_invalid_pool"); continue; }
+                foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
+                {
+                    if (checked((long)row.Count * pool.Draws) > int.MaxValue)
+                    { Error(source, row.ItemId, "pool_reward_count_overflow"); continue; }
+                    Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade),
+                        $"{source}/{id}:pool:{pool.JobTag}:{pool.GrowType}:{pool.MinimumLevel}:{pool.MaximumLevel}", pool.RequiredKind, booster, freeSource: id);
+                }
+            }
+            if (booster.Selection is { } selection)
+            {
+                if (selection.SelectionCount < 0 || selection.Categories.IsEmpty)
+                    throw new InvalidDataException("selection_definition");
+                // 与真实 TrySelect 相同，同坐标只使用最后块；原生空坐标没有合法选择请求。
+                var effective = selection.Categories.GroupBy(row => (row.Category, row.Subcategory))
+                    .Select(group => group.Last()).ToArray();
+                if (!effective.Any(category => category.PendingRule is null && !category.Rewards.IsEmpty))
+                    Error(source, id, "selection_has_no_usable_category");
+                foreach (var category in effective)
+                {
+                    if (category.PendingRule is not null)
+                    { Error(source, id, category.PendingRule); continue; }
+                    if (category.Rewards.IsEmpty) continue;
+                    foreach (var row in category.Rewards)
+                    {
+                        if (!row.UpgradeChances.IsEmpty && (row.UpgradeChances.Any(chance => chance.Weight < 0) ||
+                            !row.UpgradeChances.Any(chance => chance.Weight > 0)))
+                        { Error(source, row.ItemId, "selection_upgrade_chances"); continue; }
+                        string selectedSource = $"{source}/{id}:selection:{category.Category}:{category.Subcategory}";
+                        Edge(new(row.ItemId, row.Count, row.Upgrade, row.Refinement, booster.CustomAbilityGrade),
+                            selectedSource, row.RequiredKind, booster, row.NativeCreatureSelectionRow, id);
+                        foreach (var upgrade in row.UpgradeChances.Where(chance => chance.Weight > 0))
+                            Edge(new(row.ItemId, row.Count, upgrade.Level, row.Refinement, booster.CustomAbilityGrade),
+                                selectedSource + ":upgrade", row.RequiredKind, booster, row.NativeCreatureSelectionRow, id);
+                    }
+                }
+            }
+            return;
+        }
+
         ImmutableHashSet<byte> CompoundOutput(AvatarCompoundJobDefinition definition, string part,
             AvatarCompoundCandidate candidate, bool target, string source)
         {
@@ -300,79 +378,43 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
                 .Any(type => template.StackableType.StartsWith(type, StringComparison.Ordinal));
             if (isBooster)
             {
-                if (!booster.Available) throw new InvalidDataException(booster.PendingRule ?? "booster_unavailable");
+                ExpandBooster(id, source, booster);
+                return;
+            }
+            // CMD251直接调用结果礼包的奖池，不把中间礼包创建到背包。
+            if (template.StackableType == "[random reward item] 0")
+            {
+                var effect = items.SharedEffect(id);
+                if (template.Kind != ItemKind.Consumable || template.UseForbidden || template.Jobs == 0 ||
+                    template.MinimumLevel > template.MaximumLevel || effect is null || effect.CoolTime < 0 ||
+                    effect.CooltimeMaintenance > 7 || effect.Outcomes.IsDefaultOrEmpty || effect.Outcomes.Length > 256 ||
+                    effect.Outcomes.Any(row => row.Weight < 0) || effect.Outcomes.Sum(row => (long)row.Weight) <= 0 ||
+                    effect.Outcomes.Where((row, index) => row.Index != index).Any())
+                    throw new InvalidDataException("shared_effect_definition");
                 if (attributePairs.Resolve(id, AttributePairEntryKind.Booster).Kind == AttributePairResolutionKind.RequiredUnavailable)
                     throw new InvalidDataException("attribute_pair_policy_unavailable");
-                if (booster.LotteryUseNeedItem is { } lotteryCost)
+                foreach (var outcome in effect.Outcomes.Where(row => row.Weight > 0))
                 {
-                    if (!booster.Lottery) throw new InvalidDataException("lottery_material_entry");
-                    MaterialInput(lotteryCost);
+                    // 实际消费者将非正引用作为空结果，只消费源并发布特效。
+                    if (outcome.BoosterId <= 0) continue;
+                    var invoked = boosters.Get(outcome.BoosterId);
+                    if (!invoked.Available || invoked.Lottery || invoked.RuneBox is not null ||
+                        invoked.Selection is not null || !invoked.PackageRewards.IsDefaultOrEmpty)
+                        throw new InvalidDataException("shared_effect_pool_definition:" + outcome.BoosterId);
+                    ExpandBooster(id, $"{source}/shared-outcome:{outcome.Index}/pool:{outcome.BoosterId}", invoked);
                 }
-                if (booster.RuneBox is { } box)
-                {
-                    if (!items.RuneRandomChoices().TryGet(box.Family, box.Tier, out var choose))
-                        throw new InvalidDataException("rune_box_table");
-                    // 本职业筛选是原品级池的子集，筛空时仍回退原池；静态图不以单一角色裁掉候选。
-                    foreach (var (grade, weight) in choose.Grades.Where(row => row.Weight > 0))
-                    {
-                        var candidates = box.Family == 0 ? items.RuneCandidates(grade) : items.TalismanCandidates(grade);
-                        string runeSource = $"{source}/{id}:rune-box:{box.Family}:{box.Tier}:{grade}";
-                        if (candidates.Count == 0) { Error(runeSource, id, "rune_box_empty"); continue; }
-                        foreach (int candidate in candidates)
-                            // RuneBox沿独立容器消费者；普通袖珍罐的Main限制仍由原parent门禁处理。
-                            Edge(new(candidate, 1), runeSource, box.Family == 0 ? ItemKind.Rune : ItemKind.Talisman, freeSource: id);
-                    }
-                    return;
-                }
-                var packageTotals = new Dictionary<int, int>();
-                foreach (var row in booster.PackageRewards.IsDefault ? System.Collections.Immutable.ImmutableArray<BoosterReward>.Empty : booster.PackageRewards)
-                {
-                    packageTotals[row.ItemId] = checked(packageTotals.GetValueOrDefault(row.ItemId) + row.Count);
-                    if (items.Get(row.ItemId).Kind == ItemKind.Avatar && avatars.GetAvatar(row.ItemId) is { } avatar &&
-                        (avatar.PendingRule is not null || avatar.Abilities.IsEmpty))
-                    { Error(source, row.ItemId, "package_avatar_ability_unavailable"); continue; }
-                    Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade), $"{source}/{id}:package", parent: booster, freeSource: id);
-                }
-                foreach (var pool in booster.Pools)
-                {
-                    if (pool.Draws <= 0 || !pool.Rewards.Any(row => row.Weight > 0))
-                    { Error(source, id, "empty_or_invalid_pool"); continue; }
-                    foreach (var row in pool.Rewards.Where(row => row.Weight > 0 && !row.EmptyOutcome))
-                    {
-                        if (checked((long)row.Count * pool.Draws) > int.MaxValue)
-                        { Error(source, row.ItemId, "pool_reward_count_overflow"); continue; }
-                        Edge(new(row.ItemId, row.Count, CustomAbilityGrade: booster.CustomAbilityGrade),
-                            $"{source}/{id}:pool:{pool.JobTag}:{pool.GrowType}:{pool.MinimumLevel}:{pool.MaximumLevel}", pool.RequiredKind, booster, freeSource: id);
-                    }
-                }
-                if (booster.Selection is { } selection)
-                {
-                    if (selection.SelectionCount < 0 || selection.Categories.IsEmpty)
-                        throw new InvalidDataException("selection_definition");
-                    // 与真实 TrySelect 相同，同坐标只使用最后块；原生空坐标没有合法选择请求。
-                    var effective = selection.Categories.GroupBy(row => (row.Category, row.Subcategory))
-                        .Select(group => group.Last()).ToArray();
-                    if (!effective.Any(category => category.PendingRule is null && !category.Rewards.IsEmpty))
-                        Error(source, id, "selection_has_no_usable_category");
-                    foreach (var category in effective)
-                    {
-                        if (category.PendingRule is not null)
-                        { Error(source, id, category.PendingRule); continue; }
-                        if (category.Rewards.IsEmpty) continue;
-                        foreach (var row in category.Rewards)
-                        {
-                            if (!row.UpgradeChances.IsEmpty && (row.UpgradeChances.Any(chance => chance.Weight < 0) ||
-                                !row.UpgradeChances.Any(chance => chance.Weight > 0)))
-                            { Error(source, row.ItemId, "selection_upgrade_chances"); continue; }
-                            string selectedSource = $"{source}/{id}:selection:{category.Category}:{category.Subcategory}";
-                            Edge(new(row.ItemId, row.Count, row.Upgrade, row.Refinement, booster.CustomAbilityGrade),
-                                selectedSource, row.RequiredKind, booster, row.NativeCreatureSelectionRow, id);
-                            foreach (var upgrade in row.UpgradeChances.Where(chance => chance.Weight > 0))
-                                Edge(new(row.ItemId, row.Count, upgrade.Level, row.Refinement, booster.CustomAbilityGrade),
-                                    selectedSource + ":upgrade", row.RequiredKind, booster, row.NativeCreatureSelectionRow, id);
-                        }
-                    }
-                }
+                return;
+            }
+            // 普通饲料沿CMD44宠物消费者，不借同族成长道具或经验胶囊授予资格。
+            if (template.StackableType == "[feed] 1")
+            {
+                var feed = creatures.Feed(id);
+                if (template.Kind != ItemKind.CreatureConsumable || feed is null || feed.ItemId != id ||
+                    feed.MinimumLevel < 0 || feed.CoolTime < 0 || feed.Satiety is <= 0 or > 100 ||
+                    feed.EffectSeconds < 0 || feed.SkillRecoveryRate is < -100 or > 1000)
+                    throw new InvalidDataException("creature_feed_definition");
+                // Session在喂养前读取同源冷却组；缺省负ID合法，显式负组由目录拒绝。
+                _ = creatures.CooldownGroup(id);
                 return;
             }
             if (items.CashShopCouponKey(id) is { } coupon)
