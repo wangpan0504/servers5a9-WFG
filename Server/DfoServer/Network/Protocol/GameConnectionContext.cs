@@ -22,6 +22,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal Func<Task>? AfterDispatch { get; set; }
     internal DfoServer.Network.Projection.ServerEventProjection? ServerEvents { get; set; }
     internal DfoServer.Network.Projection.DailyAttendanceProjection? DailyAttendance { get; set; }
+    internal DfoServer.Network.Projection.MonsterMockBattleProjection? MonsterMockBattle { get; set; }
     internal DfoServer.Network.Projection.Strongway2019Projection? Strongway2019 { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。

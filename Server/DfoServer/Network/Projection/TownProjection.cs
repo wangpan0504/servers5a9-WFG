@@ -120,6 +120,13 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         if (onlineEnabled) activeEvents.Add(ServerEventService.PcRoomTimePointId);
         if (attendanceEnabled) activeEvents.Add(ServerEventService.DailyAttendanceId);
         if (weeklyEnabled) activeEvents.Add(ServerEventService.WeeklyAttendanceId);
+        var eventValues = new Dictionary<ushort, IReadOnlyList<uint>>();
+        if (nolanVisible && context.MonsterMockBattle?.Enabled == true)
+        {
+            activeEvents.Add(ServerEventService.NolanVisibilityId);
+            // 026BEAD5的12项数值经004721B0将第二项写入活动体力上限；1766不含该上限。
+            eventValues[ServerEventService.NolanVisibilityId] = [0, Game.MonsterMockBattle.MockBattleAccount.HeartLimit, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        }
         if (battlePass) activeEvents.Add(BattlePassEventId);
         var firstValues = new Dictionary<ushort, uint>();
         if (battlePass) firstValues[BattlePassEventId] = checked((uint)BattlePassMissions!.End.ToUnixTimeSeconds());
@@ -128,7 +135,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             activeEvents: activeEvents,
             designPages: designPages,
             firstValues: firstValues,
-            includeSeriaLuck: seriaLuck);
+            includeSeriaLuck: seriaLuck,
+            eventValues: eventValues);
         string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
         if (designPages.Count != 0)
             await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);

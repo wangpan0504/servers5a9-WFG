@@ -179,6 +179,8 @@ internal sealed partial class GameSession
             if (activity?.Active != true) return RejectFormal("epic-road-event-closed");
             requiredEvent = new(activity.Schedule, timeProvider ?? TimeProvider.System);
         }
+        if (monsterMockBattle?.ContainsDungeon(dungeonId) == true)
+            return RejectFormal("monster-mock-battle-admission-required");
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
@@ -781,6 +783,8 @@ internal sealed partial class GameSession
                     : entry.IsTournament && entry.BasisLevel is { } tournamentLevel
                     ? DungeonTournamentPlan.CreateRoomPlan(rooms,room,rooms.ReadTournamentSource(map),mapSeed,expected.Id,checked((ushort)next),
                         tournamentLevel,entry.PlayerTeam)
+                    : entry.MockBattle is { } mockBattle
+                    ? DungeonMonsterPlan.FromMockBattleRoom(room, expected.Id, checked((ushort)next), mockBattle, mockBattle.Catalog)
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
@@ -1139,7 +1143,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (prepared.RequiredEvent is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1149,7 +1153,9 @@ internal sealed partial class GameSession
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
                         prepared.Weekly,installing.GriefAdmission) { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
-                RequiredEvent = prepared.RequiredEvent ?? Strongway2019RequiredEvent(installing.Strongway2019Admission) });
+                MockBattle = installing.Entry.MockBattle,
+                RequiredEvent = prepared.RequiredEvent ?? (installing.Entry.MockBattle is { } mockEntry ? new(mockEntry.Schedule, timeProvider ?? TimeProvider.System) :
+                    Strongway2019RequiredEvent(installing.Strongway2019Admission)) });
             }
             catch (DungeonEventAdmissionRejectedException)
             {

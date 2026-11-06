@@ -267,6 +267,10 @@ internal sealed partial class SinglePlayerDungeonRun
                 monster.ObjectKey == key && monster.AiCharacter is not null && monster.IsFriendly && !monster.CanReportDeath));
         room?.Dead.Add(key);
     }
+    internal bool MockBattleDefeated => entry.MockBattle is not null &&
+        current.Plan.Monsters.Any(monster => monster.MockBattleSpawn is { Team: 0 }) &&
+        current.Plan.Monsters.Where(monster => monster.MockBattleSpawn is { Team: 0 })
+            .All(monster => current.Dead.Contains(monster.ObjectKey));
     SinglePlayerDungeonPhase phase = SinglePlayerDungeonPhase.Loading;
     // 截止瞬间停止新战斗与移动，不依赖后台任务何时取得命令门；已准备的事务仍由原回执确认。
     public SinglePlayerDungeonPhase Phase
@@ -299,7 +303,7 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     public bool HasPendingSettlement => pendingSettlement is not null || pendingAltarSettlement is not null || pendingDespairClear is not null;
     // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
-    public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
+    public int CreatureExperiencePoints => entry.MockBattle is not null || entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
         ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
@@ -501,7 +505,9 @@ internal sealed partial class SinglePlayerDungeonRun
             try
             {
                 // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。伴侣行按同一放行集合复验。
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
+                resourcePlan = entry.MockBattle is { } mock
+                    ? DungeonMonsterPlan.FromMockBattleRoom(plan.Room, entry.CharacterId, plan.Monsters[0].ObjectKey, mock, mock.Catalog)
+                    : DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
                     entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
@@ -532,6 +538,7 @@ internal sealed partial class SinglePlayerDungeonRun
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
                 pair.First.SourceOrdinal != pair.Second.SourceOrdinal || pair.First.Source != pair.Second.Source ||
                 pair.First.AiCharacter != pair.Second.AiCharacter || pair.First.MonsterId != pair.Second.MonsterId ||
+                pair.First.MockBattleSpawn != pair.Second.MockBattleSpawn ||
                 pair.First.CandidateLevel != pair.Second.CandidateLevel ||
                 pair.First.SpawnType != pair.Second.SpawnType && !AllowedChampionPromotion(pair.First, pair.Second, entry) ||
                 pair.First.IsDummyMapBoss != pair.Second.IsDummyMapBoss ||
@@ -841,7 +848,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (pendingDeath is not null)
             return SameDeath(pendingDeath.Death, confirmed)
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
-        if (!Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
+        if (MockBattleDefeated || !Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
             HasPendingSettlement || committedAltarSettlement is not null || committedDespairClear is not null || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
             CurrentLivingMonster(confirmed.MonsterKey) is null || !CanReportTournamentDeath(confirmed.MonsterKey))

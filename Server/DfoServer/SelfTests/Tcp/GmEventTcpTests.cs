@@ -34,6 +34,7 @@ internal static class GmEventTcpTests
             .ToDictionary(row => row.GetProperty("id").GetInt32());
         That(definitions.TryGetValue(64, out var gold) && gold.GetProperty("supportsSchedule").GetBoolean() &&
             definitions.TryGetValue(2532, out var nolan) && !nolan.GetProperty("supportsSchedule").GetBoolean() &&
+            nolan.GetProperty("name").GetString() == "阿拉德谋略战" && nolan.GetProperty("defaultState").GetString() == "默认开启" &&
             definitions.TryGetValue(228, out var onlineGift) && onlineGift.GetProperty("name").GetString() == "累积在线得好礼" &&
             onlineGift.GetProperty("supportsControl").GetBoolean() && !onlineGift.GetProperty("supportsSchedule").GetBoolean() &&
             onlineGift.GetProperty("defaultState").GetString() == "默认开启" &&

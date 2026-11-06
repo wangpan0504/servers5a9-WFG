@@ -179,7 +179,8 @@ internal static partial class CashShopTcpTests
         => AssertPromotionNativeEvents(payload, (long?)count, (bool?)disabled, extraEvents);
 
     internal static void AssertPromotionNativeEvents(byte[] payload, long? count, bool? disabled, IReadOnlyList<ushort> extraEvents,
-        long? unavailableCount = null, IReadOnlyList<ushort>? activeEvents = null, uint? battlePassEnd = null)
+        long? unavailableCount = null, IReadOnlyList<ushort>? activeEvents = null, uint? battlePassEnd = null,
+        IReadOnlyDictionary<ushort, IReadOnlyList<uint>>? eventValues = null)
     {
         activeEvents ??= [2395];
         using var input = new MemoryStream(payload);
@@ -270,7 +271,8 @@ internal static partial class CashShopTcpTests
         {
             That(reader.ReadUInt16() == id, "原active tail活动身份未丢失");
             for (int index = 0; index < 12; index++)
-                That(reader.ReadUInt32() == (id == 2037 && index == 0 ? 8u : 0u), "原active tail完整12个数值逐字段保留");
+                That(reader.ReadUInt32() == (eventValues is not null && eventValues.TryGetValue(id, out var values)
+                    ? values[index] : id == 2037 && index == 0 ? 8u : 0u), "原active tail完整12个数值逐字段保留");
         }
         if (battlePassEnd is uint end)
         {

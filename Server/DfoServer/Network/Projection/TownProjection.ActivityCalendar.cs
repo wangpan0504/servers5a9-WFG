@@ -16,7 +16,7 @@ internal sealed partial class TownProjection
         // 不渝之咏没有活动页登记，仍并入同一槽序，供随后的 14 增量使用。
         int[] calendarIds = pages.Where(page => page.Visible).SelectMany(page => page.ShowItemIds).Distinct().Order()
             .Where(id => id > 0 && items.Get(id).AccountMaterial is not null).ToArray();
-        int[] ids = AccountMaterialProjectionIds(pages);
+        int[] ids = AccountMaterialProjectionIds(context, pages);
         var previous = context.ActivityCalendarItems;
         bool same = previous is { } current && current.Epoch == epoch && current.ItemIds.SequenceEqual(ids);
         if (ids.Length == 0 && previous is not { ItemIds.Length: > 0 }) return;
@@ -34,13 +34,17 @@ internal sealed partial class TownProjection
     }
 
     // 活动登记与攻坚额度材料去重后按模板升序固定槽；零余额不占全量包，增加时仍用原槽。
-    int[] AccountMaterialProjectionIds(IReadOnlyList<EventInfoDesignPage> pages)
+    int[] AccountMaterialProjectionIds(GameConnectionContext context, IReadOnlyList<EventInfoDesignPage> pages)
     {
         var selected = new HashSet<int>();
         foreach (int id in pages.Where(page => page.Visible).SelectMany(page => page.ShowItemIds))
             if (id > 0 && items!.Get(id).AccountMaterial is not null) selected.Add(id);
         foreach (int id in items!.RaidAccountMaterialLimits.Keys)
             if (items.TryGet(id, out var template) && template.AccountMaterial is not null) selected.Add(id);
+        // 谋略战召唤界面直接查询list45；券和硬币并入共享槽序，领取、消耗及重连沿同一投影。
+        if (context.MonsterMockBattle is { Enabled: true } battle)
+            foreach (int id in battle.AccountMaterialIds)
+                if (items.TryGet(id, out var template) && template.AccountMaterial is not null) selected.Add(id);
         return selected.Order().ToArray();
     }
 

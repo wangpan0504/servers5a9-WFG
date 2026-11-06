@@ -99,6 +99,7 @@ internal sealed partial class CharacterRepository
         "account_evildom_war_guides",
         "account_fiendwar_guides",
         "account_material_audit",
+        "account_monster_mock_battle_runs",
         "account_pcroom_timepoint_days",
         "account_pcroom_timepoint_segments",
         "account_pcroom_timepoint_claims",

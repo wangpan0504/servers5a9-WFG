@@ -249,6 +249,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 await (inventoryProjection ?? throw new InvalidOperationException("次元裂缝奖励缺少库存投影")).RefreshAsync(context, crackInventory);
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
+        if (context.MonsterMockBattle is { } mockBattle) await mockBattle.BattleInfoAsync(receipt, spawn: false);
         if (cosmo) await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
         guildEconomy?.PublishDungeonMileage(context.Session, result.GuildMileageGuildId != 0
             ? result.GuildMileageGuildId : result.GuildDungeon?.GuildId ?? 0);

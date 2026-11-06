@@ -116,7 +116,8 @@ internal static class ServerRuntime
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false,
         Random? fiendwarMazeRandom = null, CashShopPromotionConfiguration? promotionConfiguration = null,
-        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false, DungeonCatalog? dungeonCatalog = null)
+        Func<int, ItemTemplate>? promotionItemResolver = null, bool epicRoad2019Enabled = false, DungeonCatalog? dungeonCatalog = null,
+        bool enableMonsterMockBattle = true)
     {
         quests = quests.WithCreatures(itemResources.Creatures).WithItems(itemResources.Items);
         var questStages = QuestStageGraph.Build(quests);
@@ -300,6 +301,20 @@ internal static class ServerRuntime
             weeklyAttendance = new(repository, weeklyCatalog, itemResources.Items, events, debugSettings, clock);
             log.Write("startup", new { Stage = "Weekly attendance", weeklyCatalog.Weeks,
                 Resource = GameWorld.OnlineEvents.WeeklyAttendanceCatalog.ResourcePath });
+        }
+        Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null;
+        if (enableMonsterMockBattle && pvf.Contains(GameWorld.MonsterMockBattle.MonsterMockBattleCatalog.ResourcePath))
+        {
+            var mockCatalog = GameWorld.MonsterMockBattle.MonsterMockBattleCatalog.Load(pvf);
+            string settingsPath = Path.Combine(options.DataDirectory, "MonsterMockBattle", "settings.json");
+            var mockSettings = File.Exists(settingsPath)
+                ? System.Text.Json.JsonSerializer.Deserialize<Game.MonsterMockBattle.MockBattleSettings>(File.ReadAllText(settingsPath),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ??
+                    throw new InvalidDataException("怪物模拟战配置为空") : new Game.MonsterMockBattle.MockBattleSettings();
+            monsterMockBattle = new(repository, mockCatalog, mockSettings, itemResources.Items, itemResources.GoldLimits,
+                itemResources.EpicPieces, events, clock, debugSettings: debugSettings);
+            log.Write("startup", new { Stage = "Monster mock battle", Cards = mockCatalog.Cards.Count,
+                Worlds = mockCatalog.Worlds.Count, SettingsFile = File.Exists(settingsPath) });
         }
         if (pvf.Contains(GameWorld.OnlineEvents.PcRoomTimePointCatalog.ResourcePath))
         {
@@ -1061,11 +1076,12 @@ internal static class ServerRuntime
         if (pcRoomTimePoint is not null) new PcRoomTimePointHandler(log).Register(commands);
         if (dailyAttendance is not null) new DailyAttendanceHandler(log).Register(commands);
         if (weeklyAttendance is not null) new WeeklyAttendanceHandler().Register(commands);
+        if (monsterMockBattle is not null) new MonsterMockBattleHandler(log).Register(commands);
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics, endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, weeklyAttendance: weeklyAttendance);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin,guildNpcBenefits: guildNpcBenefitService, trade: tradeHandler, pvpMissions: pvpMissions, missionBook: pvpMissionBook, serverEvents: events, promotionStore: repository, settingsProjection: settingsProjection, consumables: itemResources.RecoveryConsumables, springTreasure: springTreasure, strongway2019: strongwayCatalog, strongway2019AntiEvil: strongwayAntiEvil, strongwayMatching: strongwayMatching, strongwayProjection: strongwayProjection, pcRoom: itemResources.PcRoom, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics, endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, weeklyAttendance: weeklyAttendance, monsterMockBattle: monsterMockBattle);
         if (options.EnableHostedDungeonEligibility)
             game.AttachHostedDungeonEligibility(new HostedDungeonEligibilityCoordinator(
                 new HostedDungeonEligibilityOptions

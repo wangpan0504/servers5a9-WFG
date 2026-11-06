@@ -84,6 +84,7 @@ internal sealed record DungeonMaze(
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     public DungeonMap? WeddingCoupleRoom { get; init; }
+    public DungeonMap? MockBattleRoom { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&

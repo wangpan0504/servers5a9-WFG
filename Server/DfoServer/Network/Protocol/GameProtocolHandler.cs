@@ -58,7 +58,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
     DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
-    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null) : IConnectionProtocol
+    DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null,
+    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -137,7 +138,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
             directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
-            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance);
+            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, monsterMockBattle: monsterMockBattle);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
@@ -175,6 +176,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (dailyAttendance is not null) context.DailyAttendance = new(context, dailyAttendance, time ?? TimeProvider.System, log);
         if (pcRoomTimePoint is not null) context.PcRoomTimePoint = new(context, pcRoomTimePoint, projection, log, time, SqliteBusyRetry.IsBusy);
         if (weeklyAttendance is not null) context.WeeklyAttendance = new(context, weeklyAttendance, projection, log);
+        if (monsterMockBattle is not null && inventory is not null)
+            context.MonsterMockBattle = new(context, monsterMockBattle, inventory, projection, log);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);

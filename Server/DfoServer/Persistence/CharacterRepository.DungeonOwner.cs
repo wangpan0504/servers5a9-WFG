@@ -205,6 +205,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         CommitTagEvildomAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitImperialArenaAdmission(db, tx, owner, expected, charge, checked(revision + 1));
+        CommitMockBattleAdmission(db, tx, owner, expected, charge);
         CommitHopeAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));

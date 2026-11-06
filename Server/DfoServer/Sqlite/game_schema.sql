@@ -2611,3 +2611,23 @@ CREATE TABLE account_weekly_attendance(
   state TEXT NOT NULL CHECK(json_valid(state) AND json_type(state)='object'),
   PRIMARY KEY(account,season_start)
 ) STRICT;
+
+CREATE TABLE account_monster_mock_battle(
+  account TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  display_name TEXT NOT NULL,
+  lineup_stars INTEGER NOT NULL CHECK(lineup_stars BETWEEN 0 AND 25),
+  state TEXT NOT NULL CHECK(json_valid(state) AND json_type(state)='object')
+) STRICT;
+CREATE INDEX account_mock_battle_matching ON account_monster_mock_battle(lineup_stars,account);
+CREATE INDEX account_mock_battle_name ON account_monster_mock_battle(display_name);
+CREATE TABLE account_monster_mock_battle_runs(
+  run_id TEXT PRIMARY KEY CHECK(length(run_id)=32),
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  world_id INTEGER NOT NULL CHECK(world_id>=0),
+  opened_at INTEGER NOT NULL CHECK(opened_at>=0),
+  paid_revision INTEGER NOT NULL CHECK(paid_revision>0),
+  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2)
+) STRICT;
+CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_runs(account) WHERE state=0;

@@ -140,6 +140,10 @@ internal sealed partial class GameSession
         if (capture.Dungeon?.Entry.SuppressOrdinaryResultBoard == true)
             return new(DungeonRunOutcome.Rejected);
         Events.DailyAttendancePlan? attendance = null;
+        DfoServer.Game.MonsterMockBattle.MockBattleVictory? mockVictory = null;
+        if (!capture.Prepared && capture.ValidReport && capture.Character is { } mockCharacter &&
+            capture.Dungeon is { Entry.MockBattle: { } mockAdmission, Run.ClearFact: not null } mockDungeon && monsterMockBattle is not null)
+            mockVictory = monsterMockBattle.PrepareVictory(owner, mockCharacter, mockDungeon.Run.Snapshot.Identity, mockAdmission);
         uint attendanceMailId = 0;
         if (!capture.Prepared && capture.ValidReport && capture.Character is { } attendee && capture.Dungeon is { } attendanceDungeon &&
             dailyAttendance is not null && Events.DailyAttendanceService.IsRecommended(attendanceDungeon.Entry,
@@ -234,7 +238,7 @@ internal sealed partial class GameSession
             ? AncientGateProgression.Prepare(Selected!.Inventory, IncountNow()) : null);
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
-        bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
+        bool noClearCards = dungeon.Entry.MockBattle is not null || dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
             dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
         DungeonCardReward? normalCard = null;
         var settlementNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
@@ -290,6 +294,7 @@ internal sealed partial class GameSession
         }
         prepared.Pending.FreezeGuildContribution(dungeon.GuildMemberships, contributionSource, guildDungeons, guildReward);
         prepared.Pending.FreezeDailyAttendance(attendance);
+        prepared.Pending.FreezeMockBattle(mockVictory);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
             new(dungeon.ClearTimeMilliseconds, rankPoint, finalRankGrade, dungeon.KillExperienceTotal)
             {
@@ -334,9 +339,9 @@ internal sealed partial class GameSession
             {
                 // 幸运星只按 ±5 等级区间；冒险团「推荐地下城通关」另按 95 规则加入剧情路线、地轨中心与哈林全图，团本排除。
                 var definition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
-                bool luckyStar = DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
+                bool luckyStar = dungeon.Entry.MockBattle is null && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, expected.Level);
                 settlement.LuckyStarEligible = luckyStar && luckyStarLimit > 0;
-                bool recommendedClear = DungeonLuckyStarPolicy.IsRecommendedClear(
+                bool recommendedClear = dungeon.Entry.MockBattle is null && DungeonLuckyStarPolicy.IsRecommendedClear(
                     definition, dungeon.Entry.QuestId, dungeon.Entry.RouteQuestId, expected.Level);
                 commit = repository.CommitDungeonSettlement(owner, expected, dungeon.Run, prepared.Pending, growth,
                     grantLuckyStar: luckyStar, luckyStarLimit: luckyStarLimit, recommendedClear: recommendedClear);

@@ -394,7 +394,7 @@ internal static class DungeonPackets
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(monsters);
-        int actorCount = checked(monsters.Monsters.Count(monster => monster.HellWave is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
+        int actorCount = checked(monsters.Monsters.Count(monster => monster.HellWave is null && monster.MockBattleSpawn is null) + monsters.SpecialObjects.Count + monsters.HellWaves.Count);
         if (monsters.Room.Map != plan.StartMap || actorCount > byte.MaxValue)
             throw new InvalidDataException("怪物计划与房间不匹配或超过通知数量范围");
         byte[] empty = StartMap(plan, seed, operation, payload);
@@ -406,7 +406,7 @@ internal static class DungeonPackets
         using var writer = new BinaryWriter(stream);
         writer.Write(empty.AsSpan(0, 18));
         writer.Write(checked((byte)actorCount));
-        foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null))
+        foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null && monster.MockBattleSpawn is null))
         {
             if (monster.BattleLevel is < 1 or > byte.MaxValue)
                 throw new NotSupportedException("怪物生成等级超出单字节范围");

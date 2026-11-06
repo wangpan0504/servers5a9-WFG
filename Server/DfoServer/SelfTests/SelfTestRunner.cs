@@ -18,6 +18,7 @@ internal static class SelfTestRunner
         PreyTeamProtocolTests.RunCore();
         HelperSafetyTests.RunCore();
         WeeklyAttendanceTests.RunCore();
+        MonsterMockBattleTests.RunCore();
         HelperAssetSafetyTests.RunCore();
         await HelperAssetSafetyTests.RunProtocolAsync();
         MapGeometryTests.RunCore();
