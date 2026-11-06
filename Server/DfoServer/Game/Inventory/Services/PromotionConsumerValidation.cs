@@ -15,7 +15,7 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
     EnhancementCatalog enhancements, RecoveryConsumableCatalog consumables,
     AmplificationCatalog amplifications, AmplifyUpgradeCatalog amplifyUpgrades,
     SpringTreasureAvatarCatalog? springAvatars = null, SpringTreasureDropPolicy? springDrops = null,
-    CreatureEggCatalog? creatureEggs = null)
+    CreatureEggCatalog? creatureEggs = null, TeleportCatalog? teleports = null)
 {
     public string? Validate(PromotionRules rules)
     {
@@ -417,6 +417,15 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             if (items.LevelUpByTable(id) is { } levelTable)
             {
                 if (levelTable.Item != template) throw new InvalidDataException("level_up_by_table_definition");
+                return;
+            }
+            if (template.StackableType == "[teleport potion] 0")
+            {
+                if (teleports is null || teleports.Potion(id) is not { } potion)
+                    throw new InvalidDataException("teleport_potion_definition");
+                if (potion.CoolTime <= 0 || template.Kind != ItemKind.Consumable || template.UseForbidden ||
+                    template.MinimumLevel != potion.MinimumLevel)
+                    throw new InvalidDataException("teleport_potion_definition");
                 return;
             }
             if (template.OpensCreatureSkinSlot || template.OpensAuraSkinSlot)
