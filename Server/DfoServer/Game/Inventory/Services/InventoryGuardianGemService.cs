@@ -9,6 +9,12 @@ internal static class InventoryGuardianGemService
     public const int SocketCount = 4;
     public const int BaseItemId = 89999;
 
+    // 零key表示空孔，匹配客户端按有符号16位读取；实例和其它孔的资格仍由Plan校验。
+    public static bool SupportsDefinition(int itemId, ItemTemplate template) =>
+        itemId > BaseItemId && (long)itemId - BaseItemId <= short.MaxValue &&
+        template.Id == itemId && template.Kind == ItemKind.GuardianGem &&
+        template.GuardianGemEffects.Count != 0;
+
     public static int ItemId(ulong keys, int socket)
     {
         if (socket is < 0 or >= SocketCount)
@@ -34,7 +40,7 @@ internal static class InventoryGuardianGemService
             material.Core.Count <= 0 || material.Core.EquipmentLockId != 0 || material.IsExpired(utcSeconds))
             return InventoryResult.Reject(0x12);
         var template = catalog.Get(material.Core.ItemId);
-        if (template.Kind != ItemKind.GuardianGem || template.GuardianGemEffects.Count == 0)
+        if (!SupportsDefinition(material.Core.ItemId, template))
             return InventoryResult.Reject(0x12);
         for (int socket = 0; socket < SocketCount; socket++)
         {
@@ -47,7 +53,7 @@ internal static class InventoryGuardianGemService
             if (id <= BaseItemId)
                 return InventoryResult.Reject(4);
             var existing = catalog.Get(id);
-            if (existing.Kind != ItemKind.GuardianGem || existing.GuardianGemEffects.Count == 0)
+            if (!SupportsDefinition(id, existing))
                 return InventoryResult.Reject(4);
             if (template.GuardianGemEffects.Overlaps(existing.GuardianGemEffects))
                 return InventoryResult.Reject(0x12);
