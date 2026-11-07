@@ -695,6 +695,7 @@ internal sealed partial class ItemCatalog
             UsableExpired = isEquipment && text.Has("usable expired item"),
             PartSetIds = partSetIds,
             QuestItemDropRateBonus = isEquipment || kind == ItemKind.Rune ? EquipmentQuestDropBonusFile.Read(text) : 0,
+            UpgradeBonuses = isEquipment || kind == ItemKind.Rune ? EquipmentUpgradeBonuses.Read(text) : default,
             QuestItemDropSetBonuses = isEquipment && questDropSets is not null
                 ? partSetIds.Where(setId => setId > 0).SelectMany(setId => questDropSets.Get(setId)).ToImmutableArray() : [],
             UsableWorlds = GameWorld.Items.StackableUseRules.ParseWorlds(ItemUseFields.UsableWorlds(text)),

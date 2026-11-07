@@ -91,8 +91,11 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
                 successBonus.Weight);
         }
+        var equipmentBonus = lucky ? default : EquipmentUpgradeBonusPolicy.Capture(character, items,
+            reinforce ? EquipmentUpgradeKind.Reinforcement : EquipmentUpgradeKind.Amplification, now, includeCost: !portable);
+        if (!lucky) failureWeight = 100000 - equipmentBonus.SuccessWeight(100000 - failureWeight, 100000);
         int count = portable || lucky ? 1 : step.MaterialCount;
-        int gold = portable || lucky ? 0 : rules.Gold(template, old);
+        int gold = portable || lucky ? 0 : equipmentBonus.GoldCost(rules.Gold(template, old));
         int available = wallet ? checked((int)Math.Min(int.MaxValue, CurrencyWallet.Get(before, walletKind!.Value))) : source!.Core.Count;
         if (available < count || before.Gold < gold)
             return InventoryResult.Reject(RejectCode);
@@ -163,7 +166,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             refunds = [];
         }
         after.Validate(allocating: true);
-        long? deadline = new[] { source?.ExpireTime ?? 0, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0 }
+        long? deadline = new[] { source?.ExpireTime ?? 0, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0,
+            equipmentBonus.ExpiresAt ?? 0 }
             .Where(value => value > 0).Select(value => (long?)value).Min();
         int remaining = wallet ? checked((int)CurrencyWallet.Get(paid, walletKind!.Value)) : source!.Core.Count - count;
         string reason = reinforce

@@ -304,6 +304,7 @@ internal static class SelfTestRunner
         GuildTrainingTests.RunCore();
         GuildNpcEmblemConsumptionTests.RunCore();
         DfoServer.Testing.Inventory.GuildNpcEnhancementBonusTests.RunCore();
+        EquipmentUpgradeBonusTests.RunCore();
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunCore();
         GuildExperienceGiftTests.RunCore();
         GuildDungeonScrollTests.RunCore();
