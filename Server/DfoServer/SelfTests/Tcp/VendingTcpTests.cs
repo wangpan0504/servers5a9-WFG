@@ -112,7 +112,9 @@ internal static class VendingTcpTests
                             "契约记录为6加ID数量，并由同事务延长期限");
                     else if (CurrencyWallet.RewardKind(id) is { } kind)
                         That(CurrencyWallet.Get(after.Inventory, kind) - CurrencyWallet.Get(before.Inventory, kind) == count &&
-                            ack.Length == 149 && U16(ack, 23) == 1 && U32(ack, 32) == count, "虚拟货币按本次增量到账");
+                            ack.Length == 149 && U16(ack, 23) == 1 && U32(ack, 32) == CurrencyWallet.Get(after.Inventory, kind) &&
+                            U32(ack, 32) - CurrencyWallet.Get(before.Inventory, kind) == count,
+                            "虚拟货币按本次增量到账，记录总余额供原生求差展示");
                     else
                     {
                         That(after.Inventory.Items.Where(item => item.Core.ItemId == id).Sum(item => item.Core.Count) -
@@ -120,6 +122,19 @@ internal static class VendingTcpTests
                             "真实网络抽取后完整实体奖励到账");
                         That(U16(ack, 23) > 0 && ack.Length == 25 + U16(ack, 23) * 124 && U32(ack, 28) == id,
                             "奖励列表每行含容器字节和本版123B物品记录");
+                        for (int row = 0; row < U16(ack, 23); row++)
+                        {
+                            int at = 25 + row * 124;
+                            var position = new InventorySlot((InventoryListType)ack[at], checked((short)U16(ack, at + 1)));
+                            var stored = after.Inventory.Find(position)!;
+                            That(U32(ack, at + 7) == stored.Core.Value,
+                                "实际奖励行使用已提交总数，原生展示不把增量误当总数");
+                            if (stored.Core.IsStackable)
+                            {
+                                int oldCount = before.Inventory.Find(position)?.Core.Count ?? 0;
+                                That(U32(ack, at + 7) > oldCount, "原生总数比较产生正差，奖励弹窗有可展示数量");
+                            }
+                        }
                     }
                 }
                 string exhausted = State();
