@@ -54,7 +54,8 @@ internal sealed record MonsterCardUpgradeFact(Guid Id, DateTimeOffset PlannedAt,
                 if (current is null || current.Core.Count < item.Core.Count ||
                     current != (item with { Core = item.Core with { Value = current.Core.Value } })) return false;
                 long delta = current.Core.Count - item.Core.Count;
-                if (delta != 0 && (current.Core with { Value = 1 }) != upgraded.Core) return false;
+                // 已有堆的UID、位置和完整核心已在上方复验；奖励合堆沿公共规则保留该堆的排序锁。
+                if (delta != 0 && (current.Core with { Value = 1, SortLockFlag = upgraded.Core.SortLockFlag }) != upgraded.Core) return false;
                 granted += delta;
             }
             foreach (var item in After.Items.Where(item => !remaining.Any(old => old.Uid == item.Uid)))

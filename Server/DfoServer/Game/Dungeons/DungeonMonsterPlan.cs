@@ -117,6 +117,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         var result = new List<DungeonHellWaveMonster>();
         foreach (var wave in waves)
         {
+            if (wave.Type >= 5 && SupportCompanionResources.IsBlocked(wave.MonsterId)) continue;
             if (wave.Type >= 5 && apcIndex >= 128) throw new InvalidDataException("深渊APC超过客户端独立索引容量");
             if (next == characterId) next++;
             if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("深渊波次 object key 超出 ushort 范围");
@@ -202,7 +203,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 expected.MonsterId != opponent.Code || expected.CandidateLevel != opponent.Level ||
                 expected.SpawnType != opponent.Type || !expected.CanReportDeath ||
                 (expected.AiCharacter is null) != (candidate is null) ||
-                candidate is not null && (candidate.Id != member.Code || candidate.Faction != "[monster]" ||
+                candidate is not null && (candidate.IsSuppressedCompanion || candidate.Id != member.Code || candidate.Faction != "[monster]" ||
                     expected.AiCharacter is not { } actor || actor.Path != candidate.Path || actor.Level != candidate.Level) ||
                 expected.IsBoss != (round == DungeonTournamentPlan.RoundCount - 1) ||
                 !opponentOrdinals.Add((expected.SourceOrdinal, expected.AiCharacter is not null)) ||
@@ -304,6 +305,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         for (int index = 0; index < room.AiCharacters.Count; index++)
         {
             var source = room.AiCharacters[index];
+            if (source.IsSuppressedCompanion) continue;
             // 专用伴侣只在当前放行集合内发送；集合由入场计划冻结，只有起始房间传入集合。
             // 来源明确的旧5409不再放行，等资源差量原位迁到9986；未知5409保持原生演员合同。
             // 丢弃时不占用对象key，其余行号保持原索引。
@@ -319,11 +321,13 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的APC资源行 {index} 尚未支持");
             if (companion && (source.Faction != "[character]" || source.RankKind != "[normal]"))
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的支援兵资源行 {index} 不是友方普通演员");
-            if (nextKey == characterId) nextKey++;
-            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
             // 原生 02A0B720 使用通知中的模板编号创建演员，MAP原序号仅取坐标和阵营。
             // 档次/套装只替换已放行的基础支援兵，模板已经资源目录核验，不能借此生成额外MAP行。
             var profile = companion ? companionProfiles?.SingleOrDefault(candidate => candidate.BaseId == source.Id) : null;
+            // 手工构造的冻结集合也不能借允许职业的MAP行发送退役模板。
+            if (profile is not null && SupportCompanionResources.IsBlocked(profile.TemplateId)) continue;
+            if (nextKey == characterId) nextKey++;
+            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
             // Full03 03FA9810确认类型5..8走APC构造器；APC索引属于独立MAP数组。
             // AiCharacter保留原MAP来源，实际通知编号/等级取冻结模板，复验不能用新数组替换原来源身份。
             result.Add(new(index,(ushort)nextKey++,profile?.TemplateId ?? source.Id,profile?.Level ?? source.Level,null)

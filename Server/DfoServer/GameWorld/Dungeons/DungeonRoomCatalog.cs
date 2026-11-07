@@ -33,7 +33,13 @@ internal sealed record DungeonRoomSpecialObject(int SourceOrdinal, int ObjectId,
     public bool IsEmptyPlaceholder => Path is null && ObjectId == 0 &&
         RawValues is [0, 1, -1, -1, 0] && Children.Count == 0;
 }
-internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level);
+internal sealed record DungeonRoomAiCharacter(int Id, IReadOnlyList<int> RawValues, string Faction, string RankKind, string Path, int Level)
+{
+    // 占位只保留原MAP数组位置；不读取退役AIC，也不能成为生成或比赛来源。
+    public bool IsSuppressedCompanion => SupportCompanionResources.IsBlocked(Id);
+    public static DungeonRoomAiCharacter Suppressed(PvfAiCharacterSpawn row) =>
+        new(row.Values[0], row.Values, row.Faction, row.Rank, "", 0);
+}
 internal enum TournamentEnemyKind { Monster, AiCharacter }
 internal sealed record TournamentEnemy(int PartyCount, int Code, int Strength)
 {
@@ -306,6 +312,7 @@ internal sealed class DungeonRoomCatalog
                 string resourcePath = "";
                 if (entityType == 1)
                 {
+                    if (SupportCompanionResources.IsBlocked(code)) continue;
                     if (!aiCharacters.TryGetValue(code, out var apcPath) || !archive.Contains(apcPath)) continue;
                     type = 5;
                     resourcePath = apcPath;
@@ -393,8 +400,10 @@ internal sealed class DungeonRoomCatalog
                 partyCount = body[0].Value;
                 for (int i = 2; i < body.Length; i += 3)
                 {
-                    if (body[i].Type != 0 || body[i + 1].Type != 0 || body[i].Value <= 0 || body[i + 1].Value is < 0 or > ushort.MaxValue ||
-                        !paths.TryGetValue(body[i].Value,out var enemyPath) || enemyPath.Length == 0 || !exists(enemyPath))
+                    if (body[i].Type != 0 || body[i + 1].Type != 0 || body[i].Value <= 0 || body[i + 1].Value is < 0 or > ushort.MaxValue)
+                        throw new InvalidDataException("tournament enemy 记录无效");
+                    if (enemyKind == TournamentEnemyKind.AiCharacter && SupportCompanionResources.IsBlocked(body[i].Value)) continue;
+                    if (!paths.TryGetValue(body[i].Value,out var enemyPath) || enemyPath.Length == 0 || !exists(enemyPath))
                         throw new InvalidDataException("tournament enemy 记录无效");
                     DungeonRoomAiCharacter? apc = null;
                     if (enemyKind == TournamentEnemyKind.AiCharacter)
@@ -432,6 +441,7 @@ internal sealed class DungeonRoomCatalog
     DungeonRoomAiCharacter? ResolveAiCharacter(PvfAiCharacterSpawn row)
     {
         int id = row.Values[0];
+        if (SupportCompanionResources.IsBlocked(id)) return DungeonRoomAiCharacter.Suppressed(row);
         // 匹配客户端 02A0B720：目录不命中返回 al=0，上层不计创建成功，不阻断整图装载。
         // 已列入且脚本存在的 APC 仍校验最低信息；不把缺项改写成相邻编号。
         if (!aiCharacters.TryGetValue(id,out var path) || !archive.Contains(path))
@@ -619,7 +629,9 @@ internal sealed class DungeonRoomCatalog
             if (resolveAiCharacter is null)
                 throw new InvalidDataException("房间APC定义解析依赖缺失");
             foreach (var row in PvfAiCharacterScript.MapRows(actorTokens,resolve))
-                if (resolveAiCharacter(row) is { } actor)
+                if (SupportCompanionResources.IsBlocked(row.Values[0]))
+                    actors.Add(DungeonRoomAiCharacter.Suppressed(row));
+                else if (resolveAiCharacter(row) is { } actor)
                     actors.Add(actor);
         }
         var eventPositions = sections.TryGetValue("[event monster position]", out var eventTokens) ? Integers(eventTokens) : Freeze(Array.Empty<int>());

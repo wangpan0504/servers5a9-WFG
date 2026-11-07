@@ -16,16 +16,18 @@ internal sealed record PublicCharacterSnapshot(Character Character, ChannelIdent
 
 internal sealed partial class GameSession
 {
-    internal (AdventureSnapshot Snapshot, Func<bool> IsCurrent)? PublicAdventure(ushort id, AdventureCatalog catalog)
+    internal (AdventureSnapshot Snapshot, ChannelIdentity Channel, Func<bool> IsCurrent)? PublicAdventure(ushort id, AdventureCatalog catalog)
     {
         try
         {
-            return owner.Execute<(AdventureSnapshot, Func<bool>)?>(() =>
+            return owner.Execute<(AdventureSnapshot, ChannelIdentity, Func<bool>)?>(() =>
             {
-                if (!Ready || Selected?.Id != id) return null;
+                if (!Ready || Selected?.Id != id || ChannelEntry is not { } entry) return null;
                 long epoch = SelectionEpoch;
+                var channel = entry.Identity;
                 var snapshot = ReadAdventure(catalog, DateTimeOffset.UtcNow);
-                return (snapshot, () => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == id);
+                return (snapshot, channel, () => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == id &&
+                    ChannelEntry?.Identity == channel);
             });
         }
         catch (InvalidOperationException) when (!owner.IsCurrent) { return null; }

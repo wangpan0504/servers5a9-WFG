@@ -125,8 +125,20 @@ internal static partial class FormalDungeonTcpTests
             }
             if (slot == 1)
             {
-                // 收到31后再等原生30秒宽限注册，只有无42槽推进宽限。
-                await clock.WaitForOneShotTimerAsync(clock.GetUtcNow().AddSeconds(30));
+                // 周签到也有30秒等待；必须确认本角色、本实例的回城宽限已注册，不能借用同期限的活动计时器。
+                That(SpinWait.SpinUntil(() =>
+                {
+                    var events = fixture.Events();
+                    return events.Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
+                            row.GetProperty("Detail").GetProperty("Accepted").GetBoolean() &&
+                            row.GetProperty("Detail").GetProperty("CharacterId").GetUInt16() == peer.Id)
+                        .Any(entry => events.Any(row => row.GetProperty("Kind").GetString() == "formal_lost_land_timer" &&
+                            row.GetProperty("Detail").GetProperty("State").GetString() == "return_grace_started" &&
+                            row.GetProperty("Detail").GetProperty("Connection").GetInt64() ==
+                                entry.GetProperty("Detail").GetProperty("Connection").GetInt64() &&
+                            row.GetProperty("Detail").GetProperty("InstanceId").GetGuid() ==
+                                entry.GetProperty("Detail").GetProperty("Identity").GetProperty("InstanceId").GetGuid()));
+                }, TimeSpan.FromSeconds(5)), "无42回城只推进当前实例已注册的30秒宽限");
                 clock.Advance(TimeSpan.FromSeconds(30));
             }
             if (slot != 1) { peer.Send(42); peer.Expect(1, 42, [1]); }

@@ -130,7 +130,7 @@ internal static class BlackDiamondTests
             That(DevelopmentGm.Answer("summon-wangfugui on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().SummonWangFugui,
                 "离线入口拒绝伴侣设置，新实例恢复关闭");
-            // 四类支援兵共享原子单选，兼容开关查询不写角色状态。
+            // 允许职业共享原子单选，退役职业只兼容关闭和查询。
             That(!settings.SummonGuangbing &&
                 Switch("summon-guangbing") == "OK {\"summonGuangbing\":false}" &&
                 !DevelopmentRequest.Parse("summon-guangbing", "black").Writes, "光兵开关默认关闭，只读查询不写玩家状态");
@@ -147,7 +147,7 @@ internal static class BlackDiamondTests
             That(DevelopmentGm.Answer("summon-guangbing on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().SummonGuangbing,
                 "离线入口拒绝光兵设置，新实例恢复关闭");
-            foreach (var value in new[] { "wangfugui", "guangbing", "female-crusader", "enchantress", "off" })
+            foreach (var value in new[] { "wangfugui", "guangbing", "off" })
             {
                 string result = Switch("support-companion " + value);
                 using var state = System.Text.Json.JsonDocument.Parse(result[3..]);
@@ -157,15 +157,30 @@ internal static class BlackDiamondTests
                         .Count(key => json.GetProperty(key).GetBoolean()) == (value == "off" ? 0 : 1),
                     "原子选择一次回读完整且最多一名");
             }
-            _ = Switch("support-companion enchantress");
-            That(Switch("support-companion invalid").StartsWith("ERR ", StringComparison.Ordinal) && settings.SummonEnchantress &&
-                Switch("summon-wangfugui off") == "OK {\"summonWangFugui\":false}" && settings.SummonEnchantress,
+            _ = Switch("support-companion guangbing");
+            That(Switch("support-companion invalid").StartsWith("ERR ", StringComparison.Ordinal) && settings.SummonGuangbing &&
+                Switch("summon-wangfugui off") == "OK {\"summonWangFugui\":false}" && settings.SummonGuangbing,
                 "无效选择及关闭非当前兼容项都不清空当前选择");
-            _ = Switch("summon-female-crusader on");
-            That(settings.SummonFemaleCrusader && !settings.SummonEnchantress &&
-                DevelopmentRequest.Parse("support-companion off", "black").Writes &&
+            foreach (string blocked in new[] { "female-crusader", "enchantress" })
+            {
+                foreach (string command in new[] { "support-companion " + blocked, "support-companions " + blocked + ",guangbing",
+                    "support-profile " + blocked + " entry graduate huge", "summon-" + blocked + " on" })
+                    That(Switch(command).StartsWith("ERR ", StringComparison.Ordinal) && settings.SupportCompanions == 2,
+                        "退役职业单选、批量、档次及旧召唤入口均拒绝且不改变允许名单");
+                That(Switch("summon-" + blocked + " off").StartsWith("OK ", StringComparison.Ordinal) &&
+                    Switch("summon-" + blocked).Contains("false", StringComparison.Ordinal) && settings.SupportCompanions == 2,
+                    "退役职业仍可关闭和查询，不能清掉已选光兵");
+            }
+            _ = Switch("support-companions wangfugui,guangbing");
+            using (var state = JsonDocument.Parse(Switch("support-companions")[3..]))
+                That(settings.SupportCompanions == 3 &&
+                    state.RootElement.GetProperty("supportedCompanions").EnumerateArray().Select(value => value.GetString())
+                        .SequenceEqual(["wangfugui", "guangbing"]) &&
+                    state.RootElement.GetProperty("unavailableCompanions").GetArrayLength() == 2,
+                    "两职业组合原子保存，查询明确给出允许名单与不可用职业");
+            That(DevelopmentRequest.Parse("support-companion off", "black").Writes &&
                 !DevelopmentRequest.Parse("support-companion", "black").Writes,
-                "旧入口开启同样互斥，单选查询与写入权限分离");
+                "单选查询与写入权限分离");
             _ = Switch("support-companion off");
             Character Create(AccountOwners.Lease lease, string name) => repo.Create(lease,
                 new(name, new(1, 0, 1, 1), null) { DungeonState = CharacterDungeonState.NewOrdinary });

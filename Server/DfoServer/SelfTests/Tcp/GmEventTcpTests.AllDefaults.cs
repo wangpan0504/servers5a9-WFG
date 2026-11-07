@@ -65,6 +65,10 @@ internal static partial class GmEventTcpTests
             That(stream.Position == stream.Length, "全部活动目录及状态完整消费，无未知尾部");
         };
         peer.Select();
+        byte[] initialCommon = peer.InitialAccountMaterialLists.Single(row => row.Body is [45, ..]).Body;
+        That(initialCommon.Length == 126 && U16(initialCommon, 1) == 1 && U16(initialCommon, 3) == 0 &&
+            U32(initialCommon, 5) == 490013716 && U32(initialCommon, 9) == 150,
+            "全部默认活动登录时108后的list45日历全量保留星河材料490013716，不被活动页清空");
         peer.SendBarrier();
         var packets = new List<WirePacket>();
         for (int index = 0; ; index++)
@@ -90,8 +94,9 @@ internal static partial class GmEventTcpTests
         Bytes(wallet, Build(writer => { writer.Write((byte)1); writer.Write((byte)1); writer.Write(490013685); writer.Write(100); }),
             "全活动首次登录谋略战100币只发一次，真实563余额完整");
         byte[] materials = packets.Single(row => row.Opcode == 14 && row.Body is [45, ..]).Body;
-        That(materials.Length == 126 && U16(materials, 1) == 1 && U32(materials, 5) == 490013685 && U32(materials, 9) == 100,
-            "全活动首次登录同时刷新活动道具背包100币");
+        That(materials.Length == 126 && U16(materials, 1) == 1 && U16(materials, 3) != 0 &&
+            U32(materials, 5) == 490013685 && U32(materials, 9) == 100,
+            "全活动首次登录同时刷新活动道具背包100币且避开0槽星河实体材料");
         byte[] mock = packets.Single(row => row.Opcode == 1766).Body;
         That(mock.Length == 980 && U32(mock) == 100 && U32(mock, 4) == 30, "全部默认活动共存时谋略战100币及30体力完整");
         That(packets.Count(row => row.Opcode == 1210 && row.Body.Length == 37 && U32(row.Body) == 2370) == 1 &&
@@ -99,5 +104,14 @@ internal static partial class GmEventTcpTests
             "签到状态和完整战令三包与谋略战首次日补给共存");
         That(fixture.Query("SELECT balance FROM account_material_balances WHERE account=$p0 AND item_id=490013685", fixture.Options.DevelopmentAccount)
             is [[100L]], "全部默认活动登录后真实材料账本只增加当日100币");
+        using var switched = Open(fixture);
+        switched.BeforeMileageInitialization = peer.BeforeMileageInitialization;
+        switched.ValidateNativePromotionEvents = peer.ValidateNativePromotionEvents;
+        switched.Select(1);
+        byte[] switchedCommon = switched.InitialAccountMaterialLists.Single(row => row.Body is [45, ..]).Body;
+        That(switchedCommon.Length == 249 && U16(switchedCommon, 1) == 2 &&
+            U16(switchedCommon, 3) == 0 && U32(switchedCommon, 5) == 490013716 && U32(switchedCommon, 9) == 150 &&
+            U16(switchedCommon, 3 + 123) == U16(materials, 3) && U32(switchedCommon, 5 + 123) == 490013685 && U32(switchedCommon, 9 + 123) == 100,
+            "同账号换角后list45同时保留星河490013716的150数量与谋略战100币，切换角色不丢失星河材料显示");
     }
 }

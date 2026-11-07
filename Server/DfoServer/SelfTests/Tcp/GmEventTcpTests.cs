@@ -17,8 +17,16 @@ internal static partial class GmEventTcpTests
             Path.Combine(root, "gm-events"), resources: resources, useDefaultActivities: true);
         var repository = new DfoServer.Persistence.CharacterRepository(fixture.Database);
         using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEvents", resources.Characters.Get(0),
+        {
+            var primary = repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEvents", resources.Characters.Get(0),
                 resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
+            repository.Create(owner, DfoServer.Game.Characters.CharacterCreation.Prepare("AllEventsAlt", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
+            var grant = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.TryGrantBatch(
+                primary, [new(490013716, 150)], resources.ItemResources.Items, resources.ItemResources.GoldLimits,
+                resources.ItemResources.EpicPieces, DateTimeOffset.UtcNow);
+            DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, primary, grant);
+        }
         await fixture.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
         for (int attempt = 0; ; attempt++)

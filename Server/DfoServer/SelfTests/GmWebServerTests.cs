@@ -32,7 +32,12 @@ internal static partial class GmWebServerTests
             if (line is "event initialize-default 312" or "event initialize-default 2520")
                 return "OK " + JsonSerializer.Serialize(new { eventId = int.Parse(line.Split(' ')[2]), active = false, mode = "off", Revision = 3,
                     StartsAt = (long?)null, EndsAt = (long?)null, initialized = false });
-            if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new { supportCompanion = Companion });
+            if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new
+            {
+                supportCompanion = Companion, supportedCompanions = new[] { "wangfugui", "guangbing" },
+                unavailableCompanions = new[] { new { companion = "female-crusader", reason = "当前客户端不支持该支援兵" },
+                    new { companion = "enchantress", reason = "当前客户端不支持该支援兵" } }
+            });
             if (line.StartsWith("support-companion ", StringComparison.Ordinal))
             {
                 Companion = line[18..];
@@ -109,18 +114,20 @@ internal static partial class GmWebServerTests
         TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM接口保留内容安全策略");
         using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
         {
-            Content = JsonContent.Create(new { key = "support-companion", value = "enchantress", confirm = true })
+            Content = JsonContent.Create(new { key = "support-companion", value = "guangbing", confirm = true })
         })
         {
             request.Headers.Add("X-GM-Request", "1");
             using var response = await http.SendAsync(request);
-            TestCheck.That(response.IsSuccessStatusCode && data.Companion == "enchantress", "管理端单次请求提交枚举选择");
+            TestCheck.That(response.IsSuccessStatusCode && data.Companion == "guangbing", "管理端单次请求提交允许枚举选择");
         }
         int beforeCompanionRead = data.Commands.Count;
         var debug = (await http.GetFromJsonAsync<JsonElement>("/api/debug")).GetProperty("data");
-        TestCheck.That(debug.GetProperty("supportCompanion").GetString() == "enchantress" &&
-            debug.GetProperty("summonEnchantress").GetBoolean() && !debug.GetProperty("summonWangFugui").GetBoolean() &&
-            !debug.GetProperty("summonGuangbing").GetBoolean() && !debug.GetProperty("summonFemaleCrusader").GetBoolean() &&
+        TestCheck.That(debug.GetProperty("supportCompanion").GetString() == "guangbing" &&
+            !debug.GetProperty("summonEnchantress").GetBoolean() && !debug.GetProperty("summonWangFugui").GetBoolean() &&
+            debug.GetProperty("summonGuangbing").GetBoolean() && !debug.GetProperty("summonFemaleCrusader").GetBoolean() &&
+            debug.GetProperty("supportedCompanions").EnumerateArray().Select(value => value.GetString()).SequenceEqual(["wangfugui", "guangbing"]) &&
+            debug.GetProperty("unavailableCompanions").GetArrayLength() == 2 &&
             data.Commands.Skip(beforeCompanionRead).Count(line => line.StartsWith("support-companion", StringComparison.Ordinal)) == 1 &&
             data.Commands.Skip(beforeCompanionRead).All(line => !line.StartsWith("summon-", StringComparison.Ordinal)),
             "管理回读一次原子选择派生四个兼容字段");
@@ -133,7 +140,32 @@ internal static partial class GmWebServerTests
             int beforeInvalidSelection = data.Commands.Count;
             using var response = await http.SendAsync(request);
             TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeInvalidSelection &&
-                data.Companion == "enchantress", "无效单选在调用GM前拒绝，不先清空当前项");
+                data.Companion == "guangbing", "无效单选在调用GM前拒绝，不先清空当前项");
+        }
+        foreach (string blocked in new[] { "female-crusader", "enchantress" })
+        {
+            foreach (var choice in new[] { (Key: "support-companion", Value: blocked),
+                (Key: "support-companions", Value: blocked + ",guangbing"), (Key: "summon-" + blocked, Value: "on") })
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
+                { Content = JsonContent.Create(new { key = choice.Key, value = choice.Value, confirm = true }) };
+                request.Headers.Add("X-GM-Request", "1");
+                int commandCount = data.Commands.Count;
+                using var response = await http.SendAsync(request);
+                TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == commandCount &&
+                    data.Companion == "guangbing", "旧HTTP单选、批量及召唤入口拒绝退役职业，不执行GM或清空原选择");
+            }
+            using var profileRequest = new HttpRequestMessage(HttpMethod.Post, "/api/support-companions")
+            {
+                Content = JsonContent.Create(new { companions = new[] { blocked },
+                    tiers = new Dictionary<string,string> { ["wangfugui"] = "entry", ["female-crusader"] = "graduate", ["enchantress"] = "huge" },
+                    confirm = true })
+            };
+            profileRequest.Headers.Add("X-GM-Request", "1");
+            int beforeProfile = data.Commands.Count;
+            using var profileResponse = await http.SendAsync(profileRequest);
+            TestCheck.That(profileResponse.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeProfile,
+                "档次HTTP入口同样在转发前拒绝退役名单");
         }
         using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/reward-limit-reset")
         {

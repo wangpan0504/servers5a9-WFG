@@ -15,6 +15,14 @@ internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
+    public const byte GuildMedalMaximumUpgrade = 20;
+    // 勋章仍为独立类型和穿戴槽，不借普通装备资格开放增幅或锻造。
+    internal static int MaximumUpgrade(ItemTemplate template) => template.Kind switch
+    {
+        ItemKind.Equipment => 31,
+        ItemKind.GuildMedal when template.EquipmentSlot == 32 => GuildMedalMaximumUpgrade,
+        _ => 0
+    };
     public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0,
         bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null,
         byte? echonGrade = null, Func<int, int>? echonDraw = null, int? quality = null)
@@ -53,7 +61,7 @@ internal static class InventoryRewardGrantService
     {
         if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
             throw new InvalidDataException("无效发放数量");
-        if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
+        if (upgrade > MaximumUpgrade(template) || refinement > 127 || template.Kind != ItemKind.Equipment && refinement != 0)
             throw new InvalidDataException("无效装备创建属性");
         // quality 是实例品级种子（999999893+pct / 999999998），只有普通装备有；其它类型带了就拒绝，不静默丢弃。
         if (quality is not null && template.Kind != ItemKind.Equipment)
@@ -63,9 +71,9 @@ internal static class InventoryRewardGrantService
     // 数量是整笔发放量；统一放置器可拆堆并逐件创建装备，不把总量误当单个Core.Count。
     internal static ushort? GrantDefinitionError(ItemTemplate template, InventoryReward reward, bool createsInstance = true)
     {
-        if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127) return 1;
+        if (reward.Count <= 0 || reward.Upgrade > MaximumUpgrade(template) || reward.Refinement > 127) return 1;
         if (createsInstance && (template.IsPremiumService || !template.Expiration.SupportsCreation)) return 19;
-        if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0)) return 1;
+        if (template.Kind != ItemKind.Equipment && reward.Refinement != 0) return 1;
         if (createsInstance && template.Echon is not null && reward.CustomAbilityGrade is < 0 or > 3) return 19;
         return null;
     }

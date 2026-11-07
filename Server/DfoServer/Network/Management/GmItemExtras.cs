@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Management.ImagePack;
 using PvfLib;
@@ -232,7 +233,8 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
         string tag = Regex.Match(document.Section(equipmentFile ? "equipment type" : "stackable type"), @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant();
         bool avatar = tag.Contains("avatar", StringComparison.Ordinal);
         bool gear = equipmentFile && !avatar && GearTags.Contains(tag);
-        bool reinforce = false, amplify = false;
+        bool medal = equipmentFile && tag == "flag";
+        bool reinforce = medal, amplify = false;
         if (gear)
         {
             if (!(document.Has("impossible contents") && !document.Has("/impossible contents")))
@@ -246,7 +248,8 @@ internal sealed partial class GmItemExtras(PvfArchive pvf, string? imagePacksPat
         int stack = document.TryGetInt32("stack limit", out int limit) && limit > 1 ? limit : 1;
         return new
         {
-            gear, avatar, reinforce, amplify, refine = tag == "weapon", maxRefine,
+            gear, avatar, reinforce, maxUpgrade = medal ? InventoryRewardGrantService.GuildMedalMaximumUpgrade : gear ? 31 : 0,
+            amplify, refine = tag == "weapon", maxRefine,
             seal = gear && document.Section("attach type").Contains("[sealing]", StringComparison.OrdinalIgnoreCase),
             stackable = !equipmentFile && stack > 1,
             countMax = !equipmentFile && stack > 1 ? stack : 10,

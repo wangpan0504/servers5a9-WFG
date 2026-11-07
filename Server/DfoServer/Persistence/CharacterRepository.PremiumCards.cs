@@ -123,14 +123,18 @@ internal sealed partial class CharacterRepository
             remaining.RemoveAt(at);
         }
         ItemCore Key(ItemCore core) => core.IsStackable ? core with { Value = 1 } : core;
-        var expected = remaining.GroupBy(Key).ToDictionary(group => group.Key,group => group.Sum(core => core.Count));
+        // 排序锁属于原槽位；合法合堆保留目标锁，不要求它等于新奖励的默认锁。
+        ItemCore RewardKey(ItemCore core) => core.IsStackable ? core with { Value = 1, SortLockFlag = 0 } : core;
+        var expected = remaining.GroupBy(RewardKey).ToDictionary(group => group.Key,group => group.Sum(core => core.Count));
         foreach (var slot in plan.ChangedSlots)
         {
             var before = plan.BeforeIndex.Find(slot);
             var after = plan.AfterIndex.Find(slot);
             if (after is null || before is not null && (before.Uid != after.Uid || Key(before.Core) != Key(after.Core)))
                 throw new InvalidDataException("翻牌不能删除或更换已有完整核心");
-            var key = Key(after.Core);
+            if (before is null && !remaining.Any(core => Key(core) == Key(after.Core)))
+                throw new InvalidDataException("翻牌新增完整核心不属于冻结批次");
+            var key = RewardKey(after.Core);
             int added = after.Core.Count-(before?.Core.Count ?? 0);
             if (added <= 0 || !expected.TryGetValue(key,out int needed) || needed < added)
                 throw new InvalidDataException("翻牌新增物品量超过冻结批次");

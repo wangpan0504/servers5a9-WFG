@@ -38,6 +38,17 @@ internal sealed class GameDebugSettings
             throw new ArgumentOutOfRangeException(nameof(value));
     }
 
+    // 仅供读取旧安装时迁移；未知位、多辅助及损坏档次仍按旧合同拒绝。
+    internal static void ValidateLegacySupportConfiguration(SupportCompanionConfiguration value)
+    {
+        int mask = value.SelectionMask, auxiliary = mask & 13;
+        if (mask < 0 || (mask & ~15) != 0 || (auxiliary & (auxiliary - 1)) != 0 ||
+            !SupportCompanionConfiguration.ValidTier(value.WangFuguiTier) ||
+            !SupportCompanionConfiguration.ValidTier(value.FemaleCrusaderTier) ||
+            !SupportCompanionConfiguration.ValidTier(value.EnchantressTier))
+            throw new ArgumentOutOfRangeException(nameof(value));
+    }
+
     // 两个开关均为true时忽略对应声明，不能互相代替或翻转成启用期限。
     public volatile bool IgnoreCashShopAbsoluteExpiration = true;
     public volatile bool IgnoreCashShopUsablePeriod = false;
@@ -46,7 +57,7 @@ internal sealed class GameDebugSettings
     // GM 的 on/off 只改当前进程，重启不沿用上次的临时调试资格。
     public volatile bool PremiumPcRoom;
     // 进图伴侣默认关闭；线上实例先持久化完整配置再发布，重启保留选择。塔与祭坛等类型仍由资源标记排除。
-    // 同一原子位集合保存两组：辅助最多一名，三四仔最多两名；旧单选接口仍一次替换全部选择。
+    // 同一原子位集合仅开放奶爸与光兵；旧单选接口仍一次替换全部选择。
     private SupportCompanionConfiguration supportCompanion = SupportCompanionConfiguration.Default;
     public SupportCompanionCatalog SupportProfiles { get; init; } = SupportCompanionCatalog.Empty;
     public SupportCompanionConfiguration SupportConfiguration
@@ -72,7 +83,7 @@ internal sealed class GameDebugSettings
         get => LegacySupportCompanion(SupportCompanions);
         set
         {
-            if (value is < SupportCompanionKind.Off or > SupportCompanionKind.Enchantress)
+            if (value is < SupportCompanionKind.Off or > SupportCompanionKind.Guangbing)
                 throw new ArgumentOutOfRangeException(nameof(value));
             UpdateSelection(_ => SupportCompanionBit(value));
         }
@@ -108,11 +119,7 @@ internal sealed class GameDebugSettings
 
     public static int SupportCompanionBit(SupportCompanionKind kind) => kind == SupportCompanionKind.Off ? 0 : 1 << ((int)kind - 1);
     public static bool HasCompanion(int mask, SupportCompanionKind kind) => (mask & SupportCompanionBit(kind)) != 0;
-    public static bool ValidSupportCompanions(int mask)
-    {
-        int auxiliary = mask & 13;
-        return mask >= 0 && (mask & ~15) == 0 && (auxiliary & (auxiliary - 1)) == 0;
-    }
+    public static bool ValidSupportCompanions(int mask) => mask >= 0 && (mask & ~3) == 0;
 
     public static int ParseSupportCompanions(string value)
     {
@@ -130,14 +137,14 @@ internal sealed class GameDebugSettings
     }
 
     public static SupportCompanionKind[] SupportCompanionKinds(int mask) =>
-        new[] { SupportCompanionKind.WangFugui, SupportCompanionKind.FemaleCrusader, SupportCompanionKind.Enchantress, SupportCompanionKind.Guangbing }
+        new[] { SupportCompanionKind.WangFugui, SupportCompanionKind.Guangbing }
             .Where(kind => HasCompanion(mask, kind)).ToArray();
     public static string[] SupportCompanionNames(int mask) => SupportCompanionKinds(mask).Select(SupportCompanionName).ToArray();
     public static SupportCompanionKind LegacySupportCompanion(int mask) => SupportCompanionKinds(mask).FirstOrDefault();
 
     public static int ParseSupportCompanion(string value) => value switch
     {
-        "off" => 0, "wangfugui" => 1, "guangbing" => 2, "female-crusader" => 3, "enchantress" => 4, _ => -1
+        "off" => 0, "wangfugui" => 1, "guangbing" => 2, _ => -1
     };
 
     public static string SupportCompanionName(SupportCompanionKind value) => value switch

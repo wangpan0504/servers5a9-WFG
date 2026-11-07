@@ -27,7 +27,7 @@ internal sealed partial class InventoryProjection
         foreach (var list in new[] { InventoryListType.GuildMedal, InventoryListType.Talisman, InventoryListType.AccountCommon })
             if (plan.ChangedSlots.Any(slot => slot.List == list))
             {
-                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current, list),
+                await context.Notify(NotiPacketType.ITEM_LIST, town.SpecialFull(context, current, list),
                     "certificate_inventory_resync", CanSend);
                 await RestoreLocksAsync(context, current, current.Items.Where(item => item.Position.List == list)
                     .Select(item => item.Position), canSend: CanSend);
