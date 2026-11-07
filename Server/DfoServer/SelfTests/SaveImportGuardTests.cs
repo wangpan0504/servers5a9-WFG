@@ -35,6 +35,34 @@ internal static class SaveImportGuardTests
             Directory.Delete(pending);
             SaveImportGuard.RequireNoPending(directory);
             That(File.Exists(database + "-wal"), "完成外部恢复后检查可放行，仍不擅自处理侧车");
+
+            string installation = Path.Combine(directory, "一体安装 空格");
+            string integratedData = Path.Combine(installation, "ServerS5A9", "Data");
+            Directory.CreateDirectory(integratedData);
+            using var integratedGate = new FileStream(Path.Combine(integratedData, "server.lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+            string updateDirectory = Path.Combine(installation, ".95jp-update");
+            string updateMarker = Path.Combine(updateDirectory, "active.json");
+            string integratedDatabase = Path.Combine(integratedData, "game.db");
+            SaveImportGuard.RequireNoPending(integratedData);
+            Directory.CreateDirectory(updateDirectory);
+            File.WriteAllText(updateMarker, "{\"schema\":1,\"id\":\"unfinished\"}");
+            Reject<InvalidDataException>(() => SaveImportGuard.RequireNoPending(integratedData), "更新中断后即使实例锁已重新取得仍拒绝创建数据库");
+            That(!File.Exists(integratedDatabase) && File.Exists(updateMarker), "拒绝不建库也不清除更新恢复入口");
+            File.WriteAllBytes(integratedDatabase, [7, 8, 9]);
+            File.WriteAllBytes(integratedDatabase + "-wal", [10, 11]);
+            File.WriteAllText(updateMarker, "corrupt");
+            Reject<InvalidDataException>(() => SaveImportGuard.RequireNoPending(integratedData), "损坏更新记录仍阻止直接服务及离线写库共用入口");
+            Bytes(File.ReadAllBytes(integratedDatabase), [7, 8, 9], "更新未恢复时保留主库");
+            Bytes(File.ReadAllBytes(integratedDatabase + "-wal"), [10, 11], "更新未恢复时保留侧车");
+            File.Delete(updateMarker);
+            Directory.CreateDirectory(updateMarker);
+            Reject<InvalidDataException>(() => SaveImportGuard.RequireNoPending(integratedData), "更新记录被目录占用时也拒绝");
+            Directory.Delete(updateMarker);
+            File.WriteAllText(updateMarker + ".previous", "corrupt");
+            Reject<InvalidDataException>(() => SaveImportGuard.RequireNoPending(integratedData), "只有更新前代记录仍须恢复，不因主标记缺失放行");
+            File.Delete(updateMarker + ".previous");
+            SaveImportGuard.RequireNoPending(integratedData);
+            That(File.Exists(integratedDatabase + "-wal"), "外部恢复收口后放行且不改动侧车");
         }
         finally { TestFiles.DeleteDirectory(directory, true); }
         Console.WriteLine($"PASS {Count - before} 存档导入中断访问保护断言");
