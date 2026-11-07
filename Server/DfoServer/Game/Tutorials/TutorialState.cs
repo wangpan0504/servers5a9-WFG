@@ -20,7 +20,10 @@ internal sealed record TutorialCheckpointPlan(Character Expected, Guid EventId, 
     public DungeonExperienceReward? DeathReward { get; init; }
     public FrozenDungeonGroundDeath? Loot { get; init; }
 }
-internal sealed record TutorialCheckpointResult(Character Character, bool Duplicate);
+internal sealed record TutorialCheckpointResult(Character Character, bool Duplicate)
+{
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
+}
 internal readonly record struct TutorialRewardRow(ushort Slot, uint ItemId, uint Count);
 internal sealed record TutorialFlagResult(ushort Error, Character Character, long Generation, long SelectionEpoch,
     IReadOnlyList<TutorialRewardRow> Rewards, InventoryResult? Inventory = null)

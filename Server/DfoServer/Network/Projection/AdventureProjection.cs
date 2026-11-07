@@ -1,4 +1,6 @@
 using DfoServer.Game.Session;
+using DfoServer.Game.Adventure;
+using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Adventure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
@@ -7,6 +9,17 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class AdventureProjection(AdventureCatalog catalog, TimeProvider? clock = null)
 {
+    public Task ProgressAsync(GameConnectionContext context, Character committed, AdventureProgressionCommit progression,
+        Func<bool> canSend)
+    {
+        long epoch = context.Session.SelectionEpoch;
+        // 原事务回执已携带本次实际进度；热点发布不重读账号、名册或背包，也不创建第二套在线状态。
+        bool Guard() => canSend() && context.Session.Ready && context.Session.SelectionEpoch == epoch &&
+            ReferenceEquals(context.Session.Selected, committed);
+        return context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(committed.Id, progression.State, catalog),
+            "adventure_progress_committed", Guard);
+    }
+
     public async Task OtherInformationAsync(GameConnectionContext context, GameSession other, ushort target)
     {
         long epoch = context.Session.SelectionEpoch;

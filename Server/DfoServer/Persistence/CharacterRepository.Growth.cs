@@ -168,10 +168,11 @@ internal sealed partial class CharacterRepository
         if (skillsChanged)
             WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
         // 副本击杀经验计入冒险团：按角色更新前的有效位置推进里程，满级部分按资源倍率折算。
+        AdventureProgressionCommit? adventureCommit = null;
         if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, amount,
                 EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
                 DateTimeOffset.UtcNow) is { } credit)
-            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
+            adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         // 熟练度与角色经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
         // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
         bool proficiencyChanged = false;
@@ -244,7 +245,7 @@ internal sealed partial class CharacterRepository
         RememberInventoryItems(committed.Inventory, itemRead);
         CacheDungeonLoot(owner, expected, prepared, loot);
         return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
-            { CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [], DirectPickup = directPickupCommit };
+            { Adventure = adventureCommit, CommittedBonuses = committedBonuses, EquipmentChanges = equipmentGrowth?.Changes ?? [], DirectPickup = directPickupCommit };
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,

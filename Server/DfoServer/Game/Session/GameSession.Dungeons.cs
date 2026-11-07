@@ -29,7 +29,7 @@ internal sealed partial class GameSession
                 prepared.Result.ClearFact is not null, catalog) with { Death = prepared, DeathReward = reward, Loot = loot };
             var tutorial = repository.CommitTutorialCheckpoint(owner, checkpoint);
             committed = new(tutorial.Character, tutorial.Duplicate,
-                checked((uint)(tutorial.Character.Learning.Experience - expected.Learning.Experience)));
+                checked((uint)(tutorial.Character.Learning.Experience - expected.Learning.Experience))) { Adventure = tutorial.Adventure };
         }
         else
         {

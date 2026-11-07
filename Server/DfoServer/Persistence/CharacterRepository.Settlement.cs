@@ -155,9 +155,7 @@ internal sealed partial class CharacterRepository
                 EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
                 DateTimeOffset.UtcNow) is { } credit)
         {
-            WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
-            if (credit.After != credit.Before)
-                adventureCommit = new(credit.After with { Revision = credit.Before.Revision + 1 }, credit.RawOverflow);
+            adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, AdventureCreditSource.Earned, adventureCatalog!);
         }
         // 熟练度与通关经验同源：满级溢出全额、跨过95级入口线只计入口线以上部分。
         // 回执保存这笔经验里真正记入熟练度的额度，重复报告与显示层都按同一有效经验回放。
