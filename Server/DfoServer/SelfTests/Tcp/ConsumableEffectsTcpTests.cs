@@ -100,8 +100,9 @@ internal static partial class ConsumableUseTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(4);
-            Use(peer,65,0,490704393); Accepted(peer,65,0,490704393); peer.Barrier();
+            Use(peer,65,0,490704393); Accepted(peer,65,0,490704393);
             long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 300000;
+            ExpectBossBuff(peer,1271,checked((int)(until / 1000))); peer.Barrier();
             That(fixture.Query("SELECT kind,until_ms FROM character_consumable_states WHERE character_id=$p0 ORDER BY kind",peer.Id)
                     .Select(row => (Convert.ToInt32(row[0]), Convert.ToInt64(row[1]))).SequenceEqual(new[] { (0,until),(1,until) }),
                 "截图星空裂缝史诗Buff药剂真实44成功后同事务保存五分钟效果和冷却");
@@ -109,7 +110,8 @@ internal static partial class ConsumableUseTcpTests
             Use(peer,65,1,490704393); Refused(peer,1,490704393); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
                 "星空药新token冷却拒绝不重扣、不续期");
-            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2); peer.Select(4);
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
+            peer.Select(4, hellLegendUntil: checked((int)(until / 1000)));
             That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
                 fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
                 "星空药重选恢复实际剩余时限，不再扣源或重新起算");
