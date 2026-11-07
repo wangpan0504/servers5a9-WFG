@@ -267,6 +267,19 @@ internal static class MonsterMockBattleTests
         Reject<MockBattleRejectedException>(() => service.Prepare(owner, saved.Character, 9, 0, 0, new byte[20]));
 
         // 此处仅准备奖励规划所需的入场revision；完整入场与真实通关由TCP用例验证。
+        var lineupReady = saved.Account with
+        {
+            Snapshot = saved.Account.Snapshot with
+            {
+                Cards = saved.Account.Snapshot.Cards.SetItem(0, new(0, 1, 0, 0, 0))
+            }
+        };
+        saved = service.Commit(owner, saved.Character, new(saved.Account, new(lineupReady, []),
+            new(saved.Character.Inventory, saved.Character.Inventory, "mock-lineup-fixture"), schedule, clock.GetUtcNow()));
+        var fallbackAdmission = service.PrepareAdmission(owner, saved.Character, 120, null);
+        That(fallbackAdmission.World.Id == 20 && fallbackAdmission.Paid.Hearts == 22,
+            "未配置SpecialCalendarStart且当前日期不在2020日历、第20关未完成时，异次元裂缝默认首关world 20仍可准入");
+        Reject<MockBattleRejectedException>(() => service.PrepareAdmission(owner, saved.Character, 121, null));
         var admission = new MockBattleAdmission(catalog.Worlds[0], saved.Account, saved.Account, [], null, schedule, clock.GetUtcNow(), catalog);
         saved = service.Commit(owner, saved.Character, new(saved.Account, new(saved.Account, []),
             new(saved.Character.Inventory, saved.Character.Inventory, "mock-victory-plan-fixture"), schedule, clock.GetUtcNow()));
@@ -308,7 +321,7 @@ internal static class MonsterMockBattleTests
         Section("random monster card booster by item", Ints(50001, 2, 0, 0, 1, 1, 0, 2));
         Section("achievement info", Enumerable.Range(0, 21).SelectMany(id =>
             Ints(id, id == 20 ? 0 : 1, 0, id == 0 ? 1 : id == 20 ? 20 : 100, 490013685, 100, 0, 0)));
-        foreach (var (id, mode) in new[] { (0, 0), (20, 1) })
+        foreach (var (id, mode) in new[] { (0, 0), (20, 1), (21, 1) })
         {
             var world = Ints(id, 0, 0, 0, 0, 0).ToList();
             world.AddRange(mixedWorldRewards ? Ints(2, 1, MonsterMockBattleService.CoinItemId, 7, 50001, 2, 120) : Ints(0, 1, 120));

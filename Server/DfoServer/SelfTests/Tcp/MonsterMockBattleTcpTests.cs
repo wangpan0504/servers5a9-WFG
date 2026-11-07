@@ -276,18 +276,15 @@ internal static class MonsterMockBattleTcpTests
                 "卡片战斗不授予普通角色经验");
 
             var special = catalog.Worlds[20];
+            uint lockedSpecial = checked((uint)catalog.Worlds[21].DungeonId);
             long beforeSpecial = Material(490013685);
-            var unavailableSpecial = Enter(peer, checked((uint)special.DungeonId), uint.MaxValue);
-            That(unavailableSpecial.Any(row => row is { Kind: 1, Opcode: 16, Body: [0, ..] }) &&
-                U32(stateBody, 4) == 24 && Settlements() == 1, "未通关第20关时，开放日程也不能进入特殊关卡或扣体力");
-            That(Request(peer, 132, []).Any(row => row is { Kind: 1, Opcode: 132, Body: [1] }),
-                "特殊关前置被拒后沿真实132退出选图再准备完成位");
-            // 这里只准备第20关完成位以验证特殊关前置，不声称已实打全部20关。
-            fixture.Sql("""
-                UPDATE account_monster_mock_battle SET state=json_set(state,
-                  '$.Snapshot.Worlds[19].Value',1,'$.Snapshot.Worlds[19].Completed',1)
-                WHERE account=$p0
-                """, fixture.Options.DevelopmentAccount);
+            var rejectedSelection = Request(peer, 15, Build(writer => writer.Write(lockedSpecial)));
+            var rejectedEntry = Request(peer, 16, Selection(lockedSpecial, uint.MaxValue));
+            That(rejectedSelection.Any(row => row is { Kind: 1, Opcode: 15, Body: [0, ..] }) &&
+                rejectedSelection.All(row => row.Opcode != 27) &&
+                rejectedEntry.Any(row => row is { Kind: 1, Opcode: 16, Body: [0, ..] }) &&
+                U32(stateBody, 4) == 24 && Settlements() == 1,
+                "未开放或前置不足的关卡在15阶段直接拒绝且不发27选图通知，不把角色留在普通选图界面");
             var specialMap = Enter(peer, checked((uint)special.DungeonId), uint.MaxValue).Single(row => row.Opcode == 29).Body;
             Request(peer, 37, new byte[8]);
             for (int index = 0; index < specialMap[18]; index++)
@@ -346,6 +343,12 @@ internal static class MonsterMockBattleTcpTests
             Request(fresh, 1736, Command(7, 1));
             That(DailyMails() == 0 && Material(490013685) == beforeNextDay + 100,
                 "次日日币同日再次读卡册不重复发放");
+            var fallbackSpecial = Enter(fresh, checked((uint)catalog.Worlds[20].DungeonId), uint.MaxValue);
+            That(fallbackSpecial.Any(row => row.Opcode == 28) && fallbackSpecial.Any(row => row.Opcode == 29) &&
+                fallbackSpecial.Any(row => row.Opcode == 1767) && U32(stateBody, 4) == 20,
+                "无settings.json且处于2026年时，剧情模式最后一项异次元裂缝直接进入谋略战战场而非停在选图");
+            Request(fresh, 37, new byte[8]);
+            Request(fresh, 42, []);
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "完整活动链后数据库完整");
