@@ -105,8 +105,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
             {
                 if (IsStopped) return;
                 bool changed;
-                if ((Battle.Kind is RaidKind.Luke or RaidKind.Fiendwar || Battle.HasPreyTeamAutomaticRewards) && owner.settleRewards is { } settle &&
-                    (Battle.DueLukeRewards().Length != 0 || Battle.FiendwarRewardExpired || Battle.PreyTeamRewardDue))
+                if ((Battle.Kind is RaidKind.Luke or RaidKind.Fiendwar || Battle.HasPreyAutomaticRewards) && owner.settleRewards is { } settle &&
+                    (Battle.DueLukeRewards().Length != 0 || Battle.FiendwarRewardExpired || Battle.PreyRewardDue))
                 {
                     var beforeReward = Battle.View;
                     try { await settle(Battle); }
@@ -117,8 +117,8 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                     }
                     catch (Exception error)
                     { failures = Math.Min(failures + 1, 30); Report("luke-auto-reward", error); return; }
-                    // 普雷P1的最后一笔也可能由离线恢复提交；完整表就绪不一定改变view，仍须唤醒结果投影。
-                    if (!ReferenceEquals(beforeReward, Battle.View) || Battle.HasPreyTeamAutomaticRewards && beforeReward.Phase == 1)
+                    // 普雷最后一笔也可能由离线恢复提交；完整表就绪不一定改变view，仍须唤醒结果投影。
+                    if (!ReferenceEquals(beforeReward, Battle.View) || Battle.HasPreyAutomaticRewards)
                         Battle.Publish(Battle.View, error => Report("recipient", error));
                 }
                 bool waitingForReward = Battle.Kind == RaidKind.Anton && Battle.HasAntonRewards &&

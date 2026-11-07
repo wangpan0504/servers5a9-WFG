@@ -98,6 +98,38 @@ internal static class AccountMaterialTests
             "账号材料显示槽遵守本版list44的64格边界");
         Reject<InvalidDataException>(() => ActivityCalendarItemPackets.Full(45, current, Enumerable.Range(1, 51).ToArray()),
             "共通材料显示槽遵守本版list45的50格边界");
+        var physical = new InventorySnapshot([
+            new(82, new(InventoryListType.AccountCommon, 0), new(490013716, ItemKind.Material, 150) { EnchantCardId = 7, SortLockFlag = 1 }),
+            new(83, new(InventoryListType.AccountCommon, 2), new(490013717, ItemKind.Material, 30))]);
+        byte[] mergedFull = ActivityCalendarItemPackets.Full(45, current, ids, physical, 0);
+        That(mergedFull.Length == 3 + 3 * 123 && BinaryPrimitives.ReadUInt16LittleEndian(mergedFull.AsSpan(1)) == 3 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(mergedFull.AsSpan(3)) == 0 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(5)) == 490013716 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(9)) == 150 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(17)) == 7 && mergedFull[3 + 95] == 1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(mergedFull.AsSpan(3 + 123)) == 2 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(5 + 123)) == 490013717 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(mergedFull.AsSpan(3 + 246)) == 3 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(5 + 246)) == Coin &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedFull.AsSpan(9 + 246)) == 12,
+            "list45全量保留星河实体槽与完整属性，活动共通材料跳过已占用0/2槽落入空闲槽1/3");
+        var mergedUpdates = ActivityCalendarItemPackets.Changes(45, before, current, ids, physical, physical).ToArray();
+        That(mergedUpdates.Length == 2 && !mergedUpdates[0].Obtained && mergedUpdates[1].Obtained &&
+            BinaryPrimitives.ReadUInt16LittleEndian(mergedUpdates[0].Body.AsSpan(3)) == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedUpdates[0].Body.AsSpan(5)) == -1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(mergedUpdates[1].Body.AsSpan(3)) == 3 &&
+            BinaryPrimitives.ReadInt32LittleEndian(mergedUpdates[1].Body.AsSpan(9)) == 12,
+            "实体槽存在时活动材料增减只更新让位后的空闲槽1/3，不覆盖0/2星河实体材料");
+        var shifted = ActivityCalendarItemPackets.Changes(45, current, current, ids, InventorySnapshot.Empty, physical).Single();
+        That(!shifted.Obtained && shifted.Body.Length == 3 + 2 * 123 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(shifted.Body.AsSpan(3)) == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(shifted.Body.AsSpan(5)) == -1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(shifted.Body.AsSpan(3 + 123)) == 3 &&
+            BinaryPrimitives.ReadInt32LittleEndian(shifted.Body.AsSpan(5 + 123)) == Coin &&
+            BinaryPrimitives.ReadInt32LittleEndian(shifted.Body.AsSpan(9 + 123)) == 12,
+            "新增45实体材料占用原虚拟槽时，1681静默清旧虚拟槽1并将余额迁往新空闲槽3");
+        Reject<InvalidDataException>(() => ActivityCalendarItemPackets.Full(45, current, Enumerable.Range(1, 49).ToArray(), physical, 0),
+            "list45实体槽与虚拟活动材料总数遵守50格上限");
         Console.WriteLine($"PASS activity calendar account materials {Count - start}");
     }
 

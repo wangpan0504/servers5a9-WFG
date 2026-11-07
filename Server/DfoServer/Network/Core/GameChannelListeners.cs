@@ -8,18 +8,17 @@ internal sealed class GameChannelListeners(ServerOptions options, ChannelCatalog
 {
     internal sealed record BoundChannel(TcpListener Listener, ChannelEndpoint Endpoint);
     readonly List<BoundChannel> bound = [];
+    int[] ReservedPorts => [options.ChannelPort, options.GamePort, options.NativePort, options.GmPort,
+        options.PacketHttpPort, options.GmWebPort, options.RechargeWebPort];
     public IReadOnlyList<BoundChannel> Bound => bound;
     public IReadOnlyList<ChannelEndpoint> Endpoints { get; private set; } = [];
 
     public void Start()
     {
         if (bound.Count != 0) throw new InvalidOperationException("分类入口已启动");
-        int count = catalog.Channels.Count - 1;
+        ValidateFixedPortRange();
         int first = options.ChannelEntryPortBase;
-        int[] reserved = [options.ChannelPort, options.GamePort, options.NativePort, options.GmPort, options.PacketHttpPort];
-        if (first != 0 && (first + count - 1 > 65535 ||
-            reserved.Any(port => port != 0 && port >= first && port < first + count)))
-            throw new InvalidDataException("分类入口端口范围越界或与主监听重复");
+        int[] reserved = ReservedPorts;
         var address = IPAddress.Parse(options.ListenAddress);
         try
         {
@@ -54,6 +53,19 @@ internal sealed class GameChannelListeners(ServerOptions options, ChannelCatalog
                 throw;
             }
         }
+    }
+
+    internal void ValidateFixedPortRange()
+    {
+        int count = catalog.Channels.Count - 1;
+        int first = options.ChannelEntryPortBase;
+        if (first == 0 || count == 0) return;
+        long last = (long)first + count - 1;
+        if (first < 1 || last > 65535)
+            throw new InvalidDataException($"分类入口端口范围 [{first}, {last}] 超出1..65535，请调整 --channel-entry-port-base。");
+        var conflicts = ReservedPorts.Where(port => port > 0 && port >= first && port <= last).Distinct().Order().ToArray();
+        if (conflicts.Length != 0)
+            throw new InvalidDataException($"分类入口端口范围 [{first}, {last}] 与保留监听端口 {string.Join("、", conflicts)} 冲突；请调整分类入口范围或相应监听端口。");
     }
 
     public void Stop()

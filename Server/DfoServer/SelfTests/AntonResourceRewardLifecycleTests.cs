@@ -108,7 +108,9 @@ internal static class AntonResourceRewardLifecycleTests
             That(firstTeam.Length == 1 && firstTeam[0].Body[0] == 3 && firstTeam[0].Body[1] == acceptedTable.Length &&
                 CompleteTeamBody(firstTeam[0].Body, acceptedTable),
                 "第一连接完整class2帧按独立16B读宽包含全部owner/Card0/冻结物品且不含资产回执");
-            foreach (var actor in actors) battle.CompleteAntonMovie(actor, battle.View);
+            await RaidMovieResponseTests.ReturnAsync(resources, actors[0], battle, clock);
+            foreach (var actor in actors.SkipLast(1)) battle.CompleteAntonMovie(actor, battle.View);
+            await RaidMovieResponseTests.FailedFinalAckAsync(actors[0], actors[^1], battle);
             That(battle.View.AntonCardsReady, "两成员真实影片确认后才开放奖励");
             var secondTeamFrames = new List<(byte Kind, ushort Opcode, byte[] Body)>();
             using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15)))

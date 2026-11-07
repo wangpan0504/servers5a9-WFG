@@ -61,7 +61,7 @@ internal static class ServerDefaultsUpgradeTests
         var schedule = current.Schedule(312, now.AddDays(2), now.AddDays(3));
         current.Override(10005, false);
         raids.Replace("{}");
-        var selected = new SupportCompanionConfiguration(6, "graduate", "huge", "entry");
+        var selected = new SupportCompanionConfiguration(3, "graduate", "huge", "entry");
         new SupportCompanionStore(directory).Write(selected);
         That(!ServerDefaultsUpgrade.Apply(directory, true), "同代次重启不再次执行升级");
         var restarted = new ServerEventService(new ServerEventRepository(Path.Combine(directory, "game.db")));
@@ -116,10 +116,32 @@ internal static class ServerDefaultsUpgradeTests
         var failing = new GameDebugSettings(chosen, _ => throw new IOException("injected"));
         Reject<IOException>(() => failing.SupportCompanions = 0, "支援兵落盘失败向原命令报告失败");
         That(failing.SupportConfiguration == chosen, "落盘失败不能先发布内存成功状态");
-        Parallel.For(0, 24, index => settings.SupportConfiguration = chosen with { SelectionMask = index % 2 == 0 ? 3 : 6 });
+        Parallel.For(0, 24, index => settings.SupportConfiguration = chosen with { SelectionMask = index % 2 == 0 ? 3 : 2 });
         That(store.Read() == settings.SupportConfiguration, "并发更新的最终磁盘与内存属于同一完整快照");
         Reject<ArgumentOutOfRangeException>(() => settings.SupportConfiguration = chosen with { SelectionMask = 5 },
-            "多辅助非法组合仍被原合同拒绝");
+            "退役辅助和多辅助非法组合均拒绝");
+        string path = Path.Combine(directory, "support-companions.json");
+        foreach (int oldMask in new[] { 1, 3, 4, 6, 8, 10 })
+        {
+            var old = chosen with { SelectionMask = oldMask };
+            if (oldMask > 3)
+                Reject<ArgumentOutOfRangeException>(() => store.Write(old), "新的配置写入不能重新启用退役职业");
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(old));
+            var normalized = old with { SelectionMask = oldMask & 3 };
+            That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
+                File.ReadAllText(path)) == normalized, "旧合法选择移除退役位并持久化，允许光兵与三个档次完整保留");
+            var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(path, stamp);
+            That(new GameDebugSettings(store.Read(), store.Write).SupportConfiguration == normalized && File.GetLastWriteTimeUtc(path) == stamp,
+                "同配置重启不再重写或反复清零");
+        }
+        foreach (int invalid in new[] { -1, 5, 12, 16 })
+        {
+            string raw = System.Text.Json.JsonSerializer.Serialize(chosen with { SelectionMask = invalid });
+            File.WriteAllText(path, raw);
+            Reject<ArgumentOutOfRangeException>(() => store.Read(), "坏旧mask不能借归一迁移洗成允许状态");
+            That(File.ReadAllText(path) == raw, "坏配置读取失败保留原文件");
+        }
         File.WriteAllText(Path.Combine(directory, "support-companions.json"), "{}");
         Reject<ArgumentOutOfRangeException>(() => store.Read(), "坏持久配置不能静默覆盖为默认");
     }

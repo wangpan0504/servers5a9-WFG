@@ -58,8 +58,14 @@ internal static class PreyDebugRewardTests
                     "默认奖励限制拒绝不发放库存资产");
                 continue;
             }
-            if (!battle.PreyGuide && phase == 1)
-                That(battle.CompletePreyMovie(actor, battle.View), "普通最终奖励仍等待真实演出完成业务确认");
+            if (battle.PreyGuide || phase == 1)
+            {
+                var beforeMovie = session.Selected;
+                That(session.ClaimRaidReward(1, 0, repository, resources.ItemResources.Items,
+                    resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces, now) is null &&
+                    ReferenceEquals(beforeMovie, session.Selected), "Debug额度豁免不绕过真实阶段电影前拒领且不改资产");
+                That(battle.CompletePreyMovie(actor, battle.View), "引导各阶段及普通最终奖励均等待真实演出完成业务确认");
+            }
             foreach (byte kind in new byte[] { 1, 0 })
             {
                 var receipt = session.ClaimRaidReward(kind, 0, repository, resources.ItemResources.Items,

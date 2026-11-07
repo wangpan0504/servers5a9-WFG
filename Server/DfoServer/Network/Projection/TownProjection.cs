@@ -35,7 +35,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal bool EpicRoadAvailable => epicRoadAvailable;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
-        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
+        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null,
+        DfoServer.Game.Inventory.Models.InventorySnapshot? beforeInventory = null)
     {
         foreach (var body in AccountMaterialPackets.Balances(character.Inventory.AccountWallet, before))
             await context.Notify(NotiPacketType.ACCOUNT_MATERIAL_STORAGE_INFO, body,
@@ -44,12 +45,13 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         {
             bool CalendarCurrent() => canSend?.Invoke() != false && context.Session.SelectionEpoch == calendar.Epoch &&
                 context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == calendar.ItemIds;
+            long nowUnix = timer.GetUtcNow().ToUnixTimeSeconds();
             foreach (var (list, ids) in CalendarLists(calendar.ItemIds))
             {
                 if (before is null)
-                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids),
+                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids, character.Inventory, nowUnix),
                         "activity_calendar_items_resync", CalendarCurrent);
-                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids))
+                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids, beforeInventory, character.Inventory))
                     await context.Notify(obtained ? NotiPacketType.UPDATE_ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE,
                         body, obtained ? "activity_calendar_item_obtained" : "activity_calendar_item_committed", CalendarCurrent);
             }
@@ -666,7 +668,27 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await PcRoomBuffProjection.PostAsync(context, CanSend);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        if (context.Session.RaidStatusSnapshot() is { } raid)
+        {
+            // 业务Town可早于24写出；时钟资格提交不得把成功演出投到仍在图内的原生场景。
+            void SceneWritten()
+            {
+                var latest = raid.Battle.View;
+                bool Current() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    latest.Phase == raid.View.Phase && !latest.PhaseExpired && !latest.ClockFaulted &&
+                    context.Session.CanPublishRaidBattle(raid.Actor, latest);
+                if (latest.State == Game.Raids.AntonRaidBattleState.Reward && context.Owner.Execute(Current))
+                    // 只排当前已提交演出；完整Notice含资格查询，不能在发送泵回调中执行。
+                    RaidCombatProjection.PostState(context, latest, raid.Actor, Current, "raid_return_state");
+            }
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character),
+                action, CanSend, afterWritten: SceneWritten))
+                throw new IOException("Raid return scene queue unavailable");
+            if (!context.Sender.IsPublicationQueued) await context.Sender.DrainAsync();
+        }
+        else
+            await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         await RestoreFreeConsumablesAsync(context, receipt.ConsumableCooldowns, receipt.ConsumableEffects, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);

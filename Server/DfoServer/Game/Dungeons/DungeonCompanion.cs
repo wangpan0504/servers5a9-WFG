@@ -10,7 +10,7 @@ internal static class DungeonCompanion
 {
     // 王富贵：priest/heal_soldier/heal_soldier.aic，20900 行写在每张可解析的副本地图里。
     public const int WangFuguiId = 20900;
-    // 专用光兵不再复用人偶2600261的5409；奶妈、奶萝与光兵须配套各自注册的AIC及MAP行。
+    // 专用光兵不再复用人偶2600261的5409，须配套注册AIC及MAP行；退役身份仅保留用于屏蔽旧资源。
     public const int GuangbingId = 9986;
     public const int FemaleCrusaderId = 74990;
     public const int EnchantressId = 19973;
@@ -29,9 +29,12 @@ internal static class DungeonCompanion
         _ => throw new ArgumentOutOfRangeException(nameof(id))
     };
     public static ImmutableArray<SupportCompanionProfile> FreezeProfiles(SupportCompanionConfiguration selected,
-        SupportCompanionCatalog catalog, Func<int, int> draw) =>
-        [.. GameDebugSettings.SupportCompanionKinds(selected.SelectionMask)
+        SupportCompanionCatalog catalog, Func<int, int> draw)
+    {
+        GameDebugSettings.ValidateSupportConfiguration(selected);
+        return [.. GameDebugSettings.SupportCompanionKinds(selected.SelectionMask)
             .Select(kind => catalog.Pick(BaseId(kind), selected.TierFor(kind), draw)).OfType<SupportCompanionProfile>()];
+    }
 
     // 入图仅消费一次两组选择快照；共享实例成员沿用创建者冻结的集合。
     public static ImmutableArray<int> EnabledRows(int mask)
@@ -46,13 +49,11 @@ internal static class DungeonCompanion
         SupportCompanionKind.Off => [],
         SupportCompanionKind.WangFugui => [WangFuguiId],
         SupportCompanionKind.Guangbing => [GuangbingId],
-        SupportCompanionKind.FemaleCrusader => [FemaleCrusaderId],
-        SupportCompanionKind.Enchantress => [EnchantressId],
         _ => throw new ArgumentOutOfRangeException(nameof(selected))
     };
 
     // ID判定只覆盖专用模板；5409原生演员与人偶不能全局归入伴侣。
-    public static bool IsCompanionRow(int id) => id is WangFuguiId or GuangbingId or FemaleCrusaderId or EnchantressId;
+    public static bool IsCompanionRow(int id) => SupportCompanionResources.IsSupportedBase(id) || SupportCompanionResources.IsBlocked(id);
 
     // 活动地图由新 DLL 全权接管；服务端按旧支援兵的完整友方普通 APC 形状屏蔽 5409，
     // 不把普通副本中的未知 5409 原生演员误判为支援兵。

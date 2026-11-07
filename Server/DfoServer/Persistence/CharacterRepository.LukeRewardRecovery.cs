@@ -35,10 +35,10 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
                 validateAllGrants: target.RaidType == RaidKind.Prey, raidType: target.RaidType);
             if (target.RaidType == RaidKind.Fiendwar && (eligibility.Source != row.GetString(3) || eligibility.Week <= 0))
                 throw new InvalidDataException("漩涡历史资格来源或周期不属于原开战实例");
-            if (target.RaidType == RaidKind.Prey && (eligibility.Source != PreyGuideRewards.TeamSource ||
+            if (target.RaidType == RaidKind.Prey && (eligibility.Source is not (PreyGuideRewards.TeamSource or PreyGuideRewards.Source) ||
                 eligibility.Source != row.GetString(3) || eligibility.Week <= 0 ||
                 eligibility.Offers.Any(offer => offer.Kind is not (0 or 1) || offer.Card != 0)))
-                throw new InvalidDataException("普雷普通历史资格来源或牌面不属于原开战实例");
+                throw new InvalidDataException("普雷历史资格来源或牌面不属于原开战实例");
             if (!eligibility.Eligible) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
         }
         var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == target.Kind &&

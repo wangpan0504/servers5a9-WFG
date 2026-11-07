@@ -7,15 +7,21 @@ namespace DfoServer.Network.Projection;
 internal static partial class RaidCombatProjection
 {
     internal static bool Movie(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
-        AntonRaidBattleView view, bool completed)
+        AntonRaidBattleView view, Guid movieEvent, bool completed)
     {
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
-        bool Guard() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity;
-        if (!Guard()) return true;
+        bool Guard() => context.Session.CanPublishRaidMovie(actor, battle, view.Phase, movieEvent) && context.RaidDisplay == identity;
         // 最后一名无资格成员确认可同步进入等待；已接受的659仍需ACK，但不能投到新actor或新阶段。
         bool Acknowledge() => actor.IsCurrent && context.Session.CurrentRaidBattle(actor) == battle &&
             battle.View.Phase == view.Phase && context.RaidDisplay == identity;
-        if (!context.Sender.TryPost(1, (ushort)CmdPacketType.RAID_MOVIE_SKIP, [1], "raid_movie_ack", Acknowledge)) return false;
+        var confirmation = context.Session.ConfirmRaidMovie(actor, battle, view, movieEvent, completed,
+            () => context.RaidDisplay == identity,
+            () => context.Sender.TryPost(1, (ushort)CmdPacketType.RAID_MOVIE_SKIP, [1], "raid_movie_ack", Acknowledge));
+        if (confirmation is null) return true;
+        view = confirmation.View;
+        // 完成事实与ACK已在同一owner/Battle边界接受，广播始终在锁外。
+        if (confirmation.Changed) battle.Publish(battle.View);
+        if (!confirmation.Acknowledged) return false;
         if (!completed)
         {
             if (battle.HasAntonRewards && view.AntonCardsReady) return true;
@@ -24,29 +30,14 @@ internal static partial class RaidCombatProjection
                 () => Guard() && context.RaidMoviePrompt != identity && context.RaidMovieCards != identity,
                 () => context.RaidMoviePrompt = identity);
         }
-        if (battle.HasAntonRewards)
+        if (battle.HasAntonRewards || battle.Kind == RaidKind.Fiendwar) return true;
+        if (battle.Kind == RaidKind.Prey)
         {
-            if (battle.CompleteAntonMovie(actor, view)) battle.Publish(battle.View);
-            return true;
-        }
-        if (battle.Kind == RaidKind.Fiendwar)
-        {
-            if (battle.CompleteFiendwarMovie(actor, view)) battle.Publish(battle.View);
-            return true;
-        }
-        if (battle is { Kind: RaidKind.Prey, PreyGuide: false })
-        {
-            bool changed = battle.CompletePreyMovie(actor, view);
-            if (changed && !battle.IsCurrent(view)) battle.Publish(battle.View);
             return PostPreyResults(context, actor, battle, view);
         }
         if (view.Phase == 0 || battle.LukeEligibility(actor.Character, view.Phase) is { Eligible: false })
-        {
-            bool changed = battle.CompleteLukeFirstMovie(actor, view);
-            if (changed && (battle.LukeMovieCardsReady(view) || !battle.IsCurrent(view))) battle.Publish(battle.View);
             return true;
-        }
-        return PostLukeMovieCards(context, actor, battle, view);
+        return PostLukeMovieCards(context, actor, battle, view, movieEvent);
     }
 
     static bool PostPreyResults(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
@@ -61,7 +52,7 @@ internal static partial class RaidCombatProjection
         {
             var latest = battle.View;
             return context.Session.CanPublishRaidBattle(actor, latest) && context.RaidDisplay == identity &&
-                latest.Phase == 1 && battle.PreyMovieCardsReady(actor, latest) && context.RaidMovieCards != identity;
+                latest.Phase == view.Phase && battle.PreyMovieCardsReady(actor, latest) && context.RaidMovieCards != identity;
         }
         byte Written() => context.PreyResultDisplay is { } display && display.Identity == identity ? display.Mask : (byte)0;
         void Record(byte bit) => context.PreyResultDisplay = (identity, (byte)(Written() | bit));
@@ -71,25 +62,40 @@ internal static partial class RaidCombatProjection
             () => Current() && (Written() & 1) == 0, () => Record(1))) return false;
         if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Team(team),
             "prey_result_team", () => Current() && (Written() & 4) == 0, () => Record(4))) return false;
-        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, 1], "prey_result_open",
+        // type3的0x10C只在显示阶段1开启；不能为开窗改写引导的真实阶段及原资格。
+        byte displayPhase = battle.PreyGuide ? (byte)1 : checked((byte)view.Phase);
+        if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, displayPhase], "prey_result_open",
             () => Current() && (Written() & 5) == 5, () => context.RaidMovieCards = identity)) return false;
         return true;
     }
 
-    static bool PostLukeMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
-        AntonRaidBattleView view)
+    // 引导P1领取后会立即进入真实P2；须在原阶段仍有效时写完已提交结果，不能等新阶段广播补旧牌面。
+    internal static async Task PublishPreyGuideResultsAsync(GameConnectionContext context, RaidRewardReceipt receipt)
     {
-        if (!battle.LukeMovieCardsReady(view) ||
-            battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true } ||
-            battle.RewardPolicy(actor, view.Phase) is not { } policy) return true;
+        if (!context.Session.CanPublishRaidReward(receipt) ||
+            context.Session.RaidStatusSnapshot() is not { Battle.Kind: RaidKind.Prey, Battle.PreyGuide: true } snapshot ||
+            snapshot.View.State != AntonRaidBattleState.Reward || snapshot.View.Phase != receipt.Prepared.Phase ||
+            snapshot.View.Instance != receipt.Prepared.Instance) return;
+        if (!PostPreyResults(context, snapshot.Actor, snapshot.Battle, snapshot.View))
+            throw new IOException("Prey guide result queue unavailable");
+        await context.Sender.DrainAsync();
+    }
+
+    static bool PostLukeMovieCards(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view, Guid? acceptedMovieEvent = null)
+    {
+        if (battle.CaptureLukeMovieCards(actor, view.Phase, acceptedMovieEvent) is not { } snapshot ||
+            snapshot.View.Instance != view.Instance || view.Phase != 0 && snapshot.Team.IsDefaultOrEmpty) return true;
+        view = snapshot.View;
         var identity = RaidCombatDisplayIdentity.Capture(actor, view);
-        bool Cards() => context.Session.CanPublishRaidBattle(actor, view) && context.RaidDisplay == identity &&
-            battle.LukeMovieCardsReady(view) && context.RaidMovieCards != identity;
-        context.LukeResults.PostTeam(context, actor, battle, view);
+        bool Cards() => context.Session.CanPublishRaidMovie(actor, battle, view.Phase, snapshot.Event) && context.RaidDisplay == identity &&
+            battle.LukeMovieCardsReady(actor, view.Phase, snapshot.Event) && context.RaidMovieCards != identity &&
+            (view.Phase == 0 || context.LukeResults.MovieTeamWritten(identity));
+        context.LukeResults.PostTeam(context, actor, battle, view, movie: snapshot);
         // 02396DE0 state4→036D2770→01C99AA0显示翻牌组合对象；第二字节写入真实阶段。
         // 这是演出显示推进，Battle仍在Reward，只有实际资产提交确认才能转阶段。
         if (!context.Sender.TryPost(0, (ushort)NotiPacketType.RAID_STATE, [4, checked((byte)view.Phase)], "raid_movie_cards", Cards)) return false;
-        var offers = policy.Offers;
+        var offers = snapshot.Policy.Offers;
         for (int index = 0; index < offers.Length; index++)
         {
             var offer = offers[index];

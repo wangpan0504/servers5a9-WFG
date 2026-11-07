@@ -36,7 +36,7 @@ internal sealed partial class AdventureHandler
             var member = snapshot.Representatives(representatives.Catalog).Single(row => row.Job == request.Job && row.ProfessionGrow == request.Grow);
             // 1477与1343使用同一收藏口径：按分类统计不同转职数，并用整类集齐标志点亮左侧分类按钮。
             var collection = snapshot.Collections(representatives.Catalog)[profession.Group];
-            body = AdventurePackets.Representative(profession, collection, member);
+            body = AdventurePackets.Representative(profession, collection, member, context.Channel.ServerIndex);
         }
         await context.Reply(CmdPacketType.SET_REPRESENT_CHARAC_JOB, body, "adventure_representative_set",
             result.Accepted ? () => context.Session.CanPublishAdventureRepresentative(result) : null);
@@ -58,7 +58,7 @@ internal sealed partial class AdventureHandler
         await expeditions.RepresentativesAsync(context, result);
         bool Guard() => context.Session.CanPublishAdventureRepresentative(result);
         await context.Notify(NotiPacketType.ADVENTURE_INFO, AdventurePackets.Information(selected.Id, snapshot, representatives.Catalog,
-            snapshot.Representatives(representatives.Catalog)), "adventure_representative_information", Guard);
+            snapshot.Representatives(representatives.Catalog), context.Channel.ServerIndex), "adventure_representative_information", Guard);
         await context.Notify(NotiPacketType.ADVENTURE_LV_EXP, AdventurePackets.Refresh(selected.Id, snapshot.State, representatives.Catalog),
             "adventure_representative_actor", Guard);
     }

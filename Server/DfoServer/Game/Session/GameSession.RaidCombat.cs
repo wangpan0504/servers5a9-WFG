@@ -175,7 +175,7 @@ internal sealed partial class GameSession
 
     internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View)? RaidStatusSnapshot() =>
         owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView)?>(() =>
-            Ready && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } raid
+            Ready && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar } raid
                 ? (raid.Actor, raid.Battle, raid.Battle.View) : null);
 
     internal AntonRaidBattleChange? RecordLukeNamedDeath(FormalDungeonDeathResult result) => owner.Execute(() =>
@@ -255,18 +255,24 @@ internal sealed partial class GameSession
         return result with { RawFlag = sameTasks ? (byte)1 : (byte)0 };
     });
 
-    internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View)? RaidMovieSnapshot() =>
-        owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView)?>(() =>
+    internal (RaidActor Actor, AntonRaidBattle Battle, AntonRaidBattleView View, Guid Event)? RaidMovieSnapshot() =>
+        owner.Execute<(RaidActor, AntonRaidBattle, AntonRaidBattleView, Guid)?>(() =>
         {
             if (!Ready || AntonRejoinPresentationPending || raidCombat is not { Actor.IsCurrent: true } raid ||
-                raid.Battle.View is not { State: AntonRaidBattleState.Reward, PhaseExpired: false, ClockFaulted: false } view ||
-                raid.Battle.RewardPolicy(raid.Actor, view.Phase) is not { PublishResult: true } ||
-                !(raid.Battle.HasAntonRewards ? raid.Battle.CanConfirmAntonMovie(raid.Actor, view) :
-                    raid.Battle.Kind == RaidKind.Fiendwar ? raid.Battle.CanConfirmFiendwarMovie(raid.Actor, view) :
-                    raid.Battle is { Kind: RaidKind.Prey, PreyGuide: false } ? raid.Battle.CanConfirmPreyMovie(raid.Actor, view) :
-                    raid.Battle.CanConfirmLukeMovie(raid.Actor, view))) return null;
-            return (raid.Actor, raid.Battle, view);
+                raid.Battle.CaptureMovie(raid.Actor) is not { } movie) return null;
+            return (raid.Actor, raid.Battle, movie.View, movie.Event);
         });
+
+    internal RaidMovieConfirmation? ConfirmRaidMovie(RaidActor actor, AntonRaidBattle battle,
+        AntonRaidBattleView view, Guid movieEvent, bool completed, Func<bool> displayed, Func<bool> acknowledge) =>
+        owner.Execute(() => Ready && !AntonRejoinPresentationPending && raidCombat is { } raid &&
+            raid.Actor == actor && actor.IsCurrent && ReferenceEquals(raid.Battle, battle) && displayed()
+                ? battle.ConfirmMovie(actor, view, movieEvent, completed, acknowledge) : null);
+
+    internal bool CanPublishRaidMovie(RaidActor actor, AntonRaidBattle battle, int phase, Guid movieEvent) =>
+        owner.Execute(() => Ready && !AntonRejoinPresentationPending && raidCombat is { } raid &&
+            raid.Actor == actor && actor.IsCurrent && ReferenceEquals(raid.Battle, battle) &&
+            battle.CaptureMovie(actor) is { } movie && movie.View.Phase == phase && movie.Event == movieEvent);
 
     public bool CanPublishRaidBattle(RaidActor actor, AntonRaidBattleView view) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent && raid.Battle.IsCurrent(view));

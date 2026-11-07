@@ -309,16 +309,22 @@ internal static class DungeonMonsterPlanTests
         };
         That(!DungeonCompanion.IsCompanionRow(unknownLegacyRoom, 0) && !DungeonCompanion.IsCompanionRow(5409),
             "来源未证的真实5409不归入支援兵分类");
-        foreach (var selected in new[] { SupportCompanionKind.FemaleCrusader, SupportCompanionKind.Enchantress })
+        foreach (int id in new[] { 74990, 74000, 74047, 19973, 19000, 19083 })
         {
-            int id = DungeonCompanion.EnabledRows(selected).Single();
-            var actorRow = new DungeonRoomAiCharacter(id, [id, 120, 200, 0, 0, 0], "[character]", "[normal]", "aicharacter/fixture.aic", 95);
+            var actorRow = new DungeonRoomAiCharacter(id, [], "[character]", "[normal]", "", 0);
             var repeated = DungeonMonsterPlan.FromRoom(room with { AiCharacters = [actorRow, actorRow] }, 99, 10,
-                companionRows: DungeonCompanion.EnabledRows(selected));
-            That(repeated.Monsters.Count(row => row.AiCharacter is { } value && value.Id == id) == 1 &&
-                repeated.Monsters[^1] is { IsFriendly: true, IsBlocking: false, CanReportDeath: false },
-                "新增奶妈奶萝专用行每类仅放一名，不产生敌对死亡资格");
+                companionRows: [id]);
+            That(repeated.Monsters.All(row => row.AiCharacter is null), "伪造放行集合也不能生成退役基础或变体，且不校验其正文");
+            var disguised = DungeonMonsterPlan.FromRoom(companionOnlyRoom, 99, 10,
+                companionRows: [DungeonCompanion.WangFuguiId], companionProfiles:
+                    [new(DungeonCompanion.WangFuguiId, "graduate", id, "forged", "", 95)]);
+            That(disguised.Monsters.All(row => row.AiCharacter is null), "伪造奶爸profile不能借允许MAP行发送退役模板");
+            var wavePlan = companionOnlyClosed.WithHellWaves([new(0, 1, id, 95, 5, 0, 0)], 99);
+            That(wavePlan.HellWaves.Count == 0 && wavePlan.Monsters.SequenceEqual(companionOnlyClosed.Monsters),
+                "手工构造的深渊APC波次仍不生成退役演员或占用对象key");
         }
+        foreach (var selected in new[] { SupportCompanionKind.FemaleCrusader, SupportCompanionKind.Enchantress })
+            Reject<ArgumentOutOfRangeException>(() => DungeonCompanion.EnabledRows(selected), "旧单职业枚举不能重新开放退役职业");
         That(nextRoom.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))
                 .SequenceEqual(companionOnlyClosed.Monsters.Select(row => (row.SourceOrdinal, row.ObjectKey))) &&
             wangOnly.Monsters.Take(companionOnlyClosed.Monsters.Count).Select(row => (row.SourceOrdinal, row.ObjectKey))

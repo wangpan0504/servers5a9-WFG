@@ -106,7 +106,7 @@ internal static partial class GmWebServer
         });
         await using var app = builder.Build();
         using var packetRequests = new SemaphoreSlim(8, 8);
-        Map(app, data, port != 0, clientPages);
+        Map(app, data, port, clientPages);
         if (clientPages)
         {
             MapRecharge(app, data);
@@ -114,7 +114,7 @@ internal static partial class GmWebServer
             MapClientGeometry(app, geometry);
             MapClientGeometryBatch(app, () => geometrySnapshot);
         }
-        if (capture is not null && options is not null)
+        if (port != 0 && capture is not null && options is not null)
             MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
         await app.StartAsync(stop);
         started?.Invoke();
@@ -127,44 +127,10 @@ internal static partial class GmWebServer
     static readonly Regex Amplify = new(@"^amp:[1-4]:[0-9]{1,10}$", RegexOptions.Compiled);
     static readonly Regex Tag = new(@"^[^\s\p{C}]{1,32}$", RegexOptions.Compiled);
 
-    internal static void Map(WebApplication app, IGmWebData data, bool management = true, bool clientPages = false)
+    internal static void Map(WebApplication app, IGmWebData data, int managementPort, bool clientPages = false)
     {
-        app.Use(async (context, next) =>
-        {
-            string host = context.Request.Host.Host;
-            bool local = context.Connection.RemoteIpAddress is { } peer && IPAddress.IsLoopback(peer) &&
-                string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase);
-            bool clientPath = clientPages && (context.Request.Path.StartsWithSegments("/client", StringComparison.Ordinal) ||
-                context.Request.Path.StartsWithSegments(RechargeRoot.TrimEnd('/'), StringComparison.Ordinal) ||
-                context.Request.Path == "/favicon.ico");
-            bool listenerHost = IPAddress.TryParse(host, out var address) &&
-                context.Connection.LocalIpAddress is { } listener && address.Equals(listener);
-            if (!local && !listenerHost)
-            {
-                context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                return;
-            }
-            context.Response.Headers["Cache-Control"] = "no-store";
-            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-            bool recharge = context.Request.Path.StartsWithSegments(RechargeRoot.TrimEnd('/'), StringComparison.Ordinal);
-            context.Response.Headers["Content-Security-Policy"] = clientPath
-                ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-                : "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-            if (!HttpMethods.IsGet(context.Request.Method))
-            {
-                // 防跨站请求：自定义头无法由普通跨站表单带出；Origin 存在时必须与本机 Host 同源。
-                string? origin = context.Request.Headers.Origin;
-                bool geometryQuery = clientPages && HttpMethods.IsPost(context.Request.Method) && context.Request.Path == GeometryBatchRoute;
-                if ((!geometryQuery && context.Request.Headers[recharge ? "X-Recharge-Request" : "X-GM-Request"] != "1") ||
-                    origin is not null && origin != "http://" + context.Request.Host.Value)
-                {
-                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    return;
-                }
-            }
-            await next();
-        });
-        if (!management) return;
+        app.Use(CreateRequestBoundary(managementPort, clientPages));
+        if (managementPort == 0) return;
         app.MapGet("/api/status", () => Results.Json(data.Status()));
         app.MapGet("/api/online", () => Results.Json(data.Online()));
         app.MapGet("/api/accounts", () => Results.Json(data.Accounts()));
@@ -209,13 +175,13 @@ internal static partial class GmWebServer
         app.MapPost("/api/support-companions", (HttpContext http, SupportCompanionsBody b) =>
         {
             if (b.Confirm != true) return Bad("需要二次确认");
-            if (b.Companions is null || b.Companions.Length > 3 ||
-                b.Companions.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress")))
+            if (b.Companions is null || b.Companions.Length > 2 ||
+                b.Companions.Any(name => name is not ("wangfugui" or "guangbing")))
                 return Bad("支援兵名单无效");
             string[] names = ["wangfugui", "female-crusader", "enchantress"];
             if (b.Tiers is null || b.Tiers.Count != names.Length ||
                 names.Any(name => !b.Tiers.TryGetValue(name, out var tier) || tier is not ("entry" or "graduate" or "huge")))
-                return Bad("请同时提交奶爸、奶妈、小魔女的门槛、毕业或超大档次");
+                return Bad("请提交有效档次配置，并保留旧版三个档次字段；当前仅开放奶爸与光兵");
             string selection = b.Companions.Length == 0 ? "off" : string.Join(',', b.Companions);
             string command = $"support-profile {selection} {string.Join(' ', names.Select(name => b.Tiers[name]))}";
             return Run(http, data, "support-companions", "-", "-", command, "support-profile");
@@ -432,18 +398,20 @@ internal static partial class GmWebServer
             {
                 // 这里只校验传输标记，分组数量与重复项由同一开发命令执行器原子校验。
                 string[] names = b.Value?.Split(',') ?? [];
-                if (b.Value != "off" && (names.Length is < 1 or > 4 ||
-                    names.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress"))))
+                if (b.Value != "off" && (names.Length is < 1 or > 2 ||
+                    names.Any(name => name is not ("wangfugui" or "guangbing"))))
                     return Bad("支援兵选择无效");
                 return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
             }
             if (b.Key == "support-companion")
             {
-                if (b.Value is not ("off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
+                if (b.Value is not ("off" or "wangfugui" or "guangbing"))
                     return Bad("支援兵选择无效");
                 return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
             }
             if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
+            if (b.Value == "on" && (b.Key is "summon-female-crusader" or "summon-enchantress"))
+                return Bad("当前仅开放奶爸与光兵");
             if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room" or
                 "summon-wangfugui" or "summon-guangbing" or "summon-female-crusader" or "summon-enchantress")) return Bad("未知调试开关");
             return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
@@ -465,7 +433,7 @@ internal static partial class GmWebServer
             catch (JsonException) { return null; }
         }
         string[]? selections = null;
-        JsonElement? companionTiers = null, companionProfiles = null;
+        JsonElement? companionTiers = null, companionProfiles = null, supportedCompanions = null, unavailableCompanions = null;
         string companion = data.Command("support-companion");
         if (companion.StartsWith("OK ", StringComparison.Ordinal))
         {
@@ -476,14 +444,18 @@ internal static partial class GmWebServer
                     companionTiers = tiers.Clone();
                 if (document.RootElement.TryGetProperty("profiles", out var profiles) && profiles.ValueKind == JsonValueKind.Array)
                     companionProfiles = profiles.Clone();
+                if (document.RootElement.TryGetProperty("supportedCompanions", out var supported) && supported.ValueKind == JsonValueKind.Array)
+                    supportedCompanions = supported.Clone();
+                if (document.RootElement.TryGetProperty("unavailableCompanions", out var unavailable) && unavailable.ValueKind == JsonValueKind.Array)
+                    unavailableCompanions = unavailable.Clone();
                 if (document.RootElement.TryGetProperty("supportCompanions", out var values) && values.ValueKind == JsonValueKind.Array &&
                     values.EnumerateArray().All(value => value.ValueKind == JsonValueKind.String &&
-                        value.GetString() is "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
+                        value.GetString() is "wangfugui" or "guangbing"))
                 {
                     selections = values.EnumerateArray().Select(value => value.GetString()!).ToArray();
                 }
                 else if (document.RootElement.TryGetProperty("supportCompanion", out var value) && value.ValueKind == JsonValueKind.String &&
-                    value.GetString() is "off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress")
+                    value.GetString() is "off" or "wangfugui" or "guangbing")
                     selections = value.GetString() == "off" ? [] : [value.GetString()!];
             }
             catch (JsonException) { }
@@ -496,6 +468,8 @@ internal static partial class GmWebServer
             ["premiumPcRoom"] = Flag("pc-room", "premiumPcRoom"),
             ["supportCompanion"] = selections is null ? null : selections.FirstOrDefault(name => name != "guangbing") ?? selections.FirstOrDefault() ?? "off",
             ["supportCompanions"] = selections,
+            ["supportedCompanions"] = supportedCompanions,
+            ["unavailableCompanions"] = unavailableCompanions,
             ["supportCompanionTiers"] = companionTiers,
             ["profiles"] = companionProfiles,
             ["supportAuxiliary"] = selections is null ? null : selections.FirstOrDefault(name => name != "guangbing") ?? "off",

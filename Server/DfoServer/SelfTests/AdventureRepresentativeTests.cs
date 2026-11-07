@@ -43,10 +43,13 @@ internal static class AdventureRepresentativeTests
         That(candidates.Length == 108 && candidates[0] == 1 && candidates[1] == 1 && candidates[2] == 2 && candidates[3] == 2 &&
             BitConverter.ToUInt32(candidates, 16) == 1 && BitConverter.ToUInt32(candidates, 68) == 2,
             "1476为52B候选，不误用56B客户端扩展记录");
-        var set = AdventurePackets.Representative(catalog.Professions[(0, 1)], new AdventureCollection(2, true), second);
+        var set = AdventurePackets.Representative(catalog.Professions[(0, 1)], new AdventureCollection(2, true), second, 2);
         That(set.Length == 64 && BitConverter.ToUInt32(set, 1) == 3 && set[5] == catalog.Professions[(0, 1)].Group &&
-            set[6] == 2 && set[7] == 1 && BitConverter.ToUInt32(set, 8) == 52 && set[54] == 7,
-            "1477成功含3B分类结构（type:u8@0、count:u8@1、complete:u8@2）及52B收藏RAW，熟练角标在收藏42偏移");
+            set[6] == 2 && set[7] == 1 && BitConverter.ToUInt32(set, 8) == 52 && set[54] == 2 && BitConverter.ToUInt32(set, 16) == 7 && BitConverter.ToUInt16(set, 56) == 7,
+            "1477成功含3B分类结构（type:u8@0、count:u8@1、complete:u8@2）及52B收藏RAW，服务器在收藏42偏移，熟练度仍独立在4及44");
+        var information = AdventurePackets.Information(1, snapshot, catalog, [second], 2);
+        Bytes(set.AsSpan(12, 52).ToArray(), information.AsSpan(18 + 72, 52).ToArray(),
+            "1477收藏行与1343对同一代表使用完全相同的服务器、熟练度及身份字段");
         Persist(service, now);
         Console.WriteLine($"PASS {Count - before} 代表职业资格、字节、零变化与SQLite原子断言");
     }

@@ -60,7 +60,7 @@ internal sealed partial class AntonRaidBattle
                     current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired &&
                     HasFiendwarMovieBarrierLocked() && (LukeMovieBarrierReadyLocked() ||
                         automaticLuke && LukeRewardRemainingLocked() == TimeSpan.Zero);
-            if (Kind == RaidKind.Prey && !PreyGuide && phase == 1)
+            if (Kind == RaidKind.Prey && HasPreyMovieBarrierLocked())
                 return actor.IsCurrent && members.ContainsKey(actor) && current.Phase == phase &&
                     current.State == AntonRaidBattleState.Reward && !current.ClockFaulted && !current.PhaseExpired &&
                     (lukeMovieCompleted.Contains((phase, actor.Character)) ||

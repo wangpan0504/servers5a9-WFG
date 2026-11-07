@@ -95,7 +95,8 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
             sourceTemplate.Kind != source.Core.Kind || sourceTemplate.UseForbidden)
             return InventoryResult.Reject(Rejection);
         var rules = medals.Rules;
-        if (target.Core.Upgrade >= rules.Rows.Length) return InventoryResult.Reject(Rejection);
+        if (target.Core.Upgrade >= InventoryRewardGrantService.MaximumUpgrade(template) ||
+            target.Core.Upgrade >= rules.Rows.Length) return InventoryResult.Reject(Rejection);
         var row = rules.Rows[target.Core.Upgrade];
         if (source.Core.ItemId != row.MaterialId) return InventoryResult.Reject(Rejection);
         int coins = rules.CoinCost(template.Rarity, row.MaterialCount);

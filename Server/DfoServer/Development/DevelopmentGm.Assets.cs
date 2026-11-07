@@ -26,6 +26,7 @@ internal static partial class DevelopmentGm
         if (recipient is null || recipient.Account != request.Account)
             throw new InvalidDataException("角色不存在或不属于该账号");
         var template = items.Get(request.Primary);
+        RequireEquipmentOptions(template, request.Upgrade, 0);
         var now = DateTimeOffset.UtcNow;
         var prototype = InventoryRewardGrantService.Create(template, utcNow: now, upgrade: (byte)request.Upgrade);
         bool stackable = prototype.IsStackable;
@@ -75,7 +76,9 @@ internal static partial class DevelopmentGm
             id = template.Id, name = template.Name, kind = template.Kind.ToString(), minLevel = template.MinimumLevel,
             rarity = template.Rarity, stackLimit = template.StackLimit,
             stackable = InventoryRewardGrantService.Create(template).IsStackable,
-            upgradable = template.Kind == ItemKind.Equipment,
+            upgradable = InventoryRewardGrantService.MaximumUpgrade(template) > 0,
+            maxUpgrade = InventoryRewardGrantService.MaximumUpgrade(template),
+            amplifiable = template.Kind == ItemKind.Equipment,
             refinable = template.Kind == ItemKind.Equipment && template.EquipmentSlot == 12
         });
     }
@@ -94,7 +97,7 @@ internal static partial class DevelopmentGm
                 list = (int)item.Position.List, listName = item.Position.List.ToString(), slot = item.Position.Index,
                 uid = item.Uid, id = item.Core.ItemId, name = TryTemplate(items, item.Core.ItemId)?.Name,
                 kind = item.Core.Kind.ToString(), count = item.Core.IsStackable ? item.Core.Value : 1,
-                upgrade = item.Core.Kind == ItemKind.Equipment ? item.Core.Attr & 31 : 0, refine = item.Core.Kind == ItemKind.Equipment ? item.Core.GenuineUpgrade : 0,
+                upgrade = item.Core.Kind is ItemKind.Equipment or ItemKind.GuildMedal ? item.Core.Upgrade : 0, refine = item.Core.Kind == ItemKind.Equipment ? item.Core.GenuineUpgrade : 0,
                 amplifyType = item.Core.AmplifyType, amplifyValue = item.Core.AmplifyValue, ability = item.Core.Kind == ItemKind.Avatar ? item.Core.Durability : 0,
                 isSealed = item.Core.SealFlag != 0, expire = item.ExpireTime,
                 deletable = InventoryDeleteService.CanGmDelete(inventory, item), locked = item.Core.EquipmentLockId != 0

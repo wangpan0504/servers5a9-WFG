@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -33,5 +34,5 @@ internal sealed partial class SinglePlayerDungeonRun
 
     static bool IsDedicatedCompanion(DungeonPlannedMonster actor) => actor is
         { IsFriendly: true, IsBlocking: false, CanReportDeath: false, AiCharacter: { Faction: "[character]" } source } &&
-        DungeonCompanion.IsCompanionRow(source.Id);
+        SupportCompanionResources.IsSupportedBase(source.Id) && !SupportCompanionResources.IsBlocked(actor.MonsterId);
 }

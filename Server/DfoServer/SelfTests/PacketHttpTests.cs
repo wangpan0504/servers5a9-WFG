@@ -147,6 +147,7 @@ internal static class PacketHttpTests
             var listeners = new GameChannelListeners(options with { ChannelEntryPortBase = port - 1 }, catalog);
             Reject<InvalidDataException>(listeners.Start, "分类入口连续端口区间不能覆盖HTTP保留端口");
             That(listeners.Bound.Count == 0, "端口区间冲突在启动任何分类入口前拒绝");
+            ChannelWebPortRanges(catalog);
 
             async Task<JsonElement> Read(string path)
             {
@@ -166,5 +167,69 @@ internal static class PacketHttpTests
         }
         finally { TestFiles.DeleteDirectory(root, true); }
         Console.WriteLine($"PASS {Count - checks} 本机包查询HTTP、客户端过滤、安全边界及取消断言");
+    }
+
+    static void ChannelWebPortRanges(ChannelCatalog catalog)
+    {
+        const int first = 42000, last = 42001;
+        // 故意使地址不可解析；冲突必须先于地址解析和任何真实监听拒绝，不依赖现场端口状态。
+        var baseline = new ServerOptions
+        {
+            ListenAddress = "not-an-ip-address", ChannelEntryPortBase = first,
+            ChannelPort = 43000, GamePort = 43001, NativePort = 43002, GmPort = 43003,
+            PacketHttpPort = 43004, GmWebPort = 0, RechargeWebPort = 43005
+        };
+        foreach (var (options, port, label) in new[]
+        {
+            (baseline with { GmWebPort = last }, last, "GM网页位于固定范围内部"),
+            (baseline with { RechargeWebPort = last }, last, "客户端网页位于固定范围内部"),
+            (baseline with { GmWebPort = first }, first, "GM网页与范围下界相同"),
+            (baseline with { RechargeWebPort = first }, first, "客户端网页与范围下界相同"),
+            (baseline with { GmWebPort = last, RechargeWebPort = last }, last, "两网页共用范围内端口")
+        })
+        {
+            var listeners = new GameChannelListeners(options, catalog);
+            InvalidDataException? rejected = null;
+            try { listeners.Start(); }
+            catch (InvalidDataException error) { rejected = error; }
+            That(rejected is not null && rejected.Message.Contains($"[{first}, {last}]", StringComparison.Ordinal) &&
+                rejected.Message.Contains($"保留监听端口 {port}", StringComparison.Ordinal),
+                label + "给出完整分类区间与具体冲突端口");
+            That(listeners.Bound.Count == 0 && listeners.Endpoints.Count == 0,
+                label + "在第一次Bind前拒绝，不发布半套端点");
+            if (options.GmWebPort == options.RechargeWebPort)
+                That(rejected!.Message.Contains($"保留监听端口 {port} 冲突", StringComparison.Ordinal),
+                    "共用网页端口冲突只报告一次，不因重复配置漏掉保护");
+        }
+        foreach (var (options, label) in new[]
+        {
+            (baseline with { GmWebPort = 0, RechargeWebPort = 0 }, "两个网页端口为0不占保留位置"),
+            (baseline with { GmWebPort = 0 }, "GM网页禁用但客户端网页正常保留"),
+            (baseline with { GmWebPort = first - 1, RechargeWebPort = last + 1 }, "分类范围恰好位于两网页端口之间"),
+            (baseline with { GmWebPort = last + 1, RechargeWebPort = last + 1 }, "两个网页共用紧邻范围之后的端口"),
+            (baseline with { ChannelEntryPortBase = last + 1, GmWebPort = last, RechargeWebPort = last }, "分类范围恰好从网页端口后一位开始"),
+            (baseline with { ChannelEntryPortBase = 65534, GmWebPort = 65533, RechargeWebPort = 0 }, "固定范围上界等于65535仍合法"),
+            (baseline with { ChannelEntryPortBase = 0, GmWebPort = first, RechargeWebPort = first }, "动态入口模式不误用固定区间检查")
+        })
+        {
+            var listeners = new GameChannelListeners(options, catalog);
+            listeners.ValidateFixedPortRange();
+            That(listeners.Bound.Count == 0 && listeners.Endpoints.Count == 0,
+                label + "通过同一纯范围校验且不绑定端口");
+        }
+        var multiple = new GameChannelListeners(baseline with { GmWebPort = first, RechargeWebPort = last }, catalog);
+        bool bothReported = false;
+        try { multiple.Start(); }
+        catch (InvalidDataException error)
+        {
+            bothReported = error.Message.Contains($"[{first}, {last}]", StringComparison.Ordinal) &&
+                error.Message.Contains($"保留监听端口 {first}、{last}", StringComparison.Ordinal);
+        }
+        That(bothReported && multiple.Bound.Count == 0, "同一区间的两个不同网页冲突均明确报告且没有监听");
+        var overflow = new GameChannelListeners(baseline with { ChannelEntryPortBase = 65535 }, catalog);
+        bool overflowReported = false;
+        try { overflow.Start(); }
+        catch (InvalidDataException error) { overflowReported = error.Message.Contains("[65535, 65536]", StringComparison.Ordinal); }
+        That(overflowReported && overflow.Bound.Count == 0, "固定范围超出65535报告实际完整区间且在监听前拒绝");
     }
 }

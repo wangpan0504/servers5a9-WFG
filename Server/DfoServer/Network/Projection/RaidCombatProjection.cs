@@ -236,7 +236,7 @@ internal static partial class RaidCombatProjection
         // 末张结果也必须保留原窗口，均不能借587=4重开一个不可选择的空四卡/八卡页。
         if (view.State == AntonRaidBattleState.Completed && context.Session.CurrentRaidBattle(actor) is { } endedBattle)
         {
-            if (endedBattle is { Kind: RaidKind.Prey, PreyGuide: false })
+            if (endedBattle.Kind == RaidKind.Prey)
             { PostPreyResults(context, actor, endedBattle, view); return; }
             if (endedBattle.Kind == RaidKind.Luke) return;
         }
@@ -261,7 +261,11 @@ internal static partial class RaidCombatProjection
             bool SceneReady()
             {
                 if (view.State != AntonRaidBattleState.Reward) return true;
+                // 回城已提交不等于客户端已安装24；安徒恩原地电影仍允许在副本场景播放。
+                if (context.Session.Phase == Game.Session.SessionPhase.Town && context.Sender.DungeonSceneWritten) return false;
                 var battle = context.Session.CurrentRaidBattle(actor);
+                if (battle is { Kind: RaidKind.Prey, PreyGuide: true })
+                    return context.Session.Phase == Game.Session.SessionPhase.Town && !context.Sender.DungeonSceneWritten;
                 if (battle is { Kind: RaidKind.Prey, PreyGuide: false })
                     return context.Session.Phase == Game.Session.SessionPhase.Town &&
                         context.LukePhaseExit?.ReturnPending(view.Instance) != true;
@@ -275,6 +279,10 @@ internal static partial class RaidCombatProjection
                 context.Session.CurrentRaidBattle(actor)!, view)) return false;
             bool Show() => current() && SceneReady() && context.RaidDisplay != identity &&
                 (!completedTeam || context.AntonResults.HasTeam(actor, view));
+            // 引导的601本地演出和type3结果控制器均使用显示阶段1；业务身份与守卫仍取原阶段。
+            byte[] state = view.State == AntonRaidBattleState.Reward &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: true }
+                ? [(byte)view.State, 1] : RaidCombatPackets.State(view);
             // 587同state/phase仍会重新安装原生动画；601只判断，587成功写帧才确认。
             // 两包在本人owner内连续入队，无网络等待；仅使用Post，不用于QueuePublished的提前guard。
             // 601使用资格提交后冻结的真实阶段统计。
@@ -288,7 +296,7 @@ internal static partial class RaidCombatProjection
                     context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance);
             }
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
-                preyPreparing || preyBoarding ? [1, checked((byte)view.Phase)] : RaidCombatPackets.State(view), action, Show, () =>
+                preyPreparing || preyBoarding ? [1, checked((byte)view.Phase)] : state, action, Show, () =>
             {
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
@@ -306,23 +314,11 @@ internal static partial class RaidCombatProjection
             }
             if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } rewardLuke)
                 context.LukeResults.PostIneligible(context, actor, rewardLuke, view);
-            if (view.Phase == 0 && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } lukeMovie)
+            if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } lukeMovie)
                 PostLukeMovieCards(context, actor, lukeMovie, view);
             if (view.State == AntonRaidBattleState.Reward &&
-                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } preyMovie)
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } preyMovie)
                 PostPreyResults(context, actor, preyMovie, view);
-            if (view.State == AntonRaidBattleState.Reward &&
-                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: true } prey &&
-                prey.LukeEligibility(actor.Character, view.Phase) is { Eligible: true } &&
-                prey.RewardPolicy(actor, view.Phase) is { } preyPolicy)
-            {
-                bool Cards() => current() && context.RaidDisplay == identity && context.AntonCardsDisplay != identity;
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MOVIE_SKIP, [], "prey_movie_skip", Cards);
-                foreach (var offer in preyPolicy.Offers)
-                    context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST,
-                        PreyRewardPackets.Reward(actor.Character, offer), "prey_card_list", Cards,
-                        offer == preyPolicy.Offers[^1] ? () => context.AntonCardsDisplay = identity : null);
-            }
             if (view.State == AntonRaidBattleState.Reward && view.AntonCardsReady &&
                 context.Session.CurrentRaidBattle(actor) is { HasAntonRewards: true } rewardBattle &&
                 rewardBattle.RewardPolicy(actor, view.Phase) is { } policy &&

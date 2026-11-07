@@ -23,6 +23,7 @@ internal static class LukeRaidLifecycleTransactionTests
 {
     internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy,string? restartPvf=null,bool energyObjects=false)
     {
+        if(restartPvf is not null) LukeMovieRejoinResponseTests.RunAsync(resources,definition,policy).GetAwaiter().GetResult();
         int before=Count;string root=Path.Combine(Path.GetTempPath(),"S5A9-luke-lifecycle-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);string path=Path.Combine(root,"game.db");bool done=false;
         var owners=new AccountOwners();List<AccountOwners.Lease> leases=[];List<GameSession> sessions=[];
@@ -246,6 +247,7 @@ internal static class LukeRaidLifecycleTransactionTests
                     return;
                 }
                 That(battle.View.State==AntonRaidBattleState.Reward,"SQL及全部退出均完成才进入Reward");
+                if(phase==0&&supersede)RaidMovieResponseTests.ReturnAsync(resources,actors[0],battle,clock).GetAwaiter().GetResult();
                 if(unclaimedRestart)
                 {
                     That(phase==0,"只在P1已SQL且全Run退出后测试未领资格，不伪造P2");

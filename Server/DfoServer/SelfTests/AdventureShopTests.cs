@@ -25,7 +25,7 @@ internal static class AdventureShopTests
         // 周期列先对齐当前周四边界，才能断言同周期载入是零变化。
         var state = AdventureState.Initial("shop", now) with { CapsuleWeek = AdventurePeriod.CapsuleWeek(catalog, now),
             Purchases = new Dictionary<int, uint> { [1000] = 2 }.ToImmutableDictionary() };
-        var information = AdventurePackets.Information(1, new(state, []), catalog, []);
+        var information = AdventurePackets.Information(1, new(state, []), catalog, [], 2);
         That(BitConverter.ToUInt32(information, 18 + AdventurePackets.PurchasesOffset) == 1000 &&
             BitConverter.ToUInt32(information, 22 + AdventurePackets.PurchasesOffset) == 2, "7440B购买记录使用物品ID/次数而不是PVF序号");
         That(AdventurePeriod.Apply(state, catalog, now.AddMonths(1)).Purchases.IsEmpty &&

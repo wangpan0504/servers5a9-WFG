@@ -14,6 +14,8 @@ internal sealed class LukeRewardResultProjection
     bool personalEmptyWritten;
     RaidCombatDisplayIdentity? ineligibleIdentity;
 
+    internal bool MovieTeamWritten(RaidCombatDisplayIdentity expected) => teamIdentity == expected && teamBody is not null;
+
     internal void PostIneligible(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
         AntonRaidBattleView view)
     {
@@ -27,15 +29,17 @@ internal sealed class LukeRewardResultProjection
     }
 
     internal void PostTeam(GameConnectionContext context, RaidActor actor, AntonRaidBattle battle,
-        AntonRaidBattleView view, bool afterPersonal = false)
+        AntonRaidBattleView view, bool afterPersonal = false, LukeMovieCardSnapshot? movie = null)
     {
         context.Owner.Execute(() =>
         {
-            if (!context.Session.CanPublishRaidBattle(actor, view) ||
+            if (!(movie is null ? context.Session.CanPublishRaidBattle(actor, view) :
+                    context.Session.CanPublishRaidMovie(actor, battle, view.Phase, movie.Event) &&
+                    battle.LukeMovieCardsReady(actor, view.Phase, movie.Event)) ||
                 battle.LukeEligibility(actor.Character, view.Phase) is not { Eligible: true }) return false;
             if (view.State is not (AntonRaidBattleState.Reward or AntonRaidBattleState.Completed) ||
                 view.Phase == 0 && !afterPersonal) return false;
-            var results = battle.LukeTeamEntitlements(view);
+            var results = movie is null ? battle.LukeTeamEntitlements(view) : movie.Team;
             if (results.IsDefault) return false;
             var expected = RaidCombatDisplayIdentity.Capture(actor, view) with { State = AntonRaidBattleState.Reward };
             if (teamIdentity != expected) { teamIdentity = expected; teamBody = null; personalEmptyWritten = false; }
@@ -45,6 +49,7 @@ internal sealed class LukeRewardResultProjection
                 (latest.State is AntonRaidBattleState.Reward or AntonRaidBattleState.Completed ||
                     view.Phase == 0 && latest.State == AntonRaidBattleState.Intermission) &&
                 !latest.ClockFaulted && !latest.PhaseExpired && context.RaidDisplay == expected &&
+                (movie is null || battle.LukeMovieCardsReady(actor, view.Phase, movie.Event)) &&
                 (!afterPersonal || identity == expected && written.Any(reward => reward.Phase == view.Phase && reward.Kind == 1));
             // 第二页一次性装配，P2须在state4前预填完整权益；P1本人结果后发空页设置跳页标志。
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_REWARD_LIST, body, "luke_team_reward_entitlements",

@@ -33,7 +33,7 @@ internal sealed class AdventureProjection(AdventureCatalog catalog, TimeProvider
             Purchases = System.Collections.Immutable.ImmutableDictionary<int, uint>.Empty, Expeditions = []
         } };
         bool Guard() => context.Session.Ready && context.Session.SelectionEpoch == epoch && identity.IsCurrent();
-        var body = AdventurePackets.Information(target, snapshot, catalog, snapshot.Representatives(catalog), ack: true);
+        var body = AdventurePackets.Information(target, snapshot, catalog, snapshot.Representatives(catalog), identity.Channel.ServerIndex, ack: true);
         await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "other_adventure_information", Guard);
     }
 
@@ -46,7 +46,7 @@ internal sealed class AdventureProjection(AdventureCatalog catalog, TimeProvider
         var snapshot = context.Session.ReadAdventure(catalog, (clock ?? TimeProvider.System).GetUtcNow());
         bool Guard() => context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, selected) &&
             (selected is null ? context.Session.CheckState(UserState.CharacterSelect) : initialization || context.Session.Ready);
-        var body = AdventurePackets.Information(selected?.Id ?? 0, snapshot, catalog, snapshot.Representatives(catalog), ack);
+        var body = AdventurePackets.Information(selected?.Id ?? 0, snapshot, catalog, snapshot.Representatives(catalog), context.Channel.ServerIndex, ack);
         if (ack) await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "adventure_information", Guard);
         else
         {

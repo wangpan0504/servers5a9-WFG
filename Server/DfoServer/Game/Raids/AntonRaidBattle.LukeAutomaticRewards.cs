@@ -8,8 +8,16 @@ internal sealed partial class AntonRaidBattle
     internal bool HasPreyTeamAutomaticRewards => Kind == RaidKind.Prey && !PreyGuide &&
         lukeCompletion?.Source == PreyGuideRewards.TeamSource;
 
+    internal bool HasPreyAutomaticRewards => Kind == RaidKind.Prey &&
+        lukeCompletion?.Source == (PreyGuide ? PreyGuideRewards.Source : PreyGuideRewards.TeamSource);
+
+    bool MatchesPreyRewardSource(string source) => HasPreyAutomaticRewards && source == lukeCompletion!.Source;
+
     internal bool PreyTeamRewardDue
     { get { lock (gate) return HasPreyTeamAutomaticRewards && LukeRewardRemainingLocked() == TimeSpan.Zero; } }
+
+    internal bool PreyRewardDue
+    { get { lock (gate) return HasPreyAutomaticRewards && LukeRewardRemainingLocked() == TimeSpan.Zero; } }
 
     // 普雷结果窗会锁存完整团队表；首个真实演出完成后交付全团权益，各人演出和终局另行确认。
     TimeSpan? LukeRewardRemainingLocked()
@@ -19,8 +27,8 @@ internal sealed partial class AntonRaidBattle
         // 普通普雷一阶段没有原生翻牌请求；全部正式Run退场后直接履行原资格，再进入下一阶段。
         if (HasPreyTeamAutomaticRewards && current.Phase == 0)
             return dungeonRuns.Count == 0 && lukePhaseCommits.ContainsKey(0) ? TimeSpan.Zero : null;
-        if (HasPreyTeamAutomaticRewards && current.Phase == 1 && PreyMovieRewardsRequestedLocked() &&
-            (!AllRewardsConfirmed(1) || LukeMovieBarrierReadyLocked()))
+        if (HasPreyAutomaticRewards && PreyMovieRewardsRequestedLocked() &&
+            (!AllRewardsConfirmed(current.Phase) || LukeMovieBarrierReadyLocked()))
             return TimeSpan.Zero;
         return grace;
     }
@@ -28,7 +36,7 @@ internal sealed partial class AntonRaidBattle
     // 独立保留原资源演出最大值加120秒的期限；不能把某人的立即调度当成全团超时。
     TimeSpan? LukeRewardGraceRemainingLocked()
     {
-        if (lukeFlow is null && !(Kind == RaidKind.Fiendwar && HasFiendwarMovieBarrierLocked()) && !HasPreyTeamAutomaticRewards ||
+        if (lukeFlow is null && !(Kind == RaidKind.Fiendwar && HasFiendwarMovieBarrierLocked()) && !HasPreyAutomaticRewards ||
             current.ClockFaulted || current.State != AntonRaidBattleState.Reward) return null;
         if (lukeRewardPhase != current.Phase)
         { lukeRewardPhase = current.Phase; lukeRewardAnchor = lukeClock.GetTimestamp(); }
@@ -42,7 +50,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (LukeRewardRemainingLocked() != TimeSpan.Zero || !lukePhaseCommits.TryGetValue(current.Phase, out var committed)) return [];
-            if (HasPreyTeamAutomaticRewards && current.Phase == 1 && !PreyMovieRewardsRequestedLocked() &&
+            if (HasPreyMovieBarrierLocked() && !PreyMovieRewardsRequestedLocked() &&
                 LukeRewardGraceRemainingLocked() != TimeSpan.Zero) return [];
             return committed.Members.Where(row => row.Eligible)
                 .Select(row => (originalLukeMembers[row.Character].Owner.Account, row)).ToArray();
@@ -58,8 +66,8 @@ internal sealed partial class AntonRaidBattle
         {
             byte kind = prepared.Kind;
             if (rewards.Contains((eligibility.Character, eligibility.Phase, kind))) return;
-            if (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) && !HasPreyTeamAutomaticRewards ||
-                Kind == RaidKind.Prey && eligibility.Source != PreyGuideRewards.TeamSource ||
+            if (Kind is not (RaidKind.Luke or RaidKind.Fiendwar) && !HasPreyAutomaticRewards ||
+                Kind == RaidKind.Prey && !MatchesPreyRewardSource(eligibility.Source) ||
                 current.State != AntonRaidBattleState.Reward || eligibility.Instance != Instance ||
                 eligibility.Phase != current.Phase || LukeEligibility(eligibility.Character, eligibility.Phase) is not { } actual ||
                 !SameLukeEligibility(actual, eligibility) || !actual.Eligible ||
