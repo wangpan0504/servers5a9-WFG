@@ -24,6 +24,7 @@ internal static class EvildomWarTcpTests
         var catalog = EvildomWarCatalog.Load(resources.Archive, SelfTestCatalogs.Dungeons(resources.Archive));
         EvildomWarTransactionTests.Run(resources, catalog, root);
         EvildomWarRewardTransactionTests.Run(resources, catalog, root);
+        EvildomWarRewardBatchTests.Run(resources, catalog, root);
         EvildomWarRecoveryTransactionTests.Run(resources, catalog, root);
         EvildomWarHiddenTransactionTests.Run(resources, catalog, root);
         EvildomWarGuideTests.Run(resources, catalog, root);
@@ -311,27 +312,39 @@ internal static class EvildomWarTcpTests
                                     rewardNotices++;
                                     That(stage == 4 && killed.All(rows => rows.Count(packet => packet is { Kind: 0, Opcode: 1673 }) == 1),
                                         "仅王座真实完成后向每位成员发布一次1673");
-                                    foreach (var peer in peers)
+                                    var teamRewards = peers.Select(peer =>
                                     {
+                                        string json = (string)fixture.Query("SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$p0 AND delivered=1", peer.Id)[0][0];
+                                        var saved = JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(json)!;
+                                        string paymentJson = (string)fixture.Query("SELECT payment_json FROM character_evildom_war_seats WHERE character_id=$p0", peer.Id)[0][0];
+                                        var payment = JsonSerializer.Deserialize<EvildomWarPayment>(paymentJson)!;
+                                        return (Peer: peer, Slot: payment.Slot, Saved: saved);
+                                    }).OrderBy(row => row.Slot).ToArray();
+                                    That(teamRewards.Select(row => row.Slot).Distinct().Count() == peers.Count,
+                                        "奖励外层槽位来自实际付费席位，重连后仍唯一且不借用peers索引");
+                                    byte[] expected = Build(writer =>
+                                    {
+                                        writer.Write(0u); writer.Write((byte)teamRewards.Length);
+                                        foreach (var member in teamRewards)
+                                        {
+                                            writer.Write(member.Slot); writer.Write((byte)member.Saved.Reward.Items.Length);
+                                            foreach (var row in member.Saved.Reward.Items)
+                                            {
+                                                writer.Write(row.Group); writer.Write(row.ItemId); writer.Write((uint)row.Count);
+                                            }
+                                        }
+                                    });
+                                    foreach (var member in teamRewards)
+                                    {
+                                        var peer = member.Peer;
                                         That(fixture.Query("SELECT count(*) FROM character_evildom_war_rewards WHERE character_id=$p0", peer.Id) is [[1L]] &&
                                             fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0", peer.Id) is [[> 0L]],
                                             "显示奖励之前每人独立回执与永久奖励邮件已提交");
-                                        string json = (string)fixture.Query("SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$p0 AND delivered=1", peer.Id)[0][0];
-                                        var saved = JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(json)!;
+                                        var saved = member.Saved;
                                         That(saved.Rule == EvildomWarRewardPolicy.Rule && saved.Reward.Items.All(row => row.Group != 1),
                                             "新王座快照不重复发放实验室固定组");
-                                        var groups = saved.Reward.Items.GroupBy(row => row.Group).ToArray();
-                                        byte[] expected = Build(writer =>
-                                        {
-                                            writer.Write(0u); writer.Write((byte)groups.Length);
-                                            foreach (var group in groups)
-                                            {
-                                                writer.Write(group.Key); writer.Write((byte)group.Count());
-                                                foreach (var row in group) { writer.Write((byte)0); writer.Write(row.ItemId); writer.Write((uint)row.Count); }
-                                            }
-                                        });
                                         That(killed[peers.IndexOf(peer)].Single(packet => packet.Opcode == 1673).Body.SequenceEqual(expected),
-                                            "1673独立读宽及每行物品数量逐字节等于已提交奖励");
+                                            "全员1673逐字节等于同一完整团队表，每槽每卡种物品数量均来自对应成员已提交奖励");
                                         var cores = fixture.Query("""
                                             SELECT i.item_core FROM mailbox_messages m JOIN mailbox_attachments a ON a.mail_id=m.mail_id
                                             JOIN character_inventory_items i ON i.item_uid=a.item_uid
