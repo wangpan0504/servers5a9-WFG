@@ -172,7 +172,9 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         receipt = new(reinforce ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
             request.Target, request.MaterialSlot, remaining, old, outcome.Level, outcome.Code == 0)
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true, UsesLevelProbability = !lucky,
-            TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
+            TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds,
+            BaseSuccessPercent = lucky ? null : (100000 - step.FailureWeight) / 1000m,
+            SuccessPercent = lucky ? null : (100000 - failureWeight) / 1000m };
         return new(true, 0, new(before, after, reason, new(character, deadline, clock,
                 qualificationExpiresAtMilliseconds: successBonus.QualificationExpiresAtMilliseconds))
         {

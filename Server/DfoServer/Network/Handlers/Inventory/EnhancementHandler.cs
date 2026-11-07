@@ -60,7 +60,9 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
         log.Write("enhancement", new { Connection = context.Id, request.Mode, TargetList = request.Target.List,
             TargetSlot = request.Target.Index, request.MaterialSlot, result.Accepted, result.Error,
             Reason = resourceInvalid ? "resource_invalid" : result.Accepted ? "committed" : "rejected",
-            receipt?.OldLevel, receipt?.NewLevel, receipt?.OutcomeCode, receipt?.GoldCost, Revision = result.Receipt?.Character.Revision });
+            receipt?.OldLevel, receipt?.NewLevel, receipt?.OutcomeCode, receipt?.GoldCost, Revision = result.Receipt?.Character.Revision,
+            BaseSuccessPercent = result.Accepted ? receipt?.BaseSuccessPercent : null,
+            SuccessPercent = result.Accepted ? receipt?.SuccessPercent : null });
         await context.Reply(CmdPacketType.UPGRADE_ITEM, EnhancementPackets.Ack(result, result.Accepted ? receipt : null),
             result.Accepted ? "enhancement_committed" : "enhancement_rejected", Guard);
         HashSet<InventorySlot>? acknowledged = null;
