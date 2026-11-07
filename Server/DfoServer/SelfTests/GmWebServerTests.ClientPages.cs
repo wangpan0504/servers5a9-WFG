@@ -12,7 +12,7 @@ internal static partial class GmWebServerTests
 
     static async Task ClientPagesAsync(FakeData data)
     {
-        That(new ServerOptions().RechargeWebPort == 80, "客户端网页默认使用HTTP80");
+        That(new ServerOptions().RechargeWebPort == 23104, "客户端网页默认使用HTTP23104");
         int clientPort = FreeWebPort();
         using (var stop = new CancellationTokenSource())
         {
