@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -22,6 +23,7 @@ internal static class DungeonDropCollectionRepositoryTests
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources resources)
     {
         int checks = Count;
+        EquipmentGoldBonusTests.RunResources(resources.Items);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-drop-collection-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string path = Path.Combine(root, "game.db");
@@ -37,6 +39,10 @@ internal static class DungeonDropCollectionRepositoryTests
                 DungeonState = CharacterDungeonState.NewOrdinary,
                 ActiveMainQuests = [new(0, 3145, 1)]
             };
+            var title = new InventoryItem(0, new(InventoryListType.Equipment, 13),
+                InventoryRewardGrantService.Create(resources.Items.Get(100331240)) with { ExpireTime = 0 });
+            fixture = fixture with { Inventory = fixture.Inventory with
+                { Items = fixture.Inventory.Items.Where(item => item.Position != title.Position).Append(title).ToImmutableArray() } };
             var created = repository.Create(owner, fixture);
             var reserved = repository.ReserveDungeonAttempt(owner, created, 500);
             That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion &&
@@ -151,14 +157,26 @@ internal static class DungeonDropCollectionRepositoryTests
             }
             That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 5 &&
                 DungeonTransientReceipts.Find(owner, run.Snapshot.Identity)!.Pickups.Values.Count(value => value.Committed) == 5 &&
-                current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
+                current.Inventory.Gold == reserved.Inventory.Gold + 27 &&
                 current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 7 &&
                 current.Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
                 current.Inventory.Items.Single(item => item.Core.ItemId == contents[3].Item!.ItemId && item.Position.List == InventoryListType.Main).Core == contents[3].Item &&
                 current.Inventory.EpicPieces.Get(0) == 3 && current.Revision == committed.Character.Revision + 6,
-                "同死亡五个key各一次提交，实体、货币与图鉴钱包数量及未净化装备完整核心均正确");
+                "同死亡五个key各一次提交，金币含称号额外2且原地面仍为25，实体、钱包和完整核心均正确");
             That(SkillRepositoryTests.Equal(new CharacterRepository(path).LoadCharacter(owner, current.Slot), current),
                 "重新打开原仓储保留全部集合资产和逐件去重账本，不重建在线状态");
+            var wornTitle = current.Inventory.Find(title.Position)!;
+            var unequipped = current.Inventory with
+                { Items = current.Inventory.Items.Replace(wornTitle, wornTitle with { Position = new(InventoryListType.Main, 64) }) };
+            current = InventoryService.Commit(repository, owner, current,
+                new(true, 0, new(current.Inventory, unequipped, "gold-bonus-unequip", new(current))));
+            var goldGround = loot.Grounds.Single(item => item.IsGold);
+            var plainGold = DungeonPickupPlanning.Gold(current, goldGround.Content, resources.GoldLimits);
+            var oldGold = new CharacterRepository(path).CommitDungeonPickup(owner, current,
+                new(run.Snapshot.Identity, goldGround), plainGold.Plan!, resources.EpicPieces, resources.Items);
+            That(plainGold.Plan!.After.Gold == current.Inventory.Gold + 25 && oldGold.Duplicate &&
+                !oldGold.ProjectionCurrent && oldGold.Amount == 27 && oldGold.Character.Inventory.Gold == current.Inventory.Gold,
+                "脱下称号后新拾取回到原金额；旧回执仍重放原27金币，不按新穿戴重算或再次入账");
             // 旧掉落v18和v19均接管现有集合；真实到账资产和逐件结果须原样保留。
             foreach (int sourceVersion in new[] { 18, 19 })
             {
@@ -257,6 +275,51 @@ internal static class DungeonDropCollectionRepositoryTests
                 ground.ConfirmPickup(commonPickup!) && ground.FindAvailable(run.Snapshot.Identity, 406) is null &&
                 new CharacterRepository(path).LoadCharacter(owner, commonResult.Character.Slot).Inventory.Find(commonSlot)?.Core == commonCore,
                 "716实际目的容器持久化，提交后消除原地面源，仓储重开不重复发物");
+            var directCharacter = commonResult.Character;
+            var bagTitle = directCharacter.Inventory.Items.Single(item => item.Core.ItemId == title.Core.ItemId);
+            directCharacter = InventoryService.Commit(repository, owner, directCharacter,
+                new(true, 0, new(directCharacter.Inventory, directCharacter.Inventory with
+                { Items = directCharacter.Inventory.Items.Replace(bagTitle, bagTitle with { Position = title.Position }) },
+                "gold-bonus-reequip", new(directCharacter))));
+            var directReserved = repository.ReserveDungeonAttempt(owner, directCharacter, 700);
+            var directEntry = new DungeonEntryPlan(directReserved.Id, directReserved.Revision, 3, 3145, 0, 0, maze, map, map);
+            That(SinglePlayerDungeonRun.TryCreate(directEntry, directReserved.DungeonState!.LastAttempt, 1,
+                new([plan], []), authority, out var directRun, out _),
+                "金币自动拾取使用新的真实副本实例，不继承旧拾取key");
+            var directGround = new DungeonGroundState(directRun!, [plan],
+                [new(20, 450, map, 100, 100, 0, 0), new(20, 451, map, 100, 100, 0, 1)], "金币自动拾取合成来源");
+            directRun!.CompleteLoading(directRun.Snapshot.Identity, Guid.NewGuid());
+            var directPending = directRun.PrepareConfirmedDeath(authority.Death(directRun.Snapshot.Identity, 20)).Pending!;
+            var directLoot = directGround.GetOrFreezeAssets(directPending, () => [new(null, 101), new(null, 19)]);
+            var directPlan = DungeonDirectPickupPlan.Create(directReserved, directPending, directLoot, directReserved.Inventory,
+                resources.Items, resources.EpicPieces, true, DateTimeOffset.UtcNow, TimeProvider.System, resources.GoldLimits);
+            That(directPlan.Entries.Select(item => item.Amount).SequenceEqual(new[] { 111, 20 }) &&
+                directPlan.After.Gold == directReserved.Inventory.Gold + 131 &&
+                directLoot.Grounds.Select(item => item.GoldAmount).SequenceEqual(new[] { 101, 19 }),
+                "自动拾取逐个地面金币应用称号10%，不合并取整或修改冻结来源");
+            long beforeDirectReceipts = Query("SELECT count(*) FROM character_dungeon_drop_pickups");
+            Sql("CREATE TRIGGER gold_direct_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'gold direct rollback'); END");
+            Reject<SqliteException>(() => repository.CommitDungeonGrowth(owner, directReserved, directRun, directPending,
+                reward, growth, directLoot, directPickup: directPlan), "金币加成和自动拾取与死亡事务共同回滚");
+            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == beforeDirectReceipts &&
+                SkillRepositoryTests.Equal(repository.LoadCharacter(owner, directReserved.Slot), directReserved),
+                "自动拾取失败不入金币、经验或拾取回执");
+            Sql("DROP TRIGGER gold_direct_fail");
+            var directCommit = repository.CommitDungeonGrowth(owner, directReserved, directRun, directPending, reward, growth,
+                directLoot, directPickup: directPlan);
+            DungeonTransientReceipts.Forget(owner, directRun.Snapshot.Identity);
+            var directReplay = new CharacterRepository(path).CommitDungeonGrowth(owner, directReserved, directRun, directPending,
+                reward, growth, directLoot, directPickup: directPlan);
+            That(directCommit.Character.Inventory.Gold == directReserved.Inventory.Gold + 131 && directReplay.Duplicate &&
+                directReplay.Character.Inventory.Gold == directCommit.Character.Inventory.Gold &&
+                directCommit.DirectPickup.GroundKeys.SequenceEqual(new uint[] { 450, 451 }) &&
+                directReplay.DirectPickup.GroundKeys.SequenceEqual(directCommit.DirectPickup.GroundKeys) &&
+                Query("SELECT sum(amount) FROM character_dungeon_drop_pickups WHERE ground_key IN(450,451)") == 131,
+                "自动拾取保存实际111与20金币，缓存丢失和仓储重开只回放原结果，不再加成");
+            directRun.ConfirmCommittedDeath(directPending);
+            That(directGround.PublishCommitted(directPending, directLoot, directCommit.DirectPickup.GroundKeys) &&
+                directGround.FindAvailable(directRun.Snapshot.Identity, 450) is null,
+                "自动拾取提交后移除原地面来源，不能再次手动领取");
             // 满级角色的击杀经验不进经验条，但必须等额进入角色熟练度。
             var seeded = SkillLearning.Initialize(0, characters.Get(0).Skills.ToArray(), learning);
             That(seeded.Success, "熟练度fixture使用真实职业技能初始化");

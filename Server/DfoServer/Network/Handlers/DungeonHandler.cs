@@ -815,9 +815,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         var destination = commit.Currency is { } kind
             ? new InventorySlot(InventoryListType.Main, CurrencyPackets.PickupSlot(kind)) : commit.Destination;
-        // 普通consumer不使用这九个局部值。本服无扩展贡献，明确投影零，不作Builder默认。
+        // 总额来自已提交回执，附加额仅拆分展示，不再放大地面金币或余额。
         var notice = commit.Currency == CurrencyKind.Gold
-            ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount))
+            ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount),
+                checked((uint)(commit.Amount - result.Ground!.GoldAmount)))
             : DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
                 receipt.Character.Id, new byte[8], receipt.Character.Id,
                 commit.EpicPiece is not null || commit.AccountMaterial is not null
