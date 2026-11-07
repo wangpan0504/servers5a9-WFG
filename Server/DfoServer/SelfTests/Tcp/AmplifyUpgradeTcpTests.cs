@@ -40,7 +40,8 @@ internal static class AmplifyUpgradeTcpTests
                     new(0, Bag(21), core with { AmplifyType=0, AmplifyValue=0 }),
                     new(0, Bag(69), InventoryRewardGrantService.Create(r.Items.Get(10005312), 2) with { ExpireTime=0 }),
                     new(0, Bag(70), InventoryRewardGrantService.Create(r.Items.Get(10007838), 1) with { ExpireTime=0 }),
-                    new(0, Bag(exchangeSlot), exchangeCore)], Gold: 10_000_000)
+                    new(0, Bag(exchangeSlot), exchangeCore), new(0, new(InventoryListType.Equipment, 13),
+                        InventoryRewardGrantService.Create(r.Items.Get(100330496)) with { ExpireTime = 0 })], Gold: 10_000_000)
             });
             repository.CommitInventory(owner, created, new(created.Inventory, created.Inventory with
             {
@@ -56,9 +57,10 @@ internal static class AmplifyUpgradeTcpTests
             var first = peer.Expect(1, 80).Body;
             Check(first, 121, 0, 0, 1, 0, 19, 0);
             var gold = peer.Expect(0, 14).Body;
-            uint remainingGold = checked((uint)(10_000_000 - r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440))));
+            int discountedGold = (int)Math.Floor(r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440)) * 0.97 + 0.5);
+            uint remainingGold = checked((uint)(10_000_000 - discountedGold));
             That(gold.Length == 126 && U16(gold, 3) == 0 && U32(gold, 9) == remainingGold,
-                "普通NPC增幅提交后只补金币绝对余额，ACK已原位同步源和目标");
+                "普通NPC增幅按已穿称号折扣扣金币并同步绝对余额，ACK原位同步源和目标");
             peer.Barrier();
             That(Core(19, 0) == core with { Attr = 0xE1 } && fixture.Query("SELECT 1 FROM character_inventory_slots WHERE list_type=0 AND slot_index=121").Length == 0,
                 "真实普通+1保存完整目标并耗尽原材料槽，不复制UID或丢扩展");
@@ -141,8 +143,8 @@ internal static class AmplifyUpgradeTcpTests
                 "重新选角恢复增幅券和成功之兆的等级、完整属性，商店兑换材料数量不变");
         }
         int npcCubes = r.AmplifyUpgrades.ReinforceRules.Steps[0].MaterialCount;
-        int npcGold = r.AmplifyUpgrades.ReinforceRules.Gold(r.Items.Get(31440), 0);
-        int amplifyGold = r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440));
+        int npcGold = (int)Math.Floor(r.AmplifyUpgrades.ReinforceRules.Gold(r.Items.Get(31440), 0) * 0.97 + 0.5);
+        int amplifyGold = (int)Math.Floor(r.AmplifyUpgrades.Rules.Gold(r.Items.Get(31440)) * 0.97 + 0.5);
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();

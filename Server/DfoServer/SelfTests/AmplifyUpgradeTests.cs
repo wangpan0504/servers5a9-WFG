@@ -112,6 +112,7 @@ internal static class AmplifyUpgradeTests
     public static void RunResources(TcpTestResources resources)
     {
         EnhancementTests.RunResources(resources.ItemResources, resources.ItemResources.Enhancements);
+        EquipmentUpgradeBonusTests.RunResources(resources);
         int before = Count;
         var r = resources.ItemResources;
         foreach (int id in new[] { 490011012,490011266,490011334,490011881,490012050,490012067,490012459,

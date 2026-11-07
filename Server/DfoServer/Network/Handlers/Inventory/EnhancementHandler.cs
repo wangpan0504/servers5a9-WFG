@@ -32,8 +32,12 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
         InventorySlot? effectSource = null;
         try
         {
-            if (capture.Selected is { } sourceCharacter && service.IsEffectSource(sourceCharacter, request))
-                effectSource = new(InventoryListType.Main, request.MaterialSlot);
+            if (capture.Selected is { } sourceCharacter)
+            {
+                service.PrepareEquipmentBonuses(sourceCharacter);
+                if (service.IsEffectSource(sourceCharacter, request))
+                    effectSource = new(InventoryListType.Main, request.MaterialSlot);
+            }
         }
         catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
         { resourceInvalid = true; }
