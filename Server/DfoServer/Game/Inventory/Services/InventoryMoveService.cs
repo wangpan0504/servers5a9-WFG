@@ -52,8 +52,12 @@ internal static class InventoryMoveService
             request.Count == 1 && request.DestinationItemId == 0 &&
             source is { Core.Kind: ItemKind.Avatar, Avatar: not null } &&
             destination is { Core.Kind: ItemKind.Avatar, Avatar: not null };
+        // 仓库自动取出会把已占用的同模板背包堆回显为0；完整合堆条件仍由后续规则校验。
+        bool cargoStackTargetEcho = IsCargo(request.Source.List) && request.Destination.List == InventoryListType.Main &&
+            request.DestinationItemId == 0 && source is { Core.IsStackable: true } &&
+            destination is { Core.IsStackable: true } && source.Core.ItemId == destination.Core.ItemId;
         bool destinationMatches = destination is null && (CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho) ||
-            (destination?.Core.ItemId ?? 0) == request.DestinationItemId || avatarEmptyTargetEcho ||
+            (destination?.Core.ItemId ?? 0) == request.DestinationItemId || avatarEmptyTargetEcho || cargoStackTargetEcho ||
             destination is not null && IsCargo(request.Destination.List) &&
             (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
         bool throwOntoOccupied = source is not null && destination is not null && destinationMatches &&

@@ -56,6 +56,34 @@ internal static class BattlePassMonsterCardUpgradeTests
         That(merge.Matches(new(mergeBefore, mergeAfter, "monster_card_upgrade"), mergeAfter), "升级卡叠入原完整核心相同的堆仍只计一次");
         That(!merge.Matches(new(mergeBefore, mergeAfter, "monster_card_upgrade"), mergeAfter with { Items = [remaining, other with { Uid = 29 }, mergeAfter.Items[2]] }),
             "未参与升级的原实例也必须完整保持");
+        var sortedExisting = existing with { Core = existing.Core with { SortLockFlag = 1 } };
+        var sortedBefore = mergeBefore with { Items = [stack, material, other, sortedExisting] };
+        var sortedPaid = sortedBefore with { Items = [stack, other, sortedExisting] };
+        var sortedReward = sortedExisting with { Core = sortedExisting.Core with { Value = 5 } };
+        var sortedAfter = sortedPaid with { Items = [remaining, other, sortedReward] };
+        var sorted = fact with { Target = stack, Before = sortedBefore, Paid = sortedPaid, After = sortedAfter };
+        That(sorted.Matches(new(sortedBefore, sortedAfter, "monster_card_upgrade"), sortedAfter),
+            "升级奖励可合入排序锁不同的同级堆，既有堆的原锁和UID保持");
+        foreach (var changed in new[] { sortedReward with { Uid = 43 },
+            sortedReward with { Position = new(InventoryListType.Main, 236) },
+            sortedReward with { Core = sortedReward.Core with { Value = 4 } },
+            sortedReward with { Core = sortedReward.Core with { Value = 6 } },
+            sortedReward with { Core = sortedReward.Core with { SortLockFlag = 0 } },
+            sortedReward with { Core = sortedReward.Core with { EquipmentLockId = 1 } },
+            sortedReward with { Core = sortedReward.Core with { Marker16 = 0 } } })
+        {
+            var changedAfter = sortedAfter with { Items = [remaining, other, changed] };
+            var changedFact = sorted with { After = changedAfter };
+            That(!changedFact.Matches(new(sortedBefore, changedAfter, "monster_card_upgrade"), changedAfter),
+                "异排序锁合堆仍拒绝换UID、换槽、漏发、超发、改锁和改其他完整属性");
+        }
+        var changedSourceAfter = sortedAfter with { Items = [remaining with { Core = remaining.Core with { SortLockFlag = 1 } }, other, sortedReward] };
+        That(!(sorted with { After = changedSourceAfter }).Matches(new(sortedBefore, changedSourceAfter, "monster_card_upgrade"), changedSourceAfter),
+            "奖励身份忽略排序锁不允许改动未升级的原目标余堆排序锁");
+        var changedFreshAfter = splitAfter with { Items = [remaining, other, freshUpgrade with { Core = freshUpgrade.Core with { SortLockFlag = 1 } }] };
+        var changedFreshActual = changedFreshAfter with { Items = [remaining, other, changedFreshAfter.Items[2] with { Uid = 53 }] };
+        That(!(split with { After = changedFreshAfter }).Matches(new(stackedBefore, changedFreshAfter, "monster_card_upgrade"), changedFreshActual),
+            "新槽奖励仍须精确保留源排序锁，不沿已有堆的合并例外放宽");
         foreach (int count in new[] { 3, 4 })
         {
             var source = target with { Core = target.Core with { Value = count } };

@@ -2,6 +2,7 @@ using DfoServer.Development;
 using DfoServer.Game.Mailbox;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Testing;
@@ -218,6 +219,25 @@ internal static class DevelopmentAssetTests
         string bag = DevelopmentGm.Answer("items Receiver", "receiver", f.Repository, f.Owners, _ => session, service, resources.Items);
         TestCheck.That(bag.StartsWith("OK ") && bag.Contains(System.Text.Json.JsonSerializer.Serialize(resources.Items.Get(18400).Name), StringComparison.Ordinal),
             "在线背包查看带出真实模板名称");
+        string medalBefore = f.Snapshot();
+        foreach (string invalid in new[] { "item Receiver 100380058 1 21", "item Receiver 100380058 1 -1", "item Receiver 90000 1 1" })
+            TestCheck.That(Send(invalid).StartsWith("ERR ") && f.Snapshot() == medalBefore,
+                "旧GM物品命令拒绝超限/负数勋章和守护珠强化，不写邮件或UID");
+        string medalInfo = Send("item-info 100380058");
+        TestCheck.That(medalInfo.Contains("\"upgradable\":true", StringComparison.Ordinal) &&
+            medalInfo.Contains("\"maxUpgrade\":20", StringComparison.Ordinal) &&
+            medalInfo.Contains("\"amplifiable\":false", StringComparison.Ordinal) && f.Snapshot() == medalBefore,
+            "旧item-info兼容字段开放勋章强化，并返回20上限和独立增幅禁用能力");
+        TestCheck.That(Send("item Receiver 100380058 1 20").StartsWith("OK "), "旧GM物品命令可发送强化20勋章邮件");
+        var medalMail = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.MaxBy(row => row.Id)!;
+        var mailedMedal = medalMail.Attachments.Single().Item;
+        TestCheck.That(mailedMedal.Core is { Kind: ItemKind.GuildMedal, Upgrade: 20 } &&
+            session.ClaimMail(service, [medalMail.Id]).Accepted, "旧GM勋章邮件按真实强化20完整核心领取");
+        session.ReturnToRoster();
+        session.Select(0, resources.GoldLimits);
+        session.MarkReady();
+        TestCheck.That(session.Selected!.Inventory.Items.Any(item => item.Uid == mailedMedal.Uid && item.Core == mailedMedal.Core),
+            "旧GM强化20邮件领取后重选仍保留同一UID和完整核心");
         f.Integrity();
         Console.WriteLine($"PASS {TestCheck.Count - before} GM道具邮件真实资源、数量、领取与回滚断言");
     }

@@ -45,7 +45,7 @@ internal static class AdventurePackets
         PacketEncoding.WriteString(writer, name);
     });
     public static byte[] Information(ushort actor, AdventureSnapshot snapshot, AdventureCatalog catalog,
-        IReadOnlyList<AdventureMember> representatives, bool ack = false) => Build(writer =>
+        IReadOnlyList<AdventureMember> representatives, byte region, bool ack = false) => Build(writer =>
     {
         if (ack) writer.Write((byte)1);
         writer.Write(actor); writer.Write(checked((uint)snapshot.State.CreatedDate));
@@ -73,7 +73,7 @@ internal static class AdventurePackets
             var row = raw.AsSpan(RosterOffset + 52 * at++, 52);
             row[0] = profession.Job; row[1] = profession.Grow;
             if (member is null) continue;
-            WriteCollection(row, member);
+            WriteCollection(row, member, region);
             // 同熟练度取目录顺序靠前者，保持每次构包稳定。
             if (best is null || member.Proficiency > best.Proficiency) best = member;
         }
@@ -144,21 +144,21 @@ internal static class AdventurePackets
     // 1477成功回包：ACK、分类结构长度u32=3、type:u8、count:u8、complete:u8、收藏行长度u32=52、52B行。
     // 客户端01034DC0把这3字节整体写回收藏表对应槽并复用显示刷新，布局必须与1343表完全一致；
     // count超过127会被显示侧当作负数而置灰，宽度写错还会让52B行整体错位。
-    public static byte[] Representative(AdventureProfession profession, AdventureCollection collection, AdventureMember member) => Build(writer =>
+    public static byte[] Representative(AdventureProfession profession, AdventureCollection collection, AdventureMember member, byte region) => Build(writer =>
     {
         writer.Write((byte)1); writer.Write(3u); writer.Write(profession.Group);
         writer.Write((byte)Math.Min((int)collection.Count, 127)); writer.Write(collection.Complete ? (byte)1 : (byte)0);
-        var row = new byte[52]; WriteCollection(row, member);
+        var row = new byte[52]; WriteCollection(row, member, region);
         writer.Write(52u); writer.Write(row);
     });
 
-    static void WriteCollection(Span<byte> row, AdventureMember member)
+    static void WriteCollection(Span<byte> row, AdventureMember member, byte region)
     {
         row[0] = member.Job; row[1] = member.ProfessionGrow;
         U32(row, 4, member.Proficiency); Name(row.Slice(12, 30), member.Name);
-        // 010314C0 把 u8@42 读进显示结构+2C；选角卡片右上角的熟练角标按熟练等级分档取图标，
-        // 原先写频道 ServerIndex 会让所有角色恒显示同一档。超过255沿用最高档，不按u8回绕。
-        row[42] = checked((byte)Math.Min(member.Proficiency, byte.MaxValue));
+        // 010314C0读取u8@42到DTO+2C，1343/1477再经收藏map+40投影UI条目+34，
+        // 00D9C079将其传给0290B6D0服务器名称查表；熟练度独立保留在u32@4。
+        row[42] = region;
         // 010314C0 把 word@44 读进显示结构+30；该字段的客户端用途尚未确认，
         // 「最高熟练度」卡片实际读取报文头的 RAW+56/57/60，不再依赖这里选人。
         U16(row, 44, (ushort)Math.Min(member.Proficiency, ushort.MaxValue));

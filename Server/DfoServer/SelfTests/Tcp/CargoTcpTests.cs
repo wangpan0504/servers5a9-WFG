@@ -106,6 +106,12 @@ internal static class CargoTcpTests
             peer.Send(308, Build(w => w.Write(751)));
             peer.Expect(1, 308, [0, 10, 0]);
             peer.Barrier();
+            Transfer(peer, 0, 121, 3299, 2, 2, 1, 0, 2);
+            That(U32(peer.Expect(0, 14).Body, 9) == 598 && peer.Expect(0, 14).Body[0] == 2,
+                "个人仓库先保存两件真实材料，不改变后续账号仓库流程余额");
+            Transfer(peer, 2, 1, 1, 2, 0, 121, 0, 2);
+            That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "个人自动取出已占用同模板Main且目标编号0，ACK与实际差量恢复600并清源");
             Transfer(peer, 0, 9, weaponId, 1, 2, 7, 7, 1);
             var main = peer.Expect(0, 14).Body;
             That(main[0] == 0 && U32(main, 5) == uint.MaxValue, "personal deposit clears original physical slot");
@@ -136,7 +142,7 @@ internal static class CargoTcpTests
                 "deposit into an empty requested slot merges into existing account stack");
             That(fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE list_type=12 AND slot_index=7") is [[0L]],
                 "automatic merge does not allocate requested target slot seven");
-            Transfer(peer, 12, 1, 1, 0, 0, 122, 0, 19, actualTargetSlot: 121);
+            Transfer(peer, 12, 1, 1, 0, 0, 121, 0, 19);
             That(U32(peer.Expect(0, 14).Body, 9) == 600 && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
                 "partial withdrawal merges full quantity and clears account stack");
             peer.Send(408, Build(w => w.Write(stepSlot)));

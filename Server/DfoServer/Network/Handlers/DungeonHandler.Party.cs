@@ -507,8 +507,15 @@ internal sealed partial class DungeonHandler
         else if (commit.AccountMaterial is not null)
             await town.AccountMaterialsAsync(context, picked.Character, canSend: Guard);
         else
+        {
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(picked.Character.Inventory,
                 destination.List, [destination]), "party_pickup_inventory", Guard);
+            if (destination.List == InventoryListType.AccountCommon &&
+                picked.Character.Inventory.Find(destination) is { } created && created.Core.Count == commit.Amount)
+                await town.SyncCommonCalendarSlotsAsync(context,
+                    picked.Character.Inventory with { Items = picked.Character.Inventory.Items.Remove(created) },
+                    picked.Character, Guard);
+        }
         if (scene.Character.Id == notice.Peer)
             await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "party_pickup_ack", Guard);
         if (result.PreviousQuests is { } previousQuests)

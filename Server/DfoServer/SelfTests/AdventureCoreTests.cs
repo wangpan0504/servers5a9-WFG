@@ -109,11 +109,12 @@ internal static class AdventureCoreTests
         }, members) { ContentCounts = ImmutableArray.Create(counts) };
         var representatives = snapshot.Representatives(catalog);
         That(representatives is [{ Id: 2 }], "同职业默认展示熟练度最高的合法角色，不创建代表或在线会话");
-        byte[] info = AdventurePackets.Information(42, snapshot, catalog, representatives);
+        byte[] info = AdventurePackets.Information(42, snapshot, catalog, representatives, 2);
         That(BinaryPrimitives.ReadUInt16LittleEndian(info) == 42 && BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(14)) == 7440 &&
             BinaryPrimitives.ReadUInt64LittleEndian(info.AsSpan(26)) == (1UL << 32) + 7 &&
             BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(18 + 20)) == 6 &&
-            BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(86)) == 3 && info[18 + 72 + 42] == 9 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(86)) == 3 && info[18 + 72 + 42] == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(18 + 72 + 4)) == 9 &&
             BinaryPrimitives.ReadUInt16LittleEndian(info.AsSpan(18 + 72 + 44)) == 9 &&
             info[18 + 56] == 0 && info[18 + 57] == representatives[0].ProfessionGrow &&
             BinaryPrimitives.ReadUInt32LittleEndian(info.AsSpan(18 + 60)) == 9 &&
@@ -145,10 +146,16 @@ internal static class AdventureCoreTests
         var full = (snapshot with { Members = members.Add(new AdventureMember(5, 4, "HeroD", 0, 34, 95, 3, 0)) }).Collections(wide);
         That(partial[0] is { Count: 1, Complete: false } && full[0] is { Count: 2, Complete: true },
             "整类未集齐时按钮保持灰色，集齐全部转职后complete才为1");
-        // 角标是u8：熟练等级超过255时客户端只能显示最高档，服务端按上限饱和，不能截断成回绕值。
-        var capped = snapshot with { Members = ImmutableArray.Create(new AdventureMember(2, 1, "HeroB", 0, 33, 95, 300, 0)) };
-        That(AdventurePackets.Information(42, capped, catalog, capped.Representatives(catalog))[18 + 72 + 42] == 255,
-            "熟练等级超过255按最高档角标下发");
+        // 同一服务器下熟练度变化只影响独立熟练字段，不改变收藏服务器；服务器来自显式身份。
+        var proficient = snapshot with { Members = ImmutableArray.Create(new AdventureMember(2, 1, "HeroB", 0, 33, 95, 300, 0)) };
+        foreach (byte region in new byte[] { 0, 2, 249 })
+        {
+            var regional = AdventurePackets.Information(42, proficient, catalog, proficient.Representatives(catalog), region);
+            That(regional[18 + 72 + 42] == region &&
+                BinaryPrimitives.ReadUInt32LittleEndian(regional.AsSpan(18 + 72 + 4)) == 300 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(regional.AsSpan(18 + 72 + 44)) == 300,
+                "收藏服务器独立于熟练度，保留u32熟练值及未闭合的u16既有值，不按熟练度饱和或回绕服务器");
+        }
         byte[] name = CharacterName.Encoding.GetBytes("测试团");
         Bytes(AdventurePackets.AccountName("测试团"), [6, 0, 0, 0, 0xB2, 0xE2, 0xCA, 0xD4, 0xCD, 0xC5, 0],
             "1375使用独立CP936名称和尾部标志，不混入1343或固定Actor状态");
@@ -157,19 +164,21 @@ internal static class AdventureCoreTests
             "1375保留16个中文字符的32B边界及零标志");
         That(BinaryPrimitives.ReadInt32LittleEndian(info.AsSpan(18 + 7440)) == name.Length &&
             info.AsSpan(22 + 7440).SequenceEqual(name), "账号名称使用CP936字节长度，不按UTF8字符数发送");
-        byte[] empty = AdventurePackets.Information(42, snapshot, catalog, []);
+        byte[] empty = AdventurePackets.Information(42, snapshot, catalog, [], 2);
         That(BinaryPrimitives.ReadUInt32LittleEndian(empty.AsSpan(18 + AdventurePackets.RecommendedClearOffset)) == 12 &&
             BinaryPrimitives.ReadUInt32LittleEndian(empty.AsSpan(18 + 60)) == 0 &&
             Enumerable.Range(0, (AdventurePackets.ShopOffset - AdventurePackets.RosterOffset) / 52)
-                .All(row => BinaryPrimitives.ReadUInt16LittleEndian(empty.AsSpan(18 + AdventurePackets.RosterOffset + row * 52 + 44)) == 0),
+                .All(row => empty[18 + AdventurePackets.RosterOffset + row * 52 + 42] == 0 &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(empty.AsSpan(18 + AdventurePackets.RosterOffset + row * 52 + 4)) == 0 &&
+                    BinaryPrimitives.ReadUInt16LittleEndian(empty.AsSpan(18 + AdventurePackets.RosterOffset + row * 52 + 44)) == 0),
             "没有代表角色时内容熟练度仍按账号累计下发，最高熟练度卡片保持占位，名册行不伪造熟练度");
-        var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, ack: true);
+        var ack = AdventurePackets.Information(0, snapshot, catalog, representatives, 2, ack: true);
         That(ack[0] == 1 && ack.AsSpan(1, 2).SequenceEqual(new byte[2]) && ack.Length == info.Length + 1,
             "ACK1403保留成功前缀与选角owner0");
         var raids = snapshot with { RaidClears = new(65536, 70000, uint.MaxValue), DuelWins = 9, DespairTowerClears = 5, LamentTowerClears = 8 };
         foreach (bool isAck in new[] { false, true })
         {
-            byte[] content = AdventurePackets.Information(42, raids, catalog, [], ack: isAck);
+            byte[] content = AdventurePackets.Information(42, raids, catalog, [], 2, ack: isAck);
             int prefix = isAck ? 19 : 18;
             That(BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.LukeRaidClearOffset)) == 65536 &&
                 BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(prefix + AdventurePackets.MetroRaidClearOffset)) == 70000 &&

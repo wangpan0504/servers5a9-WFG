@@ -7,13 +7,19 @@ internal static partial class DevelopmentGm
 {
     static object SupportCompanionState(GameDebugSettings settings)
     {
-        // 名单与三辅助档次从同一原子快照派生，避免并发保存时把旧档次配到新选择上。
+        // 名单与兼容档次字段从同一原子快照派生，避免并发保存时混用配置。
         var snapshot = settings.SupportConfiguration;
         int mask = snapshot.SelectionMask;
         return new
         {
             supportCompanion = GameDebugSettings.SupportCompanionName(GameDebugSettings.LegacySupportCompanion(mask)),
             supportCompanions = GameDebugSettings.SupportCompanionNames(mask),
+            supportedCompanions = new[] { "wangfugui", "guangbing" },
+            unavailableCompanions = new[]
+            {
+                new { companion = "female-crusader", reason = "当前客户端不支持该支援兵" },
+                new { companion = "enchantress", reason = "当前客户端不支持该支援兵" }
+            },
             supportCompanionTiers = new Dictionary<string, string>
             {
                 ["wangfugui"] = snapshot.WangFuguiTier,

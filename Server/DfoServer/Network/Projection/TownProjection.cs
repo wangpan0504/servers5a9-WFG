@@ -35,7 +35,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal bool EpicRoadAvailable => epicRoadAvailable;
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
-        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null)
+        DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null,
+        DfoServer.Game.Inventory.Models.InventorySnapshot? beforeInventory = null)
     {
         foreach (var body in AccountMaterialPackets.Balances(character.Inventory.AccountWallet, before))
             await context.Notify(NotiPacketType.ACCOUNT_MATERIAL_STORAGE_INFO, body,
@@ -44,12 +45,13 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         {
             bool CalendarCurrent() => canSend?.Invoke() != false && context.Session.SelectionEpoch == calendar.Epoch &&
                 context.Session.Selected?.Id == character.Id && context.ActivityCalendarItems?.ItemIds == calendar.ItemIds;
+            long nowUnix = timer.GetUtcNow().ToUnixTimeSeconds();
             foreach (var (list, ids) in CalendarLists(calendar.ItemIds))
             {
                 if (before is null)
-                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids),
+                    await context.Notify(NotiPacketType.ITEM_LIST, ActivityCalendarItemPackets.Full(list, character.Inventory.AccountWallet, ids, character.Inventory, nowUnix),
                         "activity_calendar_items_resync", CalendarCurrent);
-                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids))
+                else foreach (var (body, obtained) in ActivityCalendarItemPackets.Changes(list, before, character.Inventory.AccountWallet, ids, beforeInventory, character.Inventory))
                     await context.Notify(obtained ? NotiPacketType.UPDATE_ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE,
                         body, obtained ? "activity_calendar_item_obtained" : "activity_calendar_item_committed", CalendarCurrent);
             }

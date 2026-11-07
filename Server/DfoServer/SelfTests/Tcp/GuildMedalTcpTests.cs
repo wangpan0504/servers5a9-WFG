@@ -18,6 +18,8 @@ internal static class GuildMedalTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "guild-medals"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
         long legacyUid;
+        long cappedUid;
+        string cappedCore;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var role = repo.Create(owner, new("MedalTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -25,8 +27,11 @@ internal static class GuildMedalTcpTests
                 Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills
             });
             var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            role = InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 2), new(90000, 2), new(90001, 1), new(90032, 2),
+            role = InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 1), new(100380044, 1, 20), new(90000, 2), new(90001, 1), new(90032, 2),
                 new(490011648, 100)]));
+            var capped = role.Inventory.Find(new(InventoryListType.GuildMedal, 1))!;
+            cappedUid = capped.Uid;
+            cappedCore = JsonSerializer.Serialize(capped.Core);
             var coin = role.Inventory.Find(new(InventoryListType.Main, 177))!;
             legacyUid = coin.Uid;
             var legacy = coin with { Position = new(InventoryListType.Main, 121), Core = coin.Core with { Kind = ItemKind.Material } };
@@ -51,6 +56,11 @@ internal static class GuildMedalTcpTests
             That(fixture.Query("SELECT i.item_uid,json_extract(i.item_core,'$.Value') FROM character_inventory_items i " +
                 "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=177", peer.Id)
                 is [[long movedUid, 100L]] && movedUid == legacyUid, "任务页拆分再合堆保留原硬币UID和总数");
+            string beforeCap = Snapshot();
+            peer.Send(80, EnhancementTests.Request(0, 38, 1, 100380044, 177, []));
+            peer.Expect(1, 80, [0, 23, 0]);
+            peer.Barrier();
+            That(Snapshot() == beforeCap, "真实CMD80拒绝强化20勋章，不扣公会硬币、不改UID或审计，连接继续可用");
             peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380044, 177, []));
             var upgrade = peer.Expect(1, 80).Body;
             That(upgrade.Length == 27 && upgrade[0] == 1 && upgrade[1] == 0 && U16(upgrade, 2) == 177 &&
@@ -118,6 +128,9 @@ internal static class GuildMedalTcpTests
             "reconnect keeps committed medal upgrade level and guild coin deduction");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "medal TCP fixture remains consistent after rejection, faults and reconnect");
+        That(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items WHERE item_uid=$p0", cappedUid)
+            is [[long restoredUid, string restoredCore]] && restoredUid == cappedUid && restoredCore == cappedCore,
+            "强化20勋章经快捷栏往返和重连仍保留同一UID及完整核心");
 
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid")) +

@@ -243,6 +243,7 @@ internal static class CargoTests
     {
         VerifyAccountCommon45Persistence();
         VerifySortRules();
+        VerifyAutomaticTakeout();
         var template = new DfoServer.GameWorld.Items.ItemTemplate(50, DfoServer.GameWorld.Items.ItemKind.Consumable,
             0, 10, 0, 100, 0, 0, 0, "[free]", 1, 0, "仓库资格测试") { MaximumLevel = 20, PersonalCargoUpgradeTarget = 24 };
         var catalog = new DfoServer.GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
@@ -402,6 +403,64 @@ internal static class CargoTests
         }
         catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template with { UseForbidden = true } });
         That(!service.PersonalUpgrade(role, 65).Accepted, "仓库工具禁止使用标记不可绕过");
+    }
+
+    static void VerifyAutomaticTakeout()
+    {
+        var template = new GameWorld.Items.ItemTemplate(201, GameWorld.Items.ItemKind.Material, 0, 0, 0, 100, 0, 0, 0,
+            "[free]", 1, 0, "自动取出材料");
+        var catalog = new GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, GameWorld.Items.ItemTemplate>
+            { [201] = template, [202] = template with { Id = 202 }, [203] = template with
+                { Id = 203, Kind = GameWorld.Items.ItemKind.Equipment, EquipmentSlot = 12, StackLimit = 1 } });
+        foreach (var list in new[] { InventoryListType.PersonalCargo, InventoryListType.AccountCargo })
+        {
+            var source = new InventoryItem(1, new(list, 1), new(201, template.Kind, 6) { SortLockFlag = 1 });
+            var target = new InventoryItem(2, new(InventoryListType.Main, 121), source.Core with { Value = 4 });
+            var role = new Character(1, 0, "CargoAuto", 0, new(0, 0, 0, 0), null)
+                { Level = 60, Inventory = new([source, target]) { AccountCargo = new(Capacity: 8) } };
+            var request = new InventoryMoveRequest(source.Position, 1, 2, target.Position, 0, 0, -1, 0, 0);
+            foreach (int echo in new[] { 0, template.Id })
+            foreach (byte sortLock in new byte[] { 0, 1 })
+            {
+                var actualTarget = target with { Core = target.Core with { SortLockFlag = sortLock } };
+                var holder = role with { Inventory = role.Inventory with { Items = [source, actualTarget] } };
+                var result = InventoryMoveService.Plan(holder, request with { DestinationItemId = echo }, catalog, 0);
+                That(result.Accepted && result.Plan!.After.Find(source.Position) == source with { Core = source.Core with { Value = 4 } } &&
+                    result.Plan.After.Find(target.Position) == actualTarget with { Core = actualTarget.Core with { Value = 6 } },
+                    "两仓自动取出兼容0及真实模板回显，完整合堆保原UID、目标排序锁和源余量 " + list);
+            }
+            That(!InventoryMoveService.Plan(role, request with { DestinationItemId = 202 }, catalog, 0).Accepted &&
+                !InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                    { Items = [source, target with { Core = new(202, template.Kind, 4) }] } }, request, catalog, 0).Accepted,
+                "自动取出零回显不放宽未知非零编号或不同模板 " + list);
+            foreach (var blockedCore in new[] { target.Core with { Value = 100 }, target.Core with { Attr = 1 } })
+            {
+                var blocked = target with { Core = blockedCore };
+                var holder = role with { Inventory = role.Inventory with { Items = [source, blocked] } };
+                var moved = InventoryMoveService.Plan(holder, request, catalog, 0);
+                That(moved.Accepted && moved.Plan!.After.Find(target.Position) == blocked &&
+                    moved.Plan.After.Items.Single(item => item.Position.List == InventoryListType.Main && item.Position != target.Position)
+                        is { Core.ItemId: 201, Core.Value: 2 } && moved.Plan.After.Find(source.Position) is { Core.Value: 4 },
+                    "满堆或属性不兼容仍改投合法空格，不改写目标完整核心 " + list);
+                var full = holder.Inventory with { Items = holder.Inventory.Items.AddRange(Enumerable.Range(ItemSlotBoundService.QuickSlotStart,
+                    ItemSlotBoundService.Range(template.Kind, holder.Inventory).End - ItemSlotBoundService.QuickSlotStart + 1)
+                    .Where(index => index != target.Position.Index && ItemSlotBoundService.Allows(holder.Inventory,
+                        new(InventoryListType.Main, (short)index), template.Kind))
+                    .Select(index => new InventoryItem(100 + index, new(InventoryListType.Main, (short)index), new(202, template.Kind, 1)))) };
+                That(!InventoryMoveService.Plan(holder with { Inventory = full }, request, catalog, 0).Accepted &&
+                    full.Find(source.Position) == source && full.Find(target.Position) == blocked,
+                    "没有兼容堆和合法空格时整笔拒绝，源目标均保持 " + list);
+            }
+            That(!InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                { Items = [source with { Core = source.Core with { ExpireTime = 1 } }, target] } }, request, catalog, 2).Accepted,
+                "自动取出回显兼容不绕过源期限 " + list);
+            var equipment = source with { Core = new(203, GameWorld.Items.ItemKind.Equipment, 0) };
+            That(!InventoryMoveService.Plan(role with { Inventory = role.Inventory with
+                { Items = [equipment, target with { Position = new(InventoryListType.Main, 9), Core = equipment.Core }] } },
+                request with { Destination = new(InventoryListType.Main, 9) }, catalog, 0).Accepted,
+                "非堆叠装备不取得仓库自动合堆的零目标兼容 " + list);
+        }
     }
 
     static void VerifySortRules()

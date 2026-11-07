@@ -40,6 +40,7 @@ internal static class DungeonSettlementSessionTests
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
         var expectedReward = clear.Calculate(definition, 0, 99);
+        DungeonSettlementTests.RunSortedStackCards(pvf, itemResources);
         CommittedSettlement();
         ReturnWithoutSettlement();
         RaidStatisticsIsolation();
