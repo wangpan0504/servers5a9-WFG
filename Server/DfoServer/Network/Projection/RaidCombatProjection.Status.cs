@@ -8,13 +8,39 @@ internal static partial class RaidCombatProjection
 {
     internal static void RestoreStatusForScene(GameConnectionContext context, Func<bool> current)
     {
-        if (context.Session.RaidStatusSnapshot() is not { Battle.Kind: RaidKind.Luke } snapshot) return;
+        if (context.Session.RaidStatusSnapshot() is not { } snapshot) return;
+        if (snapshot.Battle.Kind == RaidKind.Anton)
+        {
+            PostAntonSceneSymbols(context, snapshot.Battle, snapshot.View,
+                () => current() && context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View));
+            return;
+        }
+        if (snapshot.Battle.Kind != RaidKind.Luke) return;
         // 加载前的583只能缓存符号，尚未就绪的地图效果物件收不到onChangeRaidSymbol；30后恢复原值供ACT重评。
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
             RaidCombatPackets.Symbols(snapshot.Battle.SymbolSnapshot(snapshot.View)), "raid_scene_symbols",
             () => current() && context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View));
         PostStatus(context, snapshot.Battle, snapshot.View,
             () => current() && context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View), restore: true);
+    }
+
+    internal static void PostAntonSceneSymbols(GameConnectionContext context, AntonRaidBattle battle,
+        AntonRaidBattleView view, Func<bool> current)
+    {
+        // 地图安装后只恢复状态，不能重播影片、字幕或阶段执行事件。
+        var symbols = battle.SymbolSnapshot(view).Where(row => row.Id is >= 3 and <= 12 or >= 50 and <= 63 or 110 or 111 or 126 or 127 or >= 20000 and <= 20003).ToArray();
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL, RaidCombatPackets.Symbols(symbols),
+            "anton_scene_symbols", () => current() && battle.IsCurrent(view));
+    }
+
+    internal static void CorrectAntonEnergy(GameConnectionContext context)
+    {
+        if (context.Session.RaidStatusSnapshot() is not { Battle.Kind: RaidKind.Anton } snapshot) return;
+        // 662执行者可能先在本地减法；同值权威回写也不能被增量过滤吞掉。
+        var symbols = snapshot.Battle.SymbolSnapshot(snapshot.View).Where(row => row.Id == 110).ToArray();
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL, RaidCombatPackets.Symbols(symbols),
+            "anton_energy_authoritative", () => snapshot.Battle.IsCurrent(snapshot.View) &&
+                context.Session.CanPublishRaidBattle(snapshot.Actor, snapshot.View));
     }
 
     internal static void PostStatus(GameConnectionContext context, AntonRaidBattle battle, AntonRaidBattleView view,

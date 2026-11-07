@@ -9,7 +9,7 @@ namespace DfoServer.Testing;
 internal static partial class AntonRaidGapTcpTests
 {
     // 复用既有单人全流程Host；不建立Native连接，覆盖无peer时本地事件的正式游戏协议接线。
-    static void VerifyBatteryObserver(TcpPeer peer, RaidDungeonCatalog catalog)
+    static bool VerifyBatteryObserver(TcpPeer peer, RaidDungeonCatalog catalog)
     {
         peer.Send(15, BitConverter.GetBytes(218u));
         That(AntonTcpProbe.Barrier(peer, "单人观测打开218").Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }),
@@ -58,7 +58,7 @@ internal static partial class AntonRaidGapTcpTests
                 That(AntonTcpProbe.Barrier(peer, "电池观测跳过后回候战室").Any(packet =>
                     packet is { Kind: 1, Opcode: 42, Body: [1] }),
                     "电池观测因Boss跳过后先回候战室，不能把房内状态带到后续阶段夹具");
-                return;
+                return false;
             }
             AntonTcpProbe.ClearRoom(peer, map, report, out _, out _, false);
             byte[] move = new byte[100]; move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
@@ -115,6 +115,7 @@ internal static partial class AntonRaidGapTcpTests
         peer.Send(0x7FF4, Observation(3, 23, death));
         That(AntonTcpProbe.Barrier(peer, "回城后的旧单人观测").All(packet => packet.Opcode != 0x7FF4),
             "回城旧观测不伪造成功且连接保留");
+        return true;
 
         void Load() { peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "单人观测房间加载完成"); }
         static byte[] Identity(List<WirePacket> packets) => packets.Single(packet => packet is { Kind: 0, Opcode: 0x7FF0 }).Body;

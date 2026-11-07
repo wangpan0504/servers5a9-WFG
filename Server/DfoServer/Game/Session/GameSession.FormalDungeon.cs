@@ -37,6 +37,9 @@ internal sealed partial class GameSession
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
+        public Dictionary<int, RecoveryConsumableDefinition> FreeEffectDefinitions { get; } = new();
+        public HashSet<int> FreeTouchedNormalCooldowns { get; } = new();
+        public HashSet<int> FreeTouchedNormalEffects { get; } = new();
         public BossSelectionBuff? BossSelectionBuff { get; init; }
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
@@ -124,11 +127,16 @@ internal sealed partial class GameSession
         formalDungeon?.Entry.HasFreeCombatConsumption == true;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
     {
+        public FormalDungeonReceipt? AntonHatcherySource { get; init; }
+        public InventoryItem? QuickSlotEnergySource { get; init; }
         public InventoryEventPrecondition? RequiredEvent { get; init; }
         public DungeonSelectionContext? ClassExperienceSelection { get; init; }
         // 本次入场计入的冒险团每周地下城列；练习、训练、职业体验与比赛为 null。
         public WeeklyDungeonEntry? Weekly { get; init; }
     }
+    InventoryItem? CaptureQuickSlotEnergy(Character character, ItemCatalog? resourceItems = null) =>
+        QuickSlotEquipmentEnergy.Capture(character, resourceItems ?? items,
+            (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
     public FormalDungeonReceipt? EnterFormalDungeon(uint dungeonId, uint questId, byte difficulty,
@@ -176,6 +184,8 @@ internal sealed partial class GameSession
             if (activity?.Active != true) return RejectFormal("epic-road-event-closed");
             requiredEvent = new(activity.Schedule, timeProvider ?? TimeProvider.System);
         }
+        if (monsterMockBattle?.ContainsDungeon(dungeonId) == true)
+            return RejectFormal("monster-mock-battle-admission-required");
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
@@ -330,8 +340,8 @@ internal sealed partial class GameSession
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
-        // 乔安菜单只建立本次普通选图身份；旧选择、直接16、任务/练习/深渊和重试不能借用NPC入口。
-        if (dungeonId == 4000 && (questId != 0 || difficulty != 0 || retry is not null || practice || classExperience ||
+        // 乔安菜单只建立本次普通选图身份。已接取且声明4000的任务可以携带任务号；直接16、练习、深渊和重试不能借用。
+        if (dungeonId == 4000 && (difficulty != 0 || retry is not null || practice || classExperience ||
             hellParty || hellLegend || sealDoor || assault is not null || selection is null || selection.IsTutorial ||
             selection.IsClassExperience || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("lost-land-selection-mismatch");
@@ -404,8 +414,8 @@ internal sealed partial class GameSession
         // 票据在下面统一规划并随实例安装原子提交；组队逐人核验并由共享入场事务扣除。
         if (hellParty)
         {
-            // 结算页再挑战对超星空与时空裂缝放行；两者都按当前背包重算门票与入场疲劳，不免费重开旧实例。
-            if (retry is not null && !retry.Entry.IsCosmo && !retry.Entry.IsInfernoParty && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
+            // 结算页只继承已结算实例的深渊模式；所有类型仍按当前背包重算门票与入场费用。
+            if (retry is not null && retry.Entry.HellParty is null && !retry.Entry.IsCosmo && !retry.Entry.IsInfernoParty && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
                 sealDoor && (hellLegend || dungeonId == DungeonCosmoRewardCatalog.DungeonId))
                 return RejectFormal("hell-party-mode-unsupported");
             if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||
@@ -433,7 +443,8 @@ internal sealed partial class GameSession
             if (questId >= 30000 || !questCatalog.TryGet((int)questId, out quest) ||
                 !QuestCoverage.HasOrdinaryDeclarations(quest) ||
                 !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != questId).ToArray() },
-                    quest, questCatalog).Eligible) return RejectFormal("quest-not-eligible-or-undeclared");
+                    // 地区每日上限只约束新分配；已接任务的进图与领奖采用同一升级兼容规则。
+                    quest, questCatalog, allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest)).Eligible) return RejectFormal("quest-not-eligible-or-undeclared");
         }
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
@@ -593,9 +604,13 @@ internal sealed partial class GameSession
         if (entry.IsClassExperience != classExperience) return RejectFormal("class-experience-mismatch");
         if (entry.IsTutorial && !training) return RejectFormal("tutorial-entry-not-training");
         if (questId == 0 && entry.RouteQuestId > 0 && questCatalog is not null &&
-            expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId) &&
-            !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
-                questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
+            expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId))
+        {
+            var routeQuest = questCatalog.Get((int)entry.RouteQuestId);
+            if (!QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
+                routeQuest,questCatalog,allowAboveMaximum: QuestAutoDailyPlan.Hunt(routeQuest)).Eligible)
+                return RejectFormal("route-quest-not-eligible");
+        }
         if (partyAdmission && (entry.IsPractice || entry.IsTournament || entry.IsTrainingRoom || entry.IsClassExperience ||
             entry.IsTutorial || entry.IsQuestReplay || assault is not null)) return RejectFormal("party-mode-unsupported");
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
@@ -686,7 +701,7 @@ internal sealed partial class GameSession
             if (storedFatigue.Remaining < entry.StartFatigue || FatigueForClient(expected).Remaining < entry.StartFatigue)
                 return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
         }
-        var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
+        var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition ?? formalDungeon?.OrdinaryReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
         QuestDropResources? questDrops = null;
@@ -728,7 +743,8 @@ internal sealed partial class GameSession
                 participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, participantDropPlans)
                 { NextObjectKey = shared.Session.PreparedParty(shared).NextKey, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, EntryPieces = pieces,
                     HellRewardPlans = source.HellRewardPlans, CrackRewards = crackRewards ?? source.CrackRewards };
-            return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey);
+            return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey)
+            { QuickSlotEnergySource = CaptureQuickSlotEnergy(expected, items) };
         }
         if (state.LastAttempt == long.MaxValue) return RejectFormal("attempt-overflow");
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
@@ -778,10 +794,13 @@ internal sealed partial class GameSession
                     : entry.IsTournament && entry.BasisLevel is { } tournamentLevel
                     ? DungeonTournamentPlan.CreateRoomPlan(rooms,room,rooms.ReadTournamentSource(map),mapSeed,expected.Id,checked((ushort)next),
                         tournamentLevel,entry.PlayerTeam)
+                    : entry.MockBattle is { } mockBattle
+                    ? DungeonMonsterPlan.FromMockBattleRoom(room, expected.Id, checked((ushort)next), mockBattle, mockBattle.Catalog)
                     : DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
-                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles);
+                        companionRows: map == entry.StartMap ? entry.CompanionMapRows : [], companionProfiles: entry.CompanionProfiles,
+                        suppressCompanions: entry.IsTagSystem);
                 if (EpicRoad2019MonsterPolicy.Matches(entry))
                     plan = EpicRoad2019MonsterPolicy.Apply(plan, entry);
                 else if (entry.ChampionPercents.IsEnabled)
@@ -925,7 +944,8 @@ internal sealed partial class GameSession
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { NextObjectKey = next, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
                 CrackRewards = crackRewards, AltarStartedTimestamp = (timeProvider ?? TimeProvider.System).GetTimestamp() };
-        return new(expected,epoch,dungeon,next);
+        return new(expected,epoch,dungeon,next)
+        { QuickSlotEnergySource = CaptureQuickSlotEnergy(expected, items) };
     }
 
     // #510/#511 选图准入逐项给出具体拒绝原因；未知或未核验的原因仍按原静默失败处理。
@@ -1136,7 +1156,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (prepared.RequiredEvent is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1144,9 +1164,11 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
+                        prepared.Weekly,installing.GriefAdmission) { QuickSlotEnergySource = prepared.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
-                RequiredEvent = prepared.RequiredEvent ?? Strongway2019RequiredEvent(installing.Strongway2019Admission) });
+                MockBattle = installing.Entry.MockBattle,
+                RequiredEvent = prepared.RequiredEvent ?? (installing.Entry.MockBattle is { } mockEntry ? new(mockEntry.Schedule, timeProvider ?? TimeProvider.System) :
+                    Strongway2019RequiredEvent(installing.Strongway2019Admission)) });
             }
             catch (DungeonEventAdmissionRejectedException)
             {
@@ -1204,6 +1226,7 @@ internal sealed partial class GameSession
             entrySlots = [.. entrySlots.Concat(training.Inventory.ChangedSlots.Except(hellSlots).Except(channelSlots).Except(assaultSlots)).Distinct()];
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue,
+            FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(character.Inventory, committed.Inventory),
             BattlePassMissionClock = entryFatigue > 0 ? timeProvider ?? TimeProvider.System : null, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
             EntryChangedCurrencies = entryItems?.ChangedCurrencies ?? [],
             GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
@@ -1247,6 +1270,8 @@ internal sealed partial class GameSession
         bool hasMatchingQuest = !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && expected.ActiveMainQuests.Any(active =>
             QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
             QuestDungeonClearProgress.CountsInitializations(quest,entry));
+        // 先冻结资格，不依赖可切换的调试开关；事务内实际未扣疲劳时自然不扣能量。
+        var energySource = entry.UsesRoomFatigue || entry.Hope is not null ? CaptureQuickSlotEnergy(expected) : null;
         var receipt = owner.Execute(() =>
         {
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading || !IsCurrentRaidDungeon(dungeon.Entry) ||
@@ -1256,13 +1281,13 @@ internal sealed partial class GameSession
             if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System);
+                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
             if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System);
+                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
             var result = dungeon.Run.CompleteLoading(identity,Guid.NewGuid(),hasMatchingQuest);
@@ -1274,6 +1299,7 @@ internal sealed partial class GameSession
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(expected.Inventory, Selected!.Inventory),
                 BattlePassMissionClock = expected.Fatigue is {} oldFatigue && Selected?.Fatigue is {} newFatigue && newFatigue.Remaining < oldFatigue.Remaining ? timeProvider ?? TimeProvider.System : null };
         });
         ScheduleHostedDungeonEligibility(receipt);
@@ -1569,7 +1595,7 @@ internal sealed partial class GameSession
         if (dungeon.QuestDrops is { } resources)
             dungeon.PendingQuestDrop ??= QuestDropPlan.Create(Selected,dungeon.Run.Entry,resources,pending.Death.EventId,
                 pending.Death.Identity,pending.Result.Snapshot.CurrentMap.Id,pending.Monster.MonsterId,pending.Monster.EnemyType,pending.Result.ClearFact is not null,
-                dungeon.Draw,frozen.At);
+                dungeon.Draw,frozen.At,consumables?.TreasureHunterPotions);
         var questDrop = dungeon.PendingQuestDrop;
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop);
         if (committed.Commit.CommittedBonuses is { } actualBonuses)
@@ -1684,6 +1710,8 @@ internal sealed partial class GameSession
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
             dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
+        using var fiendwarReturn = raidCombat is { Battle.Kind: DfoServer.Game.Raids.RaidKind.Fiendwar } raid
+            ? raid.Battle.ReserveFiendwarReturn(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId) : null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。
         if (dungeon.Entry.IsTutorial && Selected.Tutorial is { Completed: false })
             Selected = repository.CommitTutorialCheckpoint(owner, TutorialCheckpoint(Selected, "skip", Guid.NewGuid(), 0, 0,
@@ -1695,7 +1723,8 @@ internal sealed partial class GameSession
             var after = clearedHell ? before : StaminaRecoveryService.ApplyDungeonRetreat(Selected, dungeon.Entry, dungeon.Run.Phase, retreatAt,
                 PremiumPcRoom);
             after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
-            if (RaidDungeonExitPosition(dungeon, Selected) is not { } back) return null;
+            if ((fiendwarReturn is null ? RaidDungeonExitPosition(dungeon, Selected) :
+                FiendwarReturnPosition(fiendwarReturn.Destination)) is not { } back) return null;
             if (dungeon.Run.TagEvildomAdmission is not null && repository is DfoServer.Game.TagEvildom.ITagEvildomConfigurationStore tagStore)
                 Selected = tagStore.CommitTagEvildomReturn(owner, Selected, dungeon.Run.Snapshot.Identity.InstanceId,
                     back, Selected.Return, after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)),
@@ -1713,13 +1742,17 @@ internal sealed partial class GameSession
         dungeon.Ground.ExpireRun();
         // 原生离图保留双成员并恢复队首；返城提交只更新主角记录，不能据此作废已安装的备用资料。
         var raidChange = ReleaseCurrentRaidDungeon();
+        if (fiendwarReturn is not null) raidChange = fiendwarReturn.Install();
         ReleaseCurrentEvildomWarDungeon();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
+        var consumableStates = RestoreAfterFreeConsumables(dungeon);
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
-        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = RecordPreyTownLocation(raidChange) };
+        raidChange = RecordPreyTownLocation(raidChange);
+        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange,
+            ConsumableCooldowns = consumableStates.Cooldowns, ConsumableEffects = consumableStates.Effects };
     });
 
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
@@ -1761,6 +1794,7 @@ internal sealed partial class GameSession
             PartyActors = dungeon.PartyActors,
             GuildMemberships = dungeon.GuildMemberships,
             PartySlot = dungeon.PartySlot,
+            Dazzlement = dungeon.Dazzlement,
             ClearTimeMilliseconds = dungeon.ClearTimeMilliseconds
         };
     }

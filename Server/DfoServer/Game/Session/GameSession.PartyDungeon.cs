@@ -141,7 +141,8 @@ internal sealed partial class GameSession
         var plan = PreparedParty(token);
         if (!Ready || SelectionEpoch != plan.SelectionEpoch || !ReferenceEquals(Selected, plan.Character) ||
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
-                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan)) || HasPendingTownQuestCommit) return null;
+                Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null || CanReserveStrongway2019Matching(plan) ||
+                CanReserveAntonHatchery(plan)) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
         if (dungeon.EvildomWarChallengeEntry is { } challenge && !IsCurrentEvildomWarChallengeAdmission(challenge)) return null;
         if (dungeon.Strongway2019Admission is { } strongway && !IsCurrentStrongway2019Admission(strongway)) return null;

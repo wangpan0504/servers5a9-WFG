@@ -176,7 +176,7 @@ internal static partial class AntonRaidGapTcpTests
         foreach (var dungeon in raidResources.Script.Phases[1].Dungeons)
             AssertHp(dungeon.Id, dungeon.HpRaw);
         foreach (int dungeon in new[] { 220, 221, 222, 223, 224 }) AntonTcpProbe.RejectClosed(peer, null, dungeon);
-        VerifyBatteryObserver(peer, catalog);
+        int energyAfterTerminal = (VerifyBatteryObserver(peer, catalog) ? 9900 : 10000) - 3000;
         AntonTcpProbe.Enter(peer, catalog, 218, report, clear: true, leave: false);
         AssertState(report, 218, 0);
         int hpSymbol = raidResources.Script.Symbols["[218 dgn hp]"];
@@ -188,12 +188,13 @@ internal static partial class AntonRaidGapTcpTests
         byte[] energy = [110, 0, 0, 0, 0xB8, 0x0B, 0, 0, 2];
         peer.Send(662, energy);
         var energyReply = AntonTcpProbe.Barrier(peer, "218终末Last能量报告");
-        That(energyReply.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == 6900),
+        That(energyReply.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == energyAfterTerminal),
             "正式218通关后110减3000，保持HP0剩余语义");
         peer.Send(662, energy);
         var duplicateEnergy = AntonTcpProbe.Barrier(peer, "同Run重复Last");
-        That(duplicateEnergy.Where(p => p is { Kind: 0, Opcode: 583 }).All(p => Energy(p.Body) == 6900),
-            "同Run重复报告不再扣能量");
+        That(duplicateEnergy.Any(p => p is { Kind: 0, Opcode: 583 } && Energy(p.Body) == energyAfterTerminal) &&
+            duplicateEnergy.Where(p => p is { Kind: 0, Opcode: 583 }).All(p => Energy(p.Body) == energyAfterTerminal),
+            "同Run重复报告不再扣能量，仍回写权威110校正客户端乐观减法");
         static int Energy(byte[] body)
         {
             for (int index = 0; index < body[0]; index++)
@@ -202,7 +203,7 @@ internal static partial class AntonRaidGapTcpTests
             return -1;
         }
         peer.Send(42); AntonTcpProbe.Barrier(peer, "218回候战室");
-        VerifyConstructorLast(peer, catalog, report, clock);
+        VerifyConstructorLast(peer, catalog, report, clock, energyAfterTerminal);
         int volcanoMap = report.Maps.Count;
         AntonTcpProbe.Enter(peer, catalog, 219, report, clear: true);
         That(U32(report.Maps[volcanoMap], 14) == 19206 && report.Maps[volcanoMap][0] == 0 && report.Maps[volcanoMap][1] == 1,

@@ -11,6 +11,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
 {
     // 仅保存六个已证影片事件的最后规则写入代，随候选提交，不由网络快照制造事件。
     public ImmutableDictionary<int, long> AntonMovieEvents { get; init; } = ImmutableDictionary<int, long>.Empty;
+    public bool AntonVolcanoBarrierOpen { get; init; }
     public FiendwarFieldState? Fiendwar { get; init; }
     public ImmutableDictionary<int, FiendwarTimer> FiendwarDungeonTimers { get; init; } = ImmutableDictionary<int, FiendwarTimer>.Empty;
     public ImmutableDictionary<ushort, int> FiendwarPositions { get; init; } = ImmutableDictionary<ushort, int>.Empty;
@@ -196,6 +197,9 @@ internal sealed partial class AntonRaidBattle
         if (Kind == RaidKind.Luke)
             foreach (var dungeon in script.Phases[view.Phase].Dungeons)
                 symbols[script.Symbols[dungeon.HpSymbol]] = dungeon.HpRaw - view.Symbols[dungeon.HpSymbol];
+        // 95原生01BEAE60用111锁存屏障；110仅为能量，资源符号表没有111名称。
+        if (Kind == RaidKind.Anton && view.Phase == 1 && script.Symbols.GetValueOrDefault("[black volcano barrier]") == 110)
+            symbols[111] = view.AntonVolcanoBarrierOpen ? 1 : 0;
         return symbols.Select(row => (row.Key, row.Value)).Concat(view.LukeEnergySignals.Select(row => (row.Key, row.Value)))
             .Concat(Kind == RaidKind.Anton && view.Phase == 1 ? view.AntonConstructorSignals.Select(row => (row.Key, row.Value)) : [])
             .OrderBy(row => row.Item1).ToArray();

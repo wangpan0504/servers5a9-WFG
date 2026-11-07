@@ -314,6 +314,7 @@ internal static partial class AntonRaidGapTcpTests
             "冲突改位后跨休息态重发原请求仍确认同份回执，不增发");
         clock.Advance(595); clock.Advance(3);
         await VerifyBatteryNativeAsync(fixture, leader, member, catalog);
+        VerifyHatcheryTransfer(fixture, leader, member, catalog, clock);
     }
 
     static void SameRoom(byte[] leader, byte[] member, uint? map, string why) =>
