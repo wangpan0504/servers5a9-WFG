@@ -27,7 +27,9 @@ internal sealed class SupportCompanionStore(string directory)
         try
         {
             File.WriteAllText(temporary, JsonSerializer.Serialize(value));
-            File.Move(temporary, path, true);
+            // 替换已有文件时保留共享删除读句柄的旧快照；首次建立不覆盖竞争创建的目标。
+            if (File.Exists(path)) File.Replace(temporary, path, null);
+            else File.Move(temporary, path);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
