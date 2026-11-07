@@ -85,6 +85,8 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
             return await UseNpcFavorAsync(context, request);
         if (request.Action == 72)
             return await UseMileageAsync(context, request);
+        if (request.Action == ActionConsumableDefinition.RidingAction)
+            return await UseRidingAsync(context, request);
         if (request.Action == 149)
             return cargo is not null ? await cargo.UseAccountUpgradeToolAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 151)
@@ -213,6 +215,37 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
             result.Accepted ? "mileage_item_committed" : "mileage_item_rejected", Guard);
         // 动作72的默认成功消费者自行扣一件源；随后只发布已提交的537积分通知。
         if (inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, refreshEquipment: false);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseRidingAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = request.List == (byte)InventoryListType.Main && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument == 0 && request.SecondArgument == 0 && inventoryProjection is not null;
+        var source = new InventorySlot(InventoryListType.Main, unchecked((short)request.Slot));
+        InventoryResult result;
+        try
+        {
+            result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
+                context.Session.UseRidingConsumable(source, items);
+        }
+        catch (Exception error) when (error is DbException or InvalidDataException or KeyNotFoundException)
+        {
+            log.Write("riding_consumable_commit_failed", new { Connection = context.Id, request.Slot, Error = error.Message });
+            result = InventoryResult.Reject(19);
+        }
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
+            context.Session.Phase == before.Phase);
+        log.Write("riding_consumable_use", new { Connection = context.Id, request.Slot, result.Accepted, result.Error,
+            Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "riding_consumable_used" : "riding_consumable_rejected", Guard);
+        // 028C0AE0->028BEC5E在ACK515成功后挂接CAppendageRiding并由028C0C02扣一件源；不再重复下发源槽NOTI14。
+        if (result.Accepted && inventoryProjection is not null)
             await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { source }, refreshEquipment: false);
         return CommandResult.Handled;
     }

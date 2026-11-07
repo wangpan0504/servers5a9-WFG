@@ -11,6 +11,28 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town),
             3, requireTown: false, effectItem: position);
 
+    public InventoryResult UseRidingConsumable(InventorySlot source, ItemCatalog catalog, TimeProvider? clock = null)
+    {
+        var dungeon = owner.Execute(() => formalDungeon is { CharacterDead: false,
+            Run.Phase: DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon } active
+            ? (DungeonId: active.Entry.DungeonId, InRaid: active.Entry.RaidEntry is not null) : ((uint DungeonId, bool InRaid)?)null);
+        if (dungeon is null) return InventoryResult.Reject(19);
+        return PlanAndCommitInventory(character =>
+        {
+            var item = character.Inventory.Find(source);
+            if (item is null || catalog.ActionConsumable(item.Core.ItemId) is not { Label: "[riding]", Parameters: [> 0, > 0] } definition ||
+                !definition.AllowsDungeon(dungeon.Value.DungeonId, dungeon.Value.InRaid))
+                return InventoryResult.Reject(19);
+            return InventoryActionConsumableService.Plan(character, source, definition, "[dungeon]",
+                clock ?? timeProvider ?? TimeProvider.System);
+        }, 19, requireTown: false, allowSettlement: false, requiredPhase: SessionPhase.Dungeon,
+            additionalGuard: () => formalDungeon is { CharacterDead: false,
+                Run.Phase: DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon } active &&
+                active.Entry.DungeonId == dungeon.Value.DungeonId &&
+                (active.Entry.RaidEntry is not null) == dungeon.Value.InRaid,
+            usedItem: source);
+    }
+
     // 在线日切清包：与选角/CMD20 共用 InventoryExpiryService.Plan，审计 item_expired。
     // 6 点可能没开服 → 必须有登录/选角扫兜底；本方法不能当唯一清理通道。A 不追溯：ExpireTime=0 不会被 Plan 删除。
     public InventoryResult ExpireInventory() =>

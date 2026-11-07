@@ -6,12 +6,19 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Label, ImmutableArray<int> Parameters,
     int CoolTime, int CoolGroup, byte Maintenance, byte DailyLimit, ImmutableArray<string> Places)
 {
+    public const uint RidingAction = 100;
     public const uint StoryBookAction = 139;
     public int EffectMilliseconds { get; init; }
     public byte EffectMaintenance { get; init; }
     public ImmutableHashSet<int> AllowedTargets { get; init; } = [];
+    public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = [];
+    public ImmutableHashSet<uint>? AllowedDungeons { get; init; }
+    public bool RaidUseForbidden { get; init; }
     // [village] 覆盖整座城镇（含赛丽亚房间），与强化/宠物地点判定同一口径；[seria room] 仍只限房间。
     public bool AllowsPlace(string place) => StackableUsePlaces.Allows(Places, place);
+    public bool AllowsDungeon(uint dungeonId, bool inRaid = false) =>
+        dungeonId > 0 && (!RaidUseForbidden || !inRaid) && !ExcludedDungeons.Contains(dungeonId) &&
+        (AllowedDungeons is null || AllowedDungeons.Contains(dungeonId));
 
     public static ActionConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {
@@ -29,6 +36,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[character name change]", Parameters.Count: 0 } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] } or
+                { Label: "[riding]", Parameters: [> 0, > 0] } or
                 { Label: "[add crackofdaybreak dungeon enter count]", Parameters: [> 0 and <= 10000] } or
                 { Label: "[reset crackofdaybreak dungeon enter count]", Parameters.Count: 0 } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
@@ -38,10 +46,12 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[change creature]", Parameters.Count: 4 } or
                 { Label: "[creature effect]", Parameters: [> 0] }) ||
             (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 :
-                action.Label == "[add dungeon incount item limit count]" ? raw.DeclaredUseActionPacket is not (null or 1) :
+                action.Label is "[add dungeon incount item limit count]" or "[riding]" ? raw.DeclaredUseActionPacket is not (null or 1) :
                 raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
+            file.DeclaredFields.Contains("action usable dungeon") && file.ActionUsableDungeons is null ||
+            file.LimitDungeons.IsDefault || file.LimitDungeons.Any(id => id <= 0) || file.ImpossibleContents.IsDefault ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null or < 0 ||
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null ||
@@ -55,8 +65,13 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             raw.DeclaredActionResultLimitIndexes is not { Count: 0 })) return null;
         return new(item, action.Label, action.Parameters.ToImmutableArray(), file.CoolTime ?? 0, file.CoolGroup ?? -item.Id,
             file.CooltimeMaintenance ?? 0, checked((byte)(file.TotalUsableCount ?? 0)), raw.DeclaredActionUsablePlaces?.ToImmutableArray() ?? [])
-        { EffectMilliseconds = action.Label == "[creature effect]" ? action.Parameters[0] : 0,
+        {
+            EffectMilliseconds = action.Label == "[creature effect]" ? action.Parameters[0] : 0,
             EffectMaintenance = file.EffectMaintenance ?? 0,
-            AllowedTargets = extension ? raw.DeclaredActionLimitIndexes!.ToImmutableHashSet() : [] };
+            AllowedTargets = extension ? raw.DeclaredActionLimitIndexes!.ToImmutableHashSet() : [],
+            AllowedDungeons = file.ActionUsableDungeons?.Select(id => checked((uint)id)).ToImmutableHashSet(),
+            ExcludedDungeons = file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet(),
+            RaidUseForbidden = file.ImpossibleContents.Contains("raid dungeon", StringComparer.OrdinalIgnoreCase)
+        };
     }
 }

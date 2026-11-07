@@ -919,6 +919,8 @@ internal static class ServerRuntime
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
                 itemResources.EpicPieces, clock), inventoryProjection, log),
+            new TitleChangeHandler(new InventoryTitleChangeService(itemResources.Items, itemResources.TitleChanges, clock),
+                inventoryProjection, log),
             new DarkRevelationHandler(new InventoryDarkRevelationService(itemResources.DarkRevelations,
                 itemResources.EpicPieces, clock), itemResources.DarkRevelations, inventoryProjection, log),
             new EchonEquipmentHandler(new InventoryEchonEquipmentService(itemResources.Items, itemResources.Echon,
