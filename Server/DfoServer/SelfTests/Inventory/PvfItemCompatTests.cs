@@ -16,7 +16,9 @@ internal static class PvfItemCompatTests
         That(resources.Items.Get(2683657).Id == 2683657, "分块 impossible contents 的道具可加载");
         That(resources.Items.Get(10310207).Jobs == ushort.MaxValue, "[account] 可用职业按全职业读取");
         That(resources.Items.Get(100400000).EquipmentSlot == 34, "护石按独立槽位 34 加载");
-        That(resources.Items.Get(100360001).EquipmentSlot == 35, "符咒按独立槽位 35 加载");
+        That(resources.Items.Get(100360001) is
+            { Kind: ItemKind.Equipment, EquipmentSlot: 31, IsQuickSlotEquipment: true, QuickSlotEquipment: not null },
+            "符咒按类型31加载为快捷栏装备，不占护石35号穿戴槽");
         That(resources.Items.Get(0).Id == 0, "编号 0 的金币占位可以加载");
         That(resources.Items.Get(490008569).QualityBox is { MinimumPercent: 100, MaximumPercent: 100, RequiredRarity: null, RejectTitle: false },
             "黄金品级箱取最高品级且不按稀有度或称号收窄");
