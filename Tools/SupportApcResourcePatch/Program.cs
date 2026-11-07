@@ -103,6 +103,11 @@ else if (args[0] is "preview-maps" or "generate-maps" && args.Length == 4)
     if (args[0] == "generate-maps") MapDelta.Write(patches, audit.Unknown, args[3]);
     Console.WriteLine($"MAP_DELTA resources={patches.Count} changed={patches.Count(p => p.Changed)} unknownPreserved={audit.Unknown.Length} preview={args[0] == "preview-maps"}; source PVF read-only");
 }
+else if (args[0] == "prepare-combat" && args.Length == 3)
+{
+    using var source = PvfArchive.Open(args[1]);
+    CombatDelta.Write(source, args[2]);
+}
 else if (args[0] == "prepare-overdrive" && args.Length == 4)
 {
     using var source = PvfArchive.Open(args[1]);

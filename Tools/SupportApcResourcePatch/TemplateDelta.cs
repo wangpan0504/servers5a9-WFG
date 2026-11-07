@@ -77,6 +77,8 @@ internal static class TemplateDelta
             Replace(source, aic, "skill", skills.Values.SelectMany(s => new[] { ScriptToken.Int(s.Id), ScriptToken.Int(s.Level) }));
             Replace(source, aic, "quick skill", definition.Active.Take(6).SelectMany(id => new[] { ScriptToken.Int(id), ScriptToken.Int(skills[id].Level) }));
             Replace(source, aic, "key stream", definition.Active.SelectMany(id => new[] { ScriptToken.String(""), ScriptToken.String($"support_{id}.key") }));
+            if (AiPrograms.HasBasicAttack(definition))
+                Replace(source, aic, "key stream", Section(source, aic, "key stream").Concat([ScriptToken.String(""), ScriptToken.String("support_attack.key")]));
             Replace(source, aic, "ai pattern", new[] { "Event.ai", "DestinationSelect.ai", "Action.ai", "MoveMethod.ai" }.Select(ScriptToken.String));
             Set(source, aic, "vision", ScriptToken.Int(1200));
             Set(source, aic, "warlike", ScriptToken.Int(0));
@@ -177,6 +179,8 @@ internal static class TemplateDelta
                 AddEntry($"{directory}/key/support_{id}.key",
                     program, copiedFrom);
             }
+            if (AiPrograms.HasBasicAttack(definition))
+                AddEntry(directory + "/key/support_attack.key", AiPrograms.BasicAttack(), "aicharacter/_bizarre/priest/mirror_priest/key/x.key");
             // Event无动作是既有事件合同；其余三个决策脚本不能用空返回冒充实现。
             AddEntry(directory + "/ai/event.ai", Read(source, "aicharacter/priest/heal_soldier/ai/event.ai"), "aicharacter/priest/heal_soldier/ai/event.ai");
             foreach (var program in AiPrograms.Action(definition))

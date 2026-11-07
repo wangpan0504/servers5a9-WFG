@@ -2,6 +2,12 @@ using PvfLib;
 
 internal static class AiPrograms
 {
+    // 原生矩形查询会转为有符号坐标；使用有限房间包围范围，不传无穷或溢出值。
+    internal const float RoomRange = 1048576;
+    internal static bool HasBasicAttack(TemplateDefinition definition) => definition.Id is 20900 or 9986;
+    internal static List<ScriptToken> BasicAttack() =>
+        [ScriptToken.Tag("[input]"), ScriptToken.String("target current direction"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(30),
+         ScriptToken.Tag("[input]"), ScriptToken.String("x"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(300)];
     // 专用负选择器只在成功分支使用目标；未闭合的能力仍阻止写包。
     internal static Dictionary<string, List<ScriptToken>> Action(TemplateDefinition definition)
     {
@@ -18,7 +24,7 @@ internal static class AiPrograms
             case 9986:
                 Field(42);
                 Buff(30); Toggle(36);
-                Awakening(67); Awakening(26); Small(12);
+                Awakening(67); Awakening(26);
                 break;
             case 74990:
                 Heal(3, 70); Heal(32, 55); Buff(6); Revive(30);
@@ -34,6 +40,8 @@ internal static class AiPrograms
                 break;
             default: throw new InvalidDataException("Unsupported support identity");
         }
+        if (HasBasicAttack(definition))
+            rules.Add(next => BattleForDefinition(Target(100, Return(definition.Active.Length), next, 50), next));
         var programs = new Dictionary<string, List<ScriptToken>>(StringComparer.Ordinal);
         if (rules.Count is < 1 or > 64) throw new InvalidDataException("Support decision graph exceeds bounded rule count");
         for (int i = 0; i < rules.Count; i++)
@@ -72,7 +80,7 @@ internal static class AiPrograms
                 rules.Add(next =>
                 {
                     var cast = Return(keys[skill]);
-                    if (battle) cast = Battle(cast, next);
+                    if (battle) cast = BattleForDefinition(cast, next);
                     // true 包括已有增益及客户端判定无效；仅有效缺失/到期才进入施法。
                     return Select(selected, Ready(skill, Think("check party buff on", [ScriptToken.Int(JobId(definition.Job)), ScriptToken.Int(skill)], next, cast), next), next);
                 });
@@ -91,9 +99,11 @@ internal static class AiPrograms
                 Select(1, Ready(skill, Return(keys[skill]), next), next)));
         void Field(int skill) => rules.Add(next =>
             Think("check skill on", [ScriptToken.Int(skill)], next,
-                Select(1, Ready(skill, Battle(Return(keys[skill]), next), next), next)));
-        void Awakening(int skill) => rules.Add(next => Select(1, Ready(skill, Battle(Target(600, Return(keys[skill]), next), next), next), next));
-        void Small(int skill) => rules.Add(next => Select(1, Ready(skill, Battle(Target(350, Return(keys[skill]), next), next), next), next));
+                Select(1, Ready(skill, BattleForDefinition(Return(keys[skill]), next), next), next)));
+        void Awakening(int skill) => rules.Add(next => Select(1, Ready(skill,
+            BattleForDefinition(HasBasicAttack(definition) ? Return(keys[skill]) : Target(600, Return(keys[skill]), next), next), next), next));
+        void Small(int skill) => rules.Add(next => Select(1, Ready(skill, BattleForDefinition(Target(350, Return(keys[skill]), next), next), next), next));
+        List<ScriptToken> BattleForDefinition(List<ScriptToken> yes, List<ScriptToken> no) => Battle(yes, no, HasBasicAttack(definition) ? RoomRange : 1200);
         List<ScriptToken> Ready(int skill, List<ScriptToken> yes, List<ScriptToken> no) => Think("check use skill", [ScriptToken.Int(skill)], yes, no);
     }
 
@@ -106,11 +116,11 @@ internal static class AiPrograms
     static List<ScriptToken> Think(string condition, List<ScriptToken> args, List<ScriptToken> yes, List<ScriptToken> no) =>
         [ScriptToken.Tag("[think]"), ScriptToken.Tag("[" + condition + "]"), ..args,
          ScriptToken.Tag("[true]"), ..yes, ScriptToken.Tag("[false]"), ..no, ScriptToken.Tag("[/think]")];
-    static List<ScriptToken> Target(float range, List<ScriptToken> yes, List<ScriptToken> no) => Think("void",
-        [ScriptToken.String("is target in attack area()"), ScriptToken.Float(range), ScriptToken.Float(range), ScriptToken.Float(100), ScriptToken.Float(100)], yes, no);
-    static List<ScriptToken> Battle(List<ScriptToken> yes, List<ScriptToken> no) =>
+    static List<ScriptToken> Target(float range, List<ScriptToken> yes, List<ScriptToken> no, float depth = 100) => Think("void",
+        [ScriptToken.String("is target in attack area()"), ScriptToken.Float(range), ScriptToken.Float(range), ScriptToken.Float(depth), ScriptToken.Float(depth)], yes, no);
+    static List<ScriptToken> Battle(List<ScriptToken> yes, List<ScriptToken> no, float range = 1200) =>
         [ScriptToken.Tag("[think]"), ScriptToken.Tag("[void]"), ScriptToken.String("enemy number of in attack area()"),
-         ScriptToken.Float(1200), ScriptToken.Float(1200), ScriptToken.Float(1200), ScriptToken.Float(1200),
+         ScriptToken.Float(range), ScriptToken.Float(range), ScriptToken.Float(range), ScriptToken.Float(range),
          ..Think("last result", [ScriptToken.String(">="), ScriptToken.Float(1)], yes, no), ScriptToken.Tag("[/think]")];
 
     static List<ScriptToken> Maintained(TemplateDefinition definition, List<ScriptToken> next) => definition.Id switch
