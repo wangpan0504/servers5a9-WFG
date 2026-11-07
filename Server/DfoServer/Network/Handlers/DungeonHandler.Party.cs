@@ -494,7 +494,8 @@ internal sealed partial class DungeonHandler
         var destination = commit.Currency is { } currency
             ? new InventorySlot(InventoryListType.Main, CurrencyPackets.PickupSlot(currency)) : commit.Destination;
         var body = commit.Currency == CurrencyKind.Gold
-            ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot)
+            ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot,
+                checked((uint)(commit.Amount - result.Ground!.GoldAmount)))
             : DungeonPickupPackets.OrdinaryNotification(key, picked.Character.Id, new byte[8], picked.Character.Id,
                 commit.EpicPiece is not null || commit.AccountMaterial is not null
                     ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);

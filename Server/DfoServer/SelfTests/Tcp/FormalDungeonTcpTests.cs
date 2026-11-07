@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using DfoServer.Game.Dungeons;
@@ -103,6 +104,13 @@ internal static partial class FormalDungeonTcpTests
                 var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
                 character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5), new(1, 2)]));
                 PrepareDelilahServices(repository,owner,character,resources);
+                character = repository.LoadCharacter(owner, 0);
+                var goldTitle = new InventoryItem(0, new(InventoryListType.Equipment, 13),
+                    DfoServer.Game.Inventory.Services.InventoryRewardGrantService.Create(items.Items.Get(100331240)) with { ExpireTime = 0 });
+                DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character,
+                    new(true, 0, new(character.Inventory, character.Inventory with
+                    { Items = character.Inventory.Items.Where(item => item.Position != goldTitle.Position).Append(goldTitle).ToImmutableArray() },
+                    "gold-bonus-tcp-fixture", new(character))));
             }
             fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             peer.Select();
@@ -1544,6 +1552,11 @@ internal static partial class FormalDungeonTcpTests
             if (pickup.Length == 18) { BinaryPrimitives.WriteUInt16LittleEndian(pickup, (ushort)ground); pickup[2] = 1; }
             else BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
             long beforeGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
+            // 预期独立按本组真实穿戴的10%称号计算，不调用生产加成策略生成预期。
+            uint extraGold = itemId == 0 && fixture.Query("""
+                SELECT 1 FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=13 AND json_extract(i.item_core,'$.ItemId')=100331240
+                """, peer.Id).Length == 1 ? value / 10 : 0;
             long beforeReceipts = Convert.ToInt64(fixture.Query(
                 "SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]);
             peer.Send(43, pickup);
@@ -1555,11 +1568,11 @@ internal static partial class FormalDungeonTcpTests
                 for (int member = 0; member < 8; member++)
                 {
                     byte active = got[cursor++]; uint amount = U32(got, cursor); cursor += 4;
-                    That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value : 0), "金币八成员分支保留实际金额");
+                    That(active == (member == 0 ? 1 : 0) && amount == (member == 0 ? value + extraGold : 0), "金币八成员分支保留含装备加成的实际金额");
                     if (active != 0)
                     {
-                        That(got[cursor++] == 1 && U32(got, cursor) == 0 && U32(got, cursor + 4) == 0,
-                            "无附加金币也进入保留地面上下文的扩展表现分支，不伪造奖金或公会基金");
+                        That(got[cursor++] == 1 && U32(got, cursor) == extraGold && U32(got, cursor + 4) == 0,
+                            "金币原生扩展携带实际装备附加额，零加成仍保留完整扩展且基金为零");
                         cursor += 8;
                     }
                 }
@@ -1620,8 +1633,8 @@ internal static partial class FormalDungeonTcpTests
                 "集合拾取保留本次真实任务/普通死亡的持久成长来源，不借旧实例身份");
             That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0 AND receipt_format=1", peer.Id)[0][0]) == beforeReceipts + 1,
                 "拾取与资产同事务保存一次当前格式的实际回执");
-            if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value,
-                "金币地面与实际余额增量一致，不制造背包UID");
+            if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value + extraGold,
+                "金币原地面金额加称号实际增量与数据库一致，不制造背包UID");
             else if (CurrencyWallet.RewardKind(checked((int)itemId)) is { } currency)
             {
                 var audit = fixture.Query("SELECT balance_after-balance_before FROM currency_audit_log WHERE character_id=$p0 AND currency_kind=$p1 ORDER BY audit_id DESC LIMIT 1",

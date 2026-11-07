@@ -211,7 +211,8 @@ internal sealed partial class CharacterRepository
         int amount = reader.GetInt32(8);
         CurrencyKind? currency = reader.IsDBNull(7) ? null : (CurrencyKind)reader.GetInt32(7);
         CurrencyKind? expectedCurrency = ground.IsGold ? CurrencyKind.Gold : CurrencyWallet.RewardKind(ground.Core.ItemId);
-        if (currency != expectedCurrency || amount != (ground.IsGold ? ground.GoldAmount : ground.Core.Count))
+        // 金币回执是已验证、已提交的实际收益；当前穿戴变化不能重算或再次放大旧结果。
+        if (currency != expectedCurrency || (ground.IsGold ? amount < ground.GoldAmount || reader.GetInt64(9) < amount : amount != ground.Core.Count))
             throw new InvalidDataException("持久拾取的原数量或币种被修改");
         bool projection = current.Revision == revision;
         InventorySlot destination = new(InventoryListType.Main, 0);
