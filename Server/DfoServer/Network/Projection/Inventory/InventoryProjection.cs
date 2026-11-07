@@ -147,10 +147,12 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main || list == suppressMoveNoticeList;
             // 包裹回填仍先清槽再载入，保留图标effect而不播报获得。
             // CMD19已安装的穿戴对象不能再清空；统一按容器保护，不用部位白名单遗漏宠物等槽。
+            // 同模板堆叠对象的NOTI14分支不重写卡片等级，等级变化必须重建对象后再载入完整核心。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
                 !(preserveSkillSwitch && slot.List == InventoryListType.Equipment) &&
                 (suppressNotice ||
-                    plan.BeforeIndex.Find(slot) is { } old && old.Core.ItemId != now.Core.ItemId)).ToArray();
+                    plan.BeforeIndex.Find(slot) is { } old && (old.Core.ItemId != now.Core.ItemId ||
+                        old.Core.IsStackable && old.Core.EnchantUpgrade != now.Core.EnchantUpgrade))).ToArray();
             var updateType = suppressNotice ?
                 NotiPacketType.UPDATE_ITEM_LIST_NOT_NOTICE : NotiPacketType.UPDATE_ITEM_LIST;
             if (reloadSlots.Length != 0)

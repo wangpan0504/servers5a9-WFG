@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DfoServer.Game.Characters;
@@ -208,14 +209,56 @@ internal sealed partial class CharacterRepository
         foreach (string table in names)
         {
             var columns = CopyColumns(db, tx, table);
-            if (table == "characters" && !columns.SequenceEqual(CopyCharacterColumns) ||
-                specs.TryGetValue(table, out var spec) && !columns.SequenceEqual(spec.Fields.Split(',')))
-                throw new InvalidDataException("角色存档结构已变化，当前版本尚未核对复制兼容性：" + table);
+            string[]? expected = table == "characters" ? CopyCharacterColumns :
+                specs.TryGetValue(table, out var spec) ? spec.Fields.Split(',') : null;
+            if (expected is not null)
+            {
+                // 复制始终显式指定字段名；正常迁移追加字段后的物理列顺序不影响语义。
+                // 启动时对字段类型、默认值和约束的既有校验仍然保留，不在此猜写新字段。
+                var missing = expected.Except(columns, StringComparer.Ordinal).ToArray();
+                var extra = columns.Except(expected, StringComparer.Ordinal).ToArray();
+                if (missing.Length != 0 || extra.Length != 0)
+                    throw new InvalidDataException("角色存档结构不兼容：" + CopySchemaLabel(table) +
+                        "；缺少字段：" + CopySchemaNames(missing) +
+                        "；额外字段：" + CopySchemaNames(extra) + "。" + CopySchemaAdvice(extra.Length != 0));
+                // 现有 CharacterRepository.Read 仍按下标读取前 19 列，只有后缀字段使用名字读取。
+                if (table == "characters")
+                {
+                    int mismatch = Enumerable.Range(0, 19).FirstOrDefault(index => columns[index] != expected[index], -1);
+                    if (mismatch >= 0)
+                        throw new InvalidDataException("角色核心字段顺序不兼容：characters；第" + (mismatch + 1) +
+                            "列当前：" + CopySchemaLabel(columns[mismatch]) + "；预期：" + expected[mismatch] + "。" + CopySchemaAdvice(true));
+                }
+            }
             if (!specs.ContainsKey(table) && !UncopiedCharacterTables.Contains(table) &&
                 (table.StartsWith("character_", StringComparison.Ordinal) || columns.Intersect(ownerFields).Any()))
-                throw new InvalidDataException("发现尚未核对复制规则的角色关联表：" + table);
+                throw new InvalidDataException("发现未适配的角色关联表：" + CopySchemaLabel(table) +
+                    "；当前字段：" + CopySchemaNames(columns) + "；预期：须先适配复制规则。" + CopySchemaAdvice(true));
         }
-        if (CopyTables.Any(table => !names.Contains(table.Name))) throw new InvalidDataException("角色复制所需的存档结构不完整");
+        var missingTables = CopyTables.Select(table => table.Name).Append("characters").Except(names, StringComparer.Ordinal).ToArray();
+        if (missingTables.Length != 0)
+            throw new InvalidDataException("角色复制所需的存档结构不完整；缺少表：" + CopySchemaNames(missingTables) + "。" + CopySchemaAdvice(false));
+    }
+
+    static string CopySchemaAdvice(bool newerOrCustom) => newerOrCustom
+        ? "请先停服备份，改用支持此存档的配套服务端；自定义结构需作者适配。不要手动删除字段或表，也不要降级存档。"
+        : "请先停服备份，用配套服务端正常启动完成迁移，再刷新原角色；仍失败请反馈完整提示，不要手动改表。";
+
+    // 每次只报首个名字及总项数；单个名字不超过 96 个 UTF-8 字节，避免异常结构撑大 GM 提示。
+    static string CopySchemaNames(string[] names) => names.Length == 0 ? "无" :
+        CopySchemaLabel(names[0]) + (names.Length == 1 ? "" : "等" + names.Length + "项");
+
+    static string CopySchemaLabel(string name)
+    {
+        var result = new StringBuilder();
+        int bytes = 0;
+        foreach (var rune in name.EnumerateRunes())
+        {
+            if (bytes + rune.Utf8SequenceLength > 93) { result.Append('…'); break; }
+            result.Append(rune.ToString());
+            bytes += rune.Utf8SequenceLength;
+        }
+        return result.ToString();
     }
 
     static void CopyCharacterRows(SqliteConnection db, SqliteTransaction tx, Character source,

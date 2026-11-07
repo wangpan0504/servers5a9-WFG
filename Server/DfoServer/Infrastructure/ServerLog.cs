@@ -3,16 +3,30 @@ using System.Text;
 
 namespace DfoServer.Infrastructure;
 
-internal sealed class ServerLog(string directory, TextWriter? output = null, bool fileEnabled = true) : IDisposable
+internal sealed class ServerLog(string directory, TextWriter? output = null, bool fileEnabled = true,
+    TextWriter? failureOutput = null) : IDisposable
 {
     readonly BufferedLogFile? file = fileEnabled
         ? new(Path.Combine(directory, "server.jsonl"), error => Console.Error.WriteLine("Server log failed: " + error.Message)) : null;
     readonly TextWriter? console = output is null ? null : TextWriter.Synchronized(output);
     int consoleFailed;
+    int failureReported;
 
     public void Write(string kind, object detail)
     {
-        if (file is null && console is null) return;
+        if (file is null && console is null)
+        {
+            // 关闭日志也保留首个启动失败，不为普通事件分配JSON、写文件或输出包体。
+            if ((kind is "server_failed" or "listener_failed") && Interlocked.CompareExchange(ref failureReported, 1, 0) == 0)
+            {
+                using var failure = JsonSerializer.SerializeToDocument(detail);
+                string failureMessage = ConsoleMessage(kind, failure.RootElement).Replace('\r', ' ').Replace('\n', ' ');
+                if (failureMessage.Length > 2048) failureMessage = failureMessage[..2045] + "...";
+                try { (failureOutput ?? Console.Error).WriteLine(failureMessage); }
+                catch (Exception error) when (error is IOException or ObjectDisposedException) { }
+            }
+            return;
+        }
         var time = DateTimeOffset.Now;
         string line = JsonSerializer.Serialize(new { Time = time, Kind = kind, Detail = detail }) + "\n";
         file?.Append(line);

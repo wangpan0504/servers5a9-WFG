@@ -7,8 +7,12 @@ namespace DfoServer;
 
 internal static partial class GmWebServerTests
 {
-    public static Task RunClientPagesAsync() => ClientPagesAsync(new FakeData(
-        Path.Combine(Path.GetTempPath(), "gm-client-web-" + Guid.NewGuid().ToString("N") + ".jsonl")));
+    public static async Task RunClientPagesAsync()
+    {
+        await RunManagementBoundaryAsync();
+        await ClientPagesAsync(new FakeData(
+            Path.Combine(Path.GetTempPath(), "gm-client-web-" + Guid.NewGuid().ToString("N") + ".jsonl")));
+    }
 
     static async Task ClientPagesAsync(FakeData data)
     {
