@@ -57,8 +57,8 @@ internal static class EquipmentTransferSealTests
         var character = new Character(1, 0, "Rules", 0, new(1,0,1,1), null) { Level = 95, Inventory = new([target, source]) };
         var reseal = new EquipmentResealService(items, catalog, pieces, clock);
         var result = reseal.Plan(character, new(9, equipment.Id, 82, 0, false));
-        That(result.Accepted && result.Plan!.After.Find(Bag(9))!.Core == target.Core with { Attr = 4 * 32 + 17, SealFlag = 1 } &&
-            result.Plan.After.Find(Bag(82))!.Core.Count == 9, "普通蜜蜡只改封装与次数，按实际费用扣指定堆叠并保留全部核心");
+        That(result.Accepted && result.Plan!.After.Find(Bag(9))!.Core == target.Core with { Attr = 4 * 32 + 17, SealFlag = 1, Rune = 0 } &&
+            result.Plan.After.Find(Bag(82))!.Core.Count == 9, "普通蜜蜡清除特效，按实际费用扣指定堆叠并保留打造");
         foreach (var invalid in new[] { target with { Core = target.Core with { EquipmentLockId = 1 } },
             target with { Core = target.Core with { SealFlag = 1 } }, target with { Core = target.Core with { Attr = 7 * 32 + 17 } },
             target with { Core = target.Core with { ExpireTime = 1 } }, target with { Core = target.Core with { IsRental = true } } })
@@ -67,8 +67,8 @@ internal static class EquipmentTransferSealTests
         var maxed = target with { Core = target.Core with { Attr = 7 * 32 + 17 } };
         var once = reseal.Plan(character with { Inventory = new([maxed, source with { Core = source.Core with { ItemId = 102, Value = 1 } }]) },
             new(9,equipment.Id,82,0,false));
-        That(once.Accepted && once.Plan!.After.Find(Bag(9))!.Core == maxed.Core with { SealFlag = 1 } && once.Plan.After.Find(Bag(82)) is null,
-            "一次性蜜蜡可封装已满次数装备且不增加次数");
+        That(once.Accepted && once.Plan!.After.Find(Bag(9))!.Core == maxed.Core with { SealFlag = 1, Rune = 0 } && once.Plan.After.Find(Bag(82)) is null,
+            "一次性蜜蜡可封装已满次数装备且不增加次数，同时清除特效");
 
         var transport = new EquipmentTransportCatalog("""
             [stone type]

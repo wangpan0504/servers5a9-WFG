@@ -138,7 +138,7 @@ internal static class EquipmentUpgradeTests
         {
             Attr = 15, AmplifyType = 2, AmplifyValue = 45, EnchantCardId = 2000, EnchantUpgrade = 3,
             EmblemSocketCount = 2, Emblem1 = 3000, Emblem2 = 3001, GenuineUpgrade = 8,
-            Extension114 = new(1, 12345), Extension121 = 2345, Durability = 40
+            Extension114 = new(1, 12345), Extension121 = 2345, Durability = 40, Rune = 1
         };
         var source = new InventoryItem(1, new(InventoryListType.Main, 26), core);
         var material = new InventoryItem(2, new(InventoryListType.Main, 30), new(102, ItemKind.Material, 10));
@@ -150,8 +150,8 @@ internal static class EquipmentUpgradeTests
         That(converted.Accepted && converted.Plan!.After.Gold == 100000 &&
             converted.Plan.After.Find(material.Position)?.Core.Count == 5, "权能转换一次规划扣固定材料与金币");
         var target = converted.Plan!.After.Find(source.Position)!;
-        That(target.Uid == source.Uid && target.Core with { ItemId = 300 } == core,
-            "权能转换保留UID、品级和完整打造及扩展字段");
+        That(target.Uid == source.Uid && target.Core with { ItemId = 300 } == core with { Rune = 0 },
+            "权能转换清除特效，保留UID、品级和完整打造及扩展字段");
         foreach (var rejected in new[]
         {
             service.Convert(character, 26, 300, 300),
@@ -171,13 +171,13 @@ internal static class EquipmentUpgradeTests
             id => new ItemTemplate(id, ItemKind.Equipment, 16, 95, 50, 1, 0, 4, 3, "[trade]", ushort.MaxValue, 0, "fixture")));
         var donor = source with { Core = core with { ItemId = 200, Attr = 11 } };
         var recipient = new InventoryItem(3, new(InventoryListType.Main, 27),
-            new(203, ItemKind.Equipment, 123456) { Attr = 15, Durability = 20, Extension114 = new(2, 98765) });
+            new(203, ItemKind.Equipment, 123456) { Attr = 15, Durability = 20, Extension114 = new(2, 98765), Rune = 2 });
         var imprintCharacter = character with { Inventory = character.Inventory with { Items = [donor, recipient] } };
         var imprint = service.Imprint(imprintCharacter, new(26, 200, 27, 203));
         var imprinted = imprint.Plan?.After.Find(recipient.Position);
         That(imprint.Accepted && imprint.Plan!.After.Find(donor.Position) is null &&
             imprinted?.Uid == recipient.Uid && imprinted.Core.Value == recipient.Core.Value &&
-            imprinted.Core.Durability == 20 && imprinted.Core.Extension114 == recipient.Core.Extension114,
+            imprinted.Core.Durability == 20 && imprinted.Core.Extension114 == recipient.Core.Extension114 && imprinted.Core.Rune == 0,
             "刻印消耗源实例，保留目标UID、品级、耐久和独立扩展");
         That(imprinted!.Core.Upgrade == 11 && imprinted.Core.AmplifyType == core.AmplifyType &&
             imprinted.Core.AmplifyValue == core.AmplifyValue && imprinted.Core.EnchantCardId == core.EnchantCardId &&
@@ -195,7 +195,7 @@ internal static class EquipmentUpgradeTests
         } };
         var upgradeRequest = new EquipmentUpgradeRequest(26, 200, true, 11, 8, true, 201, true);
         var upgrade = service.Upgrade(upgradeCharacter, upgradeRequest);
-        That(upgrade.Accepted && upgrade.Plan!.After.Find(donor.Position)?.Core == donor.Core with { ItemId = 201 } &&
+        That(upgrade.Accepted && upgrade.Plan!.After.Find(donor.Position)?.Core == donor.Core with { ItemId = 201, Rune = 0 } &&
             upgrade.Plan.After.Items.Length == 1, "升级使用精确目标映射并原子消耗全部材料，选择保留的打造不变");
         var stripped = service.Upgrade(upgradeCharacter,
             upgradeRequest with { Upgrade = 0, GenuineUpgrade = 0, InheritEnchant = false, InheritEmblems = false });
@@ -218,7 +218,7 @@ internal static class EquipmentUpgradeTests
         weaponFusion = service.Imprint(weaponCharacter, weaponRequest, weaponFusion: true);
         That(weaponFusion.Accepted && weaponFusion.Plan!.After.Gold == 600000 &&
             weaponFusion.Plan.After.Find(material.Position) is null && weaponFusion.Plan.After.Find(weaponDonor.Position) is null &&
-            weaponFusion.Plan.After.Find(weaponRecipient.Position)?.Core.Upgrade == 11,
+            weaponFusion.Plan.After.Find(weaponRecipient.Position)?.Core is { Upgrade: 11, Rune: 0 },
             "权能融合按独立表扣传说灵魂十个及金币一百万，源打造覆盖目标");
         That(!service.Imprint(weaponCharacter, weaponRequest).Accepted &&
             !service.Imprint(weaponCharacter, weaponRequest with { TargetId = 203 }, weaponFusion: true).Accepted,
