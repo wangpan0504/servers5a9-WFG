@@ -18,7 +18,7 @@ internal static class AntonSymbolProjectionTests
         var script = AntonRaidBattleTests.Script(210) with
         {
             Symbols = ImmutableDictionary<string, int>.Empty.Add("[hp]", 50)
-                .Add("[is exist infection dungeon]", 7).Add("[infection dungeon index]", 8)
+                .Add("[is exist infection dungeon]", 7).Add("[infection dungeon index]", 8).Add("[movie smoke in]", 121)
         };
         var battle = new AntonRaidBattle(script);
         using var owner = new AccountOwners().Acquire("anton-symbol-test", () => { });
@@ -68,6 +68,11 @@ internal static class AntonSymbolProjectionTests
         RaidCombatProjection.PostAntonSnapshot(context2, battle, battle.View, () => true);
         await sender2.DrainAsync();
         That(frames2.Single()[0] == 3, "新成员或重连独立全量");
+        frames.Clear();
+        RaidCombatProjection.PostAntonSceneSymbols(context, battle, battle.View, () => true);
+        await sender.DrainAsync();
+        That(frames.Single(row => row.Opcode == 583).Body[0] == 3 && frames.Count == 1,
+            "30后恢复普通状态，即使值未变化也补发，排除影片事件与585");
         var key = context.AntonSymbols.Key!.Value;
         That(context.AntonSymbols.Changed(key with { Phase = key.Phase + 1 }, 50, 0) &&
             context.AntonSymbols.Changed(key with { Instance = Guid.NewGuid() }, 50, 0) &&

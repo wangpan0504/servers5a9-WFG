@@ -81,6 +81,7 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                 Contract = "anton-cleared-run-last-v1" });
             context.Session.PublishRaidCombat();
             // Anton成功ACK的消费合同未闭合，只发布已提交583，不猜回包。
+            DfoServer.Network.Projection.RaidCombatProjection.CorrectAntonEnergy(context);
             return CommandResult.Handled;
         }
         if (!context.Session.AcceptsLukeFacilityReports || RaidRequests.LukeFacilitySymbol(request.Body) is not { } symbol || context.Session.PartyDungeon is not { } party)

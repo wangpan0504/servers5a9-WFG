@@ -24,7 +24,7 @@ internal sealed partial class DungeonHandler
                 reason = "anton-entry-request-unproven";
                 // 实机 CMD16 是 25 字节，Unknown21 为 0xFFFFFFFF（pcap-manual-1235）。自测构造包该字段为 0。
                 // 只接受这两个值；其它 Unknown21 仍是 anton-entry-request-unproven。
-                if (context.Session.Phase is DfoServer.Game.Session.SessionPhase.MapSelect or DfoServer.Game.Session.SessionPhase.Loading &&
+                if (context.Session.Phase is DfoServer.Game.Session.SessionPhase.MapSelect or DfoServer.Game.Session.SessionPhase.Loading or DfoServer.Game.Session.SessionPhase.Dungeon &&
                     selection.DungeonIndex <= int.MaxValue && selection.Parameter == 2 && selection.Unknown5 == 0 &&
                     selection.Unknown7 == 0 && selection.Unknown8 == 0 && selection.Unknown9 == ushort.MaxValue &&
                     selection.Unknown11 == 0 && selection.Unknown15 == 0 && selection.Unknown16 == 0 &&
@@ -32,10 +32,16 @@ internal sealed partial class DungeonHandler
                 {
                     // 大图确认可直接发送16；首次从原Battle签发，Loading只验证并重放原Run。
                     bool replay = context.Session.Phase == DfoServer.Game.Session.SessionPhase.Loading;
-                    selected = service.Select(context.Session, (int)selection.DungeonIndex, scene, out reason, replayLoading: replay);
+                    bool hatchery = context.Session.Phase == DfoServer.Game.Session.SessionPhase.Dungeon;
+                    if (!hatchery) selected = service.Select(context.Session, (int)selection.DungeonIndex, scene, out reason, replayLoading: replay);
                     try
                     {
-                        if (replay) entered = selected;
+                        if (hatchery && context.Session.ChannelEntry?.Type == 23 && party is not null)
+                        {
+                            entered = partyDungeons.TransferAntonHatchery(context.Session, selection.DungeonIndex, rooms, rejection => reason = rejection);
+                            if (entered.Length != 0) reason = null;
+                        }
+                        else if (replay) entered = selected;
                         else if (selected.Length != 0)
                             entered = partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
                                 dungeons, rooms, null, null, null, null, preySolo: party is null ? scene : null);

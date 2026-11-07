@@ -48,10 +48,10 @@ internal sealed partial class GameSession
                 !ItemSlotBoundService.Allows(character.Inventory, item.Position, item.Core.Kind) ||
                 !consumables.TryGet(item.Core.ItemId, out var definition) ||
                 !definition.OpensPortableCargo || !definition.Unlimited ||
-                !definition.Allows(character.Level, character.Job) ||
+                !definition.Allows(character.Level) ||
                 items?.Get(item.Core.ItemId).RequiresPcRoom == true && !PremiumPcRoom ||
                 !CanUseStackableItem(character, item.Core.ItemId, places: definition.Places) ||
-                !CanUseDungeonItem(item.Core.ItemId, definition.AllowedDungeons) ||
+                !CanUseDungeonItem(item.Core.ItemId) ||
                 definition.AllowedDungeons is { } allowed && (Phase != SessionPhase.Dungeon || !allowed.Contains(instance.Entry.DungeonId)) ||
                 definition.ExcludedDungeons.Contains(instance.Entry.DungeonId) ||
                 definition.RaidUseForbidden && instance.Entry.RaidEntry is not null)

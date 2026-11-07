@@ -297,6 +297,8 @@ internal sealed partial class DungeonHandler
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
                 GuildDungeonPartyBuffProjection.Post(context, clear: true);
+                if (notice.SceneTransition)
+                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_hatchery_transition", Current);
                 if (scene.Entry.Hope is { } hope)
                     await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
                         "party_operation_hope_quest_assigned",Current);

@@ -222,6 +222,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var before = context.Owner.Execute(() => (context.Session.Selected, context.Session.Ready,
             context.Session.SelectionEpoch, context.Session.Phase, context.Session.CurrentDungeonSelection));
         var character = before.Selected;
+        if (character is not null && before.Ready && before.Phase == SessionPhase.Dungeon &&
+            context.Session.ChannelEntry?.Type == 23 && antonRaid is { Enabled: true })
+            return await SelectAntonAsync(context, selection);
         if (character is not null && before.Ready && !context.BlocksTownActions &&
             before.Phase is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading &&
             context.Session.ChannelEntry?.Type == 45 && fiendwarRaid is not null)

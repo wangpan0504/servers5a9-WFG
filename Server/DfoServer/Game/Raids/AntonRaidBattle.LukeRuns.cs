@@ -59,16 +59,23 @@ internal sealed partial class AntonRaidBattle
         readonly AntonRaidBattle battle;
         readonly RaidDungeonRun run;
         readonly PreyLandingCandidate? landing;
+        readonly RaidDungeonRun? replacing;
         bool finished;
         internal AntonRaidBattleChange? ReleasedChange { get; private set; }
-        private DungeonReservation(AntonRaidBattle battle, RaidDungeonRun run, PreyLandingCandidate? landing)
-        { this.battle = battle; this.run = run; this.landing = landing; }
+        private DungeonReservation(AntonRaidBattle battle, RaidDungeonRun run, PreyLandingCandidate? landing, RaidDungeonRun? replacing)
+        { this.battle = battle; this.run = run; this.landing = landing; this.replacing = replacing; }
         internal static DungeonReservation? Prepare(AntonRaidBattle battle, RaidDungeonIdentity identity,
             uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects, LukeRouteLease? route,
-            int? mazeOrdinal, int? coinLimit, PreyLandingCandidate? landing, int? timeLimitSeconds)
+            int? mazeOrdinal, int? coinLimit, PreyLandingCandidate? landing, int? timeLimitSeconds, Guid? replacingAntonRun)
         {
             lock (battle.gate)
             {
+                RaidDungeonRun? replacing = null;
+                if (replacingAntonRun is { } previous &&
+                    (battle.Kind != RaidKind.Anton || identity.Phase != 1 || dungeon is < 221 or > 224 ||
+                     !battle.dungeonRuns.TryGetValue(previous, out replacing) || !replacing.Installed || replacing.Cleared ||
+                     replacing.Dungeon != 218 || replacing.Phase != identity.Phase || replacing.Squad != identity.Squad ||
+                     !battle.CurrentObjective(replacing) || !replacing.Active.SetEquals(actors.Select(row => row.Actor)))) return null;
                 if (landing is not null && (landing.Dungeon != dungeon || !battle.IsPreyLandingCurrent(landing)) ||
                     objects is not null && (battle.Kind != RaidKind.Luke || objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) ||
                     battle.Kind == RaidKind.Fiendwar &&
@@ -90,14 +97,14 @@ internal sealed partial class AntonRaidBattle
                     actors.Select(actor => actor.Identity.InstanceId).Distinct().Count() != 1 ||
                     battle.lukeEnergyObjects && dungeon is 5063 or 5066 &&
                         (identity.Phase != 1 || objects?.Energy is null || objects.MazeOrdinal != mazeOrdinal) ||
-                    battle.dungeonRuns.Count >= (battle.Kind == RaidKind.Prey ? battle.PreyGuide ? 1 : 12 : battle.Kind == RaidKind.Fiendwar ? 8 : battle.Kind == RaidKind.Luke ? 2 : 5) || battle.lukeRevivalReservations.Any(row => row.BlocksEntry(identity)) ||
-                    battle.dungeonRuns.Values.Any(run => identity.PreyPartyId is { } party ? run.PreyPartyId == party :
-                        identity.PreySoloCharacter is { } character ? run.PreySoloCharacter == character : run.Squad == identity.Squad) ||
+                    battle.dungeonRuns.Count - (replacing is null ? 0 : 1) >= (battle.Kind == RaidKind.Prey ? battle.PreyGuide ? 1 : 12 : battle.Kind == RaidKind.Fiendwar ? 8 : battle.Kind == RaidKind.Luke ? 2 : 5) || battle.lukeRevivalReservations.Any(row => row.BlocksEntry(identity)) ||
+                    battle.dungeonRuns.Values.Any(run => !ReferenceEquals(run, replacing) && (identity.PreyPartyId is { } party ? run.PreyPartyId == party :
+                        identity.PreySoloCharacter is { } character ? run.PreySoloCharacter == character : run.Squad == identity.Squad)) ||
                     battle.Kind == RaidKind.Luke && battle.dungeonRuns.Values.Any(run => run.Phase == identity.Phase &&
                         run.Dungeon == dungeon && run.Generation != battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon))) ||
                     battle.Kind is RaidKind.Luke or RaidKind.Prey && battle.dungeonRuns.Values.Count(run => run.Phase == identity.Phase && run.Dungeon == dungeon) >=
                         battle.script.Phases[identity.Phase].Dungeons.Single(row => row.Id == dungeon).PartyMax ||
-                    actors.Any(actor => battle.dungeonRuns.Values.Any(run => run.Active.Contains(actor.Actor)))) return null;
+                    actors.Any(actor => battle.dungeonRuns.Values.Any(run => !ReferenceEquals(run, replacing) && run.Active.Contains(actor.Actor)))) return null;
                 if (battle.UsesLukeRoute(identity.Phase)
                     ? route is null || route.Dungeon != dungeon || route.Phase != identity.Phase || route.MazeOrdinal != mazeOrdinal || !battle.IsLukeRouteCurrent(route)
                     : route is not null) return null;
@@ -108,7 +115,7 @@ internal sealed partial class AntonRaidBattle
                         PreyPartyId = identity.PreyPartyId, PreySoloCharacter = identity.PreySoloCharacter };
                 if (!battle.ReserveFiendwarEncounter(run)) return null;
                 if (!battle.dungeonRuns.TryAdd(run.Id, run)) return null;
-                return new(battle, run, landing);
+                return new(battle, run, landing, replacing);
             }
         }
         public void Install()
@@ -118,6 +125,8 @@ internal sealed partial class AntonRaidBattle
                 if (finished || !battle.dungeonRuns.TryGetValue(run.Id, out var current) || !ReferenceEquals(current, run))
                     throw new InvalidOperationException("已提交团本Run失去原入场预留");
                 // 阶段结束候选在活跃/预留Run全部释放前不能替换当前phase；这里无新的业务拒绝。
+                if (replacing is not null)
+                    foreach (var actor in replacing.Active.ToArray()) battle.ReleaseDungeonActor(actor, replacing.Id);
                 foreach (var actor in run.Actors)
                 {
                     foreach (var old in battle.entries.Keys.Where(key => key.Character == actor.Actor.Character).ToArray())
@@ -155,8 +164,8 @@ internal sealed partial class AntonRaidBattle
     internal DungeonReservation? ReserveDungeon(RaidDungeonIdentity identity, uint dungeon,
         (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects = null,
         LukeRouteLease? route = null, int? mazeOrdinal = null, int? coinLimit = null, PreyLandingCandidate? landing = null,
-        int? timeLimitSeconds = null) =>
-        DungeonReservation.Prepare(this, identity, dungeon, actors, objects, route, mazeOrdinal, coinLimit, landing, timeLimitSeconds);
+        int? timeLimitSeconds = null, Guid? replacingAntonRun = null) =>
+        DungeonReservation.Prepare(this, identity, dungeon, actors, objects, route, mazeOrdinal, coinLimit, landing, timeLimitSeconds, replacingAntonRun);
 
     // 各成员的正式事务全部确认后调用。先验证整批，再记录一次共享Run推进，不接受部分候选事实。
     internal AntonRaidBattleChange? CompleteLukeDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
@@ -297,6 +306,12 @@ internal sealed partial class AntonRaidBattle
 
     void CommitBattleCandidate(AntonRaidBattleView before, AntonRaidBattleView candidate)
     {
+        if (Kind == RaidKind.Anton && candidate.Phase == 1 &&
+            candidate.Symbols.TryGetValue("[black volcano barrier]", out int barrier))
+        {
+            bool open = barrier == 0 || barrier < 10000 && before.Phase == 1 && before.AntonVolcanoBarrierOpen;
+            if (candidate.AntonVolcanoBarrierOpen != open) candidate = candidate with { AntonVolcanoBarrierOpen = open };
+        }
         if (candidate.LukeEnergyOverloadEpoch > before.LukeEnergyOverloadEpoch)
             foreach (var run in dungeonRuns.Values.Where(run => run.Phase == candidate.Phase &&
                 run.Dungeon is 5061 or 5062 && !run.Cleared))
