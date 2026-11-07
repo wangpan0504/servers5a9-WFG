@@ -422,7 +422,7 @@ internal static class ServerRuntime
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock,
             marriageCatalog.CeraShopRestrictItems.ToImmutableHashSet(), privileges: itemResources.PrivilegeServices,
             deluxeOffer: BattlePassDeluxePurchase.Resolve(itemResources.CashShop), packages: itemResources.Boosters);
-        var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
+        var levelProjection = new CharacterLevelProjection(stats, questProjection, learning, adventureProjection);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces,titleService);
         var commands = new GameCommandRegistry(itemResources.Items);

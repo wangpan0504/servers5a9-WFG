@@ -6,18 +6,25 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection;
 
 internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null,
-    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null)
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null, AdventureProjection? adventure = null)
 {
+    public Task AdventureAsync(GameConnectionContext context, Character committed,
+        DfoServer.Game.Adventure.AdventureProgressionCommit? progression, Func<bool> canSend) =>
+        progression is not null && adventure is not null && canSend()
+            ? adventure.ProgressAsync(context, committed, progression, canSend) : Task.CompletedTask;
+
     public Task PlayerAsync(GameConnectionContext context, Character committed, string action, Func<bool> canSend) =>
         context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(committed, stats.Compute(committed), context.Session.ReadAdventureLevel(), context.Channel), action, canSend);
 
     public async Task RefreshAsync(GameConnectionContext context, Character committed, byte previousLevel,
         string action, Func<bool> canSend, byte? previousGrowType = null, bool restoreCompletedQuests = true,
-        CharacterLearningState? previousLearning = null)
+        CharacterLearningState? previousLearning = null, DfoServer.Game.Adventure.AdventureProgressionCommit? adventureProgress = null)
     {
         if (previousLevel is < 1 or > 95 || committed.Level < previousLevel)
             throw new InvalidDataException("等级刷新必须使用真实提交前后等级");
+        // 冒险团可以独立升级，95级后角色也仍有计入经验；不能受角色等级未变化的早退控制。
+        await AdventureAsync(context, committed, adventureProgress, canSend);
         if (committed.Level == previousLevel && (previousGrowType is null || previousGrowType == committed.GrowType) || !canSend())
             return;
         // 普通副本升级只追加Player；职业变化必须同步Actor，Player不携带job/grow字段。

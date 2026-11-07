@@ -37,6 +37,8 @@ internal static class QuestAdventureSettlementTcpTests
             {
                 int permits = 0; ushort? deathKey = null;
                 peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+                byte[] adventureProgress = peer.AdventureRefresh;
+                int adventureNotices = 0;
                 peer.Send(31,[31,0,250,30]); peer.Expect(1,31); Drain();
                 peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
                 peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
@@ -68,27 +70,41 @@ internal static class QuestAdventureSettlementTcpTests
                         That(permits == 0,"友方瓦格纳退场不伪造终点清图");
                         peer.Send(39,FormalDungeonTcpTests.Death(enemyKey,peer.Id,map[enemy+12])); Drain();
                         That(permits == 1 && deathKey == enemyKey,"真实普通敌对APC死亡后115引用其原key并发送一次31");
+                        int beforeReplay = adventureNotices;
                         peer.Send(39,FormalDungeonTcpTests.Death(enemyKey,peer.Id,map[enemy+12])); Drain();
                         That(permits == 1,"重放死亡不重复许可或结算");
+                        That(adventureNotices == beforeReplay,"重复死亡不重复发布冒险团进度");
                     }
                 }
                 byte[] report = DungeonSettlementProtocolTests.Report(peer.Id,99);
                 peer.Send(46,report); Drain();
                 That(fixture.Query("SELECT map_id FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[655528L]],
                     "TCP46保存真实终点的一份结算回执");
-                string before = fixture.Snapshot(); peer.Send(46,report); Drain();
+                string before = fixture.Snapshot(); int beforeReportReplay = adventureNotices;
+                peer.Send(46,report); Drain();
                 That(fixture.Snapshot() == before,"重复TCP46不重复发奖");
+                That(adventureNotices == beforeReportReplay,"重复结算不重复发布冒险团进度");
                 peer.Send(34,[34,0,250,30,255,255,1,0,255,255]);
                 That(peer.Expect(1,34).Body[0] == 1,"7930沿真实34正常交付"); Drain();
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
                 peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
 
-                void Drain() => drain(peer,packet =>
+                void Drain()
                 {
-                    if (packet.Opcode == 31) { Bytes(packet.Body,[],"31保持空正文"); permits++; }
-                    if (packet.Opcode == 115)
-                    { That(packet.Body.Length == 4 && packet.Body[0] == 1 && packet.Body[1] == 1,"115使用原协议"); deathKey=U16(packet.Body,2); }
-                });
+                    drain(peer,packet =>
+                    {
+                        if (packet.Opcode == 31) { Bytes(packet.Body,[],"31保持空正文"); permits++; }
+                        if (packet.Opcode == 115)
+                        { That(packet.Body.Length == 4 && packet.Body[0] == 1 && packet.Body[1] == 1,"115使用原协议"); deathKey=U16(packet.Body,2); }
+                        if (packet.Opcode == 1349) { adventureProgress = packet.Body; adventureNotices++; }
+                    });
+                    var progress = fixture.Query("SELECT level,experience,capsule_experience FROM account_adventures WHERE account=$p0",account).Single();
+                    That(adventureProgress.Length == 50 && U16(adventureProgress,0) == peer.Id &&
+                        U32(adventureProgress,6) == Convert.ToUInt32(progress[0]) &&
+                        BinaryPrimitives.ReadUInt64LittleEndian(adventureProgress.AsSpan(14)) == Convert.ToUInt64(progress[1]) &&
+                        BinaryPrimitives.ReadUInt64LittleEndian(adventureProgress.AsSpan(30)) == Convert.ToUInt64(progress[2]),
+                        "不开面板时击杀、结算和任务交付主动回放本次已提交冒险团进度");
+                }
             }
             using (var peer = Open(fixture,account))
             {

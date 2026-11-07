@@ -777,7 +777,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 "formal_growth_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character,
             previousLevel, "formal_level_committed", Guard,
-            previousLearning: previousCharacter?.Learning);
+            previousLearning: previousCharacter?.Learning, adventureProgress: result.Adventure);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
         if (!closed && result.PreviousQuests is { } previous)
         {

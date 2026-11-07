@@ -332,6 +332,7 @@ internal sealed partial class GameSession
                 var saved = repository.CommitTutorialCheckpoint(owner, checkpoint);
                 commit = new(saved.Character, saved.Duplicate, reward)
                 {
+                    Adventure = saved.Adventure,
                     GainedExperience = checked((uint)(saved.Character.Learning.Experience - expected.Learning.Experience))
                 };
             }

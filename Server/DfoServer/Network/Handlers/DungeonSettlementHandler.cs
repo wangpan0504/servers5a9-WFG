@@ -182,7 +182,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 Guard,
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
-            previousLearning: previous.Learning);
+            previousLearning: previous.Learning, adventureProgress: result.Adventure);
         if (!tournament && !receipt.Entry.IsTutorial && !cosmo && !grief && !war && !bossRush)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)

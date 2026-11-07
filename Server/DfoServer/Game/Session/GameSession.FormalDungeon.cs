@@ -1638,6 +1638,7 @@ internal sealed partial class GameSession
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,
             ProficiencyGained = committed.Commit.ProficiencyGained,
+            Adventure = committed.Commit.Adventure,
             ReportedTarget = target,
             PreviousQuests = previousQuests,
             BattlePassMissionClock = pending.BattlePassHellCosmoCompletion?.Clock ?? pending.BattlePassActivity?.Clock,

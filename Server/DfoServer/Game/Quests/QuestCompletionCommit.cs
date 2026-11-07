@@ -11,6 +11,7 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     QuestExperienceReward ExperienceReward, ImmutableArray<QuestGrantedItem> Rewards, bool Duplicate, bool ProjectionCurrent,
     byte PreviousLevel, CharacterLearningState? PreviousLearning = null)
 {
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public ushort QuestId { get; init; } = Clear?.QuestId ?? 0;
     public Guid AcceptanceId { get; init; } = Clear?.AcceptanceId ?? Guid.Empty;
     public byte ConditionType { get; init; } = 3;

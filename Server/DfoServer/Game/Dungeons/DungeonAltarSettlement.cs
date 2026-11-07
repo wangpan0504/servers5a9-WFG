@@ -19,4 +19,7 @@ internal sealed class PreparedDungeonAltarSettlement(DungeonAltarCompletionFact 
 }
 
 internal sealed record DungeonAltarSettlementCommit(Character Character, bool Duplicate, uint GainedExperience,
-    uint ProficiencyGained, InventoryPlan Inventory, uint BestMilliseconds, int BestRounds);
+    uint ProficiencyGained, InventoryPlan Inventory, uint BestMilliseconds, int BestRounds)
+{
+    public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
+}

@@ -126,7 +126,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         if (character.EquipmentSlotFlags != commit.PreviousEquipmentSlotFlags)
             await levelProjection.PlayerAsync(context,character,"quest_equipment_slots",Guard);
         await levelProjection.RefreshAsync(context, character, commit.PreviousLevel, "quest_level_committed", Guard, commit.PreviousGrowType,
-            restoreCompletedQuests: false, previousLearning: commit.PreviousLearning);
+            restoreCompletedQuests: false, previousLearning: commit.PreviousLearning, adventureProgress: commit.Adventure);
         if (character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType && projection is not null)
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。

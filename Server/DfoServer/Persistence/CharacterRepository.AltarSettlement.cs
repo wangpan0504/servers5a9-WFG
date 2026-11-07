@@ -40,6 +40,7 @@ internal sealed partial class CharacterRepository
             """;
         bool duplicate;
         uint gained = 0, proficiency = 0;
+        Game.Adventure.AdventureProgressionCommit? adventureCommit = null;
         using (var reader = command.ExecuteReader())
         {
             duplicate = reader.Read();
@@ -100,7 +101,7 @@ internal sealed partial class CharacterRepository
                 if (CreditAdventure(db, tx, owner.Account, expected.Id, Game.Adventure.AdventureCreditSource.Earned,
                     prepared.Reward.Experience, EffectivePosition(current.Level, current.Learning.Experience), current.Level,
                     plan.TargetLevel, DateTimeOffset.UtcNow) is { } credit)
-                    WriteAdventureCredit(db, tx, owner.Account, credit, Game.Adventure.AdventureCreditSource.Earned, adventureCatalog!);
+                    adventureCommit = WriteAdventureCredit(db, tx, owner.Account, credit, Game.Adventure.AdventureCreditSource.Earned, adventureCatalog!);
                 gained = checked((uint)plan.GainedExperience);
             }
             command.Parameters.AddWithValue("$event", prepared.EventId.ToString("N"));
@@ -136,6 +137,6 @@ internal sealed partial class CharacterRepository
         }
         tx.Commit();
         return new DungeonAltarSettlementCommit(current, duplicate, gained, proficiency,
-            new(expected.Inventory, current.Inventory, "altar_clear_reward", overflowItems: prepared.Inventory.OverflowItems), bestTime, bestRounds);
+            new(expected.Inventory, current.Inventory, "altar_clear_reward", overflowItems: prepared.Inventory.OverflowItems), bestTime, bestRounds) { Adventure = adventureCommit };
     });
 }

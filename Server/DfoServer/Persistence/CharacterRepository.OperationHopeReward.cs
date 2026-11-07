@@ -15,6 +15,7 @@ internal sealed partial class CharacterRepository
     public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => owner.Execute(() =>
     {
         var expected = plan.Expected;
+        AdventureProgressionCommit? adventureCommit = null;
         var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
         if (expected.Id != plan.Identity.CharacterId || plan.Identity.InstanceId == Guid.Empty || plan.Identity.TaskAttempt <= 0 ||
             plan.Identity.Epoch <= 0 || active is null || active.ConditionState != 0 || active.QuestId != plan.QuestId || active.Slot != plan.QuestSlot ||
@@ -83,7 +84,7 @@ internal sealed partial class CharacterRepository
         if (plan.ExperienceReward.Amount != 0 && CreditAdventure(db,tx,owner.Account,expected.Id,AdventureCreditSource.Earned,
             plan.ExperienceReward.Amount,EffectivePosition(expected.Level,expected.Learning.Experience),expected.Level,plan.TargetLevel,
             plan.FrozenAt) is { } credit)
-            WriteAdventureCredit(db,tx,owner.Account,credit,AdventureCreditSource.Earned,adventureCatalog!);
+            adventureCommit = WriteAdventureCredit(db,tx,owner.Account,credit,AdventureCreditSource.Earned,adventureCatalog!);
         command.CommandText = """
             DELETE FROM character_active_main_quests
             WHERE character_id=$id AND slot=$slot AND quest_id=$quest AND acceptance_id=$acceptance AND condition_state=0
@@ -117,7 +118,7 @@ internal sealed partial class CharacterRepository
 
         OperationHopeRewardCommit Result(Character character,ImmutableArray<QuestGrantedItem> rows,bool duplicate,bool projection) =>
             new(character,rows,plan.ExperienceReward,checked((uint)(plan.TargetLearning.Experience-expected.Learning.Experience)),
-                duplicate,projection,expected.Level,expected.Learning,plan.Inventory.ChangedSlots);
+                duplicate,projection,expected.Level,expected.Learning,plan.Inventory.ChangedSlots) { Adventure = adventureCommit };
     });
 
     private static bool MatchesHopeCharacter(Character current,Character expected,OperationHopeRewardPlan plan,InventorySnapshot inventory,bool afterCommit) =>
