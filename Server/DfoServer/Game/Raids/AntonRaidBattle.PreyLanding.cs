@@ -11,7 +11,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Prey || PreyGuide || view.Instance != Instance || view.Phase != current.Phase ||
+            if (Kind != RaidKind.Prey || view.Instance != Instance || view.Phase != current.Phase ||
                 current.State != AntonRaidBattleState.Fighting || current.PhaseExpired || current.ClockFaulted ||
                 pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 current.Symbols.GetValueOrDefault("[prepare raid]") != 1) return null;
@@ -32,7 +32,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (side is not (4 or 5) || CapturePreyLandingArrival(view) is not { } arrival) return null;
             int dungeon = current.Symbols.GetValueOrDefault($"[area_{arrival.FromArea - 300}]");
-            if (!AllowsPreyEntryFromSide(dungeon, side) || !AllowsPreyTeamEntry(dungeon)) return null;
+            if (!AllowsPreyEntryFromSide(dungeon, side) || !AllowsPreyEntry(dungeon)) return null;
             return new(arrival, dungeon, side);
         }
     }
@@ -41,7 +41,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Prey || PreyGuide || side is not (4 or 5)) return false;
+            if (Kind != RaidKind.Prey || side is not (4 or 5)) return false;
             var definition = script.Phases[current.Phase].Dungeons.SingleOrDefault(row => row.Id == dungeon);
             // 一阶段右侧防御，二阶段右侧本体；其余据点均从船尾左侧降落。
             return definition is not null && (PreyDungeonType(definition) == (current.Phase == 0 ? 5 : 6)) == (side == 5);

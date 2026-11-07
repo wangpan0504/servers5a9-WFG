@@ -169,6 +169,13 @@ internal sealed partial class AntonRaidBattle
         {
             if (state.Symbols[key] == value) return;
             state = state with { Symbols = state.Symbols.SetItem(key, value) };
+            for (int slot = 1; slot <= 20; slot++)
+                if (key == $"[area_{slot}]")
+                {
+                    int type = value == 0 ? 0 : script.Phases[state.Phase].Dungeons.FirstOrDefault(row => row.Id == value) is { } row ? PreyDungeonType(row) : 0;
+                    state = state with { Symbols = state.Symbols.SetItem($"[area_{slot}_dgn_type]", type) };
+                    break;
+                }
             events.Enqueue((null, key, null, null));
         }
         void SetDungeon(int id, RaidDungeonState next)
@@ -191,9 +198,11 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleView AdvancePreyShip(AntonRaidBattleView state)
     {
+        int departed = state.Symbols["[slenikon from area]"];
         int from = state.Symbols["[slenikon to area]"];
         int first = state.Phase == 0 ? 301 : 317, last = state.Phase == 0 ? 316 : 320;
-        int to = from < first || from >= last ? first : from + 1;
+        int to = state.Phase == 0 ? from < first || from >= last ? first : from + 1 :
+            from == 320 ? departed is >= 317 and < 319 ? departed + 1 : 317 : 320;
         if (state.Phase == 0 && from >= first && from <= last && state.Symbols[$"[area_{from - 300}_dgn_type]"] == 5 &&
             !dungeonRuns.Values.Any(run => run.Installed && !run.Cleared && run.Active.Count != 0 &&
                 run.Dungeon == state.Symbols[$"[area_{from - 300}]"]))

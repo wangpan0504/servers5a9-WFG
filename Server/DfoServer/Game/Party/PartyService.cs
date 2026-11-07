@@ -209,7 +209,7 @@ internal sealed partial class PartyService
         return member.Actor.Execute(() =>
         {
             // 普雷实际队伍只由左右空间形成，不能由普通建队请求创建单人队或覆盖空间队伍设置。
-            if (session.CapturePreyBoarding() is not null) return Reject(21);
+            if (session.CapturePreyBoarding() is { Battle.PreyGuide: false }) return Reject(21);
             if (settings is { Kind: 5, KindArgument: 2 } && guideStore is not null)
                 return SetEvildomWarGuideInformation(session, member, operation, settings);
             lock (gate)

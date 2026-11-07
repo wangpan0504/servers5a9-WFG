@@ -107,8 +107,9 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 departingBattle.Instance != expected || before?.Started?.InstanceId != expected))
                 return (null, [], departingBattle, beforeBattle);
             Game.Town.TownTravelReceipt? townReturn = null;
-            if (target == actor.Character && actor.CanManage && before is { Type: 3, Guide: false } &&
-                actor.Session.Selected?.Position is { Town: 59, Area: >= 2 and <= 5 })
+            if (target == actor.Character && actor.CanManage && before is { Type: 3 } &&
+                actor.Session.Selected?.Position is { Town: 59 } pos &&
+                (before.Guide ? pos.Area is >= 3 and <= 5 : pos.Area is >= 2 and <= 5))
             {
                 townReturn = actor.Session.ReturnPreyLobby(actor, before);
                 if (townReturn is null) return (null, [], departingBattle, beforeBattle);

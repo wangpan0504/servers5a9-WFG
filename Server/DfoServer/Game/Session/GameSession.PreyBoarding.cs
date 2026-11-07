@@ -42,9 +42,10 @@ internal sealed partial class GameSession
     internal PreyBoardingState? CapturePreyBoarding() => owner.Execute(() =>
     {
         if (!CanChangeTownParty || formalDungeon is not null || PartyDungeon is not null ||
-            raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid ||
+            raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey } raid ||
             ChannelEntry?.Type != 50 || Selected?.Position is not { Town: 59, Area: >= 2 and <= 5 } position ||
-            raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 3, Guide: false, Started: { } started } ||
+            raidRegistry?.FindCurrent(this, SelectionEpoch) is not { Type: 3, Started: { } started } party ||
+            party.Guide != raid.Battle.PreyGuide ||
             started.InstanceId != raid.Battle.Instance) return null;
         if (position.Area is 4 or 5 && (!HasPreyTeamTownAccess ||
             raid.Battle.View.State != AntonRaidBattleState.Fighting)) return null;
