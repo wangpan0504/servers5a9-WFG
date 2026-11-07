@@ -29,6 +29,7 @@ ScriptTests.Run();
 ItemModelTests.Run();
 EquipmentAuraAbilityTests.Run();
 EquipmentQuestDropBonusTests.Run();
+EquipmentUpgradeFileTests.Run();
 StackableActionTests.Run();
 RandomOptionFileTests.Run();
 AmplificationFileTests.Run();

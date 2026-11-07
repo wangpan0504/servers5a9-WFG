@@ -31,6 +31,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool IsQuickSlotEquipment => Kind == ItemKind.Equipment && EquipmentSlot == QuickSlotEquipmentDefinition.EquipmentType;
     public QuickSlotEquipmentDefinition? QuickSlotEquipment { get; init; }
     public int QuestItemDropRateBonus { get; init; }
+    public EquipmentUpgradeBonuses UpgradeBonuses { get; init; }
     public ImmutableArray<EquipmentQuestDropSetBonus> QuestItemDropSetBonuses { get; init; } = [];
     public ItemWorlds UsableWorlds { get; init; } = ItemWorlds.Common;
     public ImmutableHashSet<string> ExperienceForbiddenModules { get; init; } = ImmutableHashSet<string>.Empty;

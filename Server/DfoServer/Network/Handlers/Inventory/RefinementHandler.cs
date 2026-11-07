@@ -20,9 +20,18 @@ internal sealed class RefinementHandler(InventoryRefinementService refinement, I
         var request = RefinementRequests.Read(packet.Body);
         RefinementReceipt? receipt = null;
         Character? committed = null;
+        var prepared = context.Owner.Execute(() => context.BlocksTownActions ? null : context.Session.Selected);
+        bool resourceInvalid = false;
+        try
+        {
+            if (prepared is not null) refinement.PrepareEquipmentBonuses(prepared);
+        }
+        catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
+        { resourceInvalid = true; }
         var result = context.Owner.Execute(() =>
         {
-            var outcome = context.BlocksTownActions ? InventoryResult.Reject(4) :
+            var outcome = resourceInvalid || context.BlocksTownActions || !ReferenceEquals(prepared, context.Session.Selected)
+                ? InventoryResult.Reject(4) :
                 context.Session.MutateInventory(character => refinement.Refine(character, request, out receipt,
                     guildSuccessPercent: guildBenefits?.SuccessPercent(context.Session.CaptureGuildManagement(),
                         "equip upgrade separate buff", (character.Inventory.Find(request.Position)?.Core.GenuineUpgrade ?? 0) + 1) ?? 0), 4);
