@@ -120,7 +120,11 @@ internal static class ServerDefaultsUpgradeTests
         That(store.Read() == settings.SupportConfiguration, "并发更新的最终磁盘与内存属于同一完整快照");
         Reject<ArgumentOutOfRangeException>(() => settings.SupportConfiguration = chosen with { SelectionMask = 5 },
             "退役辅助和多辅助非法组合均拒绝");
-        if (OperatingSystem.IsWindows()) VerifySupportFileReplacement(directory, store, settings);
+        if (OperatingSystem.IsWindows())
+        {
+            VerifySupportFileReplacement(directory, store, settings);
+            VerifySupportReplacementRecovery(Path.Combine(directory, "replacement-faults"));
+        }
         string path = Path.Combine(directory, "support-companions.json");
         foreach (int oldMask in new[] { 1, 3, 4, 6, 8, 10 })
         {
@@ -215,6 +219,198 @@ internal static class ServerDefaultsUpgradeTests
         finally { File.SetAttributes(path, attributes); }
         That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
             File.ReadAllText(path)) == normalized, "解除只读属性后读取真实迁移旧名单并完整保留档次");
+    }
+
+    static void VerifySupportReplacementRecovery(string directory)
+    {
+        var before = new SupportCompanionConfiguration(2, "huge", "graduate", "entry");
+        var after = before with { SelectionMask = 1 };
+        string beforeJson = System.Text.Json.JsonSerializer.Serialize(before);
+        string afterJson = System.Text.Json.JsonSerializer.Serialize(after);
+        const int unableToRemove = unchecked((int)0x80070497);
+
+        string freshDirectory = Path.Combine(directory, "fresh");
+        That(new SupportCompanionStore(freshDirectory).Read() == SupportCompanionConfiguration.Default && !Directory.Exists(freshDirectory),
+            "干净首次读取仍返回默认配置且不创建目录");
+        Directory.CreateDirectory(freshDirectory);
+        That(new SupportCompanionStore(freshDirectory).Read() == SupportCompanionConfiguration.Default,
+            "已有空目录且无目标或遗留源仍属于首次配置");
+
+        string recoveringDirectory = Path.Combine(directory, "recover");
+        new SupportCompanionStore(recoveringDirectory).Write(before);
+        int attempts = 0;
+        string? sourcePath = null;
+        bool sameSource = true, unpublished = true, oldTarget = true;
+        GameDebugSettings? recovering = null;
+        var recoveringStore = new SupportCompanionStore(recoveringDirectory, (source, target) =>
+        {
+            sourcePath ??= source;
+            sameSource &= source == sourcePath && File.ReadAllText(source) == afterJson;
+            oldTarget &= File.ReadAllText(target) == beforeJson;
+            unpublished &= recovering!.SupportConfiguration == before;
+            if (++attempts < 4) throw new IOException("injected replace 1175", unableToRemove);
+            // 这里只验证重试与发布顺序；真实Replace由原24次连续保存用例覆盖。
+            File.Copy(source, target, true);
+            File.Delete(source);
+        });
+        recovering = new GameDebugSettings(recoveringStore.Read(), recoveringStore.Write);
+        recovering.SupportConfiguration = after;
+        That(attempts == 4 && sameSource && oldTarget && unpublished && recoveringStore.Read() == after &&
+            recovering.SupportConfiguration == after && !File.Exists(sourcePath),
+            "1175限定恢复沿用同一完整源，第四次确定性安装成功后才发布内存");
+
+        foreach (bool blockCleanup in new[] { false, true })
+        {
+            string exhaustedDirectory = Path.Combine(directory, blockCleanup ? "cleanup-blocked" : "exhausted");
+            new SupportCompanionStore(exhaustedDirectory).Write(before);
+            string path = Path.Combine(exhaustedDirectory, "support-companions.json");
+            var fault = new IOException("injected exhausted 1175", unableToRemove);
+            IOException? observed = null;
+            FileStream? held = null;
+            bool rejectReplacement = true;
+            attempts = 0;
+            sourcePath = null;
+            sameSource = true;
+            var exhaustedStore = new SupportCompanionStore(exhaustedDirectory, (source, target) =>
+            {
+                if (!rejectReplacement) { File.Replace(source, target, null); return; }
+                sourcePath ??= source;
+                sameSource &= source == sourcePath && target == path && File.ReadAllText(source) == afterJson;
+                if (blockCleanup) held ??= new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+                attempts++;
+                throw fault;
+            });
+            var exhausted = new GameDebugSettings(exhaustedStore.Read(), exhaustedStore.Write);
+            try
+            {
+                try { exhausted.SupportConfiguration = after; }
+                catch (IOException error) { observed = error; }
+                That(ReferenceEquals(observed, fault) && attempts == 4 && sameSource &&
+                    exhausted.SupportConfiguration == before && File.ReadAllText(path) == beforeJson,
+                    "1175耗尽四次后原异常向上传递，磁盘与内存仍是已提交快照");
+                That(blockCleanup ? File.Exists(sourcePath) && fault.Data["SupportCompanionCleanupError"] is IOException
+                    : !File.Exists(sourcePath) && !fault.Data.Contains("SupportCompanionCleanupError"),
+                    "临时源可清理则回收，真实清理冲突保留源且不能遮蔽原保存异常");
+            }
+            finally { held?.Dispose(); if (File.Exists(sourcePath)) File.Delete(sourcePath); }
+            rejectReplacement = false;
+            exhausted.SupportConfiguration = after;
+            That(exhaustedStore.Read() == after && exhausted.SupportConfiguration == after && attempts == 4 &&
+                Directory.GetFiles(exhaustedDirectory, "*.tmp").Length == 0,
+                "1175耗尽或清理占用解除后，同一设置实例仍能真实保存，不重播旧异常");
+        }
+
+        foreach (int code in new[] { unchecked((int)0x80070020), unchecked((int)0x80130497) })
+        {
+            string rejectedDirectory = Path.Combine(directory, $"rejected-{unchecked((uint)code):X8}");
+            new SupportCompanionStore(rejectedDirectory).Write(before);
+            var fault = new IOException("injected non-retryable replacement", code);
+            IOException? observed = null;
+            attempts = 0;
+            var rejectedStore = new SupportCompanionStore(rejectedDirectory, (_, _) => { attempts++; throw fault; });
+            var rejected = new GameDebugSettings(rejectedStore.Read(), rejectedStore.Write);
+            try { rejected.SupportConfiguration = after; }
+            catch (IOException error) { observed = error; }
+            That(ReferenceEquals(observed, fault) && attempts == 1 && rejectedStore.Read() == before &&
+                rejected.SupportConfiguration == before && Directory.GetFiles(rejectedDirectory, "*.tmp").Length == 0,
+                "共享冲突码及仅低位相同的非Win32错误均不重试、不发布内存");
+        }
+
+        foreach (int code in new[] { unchecked((int)0x80070498), unchecked((int)0x80070499) })
+        {
+            string partialDirectory = Path.Combine(directory, $"partial-{unchecked((uint)code):X8}");
+            new SupportCompanionStore(partialDirectory).Write(before);
+            string path = Path.Combine(partialDirectory, "support-companions.json");
+            var fault = new IOException("injected partial replacement", code);
+            IOException? observed = null;
+            attempts = 0;
+            sourcePath = null;
+            var partialStore = new SupportCompanionStore(partialDirectory, (source, target) =>
+            {
+                attempts++;
+                sourcePath = source;
+                // 1176允许旧目标已丢失；1177只注入错误码，不假造其完整原生失败过程。
+                if (code == unchecked((int)0x80070498)) File.Delete(target);
+                throw fault;
+            });
+            var partial = new GameDebugSettings(partialStore.Read(), partialStore.Write);
+            try { partial.SupportConfiguration = after; }
+            catch (IOException error) { observed = error; }
+            That(observed is not null && ReferenceEquals(observed.InnerException, fault) && observed.HResult == code &&
+                observed.Message.Contains("partial replacement", StringComparison.Ordinal) && observed.Message.Contains(sourcePath!, StringComparison.Ordinal) &&
+                attempts == 1 && partial.SupportConfiguration == before &&
+                Equals(observed.Data["SupportCompanionRecoveryPath"], sourcePath) &&
+                Equals(fault.Data["SupportCompanionRecoveryPath"], sourcePath) && File.ReadAllText(sourcePath!) == afterJson &&
+                (code == unchecked((int)0x80070498) ? !File.Exists(path) : File.ReadAllText(path) == beforeJson),
+                "1176与1177不重试、不发布内存，可见错误保留原始异常和HResult及完整恢复源，不擅自回滚目标");
+            // 该命令只使用debugSettings，明确不装配仓储或owner，不启动数据库或服务。
+            var gmSettings = new GameDebugSettings(before, _ => throw observed!);
+            string answer = DfoServer.Development.DevelopmentGm.Answer("support-companions off", "support-test",
+                null!, null!, _ => null, debugSettings: gmSettings);
+            That(answer.StartsWith("ERR ", StringComparison.Ordinal) && answer.Contains("partial replacement", StringComparison.Ordinal) &&
+                answer.Contains($"0x{unchecked((uint)code):X8}", StringComparison.Ordinal) && answer.Contains(sourcePath!, StringComparison.Ordinal) &&
+                gmSettings.SupportConfiguration == before,
+                "实际GM回执显示部分完成标识、HResult和恢复路径，错误仍不发布设置");
+            if (code == unchecked((int)0x80070498))
+            {
+                IOException? reopened = null;
+                try { _ = new SupportCompanionStore(partialDirectory).Read(); }
+                catch (IOException error) { reopened = error; }
+                That(reopened is not null && reopened.Message.Contains(sourcePath!, StringComparison.Ordinal) &&
+                    Equals(reopened.Data["SupportCompanionRecoveryPath"], sourcePath) && !File.Exists(path) && File.ReadAllText(sourcePath!) == afterJson,
+                    "新Store重开遇到缺目标及遗留源明确拒绝默认配置，保留源及缺失目标现场");
+            }
+        }
+
+        var legacy = before with { SelectionMask = 6 };
+        string legacyJson = System.Text.Json.JsonSerializer.Serialize(legacy);
+        foreach (bool recover in new[] { true, false })
+        {
+            string retryDirectory = Path.Combine(directory, recover ? "migration-recover" : "migration-exhausted");
+            Directory.CreateDirectory(retryDirectory);
+            string path = Path.Combine(retryDirectory, "support-companions.json");
+            File.WriteAllText(path, legacyJson);
+            var fault = new IOException("injected migration 1175", unableToRemove);
+            IOException? observed = null;
+            SupportCompanionConfiguration? returned = null;
+            attempts = 0;
+            sourcePath = null;
+            sameSource = true;
+            oldTarget = true;
+            var retryStore = new SupportCompanionStore(retryDirectory, (source, target) =>
+            {
+                sourcePath ??= source;
+                sameSource &= source == sourcePath && File.ReadAllText(source) == beforeJson;
+                oldTarget &= File.ReadAllText(target) == legacyJson;
+                if (++attempts < 4 || !recover) throw fault;
+                // 确定性注入成功不叠加最后一次真实Replace的外部竞争。
+                File.Copy(source, target, true);
+                File.Delete(source);
+            });
+            try { returned = retryStore.Read(); }
+            catch (IOException error) { observed = error; }
+            That(attempts == 4 && sameSource && oldTarget && Directory.GetFiles(retryDirectory, "*.tmp").Length == 0 &&
+                (recover ? observed is null && returned == before && File.ReadAllText(path) == beforeJson
+                    : ReferenceEquals(observed, fault) && returned is null && File.ReadAllText(path) == legacyJson),
+                "旧名单迁移1175恢复后才返回完整归一结果，耗尽仍抛原错误并保持旧文件");
+        }
+
+        string migrationDirectory = Path.Combine(directory, "migration-partial");
+        Directory.CreateDirectory(migrationDirectory);
+        File.WriteAllText(Path.Combine(migrationDirectory, "support-companions.json"), legacyJson);
+        var migrationFault = new IOException("injected migration 1176", unchecked((int)0x80070498));
+        IOException? migrationError = null;
+        attempts = 0;
+        sourcePath = null;
+        var migrationStore = new SupportCompanionStore(migrationDirectory, (source, target) =>
+        { attempts++; sourcePath = source; File.Delete(target); throw migrationFault; });
+        try { _ = migrationStore.Read(); }
+        catch (IOException error) { migrationError = error; }
+        That(migrationError is not null && ReferenceEquals(migrationError.InnerException, migrationFault) &&
+            migrationError.HResult == migrationFault.HResult && migrationError.Message.Contains(sourcePath!, StringComparison.Ordinal) && attempts == 1 &&
+            Equals(migrationError.Data["SupportCompanionRecoveryPath"], sourcePath) &&
+            Equals(migrationFault.Data["SupportCompanionRecoveryPath"], sourcePath) && File.ReadAllText(sourcePath!) == beforeJson,
+            "旧名单迁移部分失败可见错误保留原异常及HResult，不返回未提交配置且保留完整归一恢复源");
     }
 
     static void VerifyLogs(string directory)

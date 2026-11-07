@@ -9,19 +9,20 @@ internal sealed partial class TcpPeer
 
     sealed record AccountMaterialInitializationExpectation(ushort Character, string Account, Dictionary<int, int> Balances);
 
-    AccountMaterialInitializationExpectation? CaptureAccountMaterialInitialization(ushort slot)
+    AccountMaterialInitializationExpectation? CaptureAccountMaterialInitialization(ushort rosterIndex)
     {
         if (fixture is null) return null;
         TestCheck.That(loginAccount is not null, "563预期必须绑定本连接实际登录账号");
-        // 发选角前在同一次查询中冻结角色身份和账号余额；不与登录后的合法日补给竞争。
+        // C4参数是按slot排序的名册行索引；先选角色，再连接完整钱包，不能对材料行OFFSET。
         var rows = fixture.Query("""
-            SELECT c.id,c.account,m.item_id,m.balance FROM characters c
+            SELECT c.id,c.account,m.item_id,m.balance
+            FROM (SELECT id,account FROM characters WHERE account=$p0 ORDER BY slot LIMIT 1 OFFSET $p1) c
             LEFT JOIN account_material_balances m ON m.account=c.account AND m.balance>0
-            WHERE c.account=$p0 AND c.slot=$p1 ORDER BY m.item_id
-            """, loginAccount!, slot);
+            ORDER BY m.item_id
+            """, loginAccount!, rosterIndex);
         TestCheck.That(rows.Length > 0 && rows.All(row => Equals(row[0], rows[0][0]) &&
             string.Equals((string)row[1], loginAccount, StringComparison.Ordinal)),
-            "563预期只冻结实际登录账号在请求槽位的同一角色");
+            "563预期只冻结实际登录账号在请求名册行的同一角色");
         var balances = rows.Where(row => row[2] is not DBNull)
             .ToDictionary(row => Convert.ToInt32(row[2]), row => Convert.ToInt32(row[3]));
         return new(Convert.ToUInt16(rows[0][0]), (string)rows[0][1], balances);
@@ -53,7 +54,7 @@ internal sealed partial class TcpPeer
         RaidCharacterMaterialLimits = ValidateLimits(Expect(0, 1461).Body);
         if (expected is null) return;
         TestCheck.That(expected.Character == Id && expected.Account == loginAccount,
-            "563初始化角色必须对应发选角前冻结的登录账号与请求槽位");
+            "563初始化角色必须对应发选角前冻结的登录账号与请求名册行");
         TestCheck.That(expected.Balances.Count == AccountMaterials.Count && expected.Balances.All(row =>
             AccountMaterials.GetValueOrDefault(row.Key, -1) == row.Value),
             "563精确读取选角前同一账号已提交余额，不复制角色实体或读取其他账号");
