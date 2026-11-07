@@ -17,6 +17,8 @@ internal sealed partial class DungeonHandler
     public void PreparePartyContext(GameConnectionContext context)
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
+        context.Session.EvildomWarRewardPreparing = evildomRewards is not null && evildomRewardStore is not null
+            ? view => context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore, view) : null;
         context.Session.FiendwarKeyLeaseArrived = message => PublishFiendwarKeyMessageAsync(context, message);
         context.Session.FiendwarAreaTravelArrived = receipt => town.TravelFiendwarAsync(context, receipt);
         context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
@@ -87,10 +89,8 @@ internal sealed partial class DungeonHandler
         var hiddenReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { } hiddenView &&
             context.Session.CanPublishEvildomWar(hiddenView) && evildomRewards is not null && evildomRewardStore is not null
             ? context.Session.CommitEvildomWarHiddenReward(evildomRewards, evildomRewardStore) : null;
-        // 奖励规划和持久化先于发送队列预留；只消费当前战役真实完成事实。
-        var warReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true } completed &&
-            context.Session.CanPublishEvildomWar(completed) && evildomRewards is not null && evildomRewardStore is not null
-            ? context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore) : null;
+        // 全员奖励已在并发投影前提交；此处只取本人的回执，不能在每个接收者重复抽全队奖励。
+        var warReward = notice.EvildomWarRewards.SingleOrDefault(row => row.Member == notice.Recipient)?.Receipt;
         bool RejoinSceneCurrent() => notice.Recipient.Actor.IsCurrent() && notice.Scene is { } restoring &&
             context.Session.HasAntonRejoinPresentation && context.Session.CanPublishNativeScene(restoring);
         Func<bool> publicationCurrent = notice.Kind == PartyDungeonNoticeKind.AntonRejoinScene
@@ -117,13 +117,24 @@ internal sealed partial class DungeonHandler
             if (warReward is not null)
             {
                 bool sent = false;
-                bool Guard() => sent = context.Session.CanPublishEvildomWarReward(warReward);
+                bool Guard() => sent = notice.Recipient.Actor.IsCurrent() && context.Session.CanPublishEvildomWar(view) &&
+                    context.Session.CanPublishEvildomWarReward(warReward) && RewardRosterCurrent();
+                bool RewardRosterCurrent()
+                {
+                    var party = context.Session.CurrentParty?.Invoke();
+                    return party is not null && party.EvildomWarBattleId == view.BattleId &&
+                        notice.EvildomWarRewards.All(row => row.IsFrom(view) &&
+                            ReferenceEquals(row.Receipt.Admission.Battle, warReward.Admission.Battle) && party.Members.All(current =>
+                            current.Slot != row.Member.Slot || ReferenceEquals(current.Actor.Owner, row.Member.Actor.Owner) &&
+                            ReferenceEquals(current.Actor.Session, row.Member.Actor.Session) && current.Actor.Epoch == row.Member.Actor.Epoch &&
+                            current.Actor.Character.Id == row.Member.Actor.Character.Id));
+                }
                 if (context.Session.ShouldPublishEvildomWarReward(warReward))
                 {
-                    var groups = warReward.Commit.Plan.Reward.Items.GroupBy(row => row.Group).Select(group =>
-                        new EvildomWarPackets.RewardGroup(group.Key, group.Select(row =>
-                            new EvildomWarPackets.RewardRow(0, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
-                    // 首字段和特殊展示类型的业务语义未闭合；本服只用通用物品图标及真实数量，首字段保留0。
+                    var groups = notice.EvildomWarRewards.Select(member =>
+                        new EvildomWarPackets.RewardGroup(member.Member.Slot, member.Receipt.Commit.Plan.Reward.Items.Select(row =>
+                            new EvildomWarPackets.RewardRow(row.Group, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
+                    // 首字段单位仍未闭合，保留0；外层是真实成员槽位，内层是原奖励卡种。
                     await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST, EvildomWarPackets.Rewards(0, groups),
                         "evildom_war_reward", Guard);
                     if (sent) context.Session.ConfirmEvildomWarRewardPublished(warReward);

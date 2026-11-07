@@ -79,6 +79,11 @@ internal static class EvildomWarRewardTransactionTests
                 That(instance.Move(session, (byte)next.X, (byte)next.Y, 0).Length == 1, "奖励夹具沿真实王座路线推进");
             }
             That(war.Battle.Completion is not null, "只有真实王座终点ClearFact才可规划奖励");
+            var completedView = war.Battle.View;
+            That(session.CommitEvildomWarReward(policy, repository, completedView with { BattleId = Guid.NewGuid() }) is null &&
+                session.CommitEvildomWarReward(policy, repository, completedView with { Revision = completedView.Revision - 1 }) is null &&
+                war.RewardSelection is null && war.RewardPlan is null && war.RewardCommit is null,
+                "旧战役或旧版本通知在抽样和写库之前拒绝，不能替当前战役提前冻结奖励");
             int talisman = resources.ItemResources.Items.TalismanCandidates(3).First();
             // 强制十二件非堆叠护石，覆盖跨邮件批次的完整实例与事务原子性。
             war.RewardSelection = new(0, [new(2, talisman, 12)]);
@@ -97,6 +102,29 @@ internal static class EvildomWarRewardTransactionTests
                 reopened.RecoverEvildomWarRewards(owner, session.Selected.Id).IsEmpty,
                 "重建仓储后无需旧Run，恢复原冻结完整资产且重复恢复不再交付");
             var receipt = session.CommitEvildomWarReward(policy, repository)!;
+            var sourceMember = instance.Members.Single();
+            var teamRow = new EvildomWarPartyReward(sourceMember, receipt);
+            That(receipt.Commit.Plan.Run.Snapshot.Identity.Epoch != receipt.Admission.Epoch &&
+                sourceMember.Actor.Epoch == receipt.Admission.Epoch,
+                "王座实际过图推进Run地图代次，原成员选角代次保持独立");
+            That(teamRow.IsFrom(completedView) &&
+                !(teamRow with { Member = sourceMember with { Slot = 2 } }).IsFrom(completedView) &&
+                !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Epoch = sourceMember.Actor.Epoch + 1 } } }).IsFrom(completedView) &&
+                !(teamRow with { Receipt = receipt with { Generation = receipt.Generation + 1 } }).IsFrom(completedView) &&
+                !teamRow.IsFrom(completedView with { Revision = completedView.Revision - 1 }),
+                "团队显示行须保持原席位、原generation、原选角和原战役版本，不能把旧结果贴给新槽位");
+            using (var otherOwner = new AccountOwners().Acquire(owner.Account, () => { }))
+            {
+                var otherSession = new GameSession(repository, resources.Towns, otherOwner);
+                try
+                {
+                    That(otherOwner.Generation == receipt.Generation &&
+                        !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Owner = otherOwner } } }).IsFrom(completedView) &&
+                        !(teamRow with { Member = sourceMember with { Actor = sourceMember.Actor with { Session = otherSession } } }).IsFrom(completedView),
+                        "generation相同也不能替换原admission的Owner或Session引用，来源不按角色快照全记录相等判断");
+                }
+                finally { otherSession.End(); }
+            }
             That(ReferenceEquals(receipt.Commit.Plan, frozen) && receipt.Commit.MailIds.Length == 2 &&
                 Scalar("SELECT count(*) FROM mailbox_attachments") is 12L &&
                 Scalar("SELECT count(*) FROM mailbox_messages WHERE expires_at IS NULL") is 2L,
@@ -116,6 +144,7 @@ internal static class EvildomWarRewardTransactionTests
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject<InvalidOperationException>(() => reopened.CommitEvildomWarReward(owner, frozen), "旧generation不能发奖");
             That(!session.CanPublishEvildomWarReward(receipt), "接管后旧奖励通知失效");
+            That(teamRow.IsFrom(completedView), "接管只使旧接收者失效，不抹掉原成员已提交的历史奖励事实");
             session.End();
             reopened.Delete(replacement, reopened.LoadDeletionTarget(replacement, 0));
             That(Scalar("SELECT count(*) FROM character_evildom_war_rewards") is 0L, "真实删角清理独立奖励回执及邮件资产");

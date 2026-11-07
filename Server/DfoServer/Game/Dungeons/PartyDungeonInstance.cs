@@ -19,6 +19,7 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
     EvildomWarView? WarView = null, bool SceneTransition = false, AntonHpDisplay? AntonHp = null)
 {
     public ImmutableArray<ushort> AntonRejoinDeaths { get; init; } = [];
+    public ImmutableArray<EvildomWarPartyReward> EvildomWarRewards { get; init; } = [];
 }
 
 internal sealed record AntonHpDisplay(ushort Squad, ImmutableArray<ushort> Members, uint UsedCoins, uint Context, ImmutableArray<uint> Values);
