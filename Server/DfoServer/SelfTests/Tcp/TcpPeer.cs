@@ -1092,7 +1092,8 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
         byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null,
-        (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null)
+        (int BuffId, int Remaining)? bossBuff = null, byte[]? strongwayHistory = null, byte[]? strongwayAccountRewards = null,
+        int? hellLegendUntil = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1238,6 +1239,9 @@ internal sealed partial class TcpPeer : IDisposable
                 if (bossBuff is { } boss)
                     Expect(0, 487, Build(writer =>
                     { writer.Write((byte)1); writer.Write(boss.BuffId); writer.Write(boss.Remaining); writer.Write(0); writer.Write(0); }));
+                if (hellLegendUntil is { } until)
+                    Expect(0, 487, Build(writer =>
+                    { writer.Write((byte)1); writer.Write(1271); writer.Write(until); writer.Write(0); writer.Write(0); }));
                 if (ekernCycle is not null) Expect(0,656,ekernCycle);
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {

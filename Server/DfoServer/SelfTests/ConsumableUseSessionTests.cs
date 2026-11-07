@@ -360,18 +360,34 @@ internal static partial class ConsumableUseSessionTests
         using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
         {
             f.Select();
+            That(f.Session.PlanHellLegendBuffProjection() is null, "持有未使用的星空药剂不创建状态栏buff");
             That(f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0 &&
                 f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
                 "未成功使用的星空药剂不因持有物品产生掉率加成");
             var used = f.Use();
             var saved = f.Read();
             long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            var display = f.Session.PlanHellLegendBuffProjection();
+            var retry = f.Session.PlanHellLegendBuffProjection();
+            That(display is not null && retry is not null && !display.IsCurrent() && retry.IsCurrent(),
+                "未写帧的星空显示允许重规划，旧回执不能确认新计划");
+            display!.MarkSent();
+            display = f.Session.PlanHellLegendBuffProjection();
+            That(display is not null && !retry!.IsCurrent(), "旧版本确认不安装去重水位，同owner仍可重发");
+            display!.MarkSent();
+            That(display is not null && display.UntilSeconds == until / 1000 && display.IsCurrent() &&
+                f.Session.PlanHellLegendBuffProjection() is null,
+                "星空图标只取已提交截止秒，同阶段不重复发送完整时长");
             That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
                 f.Session.HellLegendEpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 6520 &&
                 f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 0 && f.Session.CanPublishConsumable(used.Guard!),
                 "星空药剂在城镇正规消费后与持续状态同事务落库，1136 掉落输入仍为零");
             f.Clock.Advance(TimeSpan.FromMilliseconds(1));
             f.Session.ReturnToRoster(); f.Select();
+            var restoredDisplay = f.Session.PlanHellLegendBuffProjection(force: true);
+            That(!display!.IsCurrent() && restoredDisplay is not null && restoredDisplay.UntilSeconds == until / 1000 &&
+                restoredDisplay.IsCurrent(), "重选使旧显示回执失效，恢复原截止而不续期");
+            restoredDisplay!.MarkSent();
             That(f.Count == 2 &&
                 f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until &&
                 f.Session.HellLegendEpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 6520,
@@ -386,6 +402,12 @@ internal static partial class ConsumableUseSessionTests
                 f.Session.HellLegendEpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 0 &&
                 f.Session.EpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 100,
                 "星空同族取最大且不与固定1136相加或互相冒充");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(299999));
+            var expiredDisplay = f.Session.PlanHellLegendBuffProjection();
+            expiredDisplay?.MarkSent();
+            That(!restoredDisplay!.IsCurrent() && expiredDisplay is { UntilSeconds: 0 } && expiredDisplay.IsCurrent() &&
+                f.Session.PlanHellLegendBuffProjection() is null && f.Count == 2,
+                "到期等号撤下星空状态，旧添加回执失效，不再次消费药剂");
         }
         using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog, level: 95))
         {

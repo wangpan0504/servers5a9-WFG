@@ -22,6 +22,12 @@ internal static class ConsumableUseTests
         BossSelectionMappings();
         EpicDropMappings();
         HellLegendMappings();
+        var hellDisplay = DfoServer.Network.Projection.HellLegendBuffProjection.AddedBody(2_000_000_300);
+        That(hellDisplay.Length == 17 && hellDisplay[0] == 1 && BitConverter.ToInt32(hellDisplay, 1) == 1271 &&
+            BitConverter.ToInt32(hellDisplay, 5) == 2_000_000_300 && hellDisplay.AsSpan(9).SequenceEqual(new byte[8]),
+            "星空状态487携带1271与绝对截止秒，不将剩余时长误写入截止字段");
+        Reject<InvalidDataException>(() => DfoServer.Network.Projection.HellLegendBuffProjection.AddedBody(0),
+            "过期星空状态只能移除，不创建永久图标");
         VillageMoveSpeedMappings();
         var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
             new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));

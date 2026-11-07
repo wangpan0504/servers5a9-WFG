@@ -133,6 +133,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
                 await context.Notify(NotiPacketType.LOAD_EFFECT_ITEM_INFO, ConsumableStatePackets.Updates(batch),
                     "consumable_effect_time_refreshed", CanSend);
         if (accepted) await BossSelectionBuffProjection.PostAsync(context, canSend: CanSend);
+        if (accepted) await HellLegendBuffProjection.PostAsync(context, canSend: CanSend);
         if (accepted && result.TownGiftItem != 0 && town is not null)
             await town.GiftEffectAsync(context, result.TownGiftItem, CanSend);
         if (accepted && result.Inventory is { Plan: { } plan, Receipt: { } recoveryReceipt } &&
