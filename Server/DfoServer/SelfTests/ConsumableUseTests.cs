@@ -321,9 +321,9 @@ internal static class ConsumableUseTests
             (490010213, 600000, EnhancementPotionMode.Amplify, 500),
             (490012609, 600000, EnhancementPotionMode.Amplify, 500),
             (2600025, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (2749959, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (490012267, 1800000, EnhancementPotionMode.Reinforce, 1000),
-            (490012268, 1800000, EnhancementPotionMode.Reinforce, 1000)
+            (2749959, 1800000, EnhancementPotionMode.Reinforce, 10000),
+            (490012267, 1800000, EnhancementPotionMode.Reinforce, 10000),
+            (490012268, 1800000, EnhancementPotionMode.Reinforce, 10000)
         })
             That(resources.RecoveryConsumables.TryGet(id, out var potion) && potion.EnhancementPotion is { } effect &&
                 effect.Mode == mode && effect.SuccessBonusWeight == bonus && potion.EffectMilliseconds == duration &&

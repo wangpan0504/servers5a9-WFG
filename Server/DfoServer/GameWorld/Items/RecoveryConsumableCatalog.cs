@@ -73,11 +73,11 @@ internal sealed class RecoveryConsumableCatalog
         epicDrop = new(() => EpicDropBuffDefinition.Load(archive));
         hellLegendEpicDrop = new(() => HellLegendEpicDropBuffDefinition.Load(archive));
         villageMoveSpeed = new(() => VillageMoveSpeedBuffDefinition.Load(archive));
-        enhancementPotions = new(() => EnhancementPotionDefinition.Load(archive, stackable));
         // 监听前完成小型参数表与已知变体的装配；击杀和道具使用不扫描归档。
         AlchemistPotionInfo = archive.Contains(TreasureHunterPotionDefinition.AlchemistPath)
             ? AlchemistPotionInfoFile.Parse(archive.ReadTokens(TreasureHunterPotionDefinition.AlchemistPath), archive.ResolveString).PotionInfo
             : ImmutableDictionary<int, int>.Empty;
+        enhancementPotions = new(() => EnhancementPotionDefinition.Load(archive, stackable, AlchemistPotionInfo));
         TreasureHunterPotions = TreasureHunterPotionDefinition.Load(archive, stackable, AlchemistPotionInfo);
     }
 

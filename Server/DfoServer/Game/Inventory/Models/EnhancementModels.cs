@@ -19,5 +19,10 @@ internal sealed record EnhancementReceipt(EnhancementMode Mode, InventorySlot Ta
     // 仅普通逐级升级表路径置位；定级/增量券及随机、幸运奖池不属于该路径。
     public bool UsesLevelProbability { get; init; }
     public ImmutableArray<EnhancementRefund> Refunds { get; init; } = [];
+    // 本次实际判定的百分比，仅用于提交结果诊断，不改变持久事实或客户端包体。
+    [System.Text.Json.Serialization.JsonIgnore]
+    public decimal? BaseSuccessPercent { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public decimal? SuccessPercent { get; init; }
 }
 internal readonly record struct EnhancementRefund(short Slot, int ItemId, int Count);

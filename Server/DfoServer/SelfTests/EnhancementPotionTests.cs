@@ -12,7 +12,7 @@ internal static class EnhancementPotionTests
     public static void RunCore()
     {
         RunTicketPlans();
-        var typed = File(490004594, "[item upgrad buff usual upgrade]", [1000]);
+        var typed = File(490005584, "[item upgrad buff usual upgrade]", [1000]);
         That(EnhancementPotionDefinition.Read(typed) is { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 } &&
             EnhancementPotionDefinition.Read(File(490001356, "[item upgrad buff amplify upgrade]", [5000])) is
                 { Mode: EnhancementPotionMode.Amplify, SuccessBonusWeight: 5000 },
@@ -29,19 +29,40 @@ internal static class EnhancementPotionTests
         That(EnhancementPotionDefinition.Read(typed with { Stackable = typed.Stackable with
             { HasActionUsablePlace = true, DeclaredActionUsablePlaces = ["[dungeon]"] } }) is not null,
             "地点不用于判断强化药身份");
-        foreach (int id in EnhancementPotionDefinition.LegacyReinforcementItems)
+        foreach (int id in new[] { 2600025, 10007343, 490004594 })
         {
             var legacy = File(id, "[expert town potion]", [0]);
-            That(EnhancementPotionDefinition.Read(legacy) is null && EnhancementPotionDefinition.Read(legacy, true) is
-                { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 } &&
-                EnhancementPotionDefinition.Read(legacy with { StatChangeDuration = new(600000, "myself", null) }, true) is null,
-                "旧四种已收录强化仅在新版等价合同存在时按明确本服策略补1000，不扩到别的时长");
+            That(EnhancementPotionDefinition.Read(legacy) is
+                { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 10000 } &&
+                EnhancementPotionDefinition.Read(legacy, 100) is
+                { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 },
+                "已确认炼金强化身份独立读取自身EXJ万分比，缺项兜底10%且不依赖另一件新版药剂");
         }
-        That(EnhancementPotionDefinition.Read(File(999, "[expert town potion]", [0]), true) is null &&
-            EnhancementPotionDefinition.Read(File(490001355, "[expert town potion]", [0]), true) is null &&
-            EnhancementPotionDefinition.Read(File(490001358, "[expert town potion]", [0]), true) is null &&
-            EnhancementPotionDefinition.Read(File(490012267, "[item upgrad buff usual upgrade]", [0]), true) is null,
-            "兼容不放行任意expert0或孤儿旧编号，也不覆盖已收录编号上显式损坏的新版类别");
+        var alchemist = File(2600025, "[expert town potion]", [0]);
+        var large = EnhancementPotionDefinition.Read(alchemist, int.MaxValue)!;
+        That(EnhancementPotionDefinition.Read(alchemist, 0) is { SuccessBonusWeight: 0 } &&
+            EnhancementPotionDefinition.Read(alchemist, -1) is null && large.SuccessBonusWeight == (long)int.MaxValue * 10 &&
+            EnhancementPotionPolicy.AdjustedSuccessWeight(1, large.SuccessBonusWeight) == 100000 &&
+            EnhancementPotionPolicy.AdjustedSuccessWeight(0, large.SuccessBonusWeight) == 0,
+            "显式0不回退，负参数拒绝，完整int参数换算不溢出且保留成功率封顶和零概率");
+        That(EnhancementPotionDefinition.Read(File(10007343, "[expert town potion]", [0]) with
+            { StatChangeDuration = new(30000, "myself", null) }, 1000) is { SuccessBonusWeight: 10000 } &&
+            EnhancementPotionDefinition.Read(File(490004594, "[item upgrad buff usual upgrade]", [1000]), 2000)
+                is { SuccessBonusWeight: 1000 } &&
+            EnhancementPotionDefinition.Read(typed, 9000) is { SuccessBonusWeight: 1000 } &&
+            EnhancementPotionDefinition.Read(File(490004594, "[item upgrad buff amplify upgrade]", [5000]), -1)
+                is { Mode: EnhancementPotionMode.Amplify, SuccessBonusWeight: 5000 },
+            "水晶之光接受自身30秒声明；编号是否登记及EXJ是否冲突都不覆盖明确的新类型、模式及参数");
+        That(EnhancementPotionPolicy.AdjustedSuccessWeight(40000, EnhancementPotionDefinition.Read(alchemist)!.SuccessBonusWeight) == 44000 &&
+            EnhancementPotionPolicy.AdjustedSuccessWeight(40000, EnhancementPotionDefinition.Read(alchemist, 100)!.SuccessBonusWeight) == 40400,
+            "兜底10%使40%成为44%，EXJ100使40%成为40.4%，都不是直接增加概率百分点");
+        That(EnhancementPotionDefinition.Read(File(999, "[expert town potion]", [0]), 1000) is null &&
+            EnhancementPotionDefinition.Read(File(2600018, "[expert town potion]", [0]), 5000) is null &&
+            EnhancementPotionDefinition.Read(File(10008220, "[expert town potion]", [0]), 1000) is null &&
+            EnhancementPotionDefinition.Read(File(490001355, "[expert town potion]", [0]), 1000) is null &&
+            EnhancementPotionDefinition.Read(File(490001358, "[expert town potion]", [0]), 1000) is null &&
+            EnhancementPotionDefinition.Read(File(490012267, "[item upgrad buff usual upgrade]", [0]), 1000) is null,
+            "参数表不授予效果身份，财宝药、随机活动药、孤儿编号和损坏新版类别仍不放行");
 
         IReadOnlyDictionary<int, EnhancementPotionDefinition> definitions = new Dictionary<int, EnhancementPotionDefinition>
         {
@@ -57,6 +78,9 @@ internal static class EnhancementPotionTests
             EnhancementPotionPolicy.ActiveBonusWeight(states, definitions, EnhancementPotionMode.Reinforce, 3000) == 0 &&
             EnhancementPotionPolicy.ActiveBonusWeight(states, definitions, EnhancementPotionMode.Amplify, 4000) == 0,
             "同模式旧多份取最大而不累加，强化增幅隔离，恰到期失效且冷却和未知道具不能冒充效果");
+        That(EnhancementPotionPolicy.ActiveBonusWeight([new(ConsumableStateKind.Effect, 2600025, 2000, 7, 1)],
+            new Dictionary<int, EnhancementPotionDefinition> { [2600025] = EnhancementPotionDefinition.Read(alchemist, 0)! },
+            EnhancementPotionMode.Reinforce, 1000) == 0, "显式零参数的有效药效不报错，也不获得兜底加成");
         That(EnhancementPotionPolicy.AdjustedSuccessWeight(60000, 1000) == 60600 &&
             EnhancementPotionPolicy.AdjustedSuccessWeight(60000, 5000) == 63000 &&
             EnhancementPotionPolicy.AdjustedSuccessWeight(33333, 1000) == 33666 &&
@@ -85,7 +109,7 @@ internal static class EnhancementPotionTests
             ReadOnlyMemory<byte>.Empty, -1, -1);
         var additional = EnhancementCatalog.Parse(sourceId, "[equipment reinforcement ticket]\n1 60 `additional` -1\n")!;
         int calls = 0;
-        InventoryResult Plan(EnhancementDefinition rule, int bonus, out EnhancementReceipt? receipt) =>
+        InventoryResult Plan(EnhancementDefinition rule, long bonus, out EnhancementReceipt? receipt) =>
             InventoryEnhancementService.Plan(role, request with { Mode = rule.Mode }, 1900000000, rule,
                 sourceTemplate, gearTemplate, () => { calls++; return 6000; }, out receipt, potionSuccessBonusWeight: bonus);
         int before = calls;
@@ -93,18 +117,23 @@ internal static class EnhancementPotionTests
         var boosted = Plan(additional, 1000, out var boostedReceipt);
         That(plain.Accepted && plainReceipt is { Succeeded: false, NewLevel: 0 } && boosted.Accepted &&
             boostedReceipt is { Succeeded: true, NewLevel: 1, MaterialRemaining: 1 } && calls == before + 2 &&
+            plainReceipt is { BaseSuccessPercent: 60m, SuccessPercent: 60m } &&
+            boostedReceipt is { BaseSuccessPercent: 60m, SuccessPercent: 60.6m } &&
             boosted.Plan!.After.Find(target.Position) == target with { Core = target.Core with { Attr = 0xE1 } } &&
             boosted.Plan.After.Find(source.Position)!.Core.Count == 1 && plain.Plan!.After.Find(target.Position) == target,
             "真实逐级强化规划相同6000抽样无药失败有药成功，各抽一次扣一券，目标UID及完整核心保留");
+        That(!System.Text.Json.JsonSerializer.Serialize(boostedReceipt).Contains("SuccessPercent", StringComparison.Ordinal),
+            "概率诊断不进入持久事实JSON，不修改已有回执格式");
         var fixedRule = additional with { Additional = false, Level = 11 };
         That(Plan(fixedRule, int.MaxValue, out var fixedReceipt).Accepted && fixedReceipt is
-            { Succeeded: false, NewLevel: 0, MaterialRemaining: 1 },
+            { Succeeded: false, NewLevel: 0, MaterialRemaining: 1, BaseSuccessPercent: 60m, SuccessPercent: 60m },
             "固定等级券保持原6000边界，巨大药剂加成不能变成保底成功");
         var randomRule = additional with { Mode = EnhancementMode.RandomReinforce, Additional = false,
             RandomLevels = [new(7, 6000), new(12, 4000)] };
         var randomPlain = Plan(randomRule, 0, out var randomPlainReceipt);
         var randomBoost = Plan(randomRule, int.MaxValue, out var randomBoostReceipt);
         That(randomPlain.Accepted && randomBoost.Accepted && randomPlainReceipt is { Succeeded: true, NewLevel: 12, Path: 1 } &&
+            randomPlainReceipt is { BaseSuccessPercent: null, SuccessPercent: null } &&
             randomBoostReceipt == randomPlainReceipt &&
             randomBoost.Plan!.After.Find(target.Position) == randomPlain.Plan!.After.Find(target.Position),
             "随机等级券相同抽样仍落原第二档，药剂不能重权重、追加等级或改变真实装备结果");
@@ -113,7 +142,7 @@ internal static class EnhancementPotionTests
     public static void RunResources(IReadOnlyDictionary<int, EnhancementPotionDefinition> definitions)
     {
         That(definitions.TryGetValue(490004594, out var reinforce) && reinforce is
-            { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 }, "正式资源强化秘药明确保留1000参数");
+            { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 }, "正式新版强化秘药优先自身类型参数，不因缺EXJ行使用兜底");
         That(definitions.TryGetValue(490001533, out var guildReinforce) && guildReinforce is
             { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 } &&
             guildReinforce.IsFamilyItem(490004594),
@@ -123,11 +152,14 @@ internal static class EnhancementPotionTests
                 { Mode: EnhancementPotionMode.Amplify } && amplify.SuccessBonusWeight == bonus &&
                 amplify.IsFamilyItem(10004688) && !amplify.IsFamilyItem(490004594),
                 "正式LST收录增幅药保留5000、3000、1000、500不同参数并接入独立同族：" + id);
-        foreach (int id in EnhancementPotionDefinition.LegacyReinforcementItems)
+        foreach (var (id, bonus) in new[] { (490004594,1000), (490006368,1000), (490007878,1000), (490008465,1000),
+            (490012267,10000), (490012268,10000), (2749959,10000), (2600025,1000), (10007343,10000),
+            (10006268,1000), (490702938,1000), (490011297,1000), (490009901,1000), (490009714,1000),
+            (490007876,1000), (490002394,1000), (490001497,1000) })
             That(definitions.TryGetValue(id, out var legacy) && legacy is
-                { Mode: EnhancementPotionMode.Reinforce, SuccessBonusWeight: 1000 } &&
+                { Mode: EnhancementPotionMode.Reinforce } && legacy.SuccessBonusWeight == bonus &&
                 legacy.IsFamilyItem(490004594) && !legacy.IsFamilyItem(10004688),
-                "正式旧版强化在等价新版存在时沿明确本服策略接入同族：" + id);
+                "17项正式强化药保留新版参数，仅旧式声明取自身EXJ或10%兜底，同族覆盖且不混入增幅：" + id);
         That(!definitions.ContainsKey(490000413) && !definitions.ContainsKey(10008220) &&
             !definitions.ContainsKey(490001356) && !definitions.ContainsKey(490001359) &&
             !definitions.ContainsKey(490001355) && !definitions.ContainsKey(490001358),
