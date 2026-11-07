@@ -204,7 +204,11 @@ internal static class AntonRaidCombatTcpTests
                 peer.Send(42); Bytes(peer.Expect(1, 42).Body, [1], "复用正式回城请求42与ACK");
                 Bytes(peer.Expect(0, 3).Body, [1, (byte)created.Id, (byte)(created.Id >> 8), 0], "回城先发本人NOTI3状态");
                 peer.Expect(0, 24);
-                peer.Send(1278); peer.Expect(1, 1278);
+                // 合成夹具只声明[hp]符号7、初值1；24安装城镇后仍须恢复该安全状态。
+                Bytes(peer.Expect(0, 583).Body, [1, 7, 0, 0, 0, 1, 0, 0, 0],
+                    "两阶段回城严格恢复唯一安全符号的数量、ID和值");
+                peer.Send(1278);
+                Bytes(peer.Expect(1, 1278).Body, [1], "安全符号恢复后连接屏障确认成功");
                 That(session.Phase == SessionPhase.Town, "位置提交和场景初始化完成后回到城镇");
             }
             using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database, Pooling = false }.ToString()); db.Open();
