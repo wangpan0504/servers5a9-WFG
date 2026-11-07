@@ -15,7 +15,30 @@ SupportApcResourcePatch prepare-templates current.pvf new-template-directory
 SupportApcResourcePatch pair-resources map-manifest.json template-plan.json client-contract.json completed-manifest.json
 SupportApcResourcePatch export-evidence current.pvf template-plan.json new-evidence-directory
 SupportApcResourcePatch prepare-overdrive current.pvf Tools/SupportApcResourcePatch/OverdriveConfiguration.json new-output-directory
+SupportApcResourcePatch prepare-combat current.pvf new-output-directory
 ```
+
+## 两职业战斗动作差量
+
+`prepare-combat` 只读最终累计输入，输出 `support-profile-delta-v1` 的 `delta.json` 和逐模板
+`combat-report.json`，不重包、不覆盖PVF。只处理注册的奶爸20900、20903至20905与光兵9986、9600至9628；
+每项先核对职业和原KEY完整顺序，任一缺失或不匹配即拒绝。保留全部原KEY下标，在末尾追加
+`support_attack.key`，已存在同一追加项时不重复添加；输出目录必须不存在。
+
+辅助技能优先级保持，光兵不再生成念气波12的施放分支。两职业在辅助和技能分支结束后增加
+100×50范围的原生普攻KEY，先沿攻击目标转向，再使用`x`输入；没有近身有效敌人时保持待机，
+不对远处目标挥空拳。原KEY中的念气波资源及学习等级保留，但新动作图没有调用。
+
+战斗场景查询继续使用原生`enemy number of in attack area()`，其18号操作枚举当前场景的
+战斗对象，检查类型掩码0x11、存活和敌对关系，不按普通、精英、绿名或Boss品级过滤。
+两职业查询矩形扩为四向1,048,576单位的有限范围；原生将浮点边界转为有符号坐标，不能用
+无穷或浮点最大值代替。觉醒决策取消额外600距离门禁，实际技能命中仍由原生技能决定。
+视野0和跟随目的地5保持，未改变追随、三档属性、装备、技能等级、外观、地图或真人资源。
+
+专项入口：`dotnet run --project Tools/SupportApcResourcePatch.Tests -c Release -- <最终累计PVF> <不存在的新输出目录>`。
+它解释实际生成的规则及导入链，覆盖近身普攻、远敌觉醒、增益优先、无念气波、维持保护与
+敌对/死亡/类型边界，并逐token证明34份AIC的非KEY内容不变。解释回放不是游戏实机验收；
+最终PVF还须由资源owner累计装配、完整回读，客户端自然施放与绿名实战表现待QA。
 
 ## 当前注册模板强化差量
 
