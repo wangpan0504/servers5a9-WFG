@@ -2,6 +2,7 @@ using DfoServer.Game.Caching;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
 using System.Collections.Immutable;
@@ -143,8 +144,12 @@ internal sealed partial class GameSession
             area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var selection) ||
             selection.Error is not null || !selection.HellDungeon) return Rejected("helper-hell-area-unavailable");
         var candidates = new List<uint>();
-        foreach (var id in selection.Options.Select(option => option.DungeonId).Where(id => id > 0).Distinct())
+        var done = QuestEligibility.Completed(capture.Character);
+        // 任务专用入口可能也带柱子资源，但不能作为普通深渊的后继图。
+        foreach (var id in selection.Options.Where(option => !option.InProgress && option.DungeonId > 0)
+            .Select(option => option.DungeonId).Distinct())
         {
+            if (SelectionRejection(capture.Character, done, checked((uint)id)) is not null) continue;
             try
             {
                 var definition = catalog.Get(id);

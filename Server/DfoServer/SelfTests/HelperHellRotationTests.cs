@@ -49,9 +49,9 @@ internal static class HelperHellRotationTests
             .Select(link => link.First == current.Snapshot.CurrentMap.Position ? (DungeonPoint?)link.Second :
                 link.Second == current.Snapshot.CurrentMap.Position ? link.First : null).First(point => point is not null)!.Value;
         FormalDungeonReceipt ReachPillar(QuestSceneTests.Fixture fixture, out int visits,
-            List<DungeonPlannedMonster>? firstCompanions = null)
+            List<DungeonPlannedMonster>? firstCompanions = null, uint dungeonId = 291100308)
         {
-            var entry = fixture.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms,
+            var entry = fixture.Session.EnterFormalDungeon(dungeonId, 0, 4, dungeons, rooms,
                 pieces: items.EpicPieces, draw: _ => 0, hellParty: true);
             That(entry is not null && entry.Entry.StartMap.Position != entry.Entry.HellParty!.Room,
                 "首轮保留正常入口，不直接落柱子房：" + fixture.Session.LastFormalDungeonRejection);
@@ -125,6 +125,37 @@ internal static class HelperHellRotationTests
                 fixture.Session.CurrentFormalDungeonScene()!.Snapshot.Identity == current.Snapshot.Identity &&
                 Tickets(fixture) == (exhausted ? 30 : 0),
                 exhausted ? "疲劳不足保留原柱子房及票数，不额外计算费用" : "门票不足保留原柱子房，不降级为普通走门");
+        }
+        var metroArea = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 310));
+        var metroSelection = towns.DungeonMaps[metroArea.DungeonWorldMap!.Value];
+        var metroDone = metroArea.Quests.Concat(metroArea.AnyQuests.Take(1)).Concat(metroSelection.HellQuests).ToHashSet();
+        var metroWalk = metroArea.Map(metroDone).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(metroDone.Contains)).Bounds;
+        var metroPosition = new Location(metroArea.Town, metroArea.Area,
+            checked((ushort)(metroWalk.X + metroWalk.Width / 2)), checked((ushort)(metroWalk.Y + metroWalk.Height / 2)));
+        That(metroSelection.Options.Any(option => option.DungeonId == 9613 && option.InProgress) &&
+            dungeons.Get(9613).Mazes.Any(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null),
+            "地轨中心任务专用入口也含普通柱子资源，不能仅按柱子识别轮换候选");
+        using (var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            metroDone.Order().ToArray(), position: metroPosition, items: [(3330, 196)]))
+        {
+            var current = ReachPillar(fixture, out _, dungeonId: 310);
+            fixture.Session.SetHelperHellRotation(fixture.Read().Id, true);
+            foreach (uint expected in new uint[] { 311, 312, 313, 314, 310 })
+            {
+                current = Clear(fixture, current);
+                var door = Door(current);
+                int before = Tickets(fixture);
+                var result = fixture.Session.RotateHelperHell((byte)door.X, (byte)door.Y, 0, dungeons, rooms,
+                    pieces: items.EpicPieces);
+                That(result.Attempted && result.Receipt?.Entry.DungeonId == expected,
+                    "地轨中心普通深渊按主列表完整回绕，跳过任务专用入口：" + fixture.Session.LastFormalDungeonRejection);
+                var next = result.Receipt!;
+                That(next.Snapshot.CurrentMap.Position == next.Entry.HellParty!.Room &&
+                    Tickets(fixture) == before - next.Entry.HellParty.RequiredItemCount,
+                    "整圈轮换只扣目标图正常门票并直达真实柱子房");
+                current = fixture.Session.CompleteFormalDungeonLoading()!;
+            }
         }
         var settings = new GameDebugSettings { InfiniteFatigue = false, SupportCompanions = 3,
             SupportProfiles = SupportCompanionCatalog.Load(pvf) };
