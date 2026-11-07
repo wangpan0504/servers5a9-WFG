@@ -47,7 +47,7 @@ internal sealed class InventoryEquipmentPeriodChangeService(ItemCatalog catalog,
         var after = consumed.Plan!.After;
         // 换模板只钳制超出新上限的耐久；不借升级修理，其他打造随实例保留。
         var upgraded = target with { Core = target.Core with
-            { ItemId = replacementId, Durability = Math.Min(target.Core.Durability, replacement.Durability) } };
+            { ItemId = replacementId, Rune = 0, Durability = Math.Min(target.Core.Durability, replacement.Durability) } };
         if (after.Find(targetSlot) is not { } current)
             return InventoryResult.Reject(19);
         after = after with { Items = after.Items.Replace(current, upgraded) };

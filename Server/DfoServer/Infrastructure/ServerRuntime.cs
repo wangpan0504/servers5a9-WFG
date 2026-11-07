@@ -962,6 +962,7 @@ internal static class ServerRuntime
             new AmplificationHandler(new InventoryAmplificationService(itemResources.Items, itemResources.Amplifications,
                 itemResources.Enhancements, clock), inventoryProjection, log),
             new CreatureSkinHandler(skinService, inventoryProjection, log),
+            new EquipmentEffectHandler(new InventoryEquipmentEffectService(itemResources.Items, clock), inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             creatureHandler,
             new CreatureSealHandler(new Game.Creatures.CreatureSealService(itemResources.Items, itemResources.EpicPieces, clock), inventoryProjection, log),

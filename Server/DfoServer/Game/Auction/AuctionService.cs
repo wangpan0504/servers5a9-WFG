@@ -471,6 +471,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         after = after with { Gold = before.Gold - (uint)ListingDepositGold };
         // 挂牌副本的数量：整件类沿用核心，堆叠类只取本次上架的数量（余量留在背包）。
         var core = item.Core.IsStackable ? item.Core with { Value = count } : item.Core;
+        if (core.Kind == ItemKind.Equipment) core = core with { Rune = 0 };
 
         return AuctionRegisterDecision.Ok(new(
             Source: item.Position,
