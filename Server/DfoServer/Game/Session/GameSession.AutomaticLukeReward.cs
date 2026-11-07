@@ -24,7 +24,8 @@ internal sealed partial class GameSession
         ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now) => owner.Execute(() =>
     {
         if (HasPendingInventoryCommit || eligibility.RaidType == RaidKind.Prey &&
-            (eligibility.Source != PreyGuideRewards.TeamSource || offer.Kind is not (0 or 1) || offer.Card != 0))
+            (eligibility.Source is not (PreyGuideRewards.Source or PreyGuideRewards.TeamSource) ||
+                offer.Kind is not (0 or 1) || offer.Card != 0))
             return (false, (InventoryResult?)null, (PreparedRaidReward?)null);
         var before = Selected;
         var target = before?.Id == eligibility.Character ? before : load(owner, eligibility.Character);

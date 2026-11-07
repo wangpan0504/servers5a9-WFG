@@ -41,7 +41,7 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
         if (context.Session.RaidMovieSnapshot() is not { } movie) return Task.FromResult(CommandResult.Unhandled);
         bool completed = request.Body[0] == 1;
-        bool accepted = RaidCombatProjection.Movie(context, movie.Actor, movie.Battle, movie.View, completed);
+        bool accepted = RaidCombatProjection.Movie(context, movie.Actor, movie.Battle, movie.View, movie.Event, completed);
         var eligibility = movie.Battle.LukeEligibility(movie.Actor.Character, movie.View.Phase);
         log.Write("raid_movie_request", new { Connection = context.Id, RaidType = movie.Battle.Kind, movie.Battle.Instance,
             movie.View.Phase, CompletionRequested = completed, Handled = accepted, Eligible = eligibility?.Eligible, EligibilityReason = eligibility?.Reason });
@@ -225,7 +225,9 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                 log.Write("raid_reward_display_rejected", new { Connection = context.Id, receipt.Prepared.Phase,
                     receipt.Prepared.Kind, Reason = missing });
         }
-        if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
+        if (receipt.Prepared is { RaidType: RaidKind.Prey, Source: PreyGuideRewards.Source })
+            await RaidCombatProjection.PublishPreyGuideResultsAsync(context, receipt);
+        else if (receipt.Prepared.RaidType is RaidKind.Prey or RaidKind.Fiendwar && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer, receipt.Prepared.RaidType),
                 "prey_reward_display", DisplayGuard);
         bool sent = false;
