@@ -178,12 +178,18 @@ internal sealed class MonsterMockBattleService(IMonsterMockBattleStore store, Mo
             throw new MockBattleRejectedException("前置关卡尚未完成");
         if (world.Mode == 1)
         {
-            if (before.Snapshot.Worlds[19].Completed == 0)
+            // 原生0047B8E0将0..20共21项装入[+208]，0073E2D0对world 20直接按体力放行按钮，仅对21..26检查[+21C]==20；
+            // 且0047C2B0在本地日期未命中2020绝对日历时固定回退[+1E4]=20（异次元裂缝首关18021）。
+            if (world.Id != 20 && before.Snapshot.Worlds[19].Completed == 0)
                 throw new MockBattleRejectedException("特殊关卡需要先通关第20关");
-            var date = DateOnly.FromDateTime(at.ToOffset(TimeSpan.FromHours(8)).DateTime.AddHours(-6));
-            if (settings?.SpecialCalendarStart is { } start)
-                date = catalog.SpecialDays[0].Date.AddDays(date.DayNumber - start.DayNumber);
-            if (!catalog.SpecialDays.Any(row => row.Date == date && row.World == world.Id))
+            var rawDate = DateOnly.FromDateTime(at.ToOffset(TimeSpan.FromHours(8)).DateTime.AddHours(-6));
+            var date = settings?.SpecialCalendarStart is { } start
+                ? catalog.SpecialDays[0].Date.AddDays(rawDate.DayNumber - start.DayNumber)
+                : rawDate;
+            bool scheduled = catalog.SpecialDays.Any(row => row.Date == date && row.World == world.Id);
+            bool fallback = world.Id == 20 &&
+                (!catalog.SpecialDays.Any(row => row.Date == date) || !catalog.SpecialDays.Any(row => row.Date == rawDate));
+            if (!scheduled && !fallback)
                 throw new MockBattleRejectedException("特殊关卡未到开放日期");
         }
         if ((world.Mode is 2 or 3) != (opponent is not null) || opponent?.Account == owner.Account)

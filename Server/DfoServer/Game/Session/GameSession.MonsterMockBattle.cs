@@ -88,6 +88,8 @@ internal sealed partial class GameSession
             Phase != SessionPhase.Town || pendingRental is not null || HasPendingTownQuestCommit ||
             HasMultiplePartyMembers?.Invoke() == true ||
             !towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))) return null;
+        try { _ = service.PrepareAdmission(owner, character, dungeon, null); }
+        catch (MockBattleRejectedException) { return null; }
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, character.Id, character.Position, character.Position)
             { MockBattleDungeon = dungeon };
         SetState(SessionPhase.MapSelect);
