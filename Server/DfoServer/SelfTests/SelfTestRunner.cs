@@ -196,6 +196,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunCore();
         KnightShieldTests.RunCore();
         CreatureEggTests.RunCore();
+        CreatureSealTests.RunCore();
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
         BoosterSelectionTests.RunCore();

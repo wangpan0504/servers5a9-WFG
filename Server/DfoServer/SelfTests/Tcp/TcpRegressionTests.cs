@@ -582,6 +582,7 @@ internal static class TcpRegressionTests
         ("amplification-options", AmplificationTcpTests.RunAsync),
         ("amplification-upgrade", AmplifyUpgradeTcpTests.RunAsync),
         ("creature-egg", CreatureEggTcpTests.RunAsync),
+        ("creature-seal", CreatureSealTcpTests.RunAsync),
         ("creature-skin", CreatureSkinTcpTests.RunAsync),
         ("aura-skin", AuraSkinTcpTests.RunAsync),
         ("inventory-expansion", InventoryExpansionTcpTests.RunAsync),
