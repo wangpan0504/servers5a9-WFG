@@ -23,6 +23,7 @@ internal sealed class ItemResources
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
+    public TitleChangeCatalog TitleChanges { get; }
     public EquipmentUpgradeCatalog EquipmentUpgrades { get; }
     public EquipmentTransmissionCatalog EquipmentTransmissions { get; }
     public DarkRevelationCatalog DarkRevelations { get; }
@@ -147,6 +148,7 @@ internal sealed class ItemResources
         Skins = new(archive, stackable);
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
+        TitleChanges = new(archive);
         EquipmentUpgrades = new(archive);
         EquipmentTransmissions = new(archive);
         DarkRevelations = new(archive, equipment);

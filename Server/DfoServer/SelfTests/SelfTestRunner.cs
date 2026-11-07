@@ -212,6 +212,7 @@ internal static class SelfTestRunner
         GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
+        TitleChangeTests.RunCore();
         EquipmentUpgradeTests.RunCore();
         EquipmentTransmissionTests.RunCore();
         DarkRevelationTests.RunCore();
@@ -613,6 +614,7 @@ internal static class SelfTestRunner
         CreatureSkinMoveTests.RunResources(itemResources.Items);
         InventoryExpansionTests.RunResources(itemResources.Items);
         KnightShieldTests.RunResources(pvf, itemResources.Items);
+        TitleChangeTests.RunResources(pvf, itemResources);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         OmittedDimensionsAvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         MixedAvatarPackageTests.RunBoundaryResources(towns, itemResources, itemResources.AvatarPackages);
