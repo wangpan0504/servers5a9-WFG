@@ -348,9 +348,11 @@ internal static class QuestCompletionRepositoryTests
         public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => inner.CommitOperationHopeReward(owner,plan);
         public Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
             DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals) => inner.ClearOperationHopeAcceptances(owner,expected,catalog,removals);
-        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock);
-        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null) =>
-            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock);
+        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run,battlePassClock,energySource);
+        public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run, TimeProvider? battlePassClock = null,
+            DfoServer.Game.Inventory.Models.InventoryItem? energySource = null) =>
+            inner.ConsumeDungeonRoomFatigue(owner, expected, run,battlePassClock,energySource);
         QuestCompletionPlan? first;
         public QuestCompletionPlan? FirstPlan => first;
         public int Calls { get; private set; }

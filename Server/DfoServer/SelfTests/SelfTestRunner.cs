@@ -144,6 +144,7 @@ internal static class SelfTestRunner
         StackableTradeTests.RunCore();
         SocialTests.RunCore();
         ExperienceBonusTests.RunCore();
+        QuickSlotEquipmentTests.RunCore();
         WorldMapHoverTests.Run();
         HellPartyEntryTests.RunCore();
         DailyBoosterProjectionTests.RunCore();

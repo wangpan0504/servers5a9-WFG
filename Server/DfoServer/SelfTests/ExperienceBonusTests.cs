@@ -44,10 +44,25 @@ internal static class ExperienceBonusTests
         Throws(() => split.SplitPartyDisplay(2));
         Throws(() => shared.SplitPartyDisplay(float.NaN));
         var unlabelled = ExperienceBonuses.Calculate(100, 100,
-            [new(ExperienceBonusSource.Equipment, 10),new(ExperienceBonusSource.BlackDiamond, 5),
+            [new(ExperienceBonusSource.BlackDiamond, 5),
                 new(ExperienceBonusSource.Avatar, 2),new(ExperienceBonusSource.Creature, 5),new(ExperienceBonusSource.Event, 20)]);
-        That(unlabelled.Display(unlabelled.Total) == CharacterExperienceDisplay.Ordinary && unlabelled.Total == 142,
+        That(unlabelled.Display(unlabelled.Total) == CharacterExperienceDisplay.Ordinary && unlabelled.Total == 132,
             "未证独立槽的来源保留绝对经验，不误归队伍、普通Buff或伪造特权资源ID");
+        var equipmentDisplay = ExperienceBonuses.Calculate(26, 26, [new(ExperienceBonusSource.Equipment, 200)]);
+        That(equipmentDisplay.Display(78).BuffExperience == 52 && equipmentDisplay.Display(78).DeductedExperienceComponent == 52 &&
+            equipmentDisplay.Total == 78 && equipmentDisplay.Amount(ExperienceBonusSource.Equipment) == 52 &&
+            equipmentDisplay.Amount(ExperienceBonusSource.Buff) == 0,
+            "装备52只投影原生Buff明细与基础扣除项，实际经验78及Equipment来源保持");
+        That(equipmentDisplay.Display(40).BuffExperience == 14 && equipmentDisplay.Display(40).DeductedExperienceComponent == 14 &&
+            equipmentDisplay.Display(26) == CharacterExperienceDisplay.Ordinary,
+            "等级封顶只播报实际到账的装备部分，零装备增量不显示虚假明细");
+        var mixed = ExperienceBonuses.Calculate(100, 100, [new(ExperienceBonusSource.Equipment, 20),
+            new(ExperienceBonusSource.Buff, 7),new(ExperienceBonusSource.Potion, 30),new(ExperienceBonusSource.GrowthContract, 10)]);
+        var mixedDisplay = mixed.Display(mixed.Total);
+        That(mixed.Total == 167 && mixedDisplay.BuffExperience == 27 && mixedDisplay.DeductedExperienceComponent == 27 &&
+            mixedDisplay.PotionExperience == 30 && mixedDisplay.GrowthContractExperience == 10 && mixedDisplay.Bonuses.Count == 0 &&
+            mixed.Total - mixedDisplay.DeductedExperienceComponent - mixedDisplay.PotionExperience - mixedDisplay.GrowthContractExperience == 100,
+            "装备与真实Buff合并显示，秘药和契约仍独立，客户端基础余项与明细守恒且不伪造资源ID");
         Throws(() => ExperienceBonuses.Calculate(1, 1, [new(ExperienceBonusSource.Guild, -1)]));
         Throws(() => ExperienceBonuses.Calculate(1, 1, [new(ExperienceBonusSource.Guild, 1), new(ExperienceBonusSource.Guild, 2)]));
         Throws(() => ExperienceBonuses.Calculate(uint.MaxValue, uint.MaxValue, [new(ExperienceBonusSource.Event, 100)]));

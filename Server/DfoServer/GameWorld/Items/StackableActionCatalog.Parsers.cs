@@ -42,7 +42,7 @@ internal static partial class StackableActionCatalog
                 "[lucky enchant deed]" or "[amplify protect equipment]" or "[new amplify protect equipment]" or
                 "[portable upgrade]" or "[new portable upgrade]" or "[protect equipment]" or "[new protect equipment]"
                     or "[rent point]" or "[repair coupon]" or "[repair equipment]" or "[change creature random]" or "[creature effect]"
-                    or "[creature use item]" or "[extend item period]" or "[creature transport stone]" or "[add mileage]" or "[add avatar socket]"
+                    or "[creature use item]" or "[extend item period]" or "[creature transport stone]" or "[add mileage]" or "[add avatar socket]" or "[charm charging]"
                     or "[add guildmileage]" or "[increase guild exp fund]" or "[guild dungeon clear count]" or "[add dungeon incount item limit count]"
                     => StackableActionBusinessStatus.ExistingVariants,
                 _ => StackableActionBusinessStatus.Pending

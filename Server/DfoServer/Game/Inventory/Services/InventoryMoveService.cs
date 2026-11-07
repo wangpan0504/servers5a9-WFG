@@ -16,7 +16,7 @@ internal static class InventoryMoveService
     internal const string LoginWearRestatementReason = "move_login_wear_restatement";
 
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
-        PremiumContractCatalog? contracts = null, bool loginWearRestatement = false)
+        PremiumContractCatalog? contracts = null, bool loginWearRestatement = false, bool allowQuickSlotEquipmentChange = true)
     {
         if (InventoryKnightShieldService.Recognizes(request) || character.Inventory.ShieldDeck.Items[0] != 0 &&
             (request.Source == InventoryKnightShieldService.MainSlot || request.Destination == InventoryKnightShieldService.MainSlot))
@@ -113,6 +113,10 @@ internal static class InventoryMoveService
             return InventoryResult.Reject(CannotMoveItem);
         if (sourceSlot == destinationSlot)
             return new(true, 0, new(before, before, "move_no_change", Precondition()));
+        if (!allowQuickSlotEquipmentChange && QuickSlotEquipmentRules.IsQuickSlot(sourceSlot) != QuickSlotEquipmentRules.IsQuickSlot(destinationSlot) &&
+            (source.Core.Kind == ItemKind.Equipment && catalog.Get(source.Core.ItemId).IsQuickSlotEquipment ||
+                destination is { Core.Kind: ItemKind.Equipment } && catalog.Get(destination.Core.ItemId).IsQuickSlotEquipment))
+            return InventoryResult.Reject(CannotMoveItem);
         if (source.Core.IsStackable && sourceSlot.List != destinationSlot.List)
         {
             // 跨容器存取优先完整合并，不能合并时仍允许空格；同容器手动拆分不走自动选格。
@@ -260,6 +264,9 @@ internal static class InventoryMoveService
         PremiumContractCatalog? contracts = null, InventorySlot? ignore = null)
     {
         if (!ItemSlotBoundService.Allows(character.Inventory, position, core.Kind))
+            return false;
+        if (QuickSlotEquipmentRules.IsQuickSlot(position) && core.Kind == ItemKind.Equipment &&
+            !QuickSlotEquipmentRules.Allows(character, position, catalog.Get(core.ItemId), catalog, ignore))
             return false;
         if (position.List != InventoryListType.Equipment)
             return true;

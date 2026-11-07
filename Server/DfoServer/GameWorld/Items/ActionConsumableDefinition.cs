@@ -21,6 +21,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             file.StructureDiagnostics.Length != 0 || raw.TypeDeclaration is null ||
             action is not ({ Label: "[rent point]" or "[add mileage]" or "[use favor point]", Parameters: [> 0] } or
                 { Label: "[repair coupon]" or "[repair equipment]", Parameters.Count: 0 } or
+                { Label: "[charm charging]", Parameters: [> 0, > 0, ..] } or
                 { Label: "[add dimension dungeon enter count]", Parameters: [> 0 and <= 5] } or
                 { Label: "[story book]", Parameters: [> 0 and < 30000] } or
                 // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。

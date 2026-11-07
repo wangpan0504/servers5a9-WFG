@@ -36,6 +36,9 @@ internal sealed partial class DungeonHandler
 
     async Task PublishEntryAssetsAsync(GameConnectionContext context, FormalDungeonReceipt receipt, Func<bool> Guard)
     {
+        if (!receipt.FatigueEnergySlots.IsEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.FatigueEnergySlots]), "entry_quick_slot_energy", Guard);
         if (!receipt.HellConsumedSlots.IsDefaultOrEmpty && receipt.HellTicket is { } hellTicket)
         {
             // 实验性：深渊派对入场票已在入场提交时扣除；把背包变化投给客户端并留日志。

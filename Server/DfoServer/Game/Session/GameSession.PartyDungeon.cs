@@ -200,7 +200,7 @@ internal sealed partial class GameSession
         preparedPartyDungeon = plan with { Dungeon = dungeon with { GuildTraining = training?.Snapshot } };
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
-            { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+            { QuickSlotEnergySource = plan.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
@@ -258,6 +258,7 @@ internal sealed partial class GameSession
         SetState(SessionPhase.Loading);
         var payment = reservation.Charge.InventoryPayment;
         return FormalReceipt() with { EntryItemConsumedSlots = installing.HellTicket is null ? payment?.ChangedSlots ?? [] : [],
+            FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(plan.Character.Inventory, committed.Inventory),
             HellConsumedSlots = installing.HellTicket is not null ? payment?.ChangedSlots ?? [] : [],
             HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryFatigueCharged = reservation.Charge.Fatigue,

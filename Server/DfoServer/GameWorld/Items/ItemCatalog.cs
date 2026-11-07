@@ -73,7 +73,7 @@ internal sealed partial class ItemCatalog
         ["earring"] = 25,
         // 声明后的整数是资源子类型；护石模板共用34，实际两个穿戴槽为34/35。
         ["talisman"] = 34,
-        ["charm"] = 35
+        ["charm"] = QuickSlotEquipmentDefinition.EquipmentType
     };
 
     readonly int equipmentSellRate;
@@ -744,6 +744,8 @@ internal sealed partial class ItemCatalog
             EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],
             ExperiencePercent = isEquipment ? ReadExperiencePercent(text) : 0,
+            QuickSlotEquipment = isEquipment && slot == QuickSlotEquipmentDefinition.EquipmentType
+                ? QuickSlotEquipmentDefinition.Parse(text) : null,
             ExperienceForbiddenModules = Regex.Matches(text.Block("impossible equip module"), @"`([^`]+)`")
                 .Select(match => match.Groups[1].Value.Trim().Trim('[', ']')).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
             CreatureEgg = kind == ItemKind.Creature && creatures?.Get(id)?.Egg == true,
