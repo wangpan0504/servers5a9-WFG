@@ -229,6 +229,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         social?.Initialize(context);
+        await projection.GuildInformationAsync(context, projectedCharacter.Character);
         projection.GuildNpcs?.Post(context);
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
