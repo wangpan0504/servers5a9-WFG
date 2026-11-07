@@ -166,10 +166,13 @@ internal sealed partial class CharacterRepository
             UPDATE character_dungeon_incount SET daily_used=0
             WHERE account=$account AND day=$day AND daily_used<>0
             """, ("$account", owner.Account), ("$day", period.Day));
+        // 各副本可指定周重置星期；本周起点必在最近七个业务日内，旧周则在此范围之外。
+        // 代号希望周一重置，不能只按默认周四的周键刷新。
+        int earliestWeek = DungeonIncountPolicy.CurrentAccountPeriods(now).Min();
         int weekly = Execute(db, tx, """
             UPDATE character_dungeon_incount SET weekly_used=0
-            WHERE account=$account AND week=$week AND weekly_used<>0
-            """, ("$account", owner.Account), ("$week", period.Week));
+            WHERE account=$account AND week BETWEEN $earliest AND $today AND weekly_used<>0
+            """, ("$account", owner.Account), ("$earliest", earliestWeek), ("$today", period.Day));
         int account = ClearAccountEntries(db, tx, owner.Account, DungeonIncountPolicy.CurrentAccountPeriods(now));
         int assault = Execute(db, tx, """
             UPDATE character_assault_daily SET clear_count=0,hidden_count=0
