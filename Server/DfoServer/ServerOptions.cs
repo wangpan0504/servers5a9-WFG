@@ -22,8 +22,8 @@ internal sealed record ServerOptions
     public int GmPort { get; init; }
     // 嵌入服务进程的 GM 网页站点；0 表示关闭。监听固定在 127.0.0.1。
     public int GmWebPort { get; init; }
-    // 充值页独立于管理开关，正式启动默认HTTP80；测试可分配隔离端口。
-    public int RechargeWebPort { get; init; } = 80;
+    // 充值页独立于管理开关，正式启动默认HTTP23104；测试可分配隔离端口。
+    public int RechargeWebPort { get; init; } = 23104;
     public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");

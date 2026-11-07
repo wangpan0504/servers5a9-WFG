@@ -71,11 +71,11 @@ Debug Runtime还为普通及引导普雷省略角色周通关及各阶段奖励�
 
 ## 开发模拟充值
 
-充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP80；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理接口与充值设为相同端口时共用一次绑定。GM Web和客户端HTTP统一使用服务端TCP的`ListenAddress / --listen-ip`，没有独立IP配置或回环硬编码，不固定域名。Host仅接受本次连接实际接入的本地IP，回环来源额外允许localhost。普通充值路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
+充值页复用内置GM Web的Kestrel、同源门禁、请求处理及GM用例，不启动Python网页或第二套账号存储。随游戏服务启动，默认HTTP23104；`--recharge-web-port`指定隔离端口，必须为正数。它不受`--gm-port`或`--gm-web-port`控制：管理入口关闭时仍挂载充值路径；管理接口与充值设为相同端口时共用一次绑定。GM Web和客户端HTTP统一使用服务端TCP的`ListenAddress / --listen-ip`，没有独立IP配置或回环硬编码，不固定域名。Host仅接受本次连接实际接入的本地IP，回环来源额外允许localhost。普通充值路径为`/comm-htdocs/pay/client/dnf/`，黑钻路径为其`diamond/`子路径。
 
 同一HTTP入口提供`/client/includeImg.htm`，以及同级`includeImg_bg.png`、`banner_top.jpg`。三项均内嵌在程序集，构建和发布不依赖原始素材目录，不开放任意文件读取，也不重定向至充值页。页面保留350×350布局和兼容旧浏览器的脚本。链接目前为原页面的空操作，不代填外部网址。
 
-客户端HTTP绑定失败（包括80端口占用或无监听权限）记录`client_web_failed`告警，不阻止频道、游戏和原生传输就绪。若配置了不同端口的GM网页，则释放失败应用后只恢复该GM入口；没有独立GM入口时等待统一停机，不立即返回触发全服退出。独立GM端口自身不可用仍按原启动失败处理，不静默吞错。启动摘要显示实际可用状态；`ready.json`的`RechargeWebPort`失败时为0，`ConfiguredRechargeWebPort`保留配置端口。端口稍后释放不会后台重试，需要重启服务再启用。
+客户端HTTP绑定失败（包括23104端口占用或无监听权限）记录`client_web_failed`告警，不阻止频道、游戏和原生传输就绪。若配置了不同端口的GM网页，则释放失败应用后只恢复该GM入口；没有独立GM入口时等待统一停机，不立即返回触发全服退出。独立GM端口自身不可用仍按原启动失败处理，不静默吞错。启动摘要显示实际可用状态；`ready.json`的`RechargeWebPort`失败时为0，`ConfiguredRechargeWebPort`保留配置端口。端口稍后释放不会后台重试，需要重启服务再启用。
 
 当前提供开发模拟加值，不连接支付平台、不产生真实扣款。页面只接受原生CMD65票据和`ticketKey`，没有手选账号、UID或默认10000回退。有效票据绑定当前连接generation、选角epoch及角色，十分钟失效；重新开页、换角、断线和接管使旧票据失效。票据与实际加值在原owner内验证和提交；状态查询只读持久钱包，不安装未知提交结果的旧快照。
 

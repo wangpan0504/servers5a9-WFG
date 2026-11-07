@@ -42,7 +42,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --channel-entry-port-base <端口> 分类入口连续端口起点，默认 0（自动分配）
           --gm-port <端口>           本机 GM 端口，默认 0（关闭）
           --gm-web-port <端口>       GM网页端口，使用服务端监听地址，默认0（关闭）
-          --recharge-web-port <端口> 客户端网页及充值端口，默认80；绑定失败不阻止游戏启动
+          --recharge-web-port <端口> 客户端网页及充值端口，默认23104；绑定失败不阻止游戏启动
           --packet-http-port <端口>  本机只读包记录 HTTP 端口，默认 0（关闭）
           --pvf-path <文件>          资源文件，默认 Data/Pvf/Script.pvf
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
@@ -60,7 +60,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --hosted-eligibility-fake-host <scenario>  测试用假宿主：读 stdin JSON 写 stdout，不加载资源
           --battle-pass-season <标识>  启用指定稳定赛季的等级奖励领取；不配置则关闭该模块
           --battle-pass-start <时刻>  显式含时区的任务赛季起点，须为周四06:00(+08:00)
-          --recharge-web-port <端口>  充值网页监听端口，默认80，不受GM网页开关控制
+          --recharge-web-port <端口>  充值网页监听端口，默认23104，不受GM网页开关控制
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
           --auction-probe <参数>     拍卖行应答记录布局探针，默认关闭（关闭时走真实挂牌数据）
           --auction-seed <条数>      开发用拍卖行种子条数，默认 0（不种子）；表内已有挂牌时不写入
