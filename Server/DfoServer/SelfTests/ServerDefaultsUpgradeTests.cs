@@ -120,6 +120,7 @@ internal static class ServerDefaultsUpgradeTests
         That(store.Read() == settings.SupportConfiguration, "并发更新的最终磁盘与内存属于同一完整快照");
         Reject<ArgumentOutOfRangeException>(() => settings.SupportConfiguration = chosen with { SelectionMask = 5 },
             "退役辅助和多辅助非法组合均拒绝");
+        if (OperatingSystem.IsWindows()) VerifySupportFileReplacement(directory, store, settings);
         string path = Path.Combine(directory, "support-companions.json");
         foreach (int oldMask in new[] { 1, 3, 4, 6, 8, 10 })
         {
@@ -144,6 +145,76 @@ internal static class ServerDefaultsUpgradeTests
         }
         File.WriteAllText(Path.Combine(directory, "support-companions.json"), "{}");
         Reject<ArgumentOutOfRangeException>(() => store.Read(), "坏持久配置不能静默覆盖为默认");
+    }
+
+    static void VerifySupportFileReplacement(string directory, SupportCompanionStore store, GameDebugSettings settings)
+    {
+        string path = Path.Combine(directory, "support-companions.json");
+        var before = settings.SupportConfiguration with { SelectionMask = 2 };
+        settings.SupportConfiguration = before;
+        var expected = before;
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        {
+            // 连续覆盖期间不插入读操作，旧句柄不应阻止新快照发布。
+            for (int index = 0; index < 24; index++)
+            {
+                expected = before with { SelectionMask = index % 2 == 0 ? 3 : 1 };
+                settings.SupportConfiguration = expected;
+            }
+            That(store.Read() == expected && settings.SupportConfiguration == expected &&
+                new GameDebugSettings(store.Read(), store.Write).SupportConfiguration == expected,
+                "共享删除读句柄存活时连续24次真实保存保留最终完整快照且可重开");
+            using var reader = new StreamReader(held, leaveOpen: true);
+            That(System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(reader.ReadToEnd()) == before && before != expected,
+                "替换后旧读句柄仍只读到原配置，不混入新名单和档次");
+        }
+        using (var blocked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Reject<IOException>(() => settings.SupportConfiguration = before, "不共享删除的真实读句柄拒绝替换");
+            That(store.Read() == expected && settings.SupportConfiguration == expected &&
+                Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
+                "共享冲突失败保持磁盘内存快照且回收本次临时文件");
+        }
+        settings.SupportConfiguration = before;
+        That(store.Read() == before && settings.SupportConfiguration == before, "解除真实共享冲突后仍可保存");
+        var attributes = File.GetAttributes(path);
+        try
+        {
+            File.SetAttributes(path, attributes | FileAttributes.ReadOnly);
+            Reject<UnauthorizedAccessException>(() => settings.SupportConfiguration = expected, "只读配置文件拒绝替换");
+            That(store.Read() == before && settings.SupportConfiguration == before &&
+                Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
+                "只读拒绝不发布内存、不覆盖磁盘且回收临时文件");
+        }
+        finally { File.SetAttributes(path, attributes); }
+        settings.SupportConfiguration = expected;
+        That(store.Read() == expected && settings.SupportConfiguration == expected, "解除只读属性后仍可保存");
+
+        // 旧合法名单的读取需要回写归一结果，失败不能返回尚未持久化的配置。
+        var legacy = expected with { SelectionMask = 6 };
+        var normalized = legacy with { SelectionMask = 2 };
+        string raw = System.Text.Json.JsonSerializer.Serialize(legacy);
+        File.WriteAllText(path, raw);
+        using (var blocked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Reject<IOException>(() => store.Read(), "旧名单迁移遇到不共享删除读句柄时报告真实写入失败");
+            That(File.ReadAllText(path) == raw && Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
+                "迁移共享冲突保留旧JSON和全部档次且清理临时文件");
+        }
+        That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
+            File.ReadAllText(path)) == normalized, "解除共享冲突后读取真实迁移旧名单并完整保留档次");
+        File.WriteAllText(path, raw);
+        attributes = File.GetAttributes(path);
+        try
+        {
+            File.SetAttributes(path, attributes | FileAttributes.ReadOnly);
+            Reject<UnauthorizedAccessException>(() => store.Read(), "旧名单迁移遇到只读目标时报告真实写入失败");
+            That(File.ReadAllText(path) == raw && Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
+                "迁移只读拒绝保留旧JSON和全部档次且清理临时文件");
+        }
+        finally { File.SetAttributes(path, attributes); }
+        That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
+            File.ReadAllText(path)) == normalized, "解除只读属性后读取真实迁移旧名单并完整保留档次");
     }
 
     static void VerifyLogs(string directory)
