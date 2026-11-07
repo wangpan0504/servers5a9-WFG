@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Management;
@@ -78,7 +79,20 @@ internal static class EvildomWarChallengeTcpTests
                         var items = resources.ItemResources;
                         var granted = InventoryRewardGrantService.TryGrantBatch(role, [new(recoveryPotionId, 2)],
                             items.Items, items.GoldLimits, items.EpicPieces, DateTimeOffset.UtcNow);
-                        slot = InventoryService.Commit(repository, owner, role, granted).Slot;
+                        role = InventoryService.Commit(repository, owner, role, granted);
+                        if (count == 1)
+                        {
+                            var range = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Material, role.Inventory);
+                            var occupied = role.Inventory.Items.Select(item => item.Position).ToHashSet();
+                            var filler = InventoryRewardGrantService.Create(items.Items.Get(3299));
+                            var full = role.Inventory with { Items = [.. role.Inventory.Items,
+                                .. Enumerable.Range(range.Start, range.End - range.Start + 1)
+                                    .Select(at => new InventorySlot(InventoryListType.Main, checked((short)at)))
+                                    .Where(position => !occupied.Contains(position))
+                                    .Select(position => new InventoryItem(0, position, filler))] };
+                            role = repository.CommitInventory(owner, role, new(role.Inventory, full, "hero_material_full_fixture"));
+                        }
+                        slot = role.Slot;
                     }
                     var peer = Open(fixture, account, gamePort: endpoints[56], channelNumber: 56);
                     peers.Add(peer);
@@ -357,6 +371,16 @@ internal static class EvildomWarChallengeTcpTests
                     That(fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]] &&
                         fixture.Query("SELECT count(*) FROM character_evildom_war_rewards WHERE character_id=$p0", peer.Id) is [[0L]],
                         "英雄结算保持无疲劳，不混普通三模式战役专用奖励账本");
+                    var frozen = fixture.Query("SELECT json_extract(plan_json,'$.Gold'),json_extract(plan_json,'$.Item.ItemId')," +
+                        "json_extract(plan_json,'$.Item.Value') FROM character_dungeon_card_rewards WHERE character_id=$p0", peer.Id);
+                    That(frozen is [[0L, 490014021L, 1L]], "每名英雄成员结算冻结唯一闪耀装饰，不生成普通装备牌");
+                    string account = (string)fixture.Query("SELECT account FROM characters WHERE id=$p0", peer.Id).Single()[0];
+                    using var readOwner = new AccountOwners().Acquire(account, () => { });
+                    var heroLimit = ClearRewardLimitCatalog.Load(resources.Archive).FindDungeon(400000105)!;
+                    var usage = new CharacterRepository(fixture.Database).LoadClearRewardLimitUsage(readOwner, peer.Id,
+                        heroLimit, ClearRewardLimitPolicy.Period(fixture.UtcNow));
+                    That(usage == new DungeonIncountUsage(1, 1),
+                        "英雄资格在冻结通关牌时已持久消费本人日周各一次，不等待选牌或混其它成员");
                 }
                 foreach (var peer in peers)
                 {
@@ -367,6 +391,14 @@ internal static class EvildomWarChallengeTcpTests
                     peer.Send(71, [0, 3]);
                     That(All(peer)[peers.IndexOf(peer)].Any(packet => packet is { Kind: 1, Opcode: 71, Body: [1, ..] }),
                         "每名英雄成员通过正式请求领取本人免费牌");
+                    if (count == 1)
+                        That(fixture.Query("SELECT count(*) FROM mailbox_attachments a JOIN mailbox_messages m USING(mail_id) " +
+                            "JOIN character_inventory_items i USING(item_uid) WHERE m.recipient_id=$p0 " +
+                            "AND m.expires_at IS NULL AND json_extract(i.item_core,'$.ItemId')=490014021", peer.Id) is [[1L]],
+                            "英雄材料页满时实际选牌将唯一闪耀装饰转永久邮件");
+                    else
+                        That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490014021", peer.Id)
+                            is [[1L]], "英雄闪耀装饰实际进入本人背包");
                     string claimed = Assets();
                     peer.Send(71, [0, 3]); All(peer);
                     That(Assets() == claimed, "英雄重复免费牌不再次改变角色、物品、邮件或结算账本");

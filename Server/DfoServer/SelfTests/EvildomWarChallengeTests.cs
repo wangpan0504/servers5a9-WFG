@@ -104,6 +104,30 @@ internal static partial class EvildomWarChallengeTests
         var none = new HashSet<int>();
         var catalog = SelfTestCatalogs.Dungeons(pvf);
         var definition = catalog.Get(EvildomWarChallengeEntryPolicy.DungeonId);
+        var prices = SelfTestCatalogs.CardPrices(pvf);
+        var limits = ClearRewardLimitCatalog.Load(pvf);
+        var rewards = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), itemResources.DungeonDropItems,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, prices: prices,
+            tayberrsRewards: new(prices, itemResources.Boosters, itemResources.Items, limits));
+        var rewardNow = DateTimeOffset.Parse("2026-11-06T00:00:00Z");
+        foreach (var usage in new[] { new DungeonIncountUsage(0, 0), new DungeonIncountUsage(0, 1) })
+        {
+            var card = rewards.Prepare(definition, 2, 13, draw: _ => throw new InvalidOperationException("英雄专奖不能抽普通池"),
+                utcNow: rewardNow, clearRewardUsage: usage);
+            That(card is { Gold: 0, Item: { ItemId: 490014021, Value: 1 }, RuleId: EvildomWarChallengeRewardPolicy.Rule } &&
+                card.Items().Count() == 1, "英雄合格通关只冻结一件真实闪耀装饰，不借普通装备或金币牌");
+        }
+        foreach (var usage in new[] { new DungeonIncountUsage(1, 1), new DungeonIncountUsage(0, 2) })
+            That(rewards.Prepare(definition, 2, 13, utcNow: rewardNow, clearRewardUsage: usage) is
+                { Gold: 0, Item: null }, "英雄每日1或每周2耗尽仍可通关，不再冻结奖励");
+        var heroOptions = rewards.PrepareOptions(definition, 2, 13,
+            new(rewardNow.AddDays(1).ToUnixTimeSeconds(), rewardNow.AddDays(1).ToUnixTimeSeconds()), rewardNow);
+        That(heroOptions is { PaidDisabled: true, BlackDiamond: null, UseGoldCard: false },
+            "英雄专奖不能经付费、黄金契约或黑钻多领");
+        var withoutTable = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), itemResources.DungeonDropItems,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        Reject<InvalidDataException>(() => withoutTable.Prepare(definition, 2, 13),
+            "英雄奖励专表缺失明确拒绝，不能静默改发普通装备");
         var maze = definition.Mazes.Single();
         That(definition.IsEvildomWarChallenge && definition.MinimumPartyCount == 4 && definition.MinimumLevel == 95 &&
             definition.TryGetDesignatedDifficulty(out byte difficulty) && difficulty == 2 &&
