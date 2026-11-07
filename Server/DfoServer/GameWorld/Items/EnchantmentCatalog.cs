@@ -12,6 +12,7 @@ internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byt
     public RandomTitleEnchantmentPool? RandomTitle { get; init; }
     public RandomCardEnchantmentPool? RandomCards { get; init; }
     public bool VillageOnly { get; init; }
+    public bool UsesInstanceUpgrade { get; init; }
     public ImmutableHashSet<int> ExcludedTargetRarities { get; init; } = [];
     public bool AllowsTarget(ItemTemplate target) => Targets.Contains((target.Kind, target.EquipmentSlot)) &&
         (LimitedItems.IsEmpty || LimitedItems.Contains(target.Id)) && !ExcludedTargetRarities.Contains(target.Rarity == 2 && target.IsLegacyEquipment ? 99 : target.Rarity);
@@ -124,6 +125,19 @@ internal sealed partial class EnchantmentCatalog
         }
     }
 
+    // 只有无显式索引的普通单卡珠读取实例等级，不改写模板缓存或随机奖池规则。
+    public EnchantmentDefinition? Get(int itemId, byte instanceUpgrade)
+    {
+        var definition = Get(itemId);
+        if (definition is null || !definition.UsesInstanceUpgrade || instanceUpgrade == 0) return definition;
+        if (instanceUpgrade > CardMaximumLevel(definition.CardItemId)) return null;
+        var rules = CardTargets(definition.CardItemId, instanceUpgrade);
+        return rules is null ? null : definition with
+        {
+            Upgrade = instanceUpgrade, Targets = rules.Targets, ExcludedTargetRarities = rules.ExcludedTargetRarities
+        };
+    }
+
     EnchantmentDefinition? Load(int itemId)
     {
         if (!stackable.TryGetValue(itemId, out var path)) return null;
@@ -211,7 +225,8 @@ internal sealed partial class EnchantmentCatalog
         return new(itemId, !weighted && cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
         { RandomCards = weighted ? new(cardIds.ToImmutable(), weights.ToImmutable(), totalWeight) :
                 cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly,
-            ExcludedTargetRarities = excludedTargetRarities.ToImmutable() };
+            ExcludedTargetRarities = excludedTargetRarities.ToImmutable(),
+            UsesInstanceUpgrade = !weighted && cardIds.Count == 1 && Fields(bead, "enchant index").Count == 0 };
     }
 
     // 四参查询保留部位与等级语义；消费入口使用完整目标资格。

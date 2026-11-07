@@ -10,6 +10,7 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
     // 272有公共u16拒绝分支；细分错误文案尚待客户端验收，不复用其他版本的宝珠错误表。
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    internal EnchantmentCatalog Catalog => enchantments;
 
     public InventoryResult Plan(Character character, EnchantmentRequest request, long utcSeconds)
     {
@@ -42,6 +43,12 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
         ItemTemplate beadTemplate, targetTemplate;
         try
         {
+            if (definition.UsesInstanceUpgrade)
+            {
+                var resolved = enchantments.Get(source.Core.ItemId, source.Core.EnchantUpgrade);
+                if (resolved is null) return InventoryResult.Reject(Rejection);
+                definition = resolved;
+            }
             beadTemplate = items.Get(source.Core.ItemId);
             targetTemplate = items.Get(target.Core.ItemId);
         }

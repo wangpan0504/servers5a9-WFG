@@ -108,7 +108,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         var current = context.Owner.Execute(() => context.Session.Selected);
         ushort craftError = 19;
         if (current is not null && ExpertJobCraft.TryPlan(current, scripts, items, goldLimits, pieces, parsed.First, parsed.Second,
-            parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError))
+            parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError, enchantments?.Catalog))
         {
             var crafted = context.Session.CommitExpertJobCraft(craft.Inventory, craft.Experience, craft.SuccessCount > 0 ? quests : null);
             if (!crafted.Accepted || crafted.Receipt is not { } craftedReceipt)
