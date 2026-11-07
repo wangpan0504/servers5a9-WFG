@@ -27,7 +27,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
     AvatarPresetHandler? avatarPresets=null,GuildEconomyHandler? guildEconomy=null,
     GuildExperienceHandler? guildExperience=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
     DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null,
-    GuildDungeonScrollHandler? guildDungeonScroll=null) : IGameCommandModule
+    GuildDungeonScrollHandler? guildDungeonScroll=null, Inventory.CargoHandler? cargo=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -85,6 +85,8 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
             return await UseNpcFavorAsync(context, request);
         if (request.Action == 72)
             return await UseMileageAsync(context, request);
+        if (request.Action == 149)
+            return cargo is not null ? await cargo.UseAccountUpgradeToolAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 151)
             return creatures is not null ? await creatures.UseEffectAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == PeriodExtensionAction)

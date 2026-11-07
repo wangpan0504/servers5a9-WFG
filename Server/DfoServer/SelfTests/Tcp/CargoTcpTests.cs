@@ -65,6 +65,14 @@ internal static class CargoTcpTests
                 current.Inventory with { Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Main, 13), core)) }, "cargo_echo_fixture"));
             mirrorUid = current.Inventory.Find(new(InventoryListType.Main, 13))!.Uid;
             repo.Create(owner, new("CargoSibling", towns.Room, towns.InitialReturn) { AcceptedStoryLevel = 1 });
+            var couponCore = InventoryRewardGrantService.Create(itemResources.Items.Get(490705134));
+            var couponHolder = repo.Create(owner, new("CargoCoupon", towns.Room, towns.InitialReturn)
+            {
+                Level = 1, AcceptedStoryLevel = 1,
+                Inventory = new([new(0, new(InventoryListType.Main, 65), couponCore), new(0, new(InventoryListType.Main, 66), couponCore)])
+            });
+            That(couponHolder.Inventory.Items.Length == 2 && couponHolder.Inventory.Items.All(item => item.Core.Count == 1),
+                "按真实stack limit逐槽准备两张独立工具，不忽略超上限发奖拒绝");
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -245,6 +253,56 @@ internal static class CargoTcpTests
             var restored = repo.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.Main, 65));
             That(restored?.Uid == beadUid && JsonSerializer.Serialize(restored.Core) == beadCore,
                 "宝珠取回后再次登录保持同一UID及完整核心，不在账号仓库重复出现");
+            peer.Barrier();
+        }
+        byte[] AccountToolUse(short slot, uint argument = 0) => Build(w =>
+        {
+            w.Write(slot); w.Write((byte)0); w.Write(0u); w.Write(149u); w.Write(argument); w.Write(0u);
+        });
+        string ToolState() => string.Join('\n', new[] { "characters", "account_cargo", "character_inventory_items", "inventory_audit_log", "cargo_audit_log", "account_wallets" }
+            .Select(table => fixture.Snapshot("SELECT * FROM " + table)));
+        fixture.Sql("CREATE TRIGGER reject_account_tool BEFORE UPDATE OF capacity ON account_cargo WHEN NEW.capacity>OLD.capacity BEGIN SELECT RAISE(ABORT,'account tool rollback'); END");
+        string beforeTool;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2); peer.Barrier(); beforeTool = ToolState();
+            peer.Send(515, AccountToolUse(65)); peer.Closed();
+        }
+        That(ToolState() == beforeTool, "真实SQL扩容失败时工具、容量、版本和审计同事务回滚，不发布成功");
+        fixture.Sql("DROP TRIGGER reject_account_tool");
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(2);
+            Cargo(entry[7].Body, 12, 24, 0, 0);
+            peer.Barrier();
+            string fees = fixture.Snapshot("SELECT * FROM account_wallets") + fixture.Snapshot("SELECT gold FROM characters WHERE id=$p0", peer.Id);
+            string unchanged = ToolState();
+            peer.Send(515, AccountToolUse(65, 1));
+            peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 149]);
+            peer.Barrier();
+            That(ToolState() == unchanged, "149非零参数不消费或改动资产");
+            foreach (var (slot, capacity) in new (short, ushort)[] { (65, 32), (66, 40) })
+            {
+                peer.Send(515, AccountToolUse(slot));
+                peer.Expect(1, 515, Build(w => { w.Write((byte)1); w.Write(slot); w.Write((byte)0); w.Write(149u); }));
+                Cargo(peer.Expect(0, 13).Body, 12, capacity, 0, 0);
+                peer.Barrier(packet => That(packet.Opcode != 14, "149成功ACK已扣源，不再重复发送源14或费用差量"));
+                That(fixture.Query("SELECT capacity FROM account_cargo") is [[long savedCapacity]] && savedCapacity == capacity,
+                    "账号逐档券免费推进材料档及付费档，容量真实落库");
+                string committed = ToolState();
+                peer.Send(515, AccountToolUse(slot));
+                peer.Expect(1, 515, Build(w => { w.Write((byte)0); w.Write((ushort)0); w.Write(slot); w.Write((byte)0); w.Write((byte)149); }));
+                peer.Barrier();
+                That(ToolState() == committed, "源耗尽后的重复请求不消费另一槽券或再次扩容");
+            }
+            That(fees == fixture.Snapshot("SELECT * FROM account_wallets") + fixture.Snapshot("SELECT gold FROM characters WHERE id=$p0", peer.Id),
+                "账号逐档券不扣角色金币、材料或账号点券");
+            That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=490705134", peer.Id)
+                is [[0L]], "两张工具均只消费一次，重复请求不扩大金库");
+        }
+        using (var peer = Open(fixture))
+        {
+            Cargo(peer.Select(1)[7].Body, 12, 40, 0, 0);
             peer.Barrier();
         }
         await fixture.StopAsync();
