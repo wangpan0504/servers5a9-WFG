@@ -9,8 +9,17 @@ namespace DfoServer.Network.Projection;
 internal sealed class DungeonDeathProjection(GameConnectionContext context, TownProjection town, ServerLog log, TimeProvider? time = null) : IAsyncDisposable
 {
     public static readonly TimeSpan ReturnDelay = TimeSpan.FromSeconds(10);
+    PartyDungeonService? partyDungeons;
+    Game.Party.PartyService? parties;
+    readonly AsyncLocal<bool> running = new();
     CancellationTokenSource? cancellation;
     Task pending = Task.CompletedTask;
+
+    internal void ConfigurePartyDungeons(PartyDungeonService? dungeons, Game.Party.PartyService? partyService)
+    {
+        partyDungeons = dungeons;
+        parties = partyService;
+    }
 
     public async Task StartAsync()
     {
@@ -26,6 +35,27 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
         {
             // 计时经注入的 TimeProvider，回归可按比例缩短等待；生产未注入时使用系统时钟。
             await Task.Delay(ReturnDelay, time ?? TimeProvider.System, stop);
+            running.Value = true;
+            if (context.Session.PartyDungeon is not null)
+            {
+                using var gates = await DispatchGateScope.EnterAsync(context, stop);
+                if (context.Session.PartyDungeon is not { } instance || partyDungeons is null ||
+                    context.Session.CurrentDungeonDeathReturn() != scheduled) return;
+                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members, stop);
+                if (!ReferenceEquals(context.Session.PartyDungeon, instance) ||
+                    context.Session.CurrentDungeonDeathReturn() != scheduled ||
+                    instance.Members.Any(m => m.IsCurrent() && ReferenceEquals(m.Actor.Session.PartyDungeon, instance) &&
+                        m.Actor.Session.CurrentDungeonDeathReturn() is null)) return;
+                foreach (var member in instance.Members.Where(m => m.IsCurrent() &&
+                    ReferenceEquals(m.Actor.Session.PartyDungeon, instance)).ToArray())
+                {
+                    var departure = partyDungeons.Depart(member.Actor.Session, preserveSolo: true);
+                    if (departure.Error != 0) return;
+                    await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
+                    parties?.Publish(departure.PartyNotices);
+                }
+                return;
+            }
             if (context.Session.ReturnFromFormalDungeonOnDeath(scheduled) is not { } receipt) return;
             if (context.LostLand is not null) await context.LostLand.StopAsync();
             await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_death_return_town");
@@ -41,7 +71,7 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
 
     public async Task StopAsync()
     {
-        if (cancellation is null) return;
+        if (running.Value || cancellation is null) return;
         await cancellation.CancelAsync();
         await pending;
         cancellation.Dispose();

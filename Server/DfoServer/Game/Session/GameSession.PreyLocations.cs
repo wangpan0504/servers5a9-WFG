@@ -8,7 +8,7 @@ internal sealed partial class GameSession
     AntonRaidBattleChange? RecordPreyTownLocation(AntonRaidBattleChange? previous = null)
     {
         RecordPreyBoardingArrival();
-        if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid ||
+        if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey } raid ||
             Selected?.Position is not { Town: 59, Area: >= 2 and <= 5 } position ||
             raid.Battle.ReportPreyTownLocation(raid.Actor, position.Area) is not { } changed) return previous;
         return previous is null ? changed : previous with { After = changed.After };

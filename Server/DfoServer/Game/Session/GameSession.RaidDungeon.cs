@@ -54,14 +54,17 @@ internal sealed partial class GameSession
         Selected?.Position is { } position && IsRaidDungeonTownArea(admission, position) && RaidSelectionReturn(admission) is not null);
 
     GameWorld.Towns.Location? RaidSelectionReturn(RaidDungeonAdmission admission) =>
-        admission.Kind == RaidKind.Prey && !admission.PreyGuide && Selected is { } character
+        admission.Kind == RaidKind.Prey && Selected is { } character &&
+            (!admission.PreyGuide || character.Position.Area is 4 or 5)
             ? towns.Entrance(character.Position, new(59, 3, 0, 0), completed) ?? towns.Spawn(new(59, 3, 0, 0), completed)
             : Selected?.Position;
 
     static bool IsRaidDungeonTownArea(RaidDungeonAdmission admission, GameWorld.Towns.Location position) =>
         admission.Catalog.Script.WaitingRoom is { } room && position.Town == room.Town &&
         (admission.Kind == RaidKind.Fiendwar ? admission.Battle?.FiendwarPosition(admission.Actor.Character) == position.Area :
-            admission.Kind == RaidKind.Prey && !admission.PreyGuide ? position.Area is 4 or 5 : position.Area == room.Area);
+            admission.Kind == RaidKind.Prey && !admission.PreyGuide ? position.Area is 4 or 5 :
+            admission.Kind == RaidKind.Prey && admission.PreyGuide ? position.Area is >= 2 and <= 5 :
+            position.Area == room.Area);
 
     internal DungeonSelectionReceipt InstallRaidDungeonMenu(RaidDungeonAdmission admission) => InstallRaidSelection(admission, null);
 

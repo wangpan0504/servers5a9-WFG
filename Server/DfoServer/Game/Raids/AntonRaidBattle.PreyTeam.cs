@@ -168,7 +168,7 @@ internal sealed partial class AntonRaidBattle
 
     internal bool PreyPreparationPending(AntonRaidBattleView view)
     {
-        lock (gate) return Kind == RaidKind.Prey && !PreyGuide && ReferenceEquals(current, view) &&
+        lock (gate) return Kind == RaidKind.Prey && ReferenceEquals(current, view) &&
             view.State == AntonRaidBattleState.Fighting && !view.PhaseExpired && !view.ClockFaulted && view.Phase == 0 &&
             view.Symbols.GetValueOrDefault("[prepare raid]") != 1;
     }
@@ -188,7 +188,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Prey || PreyGuide || !ReferenceEquals(current, view) ||
+            if (Kind != RaidKind.Prey || !ReferenceEquals(current, view) ||
                 TerminalRequested(current) || current.Phase != 0 ||
                 current.Symbols.GetValueOrDefault("[prepare raid]") == 1 ||
                 !current.Timers.TryGetValue(new RaidTimer(9000, 0), out int seconds) ||

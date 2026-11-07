@@ -22,6 +22,7 @@ internal sealed partial class DungeonHandler
         context.Session.Strongway2019NormalTimeoutArrived = timeout => ReturnStrongway2019NormalTimeoutAsync(context, timeout);
         if (partyDungeons is not null)
         {
+            context.Death?.ConfigurePartyDungeons(partyDungeons, parties);
             context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle, raidStart);
             if (preyRaid is not null)
                 context.PreyBoarding = new(context,
@@ -327,9 +328,6 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(scene.Character.Inventory,
                         InventoryListType.Main,[.. scene.HellConsumedSlots]),"party_hell_entry_items",Current);
                 }
-                if (!scene.FatigueEnergySlots.IsEmpty)
-                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
-                        InventoryListType.Main, [.. scene.FatigueEnergySlots]), "party_entry_quick_slot_energy", Current);
                 if (!scene.EntryItemConsumedSlots.IsEmpty)
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
                         InventoryListType.Main, [.. scene.EntryItemConsumedSlots]), "party_entry_items", Current);
@@ -371,9 +369,6 @@ internal sealed partial class DungeonHandler
                 }
                 if (scene.Entry.UsesFatigue)
                     await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(scene.Character)), "party_room_fatigue", Current);
-                if (!scene.FatigueEnergySlots.IsEmpty)
-                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
-                        InventoryListType.Main, [.. scene.FatigueEnergySlots]), "party_room_quick_slot_energy", Current);
                 if (context.Elevator is not null) await context.Elevator.StartAsync(scene);
                 if (scene.HellPartyRoomCleared)
                     await context.Notify(NotiPacketType.HELL_PARTY_CLEAR,DungeonPackets.HellPartyCleared(),"party_hell_clear",Current);

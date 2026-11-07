@@ -39,12 +39,14 @@ internal sealed partial class GameSession
     internal Town.TownTravelReceipt? ReturnPreyLobby(RaidActor actor, RaidParty expected) => owner.Execute<Town.TownTravelReceipt?>(() =>
     {
         if (!actor.IsCurrent || !ReferenceEquals(actor.Session, this) || !ReferenceEquals(actor.Owner, owner) ||
-            !CanChangeTownParty || ChannelEntry?.Type != 50 || expected is not { Type: 3, Guide: false } ||
-            raidRegistry?.Find(actor) is not { Type: 3, Guide: false } current || current.Key != expected.Key ||
+            !CanChangeTownParty || ChannelEntry?.Type != 50 || expected is not { Type: 3 } ||
+            raidRegistry?.Find(actor) is not { Type: 3 } current || current.Key != expected.Key ||
+            current.Guide != expected.Guide ||
             current.Started?.InstanceId != expected.Started?.InstanceId ||
             Selected is not { Position.Town: 59, Position.Area: >= 2 and <= 5 } character) return null;
         if (expected.Started is { } started && (raidCombat is not
-            { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid ||
+            { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey } raid ||
+            raid.Battle.PreyGuide != expected.Guide ||
             raid.Battle.Instance != started.InstanceId)) return null;
         var target = ChannelAreaLanding.RoomExit(towns, ChannelEntry, towns.Room, character.Level, completed);
         if (target is null) return null;
@@ -63,10 +65,11 @@ internal sealed partial class GameSession
         return raid.Battle.SetPreyMarker(raid.Actor, group, target);
     });
     bool HasPreyTeamTownAccess => ChannelEntry?.Type == 50 &&
-        raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid &&
+        raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Prey } raid &&
         raid.Battle.View is { PhaseExpired: false, ClockFaulted: false } view &&
         view.Symbols.GetValueOrDefault("[prepare raid]") == 1 &&
-        raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 3, Guide: false, Started: { } started } &&
+        raidRegistry?.FindCurrent(this, SelectionEpoch) is { Type: 3, Started: { } started } party &&
+        party.Guide == raid.Battle.PreyGuide &&
         started.InstanceId == raid.Battle.Instance;
 
     // 1614只设置本人当前攻坚的报告阈值，不构造伤害、死亡或通关事实。

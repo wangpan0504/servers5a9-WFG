@@ -6,7 +6,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Prey || PreyGuide || !actor.IsCurrent || !members.ContainsKey(actor) ||
+            if (Kind != RaidKind.Prey || !actor.IsCurrent || !members.ContainsKey(actor) ||
                 area is < 2 or > 5 || actor.Session.Selected?.Position is not { Town: 59 } position || position.Area != area ||
                 current.PreyMemberLocations.GetValueOrDefault(actor.Character) == area) return null;
             return UpdatePreyMemberLocations(current.PreyMemberLocations.SetItem(actor.Character, area));
@@ -15,7 +15,7 @@ internal sealed partial class AntonRaidBattle
 
     void InstallPreyRunLocations(RaidDungeonRun run, PreyLandingCandidate? landing)
     {
-        if (Kind != RaidKind.Prey || PreyGuide || landing is null) return;
+        if (Kind != RaidKind.Prey || landing is null) return;
         var locations = current.PreyMemberLocations;
         foreach (var row in run.Actors)
             locations = locations.SetItem(row.Actor.Character, checked((ushort)landing.Arrival.FromArea));

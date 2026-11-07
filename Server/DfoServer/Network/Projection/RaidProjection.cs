@@ -46,7 +46,7 @@ internal static class RaidProjection
         return null;
     }
     internal static IReadOnlyDictionary<ushort, ushort>? PreyLocations(RaidParty party, AntonRaidBattleView? view) =>
-        party is { Type: 3, Guide: false, Started: not null } && view is not null
+        party is { Type: 3, Started: not null } && view is not null
             ? party.Members.ToDictionary(member => member.Actor.Character,
                 member => view.PreyMemberLocations.GetValueOrDefault(member.Actor.Character, (ushort)2)) : null;
     internal static IReadOnlyDictionary<(ushort Character, int Dungeon), uint>? PreyRetryDeadlines(RaidParty party, AntonRaidBattleView? view) =>
@@ -60,9 +60,9 @@ internal static class RaidProjection
         return null;
     }
 
-    internal static byte DisplayState(RaidParty party, AntonRaidBattleView? view, GameConnectionContext? recipient = null) =>
+        internal static byte DisplayState(RaidParty party, AntonRaidBattleView? view, GameConnectionContext? recipient = null) =>
         party is { Type: 3, Guide: false } && view is { PhaseExpired: true } ? (byte)6 :
-        party is { Type: 3, Guide: false } && view is { State: AntonRaidBattleState.Fighting } &&
+        party is { Type: 3 } && view is { State: AntonRaidBattleState.Fighting } &&
             (view.Phase == 0 && view.Symbols.GetValueOrDefault("[prepare raid]") != 1 ||
                 recipient?.PreyBoardingPending(view.Instance) == true) ? (byte)1 :
             view is not null ? (byte)view.State : party.Started is null ? (byte)0 : (byte)2;
@@ -133,7 +133,7 @@ internal static class RaidProjection
                 i.Core.ItemId == receipt.Cost.ItemId).Sum(i => (long)i.Core.Count)))).ToArray();
         Cost(context, rows, recipient, party.Type == (byte)RaidKind.Luke ? Guard : null);
         // 594无载荷，先安装同分队普通Party；其后11/12按同一普通接收器幂等确认。
-        if (party is not { Type: 3, Guide: false })
+        if (party.Type != 3)
             context.Sender.Post(0, (ushort)(party.Type == 2 ? NotiPacketType.PREPARE_START_FIEND_WAR : NotiPacketType.PREPARE_START_RAID), [], "raid_prepare", Guard);
         recipient.Owner.Execute(() => { if (moved && Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
         if (party.Type == 2 && receipt.Battle is { } fiendwarInitial && recipient.Session.CurrentRaidBattle(recipient) is { } fiendwarBattle)

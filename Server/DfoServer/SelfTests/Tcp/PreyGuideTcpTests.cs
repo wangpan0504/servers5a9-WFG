@@ -57,7 +57,7 @@ internal static class PreyGuideTcpTests
         using var peer = Open(fixture, "preyflow", gamePort: ChannelTcpTests.Endpoints(fixture)[42], channelNumber: 42);
         if (deathPolicy is not null)
         {
-            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
+            peer.ExpectedOpenEvents = [2532, 266, 2520];
             peer.ExpectedBattlePassEnd = checked((uint)deathPolicy.End.ToUnixTimeSeconds());
         }
         peer.Select();
@@ -90,14 +90,28 @@ internal static class PreyGuideTcpTests
         That(guideRoster[42 + checked((int)U32(guideRoster, 12))] == 11, "引导首次名册已落红队首槽");
         peer.Send(666);
         var started = Read("started");
-        That(started.Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }), "TCP真实666启动普雷引导");
+        That(started.Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }) &&
+            started.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [1, 0] }) &&
+            started.Any(packet => packet is { Kind: 0, Opcode: 594 }), "TCP真实666启动普雷引导并发布登船state1与594");
         That(fixture.Query("SELECT raid_type,state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[3L, 0L]],
             "TCP费用与类型3生命周期共同提交");
         peer.Send(666);
         That(Read("start replay").Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }), "TCP重复666只回放成功");
-        clock.Advance(25);
-        peer.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(U32(created.Single(packet => packet is { Kind: 1, Opcode: 664 }).Body, 1)); }));
-        var prepared = Read("prepared");
+        List<WirePacket> prepared;
+        if (!death)
+        {
+            peer.Send(36, Convert.FromHexString("3B038C04B000053B0002000000000000"));
+            prepared = Read("boarded");
+            That(prepared.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [59, 3, ..] }) &&
+                prepared.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [2, 0] }),
+                "普雷引导发送原36登船后进入59/3并切换state2开放战斗");
+        }
+        else
+        {
+            clock.Advance(25);
+            peer.Send(1361, Build(writer => { writer.Write((byte)2); writer.Write(U32(created.Single(packet => packet is { Kind: 1, Opcode: 664 }).Body, 1)); }));
+            prepared = Read("prepared");
+        }
         var symbolPacket = prepared.LastOrDefault(packet => packet is { Kind: 0, Opcode: 583 }) ??
             started.Last(packet => packet is { Kind: 0, Opcode: 583 });
         var symbols = ReadSymbols(symbolPacket.Body);
@@ -108,6 +122,40 @@ internal static class PreyGuideTcpTests
             VerifyDeaths(branch == 0 ? 291100391 : 291100390);
             return;
         }
+        var gate4 = resources.Towns.Entrance(new(59, 3, 1164, 176), new(59, 4, 0, 0), new HashSet<int> { 8935 })!;
+        peer.Send(36, Area(59, 4, gate4.X, gate4.Y, 59, 3));
+        That(Read("board left").Any(packet => packet is { Kind: 0, Opcode: 24, Body: [59, 4, ..] }),
+            "普雷引导登船后可切入59/4左侧甲板待机");
+        var landed = new List<WirePacket>();
+        for (int stop = 0; stop < 16 && !landed.Any(packet => packet is { Kind: 0, Opcode: 29 }); stop++)
+        {
+            clock.Advance(15);
+            for (int attempt = 0; attempt < 20 && !landed.Any(packet => packet is { Kind: 0, Opcode: 29 }); attempt++)
+            {
+                landed.AddRange(Read("guide landing " + stop));
+                if (!landed.Any(packet => packet is { Kind: 0, Opcode: 29 }) &&
+                    landed.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
+                    await Task.Delay(10);
+                else break;
+            }
+        }
+        That(landed.Any(packet => packet is { Kind: 0, Opcode: 28 }) &&
+            landed.Any(packet => packet is { Kind: 0, Opcode: 29 }),
+            "普雷引导在59/4待机随斯雷克坤移动自动降落进入开放副本");
+        peer.Send(37, new byte[8]);
+        That(Read("guide landing loaded").Any(packet => packet is { Kind: 1, Opcode: 37, Body: [1] }), "普雷引导降落副本完成加载");
+        peer.Send(40, [0x74, 0, 4, 1, 0, 0]);
+        That(Read("guide player died").Any(packet => packet is { Kind: 0, Opcode: 32 }), "普雷引导副本内角色死亡");
+        clock.Advance(10);
+        var autoReturned = new List<WirePacket>();
+        for (int attempt = 0; attempt < 50 && !autoReturned.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [59, 3, ..] }); attempt++)
+        {
+            await Task.Delay(10);
+            autoReturned.AddRange(Read("guide death auto return"));
+        }
+        That(autoReturned.Any(packet => packet is { Kind: 0, Opcode: 24, Body: [59, 3, ..] }) &&
+            fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[59L, 3L]],
+            "普雷副本内全员死亡倒计时归0自动退场回到鸟背59/3");
         var report = new AntonTcpProbe.AntonProbeReport();
         foreach (int dungeon in branch == 0 ? new[] { 291100391, 291100393 } : new[] { 291100390, 291100392 })
             AntonTcpProbe.Enter(peer, catalog, dungeon, report, clear: true);

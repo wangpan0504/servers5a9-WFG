@@ -253,7 +253,8 @@ internal static partial class RaidCombatProjection
         {
             bool preyPreparing = context.Session.CurrentRaidBattle(actor)?.PreyPreparationPending(view) == true;
             bool preyBoarding = view.State == AntonRaidBattleState.Fighting &&
-                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey, PreyGuide: false } &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Prey } preyCurrent &&
+                (!preyCurrent.PreyGuide || preyPreparing) &&
                 context.PreyBoardingPending(view.Instance);
             var identity = RaidCombatDisplayIdentity.Capture(actor, view) with
                 { AntonPreparing = view.AntonPreparing || view.LukePreparing || preyPreparing || preyBoarding };

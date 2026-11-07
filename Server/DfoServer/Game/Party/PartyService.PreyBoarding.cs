@@ -10,7 +10,7 @@ internal sealed partial class PartyService
     {
         session.RecordPreyBoardingArrival();
         var boarding = session.CapturePreyBoarding();
-        if (boarding is null || Capture(session) is not { } member) return [];
+        if (boarding is not { Battle.PreyGuide: false } || Capture(session) is not { } member) return [];
         if (boarding.Area is not (4 or 5))
             return member.Actor.Execute(() =>
             {

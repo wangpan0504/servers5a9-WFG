@@ -129,8 +129,8 @@ internal sealed partial class GameSession
     GameWorld.Towns.Location? RaidDungeonExitPosition(FormalDungeon dungeon, Characters.Character character)
     {
         // 只在原末阶段资格已提交后改变本次正式退出落点；结果/CG仍等待原Run退出屏障。
-        if (dungeon.Entry.RaidEntry is { Kind: RaidKind.Prey, PreyGuide: false, Phase: 1 } entry &&
-            raidCombat is { Battle.Kind: RaidKind.Prey, Battle.PreyGuide: false } raid &&
+        if (dungeon.Entry.RaidEntry is { Kind: RaidKind.Prey, Phase: 1 } entry &&
+            raidCombat is { Battle.Kind: RaidKind.Prey } raid &&
             entry.InstanceId == raid.Battle.Instance && entry.Phase + 1 == raid.Battle.PhaseCount &&
             raid.Battle.RequiresLukeCompletedPhaseReturn(raid.Actor, entry.InstanceId, entry.Phase) &&
             raid.Battle.LukeWaitingRoom is { } room)
