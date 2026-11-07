@@ -265,9 +265,6 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
         await DazzlementTowerProjection.StateAsync(context);
-        if (c.Guild is { } membership)
-            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex,
-                GuildPanels?.Read(context.Owner, c.Id, context.Channel.ServerIndex)), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         foreach (var set in EchonEquipmentPackets.Snapshot(c))
             await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "echon_set_initialize");
@@ -524,6 +521,16 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
             return true;
         });
         return Task.CompletedTask;
+    }
+
+    public async Task GuildInformationAsync(GameConnectionContext context, Character character)
+    {
+        // NOTI124在023E0AA0清零公会公告已输出标志062D4970，NOTI70在023DB1D2首次见到0时置1并打印欢迎公告；
+        // 置于124之后下发可避免与ACK4触发的140成员查询在124前后重复打印两条公告。
+        if (character.Guild is { } membership)
+            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex,
+                GuildPanels?.Read(context.Owner, character.Id, context.Channel.ServerIndex)), "guild_information_initialize",
+                () => context.Owner.Execute(() => context.Session.Ready && ReferenceEquals(context.Session.Selected, character)));
     }
 
     public void Join(GameConnectionContext context, Func<bool>? canJoin = null)

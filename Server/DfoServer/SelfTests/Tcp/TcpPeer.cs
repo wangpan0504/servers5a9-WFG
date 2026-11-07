@@ -998,6 +998,7 @@ internal sealed partial class TcpPeer : IDisposable
         AccountFriendRequests = Expect(0, 1377).Body;
         if (OwnGuildGrade != 100)
         {
+            Expect(0, 70);
             ReadGuildNpcs();
             ReadGuildDungeon();
         }
@@ -1264,7 +1265,6 @@ internal sealed partial class TcpPeer : IDisposable
                     TestCheck.That(grade == expectedGrade, "127 职位与公会成员表一致（无会籍=100，会长=1，2-5 原值，其余=4）");
                 }
                 ExpectDazzlementBindings(characterId: U16(prefix[0].Body, 9));
-                if (grade != 100) Expect(0, 70);
             }
             middle.Add(packet);
         }
