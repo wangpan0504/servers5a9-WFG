@@ -59,19 +59,27 @@ internal sealed partial class GameSession
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(
         character => inventory.Delete(character,request,preserveMaterials: PreservesDungeonConsumables),
         requireTown: request.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo);
-    public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory) => owner.Execute(() =>
+    public InventoryResult MoveInventory(InventoryMoveRequest request, InventoryService inventory)
     {
-        var safety = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.AccountCargo
-            ? FindHelperAssetSafety(request.Source, 1) : null;
-        if (safety is not null && (Selected is not { } selected || !CanUseHelperAssetSafety(safety, selected, request.Source, 1)))
-            return InventoryResult.Reject(1);
-        var result = MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen),
-            requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
-                request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
-                !(CanAccessPortableCargo(request.Source.List) && CanAccessPortableCargo(request.Destination.List)));
-        if (result is { Accepted: true, Plan.Changed: true } && safety is not null) ConsumeHelperAssetSafety(safety, request.Source);
-        return result;
-    });
+        var captured = owner.Execute(() => (Selected, Phase, SelectionEpoch));
+        if (captured.Selected is { } expected) inventory.PrepareMove(expected, request);
+        return owner.Execute(() =>
+        {
+            if (!ReferenceEquals(captured.Selected, Selected) || captured.Phase != Phase || captured.SelectionEpoch != SelectionEpoch)
+                return InventoryResult.Reject(1);
+            var safety = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.AccountCargo
+                ? FindHelperAssetSafety(request.Source, 1) : null;
+            if (safety is not null && (Selected is not { } selected || !CanUseHelperAssetSafety(safety, selected, request.Source, 1)))
+                return InventoryResult.Reject(1);
+            var result = MutateInventory(character => inventory.Move(character, request, LoginWearRestatementWindowOpen,
+                allowQuickSlotEquipmentChange: Phase is SessionPhase.Town or SessionPhase.MapSelect),
+                requireTown: (request.Source.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo ||
+                    request.Destination.List is InventoryListType.PersonalCargo or InventoryListType.AccountCargo) &&
+                    !(CanAccessPortableCargo(request.Source.List) && CanAccessPortableCargo(request.Destination.List)));
+            if (result is { Accepted: true, Plan.Changed: true } && safety is not null) ConsumeHelperAssetSafety(safety, request.Source);
+            return result;
+        });
+    }
 
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>

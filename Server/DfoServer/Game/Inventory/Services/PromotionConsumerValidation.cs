@@ -634,7 +634,12 @@ internal sealed class PromotionConsumerValidation(ItemCatalog items, BoosterCata
             switch (template.Kind)
             {
                 case ItemKind.Equipment:
-                    if (template.EquipmentSlot is < 12 or > 25) throw new InvalidDataException("equipment_slot");
+                    if (template.IsQuickSlotEquipment)
+                    {
+                        if (template.QuickSlotEquipment is null)
+                            throw new InvalidDataException("quick_slot_equipment_definition");
+                    }
+                    else if (template.EquipmentSlot is < 12 or > 25) throw new InvalidDataException("equipment_slot");
                     return;
                 case ItemKind.GuardianGem:
                     if (!InventoryGuardianGemService.SupportsDefinition(id, template))

@@ -127,11 +127,15 @@ internal sealed partial class GameSession
         formalDungeon?.Entry.HasFreeCombatConsumption == true;
     sealed record PreparedFormalDungeon(Character Character, long SelectionEpoch, FormalDungeon Dungeon, uint NextKey)
     {
+        public InventoryItem? QuickSlotEnergySource { get; init; }
         public InventoryEventPrecondition? RequiredEvent { get; init; }
         public DungeonSelectionContext? ClassExperienceSelection { get; init; }
         // 本次入场计入的冒险团每周地下城列；练习、训练、职业体验与比赛为 null。
         public WeeklyDungeonEntry? Weekly { get; init; }
     }
+    InventoryItem? CaptureQuickSlotEnergy(Character character, ItemCatalog? resourceItems = null) =>
+        QuickSlotEquipmentEnergy.Capture(character, resourceItems ?? items,
+            (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
     public DungeonRunSnapshot? DungeonSnapshot => owner.Execute(() => formalDungeon?.Run.Snapshot);
 
     public FormalDungeonReceipt? EnterFormalDungeon(uint dungeonId, uint questId, byte difficulty,
@@ -738,7 +742,8 @@ internal sealed partial class GameSession
                 participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, participantDropPlans)
                 { NextObjectKey = shared.Session.PreparedParty(shared).NextKey, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, EntryPieces = pieces,
                     HellRewardPlans = source.HellRewardPlans, CrackRewards = crackRewards ?? source.CrackRewards };
-            return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey);
+            return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey)
+            { QuickSlotEnergySource = CaptureQuickSlotEnergy(expected, items) };
         }
         if (state.LastAttempt == long.MaxValue) return RejectFormal("attempt-overflow");
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
@@ -938,7 +943,8 @@ internal sealed partial class GameSession
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { NextObjectKey = next, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
                 CrackRewards = crackRewards, AltarStartedTimestamp = (timeProvider ?? TimeProvider.System).GetTimestamp() };
-        return new(expected,epoch,dungeon,next);
+        return new(expected,epoch,dungeon,next)
+        { QuickSlotEnergySource = CaptureQuickSlotEnergy(expected, items) };
     }
 
     // #510/#511 选图准入逐项给出具体拒绝原因；未知或未核验的原因仍按原静默失败处理。
@@ -1157,7 +1163,7 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
+                        prepared.Weekly,installing.GriefAdmission) { QuickSlotEnergySource = prepared.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
                 MockBattle = installing.Entry.MockBattle,
                 RequiredEvent = prepared.RequiredEvent ?? (installing.Entry.MockBattle is { } mockEntry ? new(mockEntry.Schedule, timeProvider ?? TimeProvider.System) :
@@ -1219,6 +1225,7 @@ internal sealed partial class GameSession
             entrySlots = [.. entrySlots.Concat(training.Inventory.ChangedSlots.Except(hellSlots).Except(channelSlots).Except(assaultSlots)).Distinct()];
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue,
+            FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(character.Inventory, committed.Inventory),
             BattlePassMissionClock = entryFatigue > 0 ? timeProvider ?? TimeProvider.System : null, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
             EntryChangedCurrencies = entryItems?.ChangedCurrencies ?? [],
             GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
@@ -1262,6 +1269,8 @@ internal sealed partial class GameSession
         bool hasMatchingQuest = !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && expected.ActiveMainQuests.Any(active =>
             QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
             QuestDungeonClearProgress.CountsInitializations(quest,entry));
+        // 先冻结资格，不依赖可切换的调试开关；事务内实际未扣疲劳时自然不扣能量。
+        var energySource = entry.UsesRoomFatigue || entry.Hope is not null ? CaptureQuickSlotEnergy(expected) : null;
         var receipt = owner.Execute(() =>
         {
             if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading || !IsCurrentRaidDungeon(dungeon.Entry) ||
@@ -1271,13 +1280,13 @@ internal sealed partial class GameSession
             if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System);
+                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
             if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
-                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System);
+                Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
             var result = dungeon.Run.CompleteLoading(identity,Guid.NewGuid(),hasMatchingQuest);
@@ -1289,6 +1298,7 @@ internal sealed partial class GameSession
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             return FormalReceipt() with { LostLandStarted = lostLandStarted,
+                FatigueEnergySlots = QuickSlotEquipmentEnergy.ChangedSlots(expected.Inventory, Selected!.Inventory),
                 BattlePassMissionClock = expected.Fatigue is {} oldFatigue && Selected?.Fatigue is {} newFatigue && newFatigue.Remaining < oldFatigue.Remaining ? timeProvider ?? TimeProvider.System : null };
         });
         ScheduleHostedDungeonEligibility(receipt);

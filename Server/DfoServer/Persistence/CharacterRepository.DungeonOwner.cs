@@ -201,7 +201,11 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
                 incount.Dungeon, incount.Period, incount.Row, null, incount.Account, incount.Increment) ??
                 throw new InvalidOperationException("入场次数在提交前已用尽");
-        long revision = charge.InventoryPayment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
+        var payment = charge.InventoryPayment;
+        var energy = DfoServer.Game.Inventory.Services.QuickSlotEquipmentEnergy.Plan(expected, payment?.After ?? expected.Inventory,
+            charge.QuickSlotEnergySource, fatigueBefore is not null && fatigueAfter is not null ? fatigueBefore.Remaining - fatigueAfter.Remaining : 0);
+        if (energy is not null) payment = payment is null ? energy : payment.WithAfter(energy.After);
+        long revision = payment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         CommitTagEvildomAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitImperialArenaAdmission(db, tx, owner, expected, charge, checked(revision + 1));

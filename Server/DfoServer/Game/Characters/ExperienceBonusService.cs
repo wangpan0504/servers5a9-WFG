@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using System.Collections.Immutable;
@@ -32,13 +33,25 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
         if (request.Event == ExperienceEvent.Kill)
         {
             decimal percent = 0;
-            foreach (var item in equipped)
+            bool quickSlotApplied = false;
+            var quickSlots = character.Inventory.Items.Where(item => QuickSlotEquipmentRules.IsQuickSlot(item.Position) &&
+                item.Core.Kind == ItemKind.Equipment).OrderBy(item => item.Position.Index);
+            foreach (var item in equipped.Concat(quickSlots))
             {
                 if (!TryTemplate(request, item, out var template)) continue;
+                bool quickSlot = QuickSlotEquipmentRules.IsQuickSlot(item.Position);
+                if (template.IsQuickSlotEquipment && !quickSlot) continue;
+                if (quickSlot)
+                {
+                    if (!template.IsQuickSlotEquipment || quickSlotApplied) continue;
+                    // 旧存档即使出现多件，也与客户端逐槽查首件一致，不用另一件绕过空能量或场景资格。
+                    quickSlotApplied = true;
+                    if (character.Level < 5 || !QuickSlotEquipmentRules.IsActive(item, template, now)) continue;
+                }
                 if (character.Level >= template.MinimumLevel && character.Level <= template.MaximumLevel &&
                     (template.Jobs & (1 << character.Job)) != 0 &&
                     !template.ExperienceForbiddenModules.Contains(request.EquipmentModule) &&
-                    Game.Inventory.Services.InventoryMoveService.RequiredSkillSatisfied(character, template))
+                    InventoryMoveService.RequiredSkillSatisfied(character, template))
                     percent += template.ExperiencePercent;
             }
             if (percent != 0) rates.Add(new(ExperienceBonusSource.Equipment, percent));

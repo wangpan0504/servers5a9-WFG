@@ -372,7 +372,8 @@ internal static class InventoryRewardGrantService
             }
 
             // 先合已有兼容堆；消耗品新堆只进所属分页，不能借空快捷槽绕过背包容量。
-            bool allowQuickSlotFallback = pickupQuickSlots && template.Kind != ItemKind.Consumable;
+            // 快捷栏纹章的放入即装备，自动拾取不能绕过城镇装卸和单件资格。
+            bool allowQuickSlotFallback = pickupQuickSlots && template.Kind != ItemKind.Consumable && !template.IsQuickSlotEquipment;
             for (int pass = 0; remaining > 0 && pass < (allowQuickSlotFallback ? 2 : 1); pass++)
             {
                 bool quick = allowQuickSlotFallback && pass == 1;

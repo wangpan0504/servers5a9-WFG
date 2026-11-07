@@ -7,6 +7,7 @@ internal static class TcpRegressionTests
 {
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
+        ("quickslot-equipment", QuickSlotEquipmentTcpTests.RunAsync),
         ("monster-mock-battle", MonsterMockBattleTcpTests.RunAsync),
         ("weekly-attendance", WeeklyAttendanceTcpTests.RunAsync),
         ("knight-shield", KnightShieldTcpTests.RunAsync),

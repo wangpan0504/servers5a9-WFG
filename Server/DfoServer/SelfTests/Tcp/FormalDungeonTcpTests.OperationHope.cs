@@ -1,9 +1,11 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Skills;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
@@ -39,6 +41,8 @@ internal static partial class FormalDungeonTcpTests
             var seed = CharacterCreation.Prepare("HopeTcp",resources.Characters.Get(0),position,position,resources.Learning.Get);
             var repository = new CharacterRepository(f.Database,resources.Quests);
             created = repository.Create(owner,seed with { Level=95,AcceptedStoryLevel=95,
+                Inventory = seed.Inventory with { Items = seed.Inventory.Items.Add(new(0, new(InventoryListType.Main, 3),
+                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(400360000)) with { Durability = 25 })) },
                 CompletedQuests=done.ToArray(),InitialLearning=SkillPointLedger.Synchronize(0,0,95,seed.InitialLearning with
                     {Experience=resources.Growth.GetLevelStartExperience(95)},resources.Learning) });
             var service = new InventoryService(resources.ItemResources.Items,resources.ItemResources.GoldLimits,resources.ItemResources.EpicPieces);
@@ -126,6 +130,10 @@ internal static partial class FormalDungeonTcpTests
         }
         That((long)f.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",created.Id)[0][0]==fatigueBefore-16,
             "真实网络完整四区域仅扣16疲劳");
+        var energy = JsonSerializer.Deserialize<ItemCore>((string)f.Query("SELECT item_core FROM character_inventory_items i " +
+            "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND list_type=0 AND slot_index=3", created.Id)[0][0]);
+        That(energy == created.Inventory.Find(new(InventoryListType.Main, 3))!.Core with { Durability = 9 },
+            "希望完整路线按四区域疲劳16同扣能量16，同区域换房不重复扣且不改品级");
         That(progressTransitions == 1, "希望完整迷宫恰有一次权威目标完成UI转换");
         peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
         QuestLifecycleTcpTests.DrainNotifications(peer);

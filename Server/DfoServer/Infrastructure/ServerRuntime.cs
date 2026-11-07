@@ -911,6 +911,8 @@ internal static class ServerRuntime
                 serverEvents: events, strongwayShops: itemResources.Shops,
                 battlePassCertificateChanged: battlePassProjection is null ? null : battlePassProjection.MissionStateAsync),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
+            new CharmChargingHandler(new InventoryCharmChargingService(itemResources.Items.Get,
+                itemResources.Items.ActionConsumable, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,

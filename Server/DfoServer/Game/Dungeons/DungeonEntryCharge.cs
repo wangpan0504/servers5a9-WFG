@@ -53,6 +53,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
     public int FatigueAccelerationPercent { get; init; }
+    public InventoryItem? QuickSlotEnergySource { get; init; }
     public DfoServer.Game.MonsterMockBattle.MockBattleAdmission? MockBattle { get; init; }
     public bool IsEmpty => MockBattle is null && RequiredEvent is null && Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null && PreyNormalEntry is null && AntonNormalEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }

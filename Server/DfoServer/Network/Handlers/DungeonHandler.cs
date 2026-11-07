@@ -538,6 +538,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (context.MonsterMockBattle is { } mockBattle) await mockBattle.BattleInfoAsync(receipt, spawn: false);
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
+        if (!receipt.FatigueEnergySlots.IsEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.FatigueEnergySlots]), "room_quick_slot_energy", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
         if (context.LostLand is not null) await context.LostLand.StartAsync(receipt);
         if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)

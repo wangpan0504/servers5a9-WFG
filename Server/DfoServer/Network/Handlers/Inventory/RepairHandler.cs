@@ -20,6 +20,9 @@ internal sealed class RepairHandler(InventoryRepairService repair, InventoryProj
         if (request.Mode == 1)
             log.Write("devil_auto_repair", new { Connection = context.Id, result.Accepted, result.Error,
                 Revision = result.Receipt?.Character.Revision });
+        if (!result.Accepted && result.RejectReason is not null)
+            log.Write("equipment_repair_rejected", new { Connection = context.Id, List = (byte)request.Position.List,
+                Slot = request.Position.Index, request.Mode, result.Error, result.RejectReason });
         bool CanSend() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             context.Session.SelectionEpoch == original.SelectionEpoch && context.Session.Phase == original.Phase &&
             ReferenceEquals(context.Session.Selected, original.Selected));

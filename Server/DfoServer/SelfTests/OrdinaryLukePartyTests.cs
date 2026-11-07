@@ -2,6 +2,8 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Party;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
@@ -57,10 +59,13 @@ internal static class OrdinaryLukePartyTests
             {
                 var candidate = CharacterCreation.Prepare("LukeParty"+i,resources.Characters.Get(0),position,position,resources.Learning.Get);
                 var learning = SkillPointLedger.Synchronize(0,0,95,candidate.InitialLearning with {Experience=growth.GetLevelStartExperience(95)},resources.Learning);
-                repository.Create(owner,candidate with {Level=95,AcceptedStoryLevel=95,CompletedQuests=done,InitialLearning=learning});
-                var session = new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,timeProvider:clocks[i]);
+                repository.Create(owner,candidate with {Level=95,AcceptedStoryLevel=95,CompletedQuests=done,InitialLearning=learning,
+                    Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 3),
+                        InventoryRewardGrantService.Create(items.Items.Get(400360000)) with { Durability = (ushort)(25 - i * 10) })) } });
+                var session = new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,timeProvider:clocks[i],items:items.Items);
                 session.Select(0,resumeTown:true); session.MarkReady(); return session;
             }).ToArray();
+            var energyStart = sessions.Select(session => session.Selected!).ToArray();
             var parties = new PartyService(repository);
             foreach (var session in sessions) session.CurrentParty = () => parties.Current(session);
             That(parties.Invite(sessions[0],sessions[1],sessions[1].Selected!.Id).Accepted &&
@@ -101,7 +106,18 @@ internal static class OrdinaryLukePartyTests
                 foreach (var point in route)
                 {
                     instance.CompleteLoading(sessions[0]);
-                    That(instance.CompleteLoading(sessions[1]).Length==2,"全员原加载屏障");
+                    var loaded = instance.CompleteLoading(sessions[1]);
+                    That(loaded.Length==2,"全员原加载屏障");
+                    foreach (var notice in loaded)
+                    {
+                        var current = notice.Scene!.Character;
+                        var beforeEnergy = energyStart.Single(role => role.Id == current.Id);
+                        var source = beforeEnergy.Inventory.Find(new(InventoryListType.Main, 3))!;
+                        int fatigueLost = beforeEnergy.Fatigue!.Remaining - current.Fatigue!.Remaining;
+                        That(fatigueLost > 0 && current.Inventory.Find(source.Position) == source with
+                            { Core = source.Core with { Durability = (ushort)Math.Max(0, source.Core.Durability - fatigueLost) } },
+                            "组队加载回执按成员本人真实疲劳同步独立能量，不串用队长或队友的库存");
+                    }
                     var scene = sessions[0].CurrentFormalDungeonScene()!;
                     foreach (var monster in scene.Monsters.Monsters.Where(m=>m.IsBlocking && m.CanReportDeath && !m.IsFriendly).OrderBy(m=>m.IsBoss))
                     {

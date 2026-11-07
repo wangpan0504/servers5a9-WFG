@@ -11,6 +11,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using PvfLib;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -298,9 +299,22 @@ internal static class DungeonEntryCostTests
         }
         // 票够、疲劳够：入场提交一次扣 1 张票 + 10 点疲劳；重复请求与首次加载都不再扣。
         using (var rich = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, completed, position: position,
-            items: [(RefinedStone, 2)]))
+            items: [(RefinedStone, 2)], itemCatalog: items.Items, inventorySetup: role => new(role.Inventory, role.Inventory with
+                { Items = role.Inventory.Items.Add(new(0, new(InventoryListType.Main, 3),
+                    InventoryRewardGrantService.Create(items.Items.Get(400360000)) with { Durability = 7 })) }, "test_entry_energy")))
         {
             var before = rich.Read();
+            rich.Sql("CREATE TRIGGER entry_energy_abort AFTER UPDATE ON character_fatigue BEGIN SELECT RAISE(ABORT,'entry energy rollback'); END");
+            try
+            {
+                Reject<SqliteException>(() => rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms,
+                    pieces: items.EpicPieces), "入场能量、门票写后疲劳失败整笔回滚");
+                var rejected = rich.Read();
+                That(rejected.Revision == before.Revision && rejected.Fatigue == before.Fatigue &&
+                    rejected.DungeonState == before.DungeonState && rejected.Inventory.Items.SequenceEqual(before.Inventory.Items),
+                    "拒绝后不留半笔能量、门票、疲劳或尝试号");
+            }
+            finally { rich.Sql("DROP TRIGGER entry_energy_abort"); }
             var receipt = rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms, pieces: items.EpicPieces);
             var after = rich.Read();
             That(receipt is not null && receipt.Entry.EntryItem == new DungeonRequiredItemRow(RefinedStone, 1, 1) && receipt.Entry.StartFatigue == 10 &&
@@ -309,6 +323,10 @@ internal static class DungeonEntryCostTests
                 after.Revision == before.Revision + 2 && after.DungeonState?.LastAttempt == before.DungeonState!.LastAttempt + 1 &&
                 receipt.Entry.CharacterRevision == after.Revision,
                 "入场提交：扣 1 张 10158964、扣 10 点疲劳、尝试号 +1，同一事务：" + rich.Session.LastFormalDungeonRejection);
+            var source = before.Inventory.Find(new(InventoryListType.Main, 3))!;
+            That(after.Inventory.Find(source.Position) == source with { Core = source.Core with { Durability = 0 } } &&
+                receipt!.FatigueEnergySlots.SequenceEqual([source.Position]),
+                "一次性疲劳10消耗剩余能量7至0，不因能量不足阻止入场，复用原库存提交及角色版本");
             That(Receipts(rich, CharacterFatigueState.StartDungeonRuleId) == 1 && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
                 "入场一次性疲劳写一条 local-start-dungeon-fatigue-v1 账本，不写逐房账本");
             That(rich.Session.EnterFormalDungeon(Tayberrs, 0, difficulty, dungeons, rooms, pieces: items.EpicPieces) is null &&
@@ -316,7 +334,8 @@ internal static class DungeonEntryCostTests
                 "重复入场请求被拒，不再扣票或疲劳");
             var loaded = rich.Session.CompleteFormalDungeonLoading();
             That(loaded is not null && loaded.Snapshot.ConsumedFatigue == 10 && rich.Read().Fatigue == after.Fatigue &&
-                rich.Read().Revision == after.Revision && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
+                loaded.FatigueEnergySlots.IsEmpty && rich.Read().Revision == after.Revision &&
+                rich.Read().Inventory.Items.SequenceEqual(after.Inventory.Items) && Receipts(rich, CharacterFatigueState.NormalRoomRuleId) == 0,
                 "首次房间加载不再逐房扣点，当局应耗疲劳计 10");
             That(rich.Session.CompleteFormalDungeonLoading() is null && rich.Read().Fatigue == after.Fatigue && Stones(rich.Read()) == 1,
                 "重复加载不重复扣");
