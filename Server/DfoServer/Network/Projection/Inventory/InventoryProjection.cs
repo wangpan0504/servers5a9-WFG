@@ -109,7 +109,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
             if (slots.Any(slot => slot.List == InventoryListType.AccountCommon))
-                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
+                await context.Notify(NotiPacketType.ITEM_LIST, town.SpecialFull(context, current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
         }
         else if (plan.Reason == "rune_box_open")
         {
@@ -118,7 +118,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
             if (slots.Any(slot => slot.List == InventoryListType.AccountCommon))
-                await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
+                await context.Notify(NotiPacketType.ITEM_LIST, town.SpecialFull(context, current.Inventory, InventoryListType.AccountCommon), "inventory_committed_full_list", CanSend);
         }
         else if (reloadPersonalCargo)
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_sorted", CanSend);
@@ -134,7 +134,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, emptySlots, index: receipt.Index),
                             "inventory_move_empty", CanSend);
                     await context.Notify(NotiPacketType.ITEM_LIST,
-                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory) : InventoryPackets.SpecialFull(current.Inventory, list),
+                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory) : town.SpecialFull(context, current.Inventory, list),
                         "inventory_move_counts", CanSend);
                 }
                 continue;
@@ -231,7 +231,12 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.AccountMaterialsChanged)
-            await town.AccountMaterialsAsync(context, current, plan.Before.AccountWallet, CanSend);
+            await town.AccountMaterialsAsync(context, current, plan.Before.AccountWallet, CanSend, plan.Before);
+        else if (plan.ChangedSlots.Any(slot => slot.List == InventoryListType.AccountCommon &&
+                (plan.BeforeIndex.Find(slot) is null) != (receipt.Index.Find(slot) is null)) &&
+            plan.Reason is not ("magic_box_open" or "rune_box_open") &&
+            !(rebuildMoveList && silentMoveList == InventoryListType.AccountCommon))
+            await town.SyncCommonCalendarSlotsAsync(context, plan.Before, current, CanSend);
         if (plan.ChangedCurrencies.Contains(DfoServer.Game.Currency.CurrencyKind.Mileage))
         {
             bool gained = (plan.Reason is "mileage_item" or "cash_shop_buy") && current.Inventory.AccountWallet.Mileage > plan.Before.AccountWallet.Mileage;
@@ -295,7 +300,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
             context.Session.Phase == phase && ReferenceEquals(context.Session.Selected, character));
         if (!CanSend())
             return;
-        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(character.Inventory, list), action, CanSend);
+        await context.Notify(NotiPacketType.ITEM_LIST, town.SpecialFull(context, character.Inventory, list), action, CanSend);
         await RestoreLocksAsync(context, character.Inventory,
             character.Inventory.Items.Where(item => item.Position.List == list).Select(item => item.Position), canSend: CanSend);
     }
