@@ -965,6 +965,7 @@ internal static class ServerRuntime
             new EquipmentEffectHandler(new InventoryEquipmentEffectService(itemResources.Items, clock), inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             creatureHandler,
+            new CreatureSealHandler(new Game.Creatures.CreatureSealService(itemResources.Items, itemResources.EpicPieces, clock), inventoryProjection, log),
             new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs, clock: clock), inventoryProjection),
             new ExpertJobHandler(quests, expertJobs, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService, machineDisassembly,

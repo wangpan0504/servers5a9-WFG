@@ -710,7 +710,7 @@ internal sealed partial class ItemCatalog
             CreatureInitialMode = kind == ItemKind.Creature && creatures?.Get(id) is { Egg: false, UsesExperienceItems: true } ? (byte)1 : (byte)0,
             CreatureName = kind == ItemKind.Creature ? creatures?.Get(id)?.Name : null,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
-            AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
+            AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase) || !isEquipment && IsCreatureCapsule(id),
             AccountMaterial = ReadAccountMaterial(id, isEquipment, kind, text, stackLimit),
             AccountCommonItem = !isEquipment && StackableDefinition(id)?.HasCommonInventory == true,
             AccountBoundAfterTrade = accountTrade is not null,
