@@ -268,7 +268,8 @@ internal static class TeleportTcpTests
     { w.Write(town); w.Write(area); w.Write(x); w.Write(y); w.Write((byte)5); }
     sealed class Clock : TimeProvider
     {
-        readonly DateTimeOffset start = DateTimeOffset.UtcNow;
+        // 本组只验证传送冷却，固定在UTC+8中午，避免推进冷却时意外跨越06:00日切。
+        readonly DateTimeOffset start = new(DateTime.UtcNow.Date.AddHours(4), TimeSpan.Zero);
         public TimeSpan Offset;
         public override DateTimeOffset GetUtcNow() => start + Offset;
     }

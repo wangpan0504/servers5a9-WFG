@@ -432,10 +432,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
             if (context.Session.FormalBossRushView() is { } rush)
             {
-                await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_INFO, BossRushPackets.DungeonInfo(rush.Bosses),
+                await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_INFO, BossRushPackets.DungeonInfo(rush.Rooms),
                     "formal_boss_rush_info", Guard);
                 await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(rush.Hud.Rank, rush.Hud.Score, rush.Hud.RemainMilliseconds),
                     "formal_boss_rush_data", Guard);
+                await context.Notify(NotiPacketType.DUNGEON_TIMEOUT_TIME,
+                    BossRushPackets.Timeout(Math.Max(1, (rush.Hud.RemainMilliseconds + 999) / 1000)),
+                    "formal_boss_rush_timeout", Guard);
             }
         }
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
