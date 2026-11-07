@@ -30,8 +30,8 @@ internal static class PvfItemCompatTests
             AttachType.Length: 0, StackableType: "[enchant waste] 0" }, "现场宝珠10094768的限次交易后账号绑定声明进入真实物品模板");
         That(resources.Items.Get(10094771) is { Kind: GameWorld.Items.ItemKind.Profession, AccountBoundAfterTrade: true, AttachType.Length: 0 },
             "同类附魔卡片10094771也按资源声明获得账号仓库资格，不按宝珠类型或编号特判");
-        That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: false, AccountBoundAfterTrade: false } capsule &&
-            capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊按限次交易模板读取，不伪装成无条件账号绑定");
+        That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: true, AccountBoundAfterTrade: false } capsule &&
+            capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊保留限次交易且禁止账号仓库，不伪装成无条件账号绑定");
         foreach (var (id, kind, materialId, cost, declaration) in new[]
         {
             (10161087, ItemKind.Consumable, 10160847, 20, "`character` `agitwarseason` 5"),
