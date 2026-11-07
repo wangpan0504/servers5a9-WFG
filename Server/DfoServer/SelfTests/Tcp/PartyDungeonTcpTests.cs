@@ -31,6 +31,7 @@ internal static partial class PartyDungeonTcpTests
     {
         OrdinaryLukePartyTests.Run(resources);
         DfoServer.Testing.Inventory.SpringTreasureDropTests.RunPartyResources(resources.ItemResources);
+        await RunQuickSlotEnergyAsync(source, root, resources);
         await RunLukeAsync(source, root, resources);
         await RunPreyNormalAsync(source, Path.Combine(root, "party-dungeon"), resources);
         await RunPartyAsync(source, root, resources, 2);
@@ -38,6 +39,130 @@ internal static partial class PartyDungeonTcpTests
         await RunPartyAsync(source, root, resources, 2, rollback: true);
         await RunPartyAsync(source, root, resources, 2, rejectRetry: true);
         await RunDeparturesAsync(source, root, resources);
+    }
+
+    static async Task RunQuickSlotEnergyAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "party-quick-slot-energy"), gm: true, resources: resources);
+        await fixture.StartAsync();
+        That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
+            "组队能量回归使用真实有限疲劳");
+        foreach (bool entryCost in new[] { false, true })
+        {
+            var entrance = entryCost ? OrdinaryLukePartyTests.Entrance(resources) :
+                (Position: new DfoServer.GameWorld.Towns.Location(38, 2, 1085, 249), Completed: new[] { 3145 });
+            using var group = new Coop(fixture, resources, entryCost ? "energyluke" : "energyroom", entrance.Position,
+                entrance.Completed, 95, 2, rewards: [new(400360000, 1), new(2683829, 1)]);
+            var cores = new DfoServer.Game.Inventory.Models.ItemCore[2];
+            var uids = new long[2];
+            var initialFatigue = new long[2];
+            for (int member = 0; member < 2; member++)
+            {
+                var peer = group.Peers[member];
+                var slot = fixture.Query("""
+                    SELECT s.slot_index,i.item_uid FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                    WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=400360000
+                    """, peer.Id).Single();
+                short sourceSlot = Convert.ToInt16(slot[0]);
+                uids[member] = Convert.ToInt64(slot[1]);
+                peer.Send(19, Build(w =>
+                {
+                    w.Write((byte)0); w.Write(sourceSlot); w.Write(400360000); w.Write(0);
+                    w.Write((byte)0); w.Write((short)3); w.Write(0); w.Write(0); w.Write(-1); w.Write((byte)0); w.Write((byte)0);
+                }));
+                peer.Expect(1, 19, Build(w =>
+                { w.Write((byte)1); w.Write((byte)0); w.Write(sourceSlot); w.Write(1); w.Write((byte)0); w.Write((short)3); }));
+                group.All(peer);
+                if (member == 0)
+                {
+                    int chargeSlot = Convert.ToInt32(fixture.Query("""
+                        SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                        WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=2683829
+                        """, peer.Id).Single()[0]);
+                    peer.Send(1113, Build(w => { w.Write(new byte[13]); w.Write(3); w.Write(chargeSlot); }));
+                    peer.Expect(1, 1113, Build(w => { w.Write((byte)1); w.Write(0u); w.Write(3); w.Write(0u); w.Write(100); }));
+                    group.All(peer);
+                }
+                cores[member] = ReadCore(member);
+                initialFatigue[member] = Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);
+            }
+            That(uids[0] != uids[1] && cores[0].Durability == 200 && cores[1].Durability == 100,
+                "两名真实角色持有不同UID和不同能量，避免把队长快照误发队友仍通过");
+            group.Join();
+            group.Open();
+            uint dungeon = entryCost ? 5101u : 3u;
+            group.Peers[0].Send(16, Coop.Selection(dungeon, 0, entryCost ? (byte)2 : (byte)0));
+            var entered = group.All();
+            group.ReadEntry(entered);
+            int charged = entryCost ? 8 : 0;
+            CheckEnergy(entered, charged, entryCost);
+            Load(charged + (entryCost ? 0 : 1), !entryCost);
+            charged += entryCost ? 0 : 1;
+            Replay(charged);
+            if (!entryCost)
+            {
+                var origin = new DungeonPoint(group.Map[0], group.Map[1]);
+                var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[group.Information[7]];
+                group.Clear();
+                var next = maze.StaticTopology.Links!.SelectMany(link => new[] { (link.First, link.Second), (link.Second, link.First) })
+                    .First(edge => edge.Item1 == origin).Item2;
+                CheckEnergy(group.Move((byte)next.X, (byte)next.Y), charged, false);
+                Load(++charged, true);
+                Replay(charged);
+                group.Clear();
+                CheckEnergy(group.Move((byte)origin.X, (byte)origin.Y), charged, false);
+                Load(charged, false);
+                Replay(charged);
+            }
+
+            DfoServer.Game.Inventory.Models.ItemCore ReadCore(int member) => System.Text.Json.JsonSerializer.Deserialize<DfoServer.Game.Inventory.Models.ItemCore>(
+                (string)fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", uids[member])[0][0]!)!;
+            string State() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
+                fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
+            void CheckEnergy(WirePacket[][] rows, int consumed, bool notified)
+            {
+                for (int member = 0; member < 2; member++)
+                {
+                    var deltas = rows[member].Where(packet => packet is { Kind: 0, Opcode: 14 }).ToArray();
+                    That(deltas.Length == (notified ? 1 : 0), "只在本人真实扣能量提交后发送一次N14，不广播队友差量");
+                    int energy = cores[member].Durability - consumed;
+                    if (notified)
+                    {
+                        byte[] body = deltas[0].Body;
+                        That(body.Length == 126 && body[0] == 0 && U16(body, 1) == 1 && U16(body, 3) == 3 &&
+                            U32(body, 5) == 400360000 && U16(body, 14) == energy && U32(body, 9) == (uint)cores[member].Value,
+                            "每个连接N14独立消费本人快捷格、品级及实际剩余能量");
+                    }
+                    That(ReadCore(member) == cores[member] with { Durability = checked((ushort)energy) } &&
+                        fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=3", group.Peers[member].Id)
+                            is [[long uid]] && uid == uids[member] &&
+                        Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", group.Peers[member].Id)[0][0]) == initialFatigue[member] - consumed,
+                        "真实库同时保持本人UID完整核心，能量与疲劳按实际费用一致扣除");
+                }
+            }
+            void Load(int consumed, bool notified)
+            {
+                string before = State();
+                group.Peers[0].Send(37, new byte[8]);
+                var waiting = group.All();
+                That(waiting.All(rows => rows.All(packet => packet is not { Kind: 0, Opcode: 14 or 30 })) && State() == before,
+                    "组队加载屏障未齐不扣能量、不发能量差量或释放帧");
+                group.Peers[1].Send(37, new byte[8]);
+                var loaded = group.All(group.Peers[1]);
+                That(loaded.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 30 })), "两个真实连接共同释放加载屏障");
+                CheckEnergy(loaded, consumed, notified);
+            }
+            void Replay(int consumed)
+            {
+                string before = State();
+                foreach (var peer in group.Peers)
+                {
+                    peer.Send(37, new byte[8]);
+                    CheckEnergy(group.All(peer), consumed, false);
+                }
+                That(State() == before, "两连接重复37和旧房回访均不重复扣费或发布能量差量");
+            }
+        }
     }
 
     static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources, int count, bool rollback = false,
