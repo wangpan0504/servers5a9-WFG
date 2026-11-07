@@ -96,6 +96,36 @@ internal static class InventoryBehaviorTests
         LoginWearRestatement();
         AvatarEmptyTargetEcho();
         ExpiredEquipmentMove();
+        MainSlotOrderSort();
+    }
+
+    static void MainSlotOrderSort()
+    {
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var equipmentSnapshot = new InventorySnapshot([
+            new(11, Bag(11), new(200, ItemKind.Equipment, 10)),
+            new(12, Bag(10), new(300, ItemKind.Equipment, 10) { SortLockFlag = 1 }),
+            new(13, Bag(14), new(100, ItemKind.Equipment, 10))
+        ]);
+        var sortedEquipment = InventorySortService.Plan(equipmentSnapshot, ItemKind.Equipment, 0, catalog, 0);
+        Testing.TestCheck.That(sortedEquipment.Accepted &&
+            sortedEquipment.Plan!.After.Find(Bag(9))?.Uid == 11 &&
+            sortedEquipment.Plan.After.Find(Bag(10))?.Uid == 12 &&
+            sortedEquipment.Plan.After.Find(Bag(11))?.Uid == 13 &&
+            !InventorySortService.Plan(sortedEquipment.Plan.After, ItemKind.Equipment, 0, catalog, 0).Plan!.Changed,
+            "Main装备按栏位整理(condition=0)保持原槽位先后紧凑填空，不按ItemId重排");
+        var consumableSnapshot = new InventorySnapshot([
+            new(21, Bag(67), new(400, ItemKind.Consumable, 3)),
+            new(22, Bag(66), new(500, ItemKind.Consumable, 2) { SortLockFlag = 1 }),
+            new(23, Bag(70), new(100, ItemKind.Consumable, 5))
+        ]);
+        var sortedConsumable = InventorySortService.Plan(consumableSnapshot, ItemKind.Consumable, 0, catalog, 0);
+        Testing.TestCheck.That(sortedConsumable.Accepted &&
+            sortedConsumable.Plan!.After.Find(Bag(65))?.Uid == 21 &&
+            sortedConsumable.Plan.After.Find(Bag(66))?.Uid == 22 &&
+            sortedConsumable.Plan.After.Find(Bag(67))?.Uid == 23 &&
+            !InventorySortService.Plan(sortedConsumable.Plan.After, ItemKind.Consumable, 0, catalog, 0).Plan!.Changed,
+            "Main消耗品按栏位整理(condition=0)保持原槽位先后紧凑填空，不按ItemId重排");
     }
 
     // 选角入城后客户端会把已穿武器复述一次：Main空源格（编号0，数量1）→ Equipment/12 目标编号一致。
@@ -273,6 +303,31 @@ internal static class InventoryBehaviorTests
         var unpinned = lockedGear with { Core = lockedGear.Core with { SortLockFlag = 0 } };
         var sorted = service.Sort(character with { Inventory = new([unpinned]) }, ItemKind.Equipment, 0);
         check(sorted.Accepted && sorted.Plan!.After.Find(Bag(9)) == unpinned with { Position = Bag(9) }, "equipment safety lock does not block sorting");
+        var secondGear = new InventoryItem(203, Bag(14), gear with { ItemId = Math.Max(1, gear.ItemId - 1), SortLockFlag = 0 });
+        var pinnedMiddle = new InventoryItem(204, Bag(10), gear with { SortLockFlag = 1 });
+        var slotOrderedEquipment = service.Sort(character with
+        {
+            Inventory = new([unpinned with { Position = Bag(11) }, pinnedMiddle, secondGear])
+        }, ItemKind.Equipment, 0);
+        check(slotOrderedEquipment.Accepted &&
+            slotOrderedEquipment.Plan!.After.Find(Bag(9))?.Uid == unpinned.Uid &&
+            slotOrderedEquipment.Plan.After.Find(Bag(10))?.Uid == pinnedMiddle.Uid &&
+            slotOrderedEquipment.Plan.After.Find(Bag(11))?.Uid == secondGear.Uid,
+            "equipment condition 0 compacts empty slots in original slot order without reordering by item ID");
+        check(!service.Sort(character with { Inventory = slotOrderedEquipment.Plan!.After }, ItemKind.Equipment, 0).Plan!.Changed,
+            "equipment condition 0 is a no-op once slots are already compact");
+        var higherConsumable = new InventoryItem(205, Bag(67), InventoryRewardGrantService.Create(ordinary[1]!, 3));
+        var lowerConsumable = new InventoryItem(206, Bag(70), InventoryRewardGrantService.Create(ordinary[0]!, 5));
+        var pinnedConsumable = new InventoryItem(207, Bag(66), InventoryRewardGrantService.Create(ordinary[0]!, 2) with { SortLockFlag = 1 });
+        var slotOrderedConsumable = service.Sort(character with
+        {
+            Inventory = new([higherConsumable, pinnedConsumable, lowerConsumable])
+        }, ItemKind.Consumable, 0);
+        check(slotOrderedConsumable.Accepted &&
+            slotOrderedConsumable.Plan!.After.Find(Bag(65))?.Uid == higherConsumable.Uid &&
+            slotOrderedConsumable.Plan.After.Find(Bag(66))?.Uid == pinnedConsumable.Uid &&
+            slotOrderedConsumable.Plan.After.Find(Bag(67))?.Uid == lowerConsumable.Uid,
+            "consumable condition 0 compacts empty slots in original slot order without reordering by item ID");
         var fallback = service.Sort(character with { Inventory = new([unpinned]) }, ItemKind.Equipment, 255);
         check(fallback.Accepted && fallback.Plan!.After.Items.SequenceEqual(sorted.Plan!.After.Items), "unknown sorting condition falls back to default");
         var expired = lockedGear with { Core = lockedGear.Core with { ExpireTime = 1 } };

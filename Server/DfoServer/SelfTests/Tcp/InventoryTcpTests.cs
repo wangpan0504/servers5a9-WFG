@@ -266,20 +266,36 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 19, [0, 23, 0, 0, 3]);
             peer.Barrier();
             That(Snapshot(fixture) == beforeReplay, "replayed equip is read-only and keeps connection");
-            peer.Send(19, MoveItem(0, 9, 0, 1, 3, 12, weaponId));
-            peer.Expect(1, 19, MoveAck(0, 9, 1, 3, 12));
+            peer.Send(19, MoveItem(0, 10, 0, 1, 3, 12, weaponId));
+            peer.Expect(1, 19, MoveAck(0, 10, 1, 3, 12));
             DeltaAndAppearance(peer, 4, reloadMain: true);
-            peer.Send(19, MoveItem(0, 10, 0, 1, 3, 17, pantsId));
-            peer.Expect(1, 19, MoveAck(0, 10, 1, 3, 17));
+            peer.Send(19, MoveItem(0, 12, 0, 1, 3, 17, pantsId));
+            peer.Expect(1, 19, MoveAck(0, 12, 1, 3, 17));
             DeltaAndAppearance(peer, 3, reloadMain: true);
             peer.Send(20, Convert.FromHexString("06000000100018012000"));
+            peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
+            var slotCleared = peer.Expect(0, 1681).Body;
+            var slotSorted = peer.Expect(0, 1681).Body;
+            That(slotCleared.Length == 249 && U16(slotCleared, 3) == 9 && U32(slotCleared, 5) == uint.MaxValue &&
+                U16(slotCleared, 126) == 10 && U32(slotCleared, 128) == uint.MaxValue,
+                "按栏位整理先清空目标非空槽，保留重新载入图标effect");
+            That(slotSorted.Length == 372 && U16(slotSorted, 3) == 9 && U32(slotSorted, 5) == 101010912 &&
+                U16(slotSorted, 126) == 10 && U32(slotSorted, 128) == 18400 &&
+                U16(slotSorted, 249) == 12 && U32(slotSorted, 251) == uint.MaxValue,
+                "装备按栏位整理(condition=0)保持原槽位先后向前紧凑填空，不按ItemId重排");
+            string afterSlotSort = Snapshot(fixture);
+            peer.Send(20, Convert.FromHexString("06000000100018012000"));
+            peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
+            peer.Barrier();
+            That(Snapshot(fixture) == afterSlotSort, "已紧凑的装备页重复按栏位整理为零变化，仅回ACK");
+            peer.Send(20, Convert.FromHexString("06000000100018012001"));
             peer.Expect(1, 20, Convert.FromHexString("010400000008001000"));
             var cleared = peer.Expect(0, 1681).Body;
             var sorted = peer.Expect(0, 1681).Body;
             That(cleared.Length == 249 && U32(cleared, 5) == uint.MaxValue && U32(cleared, 128) == uint.MaxValue,
                 "整理先用无播报差量清槽，后续重新载入仍可标记获得图标effect");
             That(U32(sorted, 5) == 18400 && U32(sorted, 128) == 101010912,
-                "装备整理使用1681保持完整对象和排序，不走获得播报或13全量载入");
+                "装备按品级整理(condition=1)使用1681保持完整对象和排序，不走获得播报或13全量载入");
             byte[] discard = DeleteItem(9, quality);
             peer.Send(18, discard);
             peer.Expect(1, 18, Convert.FromHexString("010C000000080012060809100118001800"));
