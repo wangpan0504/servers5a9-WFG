@@ -9,12 +9,16 @@ namespace DfoServer.Game.Dungeons;
 internal static class DungeonPickupPlanning
 {
     // 这里只规划资产；当前Run、本房key和同一准备仍由Session/地面owner复核。
-    public static InventoryResult Gold(Character character, DungeonGroundContent content, GoldLimitCatalog limits)
+    public static InventoryResult Gold(Character character, DungeonGroundContent content, GoldLimitCatalog limits,
+        DateTimeOffset? now = null, TimeProvider? clock = null)
     {
         content.Validate();
         if (!content.IsGold)
             throw new InvalidDataException("物品地面对象不能借金币拾取入口改写余额");
-        return Currency(character, CurrencyKind.Gold, content.GoldAmount, limits);
+        var reward = EquipmentGoldBonusPolicy.Capture(character, content.GoldAmount,
+            (now ?? (clock ?? TimeProvider.System).GetUtcNow()).ToUnixTimeSeconds());
+        if (reward.Amount > int.MaxValue) return InventoryResult.Reject(17);
+        return Currency(character, CurrencyKind.Gold, (int)reward.Amount, limits, reward.ExpiresAt, clock);
     }
 
     public static InventoryResult Item(Character character, DungeonGroundContent content, ItemTemplate template,
@@ -54,13 +58,14 @@ internal static class DungeonPickupPlanning
         return InventoryRewardGrantService.TryGrantCore(character, core, template, pieces, now, usePickupSlotPolicy: true);
     }
 
-    static InventoryResult Currency(Character character, CurrencyKind kind, int amount, GoldLimitCatalog limits)
+    static InventoryResult Currency(Character character, CurrencyKind kind, int amount, GoldLimitCatalog limits,
+        long? expiresAt = null, TimeProvider? clock = null)
     {
         var result = new CurrencyService(limits).Grant(character, kind, amount);
         if (!result.Accepted || result.Plan is not { } plan ||
             CurrencyWallet.Get(plan.After, kind) - CurrencyWallet.Get(plan.Before, kind) != amount)
             return InventoryResult.Reject(17);
         // 地面来源只有一份正增量；携带上限不足时保留整件，不消费被夹掉的剩余资产。
-        return result with { Plan = new(plan.Before, plan.After, "dungeon_pickup_currency", new(character)) };
+        return result with { Plan = new(plan.Before, plan.After, "dungeon_pickup_currency", new(character, expiresAt, clock)) };
     }
 }

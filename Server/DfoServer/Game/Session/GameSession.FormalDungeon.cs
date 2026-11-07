@@ -1678,7 +1678,7 @@ internal sealed partial class GameSession
             plan = InventoryRewardGrantService.TryGrantItems(Selected, [new(0, new(InventoryListType.Main, 0), original.Core)],
                 items, goldLimits, pieces, now);
         else if (goldLimits is not null && (original.UsesCollectionLedger || !original.IsGold && pieces.ByPiece.ContainsKey(original.Core.ItemId)))
-            plan = original.IsGold ? DungeonPickupPlanning.Gold(Selected, original.Content, goldLimits) :
+            plan = original.IsGold ? DungeonPickupPlanning.Gold(Selected, original.Content, goldLimits, now) :
                 DungeonPickupPlanning.Item(Selected, original.Content, items.Get(original.Core.ItemId), goldLimits, pieces, now);
         else
             plan = original.IsGold ? InventoryResult.Reject() :

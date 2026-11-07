@@ -29,7 +29,7 @@ internal sealed partial class CharacterRepository
                     committed.Inventory.AccountWallet.Material(ground.Core.ItemId).Balance,
                     committed.Inventory.AccountWallet.Revision) : null;
             SaveFrozenPickup(db, tx, owner, committed, prepared, entry.Destination, item?.Uid ?? 0, item?.Core,
-                entry.Currency, ground.IsGold ? ground.GoldAmount : ground.Core.Count, piece, material);
+                entry.Currency, entry.Amount, piece, material);
         }
         return new(plan.Entries.Select(entry => entry.Ground.Reservation.GroundKey).ToImmutableArray(),
             plan.Entries.Where(entry => entry.Currency is null && entry.EpicPieceIndex is null && !entry.AccountMaterial)

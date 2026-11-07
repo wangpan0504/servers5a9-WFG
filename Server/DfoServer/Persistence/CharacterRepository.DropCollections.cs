@@ -72,7 +72,13 @@ internal sealed partial class CharacterRepository
         ItemTemplate? template = null;
         if (!ground.IsGold && items is not null) items.TryGet(ground.Core.ItemId, out template);
         var material = template?.AccountMaterial;
-        int amount = ground.IsGold ? ground.GoldAmount : ground.Core.Count;
+        // 地面保留原金额；首笔提交复验穿戴加成，回执保存本次实际到账量。
+        if (plan.CharacterPrecondition?.IsExpired() == true) throw new InventoryQualificationExpiredException();
+        long awarded = ground.IsGold
+            ? EquipmentGoldBonusPolicy.Capture(expected, ground.GoldAmount, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).Amount
+            : ground.Core.Count;
+        if (awarded > int.MaxValue) throw new InvalidDataException("金币拾取的实际增量越界");
+        int amount = (int)awarded;
         InventorySlot destination = new(InventoryListType.Main, 0);
         if (piece is not null)
         {
