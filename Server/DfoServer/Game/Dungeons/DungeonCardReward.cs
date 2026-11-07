@@ -70,6 +70,10 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     {
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
+        // 英雄专表不参与普通装备和金币抽样，限次只限制领奖，不阻止再次入场。
+        if (dungeon.IsEvildomWarChallenge)
+            return EvildomWarChallengeRewardPolicy.Prepare(dungeon, prices, ClearRewardLimits, items,
+                utcNow ?? DateTimeOffset.UtcNow, clearRewardUsage ?? default);
         var gold = rules.GoldReferences.SingleOrDefault(row => row.Level == level);
         if (gold.Level == 0)
             throw new NotSupportedException("当前副本等级缺少翻牌金币引用");
