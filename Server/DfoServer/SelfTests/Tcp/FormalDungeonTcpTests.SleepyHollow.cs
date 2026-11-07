@@ -59,8 +59,10 @@ internal static partial class FormalDungeonTcpTests
             {
                 ushort key = U16(map, offset + 6);
                 var report = Death(key, peer.Id, map[offset + 12]);
+                var adventureBefore = AdventureProgressSnapshot(fixture, peer);
                 peer.Send(39, report);
                 var death = peer.Expect(0, 38).Body;
+                ExpectAdventureProgressIfChanged(fixture, resources, peer, adventureBefore);
                 That(U16(death, 0) == key, "真实39报告后的38掉落通知绑定实际怪物key");
                 bool boss = map[offset + 13] == 3;
                 int dropJunk = 0, dropSeeds = 0;

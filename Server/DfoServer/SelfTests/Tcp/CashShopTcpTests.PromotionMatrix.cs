@@ -459,9 +459,9 @@ internal static partial class CashShopTcpTests
                     .Select(row => (long)row[0]!).SequenceEqual(Enumerable.Range(5000, purchases).Select(number => (long)number)) &&
                 mails.Length == purchases && mails.Select(mail => mail.Id).Distinct().Count() == purchases &&
                 mails.All(mail => mail.RecipientId == characterId && mail.System && mail.Expires is null && mail.Attachments.Length == 1 &&
-                    mail.Attachments[0].Item.Uid > 0 && mail.Attachments[0].Item.Core.ItemId == 490705415 && mail.Attachments[0].Item.Core.Count == 1) &&
+                    mail.Attachments[0].Item.Uid > 0 && mail.Attachments[0].Item.Core.ItemId == 490705449 && mail.Attachments[0].Item.Core.Count == 1) &&
                 mails.SelectMany(mail => mail.Attachments).Select(attachment => attachment.Item.Uid).Distinct().Count() == purchases,
-                "仅第5000套一笔合法新单、一封永久415×1邮件和独立UID，不漏发或多发");
+                "仅第5000套一笔合法新单、一封永久449×1邮件和独立UID，不漏发或多发");
         }
         void MainPacket(byte[] body, bool full, IEnumerable<InventoryItem> expected)
         {
@@ -478,10 +478,10 @@ internal static partial class CashShopTcpTests
             var main = SavedCharacter().Inventory.Items.Where(item => item.Core.ItemId == 490705385).ToArray();
             MainPacket(packets.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body, true, main);
             var summaries = peer.Mailbox.SelectMany(body => MailboxTcpTests.ReadList(body).Summaries).ToArray();
-            That(summaries.Length == purchases && summaries.All(summary => summary.ItemId == 490705415 &&
-                    U32(summary.Core, 2) == 490705415 && U32(summary.Core, 6) == 1) &&
+            That(summaries.Length == purchases && summaries.All(summary => summary.ItemId == 490705449 &&
+                    U32(summary.Core, 2) == 490705449 && U32(summary.Core, 6) == 1) &&
                 summaries.Select(summary => summary.MailId).Order().SequenceEqual(Mails().Select(mail => mail.Id).Order()),
-                "真实登录邮箱包恢复同一批415邮件及数量，不以只读仓储代替网络重连");
+                "真实登录邮箱包恢复同一批449邮件及数量，不以只读仓储代替网络重连");
             peer.Barrier();
             Readback(purchases);
         }
@@ -524,13 +524,13 @@ internal static partial class CashShopTcpTests
             peer.Barrier();
             var after = PromotionDelivered(fixture, "10000");
             VerifyPromotionDelivery(before, after, peer.Id);
-            var expected = new Dictionary<int, long> { [490705385] = 1, [490705415] = 1 };
+            var expected = new Dictionary<int, long> { [490705385] = 1, [490705449] = 1 };
             foreach (var bonus in bonuses)
                 if (CurrencyWallet.RewardKind(bonus.ItemId) is null)
                     expected[bonus.ItemId] = expected.GetValueOrDefault(bonus.ItemId) + bonus.Count;
             That(before.Quantities.Keys.Concat(after.Quantities.Keys).Concat(expected.Keys).Distinct().All(id =>
                     after.Quantities.GetValueOrDefault(id) - before.Quantities.GetValueOrDefault(id) == expected.GetValueOrDefault(id)),
-                "主货和原固定bonus及415全量交付，不提前发385内部奖或遗留孤立UID");
+                "主货和原固定bonus及第5000套449全量交付，不提前发385内部奖或遗留孤立UID");
             Readback(index + 1);
         }
     }

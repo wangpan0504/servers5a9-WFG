@@ -58,6 +58,20 @@ internal static class EpicRoad2019SimulatedDropTests
         var hard = policy.Extend(materialPlan, entry with { DungeonId = 400000098 }, monster);
         That(hard.Trials[0] is { Threshold: 6, ProbabilityDenominator: 10 } && hard.Trials[0].ItemCounts![490013716] == 2,
             "超星河兑换材料概率乘三，数量保持");
+        foreach (decimal factor in new[] { 0m, 1m, 2m, 100m })
+        foreach (uint id in new uint[] { 400000097, 400000098 })
+        {
+            var rates = new DungeonDropMultipliers(Equipment: factor, Special: 2);
+            var controlled = DungeonDropControlSnapshot.Apply(materialPlan, rates);
+            var extendedPlan = policy.Extend(controlled, entry with { DungeonId = id }, monster);
+            int denominator = id == 400000097 ? 5 : 1;
+            That(extendedPlan.Trials[^1].Threshold == Math.Min(denominator, (int)factor) &&
+                extendedPlan.Trials[^1].ProbabilityDenominator == denominator && extendedPlan.DropMultipliers == rates,
+                "活动追加装备应用同一入场Equipment快照，零关闭，必掉仍最多一件");
+            That(extendedPlan.Trials[0].Threshold == (id == 400000097 ? 4 : 10) &&
+                extendedPlan.Trials[0].ItemCounts![490013716] == (id == 400000097 ? 10 : 2),
+                "材料仍先按原分类倍率再执行活动数量或概率规则，不重复计算");
+        }
         var capped = policy.Extend(new("cap", [materialTrial with { Threshold = 4 }, materialTrial with { Threshold = 0 }]),
             entry with { DungeonId = 400000098 }, monster);
         That(capped.Trials[0].Threshold == 10 && capped.Trials[1].Threshold == 0,
@@ -120,8 +134,15 @@ internal static class EpicRoad2019SimulatedDropTests
         control.Replace([new(DungeonDropScope.All, [], new(Equipment: 0))], true);
         var controlled = new DungeonResourceDropPolicy(rules, DungeonItemDropCatalog.Create([]),
             id => new(id, "monster/simulated.mob", null, null), _ => gear, dropControl: control, epicRoadSimulated: policy);
-        That(controlled.PrepareEntry(entry)(monster).Trials[^1] is { Threshold: 1, ProbabilityDenominator: 5 },
-            "普通模拟20%独立于通用掉率倍率");
+        var frozen = controlled.PrepareEntry(entry);
+        control.Replace([new(DungeonDropScope.All, [], new(Equipment: 2))], true);
+        That(frozen(monster).Trials[^1] is { Threshold: 0, ProbabilityDenominator: 5 } &&
+            controlled.PrepareEntry(entry)(monster).Trials[^1] is { Threshold: 2, ProbabilityDenominator: 5 },
+            "普通模拟20%接入Equipment，热改只影响下一次入场，旧缓存尚未生成也使用原快照");
+        control.Replace([new(DungeonDropScope.All, [400000098], new(Equipment: 0))], true);
+        That(controlled.PrepareEntry(entry)(monster).Trials[^1] is { Threshold: 1, ProbabilityDenominator: 5 } &&
+            controlled.PrepareEntry(entry with { DungeonId = 400000098 })(monster).Trials[^1].Threshold == 0,
+            "活动沿用明确副本集合，集合外不借其它图的零倍率");
     }
 
     public static void RunResources(PvfArchive pvf, ItemResources items)

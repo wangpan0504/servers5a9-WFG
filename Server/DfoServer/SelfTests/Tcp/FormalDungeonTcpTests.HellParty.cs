@@ -268,6 +268,7 @@ internal static partial class FormalDungeonTcpTests
                     fixture.Query("SELECT amount,monster_level FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key)
                         is [[long amount, long monsterLevel]] && amount > 0 && monsterLevel == map[offset + 12],
                     "超星空满级死亡不增加角色XP但真实熟练度与死亡来源正确落库");
+                ExpectAdventureProgress(fixture, resources, peer);
                 if (boss)
                 {
                     bossId = checked((int)U32(map, offset + 8));

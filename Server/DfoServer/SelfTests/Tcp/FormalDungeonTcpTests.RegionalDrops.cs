@@ -60,8 +60,10 @@ internal static partial class FormalDungeonTcpTests
                 {
                     ushort key = U16(map, offset + 6);
                     var report = Death(key, peer.Id, map[offset + 12]);
+                    var adventureBefore = AdventureProgressSnapshot(fixture, peer);
                     peer.Send(39, report);
                     var death = peer.Expect(0, 38).Body;
+                    ExpectAdventureProgressIfChanged(fixture, resources, peer, adventureBefore);
                     int seeds = 0;
                     for (int index = 0; index < U16(death, 2); index++)
                     {

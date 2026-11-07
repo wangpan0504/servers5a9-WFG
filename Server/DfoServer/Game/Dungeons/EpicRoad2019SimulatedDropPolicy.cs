@@ -31,14 +31,15 @@ internal sealed class EpicRoad2019SimulatedDropPolicy
     {
         if (!Matches(entry, monster)) return plan;
         return new(plan.ResourceSource + ";" + Rule,
-            plan.Trials.Select(AdjustMaterial).Append(new(1, equipment, 1, 1,
+            plan.Trials.Select(AdjustMaterial).Append(DungeonDropControlSnapshot.ApplyTrial(new(1, equipment, 1, 1,
                 ProbabilityDenominator: entry.DungeonId == 400000097 ? 5 : 1,
-                Category: DungeonDropCategory.Equipment, EpicRoad2019Simulated: true)),
+                Category: DungeonDropCategory.Equipment, EpicRoad2019Simulated: true), plan.DropMultipliers)),
             plan.ReferenceQuality, plan.Amplification)
         {
             OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource,
             ExcludeLowEquipment = plan.ExcludeLowEquipment,
-            ExcludeLowMaterials = plan.ExcludeLowMaterials
+            ExcludeLowMaterials = plan.ExcludeLowMaterials,
+            DropMultipliers = plan.DropMultipliers
         };
 
         DungeonDropTrial AdjustMaterial(DungeonDropTrial trial)

@@ -1493,6 +1493,41 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
+    static void ExpectAdventureProgress(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer)
+        => AssertAdventureProgress(fixture, resources, peer, peer.Expect(0, 1349));
+
+    static (uint Level, ulong Experience, ulong CapsuleExperience) AdventureProgressSnapshot(TcpTestFixture fixture, TcpPeer peer)
+    {
+        var progress = fixture.Query("""
+            SELECT a.level,a.experience,a.capsule_experience FROM account_adventures a
+            JOIN characters c ON c.account=a.account WHERE c.id=$p0
+            """, peer.Id).Single();
+        return (Convert.ToUInt32(progress[0]), Convert.ToUInt64(progress[1]), Convert.ToUInt64(progress[2]));
+    }
+
+    static void ExpectAdventureProgressIfChanged(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer,
+        (uint Level, ulong Experience, ulong CapsuleExperience) before)
+    {
+        if (AdventureProgressSnapshot(fixture, peer) != before)
+            ExpectAdventureProgress(fixture, resources, peer);
+    }
+
+    static void AssertAdventureProgress(TcpTestFixture fixture, TcpTestResources resources, TcpPeer peer, WirePacket packet)
+    {
+        That(packet is { Kind: 0, Opcode: 1349 }, "冒险团进度保留通知类型及编号");
+        var body = packet.Body;
+        var progress = fixture.Query("""
+            SELECT a.level,a.experience,a.capsule_experience FROM account_adventures a
+            JOIN characters c ON c.account=a.account WHERE c.id=$p0
+            """, peer.Id).Single();
+        That(body.Length == 50 && U16(body, 0) == peer.Id && U32(body, 2) == 40 &&
+            U32(body, 6) == Convert.ToUInt32(progress[0]) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(14)) == Convert.ToUInt64(progress[1]) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(22)) == resources.Adventure.Experience.GetValueOrDefault(Convert.ToInt32(progress[0]) + 1) &&
+            BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(30)) == Convert.ToUInt64(progress[2]),
+            "逐怪进度通知绑定本次角色及其账号真实已提交冒险团状态");
+    }
+
     static ulong Experience(TcpTestFixture fixture, ushort id) => checked((ulong)Convert.ToInt64(fixture.Query("SELECT experience FROM characters WHERE id=$p0", id)[0][0]));
     static int PickupResourceDrops(TcpTestFixture fixture, TcpPeer peer, byte[] death, uint questId, TcpTestResources resources)
     {
@@ -1759,6 +1794,7 @@ internal static partial class FormalDungeonTcpTests
                     }
                     else Bytes(death.AsSpan(tail).ToArray(),[0,0,255,0,0],"普通死亡不混入Boss坐标更新");
                     peer.Expect(0,37);
+                    ExpectAdventureProgress(fixture, resources, peer);
                     if (template == 1077)
                     {
                         That(map[at+13] == 3 && current == goal && advances == 2,"两次dummy标记推进后才抵达唯一真Boss");

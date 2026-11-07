@@ -191,6 +191,11 @@ internal static partial class FormalDungeonTcpTests
 
                 void Observe(WirePacket packet)
                 {
+                    if (packet is { Kind: 0, Opcode: 1349 })
+                    {
+                        AssertAdventureProgress(fixture, resources, peer, packet);
+                        return;
+                    }
                     That(packet is { Kind: 0, Opcode: 36 or 115 or 31 or 261 or 789 or 747 }, "深渊清房只接收明确的原业务通知和碎片NPC通知");
                     if (packet.Opcode == 747)
                     {

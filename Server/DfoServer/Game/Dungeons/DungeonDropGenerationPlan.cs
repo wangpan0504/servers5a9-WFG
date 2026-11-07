@@ -17,7 +17,16 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false,
     DungeonItemDropPool? EpicReplacementItems = null, DungeonDropCategory Category = DungeonDropCategory.Special,
     ImmutableDictionary<int, int>? ItemStackSizes = null,
-    ImmutableHashSet<int>? DisjointForbiddenRarities = null, bool EpicRoad2019Simulated = false);
+    ImmutableHashSet<int>? DisjointForbiddenRarities = null, bool EpicRoad2019Simulated = false,
+    DungeonEpicDropAdjustment? EpicAdjustment = null)
+{
+    public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
+    {
+        Threshold = (int)Math.Min(ProbabilityDenominator, (long)Threshold * numerator / denominator),
+        EpicAdjustment = EpicAdjustment is { } adjustment
+            ? adjustment with { EpicThreshold = adjustment.EpicThreshold * numerator / denominator } : null
+    };
+}
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -30,6 +39,7 @@ internal sealed class DungeonDropGenerationPlan
     public int? OrdinaryLukeDailySource { get; init; }
     public bool ExcludeLowEquipment { get; init; }
     public bool ExcludeLowMaterials { get; init; }
+    public DungeonDropMultipliers? DropMultipliers { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
     public DungeonDropGenerationPlan WithDisjointRestrictions(ImmutableHashSet<int> rarities)
     {
@@ -38,7 +48,7 @@ internal sealed class DungeonDropGenerationPlan
         {
             DisjointForbiddenRarities = (trial.DisjointForbiddenRarities ?? ImmutableHashSet<int>.Empty).Union(rarities)
         }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource,
-            ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials };
+            ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
     }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
     // added/scale：1136 为百分数（100/100）；星空 1271 为万分比（6520/10000）。
@@ -74,15 +84,15 @@ internal sealed class DungeonDropGenerationPlan
             changed = true;
             return trial with { RarityPools = adjusted.ToImmutable() };
         }).ToImmutableArray();
-        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials } : this;
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers } : this;
     }
 
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
     {
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
-        return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial : trial with
-        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials };
+        return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial :
+            trial.WithChanceBonus(100L + percent, 100)), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
     }
 
     public DungeonDropGenerationPlan WithAntoniumDropBonus(int basisPoints)
@@ -94,15 +104,12 @@ internal sealed class DungeonDropGenerationPlan
         return new(ResourceSource, Trials.Select(trial =>
             trial.Items?.Entries.Any(row => row.Template.Id == Adventure.AdventureBenefitPolicy.AntoniumItemId) != true
                 ? trial
-                : trial with
-                {
-                    Threshold = (int)Math.Min(trial.ProbabilityDenominator,
-                        (long)trial.Threshold * (10000L + basisPoints) / 10000L)
-                }), ReferenceQuality, Amplification)
+                : trial.WithChanceBonus(10000L + basisPoints, 10000)), ReferenceQuality, Amplification)
         {
             OrdinaryLukeDailySource = OrdinaryLukeDailySource,
             ExcludeLowEquipment = ExcludeLowEquipment,
-            ExcludeLowMaterials = ExcludeLowMaterials
+            ExcludeLowMaterials = ExcludeLowMaterials,
+            DropMultipliers = DropMultipliers
         };
     }
 
@@ -124,6 +131,9 @@ internal sealed class DungeonDropGenerationPlan
                 trial.DisjointForbiddenRarities?.Any(rarity => rarity is < 0 or > 6) == true ||
                 sources != 1 || trial.GoldMultiplier <= 0 || trial.ReferenceGold && trial.Gold is null || trial.Attempts is < 1 or > ushort.MaxValue)
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
+            if (trial.EpicAdjustment is { } adjustment && (trial.Items is null || trial.Items.TotalWeight <= 0 ||
+                adjustment.EpicThreshold < 0 || !trial.Items.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template))))
+                throw new InvalidDataException("史诗混池倍率须绑定原直接候选及非负概率");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
                 Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.CandidatePools).ToArray();
             if (!trial.RarityPools.IsDefaultOrEmpty && trial.RarityPools.Any(row => row.AlternatePermille is < 0 or > 1000 ||
@@ -197,7 +207,13 @@ internal sealed class DungeonDropGenerationPlan
             if (!epicRoad2019Available && trial.EpicRoad2019Simulated) continue;
             // 参考服先计算金币波动，再判定金币概率；即使未命中也保留这一抽样次序。
             int? preparedGold = trial.ReferenceGold ? GoldAmount(trial) : null;
-            if (Sample(trial.ProbabilityDenominator) >= trial.Threshold)
+            ItemTemplate? adjustedTemplate = null;
+            if (trial.EpicAdjustment is { } adjustment)
+            {
+                adjustedTemplate = adjustment.Select(trial, Sample);
+                if (adjustedTemplate is null) continue;
+            }
+            else if (Sample(trial.ProbabilityDenominator) >= trial.Threshold)
                 continue;
             int count = trial.MinimumCount == trial.MaximumCount ? trial.MinimumCount :
                 trial.MinimumCount + Sample(trial.MaximumCount - trial.MinimumCount + 1);
@@ -221,9 +237,9 @@ internal sealed class DungeonDropGenerationPlan
                     branch < rarity.AlternatePermille + rarity.SecondaryPermille ? rarity.SecondaryItems : rarity.Items;
             }
             // 明确空候选池不会制造另一类别；参考回退已在资源准备阶段处理。
-            if (pool!.TotalWeight == 0)
+            if (adjustedTemplate is null && pool!.TotalWeight == 0)
                 continue;
-            var template = pool.Select(Sample(pool.TotalWeight));
+            var template = adjustedTemplate ?? pool!.Select(Sample(pool.TotalWeight));
             // 禁用的品质只冻结为空；不重抽、不把垃圾转为史诗，也不改变其它候选的中奖概率。
             if (ExcludeLowEquipment && template is { Kind: ItemKind.Equipment, Rarity: >= 0 and <= 3 } ||
                 ExcludeLowMaterials && template is { Kind: ItemKind.Material, Rarity: 0 or 1 })

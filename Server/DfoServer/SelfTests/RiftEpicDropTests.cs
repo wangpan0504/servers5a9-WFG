@@ -22,6 +22,33 @@ internal static class RiftEpicDropTests
         var refined = fragment with { Id = DungeonRiftEpicDropPolicy.RefinedTerraniumId };
         var fragmentPool = new DungeonItemDropPool([new DungeonWeightedDropItem(fragment, 1)]);
         var dawnPool = new DungeonItemDropPool([new DungeonWeightedDropItem(harlem, 11)]);
+        var namedMap = basis.BossMap with { Id = RiftNamedEpicDropPolicy.DaybreakBossMapId, Kind = "boss" };
+        var namedEntry = basis with { DungeonId = RiftNamedEpicDropPolicy.DaybreakDungeonId, BossMap = namedMap,
+            DisjointForbiddenDropRarities = System.Collections.Immutable.ImmutableHashSet.Create(4) };
+        var namedSource = new DungeonRoomMonster(RiftNamedEpicDropPolicy.DaybreakBossMonsterId,
+            [RiftNamedEpicDropPolicy.DaybreakBossMonsterId, 1, 0, 100, 100, 0, 1, 1], "[fixed]", "[boss]", "monster/named-drop.mob");
+        var namedBoss = new DungeonPlannedMonster(0, 10, namedSource.MonsterId, 95, namedSource) { SpawnType = 3, SourceMap = namedMap };
+        var namedPolicy = new RiftNamedEpicDropPolicy(dawnPool);
+        foreach (decimal factor in new[] { 0m, 1m, 2m, 100m })
+        foreach (bool existingEquipment in new[] { false, true })
+        {
+            var original = new DungeonDropGenerationPlan("named-control", existingEquipment
+                ? [new(100, dawnPool, 1, 1, Category: DungeonDropCategory.Equipment)] : []) { OrdinaryLukeDailySource = 7 };
+            var controlled = DungeonDropControlSnapshot.Apply(original,
+                new(Equipment: factor, ExcludeLowEquipment: true, ExcludeLowMaterials: true));
+            var rewritten = namedPolicy.Rewrite(controlled, namedEntry, namedBoss, 2);
+            That(rewritten.Trials is [{ Category: DungeonDropCategory.Equipment }] &&
+                rewritten.Trials[0].Threshold == Math.Min(DungeonDropRatePlan.ProbabilityDenominator, (int)(2000 * factor)) &&
+                rewritten.DropMultipliers == controlled.DropMultipliers && rewritten.OrdinaryLukeDailySource == 7 &&
+                rewritten.ExcludeLowEquipment && rewritten.ExcludeLowMaterials,
+                "黎明死亡阶段新装备骰只计算一次冻结倍率，有无旧装备通道均保留完整标记");
+            That(rewritten.WithGrowthContract(50).WithEpicDropBonus(20).WithAntoniumDropBonus(100).DropMultipliers == controlled.DropMultipliers,
+                "后续契约和药剂派生保留死亡阶段冻结快照");
+            That(rewritten.Generate(_ => 0, DateTimeOffset.UnixEpoch).IsEmpty == (factor == 0),
+                "黎明绿名增益不复活已关闭装备，合法奖励仍由正式生成器创建");
+            if (factor > 0) That(rewritten.Generate(_ => 0, DateTimeOffset.UnixEpoch) is [{ Item.DisjointForbidden: true }],
+                "死亡重写仍保留入场史诗禁止分解约束");
+        }
         var materialRules = PandemoniumRiftMaterialRules.Parse("{}");
         var rifts = new DungeonRiftEpicDropPolicy(candidates, dawnPool, fragmentPool, refined, materialRules);
         Reject<InvalidDataException>(() => PandemoniumRiftMaterialRules.Parse("null"), "空裂缝材料规则拒绝");
