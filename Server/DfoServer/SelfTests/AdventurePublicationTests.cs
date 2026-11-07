@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
@@ -30,7 +31,7 @@ internal static class AdventurePublicationTests
             var point = new Location(1, 0, 10, 10);
             var towns = new TownCatalog(new(), point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
             repository.Create(owner, new("ProgressHero", point, null) { Level = 95 });
-            var session = new GameSession(repository, towns, owner);
+            var session = new GameSession(repository, towns, owner, entry: new(new(2, 10), 0, "[normal]"));
             session.Select(0);
             var selected = session.Selected!;
             var state = AdventureState.Initial(owner.Account, DateTimeOffset.UtcNow) with
@@ -55,18 +56,42 @@ internal static class AdventurePublicationTests
             await projection.RefreshAsync(context, selected, selected.Level, "stale_progress", () => false, adventureProgress: progress);
             That(sent.Count == 1, "无可见变化或原业务回执失效不追加冒险团通知");
 
+            // 复用发送队列和文件库验证他人查询：查询者server2不能覆盖目标server7。
+            using var otherOwner = owners.Acquire("region-other", () => { });
+            repository.Create(otherOwner, new("RegionOther", point, null)
+                { Level = 95, GrowType = 33, DungeonState = new(1, 0, 0, 197, 0) });
+            var other = new GameSession(repository, towns, otherOwner, entry: new(new(7, 10), 0, "[normal]"));
+            other.Select(0); other.MarkReady();
+            var target = other.Selected!;
+            ushort targetId = target.Id;
+            var publicAdventure = other.PublicAdventure(targetId, catalog)!.Value;
+            That(publicAdventure.Channel == new ChannelIdentity(7, 10) && publicAdventure.IsCurrent(),
+                "他人冒险团快照从原owner捕获目标频道身份");
+            var adventure = new AdventureProjection(catalog);
+            await adventure.OtherInformationAsync(context, other, targetId);
+            var otherInformation = sent.Single(row => row.Opcode == 1403).Body;
+            That(otherInformation[0] == 1 && otherInformation[19 + 72 + 42] == 7 &&
+                BitConverter.ToUInt32(otherInformation, 19 + 72 + 4) == 197,
+                "他人1403收藏服务器取目标server7，独立熟练度197不冒充服务器或请求者server2");
+
             output.Hold = true;
             var blocked = context.Notify(NotiPacketType.USERINFO, [], "test_send_barrier");
             await output.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var pending = Refresh(progress);
+            var pendingOther = adventure.OtherInformationAsync(context, other, targetId);
+            other.ReturnToRoster(); other.Select(0); other.MarkReady();
+            That(!publicAdventure.IsCurrent(), "目标重选后旧冒险团身份与频道快照失效");
             session.ReturnToRoster();
             session.Select(0);
             session.MarkReady();
             output.Release.TrySetResult();
             await blocked.WaitAsync(TimeSpan.FromSeconds(5));
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            await pendingOther.WaitAsync(TimeSpan.FromSeconds(5));
             That(sent.Count(row => row.Opcode == 1349) == 1,
                 "原进度排队后同角色重选推进epoch，迟到1349不覆盖新角色上下文");
+            That(sent.Count(row => row.Opcode == 1403) == 1,
+                "目标重选或查询者epoch变化后，排队的旧他人冒险团信息不发布");
 
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject<InvalidOperationException>(() => new AdventureProjection(catalog)
