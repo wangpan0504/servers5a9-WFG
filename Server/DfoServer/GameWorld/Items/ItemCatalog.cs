@@ -717,6 +717,8 @@ internal sealed partial class ItemCatalog
             PersonalCargoUpgradeTarget = cargoTarget,
             AdvancesPersonalCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var cargoAction) &&
                 StackableActionCatalog.Arguments(cargoAction) is { Label: "[upgrade cargo]", Parameters.Count: 0 },
+            AdvancesAccountCargo = !isEquipment && StackableActionDeclaration.TryRead(text, out var accountCargoAction) &&
+                StackableActionCatalog.Arguments(accountCargoAction) is { Label: "[upgrade account cargo]", Parameters.Count: 0 },
             ShopPrice = EpicRoad2019ShopLimits.Apply(id, ItemShopPrice.Parse(text, isEquipment, equipmentSellRate)),
             Expiration = EpicRoad2019ItemLifetime.Restore(id, expiration),
             EpicRoad2019FixedExpirationRestored = EpicRoad2019ItemLifetime.Applies(id, expiration.AbsoluteTime),

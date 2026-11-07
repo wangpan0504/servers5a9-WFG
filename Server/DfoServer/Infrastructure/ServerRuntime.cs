@@ -842,6 +842,7 @@ internal static class ServerRuntime
         var battlePassRewards = battlePassCatalog is null ? null : new Game.BattlePass.BattlePassRewardService(
             battlePassCatalog, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock,
             events.IsBattlePassActive);
+        var cargoHandler = new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
@@ -901,7 +902,7 @@ internal static class ServerRuntime
             rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new InventoryExpansionHandler(new InventoryExpansionService(itemResources.Items, clock), inventoryProjection, log),
-            new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection),
+            cargoHandler,
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules, epicRoadAvailable: epicRoad2019Enabled),
                 cashShop,
@@ -1010,7 +1011,7 @@ internal static class ServerRuntime
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
                 new DimensionEntryTicketService(itemResources.Items, clock),
                 incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log),
-                guildDungeonScrollHandler),
+                guildDungeonScrollHandler, cargoHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,

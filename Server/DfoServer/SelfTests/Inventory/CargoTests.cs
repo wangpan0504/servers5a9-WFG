@@ -22,6 +22,7 @@ internal static class CargoTests
     static void VerifyAcquisition(TownCatalog towns, ItemResources resources)
     {
         RunMileagePersonalCargo(towns, resources);
+        VerifyAccountUpgradeTool(towns, resources);
         var now = DateTimeOffset.UtcNow;
         var role = new Character(1, 0, "CargoAcquire", 0, towns.InitialReturn, null)
             { Level = 60, Inventory = new([]) { AccountCargo = new(Capacity: 8) } };
@@ -90,6 +91,88 @@ internal static class CargoTests
         That(bought.Accepted && bought.Plan!.After.CargoCapacity == 40 && bought.Plan.After.Items.IsEmpty &&
             bought.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == 990,
             "主商品24格与附赠40格连续生效，最终合并不覆盖附赠扩容");
+    }
+
+    static void VerifyAccountUpgradeTool(TownCatalog towns, ItemResources resources)
+    {
+        var template = resources.Items.Get(490705134);
+        That(template.AdvancesAccountCargo && !template.AdvancesPersonalCargo && !template.HasAcquisitionEffect &&
+            resources.Items.StackableAction(template.Id)?.ClientType == 149, "账号逐档券按无参数149识别，不套个人或获取时即时服务");
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var now = clock.GetUtcNow();
+        var core = InventoryRewardGrantService.Create(template, utcNow: now);
+        var source = new InventoryItem(9129, new(InventoryListType.Main, 65), core);
+        var role = new Character(1, 0, "AccountStep", 0, towns.Room, towns.InitialReturn)
+        {
+            Level = 1, Inventory = new([source]) { AccountCargo = new(Capacity: 1, Gold: 123), Gold = 456,
+                AccountWallet = InventorySnapshot.Empty.AccountWallet.Set(CurrencyKind.Cera, 789) }
+        };
+        var cargo = new InventoryCargoService(resources.Items, resources.Cargo, resources.GoldLimits, clock);
+        var granted = InventoryRewardGrantService.TryGrantBatch(role with { Inventory = InventorySnapshot.Empty },
+            [new(template.Id, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(granted.Accepted && granted.Plan!.After.AccountCargo.Capacity == 0 && granted.Plan.After.Items is [var retained] &&
+            retained.Core.ItemId == template.Id, "未开通账号也可领取战令工具实物，不在领取时开通或扩容");
+        foreach (var pair in resources.Cargo.AccountTiers.Zip(resources.Cargo.AccountTiers.Skip(1)))
+        {
+            var holder = role with { Inventory = role.Inventory with { AccountCargo = role.Inventory.AccountCargo with { Capacity = pair.First.Capacity } } };
+            var result = cargo.AccountUpgradeTool(holder, 65);
+            That(result.Accepted && result.Plan!.After.AccountCargo.Capacity == pair.Second.Capacity && result.Plan.After.Items.IsEmpty &&
+                result.Plan.After.AccountCargo.Gold == 123 && result.Plan.After.CargoCapacity == holder.Inventory.CargoCapacity &&
+                result.Plan.After.Gold == 456 && result.Plan.After.AccountWallet.Same(holder.Inventory.AccountWallet),
+                "一张券仅升账号下一合法档，不扣任意档费用或改变其他资产 " + pair.First.Capacity);
+        }
+        foreach (ushort capacity in new ushort[] { 0, 7, 240 })
+            That(!cargo.AccountUpgradeTool(role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: capacity) } }, 65).Accepted,
+                "未开通、表外容量及满档拒绝并保留源 " + capacity);
+        foreach (var invalid in new[] { source with { Core = core with { EquipmentLockId = 1 } },
+            source with { Core = core with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } },
+            source with { Core = core with { Kind = GameWorld.Items.ItemKind.Material } },
+            source with { Position = new(InventoryListType.PersonalCargo, 0) } })
+        {
+            var holder = role with { Inventory = role.Inventory with { Items = [invalid] } };
+            That(!cargo.AccountUpgradeTool(holder, 65).Accepted && holder.Inventory.Items.Single() == invalid,
+                "安全锁、到期、错误类型及其他容器不能消费");
+        }
+        That(!cargo.AccountUpgradeTool(role with { Level = 0 }, 65).Accepted && !cargo.AccountUpgradeTool(role, 66).Accepted,
+            "最低等级和实际请求槽不能绕过");
+        var expiring = source with { Core = core with { ExpireTime = checked((int)now.ToUnixTimeSeconds() + 60) } };
+        var pending = cargo.AccountUpgradeTool(role with { Inventory = role.Inventory with { Items = [expiring] } }, 65);
+        That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(role, expiring.ExpireTime - 1) &&
+            !pending.Plan.CharacterPrecondition.Matches(role, expiring.ExpireTime), "有限期限在提交前再次复验，不能等待到期后仍扣券扩容");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-account-tool-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repo = new CharacterRepository(Path.Combine(root, "game.db"));
+            var owners = new AccountOwners();
+            foreach (int channelType in new[] { 4, 20, 24, 0 })
+            {
+                using var owner = owners.Acquire("account-tool-" + channelType, () => { });
+                if (channelType == 24)
+                    repo.Create(owner, new("AcctQual", towns.Room, towns.InitialReturn) { Level = 85 });
+                var created = repo.Create(owner, new("AcctTool" + channelType, towns.Room, towns.InitialReturn)
+                {
+                    Level = channelType == 24 ? (byte)85 : (byte)1, AcceptedStoryLevel = 1,
+                    PvpPrivateCreation = channelType == 24 ? new(85, 30, now.ToUnixTimeSeconds()) : null,
+                    Inventory = new([source with { Uid = 0 }])
+                });
+                created = InventoryService.Commit(repo, owner, created, new(true, 0, new(created.Inventory,
+                    created.Inventory with { AccountCargo = created.Inventory.AccountCargo with { Capacity = 1 } }, "account_tool_fixture")));
+                var session = new GameSession(repo, towns, owner, items: resources.Items, timeProvider: clock,
+                    entry: channelType == 0 ? null : new(new(2, 101), channelType, "[pvp]"));
+                session.Select(created.Slot); session.MarkReady();
+                int plans = 0;
+                InventoryResult Plan(Character character) { plans++; return cargo.AccountUpgradeTool(character, 65); }
+                string before = JsonSerializer.Serialize(repo.List(owner));
+                var used = session.PlanAndCommitInventory(Plan, 0, usedItem: source.Position);
+                That(channelType == 0 ? used.Accepted && plans == 1 && used.Plan!.After.AccountCargo.Capacity == 8 &&
+                    used.Plan.UsedItems.Any(row => row.ItemId == template.Id && row.Count == 1) :
+                    !used.Accepted && plans == 0 && JsonSerializer.Serialize(repo.List(owner)) == before,
+                    "149使用源接入公共资格，普通/竞技决斗及专用角色拒绝且村庄房间记录实际使用 " + channelType);
+                session.End();
+            }
+        }
+        finally { TestFiles.DeleteDirectory(root, true); }
     }
 
     public static void RunMileagePersonalCargo(TownCatalog towns, ItemResources resources)
