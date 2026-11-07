@@ -2,6 +2,7 @@ using System.Text;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
@@ -84,7 +85,81 @@ internal static class MagicBoxTcpTests
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "随机盒真实TCP后的存档完整性");
+        await RunPotAsync(source, root, resources);
+    }
 
+    static async Task RunPotAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "magic-pot"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        var items = resources.ItemResources.Items;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repository.Create(owner, new("MagicPot", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, new(InventoryListType.Main, 94), InventoryRewardGrantService.Create(items.Get(2681819), 2)),
+                    new(0, new(InventoryListType.Main, 150), InventoryRewardGrantService.Create(items.Get(2681820), 1))])
+            });
+        await fixture.StartAsync();
+        // 原生02760130发送类型3、魔罐Main槽、圣水Main槽；类型值不是库存域。
+        byte[] request = [3, 94, 0, 150, 0];
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            string before = State();
+            foreach (byte[] invalid in new byte[][] { [3, 94, 0], [3, 150, 0, 94, 0], [3, 94, 0, 149, 0] })
+            {
+                peer.Send(208, invalid); peer.Expect(1, 208, [0]); peer.Barrier();
+                That(State() == before, "魔罐短包、错误源槽及错误材料槽均不扣源、不发奖、不写审计");
+            }
+            fixture.Sql("CREATE TRIGGER fail_magic_pot BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'magic pot rollback'); END");
+            peer.Send(208, request); peer.Closed();
+            That(State() == before, "魔罐真实提交失败回滚源、圣水、奖励及UID，不提前成功");
+            fixture.Sql("DROP TRIGGER fail_magic_pot");
+        }
+        InventorySnapshot committed;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            peer.Send(208, request);
+            byte[] ack = peer.Expect(1, 208).Body;
+            That(ack.Length == 132 && ack[0] == 1 && ack[1] == 3 && ack[2] == 0 && U16(ack, 3) == 94 &&
+                U16(ack, 5) == 150 && U16(ack, 7) == 1 && U32(ack, 15) == 1,
+                "魔罐ACK208回显类型3及两Main槽，单奖使用完整123B行和本次数量");
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                committed = repository.List(owner).Single().Inventory;
+            That(committed.Find(new(InventoryListType.Main, 94)) is { Core.Count: 1 } &&
+                committed.Find(new(InventoryListType.Main, 150)) is null,
+                "魔罐成功应答时一罐一圣水已原子持久化");
+            short slot = (short)U16(ack, 9);
+            int reward = (int)U32(ack, 11);
+            That(resources.ItemResources.MagicBoxes.Get(2681819).Pools.Single().Rewards.Any(row => row.ItemId == reward) &&
+                committed.Find(new(InventoryListType.Main, slot)) is { Core.Count: 1 } granted && granted.Core.ItemId == reward,
+                "魔罐应答奖品与真实PVF及已提交Main槽一致");
+            foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38, 46 })
+                That(peer.Expect(0, 13).Body[0] == list, "魔罐提交后刷新实际物品容器：" + list);
+            peer.Barrier();
+            string after = State();
+            peer.Send(208, request); peer.Expect(1, 208, [0]); peer.Barrier();
+            That(State() == after, "圣水耗尽后的重复请求不再次扣罐或发奖");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select()[4].Body;
+            foreach (var item in committed.Items)
+                BoosterTcpTests.Entry(full, item.Position.Index, item.Core.ItemId, item.Core.Value, full: true);
+            That(!Enumerable.Range(0, U16(full, 3)).Any(index => U16(full, 5 + index * 123) == 150),
+                "重新选角仅恢复已提交源与奖品，不恢复已耗尽圣水");
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "魔罐拒绝、SQL回滚、成功及重连后的存档完整性");
+
+        string State() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
     }
 
     static void CreatureDetails(byte[] body, InventorySnapshot inventory)

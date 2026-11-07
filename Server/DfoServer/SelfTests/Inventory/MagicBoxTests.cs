@@ -23,6 +23,18 @@ internal static class MagicBoxTests
                 throw new InvalidOperationException("FAIL magic-box: " + name);
         }
 
+        var potRequest = MagicBoxRequests.Single([3, 94, 0, 150, 0]);
+        Check(potRequest == new MagicBoxOpenRequest(3, new(InventoryListType.Main, 94), 0,
+            new(InventoryListType.Main, 150), 0, 1), "魔罐原生类型3保留两个Main绝对槽位");
+        foreach (byte[] invalid in new byte[][] { [3, 94, 0], [2, 94, 0, 150, 0], [5, 94, 0, 150, 0] })
+        {
+            bool malformedRejected = false;
+            try { MagicBoxRequests.Single(invalid); }
+            catch (InvalidDataException) { malformedRejected = true; }
+            Check(malformedRejected, "魔罐短包及未确认用途类型不放行");
+        }
+        Check(MagicBoxRequests.Single([0, 94, 0]).RawListType == 0 &&
+            MagicBoxRequests.Single([4, 94, 0]).RawListType == 4, "既有0/4单开短包保持兼容");
         var request = MagicBoxRequests.Expand(Convert.FromHexString("00450048B39800790047B398006400"));
         Check(request == new MagicBoxOpenRequest(0, new InventorySlot(InventoryListType.Main, 69), 0x0098B348,
             new InventorySlot(InventoryListType.Main, 121), 0x0098B347, 100),
@@ -140,6 +152,39 @@ internal static class MagicBoxTests
         var random = new FirstRandom();
         var service = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
             random, contracts: resources.Contracts);
+        var potService = new InventoryMagicBoxService(resources.Items, resources.MagicBoxes, resources.GoldLimits, resources.EpicPieces,
+            new FirstRandom(), contracts: resources.Contracts);
+        var pot = new Character(1, 0, "MagicPot", 0, towns.Room, towns.InitialReturn)
+        {
+            Level = 95,
+            Inventory = new([new(1, potRequest.BoxSlot, new(2681819, ItemKind.Consumable, 2)),
+                new(2, potRequest.MaterialSlot, new(2681820, ItemKind.Material, 1))])
+        };
+        var potOpened = potService.Open(pot, potRequest, out var potReceipt);
+        Check(potOpened.Accepted && potReceipt is { RawListType: 3, BoxSlot: 94, MaterialSlot: 150, OpenCount: 1 } &&
+            potOpened.Plan!.After.Find(potRequest.BoxSlot) is { Core.Count: 1 } &&
+            potOpened.Plan.After.Find(potRequest.MaterialSlot) is null && potReceipt.Rewards.Sum(row => row.Count) == 1,
+            "魔罐原生类型3从Main消耗一罐一圣水并按真实PVF奖池发奖");
+        foreach (var invalid in new[] { potRequest with { BoxSlot = potRequest.MaterialSlot },
+            potRequest with { MaterialSlot = new(InventoryListType.Main, 149) } })
+            Check(potService.Open(pot, invalid, out var rejectedReceipt) is { Accepted: false, Plan: null } && rejectedReceipt is null,
+                "魔罐错误源槽或材料槽不生成扣费及奖励计划");
+        Check(potService.Open(pot with { Inventory = potOpened.Plan!.After }, potRequest, out _) is { Accepted: false, Plan: null } &&
+            pot.Inventory.Find(potRequest.BoxSlot) is { Core.Count: 2 } && pot.Inventory.Find(potRequest.MaterialSlot) is { Core.Count: 1 },
+            "圣水耗尽拒绝再次开罐，规划不修改原快照");
+        var fullPot = pot with
+        {
+            Inventory = new([.. Enumerable.Range(65, 32).Select(slot => new InventoryItem(slot, new(InventoryListType.Main, (short)slot),
+                    new(2681819, ItemKind.Consumable, 3)))
+                .Concat(Enumerable.Range(121, 32).Select(slot => new InventoryItem(slot, new(InventoryListType.Main, (short)slot),
+                    new(2681820, ItemKind.Material, 3))))], Expansion: 0)
+        };
+        var overflowPot = potService.Open(fullPot, potRequest, out var overflowReceipt);
+        Check(overflowPot.Accepted && overflowPot.Plan!.OverflowItems is [{ Core.Count: 1 }] &&
+            overflowPot.Plan.After.Find(potRequest.BoxSlot) is { Core.Count: 2 } &&
+            overflowPot.Plan.After.Find(potRequest.MaterialSlot) is { Core.Count: 2 } &&
+            overflowReceipt is { Rewards.Count: 1 } && overflowReceipt.Rewards[0].Slot == -1,
+            "魔罐满包沿现有原子溢出邮件合同，不伪装空间不足或丢失奖励");
         var character = new Character(1, 0, "MagicBox", 0, towns.Room, towns.InitialReturn)
         {
             Inventory = new([new(0, new(InventoryListType.Main, 70), new(2682272, ItemKind.Consumable, 10))])
