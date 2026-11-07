@@ -20,17 +20,18 @@ internal static class CashShopPromotionTests
             (9, 1, [new(10, 490705449, 1)]),
             (10, 2, [new(12, 490705441, 1)]),
             (20, 2, [new(22, 490705441, 1)]),
-            (29, 2, [new(30, 490705449, 1), new(31, 490705415, 1)])
+            (29, 3, [new(30, 490705449, 1), new(31, 490705415, 1), new(32, 490705441, 1)]),
+            (39, 3, [new(40, 490705449, 1), new(41, 490705415, 1), new(42, 490705441, 1)])
         })
             That(CashShopPromotionRules.Settle(rules, before, units).SequenceEqual(expected),
                 $"累计完整结算({before},{before + units}]的真实外盒");
         var all = CashShopPromotionRules.Settle(rules, 0, 64);
-        That(all.Length == 61 && all.Count(award => award.ItemId == 490705415) == 34 &&
-            all.Count(award => award.ItemId != 490705415) == 27 &&
+        That(all.Length == 61 && all.Count(award => award.ItemId == 490705415) == 4 &&
+            all.Count(award => award.ItemId != 490705415) == 57 &&
             all.All(award => award.Count == 1 && award.PurchaseNumber is not (1 or 11 or 21)),
-            "64套恰27阶段及34溢出，无首档和遗漏、截断");
-        That(CashShopPromotionRules.Settle(rules, 4999, 1).SequenceEqual([new PromotionAward(5000, 490705415, 1)]),
-            "累计上限最后一套仍完整发奖");
+            "64套按10套一轮无限循环阶段礼盒，31/41/51/61送追加礼盒，无遗漏或截断");
+        That(CashShopPromotionRules.Settle(rules, 4999, 1).SequenceEqual([new PromotionAward(5000, 490705449, 1)]),
+            "累计上限最后一套仍按第10档完整发奖");
         var maximumBatch = CashShopPromotionRules.Settle(rules, 30, 64);
         That(maximumBatch.Length == 64 && maximumBatch.All(award => award.Count == 1),
             "首期最坏单车完整结算64个独立奖励外盒，不截断档位");

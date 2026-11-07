@@ -764,7 +764,19 @@ internal static partial class ConsumableUseSessionTests
                 f.Session.MoveInventory(withdraw, inventory).Accepted, "城镇NPC仓库存取保持原行为");
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "猫头鹰测试进入真实副本入口");
             Enter();
-            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "未使用猫头鹰仍拒绝副本仓库移动");
+            var accountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
+            var accountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
+            if (owl.Unlimited)
+            {
+                // 客户端 CStackableItem::CheckUse 对无限猫头鹰返回 2 并直接本地打开仓库 UI，不发送 CMD 44。
+                That(f.Session.MoveInventory(deposit, inventory).Accepted &&
+                    f.Session.MoveInventory(withdraw, inventory).Accepted &&
+                    f.Session.MoveInventory(accountDeposit, inventory).Accepted &&
+                    f.Session.MoveInventory(accountWithdraw, inventory).Accepted,
+                    "持有可用无限猫头鹰在副本内无需先发CMD44即可存取个人与账号仓库 " + id);
+                SetOwlLock(1);
+            }
+            That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "未使用或已锁定猫头鹰仍拒绝副本仓库移动");
             ushort characterId = f.Session.Selected!.Id;
             var capabilities = f.Session.ReadHelperCapabilities(characterId);
             That(capabilities is not null && f.Session.CanPublishHelperCapabilities(capabilities) &&
@@ -788,15 +800,15 @@ internal static partial class ConsumableUseSessionTests
                 { CargoCapacity = 24 }, "helper_cargo_upgrade_boundary")), requireTown: false).Accepted &&
                 !f.Session.MoveInventory(deposit, inventory).Accepted && !f.Session.MoveInventory(helperAccountDeposit, inventory).Accepted,
                 "任一仓库实际容量变化同时废止本实例助手旧资格");
+            if (owl.Unlimited) SetOwlLock(0);
             That(f.Use().Outcome == ConsumableUseOutcome.Committed, "猫头鹰经原消耗品提交成功 " + id);
             That(f.Session.MoveInventory(deposit, inventory).Accepted &&
                 f.Session.MoveInventory(withdraw, inventory).Accepted, "副本使用猫头鹰后支持双向真实库存提交 " + id);
-            var accountDeposit = deposit with { Destination = new(InventoryListType.AccountCargo, 0) };
-            var accountWithdraw = withdraw with { Source = new(InventoryListType.AccountCargo, 0) };
             That(f.Session.MoveInventory(accountDeposit, inventory).Accepted &&
                 f.Session.MoveInventory(accountWithdraw, inventory).Accepted, "同一资格支持账号仓库双向存取");
             That(!f.Session.MutateInventory(c => inventory.Sort(c, new(InventoryListType.PersonalCargo, ItemKind.Consumable, 0))).Accepted,
                 "猫头鹰不放宽仓库整理等其他Town门禁");
+            if (owl.Unlimited) SetOwlLock(1);
             That(f.Session.MutateInventory(c => new(true, 0, new(c.Inventory, c.Inventory with
                 { CargoCapacity = 16 }, "portable_cargo_upgrade_boundary")), requireTown: false).Accepted &&
                 f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 },
@@ -807,12 +819,23 @@ internal static partial class ConsumableUseSessionTests
             That(f.Session.SetHelperPortableCargo(characterId, InventoryListType.PersonalCargo) is { Accepted: true },
                 "新实例只能重新建立本实例助手授权");
             f.Clock.Advance(TimeSpan.FromSeconds(4));
+            if (owl.Unlimited) SetOwlLock(0);
             That(f.Use(1).Outcome == ConsumableUseOutcome.Committed, "新副本可重新使用猫头鹰");
             f.Session.ReturnToRoster(); f.Select();
+            if (owl.Unlimited) SetOwlLock(1);
             That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)), "重新选角进入入口");
             Enter();
             That(f.Session.MoveInventory(deposit, inventory) is { Accepted: false, Error: 1 }, "同角色重选不继承旧资格");
             That(capabilities is not null && !f.Session.CanPublishHelperCapabilities(capabilities), "同角色重选后旧能力回执也失效");
+
+            void SetOwlLock(byte lockId) => That(f.Session.MutateInventory(c =>
+            {
+                var source = c.Inventory.Find(new(InventoryListType.Main, 65))!;
+                return new(true, 0, new(c.Inventory, c.Inventory with
+                {
+                    Items = c.Inventory.Items.Replace(source, source with { Core = source.Core with { EquipmentLockId = lockId } })
+                }, "portable_cargo_owl_lock"));
+            }, requireTown: false).Accepted, "切换无限猫头鹰锁定状态");
 
             void Enter()
             {

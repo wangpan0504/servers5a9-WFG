@@ -47,11 +47,15 @@ internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPack
         rejection = "target-qualification";
         if (template.Id != target.Core.ItemId || !opener.Allows(template))
             return InventoryResult.Reject(Rejection);
-        rejection = "already-open";
-        // 任何现有孔位或徽章都不能被开孔器覆盖，重复请求也不能再次消费材料。
         var detail = target.Avatar;
-        if (detail.Socket0 != default || detail.Socket1 != default || detail.Socket2 != default ||
-            detail.Socket3 != default || detail.Socket4 != default)
+        bool legacyTwoGreenRareTopOrBottom = template is { Grade: 3, EquipmentSlot: 2 or 3 } &&
+            detail.Socket0.Type == 4 && detail.Socket1.Type == 4 &&
+            detail.Socket2 == default && detail.Socket3 == default && detail.Socket4 == default;
+        rejection = "already-open";
+        // 任何现有孔位或徽章都不能被开孔器覆盖，重复请求也不能再次消费材料；仅历史缺白金孔的天空上衣/下装可补齐首槽白金孔并保留已镶嵌绿孔。
+        if (!legacyTwoGreenRareTopOrBottom &&
+            (detail.Socket0 != default || detail.Socket1 != default || detail.Socket2 != default ||
+            detail.Socket3 != default || detail.Socket4 != default))
             return InventoryResult.Reject(Rejection);
         rejection = "socket-definition";
         if (avatar.PendingRule is not null || avatar.Types.IsDefaultOrEmpty)
@@ -59,14 +63,21 @@ internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPack
         var candidates = avatar.Types.Select(type => type.Sockets).Where(sockets => sockets != default).Distinct().ToArray();
         if (candidates.Length != 1) return InventoryResult.Reject(Rejection);
         var sockets = candidates[0];
+        if (legacyTwoGreenRareTopOrBottom && sockets != new AvatarSocketTypes(16, 4, 4, 0, 0))
+        {
+            rejection = "already-open";
+            return InventoryResult.Reject(Rejection);
+        }
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);
         if (!paid.Accepted) return paid;
         var changed = target with
         {
             Avatar = detail with
             {
-                Socket0 = AvatarSocket.Empty(sockets.First), Socket1 = AvatarSocket.Empty(sockets.Second),
-                Socket2 = AvatarSocket.Empty(sockets.Third), Socket3 = AvatarSocket.Empty(sockets.Fourth),
+                Socket0 = AvatarSocket.Empty(sockets.First),
+                Socket1 = legacyTwoGreenRareTopOrBottom ? detail.Socket0 : AvatarSocket.Empty(sockets.Second),
+                Socket2 = legacyTwoGreenRareTopOrBottom ? detail.Socket1 : AvatarSocket.Empty(sockets.Third),
+                Socket3 = AvatarSocket.Empty(sockets.Fourth),
                 Socket4 = AvatarSocket.Empty(sockets.Fifth)
             }
         };

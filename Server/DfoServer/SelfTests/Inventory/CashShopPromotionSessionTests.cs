@@ -218,8 +218,8 @@ internal static partial class CashShopPromotionSessionTests
                 mails.Length == 1 && mails.All(mail => mail.System && mail.Expires is null && mail.Attachments.Length == 1) &&
                 mails.Select(mail => mail.Id).Order().SequenceEqual(mailIds.Order()) &&
                 attachments.Length == 1 && attachments.Select(attachment => attachment.Item.Uid).Distinct().Count() == 1 &&
-                attachments.All(attachment => attachment.Item.Uid > 0 && attachment.Item.Core.ItemId == 490705415 && attachment.Item.Core.Count == 1),
-                "最后一套5000合法新订单恰一份415，越界拒绝不漏发、多发或新增邮件UID");
+                attachments.All(attachment => attachment.Item.Uid > 0 && attachment.Item.Core.ItemId == 490705449 && attachment.Item.Core.Count == 1),
+                "最后一套5000合法新订单恰一份449，越界拒绝不漏发、多发或新增邮件UID");
             var reopened = new CharacterRepository(database, promotions: () => catalog);
             var expected = session.Selected! with { Inventory = session.Selected!.Inventory with
             { Items = session.Selected.Inventory.Items.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() } };
