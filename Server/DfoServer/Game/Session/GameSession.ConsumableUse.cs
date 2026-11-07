@@ -20,13 +20,42 @@ internal sealed partial class GameSession
 
     bool CanAccessPortableCargo(InventoryListType list) =>
         list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
-        portableCargo is { } access && !AntonRejoinPresentationPending && Ready && Selected is { } character &&
-        (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
+        !AntonRejoinPresentationPending && Ready && Selected is { } character &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
-        access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
-        access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&
-        access.PersonalCapacity == character.Inventory.CargoCapacity &&
-        access.AccountCapacity == character.Inventory.AccountCargo.Capacity;
+        (portableCargo is { } access &&
+            (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
+            access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
+            access.DungeonInstance == formalDungeon?.Run.Snapshot.Identity.InstanceId &&
+            access.PersonalCapacity == character.Inventory.CargoCapacity &&
+            access.AccountCapacity == character.Inventory.AccountCargo.Capacity ||
+            HasUnlimitedPortableCargo(character, list));
+
+    bool HasUnlimitedPortableCargo(Character character, InventoryListType list)
+    {
+        if (consumables is null || formalDungeon is not { } instance || !CanUseConsumable() ||
+            (list == InventoryListType.PersonalCargo ? character.Inventory.CargoCapacity : character.Inventory.AccountCargo.Capacity) == 0)
+            return false;
+        long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+        foreach (var item in character.Inventory.Items)
+        {
+            if (item.Position.List != InventoryListType.Main ||
+                item is not { Uid: > 0, Core: { IsStackable: true, Count: > 0, EquipmentLockId: 0 } } ||
+                item.IsExpired(now) ||
+                !ItemSlotBoundService.Allows(character.Inventory, item.Position, item.Core.Kind) ||
+                !consumables.TryGet(item.Core.ItemId, out var definition) ||
+                !definition.OpensPortableCargo || !definition.Unlimited ||
+                !definition.Allows(character.Level, character.Job) ||
+                items?.Get(item.Core.ItemId).RequiresPcRoom == true && !PremiumPcRoom ||
+                !CanUseStackableItem(character, item.Core.ItemId, places: definition.Places) ||
+                !CanUseDungeonItem(item.Core.ItemId, definition.AllowedDungeons) ||
+                definition.AllowedDungeons is { } allowed && (Phase != SessionPhase.Dungeon || !allowed.Contains(instance.Entry.DungeonId)) ||
+                definition.ExcludedDungeons.Contains(instance.Entry.DungeonId) ||
+                definition.RaidUseForbidden && instance.Entry.RaidEntry is not null)
+                continue;
+            return true;
+        }
+        return false;
+    }
 
     bool CanUseDungeonItem(int itemId, IReadOnlySet<uint>? allowedDungeons = null) => !IsImperialArenaCombat &&
         (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true) &&

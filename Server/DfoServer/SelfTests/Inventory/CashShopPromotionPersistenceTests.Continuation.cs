@@ -37,9 +37,9 @@ internal static partial class CashShopPromotionPersistenceTests
         var last = f.Store.Commit(f.Owner, f.Plan(1), f.Now); f.Character = last.Character;
         That(last.Progress == new PromotionProgress(f.Rules.Scope, 5000, 10) && last.MailIds.Length == 1 &&
             f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_progress WHERE period='replica-1' AND count=5000") is 1L &&
-            f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_awards WHERE global_purchase=5000 AND json_extract(reward_snapshot,'$.Award.ItemId')=490705415") is 1L &&
+            f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_awards WHERE global_purchase=5000 AND json_extract(reward_snapshot,'$.Award.ItemId')=490705449") is 1L &&
             f.Character.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 9700,
-            "原v1最后一套到5000全额扣费并提交唯一415奖励，不创建后继累计");
+            "原v1最后一套到5000全额扣费并提交唯一449奖励，不创建后继累计");
         before = f.Sql.Snapshot();
         Reject<ArgumentOutOfRangeException>(() => f.Plan(1), "达到5000后下一套新购整笔拒绝");
         That(f.Sql.Snapshot() == before, "5001请求不改钱包、主货、bonus、累计、订单、邮件或奖励UID");
