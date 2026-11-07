@@ -93,13 +93,26 @@ internal static partial class FiendwarRecoveryTests
                 "复制或过期视图不能完成真实电影");
             if (mode == "old-owner")
             {
+                var movie = battle.CaptureMovie(actor)!.Value;
                 using var replacement = owners.Acquire(owner.Account, () => { });
-                That(!battle.CanConfirmFiendwarMovie(actor, view) && !battle.CompleteFiendwarMovie(actor, view),
+                bool queued = false;
+                That(!battle.CanConfirmFiendwarMovie(actor, view) && !battle.CompleteFiendwarMovie(actor, view) &&
+                    battle.ConfirmMovie(actor, view, movie.Event, true, () => queued = true) is null && !queued,
                     "被接管旧owner不能确认电影或开放牌面");
                 return;
             }
             if (mode is "cards" or "ineligible")
             {
+                if (mode == "cards")
+                {
+                    That(session.RaidStatusSnapshot() is { Battle.Kind: RaidKind.Fiendwar },
+                        "返城使用的当前团本快照包含漩涡，实际24写后必须进入补演出分支");
+                    // 上面的领域预留只移动战场占用；原电影仍要求真实Session位置也提交到候战房。
+                    if (session.NeedsFiendwarFinalReturn())
+                        That(session.ReturnFromFiendwarBattlefield() is not null, "场景回归先沿原Session用例提交最终候战位置");
+                    view = battle.View;
+                    RaidMovieResponseTests.ReturnAsync(resources, actor, battle, clock).GetAwaiter().GetResult();
+                }
                 That(battle.CompleteFiendwarMovie(actor, view), "真实659完成通知解除电影义务");
                 if (mode == "cards")
                 {

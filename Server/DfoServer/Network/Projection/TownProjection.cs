@@ -668,7 +668,27 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await PcRoomBuffProjection.PostAsync(context, CanSend);
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
-        await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        if (context.Session.RaidStatusSnapshot() is { } raid)
+        {
+            // 业务Town可早于24写出；时钟资格提交不得把成功演出投到仍在图内的原生场景。
+            void SceneWritten()
+            {
+                var latest = raid.Battle.View;
+                bool Current() => CanSend() && raid.Actor.IsCurrent &&
+                    ReferenceEquals(context.Session.CurrentRaidBattle(raid.Actor), raid.Battle) &&
+                    latest.Phase == raid.View.Phase && !latest.PhaseExpired && !latest.ClockFaulted &&
+                    context.Session.CanPublishRaidBattle(raid.Actor, latest);
+                if (latest.State == Game.Raids.AntonRaidBattleState.Reward && context.Owner.Execute(Current))
+                    // 只排当前已提交演出；完整Notice含资格查询，不能在发送泵回调中执行。
+                    RaidCombatProjection.PostState(context, latest, raid.Actor, Current, "raid_return_state");
+            }
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character),
+                action, CanSend, afterWritten: SceneWritten))
+                throw new IOException("Raid return scene queue unavailable");
+            if (!context.Sender.IsPublicationQueued) await context.Sender.DrainAsync();
+        }
+        else
+            await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         await RestoreFreeConsumablesAsync(context, receipt.ConsumableCooldowns, receipt.ConsumableEffects, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);

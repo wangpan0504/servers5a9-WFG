@@ -38,6 +38,8 @@ internal static class PreyGuideTests
         That(raid.Script.Issues.IsEmpty, "普雷引导脚本完整：" + string.Join(';', raid.Script.Issues));
         That(raid.ResourcesReady, "普雷引导资源完整：" + string.Join(';', raid.Issues) + ";dgn=" + string.Join(',', raid.MissingFormalDungeons) + ";map=" + string.Join(',', raid.MissingFormalMaps) + ";item=" + string.Join(',', raid.MissingItems));
         That(raid.Script.EntryCost == new RaidCost(10309342, 1), "引导使用独立门票");
+        That(raid.Script.Headers.Single(row => row.Tag == "[movie end time]").Values.Select(value => value.Number)
+            .SequenceEqual(new[] { 0, 0, 24, 24 }), "引导保留共用真实演出时长，零列不回填且自动时钟可读");
         That(raid.Script.Phases.Length == 2 && raid.Script.Phases[1].Dungeons.Any(row => row.Id == 291100397), "引导两阶段包含真实终图");
         That(raid.EntryCatalog is { Ready: true }, "引导正式进图目录完整");
         if (!battlePass) DatabaseSchemaTests.PreyGuideUpgrade(Path.Combine(root, "prey-schema"));
@@ -288,6 +290,21 @@ internal static class PreyGuideTests
                         "旧owner generation不能继续读取攻坚投影");
                     return;
                 }
+                var movieView = battle.View;
+                var beforeMovie = session.Selected;
+                string beforeMovieSaved = ClientSettingsSnapshots.Capture(path, true);
+                That(!battle.CompletePreyMovie(actor! with { Epoch = actor!.Epoch + 1 }, movieView) &&
+                    !battle.CompletePreyMovie(actor!, movieView with { Revision = movieView.Revision + 1 }),
+                    "旧选角及非当前view不能确认引导真实阶段演出");
+                foreach (byte kind in new byte[] { 1, 0 })
+                    That(session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()) is null,
+                        "引导电影完成前拒绝手动领取每类奖励");
+                That(ReferenceEquals(beforeMovie, session.Selected) &&
+                    ClientSettingsSnapshots.Capture(path, true) == beforeMovieSaved && !battle.PreyMovieCardsReady(actor!, movieView),
+                    "电影前拒领不改SQL或在线资产，也不伪造结果窗就绪");
+                That(battle.CompletePreyMovie(actor!, movieView) && !battle.CompletePreyMovie(actor!, movieView) &&
+                    battle.PreyMovieCardsReady(actor!, movieView), "引导真实phase演出只确认一次并放行电影后手动领取");
+                var eligibility = battle.LukeEligibility(actor!.Character, phase)!;
                 foreach (byte kind in new byte[] { 1, 0 })
                 {
                     var receipt = session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
@@ -296,7 +313,15 @@ internal static class PreyGuideTests
                     var replay = session.ClaimRaidReward(kind, 0, repo, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
                     That(replay is { Commit.Duplicate: true } && session.Selected!.Revision == revision,
                         "重复领取回放原收据且不再次发放资产");
+                    Reject<InvalidOperationException>(() => battle.ConfirmAutomaticLukeReward(
+                        eligibility with { Source = PreyGuideRewards.TeamSource }, receipt!.Prepared),
+                        "自动确认不能把引导原资格换成普通来源");
+                    That(!battle.HasConfirmedLukeReward(actor.Character, phase, kind), "错来源确认不消费当前引导领奖义务");
                     session.ConfirmRaidRewardPublished(receipt!);
+                    var confirmedView = battle.View;
+                    session.ConfirmRaidRewardPublished(receipt!);
+                    That(battle.HasConfirmedLukeReward(actor.Character, phase, kind) && ReferenceEquals(confirmedView, battle.View) &&
+                        session.Selected!.Revision == revision, "手动到账后重复确认不重复推进阶段或改变资产");
                 }
             }
         }

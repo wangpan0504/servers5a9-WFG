@@ -251,6 +251,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer), "prey_automatic_reward_result", Current);
                 // 二阶段由原时钟在本批交付后发布完整表，覆盖在线、离线及跨角色恢复分支。
             }
+            if (receipt.Prepared is { RaidType: DfoServer.Game.Raids.RaidKind.Prey, Source: DfoServer.Game.Raids.PreyGuideRewards.Source })
+                await RaidCombatProjection.PublishPreyGuideResultsAsync(context, receipt);
             if (DfoServer.Game.BattlePass.BattlePassUndefeatedSongSource.DeclaresSong(receipt.Prepared) && session.CanPublishRaidReward(receipt))
                 await BattlePassMissionProjection.RefreshAsync(context, (time ?? TimeProvider.System).GetUtcNow());
             if (items is not null && DfoServer.Game.Raids.LukeRewardResults.Bind(receipt, items,
