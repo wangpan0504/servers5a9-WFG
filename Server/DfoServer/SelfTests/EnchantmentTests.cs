@@ -85,6 +85,10 @@ internal static partial class EnchantmentTests
             "名称和说明内的字段文字不能覆盖真实宝珠映射或等级");
         var upgraded = Catalog(files["stackable/bead.stk"] + "[enchant index]\n2\n").Get(beadId);
         That(upgraded is { Upgrade: 2 }, "声明升级索引从宝珠读取，不接受请求末字段伪造升级");
+        That(definition.UsesInstanceUpgrade && upgraded is { UsesInstanceUpgrade: false } &&
+            Catalog(files["stackable/bead.stk"] + "[enchant index]\n2\n").Get(beadId, 1)?.Upgrade == 2 &&
+            Catalog(files["stackable/bead.stk"] + "[enchant index]\n0\n").Get(beadId, 1) is { Upgrade: 0, UsesInstanceUpgrade: false },
+            "仅未声明索引的普通单卡珠使用实例等级，显式零级与固定二级均保留原模板合同");
         foreach (string invalidIndex in new[] { "0.5", "0x0", "0suffix", "0e1", "2.5" })
         {
             string invalidCard = files["stackable/card.stk"].Replace("[enchant index] " + (invalidIndex.StartsWith('2') ? "2" : "0"),
