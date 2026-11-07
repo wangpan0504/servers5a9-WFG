@@ -915,8 +915,9 @@ internal sealed partial class GameSession
         {
             try
             {
+                var preparePassiveDrops = passiveDrops.PrepareEntry(entry, dropPlans.Values.FirstOrDefault());
                 foreach (var plan in route.AllRooms)
-                foreach (var prepared in passiveDrops.Prepare(entry, plan, draw ?? RandomNumberGenerator.GetInt32, DateTimeOffset.UtcNow))
+                foreach (var prepared in preparePassiveDrops(plan, draw ?? RandomNumberGenerator.GetInt32, DateTimeOffset.UtcNow))
                 {
                     var eventId = Guid.NewGuid();
                     for (int ordinal = 0; ordinal < prepared.Contents.Length; ordinal++)

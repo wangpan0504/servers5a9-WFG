@@ -93,7 +93,8 @@ internal sealed class HarlemHellEpicDropPolicy
         // 与末杀装备骰独立：稀有怪先死或最后死都使用自己的死亡事务。默认关闭，不改写PVF零概率。
         if (Rules.LegendRareEpicPermille == 0 || Tayberrs is null || !IsLegendRare(entry, monster)) return plan;
         return new(plan.ResourceSource + ":" + RareRule,
-            plan.Trials.Append(new(Rules.LegendRareEpicPermille, Tayberrs, 1, 1, ProbabilityDenominator: 1000)),
+            plan.Trials.Append(new(Rules.LegendRareEpicPermille, Tayberrs, 1, 1, ProbabilityDenominator: 1000,
+                Category: DungeonDropCategory.Equipment)),
             plan.ReferenceQuality, plan.Amplification);
     }
 

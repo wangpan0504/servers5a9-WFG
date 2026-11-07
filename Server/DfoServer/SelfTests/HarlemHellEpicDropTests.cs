@@ -192,8 +192,15 @@ internal static class HarlemHellEpicDropTests
             var plan = cachedRare(rare with { HellRewardRolls = rolls });
             var extra = plan.Trials.Single(trial => ReferenceEquals(trial.Items, alternate));
             That(extra.Attempts == 1 && extra.Threshold == 50 && extra.ProbabilityDenominator == 1000 &&
-                extra.MinimumCount == 1 && extra.MaximumCount == 1,
+                extra.MinimumCount == 1 && extra.MaximumCount == 1 && extra.Category == DungeonDropCategory.Equipment,
                 "提前击杀与实际末杀都保留一份独立稀有奖励，不随末杀骰数复制");
+            foreach (decimal factor in new[] { 0m, 1m, 2m })
+            {
+                var adjusted = DungeonDropControlSnapshot.Apply(new(plan.ResourceSource, [extra]), new(Equipment: factor, Special: 100));
+                That(adjusted.Trials[0].Threshold == 50 * factor &&
+                    adjusted.Generate(bound => bound == 1000 ? 99 : 0, DateTimeOffset.UnixEpoch).Length == (factor == 2 ? 1 : 0),
+                    "星空稀有怪装备接入Equipment，Special不再替代或叠乘，零关闭");
+            }
             var isolated = new DungeonDropGenerationPlan(plan.ResourceSource, [extra]);
             for (int draw = 0; draw < 1000; draw++)
                 That(isolated.Generate(bound => bound == 1000 ? draw : 0, DateTimeOffset.UnixEpoch).Length == (draw < 50 ? 1 : 0),

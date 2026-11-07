@@ -50,8 +50,11 @@ internal sealed class RiftNamedEpicDropPolicy
     {
         if (Pool(entry, monster) is not { } pool) return plan;
         int confirmed = Math.Clamp(namedKills, 0, MaximumNamedKills);
-        var equipment = new DungeonDropTrial(BaseThreshold + NamedKillThreshold * confirmed, pool, 1, 1,
-            Category: DungeonDropCategory.Equipment);
+        var restrictions = plan.Trials.Where(trial => trial.Category == DungeonDropCategory.Equipment)
+            .SelectMany(trial => trial.DisjointForbiddenRarities ?? ImmutableHashSet<int>.Empty)
+            .ToImmutableHashSet().Union(entry.DisjointForbiddenDropRarities);
+        var equipment = DungeonDropControlSnapshot.ApplyTrial(new(BaseThreshold + NamedKillThreshold * confirmed, pool, 1, 1,
+            Category: DungeonDropCategory.Equipment, DisjointForbiddenRarities: restrictions), plan.DropMultipliers);
         var trials = ImmutableArray.CreateBuilder<DungeonDropTrial>(plan.Trials.Length + 1);
         bool replaced = false;
         foreach (var trial in plan.Trials)
@@ -67,6 +70,8 @@ internal sealed class RiftNamedEpicDropPolicy
         if (!replaced) trials.Add(equipment);
         // 原计划可能已有装备通道，也可能完全没有；最后条目数不固定，不能按预分配容量 MoveToImmutable。
         return new(plan.ResourceSource + ";" + Rule + ";named=" + confirmed, trials.ToImmutable(),
-            plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource };
+            plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource,
+                ExcludeLowEquipment = plan.ExcludeLowEquipment, ExcludeLowMaterials = plan.ExcludeLowMaterials,
+                DropMultipliers = plan.DropMultipliers };
     }
 }

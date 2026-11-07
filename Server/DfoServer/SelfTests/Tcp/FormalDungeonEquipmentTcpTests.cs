@@ -394,6 +394,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Expect(0, 38);
                     // 满级角色停发 NOTI37（见 CharacterExperienceNotice.ShouldPublish），本夹具角色为满级。
                     if (character.Level < CharacterGrowthCatalog.MaximumSupportedLevel) peer.Expect(0, 37);
+                    ExpectAdventureProgress(fixture, resources, peer);
                     if (boss) { peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]); peer.Expect(0, 31, []); }
                 }
                 peer.Barrier();

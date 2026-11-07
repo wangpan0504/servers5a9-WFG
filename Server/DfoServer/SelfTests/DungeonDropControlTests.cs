@@ -81,6 +81,7 @@ internal static partial class DungeonDropControlTests
             listed[2].Probability == 0.125m && listed.All(row => row.Attempts == 2),
             "清单保留稀有度区间、互斥分支与候选权重；每次概率不冒充多次至少一次概率");
         VerifyEquipmentAndFilters();
+        VerifyDirectEpics();
         foreach (var factor in new[] { 0m, 0.5m, 1m, 2m, 100m })
         {
             var comparison = DungeonDropListing.ComparisonRows(plan, new(Materials: factor)).Single();

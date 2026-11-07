@@ -697,7 +697,8 @@ internal static class ServerRuntime
                 epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
                     ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null);
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
-            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
+            passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
+                dropControl.Settings);
             int epicPermille = 1000;
             string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
             if (fragmentRate is not null && (!int.TryParse(fragmentRate, out epicPermille) || epicPermille is < 0 or > 1000))

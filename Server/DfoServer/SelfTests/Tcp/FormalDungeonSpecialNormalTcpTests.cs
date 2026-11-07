@@ -427,6 +427,12 @@ internal static partial class FormalDungeonTcpTests
                         peer.ReadCardMembershipState(packet);
                         continue;
                     }
+                    if (packet is { Kind:0,Opcode:1349 })
+                    {
+                        AssertAdventureProgress(fixture, resources, peer, packet);
+                        packets.Add(packet);
+                        continue;
+                    }
                     if (packet is { Kind:1,Opcode:1002 })
                     {
                         That(packet.Body.Length == 13 && packet.Body[0] == 1 && U64(packet.Body,1) == 1 &&

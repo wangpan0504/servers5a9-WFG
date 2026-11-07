@@ -62,7 +62,9 @@ internal static partial class FormalDungeonTcpTests
                 }
             }
             peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 90));
-            peer.Expect(0, 34); peer.ReadCardMembershipState(); peer.Expect(0, 35);
+            peer.Expect(0, 34);
+            ExpectAdventureProgress(fixture, resources, peer);
+            peer.ReadCardMembershipState(); peer.Expect(0, 35);
             peer.ExpectDazzlementBindings();
             That(peer.DazzlementState[6] == 1, "通关35之后完整1605保持日已用1，界面剩余0/1");
             Drain(peer);

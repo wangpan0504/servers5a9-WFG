@@ -72,38 +72,48 @@ internal sealed class DungeonDropControlSnapshot
     {
         if (rates is null) return plan;
         rates.Validate();
-        var trials = plan.Trials.Select(trial =>
-        {
-            decimal multiplier = rates.For(trial.Category);
-            int threshold = (int)decimal.Min(trial.ProbabilityDenominator, decimal.Floor(trial.Threshold * multiplier));
-            var pools = trial.RarityPools;
-            // 外层装备概率封顶后，剩余史诗倍率进入稀有度骰，不能把封顶误报成史诗继续增加。
-            if (trial.Category == DungeonDropCategory.Equipment && threshold > 0 && !pools.IsDefaultOrEmpty && pools.Length == 7 &&
-                pools[^1].Threshold == DungeonDropRatePlan.RarityDenominator &&
-                pools[4].CandidatePools.Any(pool => pool.TotalWeight > 0))
-            {
-                int original = pools[4].Threshold - pools[3].Threshold;
-                int denominator = DungeonDropRatePlan.RarityDenominator;
-                int enhanced = (int)decimal.Min(denominator, decimal.Floor((decimal)original * trial.Threshold * multiplier / threshold));
-                if (enhanced != original && original < denominator)
-                {
-                    long nonEpic = 0;
-                    int previous = 0;
-                    pools = pools.Select((pool, index) =>
-                    {
-                        int width = pool.Threshold - previous;
-                        previous = pool.Threshold;
-                        if (index != 4) nonEpic += width;
-                        int cumulative = checked((int)(nonEpic * (denominator - enhanced) / (denominator - original)));
-                        return pool with { Threshold = cumulative + (index >= 4 ? enhanced : 0) };
-                    }).ToImmutableArray();
-                }
-            }
-            return trial with { Threshold = threshold, RarityPools = pools };
-        }).ToImmutableArray();
-        return new(plan.ResourceSource + ";drop-control-v2", trials, plan.ReferenceQuality, plan.Amplification)
-            { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource,
+        return new(plan.ResourceSource + ";drop-control-v2", plan.Trials.Select(trial => ApplyTrial(trial, rates)), plan.ReferenceQuality, plan.Amplification)
+            { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource, DropMultipliers = rates,
               ExcludeLowEquipment = rates.ExcludeLowEquipment, ExcludeLowMaterials = rates.ExcludeLowMaterials };
+    }
+
+    public static DungeonDropTrial ApplyTrial(DungeonDropTrial trial, DungeonDropMultipliers? rates)
+    {
+        if (rates is null) return trial;
+        decimal multiplier = rates.For(trial.Category);
+        DungeonEpicDropAdjustment? epicAdjustment = null;
+        if (trial.Category != DungeonDropCategory.Equipment && trial.Items is { Entries.Length: > 0 } direct &&
+            direct.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template)))
+        {
+            if (direct.Entries.All(row => DungeonEpicDropAdjustment.IsEpic(row.Template))) multiplier = rates.Equipment;
+            else if (multiplier != rates.Equipment)
+                epicAdjustment = new(trial.Threshold * rates.Equipment);
+        }
+        int threshold = (int)decimal.Min(trial.ProbabilityDenominator, decimal.Floor(trial.Threshold * multiplier));
+        var pools = trial.RarityPools;
+        // 外层装备概率封顶后，剩余史诗倍率进入稀有度骰，不能把封顶误报成史诗继续增加。
+        if (trial.Category == DungeonDropCategory.Equipment && threshold > 0 && !pools.IsDefaultOrEmpty && pools.Length == 7 &&
+            pools[^1].Threshold == DungeonDropRatePlan.RarityDenominator &&
+            pools[4].CandidatePools.Any(pool => pool.TotalWeight > 0))
+        {
+            int original = pools[4].Threshold - pools[3].Threshold;
+            int denominator = DungeonDropRatePlan.RarityDenominator;
+            int enhanced = (int)decimal.Min(denominator, decimal.Floor((decimal)original * trial.Threshold * multiplier / threshold));
+            if (enhanced != original && original < denominator)
+            {
+                long nonEpic = 0;
+                int previous = 0;
+                pools = pools.Select((pool, index) =>
+                {
+                    int width = pool.Threshold - previous;
+                    previous = pool.Threshold;
+                    if (index != 4) nonEpic += width;
+                    int cumulative = checked((int)(nonEpic * (denominator - enhanced) / (denominator - original)));
+                    return pool with { Threshold = cumulative + (index >= 4 ? enhanced : 0) };
+                }).ToImmutableArray();
+            }
+        }
+        return trial with { Threshold = threshold, RarityPools = pools, EpicAdjustment = epicAdjustment };
     }
 }
 
