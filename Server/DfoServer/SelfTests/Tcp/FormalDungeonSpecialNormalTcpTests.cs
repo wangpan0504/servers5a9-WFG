@@ -520,9 +520,12 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(0,29);
         byte[] info = peer.Expect(0,1488).Body;
         byte[] data = peer.Expect(0,1487).Body;
-        That(info.Length == 4 + 9 * bosses.Length && BinaryPrimitives.ReadInt32LittleEndian(info) == bosses.Length &&
-            BinaryPrimitives.ReadInt32LittleEndian(info.AsSpan(4)) == bosses[0] && info.AsSpan(8,5).ToArray().All(value => value == 0),
-            "1488 按专表 24 条下发怪物编号，后 5 字节保持零");
+        byte[] timeout = peer.Expect(0,1486).Body;
+        That(info.Length == 4 + 9 * 25 && BinaryPrimitives.ReadInt32LittleEndian(info) == 25 &&
+            info.AsSpan(4 + 12 * 9, 9).ToArray().All(value => value == 0),
+            "1488 包含25格并保留空起点，避免后半名单坐标错位");
+        That(timeout.Length == 8 && U32(timeout,0) is >= 100 and <= 120 && U32(timeout,4) == 1,
+            "1486 在原生地图与名单初始化后启动120秒倒计时");
         That(data.Length == 9 && data[0] == 0 && BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(1)) == 0 &&
             BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(5)) is >= 100000 and <= 120000,
             "1487 入场 rank/score 为 0，剩余毫秒取自 120 秒时限");
@@ -541,6 +544,10 @@ internal static partial class FormalDungeonTcpTests
                 bosses.Contains(checked((int)U32(battleMap, 27))),
                 $"337战斗房必须生成专表内可计分怪物，实际模板={U32(battleMap, 27)}");
             int id = checked((int)U32(battleMap,27));
+            int gridOffset = 4 + (point.Y * 5 + point.X) * 9;
+            That(U32(info,gridOffset) == id && info[gridOffset+4] <= 2 &&
+                catalog.BossRush.SoulPoints[info[gridOffset+4]] == catalog.BossRush.SoulFor(bosses.IndexOf(id)),
+                "真实生成怪物与原生按房间坐标查表的ID和灵魂类别一致");
             That(seen.Add(id),"不同战斗房不重复分配同一计分怪");
             Load(peer);
             QuestLifecycleTcpTests.DrainNotifications(peer);

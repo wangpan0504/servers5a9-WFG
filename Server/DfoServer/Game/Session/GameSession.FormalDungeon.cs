@@ -1762,10 +1762,10 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, receipt.Character) && formalDungeon is { } dungeon && dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity && IsCurrentRaidDungeon(dungeon.Entry) &&
         (receipt.ScriptedReturnId == Guid.Empty || CanUseScriptedReturn(dungeon) && dungeon.Run.MatchesScriptedReturn(receipt.ScriptedReturnId)));
 
-    public (ImmutableArray<int> Bosses, BossRushHud Hud)? FormalBossRushView() =>
-        owner.Execute<(ImmutableArray<int> Bosses, BossRushHud Hud)?>(() =>
+    public (ImmutableArray<BossRushRoomInfo> Rooms, BossRushHud Hud)? FormalBossRushView() =>
+        owner.Execute<(ImmutableArray<BossRushRoomInfo> Rooms, BossRushHud Hud)?>(() =>
             formalDungeon is { BossRush: { } rush } dungeon
-                ? (rush.Catalog.Bosses, rush.Hud(dungeon.StartedTimestamp)) : null);
+                ? (rush.RoomInfo(dungeon.Entry.Maze, dungeon.Route), rush.Hud(dungeon.StartedTimestamp)) : null);
 
     public bool AcceptBossRushReport() => owner.Execute(() => formalDungeon?.BossRush is not null);
 

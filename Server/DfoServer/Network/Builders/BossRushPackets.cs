@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Network.Builders;
 
@@ -17,13 +18,26 @@ internal static class BossRushPackets
         return body;
     }
 
-    public static byte[] DungeonInfo(ImmutableArray<int> bosses)
+    public static byte[] Timeout(int seconds)
     {
-        if (bosses.IsDefaultOrEmpty) throw new InvalidDataException("BossRush 名单为空");
-        byte[] body = new byte[4 + 9 * bosses.Length];
-        BinaryPrimitives.WriteInt32LittleEndian(body, bosses.Length);
-        for (int i = 0; i < bosses.Length; i++)
-            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4 + i * 9), bosses[i]);
+        if (seconds <= 0) throw new ArgumentOutOfRangeException(nameof(seconds));
+        byte[] body = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(body, seconds);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4), 1);
+        return body;
+    }
+
+    public static byte[] DungeonInfo(ImmutableArray<BossRushRoomInfo> rooms)
+    {
+        if (rooms.IsDefaultOrEmpty) throw new InvalidDataException("BossRush 房间名单为空");
+        byte[] body = new byte[4 + 9 * rooms.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(body, rooms.Length);
+        for (int i = 0; i < rooms.Length; i++)
+        {
+            if (rooms[i].MonsterId < 0 || rooms[i].SoulType > 2) throw new InvalidDataException("BossRush 房间名单非法");
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(4 + i * 9), rooms[i].MonsterId);
+            body[8 + i * 9] = rooms[i].SoulType;
+        }
         return body;
     }
 
