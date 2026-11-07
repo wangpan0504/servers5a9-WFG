@@ -493,6 +493,7 @@ internal static class SelfTestRunner
         EnhancementPotionTests.RunCore();
         UpgradeChronicleServiceTests.RunCore();
         ChronicleEnchantTests.RunCore();
+        Testing.Inventory.EquipmentEffectTests.RunCore();
         OtherverseAncientTests.RunCore();
         RecipeCraftServiceTests.RunCore();
         ConsumableStateTests.RunCore();

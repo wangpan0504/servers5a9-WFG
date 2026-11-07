@@ -49,6 +49,7 @@ internal sealed class InventoryEquipmentTransmissionService(ItemCatalog items, E
         // 本版窗口只承诺附魔、徽章及镶嵌栏覆盖；不能复制供体的强化、品级或未知扩展。
         var inherited = target.Core with
         {
+            Rune = 0,
             EnchantCardId = donor.Core.EnchantCardId,
             EnchantUpgrade = donor.Core.EnchantUpgrade,
             EmblemSocketCount = donor.Core.EmblemSocketCount,

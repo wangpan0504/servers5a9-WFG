@@ -67,6 +67,8 @@ internal sealed class EquipmentTransportService(Func<int, ItemTemplate> items, F
         }
         // 艾肯只解除套装，单件词条、品级、强化和其他核心属性保持原实例。
         var core = target.Core;
+        // 特效符文只豁免跨界石转入账号仓库；其他跨角色转移移除特效。
+        if (request.Mode != 0 && core.Kind == ItemKind.Equipment) core = core with { Rune = 0 };
         if (template.Echon is not null)
             core = (EchonEquipmentState.Read(core) with { SetIndex = 0 }).Apply(core) with { EchonSet = null };
         var transferred = target with { Core = core };

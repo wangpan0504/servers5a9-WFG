@@ -628,6 +628,7 @@ internal static class TcpRegressionTests
         ("equipment-upgrade", EquipmentUpgradeTcpTests.RunAsync),
         ("echon-equipment", EchonEquipmentTcpTests.RunAsync),
         ("equipment-transmission", EquipmentTransmissionTcpTests.RunAsync),
+        ("equipment-effect", EquipmentEffectTcpTests.RunAsync),
         ("weapon-skin", WeaponSkinTcpTests.RunAsync),
         ("emoticon", EmoticonTcpTests.RunAsync),
         ("skin-recent", SkinRecentTcpTests.RunAsync),
