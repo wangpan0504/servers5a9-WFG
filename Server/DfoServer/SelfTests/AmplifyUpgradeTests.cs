@@ -503,6 +503,10 @@ internal static class AmplifyUpgradeTests
         var boosted = service.Plan(treated, request, out var boostedReceipt);
         That(plain.Accepted && plainReceipt is { OutcomeCode: 1, NewLevel: 9 } && boosted.Accepted &&
             boostedReceipt is { OutcomeCode: 0, NewLevel: 10 } && random.Calls == calls + 2 &&
+            plainReceipt.BaseSuccessPercent == (100000 - baseFailure) / 1000m &&
+            plainReceipt.SuccessPercent == plainReceipt.BaseSuccessPercent &&
+            boostedReceipt.BaseSuccessPercent == plainReceipt.BaseSuccessPercent &&
+            boostedReceipt.SuccessPercent > plainReceipt.SuccessPercent &&
             boostedReceipt.MaterialRemaining == plainReceipt.MaterialRemaining && boosted.Plan!.After.Gold == plain.Plan!.After.Gold &&
             boosted.Plan.After.Find(request.Target) == actor.Inventory.Find(request.Target)! with
                 { Core = actor.Inventory.Find(request.Target)!.Core with { Attr = 0xEA } },

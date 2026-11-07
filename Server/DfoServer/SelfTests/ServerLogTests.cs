@@ -58,6 +58,8 @@ internal static class ServerLogTests
                     Reason = "committed", Accepted = true, Phase = 1, CharacterId = 7, Revision = 4, Level = 25, Job = 0, GrowType = 0, ActiveQuestCount = 1 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = true, Reason = "committed", SourceUid = 7 });
                 log.Write("consumable_use", new { Connection = 1, Item = 1108, Slot = 65, Accepted = false, Reason = "cooldown" });
+                log.Write("enhancement", new { Connection = 1, Accepted = true, OldLevel = 4, NewLevel = 5,
+                    BaseSuccessPercent = 80m, SuccessPercent = 88m });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 1, Accepted = true, Result = "committed", Revision = 2 });
                 log.Write("random_option_change", new { Connection = 1, Slot = 13, OptionIndex = 0, Accepted = false, Error = 4 });
                 log.Write("cash_shop_buy", new { Connection = 1, Count = 1, Commodities = "270623", Accepted = true, Result = "committed", Revision = 3 });
@@ -74,6 +76,9 @@ internal static class ServerLogTests
                 log.Write("db_slow", new { Stage = "write_transaction", Action = "CharacterRepository.Save", ElapsedMs = 1523,
                     SqlHead = "UPDATE characters SET revision=revision+1", Connection = 7 });
                 string text = output.ToString();
+                TestCheck.That(text.Contains("[INFO] [enhancement] Equipment enhancement:") &&
+                    text.Contains("BaseSuccessPercent=80 SuccessPercent=88"),
+                    "强化提交日志按英文纯文本显示实际基础及最终成功百分比");
                 TestCheck.That(text.Contains("[INFO] [server_ready] Server ready") && text.Contains("[WARN] [auth_rejected]") &&
                     text.Contains("[WARN] [formal_dungeon_entry]"), "English events expose readiness and rejection severity");
                 TestCheck.That(text.Contains("[WARN] [db_busy] Database busy") && text.Contains("Stage=dispatch Attempts=5") &&
@@ -139,7 +144,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 101 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
+            TestCheck.That(fileLines.Length == 102 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

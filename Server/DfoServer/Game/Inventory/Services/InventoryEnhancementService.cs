@@ -105,13 +105,15 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
         receipt = new(EnhancementMode.Reinforce, request.Target, request.MaterialSlot, source.Core.Count - coins, oldLevel, outcome.Level, outcome.Code == 0)
-        { OutcomeCode = outcome.Code, Path = 0, GoldCost = 0, InPlace = true, Refunds = [] };
+        { OutcomeCode = outcome.Code, Path = 0, GoldCost = 0, InPlace = true, Refunds = [],
+            BaseSuccessPercent = (100000 - row.FailureWeight) / 1000m,
+            SuccessPercent = (100000 - row.FailureWeight) / 1000m };
         return new(true, 0, new(before, after, "guild_medal_enhancement", new(character, deadline, Clock)));
     }
 
     internal static InventoryResult Plan(Character character, EnhancementRequest request, long now, EnhancementDefinition definition,
         ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt,
-        int guildSuccessPercent = 0, int potionSuccessBonusWeight = 0)
+        int guildSuccessPercent = 0, long potionSuccessBonusWeight = 0)
     {
         receipt = null;
         var before = character.Inventory;
@@ -171,7 +173,9 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
         receipt = new(request.Mode, request.Target, request.MaterialSlot, source.Core.Count - 1, oldLevel, newLevel, succeeded)
-            { Path = randomLevel ? (byte)1 : (byte)0, InPlace = randomLevel };
+            { Path = randomLevel ? (byte)1 : (byte)0, InPlace = randomLevel,
+                BaseSuccessPercent = randomLevel ? null : definition.SuccessWeight / 100m,
+                SuccessPercent = randomLevel ? null : successWeight / 100m };
         return new(true, 0, new(before, after, "equipment_enhancement_ticket", new(character, deadline)));
     }
 
