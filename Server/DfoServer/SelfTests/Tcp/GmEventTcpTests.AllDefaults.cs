@@ -10,6 +10,15 @@ internal static partial class GmEventTcpTests
     {
         uint end = checked((uint)Convert.ToInt64(fixture.Query("SELECT end_utc FROM battle_pass_season_rules").Single()[0]));
         using var peer = Open(fixture);
+        peer.BeforeAccountMaterialInitialization = current =>
+        {
+            // 确定性制造旧快照晚读取：先等真实日补给提交，再消费原始563，不能拿此时的新SQL余额回填初始预期。
+            That(SpinWait.SpinUntil(() => fixture.Query("""
+                SELECT m.balance FROM account_material_balances m JOIN characters c ON c.account=m.account
+                WHERE c.id=$p0 AND m.item_id=490013685
+                """, current.Id) is [[100L]], TimeSpan.FromSeconds(5)),
+                "读取初始化563前真实谋略战日补给已提交100币");
+        };
         peer.BeforeMileageInitialization = current =>
         {
             byte[] npc = current.Expect(0, 639).Body;
@@ -65,6 +74,7 @@ internal static partial class GmEventTcpTests
             That(stream.Position == stream.Length, "全部活动目录及状态完整消费，无未知尾部");
         };
         peer.Select();
+        That(peer.AccountMaterials.Count == 0, "563初始账号快照仍为空，不提前混入后续日补给或角色星河实体");
         byte[] initialCommon = peer.InitialAccountMaterialLists.Single(row => row.Body is [45, ..]).Body;
         That(initialCommon.Length == 126 && U16(initialCommon, 1) == 1 && U16(initialCommon, 3) == 0 &&
             U32(initialCommon, 5) == 490013716 && U32(initialCommon, 9) == 150,
@@ -108,6 +118,8 @@ internal static partial class GmEventTcpTests
         switched.BeforeMileageInitialization = peer.BeforeMileageInitialization;
         switched.ValidateNativePromotionEvents = peer.ValidateNativePromotionEvents;
         switched.Select(1);
+        That(switched.AccountMaterials.Count == 1 && switched.AccountMaterials.GetValueOrDefault(490013685) == 100,
+            "同账号换角按新的已提交快照精确初始化100币，不复制角色实体或重复日补给");
         byte[] switchedCommon = switched.InitialAccountMaterialLists.Single(row => row.Body is [45, ..]).Body;
         That(switchedCommon.Length == 249 && U16(switchedCommon, 1) == 2 &&
             U16(switchedCommon, 3) == 0 && U32(switchedCommon, 5) == 490013716 && U32(switchedCommon, 9) == 150 &&

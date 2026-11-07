@@ -35,6 +35,7 @@ internal sealed partial class TcpPeer : IDisposable
     };
     readonly NetworkStream stream;
     readonly TcpTestFixture? fixture;
+    readonly string? loginAccount;
     ushort sequence;
     ushort clientSequence;
     internal ushort NextClientSequence => clientSequence;
@@ -156,9 +157,10 @@ internal sealed partial class TcpPeer : IDisposable
     }
 
     public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10, string serverAddress = "127.0.0.1",
-        TcpTestFixture? fixture = null)
+        TcpTestFixture? fixture = null, string? account = null)
     {
         this.fixture = fixture;
+        loginAccount = account?.Trim().ToLowerInvariant();
         this.channelNumber = channelNumber;
         if (fixture?.IsolatedMockBattleSuppressed == true)
             ExpectedOpenEvents = [.. ExpectedOpenEvents.Where(id => id != ServerEventService.NolanVisibilityId)];
@@ -181,7 +183,7 @@ internal sealed partial class TcpPeer : IDisposable
     public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10,
         string serverAddress = "127.0.0.1")
     {
-        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress, fixture: fixture);
+        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress, fixture: fixture, account: account);
         peer.lastBarrierCompleted = peer.UnixTime;
         try
         {
@@ -1099,6 +1101,7 @@ internal sealed partial class TcpPeer : IDisposable
         if (!resumeTown && !requestedRoster && !directSwitch)
             Send(8, [255, 255, 2]);
         long selectionStarted = UnixTime;
+        var accountMaterialInitialization = CaptureAccountMaterialInitialization(slot);
         Send(4, Build(w => w.Write(slot)));
         var expected = prepared ? PreparedEntry : Entry;
         if (resumeTown)
@@ -1304,7 +1307,7 @@ internal sealed partial class TcpPeer : IDisposable
                 StrongwayAccountRewards = Expect(0, 1753, strongwayAccountRewards ?? new byte[24]).Body;
                 TestCheck.That(StrongwayAccountRewards.Length == 24, "强者之路选角恢复六个u32账号奖励字段");
             }
-            if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization();
+            if (notice == ((byte)0, (ushort)427)) ReadAccountMaterialInitialization(accountMaterialInitialization);
             if (notice == ((byte)0, (ushort)124)) ReadSeriaInitialization();
             // 普通入城在124前恢复；换频道等最终24绑定后恢复。
             if (!resumeTown && notice == ((byte)0, (ushort)124)) ReadSceneInitialization();
