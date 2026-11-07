@@ -16,6 +16,7 @@ internal static class ServerLogTests
         string root = Path.Combine(Path.GetTempPath(), "stdout-log-" + Guid.NewGuid().ToString("N"));
         try
         {
+            CheckQuietStartupFailure(root);
             using var output = new StringWriter();
             using (var log = new ServerLog(root, output))
             {
@@ -200,6 +201,53 @@ internal static class ServerLogTests
     sealed class EmptyProtocol : IConnectionProtocol
     {
         public Task RunAsync(ConnectionContext connection) => Task.CompletedTask;
+    }
+
+    static void CheckQuietStartupFailure(string root)
+    {
+        string quietRoot = Path.Combine(root, "quiet-failure");
+        using var failureOutput = new StringWriter();
+        using (var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: failureOutput))
+        {
+            log.Write("startup", new { Stage = "Configuration", State = "starting" });
+            log.Write("recv", new { Body = "must-not-log" });
+            log.Write("auth_rejected", new { Message = "must-not-log" });
+            TestCheck.That(failureOutput.ToString().Length == 0 && !Directory.Exists(quietRoot),
+                "关闭日志时普通进度、包体和业务拒绝不输出或创建日志目录");
+            log.Write("listener_failed", new { Stage = "Game listener", Reason = "SocketException", Message = "Address already in use" });
+            log.Write("server_failed", new { Stage = "Listeners", Reason = "SocketException", Message = "outer exception" });
+            TestCheck.That(failureOutput.ToString() == "Server failed at Game listener: SocketException: Address already in use" + Environment.NewLine,
+                "关闭日志时保留具体监听阶段的首因，外层失败不重复或覆盖");
+        }
+        using var longOutput = new StringWriter();
+        using (var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: longOutput))
+        {
+            log.Write("server_failed", new { Stage = "Resources", Reason = "InvalidDataException", Message = "bad\r\nresource " + new string('x', 8192) });
+            string text = longOutput.ToString();
+            TestCheck.That(text.StartsWith("Server failed at Resources: InvalidDataException: bad\\r\\nresource ", StringComparison.Ordinal) &&
+                text.Length <= 2048 + Environment.NewLine.Length && text.EndsWith("..." + Environment.NewLine, StringComparison.Ordinal) &&
+                text.Count(c => c == '\n') == 1 && !Directory.Exists(quietRoot),
+                "关闭日志时首因归一为单行且最多2048字符，不写文件");
+        }
+        foreach (bool disposed in new[] { false, true })
+        {
+            using var failedOutput = new FailedWriter(disposed);
+            using var log = new ServerLog(quietRoot, fileEnabled: false, failureOutput: failedOutput);
+            log.Write("server_failed", new { Stage = "Resources", Reason = "IOException", Message = "original failure" });
+            log.Write("server_failed", new { Stage = "Resources", Reason = "IOException", Message = "duplicate failure" });
+            TestCheck.That(failedOutput.Attempts == 1, "诊断管道不可写或已关闭不覆盖原失败，也不重复尝试");
+        }
+    }
+
+    sealed class FailedWriter(bool disposed) : StringWriter
+    {
+        public int Attempts { get; private set; }
+        public override void WriteLine(string? value)
+        {
+            Attempts++;
+            if (disposed) throw new ObjectDisposedException(nameof(FailedWriter));
+            throw new IOException("fixture output unavailable");
+        }
     }
 
     // 探针值而不是真实 schema 版本：证明 ready.json 写的是宿主收到的参数，不是别处抄来的常量。

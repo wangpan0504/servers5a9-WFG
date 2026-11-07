@@ -61,10 +61,11 @@ internal static class MonsterCardUpgradeTcpTests
             peer.Barrier();
             peer.Send(603, request);
             peer.Expect(1, 603, Convert.FromHexString("010185549D0001"));
+            ExpectCardReload(peer, 233);
             var delta = peer.Expect(0, 14).Body;
             That(delta.Length == 495 && delta[0] == 0 && U16(delta, 1) == 4 && U16(delta, 3) == 233 &&
                 U32(delta, 5) == 10310789 && U32(delta, 9) == 1 && delta[21] == 1,
-                "603结果ACK后以NOTI14完整物品行同步目标真实等级与材料四槽变化");
+                "603结果ACK后先清旧卡，再以NOTI14完整物品行同步目标真实等级与材料四槽变化");
             for (int index = 1; index < 4; index++)
                 That(U16(delta, 3 + index * 123) == 233 + index && U32(delta, 5 + index * 123) == uint.MaxValue,
                     "每个消耗完的材料槽显式清空，不靠结果窗口猜测扣除");
@@ -100,6 +101,7 @@ internal static class MonsterCardUpgradeTcpTests
                 "普通卡整堆三张仅一张升级，材料只扣一张，新实例分配真实UID，剩余五张不丢失");
             peer.Send(603, Convert.FromHexString("00E9000100E900"));
             peer.Expect(1, 603, Convert.FromHexString("0101240E000001"));
+            ExpectCardReload(peer, 233);
             peer.Expect(0, 14);
             peer.Barrier();
             rows = Rows("StackTcp");
@@ -111,6 +113,22 @@ internal static class MonsterCardUpgradeTcpTests
             peer.Expect(1, 603, [0, 22, 0]);
             peer.Barrier();
             That(Snapshot("StackTcp") == afterSameSource, "同源堆仅余目标时拒绝重发，资产和revision不变");
+            long targetUid = Convert.ToInt64(rows.Single(row => Convert.ToInt64(row[1]) == 233)[2]);
+            for (byte level = 2; level <= 3; level++)
+            {
+                peer.Send(603, Convert.FromHexString("00E9000100EA00"));
+                peer.Expect(1, 603, [1, 1, 0x24, 0x0E, 0, 0, level]);
+                ExpectCardReload(peer, 233);
+                var upgraded = peer.Expect(0, 14).Body;
+                That(upgraded.Length == 249 && U16(upgraded, 1) == 2 && U16(upgraded, 3) == 233 &&
+                    U32(upgraded, 5) == 3620 && upgraded[21] == level && U16(upgraded, 126) == 234 &&
+                    U32(upgraded, 128) == (level == 2 ? 3620u : uint.MaxValue),
+                    "同一连接连续升级每次先重建目标，再同步实际等级及材料余量，不清空未升级的材料堆");
+                peer.Barrier();
+                That(Rows("StackTcp").Any(row => Convert.ToInt64(row[1]) == 233 &&
+                    Convert.ToInt64(row[2]) == targetUid && Convert.ToInt64(row[4]) == 1 && Convert.ToInt64(row[5]) == level),
+                    "客户端重建不更换服务端UID，也不重复扣目标数量");
+            }
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
@@ -124,5 +142,13 @@ internal static class MonsterCardUpgradeTcpTests
             WHERE c.name=$p0 ORDER BY s.list_type,s.slot_index
             """, name);
         string Snapshot(string name) => System.Text.Json.JsonSerializer.Serialize(Rows(name));
+    }
+
+    static void ExpectCardReload(TcpPeer peer, ushort slot)
+    {
+        var clear = peer.Expect(0, 14).Body;
+        That(clear.Length == 126 && clear[0] == 0 && U16(clear, 1) == 1 && U16(clear, 3) == slot &&
+            U32(clear, 5) == uint.MaxValue,
+            "同模板等级变化先只清目标槽，避免原生NOTI14同对象分支保留旧EnchantUpgrade");
     }
 }

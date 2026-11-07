@@ -237,6 +237,11 @@ public static class ServerApplication
                 Directory.CreateDirectory(options.DataDirectory);
                 return new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             });
+            Load("Save import recovery", () =>
+            {
+                SaveImportGuard.RequireNoPending(options.DataDirectory);
+                return true;
+            });
             if (command.Kind == ServerCommandKind.PrepareCharacter)
             {
                 OfflineCharacterPreparation.Run(options, pvf, towns, command.Arguments[0], command.Arguments[1]);
@@ -302,7 +307,7 @@ public static class ServerApplication
         }
         catch (Exception error) when (log is not null)
         {
-            Console.Error.WriteLine($"Server failed at {stage}: {error}");
+            if (options.FileLogsEnabled) Console.Error.WriteLine($"Server failed at {stage}: {error}");
             log.Write("server_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message });
             return 1;
         }
