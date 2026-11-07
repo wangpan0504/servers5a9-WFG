@@ -176,6 +176,27 @@ internal static class ExpertJobCraftTests
         That(scripts.TryCardRecipe(cardId, out var recipe) && recipe.RecipeId == 10015132 && recipe.BeadId == beadId &&
             enchantments.CardMaximumLevel(cardId) == 1 && enchantments.Get(beadId) is { UsesInstanceUpgrade: true },
             "瑟尔莫升级卡沿EXJ原成品10305865，不替换账号珠或积分珠");
+        int upgradeablePairs = 0;
+        foreach (int knownCard in scripts.KnownCards(1))
+        {
+            if (!items.TryGet(knownCard, out _) || !scripts.TryCardRecipe(knownCard, out var knownRecipe) ||
+                !items.TryGet(knownRecipe.BeadId, out _)) continue;
+            byte maxUpgrade = enchantments.CardMaximumLevel(knownCard);
+            if (maxUpgrade == 0) continue;
+            upgradeablePairs++;
+            for (byte level = 1; level <= maxUpgrade; level++)
+                That(enchantments.Get(knownRecipe.BeadId, level) is { CardItemId: var mappedCard, Upgrade: var mappedLevel, UsesInstanceUpgrade: true } &&
+                    mappedCard == knownCard && mappedLevel == level,
+                    $"EXJ可升级卡片 {knownCard} 的 {level}/{maxUpgrade} 级制珠成品 {knownRecipe.BeadId} 均能解析对应实例等级");
+        }
+        That(upgradeablePairs == 272, "EXJ全部可升级卡片制珠映射完整覆盖满级实例: " + upgradeablePairs);
+        const int rosenCardId = 10306743, rosenBeadId = 10306744, rosenRecipeId = 10159564;
+        That(scripts.TryCardRecipe(rosenCardId, out var rosenRecipe) && rosenRecipe.RecipeId == rosenRecipeId &&
+            rosenRecipe.BeadId == rosenBeadId && enchantments.CardMaximumLevel(rosenCardId) == 2 &&
+            enchantments.ReadEffects(rosenCardId, 2) is var rosenEffects &&
+            rosenEffects.Any(row => row.Tag == "[water attack]" && row.IntegerValues.SequenceEqual([25])) &&
+            rosenEffects.Any(row => row.Tag == "[light attack]" && row.IntegerValues.SequenceEqual([25])),
+            "寒冰之行星-罗什卡片满级2/2对应10159564配方与10306744宝珠及25冰光强效果");
         var effects = enchantments.ReadEffects(cardId, 1);
         That(effects.Length == 2 && effects.Any(row => row.Tag == "[separate attack]" && row.IntegerValues.SequenceEqual([50, 50])) &&
             effects.Any(row => row.Tag == "[physical attack]" && row.IntegerValues.SequenceEqual([20])),
@@ -277,6 +298,27 @@ internal static class ExpertJobCraftTests
             foreach (string part in new[] { "weapon", "coat", "pants" })
                 That(enchantments.CanEnchantCard(cardId, 1, items.Get(27308) with { EquipmentSlot = ItemCatalog.Slot(part) }),
                     "同级真实卡资格保留部位 " + part);
+            var rosenSupplies = InventoryRewardGrantService.TryGrantBatch(enchanted,
+                new InventoryReward[] { new(rosenCardId, 1) { EnchantUpgrade = 2 } }
+                    .Concat(rosenRecipe.Materials.Concat(rosenRecipe.BeadMaterials).Select(row => new InventoryReward(row.ItemId, row.Count))).ToArray(),
+                items, resources.GoldLimits, resources.EpicPieces);
+            That(rosenSupplies.Accepted, "寒冰之行星-罗什满级2/2卡片及制珠材料准备成功");
+            var rosenSeed = repository.CommitInventory(owner, enchanted, rosenSupplies.Plan!) with
+            {
+                ExpertJobExperience = scripts.ExperienceForLevel(1, rosenRecipe.RequiredLevel),
+                ExpertJobRecipes = enchanted.ExpertJobRecipes.Add(rosenRecipeId)
+            };
+            var rosenCard = rosenSeed.Inventory.Items.Single(row => row.Core.ItemId == rosenCardId);
+            That(!ExpertJobCraft.TryPlan(rosenSeed with { Inventory = rosenSeed.Inventory with { Items = rosenSeed.Inventory.Items.Replace(
+                    rosenCard, rosenCard with { Core = rosenCard.Core with { EnchantUpgrade = 3 } }) } },
+                scripts, items, resources.GoldLimits, resources.EpicPieces, rosenRecipeId, 1, (ushort)rosenCard.Position.Index,
+                _ => 0, DateTimeOffset.UtcNow, out _, out _, enchantments),
+                "超出寒冰之行星-罗什2/2上限的伪造三级卡片拒绝制珠");
+            That(ExpertJobCraft.TryPlan(rosenSeed, scripts, items, resources.GoldLimits, resources.EpicPieces,
+                rosenRecipeId, 1, (ushort)rosenCard.Position.Index, _ => 0, DateTimeOffset.UtcNow, out var rosenCraft, out _, enchantments) &&
+                rosenCraft.SuccessCount == 1 && rosenCraft.FailureCount == 0 &&
+                rosenCraft.Inventory.After.Items.Single(row => row.Core.ItemId == rosenBeadId).Core is { EnchantUpgrade: 2, Count: 1 },
+                "寒冰之行星-罗什满级2/2卡片成功转为携带EnchantUpgrade=2的10306744宝珠");
             passed = true;
             void Sql(string sql) { using var db = database.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
         }
