@@ -25,6 +25,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
 {
     public DungeonRarityBonusGroup RarityBonusGroup { get; init; }
     public DungeonEquipmentRarityAdjustment? EquipmentRarityAdjustment { get; init; }
+    // 仅正式深渊碎片骰登记。入场预留上界，死亡时才把本人冻结增量变为实际次数。
+    public int EpicPieceBonusCapacity { get; init; }
     public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
     {
         Threshold = (int)Math.Min(ProbabilityDenominator, (long)Threshold * numerator / denominator),
@@ -46,6 +48,23 @@ internal sealed class DungeonDropGenerationPlan
     public bool ExcludeLowMaterials { get; init; }
     public DungeonDropMultipliers? DropMultipliers { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
+    public bool AcceptsEpicPieceBonus => Trials.Any(trial => trial.EpicPieceBonusCapacity > 0);
+
+    public DungeonDropGenerationPlan WithEpicPieceBonus(int count)
+    {
+        if (count < 0) throw new InvalidDataException("额外史诗碎片数量不能为负数");
+        if (count == 0 || !AcceptsEpicPieceBonus) return this;
+        return new(ResourceSource, Trials.Select(trial =>
+        {
+            if (trial.EpicPieceBonusCapacity == 0) return trial;
+            if (count > trial.EpicPieceBonusCapacity) throw new InvalidDataException("额外史诗碎片超过本次入场预留");
+            return trial with { Attempts = checked(trial.Attempts + count), EpicPieceBonusCapacity = 0 };
+        }), ReferenceQuality, Amplification)
+        {
+            OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment,
+            ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers
+        };
+    }
     public DungeonDropGenerationPlan WithEquipmentRarityBonus(EquipmentRarityBonus bonus)
     {
         if (bonus.IsEmpty) return this;
@@ -171,6 +190,10 @@ internal sealed class DungeonDropGenerationPlan
             if (trial.EpicAdjustment is { } adjustment && (trial.Items is null || trial.Items.TotalWeight <= 0 ||
                 adjustment.EpicThreshold < 0 || !trial.Items.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template))))
                 throw new InvalidDataException("史诗混池倍率须绑定原直接候选及非负概率");
+            if (trial.EpicPieceBonusCapacity < 0 || trial.EpicPieceBonusCapacity > 0 &&
+                (trial.Items is not { TotalWeight: > 0 } || trial.MinimumCount != 1 || trial.MaximumCount != 1 ||
+                 trial.ItemCounts is not null || trial.Items.Entries.Any(row => row.Template.Kind != ItemKind.Material)))
+                throw new InvalidDataException("额外史诗碎片须绑定单片材料候选及非负预留");
             if (trial.EquipmentRarityAdjustment is { } rarityAdjustment && (trial.Items is not { TotalWeight: > 0 } ||
                 rarityAdjustment.Bonus.RarePercent < 0 || rarityAdjustment.Bonus.UniquePercent < 0 ||
                 trial.RarityBonusGroup is not (DungeonRarityBonusGroup.MonsterSpecific or DungeonRarityBonusGroup.IndependentLottery or
@@ -230,7 +253,7 @@ internal sealed class DungeonDropGenerationPlan
                     .DefaultIfEmpty(0).Max();
                 objects = Math.Max(objects, replacementObjects);
             }
-            objects *= trial.Attempts;
+            objects *= (long)trial.Attempts + trial.EpicPieceBonusCapacity;
             if (objects > 500 - maximum)
                 throw new InvalidDataException("完整掉落生成计划超过本版通知容量，不能截断来源");
             maximum += checked((int)objects);

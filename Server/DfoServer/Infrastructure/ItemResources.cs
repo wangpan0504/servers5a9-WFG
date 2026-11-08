@@ -32,6 +32,7 @@ internal sealed class ItemResources
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
+    public EpicPieceBonusDropCatalog EpicPieceBonusDrops { get; }
     public EpicPieceShopCatalog? EpicPieceShop { get; }
     public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
@@ -119,6 +120,7 @@ internal sealed class ItemResources
         // 匹配客户端02160930加载器固定读取ShieldWindowNewData.etc，不能并集旧任务表。
         KnightShields = KnightShieldCatalog.Load(archive, KnightShieldCatalog.CurrentPath, Items);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));
+        EpicPieceBonusDrops = new(archive, Items);
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);

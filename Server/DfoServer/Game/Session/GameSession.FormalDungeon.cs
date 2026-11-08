@@ -85,7 +85,7 @@ internal sealed partial class GameSession
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
         public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At,
-            EquipmentRarityBonus RarityBonus)? PendingDeathReward { get; set; }
+            EquipmentRarityBonus RarityBonus, int EpicPieceBonus)? PendingDeathReward { get; set; }
         public DfoServer.Game.Tutorials.TutorialCheckpointPlan? PendingTutorialClear { get; set; }
         public ushort? TutorialClearTarget { get; set; }
         public AssaultModeSelection? Assault { get; init; }
@@ -1529,19 +1529,22 @@ internal sealed partial class GameSession
             dungeon.PendingDeathReward = (pending, basis with
                 { BaseAmount = basis.Amount, Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
                     PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at,
-                items is null ? default : EquipmentRarityBonusPolicy.Capture(Selected, items, at.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule));
+                items is null ? default : EquipmentRarityBonusPolicy.Capture(Selected, items, at.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule),
+                epicPieceBonuses is null ? 0 : EpicPieceBonusDropPolicy.Capture(Selected, epicPieceBonuses, at.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule));
         }
         var frozen = dungeon.PendingDeathReward.Value;
         if (!ReferenceEquals(frozen.Death, pending))
             throw new InvalidOperationException("待提交死亡奖励不能借用另一事件的候选");
         var reward = frozen.Reward;
         FrozenDungeonGroundDeath? loot = null;
+        int appliedEpicPieceBonus = 0;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
         {
             if (dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation))
             {
                 if (dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
                     dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey)) generation = rewardPlan;
+                appliedEpicPieceBonus = generation.AcceptsEpicPieceBonus ? frozen.EpicPieceBonus : 0;
                 if (riftNamedEpics is { } namedEpics && namedEpics.Applies(dungeon.Entry, pending.Monster))
                     generation = namedEpics.Rewrite(generation, dungeon.Entry, pending.Monster,
                         dungeon.Run.ConfirmedDistinctMonsterCount(monster => namedEpics.IsNamedKill(dungeon.Entry, monster)));
@@ -1569,6 +1572,7 @@ internal sealed partial class GameSession
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);
                     boosted = boosted.WithEquipmentRarityBonus(frozen.RarityBonus);
+                    boosted = boosted.WithEpicPieceBonus(frozen.EpicPieceBonus);
                     bool epicRoadAvailable = dungeon.Entry.DungeonId is not (400000097 or 400000098) ||
                         serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active == true;
                     var ordinary = boosted.Generate(dungeon.Draw, now, epicRoadAvailable);
@@ -1640,6 +1644,7 @@ internal sealed partial class GameSession
         {
             Drops = floorDrops,
             EquipmentRarityBonus = frozen.RarityBonus,
+            EpicPieceBonus = appliedEpicPieceBonus,
             DirectPickup = directPickup,
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,

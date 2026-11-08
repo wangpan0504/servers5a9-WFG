@@ -50,6 +50,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
     public DfoServer.GameWorld.Items.EquipmentRarityBonus EquipmentRarityBonus { get; init; }
+    public int EpicPieceBonus { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public Game.Session.TagEvildomClearPreparation? PendingTagEvildomClear { get; init; }
     public Game.Session.ImperialArenaDeathPreparation? PendingImperialArenaDeath { get; init; }
