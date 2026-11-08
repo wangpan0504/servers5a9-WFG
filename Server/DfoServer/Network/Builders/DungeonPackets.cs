@@ -254,7 +254,7 @@ internal static class DungeonPackets
             throw new ArgumentOutOfRangeException(nameof(error));
         return [0, (byte)error, (byte)((ushort)error >> 8), memberSlot];
     }
-    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
+    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，深渊门票/灵石不足沿0233AAA8(0x1B)提示并经03B9F7E0(1,1)复位选图深渊状态。
     public static byte[] HellPartyRejected(DungeonSelectionError code) => SelectionRejected(code);
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)
@@ -584,6 +584,25 @@ internal static class DungeonPackets
         }
         writer.Write((byte)0);
         return bytes.ToArray();
+    }
+
+    // ARAD 0238E160(NOTI 1610 SIMPLE_CLEAR_REWARD_INFO)：u32 count(<=100)，后接 count × (u32 itemId, u32 itemCount)。
+    public static byte[] SimpleClearRewardInfo(IReadOnlyList<SpecialDungeonClearRewardGrant> rewards)
+    {
+        ArgumentNullException.ThrowIfNull(rewards);
+        if (rewards.Count is <= 0 or > 100)
+            throw new InvalidDataException("特殊地下城通关奖励条目数必须在1..100之间");
+        var body = new byte[4 + rewards.Count * 8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)rewards.Count));
+        for (int index = 0; index < rewards.Count; index++)
+        {
+            var reward = rewards[index];
+            if (reward.ItemId <= 0 || reward.Count <= 0)
+                throw new InvalidDataException("特殊地下城通关奖励物品ID与数量必须为正数");
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4 + index * 8), checked((uint)reward.ItemId));
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8 + index * 8), checked((uint)reward.Count));
+        }
+        return body;
     }
 
     // 0238EFE8 只消费当前格的骑乘记录；其它格的 [map] 声明不进入本包。

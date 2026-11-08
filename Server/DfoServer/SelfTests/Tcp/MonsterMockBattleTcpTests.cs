@@ -144,12 +144,9 @@ internal static class MonsterMockBattleTcpTests
                 "真实单抽与五连扣除账号硬币并保存全部六卡，首次召唤完成位同步置2");
             Request(peer, 1736, Command(4, 0, 1));
             var rejected = Request(peer, 1736, Command(2, 0));
-            That(U32(Ack(rejected), 1) != 0 && Material(490013685) == 4550 && Cards() == 6,
-                "锁卡出售被拒且资产、卡册保持");
+            That(U32(Ack(rejected), 1) == 7 && Material(490013685) == 4550 && Cards() == 6,
+                "锁卡放归被拒且资产、卡册保持");
             Request(peer, 1736, Command(4, 0, 0));
-            var sale = Request(peer, 1736, Command(2, 0));
-            That(U32(Ack(sale), 1) != 0 && Material(490013685) == 4550 && Cards() == 6,
-                "出售返币规则未实现时拒绝请求并保持卡册与共享材料");
             var firstTicket = Request(peer, 1736, Command(1, 490013681, 3));
             SummonReceipt(firstTicket, 1, 6);
             ushort ticketSlot = CommonMaterial(firstTicket, 1681, 490013681, 1);
@@ -169,6 +166,9 @@ internal static class MonsterMockBattleTcpTests
             formation[0] = 6; formation[1] = 4; formation[17] = formation[18] = formation[19] = 0;
             Request(peer, 1736, Command(5, payload: formation));
             That(stateBody[140 + 6 * 8] == 4, "原生阵型正文实际保存卡槽6至阵位4");
+            var inLineupRelease = Request(peer, 1736, Command(2, 6));
+            That(U32(Ack(inLineupRelease), 1) == 7 && stateBody[138 + 6 * 8] == 7 && stateBody[140 + 6 * 8] == 4,
+                "上阵卡片放归被拒且阵型与卡槽保持");
             var summonAchievement = Request(peer, 1736, Command(9, 0));
             long claimed = Material(490013685);
             That(claimed == 4550 && stateBody[939] == 1, "成就硬币与领取位同事务直接进入钱包");
@@ -179,6 +179,14 @@ internal static class MonsterMockBattleTcpTests
                 "重复成就领取不再次发币或投递邮件");
             SummonReceipt(Request(peer, 1736, Command(1, 490013680, 1)), 1, 7);
             That(stateBody[974] == 1, "获得使徒卡片立即推进使徒成就，独立于搜索切磋胜负");
+            var released = Request(peer, 1736, Command(2, 0));
+            Bytes(Ack(released), [1, 0, 0, 0, 0, 2, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0],
+                "放归成功回执返回零结果且不携带获得卡槽");
+            That(Material(490013685) == claimed && Cards() == 7 && stateBody[138] == 255 && released.All(row => row.Opcode != 563),
+                "解锁且未上阵卡片放归清空目标卡槽，硬币与共享材料保持不变");
+            var repeatRelease = Request(peer, 1736, Command(2, 0));
+            That(U32(Ack(repeatRelease), 1) == 7 && Cards() == 7 && stateBody[138] == 255,
+                "已放归空槽重复放归被拒且卡册保持");
             Request(peer, 1736, Command(9, 18));
             uint apostleAchievement = Mail($"monster-mock-battle-achievement:{fixture.Options.DevelopmentAccount}:18");
             That(Material(490013681) == 0 && stateBody[975] == 1, "使徒成就先保存领取位和邮件，不直接写入共享材料");
@@ -330,7 +338,7 @@ internal static class MonsterMockBattleTcpTests
             CommonMaterial(fresh.InitialAccountMaterialLists, 13, 490013681, 1);
             That(!File.Exists(Path.Combine(settings, "settings.json")), "无独立设置文件时活动默认开放，仍从原库恢复卡册");
             Request(fresh, 1736, Command(7, 1));
-            That(stateBody[139 + 6 * 8] == 2 && stateBody[140 + 6 * 8] == 4 && U32(stateBody, 190) == 8 && stateBody[37] == 1 &&
+            That(stateBody[138] == 255 && stateBody[139 + 6 * 8] == 2 && stateBody[140 + 6 * 8] == 4 && U32(stateBody, 190) == 8 && stateBody[37] == 1 &&
                 U32(stateBody, 20) == 0 && U32(stateBody, 4) == 30 && U32(stateBody, 8) == 2 &&
                 U32(stateBody, 16) == 0 && DailyMails() == 0,
                 "服务停止两小时后换角恢复完整卡册，离线体力封顶30且同日不重复日邮件");

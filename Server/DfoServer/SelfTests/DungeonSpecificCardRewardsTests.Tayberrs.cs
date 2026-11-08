@@ -1,5 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Quests;
@@ -36,8 +38,18 @@ internal static partial class DungeonSpecificCardRewardsTests
             byte difficulty = (byte)Enumerable.Range(0, 5).First(value => definition.AllowsDifficulty((byte)value, false));
             That(string.Equals(definition.WarriorsDungeon, "Tayberrs", StringComparison.OrdinalIgnoreCase) &&
                 prices.SpecificRewards.TryGetValue(dungeonId, out var rows) &&
-                rows.SequenceEqual([new DungeonSpecificCardItem(itemId, 10000, 1)]),
-                "泰波尔斯三模式各保留类型71的独立固定奖励行：" + dungeonId);
+                rows.SequenceEqual([new DungeonSpecificCardItem(itemId, 10000, 1)]) &&
+                prices.SpecialClearRewards.TryGetValue(dungeonId, out var specialClear) &&
+                specialClear == definition.SpecialClearReward &&
+                specialClear.DungeonType == 71 &&
+                specialClear.MailSender == "泰波尔斯奖励" &&
+                specialClear.MailText == "物品栏空间不足， 泰波尔斯地下城奖励将通过邮件发送。" &&
+                specialClear.Items.SequenceEqual([new SpecialDungeonClearRewardItem(10305821, 1_000_000, 2),
+                    new SpecialDungeonClearRewardItem(10305820, 100_000, 1)]) &&
+                specialClear.Roll(_ => 99_999).SequenceEqual([new SpecialDungeonClearRewardGrant(10305821, 2),
+                    new SpecialDungeonClearRewardGrant(10305820, 1)]) &&
+                specialClear.Roll(_ => 100_000).SequenceEqual([new SpecialDungeonClearRewardGrant(10305821, 2)]),
+                "泰波尔斯三模式各保留类型71的独立固定奖励行与领主直入包灵石/原石声明：" + dungeonId);
             foreach (int roll in new[] { 0, 9999 })
             {
                 var reward = policy.Prepare(definition, difficulty, 1,
@@ -66,8 +78,21 @@ internal static partial class DungeonSpecificCardRewardsTests
                 "泰波尔斯金币牌独立抽时空石，实际黄金牌与黑钻禁用标记优先于会员：" + dungeonId);
         }
 
+        var simpleWire = DungeonPackets.SimpleClearRewardInfo([new(10305821, 2), new(10305820, 1)]);
+        That(simpleWire.Length == 20 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(simpleWire) == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(simpleWire.AsSpan(4)) == 10305821 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(simpleWire.AsSpan(8)) == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(simpleWire.AsSpan(12)) == 10305820 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(simpleWire.AsSpan(16)) == 1,
+            "NOTI 1610 按 count + (itemId,itemCount)*count 编码领主直入包奖励横幅");
+        var storyDefinition = dungeons.Get(TayberrsDropPolicy.StoryDungeonId);
+        That(storyDefinition.IsTayberrsStory && !storyDefinition.IsTayberrs && storyDefinition.SpecialClearReward is null,
+            "泰波尔斯剧情地下城(291100321)标记为无特殊通关奖励");
+
         const int representative = 291100320;
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
+        var monsterDrops = Testing.SelfTestCatalogs.MonsterDrops(pvf);
         var growth = Testing.SelfTestCatalogs.Growth(pvf, skills);
         var kills = Testing.SelfTestCatalogs.KillExperience(pvf);
         var clear = Testing.SelfTestCatalogs.ClearExperience(pvf);
@@ -82,10 +107,39 @@ internal static partial class DungeonSpecificCardRewardsTests
             checked((ushort)(bounds.Y + bounds.Height / 2)));
         var (missions, clock) = DungeonBattlePassRegression.Schedule(pvf);
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-            [.. done.Order()], position: position, items: [(10158964, 1)], timeProvider: clock);
+            [.. done.Order()], position: position, items: [(10158964, 1)], itemCatalog: items.Items, timeProvider: clock);
         DungeonBattlePassRegression.Enable(fixture, missions, clock);
+        var storyCharacter = fixture.Read() with { ActiveMainQuests = [new(0, 6040, 1) { AcceptanceId = Guid.NewGuid() }] };
+        That(DungeonEntryPlan.TryCreate(dungeons, storyCharacter, TayberrsDropPolicy.StoryDungeonId, 6040, 0,
+                out var storyPlan, out var storyReason, quest: quests.Get(6040), quests: quests) &&
+            storyPlan!.IsTayberrsStory && storyPlan.DisableItemDrops,
+            "泰波尔斯剧情地下城(291100321)入场计划标记为无地面掉落：" + storyReason);
+        var (materialStart, materialEnd) = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Material, fixture.Read().Inventory);
+        var fillerTemplate = items.Items.Get(10305616);
+        var fillerCore = InventoryRewardGrantService.Create(fillerTemplate, fillerTemplate.StackLimit);
+        var fullSlots = Enumerable.Range(materialStart, materialEnd - materialStart + 1)
+            .Select(slot => InventoryRewardGrantService.CreateItem(fillerTemplate, new(InventoryListType.Main, (short)slot), fillerCore) with { Uid = (uint)slot })
+            .ToArray();
+        var fullInventoryCharacter = fixture.Read() with
+        {
+            Inventory = fixture.Read().Inventory with
+            {
+                Items = [.. fixture.Read().Inventory.Items.Where(row => row.Position.List != InventoryListType.Main ||
+                    row.Position.Index < materialStart || row.Position.Index > materialEnd), .. fullSlots]
+            }
+        };
+        var specialClearReward = prices.SpecialClearRewards[representative];
+        var overflowGrant = InventoryRewardGrantService.TryGrantDirectItems(fullInventoryCharacter,
+            [new(10305821, 2), new(10305820, 1)], items.Items, clock.GetUtcNow(), allowOverflowMail: true,
+            reason: "special_dungeon_clear_reward", overflowMailSender: specialClearReward.MailSender,
+            overflowMailText: specialClearReward.MailText);
+        That(overflowGrant is { Accepted: true, Plan: { OverflowMailSender: "泰波尔斯奖励",
+                OverflowMailText: "物品栏空间不足， 泰波尔斯地下城奖励将通过邮件发送。" } overflowPlan } &&
+            overflowPlan.OverflowItems.Select(row => (row.Core.ItemId, row.Core.Count)).SequenceEqual([(10305821, 2), (10305820, 1)]),
+            "泰波尔斯领主直入包奖励在物品栏满时按 [mail message] 转存邮件");
         byte entryDifficulty = (byte)Enumerable.Range(0, 5).First(value => dungeons.Get(representative).AllowsDifficulty((byte)value, false));
-        var receipt = fixture.Session.EnterFormalDungeon(representative, 0, entryDifficulty, dungeons, rooms, pieces: items.EpicPieces)!;
+        var receipt = fixture.Session.EnterFormalDungeon(representative, 0, entryDifficulty, dungeons, rooms,
+            drops: monsterDrops, items: items.Items, draw: _ => 0, pieces: items.EpicPieces)!;
         That(receipt is not null, "泰波尔斯翻牌回归沿真实入场票、前置任务和疲劳准入：" + fixture.Session.LastFormalDungeonRejection);
         var path = QuestStoryRouteTests.Path(receipt!.Entry.Maze.StaticTopology, receipt.Entry.StartMap.Position, receipt.Entry.BossMap.Position);
         for (int index = 0; index < path.Length; index++)
@@ -97,6 +151,19 @@ internal static partial class DungeonSpecificCardRewardsTests
                 var death = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
                 That(death is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null },
                     "泰波尔斯真实路线死亡提交成功：" + monster.MonsterId);
+                if (!monster.IsBoss)
+                    That(death.Drops.IsEmpty && death.SpecialClearRewards.IsEmpty && death.SpecialClearRewardSlots.IsEmpty,
+                        "泰波尔斯普通怪与绿名怪无任何地面掉落或特殊通关奖励：" + monster.MonsterId);
+                else
+                    That(!death.Drops.IsEmpty &&
+                        death.Drops.All(drop => drop.Content.GoldAmount == 0 &&
+                            drop.Content.Item?.ItemId is TayberrsDropPolicy.CarbonCrystalId or TayberrsDropPolicy.AbyssInvitationId) &&
+                        death.SpecialClearRewards.SequenceEqual([new SpecialDungeonClearRewardGrant(10305821, 2),
+                            new SpecialDungeonClearRewardGrant(10305820, 1)]) &&
+                        death.SpecialClearRewardSlots.Length == 2 && !death.SpecialClearRewardMailOverflow &&
+                        fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10305821 && row.Core.Count == 2 && row.Uid > 0) &&
+                        fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10305820 && row.Core.Count == 1 && row.Uid > 0),
+                        "泰波尔斯领主地面只掉碳结晶体与深渊票，死亡同事务自动入包灵石x2与原石x1");
                 receipt = death.Receipt!;
             }
             if (index + 1 < path.Length)

@@ -67,6 +67,9 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public DungeonElevatorReceipt? Elevator { get; init; }
     public IReadOnlyList<ActiveMainQuest>? PreviousQuests { get; init; }
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
+    public ImmutableArray<DfoServer.GameWorld.Dungeons.SpecialDungeonClearRewardGrant> SpecialClearRewards { get; init; } = [];
+    public ImmutableArray<InventorySlot> SpecialClearRewardSlots { get; init; } = [];
+    public bool SpecialClearRewardMailOverflow { get; init; }
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }

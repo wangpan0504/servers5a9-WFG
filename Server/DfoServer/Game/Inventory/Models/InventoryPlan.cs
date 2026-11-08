@@ -50,6 +50,8 @@ internal sealed class InventoryPlan
     public BoosterSongAcquisition? BoosterSongAcquisition { get; init; }
     public CashShopPaymentFact? CashShopPayment { get; init; }
     public DfoServer.Game.PcRoom.PcRoomDailyClaim? PcRoomClaim { get; set; }
+    public string? OverflowMailSender { get; init; }
+    public string? OverflowMailText { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -77,7 +79,9 @@ internal sealed class InventoryPlan
     // 业务在规划完成后补写同事务状态（如装扮预设实时保存）：复制全部字段，惰性索引按新快照重算。
     public InventoryPlan WithAfter(InventorySnapshot after, InventoryCharacterPrecondition? precondition = null,
         ImmutableArray<ItemUseIntent>? usedItems = null, long? promotionCatalogRevision = null,
-        InventoryEventPrecondition? requiredEvent = null) => new(Before, after, Reason, precondition ?? CharacterPrecondition, OverflowItems)
+        InventoryEventPrecondition? requiredEvent = null, IReadOnlyList<InventoryItem>? overflowItems = null,
+        string? overflowMailSender = null, string? overflowMailText = null) => new(Before, after, Reason,
+        precondition ?? CharacterPrecondition, overflowItems ?? OverflowItems)
     {
         PreserveMaterials = PreserveMaterials,
         UsedItems = usedItems ?? UsedItems,
@@ -106,7 +110,9 @@ internal sealed class InventoryPlan
         BoosterSongAcquisition = BoosterSongAcquisition,
         CashShopPayment = CashShopPayment,
         PcRoomClaim = PcRoomClaim,
-        ExpBonus = ExpBonus
+        ExpBonus = ExpBonus,
+        OverflowMailSender = overflowMailSender ?? OverflowMailSender,
+        OverflowMailText = overflowMailText ?? OverflowMailText
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;
     public InventoryIndex AfterIndex => afterIndex.Value;

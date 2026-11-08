@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Mailbox;
 using Microsoft.Data.Sqlite;
 
@@ -108,8 +110,12 @@ internal sealed partial class CharacterRepository : IEvildomWarRewardStore
             }
             tx.Commit();
         }
-        var result = DeliverEvildomWarReward(owner, fact.Identity.CharacterId, snapshot, content);
-        return new EvildomWarRewardCommit(plan, result.MailIds, result.Delivered);
+        var result = DeliverEvildomWarReward(owner, fact.Identity.CharacterId, snapshot, content, plan);
+        return new EvildomWarRewardCommit(plan, result.MailIds, result.Delivered)
+        {
+            Character = result.Character,
+            ChangedSlots = result.ChangedSlots
+        };
     });
 
     public ImmutableArray<uint> RecoverEvildomWarRewards(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
@@ -139,10 +145,14 @@ internal sealed partial class CharacterRepository : IEvildomWarRewardStore
     });
 
     // Delivered=true表示此前已提交；本次完成时为false，调用方据此识别幂等回放。
-    sealed record StoredEvildomWarReward(bool Delivered, ImmutableArray<uint> MailIds);
+    sealed record StoredEvildomWarReward(bool Delivered, ImmutableArray<uint> MailIds, Character? Character = null,
+        ImmutableArray<InventorySlot> ChangedSlots = default)
+    {
+        public ImmutableArray<InventorySlot> ChangedSlots { get; init; } = ChangedSlots.IsDefault ? [] : ChangedSlots;
+    }
 
     StoredEvildomWarReward DeliverEvildomWarReward(AccountOwners.Lease owner, ushort characterId,
-        EvildomWarRewardSnapshot snapshot, string content)
+        EvildomWarRewardSnapshot snapshot, string content, EvildomWarRewardPlan? plan = null)
     {
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.DeliverEvildomWarReward");
@@ -152,9 +162,22 @@ internal sealed partial class CharacterRepository : IEvildomWarRewardStore
         if (stored.Delivered) { tx.Commit(); return stored; }
         var recipient = FindMailRecipientById(db, tx, characterId);
         if (recipient is null || recipient.Account != owner.Account) throw new InvalidOperationException("魔界奖励收件归属变化");
+        Character? updatedCharacter = null;
+        ImmutableArray<InventorySlot> changedSlots = [];
+        ImmutableArray<InventoryItem> mailItems = snapshot.Items;
+        InventoryItemRead? itemRead = null;
+        if (plan?.ExpectedCharacter is { } expected && plan.Inventory is { } inventoryPlan)
+        {
+            var directPlan = new InventoryPlan(inventoryPlan.Before, inventoryPlan.After, inventoryPlan.Reason);
+            updatedCharacter = CommitInventoryInTransaction(db, tx, owner, expected, directPlan);
+            changedSlots = directPlan.ChangedSlots;
+            mailItems = inventoryPlan.OverflowItems;
+            if (directPlan.Changed)
+                itemRead = ReadInventoryItemRevision(db, tx, owner.Account, characterId);
+        }
         var mails = ImmutableArray.CreateBuilder<uint>();
         // 每封最多十件，所有邮件和最终回执处于同一事务，不截掉后续完整实例。
-        foreach (var batch in snapshot.Items.Chunk(10))
+        foreach (var batch in mailItems.Chunk(10))
         {
             var delivery = new MailboxDelivery($"evildom-war:{snapshot.Completion.BattleId:N}:{characterId}:{mails.Count}",
                 recipient, "魔界大战", "本场通关奖励已永久保存，请领取附件。", 0, [..batch],
@@ -171,7 +194,9 @@ internal sealed partial class CharacterRepository : IEvildomWarRewardStore
         command.CommandText = "UPDATE character_evildom_war_rewards SET mail_ids=$mails,delivered=1 WHERE character_id=$id AND battle_id=$battle AND delivered=0";
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("魔界奖励回执状态已变化");
         tx.Commit();
-        return new(false, result);
+        if (updatedCharacter is not null && itemRead is { } readRevision)
+            RememberInventoryItems(updatedCharacter.Inventory, readRevision);
+        return new(false, result, updatedCharacter, changedSlots);
     }
 
     static StoredEvildomWarReward? ReadEvildomWarReward(SqliteConnection db, SqliteTransaction tx, string account,

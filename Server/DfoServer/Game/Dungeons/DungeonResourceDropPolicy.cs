@@ -12,7 +12,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null,
     DungeonDropControlSettings? dropControl = null, LegacyHellDropPolicy? legacyHell = null,
     DungeonRiftEpicDropPolicy? riftEpics = null, PandemoniumRegionalDropPolicy? regional = null, AssaultMaterialDropPolicy? assaultMaterials = null,
-    EpicRoad2019SimulatedDropPolicy? epicRoadSimulated = null)
+    EpicRoad2019SimulatedDropPolicy? epicRoadSimulated = null, TayberrsDropPolicy? tayberrs = null)
 {
     public const string Rule = "pvf-monster-reference-v2";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity row[3]",
@@ -23,6 +23,13 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
     public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
     {
+        if (TayberrsDropPolicy.Applies(entry))
+        {
+            var tayberrsPolicy = tayberrs ?? new TayberrsDropPolicy(new(), resolveItem);
+            var tayberrsMultipliers = dropControl?.Current.Resolve(entry);
+            return monster => DungeonDropControlSnapshot.Apply(tayberrsPolicy.Prepare(entry, monster), tayberrsMultipliers)
+                .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities);
+        }
         bool ordinaryLuke = entry.IsOrdinaryLuke && entry.DungeonId is >= 5101 and <= 5106 && entry.IsOrdinary && !entry.IsPractice;
         if (ordinaryLuke && special?.OrdinaryLukeCards.Count != 24)
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
@@ -182,5 +189,15 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
 
         DungeonItemDropPool SpecialPool(IEnumerable<DungeonSpecialDropItem> source) => new(source
             .Where(row => row.ItemId > 0 && row.Weight > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Weight)));
+    }
+
+    public DungeonDropGenerationPlan PrepareTayberrsPreview(DungeonDefinition definition, DungeonPlannedMonster monster)
+    {
+        if (definition.IsTayberrsStory)
+            return new(TayberrsDropPolicy.StoryRule, []);
+        if (!definition.IsTayberrs || !monster.IsBoss ||
+            monster.MonsterId is not (TayberrsDropPolicy.PartyBossMonsterId or TayberrsDropPolicy.SingleBossMonsterId))
+            return new(TayberrsDropPolicy.Rule, []);
+        return (tayberrs ?? new TayberrsDropPolicy(new(), resolveItem)).PrepareBossPreview();
     }
 }

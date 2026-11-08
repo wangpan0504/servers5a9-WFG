@@ -36,7 +36,9 @@ internal sealed class DungeonDropInspection(DungeonCatalog dungeons, DungeonRoom
         bool Matches(DungeonDropControlRule rule) => rule.DungeonIds.IsEmpty || rule.DungeonIds.Contains(dungeonId);
         var rate = snapshot.Enabled ? snapshot.Rules.FirstOrDefault(rule => rule.Scope == scope && Matches(rule))?.Multipliers ??
             snapshot.Rules.FirstOrDefault(rule => rule.Scope == DungeonDropScope.All && Matches(rule))?.Multipliers : null;
-        var original = policy.Prepare(sample.MonsterId, sample.CandidateLevel, sample.RewardType, difficulty, definition.BasisLevel);
+        var original = definition.IsTayberrs || definition.IsTayberrsStory
+            ? policy.PrepareTayberrsPreview(definition, sample)
+            : policy.Prepare(sample.MonsterId, sample.CandidateLevel, sample.RewardType, difficulty, definition.BasisLevel);
         var rows = DungeonDropListing.ComparisonRows(original, rate).Skip(checked(page * 64)).Take(65).ToArray();
         return "OK " + JsonSerializer.Serialize(new { dungeonId, scope = scope.ToString(), difficulty, page,
             monsters = samples.Select((monster, index) => new { index, id = monster.MonsterId, level = monster.CandidateLevel,

@@ -19,9 +19,9 @@ namespace DfoServer.Testing;
 internal static partial class FormalDungeonTcpTests
 {
     // 实验性（#256，未在95客户端实证）：深渊派对入场的真实 TCP，op16 请求 [7]=1。
-    // 1) 未完成 [hell quest] 6080 → NOTI27禁用按钮，强制请求拒绝 [0,9,0,0]；2) 已完成但没有 3330 邀请函 → 拒绝 [0,0x11,0,0]，不落任何入场状态；
+    // 1) 未完成 [hell quest] 6080 → NOTI27禁用按钮，强制请求拒绝 [0,9,0,0]；2) 已完成但没有 3330 邀请函 → 拒绝 [0,0x1B,0,0]，不落任何入场状态；
     // 3) 已完成且有 30 张 3330 → 入场成功，DUNGEON_INFO/START_MAP 带深渊字段，入场提交时扣 30 张 3330（NOTI 14 背包增量 + 库内数量归零 + 入场状态落库）；
-    // 4) 只有 29 张 → 同样 0x11，背包原样。
+    // 4) 只有 29 张 → 同样 0x1B，背包原样。
     static async Task VerifyHellPartyEntryAsync(ServerOptions source,string root,TcpTestResources resources,CharacterGrowthCatalog growth)
     {
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"hell-party-entry"),resources:resources,gm:true);
@@ -64,10 +64,10 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(16,request);
             if (!qualified || tickets < 30)
             {
-                peer.Expect(1,16,[0,(byte)(qualified ? 0x11 : 9),0,0]); peer.Barrier();
+                peer.Expect(1,16,[0,(byte)(qualified ? 0x1B : 9),0,0]); peer.Barrier();
                 That(fixture.Query("SELECT count(*) FROM character_dungeon_state WHERE character_id=$p0 AND last_attempt>0",peer.Id) is [[0L]] &&
                     Tickets(created.Id) == tickets,
-                    "深渊派对拒绝（" + name + "）：" + (qualified ? "票不够以 0x11 拒绝" : "未完成 6080 以错误9恢复") + "，不落入场状态，背包票数不变");
+                    "深渊派对拒绝（" + name + "）：" + (qualified ? "票不够以 0x1B 拒绝" : "未完成 6080 以错误9恢复") + "，不落入场状态，背包票数不变");
                 if (!qualified)
                 {
                     SelectMap(peer, incompleteHellQuest: true, daybreakRemaining: 2);

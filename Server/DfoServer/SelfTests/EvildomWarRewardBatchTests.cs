@@ -227,7 +227,8 @@ internal static class EvildomWarRewardBatchTests
         Console.WriteLine($"PASS evildom war reward batch transactions {Count - before}");
 
         string RewardState(ushort id) => Snapshot("SELECT reward_json,mail_ids,delivered FROM character_evildom_war_rewards WHERE character_id=$id ORDER BY battle_id", id);
-        string Assets(ushort id) => Snapshot("SELECT mail_id,delivery_key,state,expires_at FROM mailbox_messages WHERE recipient_id=$id ORDER BY mail_id", id) + ":" + Snapshot("""
+        string Assets(ushort id) => Snapshot("SELECT list_type,slot_index,item_uid FROM character_inventory_slots WHERE character_id=$id ORDER BY list_type,slot_index", id) + ":" +
+            Snapshot("SELECT mail_id,delivery_key,state,expires_at FROM mailbox_messages WHERE recipient_id=$id ORDER BY mail_id", id) + ":" + Snapshot("""
             SELECT m.mail_id,m.delivery_key,m.expires_at,a.ordinal,a.item_uid,i.item_core
             FROM mailbox_messages m JOIN mailbox_attachments a ON a.mail_id=m.mail_id
             JOIN character_inventory_items i ON i.item_uid=a.item_uid

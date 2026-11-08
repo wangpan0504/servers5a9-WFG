@@ -40,7 +40,7 @@ internal static partial class HellPartyEntryTests
             Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionNotice(incompleteHellQuestMemberSlots: invalid),
                 "拒绝越界、重复或过长的队伍槽位名单");
         Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.Silent), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
-        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.RequiredMaterials), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
+        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.GroupMaterials), [0, 27, 0, 0], "缺门票走0x1B提示并复位选图深渊按钮");
         That(InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 2900 }) &&
             InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 10110 }) &&
             !InfernoQuestUnlock.Satisfied(10110, new HashSet<int>()) &&

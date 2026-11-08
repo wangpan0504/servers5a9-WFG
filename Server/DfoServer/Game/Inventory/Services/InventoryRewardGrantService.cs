@@ -90,6 +90,29 @@ internal static class InventoryRewardGrantService
         => Grant(character, instances.Select(item => new InventoryReward(item.Core.ItemId, item.Core.Count)).ToArray(),
             instances, catalog, goldLimits, pieces, utcNow, allowOverflowMail: allowOverflowMail);
 
+    public static InventoryPlan PlanPreMaterializedRewards(Character character, IReadOnlyList<InventoryItem> instances,
+        ItemCatalog catalog, DateTimeOffset utcNow)
+    {
+        var inventory = character.Inventory;
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, instances.Select(item => item.Core.ItemId), allowOverflowMail: true, overflow);
+        long nowSeconds = utcNow.ToUnixTimeSeconds();
+        foreach (var instance in instances)
+        {
+            var template = catalog.Get(instance.Core.ItemId);
+            if (!InventoryKindCompatibility.AcceptsKind(instance.Core.Kind, template) ||
+                instance.Core.Count <= 0 || instance.Core.Count > template.StackLimit ||
+                instance.IsExpired(nowSeconds))
+                throw new InvalidDataException("无效预冻结奖励实例: " + instance.Core.ItemId);
+            var normalized = instance with { Core = InventoryKindCompatibility.Normalize(instance.Core, template) };
+            if (!placement.TryAdd(template, normalized.Core, normalized.Core.Count, normalized))
+                throw new InvalidDataException("预冻结奖励放置失败: " + instance.Core.ItemId);
+        }
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(inventory, after, "reward_grant", overflowItems: overflow);
+    }
+
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
         PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false, int? rentalDeadline = null)
@@ -284,6 +307,43 @@ internal static class InventoryRewardGrantService
         var after = inventory with { Items = placement.Items() };
         after.Validate(allocating: true);
         return new(true, 0, new(inventory, after, "reward_grant_core"));
+    }
+
+    // 针对无需货币/史诗碎片表参与的直接奖励（如特殊地下城通关领主入包材料）：支持同栈合并、新槽放置及满包溢出邮件。
+    public static InventoryResult TryGrantDirectItems(Character character, IReadOnlyList<InventoryReward> rewards, ItemCatalog catalog,
+        DateTimeOffset? utcNow = null, bool allowOverflowMail = false, string reason = "reward_grant",
+        string? overflowMailSender = null, string? overflowMailText = null)
+    {
+        ArgumentNullException.ThrowIfNull(character);
+        ArgumentNullException.ThrowIfNull(rewards);
+        ArgumentNullException.ThrowIfNull(catalog);
+        var inventory = character.Inventory;
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        foreach (var reward in rewards)
+        {
+            if (reward.Count <= 0 || reward.Upgrade != 0 || reward.Refinement != 0 || reward.EnchantUpgrade != 0 ||
+                CurrencyWallet.RewardKind(reward.ItemId) is not null)
+                return InventoryResult.Reject();
+            var template = catalog.Get(reward.ItemId);
+            if (template.AccountMaterial is not null || template.HasAcquisitionEffect || template.IsPremiumService)
+                return InventoryResult.Reject(19);
+            if (GrantDefinitionError(template, reward, createsInstance: true) is { } definitionError)
+                return InventoryResult.Reject(definitionError);
+            var prototype = Create(template, utcNow: now);
+            if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || prototype.IsExpired(now.ToUnixTimeSeconds()))
+                return InventoryResult.Reject(19);
+            if (!placement.TryAdd(template, prototype, reward.Count))
+                return InventoryResult.Reject(17);
+        }
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(true, 0, new(inventory, after, reason, new(character), overflow)
+        {
+            OverflowMailSender = overflowMailSender,
+            OverflowMailText = overflowMailText
+        });
     }
 
     // 两个grant入口共用一次规划内的放置集合与索引；不是另一份在线背包owner。

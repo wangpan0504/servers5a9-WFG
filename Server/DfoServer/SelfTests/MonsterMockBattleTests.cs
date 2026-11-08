@@ -41,7 +41,13 @@ internal static class MonsterMockBattleTests
             throw new InvalidOperationException("指定召唤不应抽随机数"));
         That(selected.ConsumedItem == 50001 && selected.After.Snapshot.Cards[0] is { CardId: 1, Stars: 2 },
             "零权重指定卡券按池内序号选卡，不将序号误当模板号");
-        Reject<MockBattleRejectedException>(() => MockBattleRules.Apply(catalog, single.After, 2, 0, 0, payload, _ => 0));
+        var released = MockBattleRules.Apply(catalog, single.After, 2, 0, 0, payload, _ => 0);
+        That(released.After.Coins == 900 && released.AcquiredSlots.IsEmpty && released.After.Snapshot.Cards[0].IsEmpty,
+            "放归未锁定且未上阵卡片清空目标槽位，不改变硬币余额或生成新槽回执");
+        Reject<MockBattleRejectedException>(() => MockBattleRules.Apply(catalog, released.After, 2, 0, 0, payload, _ => 0));
+        Reject<MockBattleRejectedException>(() => MockBattleRules.Apply(catalog, single.After, 2, 0, 1, payload, _ => 0));
+        byte[] dirtyPayload = new byte[20]; dirtyPayload[0] = 1;
+        Reject<MockBattleRejectedException>(() => MockBattleRules.Apply(catalog, single.After, 2, 0, 0, dirtyPayload, _ => 0));
         var locked = MockBattleRules.Apply(catalog, single.After, 4, 0, 1, payload, _ => 0).After;
         Reject<MockBattleRejectedException>(() => MockBattleRules.Apply(catalog, locked, 2, 0, 0, payload, _ => 0));
         var duplicate = single.After with { Snapshot = single.After.Snapshot with

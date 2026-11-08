@@ -690,13 +690,21 @@ internal static class ServerRuntime
                     new SpringTreasureDropPolicy(itemResources.SpringTreasureAvatars, itemResources.Items.Get(490705287),
                         () => promotions().Activities.Any(activity => activity.Availability == PromotionAvailability.Active &&
                             activity.Configuration.Rules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package"))));
+            string? configuredTayberrsDrops = Environment.GetEnvironmentVariable("DFO_TAYBERRS_DROP_RULES");
+            var tayberrsDropRules = string.IsNullOrWhiteSpace(configuredTayberrsDrops)
+                ? new TayberrsDropRules()
+                : System.Text.Json.JsonSerializer.Deserialize<TayberrsDropRules>(configuredTayberrsDrops,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    ?? throw new InvalidDataException("DFO_TAYBERRS_DROP_RULES 不能为空对象");
+            var tayberrsDrops = new TayberrsDropPolicy(tayberrsDropRules, itemResources.Items.Get);
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings,legacyHell,riftEpics,
                 regional: new PandemoniumRegionalDropPolicy(dungeonCatalog.Get, itemResources.Items.Get, specialDrops),
                 assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
                 epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
-                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null);
+                    ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null,
+                tayberrs: tayberrsDrops);
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
                 dropControl.Settings);
