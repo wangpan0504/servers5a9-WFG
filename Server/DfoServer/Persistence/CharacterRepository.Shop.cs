@@ -35,6 +35,8 @@ internal sealed partial class CharacterRepository
     static void WriteShopPurchases(SqliteConnection db, SqliteTransaction transaction, string account, ushort characterId,
         InventorySnapshot before, InventorySnapshot after)
     {
+        if (ShopPurchaseCount.Same(before.ShopPurchases, after.ShopPurchases))
+            return;
         if (before.ShopPurchases.Any(old => !after.ShopPurchases.Any(old.SameKey)))
             throw new InvalidOperationException("商店业务不能删除既有限购记录");
         using var command = db.CreateCommand();

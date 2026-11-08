@@ -41,7 +41,7 @@ internal sealed record ShopPurchaseCount(int NpcId, int ItemId, bool AccountWide
         return new DateTimeOffset(next.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-2).ToUnixTimeSeconds();
     }
     public static bool Same(ImmutableArray<ShopPurchaseCount> left, ImmutableArray<ShopPurchaseCount> right) =>
-        left.Length == right.Length && left.ToHashSet().SetEquals(right);
+        left == right || left.Length == right.Length && (left.IsEmpty || left.ToHashSet().SetEquals(right));
 }
 
 internal sealed record ShopMaterialBalance(int ItemId, long Remaining);

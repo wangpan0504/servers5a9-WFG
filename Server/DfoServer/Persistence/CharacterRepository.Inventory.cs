@@ -283,7 +283,8 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitInventory");
         using var transaction = write.Transaction;
-        var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan);
+        var loaded = Require(db, transaction, owner.Account, expected.Name, expected.Inventory);
+        var character = CommitInventoryInTransaction(db, transaction, owner, loaded, expected, plan);
         var itemRead = ReadInventoryItemRevision(db, transaction, owner.Account, character.Id);
         if (plan.PromotionCatalogRevision is { } catalogRevision)
         {
@@ -434,13 +435,17 @@ internal sealed partial class CharacterRepository
         if (!skillSwitch.Same(current.SkillSwitchInventory))
             WriteSkillSwitchInventory(db, transaction, current.Id, owner.Account, skillSwitch);
         var active = current.ActiveMainQuests;
-        if (quests is not null && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
+        if (quests is not null && active.Length > 0 && !plan.Reason.StartsWith("quest_", StringComparison.Ordinal))
         {
             var refreshed = DfoServer.Game.Quests.QuestEventProgress.Inventory(
-                DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)),
+                DfoServer.Game.Quests.QuestInventoryProgress.Refresh(active, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    () => DfoServer.Game.Quests.QuestEligibility.Completed(current)),
                 quests, plan);
-            WriteQuestConditions(db, transaction, current.Id, active, refreshed);
-            active = refreshed.ToArray();
+            if (!active.AsSpan().SequenceEqual(refreshed.AsSpan()))
+            {
+                WriteQuestConditions(db, transaction, current.Id, active, refreshed);
+                active = refreshed.ToArray();
+            }
         }
         if (plan.ExpBonus is { } bonus)
         {
@@ -572,7 +577,7 @@ internal sealed partial class CharacterRepository
         }
 
         bool reuseItems = CanReuseInventoryItems(reuseInventory, itemRead);
-        shared ??= ReadAccountInventory(db, account, transaction, includeItems: !reuseItems);
+        shared ??= ReadAccountInventory(db, account, transaction, includeItems: !reuseItems, reuseEpicPieces: reuseInventory?.EpicPieces);
         var items = reuseItems ? reuseInventory!.Items : ReadInventoryItems(db, account, characterId, transaction).AddRange(shared.Items)
             .OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray();
         var purchases = ReadShopPurchases(db, account, characterId, transaction).AddRange(shared.Purchases)
@@ -662,6 +667,7 @@ internal sealed partial class CharacterRepository
         }
 
         var updated = after.Items.ToBuilder();
+        bool allocated = false;
         for (int i = 0; i < updated.Count; i++)
         {
             var item = updated[i];
@@ -670,8 +676,10 @@ internal sealed partial class CharacterRepository
             BindSlot(item.Position);
             string core = JsonSerializer.Serialize(item.Core);
             command.Parameters.AddWithValue("$core", core);
+            InventoryItem? previous = null;
             if (item.Uid == 0)
             {
+                allocated = true;
                 command.CommandText = "INSERT INTO character_inventory_items(character_id,account,item_core) VALUES($id,$account,$core) RETURNING item_uid";
                 item = item with { Uid = (long)command.ExecuteScalar()! };
                 if (item.Avatar is not null || item.Creature is not null)
@@ -689,7 +697,7 @@ internal sealed partial class CharacterRepository
             else
             {
                 command.Parameters.AddWithValue("$uid", item.Uid);
-                var previous = plan.BeforeIndex.FindUid(item.Uid);
+                previous = plan.BeforeIndex.FindUid(item.Uid);
                 var old = previous ?? incoming?.GetValueOrDefault(item.Uid) ??
                     throw new InvalidOperationException("待转移实例不属于当前快照或已验证邮件");
                 command.Parameters.AddWithValue("$oldOwner", previous?.Position.List is InventoryListType.AccountCargo or InventoryListType.AccountCommon ? DBNull.Value : characterId);
@@ -712,13 +720,13 @@ internal sealed partial class CharacterRepository
                 command.Parameters.AddWithValue("$uid", item.Uid);
             string? avatar = item.Avatar is null ? null : JsonSerializer.Serialize(item.Avatar);
             string? creature = item.Creature is null ? null : JsonSerializer.Serialize(item.Creature);
-            if (avatar is not null)
+            if (avatar is not null && (previous is null || previous.Avatar != item.Avatar))
             {
                 command.Parameters.AddWithValue("$detail", avatar);
                 command.CommandText = "INSERT INTO inventory_avatar_details(item_uid,detail) VALUES($uid,$detail) ON CONFLICT(item_uid) DO UPDATE SET detail=excluded.detail";
                 command.ExecuteNonQuery();
             }
-            if (creature is not null)
+            if (creature is not null && (previous is null || previous.Creature != item.Creature))
             {
                 command.Parameters.AddWithValue("$detail", creature);
                 command.CommandText = "INSERT INTO inventory_creature_details(item_uid,detail) VALUES($uid,$detail) ON CONFLICT(item_uid) DO UPDATE SET detail=excluded.detail";
@@ -729,9 +737,21 @@ internal sealed partial class CharacterRepository
             written.Add(item.Uid, (item, HashJson(core, avatar, creature)));
         }
 
-        var result = after with { Items = updated.ToImmutable() };
-        result.Validate();
-        var committedIndex = new InventoryIndex(result);
+        InventorySnapshot result;
+        InventoryIndex committedIndex;
+        if (allocated)
+        {
+            result = after with { Items = updated.ToImmutable() };
+            result.Validate();
+            committedIndex = new InventoryIndex(result);
+        }
+        else
+        {
+            result = after;
+            if (!ReferenceEquals(after, plan.After))
+                result.Validate();
+            committedIndex = ReferenceEquals(after, plan.After) ? plan.AfterIndex : new InventoryIndex(result);
+        }
         foreach (var slot in slots)
         {
             var old = plan.BeforeIndex.Find(slot);

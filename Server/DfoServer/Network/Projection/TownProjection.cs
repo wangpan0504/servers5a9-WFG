@@ -751,10 +751,12 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     }
 
     public void Remove(GameConnectionContext context) => presence?.Remove(context.Sender);
-    public void Refresh(GameConnectionContext context, bool marriageOnly = false)
+    public void Refresh(GameConnectionContext context, bool marriageOnly = false, string? adventureName = null,
+        DfoServer.Game.Pvp.PvpDisplayGrade? pvpGrade = null)
     {
         if (context.Session.Selected is { } c)
-            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName(), marriageOnly: marriageOnly, pvpGrade: context.Session.ReadPvpGrade(c));
+            presence?.Refresh(context.Owner, context.Sender, c, adventureName ?? context.Session.ReadAdventureName(),
+                marriageOnly: marriageOnly, pvpGrade: pvpGrade ?? context.Session.ReadPvpGrade(c));
     }
     public async Task DetachAsync(GameConnectionContext context)
     {

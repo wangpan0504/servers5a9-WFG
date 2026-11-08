@@ -29,8 +29,11 @@ internal sealed record ServerItemUsageState(int RefillDay = 0)
             Refills.Select(row => row.ItemId).Distinct().Count() != Refills.Length)
             throw new InvalidDataException("服务端物品周期状态无效");
     }
-    public bool Same(ServerItemUsageState other) => RefillDay == other.RefillDay && LastSweepAt == other.LastSweepAt && PendingAccountRefills == other.PendingAccountRefills &&
-        Uses.SequenceEqual(other.Uses) && Mails.SequenceEqual(other.Mails) && Refills.SequenceEqual(other.Refills);
+    public bool Same(ServerItemUsageState other) => ReferenceEquals(this, other) ||
+        RefillDay == other.RefillDay && LastSweepAt == other.LastSweepAt && PendingAccountRefills == other.PendingAccountRefills &&
+        (Uses == other.Uses || Uses.SequenceEqual(other.Uses)) &&
+        (Mails == other.Mails || Mails.SequenceEqual(other.Mails)) &&
+        (Refills == other.Refills || Refills.SequenceEqual(other.Refills));
 
     public static bool TryConsume(ServerItemUsageState state, ServerItemUsageCatalog catalog, byte action, int itemId, int count,
         DateTimeOffset now, TimeZoneInfo zone, out ServerItemUsageState after)

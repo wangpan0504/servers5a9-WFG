@@ -11,7 +11,7 @@ internal sealed record ItemMakingSkillState(ImmutableArray<ushort> Points)
         if (Points.IsDefault || Points.Length != Count || Points.Any(value => value > 1000))
             throw new InvalidDataException("制作熟练度存档无效");
     }
-    public bool Same(ItemMakingSkillState other) => Points.SequenceEqual(other.Points);
+    public bool Same(ItemMakingSkillState other) => ReferenceEquals(this, other) || Points == other.Points || Points.SequenceEqual(other.Points);
     public ItemMakingSkillState Set(byte type, int value)
     {
         if (type >= Count || value is < 0 or > 1000) throw new InvalidDataException("制作熟练度类别或点数无效");

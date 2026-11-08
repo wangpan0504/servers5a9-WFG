@@ -195,6 +195,13 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     // 旧阶段同屏离场，新阶段入场；城镇或区域变了仍视为没有当前成员。
     bool AlignPhase(Member source, Character character, string mismatch, ushort? scaledSpeed = null)
     {
+        if (source.Character.Position.Town == character.Position.Town &&
+            source.Character.Position.Area == character.Position.Area &&
+            source.Character.CompletedQuests == character.CompletedQuests &&
+            (source.Character.Guild?.Id ?? 0) == (character.Guild?.Id ?? 0) &&
+            source.Character.Marriage == character.Marriage &&
+            source.Character.WeddingHall == character.WeddingHall)
+            return false;
         var next = SceneOf(source.Owner, character, source.Channel);
         if (source.Scene == next)
             return false;

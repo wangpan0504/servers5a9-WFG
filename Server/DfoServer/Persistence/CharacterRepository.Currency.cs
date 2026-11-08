@@ -61,23 +61,32 @@ internal sealed partial class CharacterRepository
     {
         var before = plan.Before;
         string reason = plan.Reason;
-        using var command = db.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            UPDATE characters SET revive_coins=$coins,win_points=$wins,gold_carry_limit=$carry,auction_gold_limit=$auction WHERE id=$id AND account=$account;
-            """;
-        command.Parameters.AddWithValue("$id", characterId);
-        command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$coins", after.ReviveCoins);
-        command.Parameters.AddWithValue("$wins", after.WinPoints);
-        command.Parameters.AddWithValue("$carry", after.GoldCarryLimit);
-        command.Parameters.AddWithValue("$auction", after.AuctionGoldLimit);
-        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("钱包角色所有权变化");
         var changes = plan.ChangedCurrencies;
+        bool characterCurrenciesChanged = before.ReviveCoins != after.ReviveCoins || before.WinPoints != after.WinPoints ||
+            before.GoldCarryLimit != after.GoldCarryLimit || before.AuctionGoldLimit != after.AuctionGoldLimit;
         bool contractsChanged = !before.AccountWallet.PremiumContracts.SequenceEqual(after.AccountWallet.PremiumContracts);
         bool seriaLuckChanged = before.AccountWallet.SeriaLuck != after.AccountWallet.SeriaLuck;
-        if (before.AccountWallet.CharacterSlotCapacity != after.AccountWallet.CharacterSlotCapacity || changes.Any(CurrencyWallet.IsAccount) || contractsChanged || seriaLuckChanged ||
-            !before.AccountWallet.MileageShop.Same(after.AccountWallet.MileageShop) || plan.AccountMaterialsChanged)
+        bool accountWalletChanged = before.AccountWallet.CharacterSlotCapacity != after.AccountWallet.CharacterSlotCapacity ||
+            changes.Any(CurrencyWallet.IsAccount) || contractsChanged || seriaLuckChanged ||
+            !before.AccountWallet.MileageShop.Same(after.AccountWallet.MileageShop) || plan.AccountMaterialsChanged;
+        if (!characterCurrenciesChanged && !accountWalletChanged && changes.IsEmpty)
+            return after;
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        if (characterCurrenciesChanged)
+        {
+            command.CommandText = """
+                UPDATE characters SET revive_coins=$coins,win_points=$wins,gold_carry_limit=$carry,auction_gold_limit=$auction WHERE id=$id AND account=$account;
+                """;
+            command.Parameters.AddWithValue("$id", characterId);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.Parameters.AddWithValue("$coins", after.ReviveCoins);
+            command.Parameters.AddWithValue("$wins", after.WinPoints);
+            command.Parameters.AddWithValue("$carry", after.GoldCarryLimit);
+            command.Parameters.AddWithValue("$auction", after.AuctionGoldLimit);
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("钱包角色所有权变化");
+        }
+        if (accountWalletChanged)
         {
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$account", owner.Account);
