@@ -149,7 +149,7 @@ internal static class EpicRoadProjectionTests
         using var expected = new MemoryStream();
         using (var writer = new BinaryWriter(expected, System.Text.Encoding.UTF8, true))
         {
-            ushort[] ids = [2037, 2378, 2395, .. nolan ? new ushort[] { 2532 } : [],
+            ushort[] ids = [2037, 2378, 2395, 333, .. nolan ? new ushort[] { 2532 } : [],
                 .. shop ? new ushort[] { 266 } : [], .. epic ? new ushort[] { 10005 } : []];
             writer.Write((ushort)ids.Length);
             foreach (ushort id in ids)

@@ -2631,3 +2631,35 @@ CREATE TABLE account_monster_mock_battle_runs(
   state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2)
 ) STRICT;
 CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_runs(account) WHERE state=0;
+
+
+        CREATE TABLE character_revised_beast_rewards(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+            task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 5335 AND 5339),
+            difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 0 AND 2),
+            success INTEGER NOT NULL CHECK(success IN (0,1)),
+            day_key INTEGER NOT NULL,week_key INTEGER NOT NULL,
+            awarded INTEGER NOT NULL CHECK(awarded IN (0,1)),
+            before_revision INTEGER NOT NULL,revision INTEGER NOT NULL,
+            plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+            PRIMARY KEY(character_id,instance_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+
+
+        CREATE TABLE character_revised_beast_stage_rewards(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+            task_attempt INTEGER NOT NULL CHECK(task_attempt>0),epoch INTEGER NOT NULL CHECK(epoch>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 5335 AND 5339),
+            difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 0 AND 2),
+            success INTEGER NOT NULL CHECK(success IN (0,1)),
+            day_key INTEGER NOT NULL,week_key INTEGER NOT NULL,
+            awarded INTEGER NOT NULL CHECK(awarded IN (0,1)),
+            before_revision INTEGER NOT NULL,revision INTEGER NOT NULL,
+            plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot)),
+            PRIMARY KEY(character_id,instance_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );

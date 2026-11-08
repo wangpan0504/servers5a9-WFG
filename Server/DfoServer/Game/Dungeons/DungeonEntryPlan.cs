@@ -149,13 +149,33 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
+    public bool IsRevisedBeast { get; init; }
+    public RevisedBeastEncounter? RevisedBeastEncounter { get; init; }
     public bool IsTerminalMap(DungeonMap map) =>
-        LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+        !IsRevisedBeast && LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :
         TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
         map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map));
+
+    public static bool TryCreateRevisedBeast(DungeonCatalog catalog, Character character, uint dungeonId, byte difficulty,
+        out DungeonEntryPlan? plan, out string reason, DungeonEntryPlan? partyRoute = null)
+    {
+        plan = null;
+        reason = "revised-beast-layout-unavailable";
+        if (dungeonId is < 5335 or > 5339 || difficulty > 2) return false;
+        try
+        {
+            var definition = catalog.Get((int)dungeonId) with { Mazes = [catalog.RevisedBeastMaze((int)dungeonId,difficulty)] };
+            if (!TryCreate(definition,character,dungeonId,0,difficulty,out plan,out reason,partyRoute:partyRoute,revisedBeast:true)) return false;
+            // 改版遭遇和终局独立调度，内部锚点不授予普通Boss通关资格。
+            plan = plan! with { IsRevisedBeast = true, DisableClearReward = true, DisableMonsterAndClearExperience = true };
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
+        { reason = "revised-beast-resource-unavailable:" + error.Message; return false; }
+    }
 
     public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
     {
@@ -208,7 +228,7 @@ internal sealed record DungeonEntryPlan(
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
         bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null,
-        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
+        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null, bool revisedBeast = false)
     {
         plan = null;
         if (hellParty && !isReplay) { questId = 0; quest = null; }
@@ -218,7 +238,7 @@ internal sealed record DungeonEntryPlan(
         if (reason != "resource-request-ready")
             return false;
         // 已退役入口不能借普通路线重新启用。
-        if (dungeonId is >= 5335 and <= 5339)
+        if (dungeonId is >= 5335 and <= 5339 && !revisedBeast)
         { reason = "dungeon-mode-unsupported"; return false; }
         if (definition.Id != dungeonId)
         {

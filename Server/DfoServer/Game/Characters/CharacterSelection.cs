@@ -15,6 +15,8 @@ internal static class CharacterSelection
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null,
         int? previousChannelType = null) => owner.Execute(() =>
     {
+        if (BeastChannel.IsEntry(channel) && !completed.Contains(BeastChannel.EntryQuest))
+            throw new InvalidDataException("魔兽频道要求完成5927");
         bool leavingRetiredTown = ChannelAreaLanding.LeavesRetiredTown(character.Position);
         bool leavingRaidInstance = ChannelAreaLanding.IsRaidInstanceArea(character.Position);
         // 同城普通/团队入口按来源频道区分；重启丢失频道历史时，保留已经独立记住的普通地区。
@@ -48,6 +50,14 @@ internal static class CharacterSelection
                 pvpArea.Map(completed).Error is null) landing=character.Position;
             if(character.Position!=landing || character.Return!=landing)
                 character=repository.Save(owner,character,landing,landing);
+        }
+        else if (BeastChannel.IsEntry(channel))
+        {
+            var landing = ChannelAreaLanding.DecideArea(towns, BeastChannel.Town, 0, character.Level, completed).Spot
+                ?? throw new InvalidDataException("魔兽频道专属房间不可用");
+            var back = BeastChannel.OrdinaryReturn(towns, character, completed);
+            if (character.Position != landing || character.Return != back)
+                character = repository.Save(owner, character, landing, back);
         }
         else if (resumeTown)
         {

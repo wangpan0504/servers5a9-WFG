@@ -192,6 +192,35 @@ internal static class DungeonPackets
     // NOTI5 DUNGEON_PERMISSION：u16 count + 每项 u32 dungeonId、u8 state。
     // 布局与参考实现 buildCurrentDungeonResourceStateEntriesBody 一致；state=0 不会进入快照。
     // 这里只写世界地图悬浮需要开通的地下城编号，不写名称字符串。
+    public static byte[] RevisedBeastSelectNotice(IReadOnlyList<int> dungeonIds)
+    {
+        ArgumentNullException.ThrowIfNull(dungeonIds);
+        if (dungeonIds.Count is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(dungeonIds));
+        if (dungeonIds.Any(id => id is < RevisedBeastSelection.FirstDungeon or > RevisedBeastSelection.LastDungeon))
+            throw new ArgumentOutOfRangeException(nameof(dungeonIds));
+        byte[] body = new byte[42 + 4 * dungeonIds.Count];
+        body[41] = checked((byte)dungeonIds.Count);
+        int at = 42;
+        foreach (int id in dungeonIds)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at), checked((uint)id));
+            at += 4;
+        }
+        return body;
+    }
+
+    public static byte[] RevisedBeastNativeIncount(RevisedBeastCounts counts)
+    {
+        byte[] body = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0), counts.DailyEntriesUsed);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), counts.WeeklyEntriesUsed);
+        body[8] = counts.DailyRewards;
+        body[9] = counts.WeeklyRewards;
+        body[10] = counts.DailyRewards;
+        body[11] = counts.WeeklyRewards;
+        return body;
+    }
+
     public static byte[] Permission(IReadOnlyList<int> dungeonIds)
     {
         ArgumentNullException.ThrowIfNull(dungeonIds);
@@ -235,8 +264,8 @@ internal static class DungeonPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)plan.DungeonId));
         body[4] = plan.Difficulty;
         body[7] = checked((byte)plan.Maze.SourceOrdinal);
-        body[8] = checked((byte)(bossPosition ?? plan.BossMap.Position).X);
-        body[9] = checked((byte)(bossPosition ?? plan.BossMap.Position).Y);
+        body[8] = plan.IsRevisedBeast ? byte.MaxValue : checked((byte)(bossPosition ?? plan.BossMap.Position).X);
+        body[9] = plan.IsRevisedBeast ? byte.MaxValue : checked((byte)(bossPosition ?? plan.BossMap.Position).Y);
         body[10] = byte.MaxValue;
         body[11] = byte.MaxValue;
         // 0238ABCC读取并经03BB1510安装练习模式；不可只改变服务端奖励策略。

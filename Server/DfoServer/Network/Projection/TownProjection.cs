@@ -68,13 +68,17 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     internal DfoServer.Game.Inventory.Models.KnightShieldDeck KnightShieldDeck(Character character) =>
         knightShields?.EffectiveDeck(character) ?? character.Inventory.ShieldDeck;
 
+    internal DfoServer.GameWorld.Dungeons.DungeonRoomCatalog? BeastRooms { get; set; }
+    internal Task RefreshRevisedBeastCountsAsync(GameConnectionContext context, Func<bool>? guard = null) =>
+        BeastRooms is null ? Task.CompletedTask : RevisedBeastCountProjection.RefreshAsync(context, BeastRooms, guard);
+
     internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null,
         long? minimumPromotionRevision = null)
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var now = timer.GetUtcNow();
         long promotionRevision = events?.PromotionRevision ?? 0;
-        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now);
+        var openEvents = BeastChannel.EntryEvents(true, DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, now));
         bool seriaLuck = events?.Read(ServerEventService.SeriaLuckId).Active ?? true;
         bool hongbao = events?.Read(ServerEventService.GuildHongbaoId).Active ?? true;
         bool jonathan = events?.Read(ServerEventService.JonathanVisibilityId).Active ?? true;
@@ -337,6 +341,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         await ServerEventsAsync(context);
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
+        await RefreshRevisedBeastCountsAsync(context);
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
         RaidClearProjection.Refresh(context, initialize: true);

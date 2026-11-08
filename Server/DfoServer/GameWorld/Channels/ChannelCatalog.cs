@@ -52,9 +52,6 @@ internal sealed partial class ChannelCatalog
             if (!int.TryParse(tokens[2], NumberStyles.None, CultureInfo.InvariantCulture, out int type) ||
                 !(type is >= 0 and <= 56 or 62 or 63 or 64 or 200))
                 throw new InvalidDataException("频道类型未在匹配客户端中定义");
-            // 退役频道不允许由旧外部配置重新广告或启用。
-            if (type == 40 || tokens[3].Equals("`[beast]`", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("频道类型40已退役，请移除旧频道配置");
             if (!GroupPattern().IsMatch(tokens[3]) || !TextPattern().IsMatch(tokens[15]))
                 throw new InvalidDataException("频道分组或末尾字符串无效");
             for (int i = 4; i < 15; i++)

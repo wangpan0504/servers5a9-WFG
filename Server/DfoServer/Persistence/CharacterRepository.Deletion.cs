@@ -14,6 +14,8 @@ internal sealed partial class CharacterRepository
         "character_strongway2019_statistics",
         "character_beast_dungeon_reservations",
         "character_beast_stage_rewards",
+        "character_revised_beast_stage_rewards",
+        "character_revised_beast_rewards",
         "character_pcroom_claims", "character_fatigue_acceleration",
         "character_evildom_war_rewards",
         "character_evildom_war_hidden_rewards",

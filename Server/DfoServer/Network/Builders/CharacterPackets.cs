@@ -34,10 +34,11 @@ internal static class CharacterPackets
     // 名册行 48 字节尾部 tail[37..41] 由 ARAD 02676A00 依次读到 +0x491/+0x492/+0x493/+0x499/+0x494（==1 为真）。
     internal const int AntonEligibleTailOffset = 37;
     internal const int LukeEligibleTailOffset = 38;
-    // tail[39] -> +0x493 保留字段：退役玩法恒为0，后续字节偏移保持不变。
+    // tail[39] -> +0x493：魔兽资格只取已落库的5927完成状态。
     internal const int ReservedSpecialChannelTailOffset = 39;
     // 名册行 48 字节尾部中超时空漩涡资格字节的偏移（KB-20261021T015635-5c920e4e59）。
     internal const int FiendWarEligibleTailOffset = 40;
+    internal const int BeastEligibleTailOffset = 39;
     internal const int PreyEligibleTailOffset = 41;
     // 02681030 读 u32 进 Data+49Ch；与 Actor 头 +6Eh 同一武器幻化字段。光环 u16 仍在 tail[46]。
     internal const int WeaponSkinTailOffset = 42;
@@ -72,6 +73,7 @@ internal static class CharacterPackets
             tail[ReservedSpecialChannelTailOffset] = 0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
+            tail[39] = character.BeastEligible ? (byte)1 : (byte)0;
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(tail.AsSpan(WeaponSkinTailOffset),
                 character.WeaponSkin);
             // 0268104E读取末尾u16，只有1才经02A8DCF0启用预览光环；高字节由零初始化保留。

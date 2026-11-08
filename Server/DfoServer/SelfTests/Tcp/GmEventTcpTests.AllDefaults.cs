@@ -58,7 +58,7 @@ internal static partial class GmEventTcpTests
                     content.Contains("[show_item_index] 1 490011740", StringComparison.Ordinal),
                     "默认活动共存保留疲劳商店原生路由及真实材料登记");
             }
-            ushort[] expected = [2037, 2378, 2395, 282, 2449, 414, 181, 2532, 266, 228, 2370, 2208, 2520,
+            ushort[] expected = [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266, 228, 2370, 2208, 2520,
                 .. fixture.Options.EpicRoad2019Enabled ? (ushort[])[10005] : [], .. ids.Contains(10999) ? (ushort[])[10999] : [], 2257];
             That(ids.SequenceEqual(expected), "全部默认活动目录逐项保留，不被谋略战或活动页替换");
             ushort[] active = [2037, 2257, 2395, 228, 2370, 2208, 2532, 2520];

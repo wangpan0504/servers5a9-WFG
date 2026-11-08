@@ -637,6 +637,7 @@ internal static class ServerRuntime
             operationHope = StartupStage.Run(log, "Operation Hope catalog", () => OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms));
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
+            projection.BeastRooms = rooms;
             var drops = StartupStage.Run(log, "Dungeon monster drops", () => DungeonMonsterDropCatalog.Load(pvf));
             var dropRules = StartupStage.Run(log, "Dungeon drop rules", () => DungeonDropRuleCatalog.Load(pvf));
             var dropCandidates = StartupStage.Run(log, "Dungeon item candidates", () => itemResources.DungeonDropItems);

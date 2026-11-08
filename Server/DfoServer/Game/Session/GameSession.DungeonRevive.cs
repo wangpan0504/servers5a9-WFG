@@ -46,6 +46,8 @@ internal sealed partial class GameSession
         formalDungeon!.Run.CancelRidable();
         formalDungeon!.CharacterDead = !blessing;
         formalDungeon.DeathSerial++;
+        formalDungeon.RevisedBeastDeathDue = formalDungeon.Entry.IsRevisedBeast && !blessing
+            ? checked(now + formalDungeon.Entry.RevisedBeastEncounter!.CoinTimeoutMilliseconds) : null;
         if (formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Anton &&
             raidCombat is { Battle.Kind: Raids.RaidKind.Anton } raid)
             raid.Battle.RecordAntonDeath(raid.Actor);
@@ -61,7 +63,7 @@ internal sealed partial class GameSession
     public TownTravelReceipt? ReturnFromFormalDungeonOnDeath(DungeonDeathReturnReceipt scheduled) => owner.Execute(() =>
         Ready && Selected?.Id == scheduled.CharacterId && owner.Generation == scheduled.Generation &&
         SelectionEpoch == scheduled.SelectionEpoch && formalDungeon is { CharacterDead: true } dungeon &&
-        dungeon.Run.TagEvildomLife is null && dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
+        dungeon.Run.RevisedBeastTerminal is null && dungeon.Run.TagEvildomLife is null && dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
             ? ReturnFromFormalDungeon() : null);
 
     // 扣币提交失败时保留死亡状态；只有实际提交结果才能发布复活。
@@ -111,6 +113,7 @@ internal sealed partial class GameSession
                         antonReservation?.Commit();
                         formalDungeon.CharacterDead = false;
                         formalDungeon.AltarRevivalDue = null;
+                        formalDungeon.RevisedBeastDeathDue = null;
                         formalDungeon.ReviveCount++;
                         formalDungeon.Run.QuestFacts.Revived();
                     }
@@ -137,7 +140,7 @@ internal sealed partial class GameSession
         !HasPendingTownQuestCommit && !HasPendingFormalCard &&
         Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon is { } dungeon && dungeon.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
+        dungeon.Run.RevisedBeastTerminal is null && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
         !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
         dungeon.PendingInventoryDiscard is null && dungeon.AltarSettlement is not { Stage: < 2 } && !HasPendingQuestScene;
 }

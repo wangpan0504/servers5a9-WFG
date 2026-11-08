@@ -99,6 +99,9 @@ internal static class ChannelAreaLanding
     // 只对共享房间 towns.Room 生效（区域房间仍走自身门），频道无已证落点或条件不足时返回 null，按存档返回地区出门。
     internal static Location? RoomExit(TownCatalog towns, ChannelEntry? channel, Location position, int level, IReadOnlySet<int> completed)
     {
+        if (BeastChannel.IsEntry(channel) && towns.IsRoom(position, completed) &&
+            (position.Town == BeastChannel.Town || position.Town == towns.Room.Town && position.Area == towns.Room.Area))
+            return DecideArea(towns, BeastChannel.Town, 1, level, completed).Spot;
         if (channel is null || RoomExitUsesRememberedDistrict(channel) || LandsInChannelTown(channel) ||
             position.Town != towns.Room.Town || position.Area != towns.Room.Area)
             return null;
@@ -135,8 +138,8 @@ internal static class ChannelAreaLanding
     // 01EB5800比较type55强者之路，对应vt+0x48；01EB5DE9..5E1B双向比较此位，跨入或离开55不保留快照。
     // 五陵和漩涡类型位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
     // 01EB5840/vt+0x78独立比较0x40，普通魔界大战的vt+0x4C不能替代它。
-    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp, bool EvildomChallenge) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type), type == EvildomWarChallengeType);
+    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena, bool DplPve, bool XianVillage, bool Pvp, bool EvildomChallenge, bool Beast) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39, type == DplPveType, type == XianVillageType, IsPvpType(type), type == EvildomWarChallengeType, type == BeastChannel.Type);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -200,6 +203,8 @@ internal static class ChannelAreaLanding
     // 不换城，反过来服务端改落点而客户端按快照留在原城，会让客户端随后按原城请求移动被 route-not-in-pvf/room-return-mismatch 拒绝。
     internal static bool ClientKeepsTownSnapshot(TownCatalog? towns, ChannelEntry? channel, Location position)
     {
+        if (position.Town == BeastChannel.Town || BeastChannel.IsEntry(channel))
+            return position.Town == BeastChannel.Town && BeastChannel.IsEntry(channel);
         if (IsRaidInstanceArea(position)) return false;
         if (channel is null)
             return position.Town != EvildomWarChallengeTown;
@@ -222,6 +227,7 @@ internal static class ChannelAreaLanding
     // 这类落点不覆盖原返回地区，离开频道后仍按原地区回到普通城镇。
     internal static bool IsChannelBoundTown(TownCatalog towns, byte town)
     {
+        if (town == BeastChannel.Town) return true;
         var own = towns.Areas.Values.Where(area => area.Town == town).ToArray();
         static IEnumerable<Link> Links(TownArea area) => area.Phases.Prepend(area.Default).SelectMany(map => map.Links);
         return own.Length > 0 && own.All(area => Links(area).All(link => link.Town == town)) &&
@@ -259,7 +265,8 @@ internal static class ChannelAreaLanding
         if (type == DplPveType)
             return (DplPveTown, 1);
         var name = GroupName(group);
-        if (type == 40 || name.Equals("beast", StringComparison.OrdinalIgnoreCase)) return null;
+        if (BeastChannel.IsEntry(type, group)) return (BeastChannel.Town, 1);
+        if (type == BeastChannel.Type || name.Equals("beast", StringComparison.OrdinalIgnoreCase)) return null;
         if (type == 23)
             return (19, 0);
         if (IsPvpType(type))

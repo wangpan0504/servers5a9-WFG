@@ -110,13 +110,13 @@ internal sealed partial class GameSession
     });
 
     DungeonEntryCost? EntryCost(Character expected, uint dungeonId, DungeonDefinition definition, EpicPieceCatalog? pieces, bool channelTown,
-        out string? rejection, DungeonIncountUsage? usageOverride = null)
+        out string? rejection, DungeonIncountUsage? usageOverride = null, DungeonIncountRow? rowOverride = null)
     {
         rejection = null;
         // 未装载 DungeonIncountInfo（旧测试夹具）时保持原行为：不计次也不消耗。
-        if (incounts is null || dungeonId > int.MaxValue) return null;
+        if (incounts is null && rowOverride is null || dungeonId > int.MaxValue) return null;
         int id = (int)dungeonId;
-        var row = IncountRow(dungeonId);
+        var row = rowOverride ?? IncountRow(dungeonId);
         var period = IncountPeriod(row?.CountKey ?? id);
         if (row is not null && !DungeonIncountPolicy.CanEnter(row, usageOverride ?? repository.LoadDungeonIncount(owner, expected.Id, row.CountKey, period)))
         {
@@ -155,7 +155,7 @@ internal sealed partial class GameSession
             return null;
         }
         return row is null && account.IsEmpty && consume is null ? null
-            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = incounts.ChargesOnClear(id), AdditionalMaterials = additional };
+            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = rowOverride is null && incounts?.ChargesOnClear(id) == true, AdditionalMaterials = additional };
     }
 
     // [sub incount on clear dungeon]：通关结算提交后补记次数，不再拦截（本次已经打完）；周期按通关时刻重算。

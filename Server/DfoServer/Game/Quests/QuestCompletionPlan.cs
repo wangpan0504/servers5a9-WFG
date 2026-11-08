@@ -66,7 +66,7 @@ internal sealed partial class QuestCompletionPlan
         ProfessionGrowType = profession; RewardLearning = rewardLearning; TargetEquipmentSlotFlags = equipmentSlots; TpAmount = tpAmount;
         GrantedExpertJob = expertJob;
         // mode3 解锁提示只对已逆向确认的 [hell challenge] 成立；inferno/cosmo/6081 为假设性放行，仍走普通 mode0（Refs #256）。
-        HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.TryHellChallenge(quest);
+        HellChallenge = quest.RewardType == "[hell challenge]" && QuestCharacterReward.SupportedChallengeReward(quest);
         ClosedChildren = closedChildren;
         CompletedChild = completedChild;
         TerminalClear = terminalClear;
@@ -304,7 +304,7 @@ internal sealed partial class QuestCompletionPlan
             byte? profession = quest.RewardType is "[grow type]" or "[awakening type]"
                 ? QuestProfessionReward.Target(expected, quest, growthCatalog.Learning ?? throw new NotSupportedException("职业变化技能资源未装配")) : null;
             _ = QuestCharacterReward.TryTp(quest,out ushort tpAmount);
-            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.TryHellChallenge(quest);
+            bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || tpAmount != 0 || QuestCharacterReward.SupportedChallengeReward(quest);
             bool creatureReward = QuestCreatureReward.Evolution(quest);
             byte? expertJob = QuestExpertJobReward.Type(quest);
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);

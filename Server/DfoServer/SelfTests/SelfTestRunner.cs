@@ -432,6 +432,10 @@ internal static class SelfTestRunner
         ImperialArenaTests.Run();
         FiendWarRosterTests.Run();
         RaidRosterFlagTests.Run();
+        BeastTownActivationTests.RunCore();
+        RevisedBeastSelectionTests.Run();
+        RevisedBeastEncounterTests.RunCore();
+        RevisedBeastRewardTests.RunCore();
         await SessionPlanningTests.RunAsync();
         TownSelectionTests.Run();
         TeleportTests.RunCore();
@@ -814,6 +818,8 @@ internal static class SelfTestRunner
         HostedDungeonEligibilitySessionTests.Run(towns, pvf, characters);
         FiendwarChannelTests.Run(towns, pvf, characters, itemResources);
         RaidRosterFlagTests.RunResources(towns, pvf);
+        BeastTownActivationTests.RunResources(towns);
+        RevisedBeastResourceTests.RunResources(pvf);
         RequiredItemConsumeTests.Run(towns, pvf, characters, itemResources);
         await FormalDungeonPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         SkillLearningCatalogTests.Run(pvf);
