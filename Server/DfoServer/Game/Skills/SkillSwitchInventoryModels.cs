@@ -54,8 +54,8 @@ internal sealed record SkillSwitchInventoryState(ushort SkillId, ImmutableArray<
             item.Validate();
     }
 
-    public bool Same(SkillSwitchInventoryState other) =>
-        SkillId == other.SkillId && Items.SequenceEqual(other.Items);
+    public bool Same(SkillSwitchInventoryState other) => ReferenceEquals(this, other) ||
+        SkillId == other.SkillId && (Items == other.Items || Items.SequenceEqual(other.Items));
 
     public SkillSwitchInventoryState WithSkill(ushort skillId)
     {
@@ -87,6 +87,7 @@ internal sealed record SkillSwitchInventoryState(ushort SkillId, ImmutableArray<
     public SkillSwitchInventoryState Reconcile(InventorySnapshot inventory)
     {
         Validate();
+        if (Items.IsEmpty) return this;
         var byUid = inventory.Items.Where(item => item.Uid > 0 && (IsCarriedContainer(item.Position.List) || item.Position.List == InventoryListType.PersonalCargo))
             .GroupBy(item => item.Uid).ToDictionary(group => group.Key, group => group.ToArray());
         var retained = Items.Where(binding => byUid.TryGetValue(binding.ItemUid, out InventoryItem[]? matches) &&
@@ -98,6 +99,7 @@ internal sealed record SkillSwitchInventoryState(ushort SkillId, ImmutableArray<
     public ImmutableArray<LocatedSkillSwitchItem> Locate(InventorySnapshot inventory)
     {
         Validate();
+        if (Items.IsEmpty) return [];
         var byUid = inventory.Items.Where(item => item.Uid > 0 && IsCarriedContainer(item.Position.List))
             .GroupBy(item => item.Uid).ToDictionary(group => group.Key, group => group.ToArray());
         var located = ImmutableArray.CreateBuilder<LocatedSkillSwitchItem>();

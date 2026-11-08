@@ -32,7 +32,7 @@ internal sealed record DailyBoosterUsage(int ItemId, int Day, byte Used)
     }
 
     public static bool Same(ImmutableArray<DailyBoosterUsage> left, ImmutableArray<DailyBoosterUsage> right) =>
-        left.Length == right.Length && left.ToHashSet().SetEquals(right);
+        left == right || left.Length == right.Length && (left.IsEmpty || left.ToHashSet().SetEquals(right));
 
     public static DateTimeOffset NextReset(DateTimeOffset now) =>
         new DateTimeOffset(DateOnly.FromDayNumber(ShopPurchaseCount.Today(now) + 1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-2);

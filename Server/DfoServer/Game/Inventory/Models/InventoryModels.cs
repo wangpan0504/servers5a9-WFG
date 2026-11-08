@@ -106,11 +106,16 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
             throw new InvalidDataException("无效商店限购快照");
         if (ReviveCoins < 0 || WinPoints < 0 || GoldCarryLimit < 0 || AuctionGoldLimit < 0 ||
             CargoCapacity is < 8 or > 264 || AccountCargo.Capacity > 240 || AccountCargo.Revision < 0 || AccountCargo.Gold < 0 ||
-            Expansion is not (0 or 8 or 16 or 24) || Items.IsDefault ||
-            Items.Select(item => item.Position).Distinct().Count() != Items.Length ||
-            Items.Any(item => item.Uid < 0 || !allocating && item.Uid == 0) ||
-            Items.Where(item => item.Uid != 0).Select(item => item.Uid).Distinct().Count() != Items.Count(item => item.Uid != 0))
+            Expansion is not (0 or 8 or 16 or 24) || Items.IsDefault)
             throw new InvalidDataException("无效背包快照");
+        var positions = new HashSet<InventorySlot>(Items.Length);
+        var uids = new HashSet<long>(Items.Length);
+        foreach (var item in Items)
+        {
+            if (!positions.Add(item.Position) || item.Uid < 0 || !allocating && item.Uid == 0 ||
+                item.Uid != 0 && !uids.Add(item.Uid))
+                throw new InvalidDataException("无效背包快照");
+        }
         foreach (var item in Items)
         {
             item.Core.Validate();
@@ -152,10 +157,19 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
     readonly (Guid? Id, byte State)? marriage = requireMarriageState
         ? (character.Marriage?.Id, character.Marriage?.State ?? 0) : null;
 
+    static bool SameSkills(ImmutableArray<CharacterSkill> expected, CharacterSkill[] actual)
+    {
+        if (expected.Length != actual.Length) return false;
+        for (int index = 1; index < actual.Length; index++)
+            if (actual[index - 1].Id > actual[index].Id)
+                return expected.SequenceEqual(actual.OrderBy(skill => skill.Id));
+        return expected.AsSpan().SequenceEqual(actual);
+    }
+
     // 时间资格也在提交前复验，不能凭到期前的规划继续穿戴越级装备。
     public bool MatchesIdentity(Character value) => value.Id == id && value.Revision == revision && value.Job == job &&
         value.GrowType == grow && value.Level == level && value.EquipmentSlotFlags == equipmentSlots &&
-        skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position) &&
+        SameSkills(skills, value.Skills) && (position is null || value.Position == position) &&
         (marriage is null || marriage.Value.Id == value.Marriage?.Id && marriage.Value.State == (value.Marriage?.State ?? 0));
     public bool IsExpired(long? utcSeconds = null)
     {

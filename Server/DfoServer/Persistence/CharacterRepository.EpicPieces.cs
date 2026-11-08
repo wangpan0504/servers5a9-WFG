@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
@@ -8,7 +9,9 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    static EpicPieceBook ReadEpicPieces(SqliteConnection db, string account, SqliteTransaction? transaction)
+    static readonly ConditionalWeakTable<EpicPieceBook, string> epicPieceCountsJson = new();
+
+    static EpicPieceBook ReadEpicPieces(SqliteConnection db, string account, SqliteTransaction? transaction, EpicPieceBook? reuse = null)
     {
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -17,8 +20,15 @@ internal sealed partial class CharacterRepository
         using var reader = command.ExecuteReader();
         if (!reader.Read())
             return EpicPieceBook.Empty;
-        var book = new EpicPieceBook(reader.GetInt64(0), reader.GetString(1), JsonSerializer.Deserialize<ImmutableArray<int>>(reader.GetString(2)));
+        long revision = reader.GetInt64(0);
+        string orderHash = reader.GetString(1);
+        string rawCounts = reader.GetString(2);
+        if (reuse is not null && reuse.Revision == revision && reuse.OrderHash == orderHash &&
+            epicPieceCountsJson.TryGetValue(reuse, out string? cachedCounts) && cachedCounts == rawCounts)
+            return reuse;
+        var book = new EpicPieceBook(revision, orderHash, JsonSerializer.Deserialize<ImmutableArray<int>>(rawCounts));
         book.Validate();
+        epicPieceCountsJson.AddOrUpdate(book, rawCounts);
         return book;
     }
 
@@ -31,12 +41,13 @@ internal sealed partial class CharacterRepository
             return after;
         if (book.Counts.IsEmpty || !old.Counts.IsEmpty && (old.OrderHash != book.OrderHash || old.Counts.Length != book.Counts.Length))
             throw new InvalidOperationException("物品业务不能重排或删除史诗图鉴结构");
+        string rawCounts = JsonSerializer.Serialize(book.Counts);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$revision", old.Revision);
         command.Parameters.AddWithValue("$hash", book.OrderHash);
-        command.Parameters.AddWithValue("$counts", JsonSerializer.Serialize(book.Counts));
+        command.Parameters.AddWithValue("$counts", rawCounts);
         command.CommandText = old.Counts.IsEmpty ?
             "INSERT INTO account_epic_books(account,revision,order_hash,counts) VALUES($account,1,$hash,$counts)" :
             "UPDATE account_epic_books SET revision=revision+1,counts=$counts WHERE account=$account AND revision=$revision AND order_hash=$hash";
@@ -59,6 +70,8 @@ internal sealed partial class CharacterRepository
                 """;
             command.ExecuteNonQuery();
         }
-        return after with { EpicPieces = book with { Revision = checked(old.Revision + 1) } };
+        var updated = book with { Revision = checked(old.Revision + 1) };
+        epicPieceCountsJson.AddOrUpdate(updated, rawCounts);
+        return after with { EpicPieces = updated };
     }
 }
