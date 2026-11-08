@@ -18,14 +18,11 @@ internal static class QuickSlotEquipmentRules
     public static bool Allows(Character character, InventorySlot target, ItemTemplate template,
         ItemCatalog items, InventorySlot? movingSource)
     {
+        _ = items;
+        _ = movingSource;
         if (!IsQuickSlot(target) || !template.IsQuickSlotEquipment) return true;
-        // 029E6470：符咒从5级起装入快捷栏；在背包或仓库保存它不属于装备行为。
-        if (character.Level < 5 || !template.AllowsUse(character.Level, character.Job) ||
-            !InventoryMoveService.RequiredSkillSatisfied(character, template)) return false;
-        foreach (var item in character.Inventory.Items)
-            if (IsQuickSlot(item.Position) && item.Position != target && item.Position != movingSource &&
-                item.Core.Kind == ItemKind.Equipment && items.Get(item.Core.ItemId).IsQuickSlotEquipment)
-                return false;
-        return true;
+        // 029E6470：符咒从5级起装入快捷栏；客户端 025D96E5/02864073/029E6804 不拦截快捷栏多件或互换，服务端经验与耗能按槽序只认首件。
+        return character.Level >= 5 && template.AllowsUse(character.Level, character.Job) &&
+            InventoryMoveService.RequiredSkillSatisfied(character, template);
     }
 }
