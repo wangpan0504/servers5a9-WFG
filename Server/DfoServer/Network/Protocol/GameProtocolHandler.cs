@@ -59,7 +59,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
     DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
     DfoServer.Game.Events.WeeklyAttendanceService? weeklyAttendance = null,
-    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null) : IConnectionProtocol
+    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null,
+    DfoServer.GameWorld.Items.EpicPieceBonusDropCatalog? epicPieceBonuses = null) : IConnectionProtocol
 {
     DfoServer.Game.Dungeons.HostedDungeonEligibilityCoordinator? hostedDungeonEligibility;
 
@@ -138,7 +139,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure,
             strongway2019Catalog: strongway2019, strongway2019AntiEvil: strongway2019AntiEvil, serverEvents: serverEvents,
             directPickupGoldLimits: goldLimits, pcRoomTimePoint: pcRoomTimePoint, riftNamedEpics: riftNamedEpics,
-            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, monsterMockBattle: monsterMockBattle);
+            endlessAdventure: endlessAdventure, dailyAttendance: dailyAttendance, monsterMockBattle: monsterMockBattle,
+            epicPieceBonuses: epicPieceBonuses);
         session.AttachHostedDungeonEligibility(hostedDungeonEligibility);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
             { RaidClearLukeCycle = projection.RaidClearLukeCycle };
