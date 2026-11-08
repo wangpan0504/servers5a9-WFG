@@ -142,7 +142,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         {
             new(Rate(0), null, 1, 1, gold, multiplier, ReferenceGold: true, Category: DungeonDropCategory.Gold),
             new(Rate(1), null, 1, 1, RarityPools: Pools(1), Category: DungeonDropCategory.Materials),
-            new(Rate(2), null, 1, 1, RarityPools: Pools(2), Category: DungeonDropCategory.Equipment),
+            new(Rate(2), null, 1, 1, RarityPools: Pools(2), Category: DungeonDropCategory.Equipment)
+                { RarityBonusGroup = DungeonRarityBonusGroup.OrdinaryEquipment },
             new(Rate(3), null, 1, 1, RarityPools: Pools(3), Category: DungeonDropCategory.Materials)
         };
         var declaration = resolveMonster(monsterId);
@@ -151,7 +152,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var explicitItems = rows.Where(row => row.Parameter > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Parameter));
             var pool = new DungeonItemDropPool(explicitItems);
             if (pool.TotalWeight > 0)
-                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1, Category: DungeonDropCategory.MonsterItems));
+                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1, Category: DungeonDropCategory.MonsterItems)
+                    { RarityBonusGroup = DungeonRarityBonusGroup.MonsterSpecific });
         }
         if (special?.IndependentByMonster.TryGetValue(monsterId, out var independent) == true)
         foreach (var row in independent)
@@ -166,13 +168,15 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var pool = SpecialPool(source);
             if (pool.TotalWeight > 0)
                 trials.Add(new(threshold, pool, 1, 1, ProbabilityDenominator: 1000000, Attempts: attempts,
-                    GrowthContractEligible: row.ListFlag == 1 && monsterType == 3));
+                    GrowthContractEligible: row.ListFlag == 1 && monsterType == 3)
+                    { RarityBonusGroup = row.ListFlag == 1 ? DungeonRarityBonusGroup.IndependentLottery : DungeonRarityBonusGroup.None });
         }
         if (special?.WorldByLevel.TryGetValue(level, out var world) == true)
         {
             var pool = SpecialPool(world.Items);
             if (pool.TotalWeight > 0)
-                trials.Add(new(Math.Min(pool.TotalWeight, 100000), pool, 1, 1, ProbabilityDenominator: 100000));
+                trials.Add(new(Math.Min(pool.TotalWeight, 100000), pool, 1, 1, ProbabilityDenominator: 100000)
+                    { RarityBonusGroup = DungeonRarityBonusGroup.WorldLottery });
         }
         return new(Rule, trials, referenceQuality: true, amplification);
 

@@ -4,6 +4,9 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Dungeons;
 
+// 正式生产者显式登记适用策略；材料、固定指定物及活动保证奖励默认不接装备掉率。
+internal enum DungeonRarityBonusGroup { None, OrdinaryEquipment, HellEquipment, MonsterSpecific, IndependentLottery, WorldLottery, EquipmentLottery }
+
 internal sealed record DungeonDropRarityPool(int Threshold, DungeonItemDropPool Items,
     DungeonItemDropPool? AlternateItems = null, int AlternatePermille = 0,
     DungeonItemDropPool? SecondaryItems = null, int SecondaryPermille = 0)
@@ -20,6 +23,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     ImmutableHashSet<int>? DisjointForbiddenRarities = null, bool EpicRoad2019Simulated = false,
     DungeonEpicDropAdjustment? EpicAdjustment = null)
 {
+    public DungeonRarityBonusGroup RarityBonusGroup { get; init; }
+    public DungeonEquipmentRarityAdjustment? EquipmentRarityAdjustment { get; init; }
     public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
     {
         Threshold = (int)Math.Min(ProbabilityDenominator, (long)Threshold * numerator / denominator),
@@ -41,6 +46,38 @@ internal sealed class DungeonDropGenerationPlan
     public bool ExcludeLowMaterials { get; init; }
     public DungeonDropMultipliers? DropMultipliers { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
+    public DungeonDropGenerationPlan WithEquipmentRarityBonus(EquipmentRarityBonus bonus)
+    {
+        if (bonus.IsEmpty) return this;
+        if (bonus.RarePercent < 0 || bonus.UniquePercent < 0) throw new InvalidDataException("装备稀有度加成不能为负");
+        bool changed = false;
+        var trials = Trials.Select(trial =>
+        {
+            if (trial.RarityBonusGroup is DungeonRarityBonusGroup.OrdinaryEquipment or DungeonRarityBonusGroup.HellEquipment)
+            {
+                var pools = trial.RarityPools;
+                if (pools.IsDefaultOrEmpty || pools.Length != 7 || pools[^1].Threshold < DungeonDropRatePlan.RarityDenominator) return trial;
+                bool Available(int rarity) => pools[rarity].CandidatePools.Any(pool => pool.TotalWeight > 0) &&
+                    pools[rarity].CandidatePools.SelectMany(pool => pool.Entries).All(row => row.Template.Kind == ItemKind.Equipment && row.Template.Rarity == rarity);
+                var previous = pools.Select(pool => pool.Threshold).ToImmutableArray();
+                var thresholds = EquipmentRarityDistribution.Adjust(previous, bonus, Available(2), Available(3));
+                if (previous.SequenceEqual(thresholds)) return trial;
+                changed = true;
+                return trial with { RarityPools = pools.Select((pool, i) => pool with { Threshold = thresholds[i] }).ToImmutableArray() };
+            }
+            if (trial.RarityBonusGroup is not (DungeonRarityBonusGroup.MonsterSpecific or DungeonRarityBonusGroup.IndependentLottery or
+                DungeonRarityBonusGroup.WorldLottery or DungeonRarityBonusGroup.EquipmentLottery) || trial.Threshold == 0 ||
+                trial.Items is not { TotalWeight: > 0 } direct || !direct.Entries.Any(row => row.Template.Kind == ItemKind.Equipment &&
+                    (row.Template.Rarity == 2 && bonus.RarePercent > 0 || row.Template.Rarity == 3 && bonus.UniquePercent > 0))) return trial;
+            changed = true;
+            return trial with { EquipmentRarityAdjustment = new(bonus) };
+        }).ToImmutableArray();
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification)
+        {
+            OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment,
+            ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers
+        } : this;
+    }
     public DungeonDropGenerationPlan WithDisjointRestrictions(ImmutableHashSet<int> rarities)
     {
         if (rarities.IsEmpty) return this;
@@ -134,6 +171,11 @@ internal sealed class DungeonDropGenerationPlan
             if (trial.EpicAdjustment is { } adjustment && (trial.Items is null || trial.Items.TotalWeight <= 0 ||
                 adjustment.EpicThreshold < 0 || !trial.Items.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template))))
                 throw new InvalidDataException("史诗混池倍率须绑定原直接候选及非负概率");
+            if (trial.EquipmentRarityAdjustment is { } rarityAdjustment && (trial.Items is not { TotalWeight: > 0 } ||
+                rarityAdjustment.Bonus.RarePercent < 0 || rarityAdjustment.Bonus.UniquePercent < 0 ||
+                trial.RarityBonusGroup is not (DungeonRarityBonusGroup.MonsterSpecific or DungeonRarityBonusGroup.IndependentLottery or
+                    DungeonRarityBonusGroup.WorldLottery or DungeonRarityBonusGroup.EquipmentLottery)))
+                throw new InvalidDataException("装备混池加成须绑定明确的随机策略及非负加成");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
                 Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.CandidatePools).ToArray();
             if (!trial.RarityPools.IsDefaultOrEmpty && trial.RarityPools.Any(row => row.AlternatePermille is < 0 or > 1000 ||
@@ -208,7 +250,12 @@ internal sealed class DungeonDropGenerationPlan
             // 参考服先计算金币波动，再判定金币概率；即使未命中也保留这一抽样次序。
             int? preparedGold = trial.ReferenceGold ? GoldAmount(trial) : null;
             ItemTemplate? adjustedTemplate = null;
-            if (trial.EpicAdjustment is { } adjustment)
+            if (trial.EquipmentRarityAdjustment is { } equipmentAdjustment)
+            {
+                adjustedTemplate = equipmentAdjustment.Select(trial, Sample);
+                if (adjustedTemplate is null) continue;
+            }
+            else if (trial.EpicAdjustment is { } adjustment)
             {
                 adjustedTemplate = adjustment.Select(trial, Sample);
                 if (adjustedTemplate is null) continue;

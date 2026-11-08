@@ -161,6 +161,18 @@ internal static class DungeonDropRuleCatalogTests
             cardItem with { Kind=ItemKind.Material,StackLimit=100 }]),null!,null!,null!,prices:ownCardRules);
         That(onlyStack.Prepare(cardDungeon,0,1,_=>0,cardNow).Item is null,
             "装备牌空池保留空牌，不借材料候选伪造装备奖励");
+        var rarityCards = new DungeonCardRewardPolicy(parsed, DungeonItemDropCatalog.Create(Enumerable.Range(0, 7)
+            .Select(rarity => Template(6000 + rarity, ItemKind.Equipment, 1) with { Rarity = rarity })), null!, null!, null!,
+            random: bound => bound == 1000000 ? 350000 : 0, prices: cardPrices);
+        var cardBonus = new EquipmentRarityBonus(100, 100);
+        That(rarityCards.Prepare(cardDungeon, 0, 1, utcNow: cardNow).Item?.ItemId == 6001 &&
+            rarityCards.Prepare(cardDungeon, 0, 1, utcNow: cardNow, equipmentRarityBonus: cardBonus).Item?.ItemId == 6002,
+            "普通翻牌沿原稀有度骰应用个人加成，不改变候选等级、品级和金币");
+        var ordinaryOptions = rarityCards.PrepareOptions(cardDungeon, 0, 1,
+            new(BlackDiamondExpires: cardNow.AddDays(1).ToUnixTimeSeconds()), cardNow, equipmentRarityBonus: cardBonus);
+        That(ordinaryOptions?.Paid.Item?.ItemId == 6002 && ordinaryOptions.BlackDiamond?.Item?.ItemId == 6002 &&
+            ordinaryOptions.Paid.Gold == 0 && ordinaryOptions.Price == 100,
+            "付费与黑钻的普通装备牌同用冻结个人加成，不改变付费与金币规则");
         Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse(ownCard[..^1],key=>cardNames[key]),"翻牌残缺等级引用拒绝");
         Reject<InvalidDataException>(() => DungeonCardPriceCatalog.Parse([..ownCard,new(3,2),new(0,1)],key=>cardNames[key]),"翻牌重复稀有度声明拒绝");
         cardNames.Add(4,"[dungeon_index specific reward rate]");
@@ -181,6 +193,16 @@ internal static class DungeonDropRuleCatalogTests
         var specialPolicy = new DungeonResourceDropPolicy(parsed, candidates,
             id => new(id, "monster/合成任意模板.mob", null, null), id => Template(id, id == 1001 ? ItemKind.Material : ItemKind.Consumable, 1), special);
         var specialPlan = specialPolicy.Prepare(42, 1, 3, 1);
+        That(specialPlan.Trials[2].RarityBonusGroup == DungeonRarityBonusGroup.OrdinaryEquipment &&
+            specialPlan.Trials[4].RarityBonusGroup == DungeonRarityBonusGroup.None &&
+            specialPlan.Trials[5].RarityBonusGroup == DungeonRarityBonusGroup.WorldLottery &&
+            specialPlan.Trials.Where((_, i) => i != 2 && i < 4).All(trial => trial.RarityBonusGroup == DungeonRarityBonusGroup.None),
+            "正式生产者登记普通装备及世界策略；固定独立物、金币和材料不误登记");
+        var randomIndependent = new DungeonResourceDropPolicy(parsed, candidates,
+            id => new(id, "monster/合成随机列表.mob", null, null), id => Template(id, ItemKind.Equipment, 1),
+            DungeonSpecialDropCatalog.Create([specialRule with { ListFlag = 1, ListValues = [1001, 5] }], []));
+        That(randomIndependent.Prepare(42, 1, 3, 1).Trials[4].RarityBonusGroup == DungeonRarityBonusGroup.IndependentLottery,
+            "只有list flag=1的独立随机列表登记稀有度加成，不混淆固定指定奖励");
         var specialAssets = specialPlan.Generate(bound => bound switch
         { 27 => 0, 10000 => 9999, 1000000 => 499999, 100000 => 2, _ => 0 }, DateTimeOffset.UtcNow);
         That(specialAssets.Select(asset => asset.Item!.ItemId).SequenceEqual(new[] { 1001, 1001, 1000 }) &&
@@ -222,6 +244,9 @@ internal static class DungeonDropRuleCatalogTests
             specialPolicy.PrepareEntry(entry with { Difficulty = 0 }, hell)(monster).Trials[0].Threshold == 986,
             "下次入图重新准备，副本等级与难度不会沿用上次计划");
         var rewarded = prepare(monster with { HellRewardRolls = 2 });
+        That(rewarded.Trials[^1].RarityBonusGroup == DungeonRarityBonusGroup.HellEquipment &&
+            cached.Trials.All(trial => trial.RarityBonusGroup != DungeonRarityBonusGroup.HellEquipment),
+            "只有带深渊奖励骰的末杀怪物追加并登记深渊稀有度策略，普通波次不误登记");
         var apc = prepare(monster with { SpawnType = 5, HellRewardRolls = 2 });
         That(rewarded.Trials.Length == cached.Trials.Length + 1 && rewarded.Trials[^1].Attempts == 2 &&
             apc.ResourceSource == "hell-party-apc" && apc.Trials.Length == 1 &&

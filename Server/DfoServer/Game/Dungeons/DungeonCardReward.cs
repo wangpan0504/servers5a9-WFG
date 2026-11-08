@@ -66,7 +66,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
 
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true,
-        bool ancientBonus = false, DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null)
+        bool ancientBonus = false, DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null,
+        EquipmentRarityBonus equipmentRarityBonus = default)
     {
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
@@ -132,9 +133,12 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (reference.Level == 0 || reference.Value0 < 0 || reference.Value1 < 0)
             throw new NotSupportedException("当前副本等级缺少普通翻牌物品引用");
         int rarityRoll = Next(DungeonDropRatePlan.RarityDenominator);
-        int rarity = prices is { RarityDecision.IsEmpty: false }
-            ? DungeonDropRatePlan.Rarity(prices.RarityDecision.AsSpan(), rarityRoll)
-            : DungeonDropRatePlan.Rarity(rules, 0, rarityRoll);
+        var rarityThresholds = prices is { RarityDecision.IsEmpty: false } ? prices.RarityDecision : rules.RarityDecision[..7];
+        if (!equipmentRarityBonus.IsEmpty)
+            rarityThresholds = EquipmentRarityDistribution.Adjust(rarityThresholds, equipmentRarityBonus,
+                candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, 2).TotalWeight > 0,
+                candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, 3).TotalWeight > 0);
+        int rarity = DungeonDropRatePlan.Rarity(rarityThresholds.AsSpan(), rarityRoll);
         var pool = candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, rarity);
         ItemCore? core = pool.TotalWeight == 0 ? null : DungeonDropCreation.Create(pool.Select(Next(pool.TotalWeight)), 1, Next, now, referenceQuality: true);
         string itemSource = prices switch
@@ -226,7 +230,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
 
     public DungeonCardOptions? PrepareOptions(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null, byte job = 0, byte grow = 0,
-        DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null)
+        DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null,
+        EquipmentRarityBonus equipmentRarityBonus = default)
     {
         if (prices is null) return null;
         if (dungeon.BasisLevel is not > 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
@@ -241,13 +246,13 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
         var paid = dungeon.IsTayberrs ? PrepareTayberrsPaid(dungeon, now)
             : Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
-                clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage) with { Gold = 0 };
+                clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
             membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
                 ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
-                    clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage) : null)
+                    clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus) : null)
         {
             PaidDisabled = dungeon.DisablePaidCard,
             DoublePaidItems = doubled,
