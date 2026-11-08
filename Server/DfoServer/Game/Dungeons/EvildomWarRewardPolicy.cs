@@ -39,8 +39,8 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
                     (row.ItemRaw == -1 ? row.CountRaw != 0 : row.ItemRaw == 0 || row.CountRaw == 0)) ||
                     group.Sum(row => (long)row.WeightRaw) > Denominator)
                     throw new InvalidDataException("魔界本服奖励表的组、类型、数量或万分权重无效");
-                // 本服将固定第1组解释为实验室额外奖，与王座奖励独立提交。
-                if (group.Key == 1) continue;
+                // 第1组为吉赛尔的实验室通关奖励（随王座结算发放或单独恢复），第2组不在结算翻牌发放。
+                if (group.Key is 1 or 2) continue;
                 int roll = draw(Denominator);
                 if (roll is < 0 or >= Denominator) throw new InvalidDataException("魔界奖励随机值越界");
                 foreach (var row in group)
@@ -60,14 +60,14 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
     public EvildomWarRewardSelection PrepareHidden(byte mode)
     {
         if (mode > 2) throw new ArgumentOutOfRangeException(nameof(mode));
-        var rows = (mode == 2 ? catalog.GuideModeRewards : catalog.Rewards).Where(row => row.GroupRaw == 1).ToArray();
+        var rows = (mode == 1 ? catalog.Rewards : catalog.GuideModeRewards).Where(row => row.GroupRaw == 1).ToArray();
         if (rows is not [{ TypeRaw: 0, ItemRaw: > 0, CountRaw: > 0 and <= MaximumProducts, WeightRaw: Denominator }] ||
             !items.Contains(rows[0].ItemRaw))
             throw new InvalidDataException("魔界实验室额外奖励必须是资源中的单项固定奖励");
         return new(mode, [new(1, rows[0].ItemRaw, rows[0].CountRaw)]);
     }
 
-    public EvildomWarRewardSelection Prepare(byte mode, Character character, Func<int, int> draw)
+    public EvildomWarRewardSelection Prepare(byte mode, Character character, Func<int, int> draw, bool includeHidden = false)
     {
         var selected = Select(mode, catalog.Rewards, catalog.HardModeRewards, catalog.GuideModeRewards, draw);
         var result = new List<EvildomWarRewardItem>();
@@ -77,8 +77,34 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
             else
                 for (int i = 0; i < row.CountRaw; i++) Expand(row.GroupRaw, row.ItemRaw);
         }
-        return new(mode, result.GroupBy(row => (row.Group, row.ItemId)).Select(group =>
-            new EvildomWarRewardItem(group.Key.Group, group.Key.ItemId, checked(group.Sum(row => row.Count)))).ToImmutableArray());
+        if (includeHidden)
+            result.AddRange(PrepareHidden(mode).Items);
+        var finalItems = ImmutableArray.CreateBuilder<EvildomWarRewardItem>(result.Count);
+        foreach (var row in result)
+        {
+            if (items.Get(row.ItemId).Kind == ItemKind.Talisman)
+            {
+                for (int i = 0; i < row.Count; i++)
+                    finalItems.Add(new(row.Group, row.ItemId, 1));
+            }
+            else
+            {
+                int existing = -1;
+                for (int i = 0; i < finalItems.Count; i++)
+                {
+                    if (finalItems[i].Group == row.Group && finalItems[i].ItemId == row.ItemId)
+                    {
+                        existing = i;
+                        break;
+                    }
+                }
+                if (existing >= 0)
+                    finalItems[existing] = finalItems[existing] with { Count = checked(finalItems[existing].Count + row.Count) };
+                else
+                    finalItems.Add(row);
+            }
+        }
+        return new(mode, finalItems.ToImmutable());
 
         void Add(int group, int id, int count)
         {
@@ -98,11 +124,12 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
             {
                 if (box.Family is < 0 or > 1 || !items.RuneRandomChoices().TryGet(box.Family, box.Tier, out var choice))
                     throw new InvalidDataException("魔界护石符文奖励缺少抽样表");
+                bool canBoostOwn = RuneBoxSelection.CanBoostOwnClass(character.Job, character.GrowType);
                 string? rejected = RuneBoxSelection.Select(choice,
                     grade => box.Family == 0 ? items.RuneCandidates(checked((byte)grade)) : items.TalismanCandidates(grade),
-                    product => box.Family == 0
+                    product => canBoostOwn && (box.Family == 0
                         ? items.Rune(product)?.AllowsUse(character.Level, character.Job, character.GrowType) == true
-                        : items.Talisman(product)?.AllowsUse(character.Level, character.Job, character.GrowType) == true,
+                        : items.Talisman(product)?.AllowsUse(character.Level, character.Job, character.GrowType) == true),
                     maximum => draw(checked((int)maximum)), out _, out int product);
                 if (rejected is not null) throw new InvalidDataException("魔界护石符文抽样失败: " + rejected);
                 Add(group, product, 1);
@@ -151,4 +178,7 @@ internal sealed class EvildomWarRewardPolicy(EvildomWarCatalog catalog, ItemCata
         }
         return result.ToImmutable();
     }
+
+    public InventoryPlan PlanGrant(Character character, ImmutableArray<InventoryItem> rewardItems, DateTimeOffset now) =>
+        InventoryRewardGrantService.PlanPreMaterializedRewards(character, rewardItems, items, now);
 }

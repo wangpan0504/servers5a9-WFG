@@ -36,6 +36,43 @@ internal static class EvildomWarRewardTransactionTests
         {
             session.Select(0, resumeTown: true); session.MarkReady(); session.CurrentParty = () => parties.Current(session);
             var policy = new EvildomWarRewardPolicy(catalog, resources.ItemResources.Items, resources.ItemResources.Boosters);
+            var items = resources.ItemResources.Items;
+            That(!DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(0, 0) &&
+                DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(0, 1) &&
+                DfoServer.Game.Inventory.Services.RuneBoxSelection.CanBoostOwnClass(9, 0) &&
+                items.TalismanCandidates(3).All(id => items.Talisman(id)!.AllowsUse(95, 0, 0) == false) &&
+                items.RuneCandidates(0).All(id => items.Rune(id)!.AllowsUse(95, 0, 0) == false) &&
+                items.TalismanCandidates(3).Any(id => items.Talisman(id)!.AllowsUse(95, 0, 1)) &&
+                items.RuneCandidates(0).Any(id => items.Rune(id)!.AllowsUse(95, 0, 1)),
+                "未转职角色不满足护石与符文首转条件，自身转职掉落率加成不会触发");
+            for (int branch = 0; branch < 2; branch++)
+            {
+                int capturedBranch = branch;
+                var guideDrops = new EvildomWarSarpozaDropPlan(2, (0, 1, 95), items).Generate(
+                    bound => bound == 2 ? capturedBranch : 0, clock.GetUtcNow());
+                That(guideDrops.Length == (branch == 0 ? 13 : 14) &&
+                    guideDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                    guideDrops.Skip(1).All(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }),
+                    "引导模式夏勒·弗兹固定掉落1个不稳定的护石碎片及12或13个随机符文");
+            }
+            var normalDrops = new EvildomWarSarpozaDropPlan(0, (0, 1, 95), items).Generate(_ => 0, clock.GetUtcNow());
+            That(normalDrops.Length == 22 && normalDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                normalDrops.Skip(1).All(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }),
+                "普通模式夏勒·弗兹固定掉落1个不稳定的护石碎片及21个随机符文");
+            for (int branch = 0; branch < 4; branch++)
+            {
+                int capturedBranch = branch;
+                var hardDrops = new EvildomWarSarpozaDropPlan(1, (0, 1, 95), items).Generate(
+                    bound => bound == 4 ? capturedBranch : 0, clock.GetUtcNow());
+                int expectedRuneCount = branch switch { 0 => 25, 1 => 26, _ => 21 };
+                int expectedRoughStoneCount = branch switch { 2 => 4, 3 => 5, _ => 0 };
+                That(hardDrops[0].Item is { ItemId: 490014022, Count: 1 } &&
+                    hardDrops.Count(row => row.Item is { Kind: DfoServer.GameWorld.Items.ItemKind.Rune, Count: 1 }) == expectedRuneCount &&
+                    (expectedRoughStoneCount == 0
+                        ? hardDrops.Length == 1 + expectedRuneCount
+                        : hardDrops.Length == 2 + expectedRuneCount && hardDrops[^1].Item is { ItemId: 10310787 } stone && stone.Count == expectedRoughStoneCount),
+                    "困难模式夏勒·弗兹四分支掉落不稳定的护石碎片、随机符文与耀眼的符文原石");
+            }
             foreach (byte mode in new byte[] { 0, 1, 2 })
                 foreach (int roll in new[] { 0, 4999, 5000, 9372, 9872, 9999 })
                 {

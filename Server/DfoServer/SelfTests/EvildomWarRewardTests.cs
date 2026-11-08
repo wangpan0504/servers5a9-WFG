@@ -11,7 +11,7 @@ internal static class EvildomWarRewardTests
     {
         int before = Count;
         ImmutableArray<EvildomWarRewardDefinition> normal = [new(0, 1, 101, 4, 5000), new(0, 1, 101, 5, 5000),
-            new(1, 0, 105, 15, 10000), new(3, 0, -1, 0, 9372), new(3, 1, 102, 1, 500)];
+            new(1, 0, 105, 15, 10000), new(2, 0, 106, 4, 10000), new(3, 0, -1, 0, 9372), new(3, 1, 102, 1, 500)];
         ImmutableArray<EvildomWarRewardDefinition> hard = [new(0, 0, 103, 1, 10000)];
         ImmutableArray<EvildomWarRewardDefinition> guide = [new(0, 0, 104, 2, 10000)];
         ImmutableArray<EvildomWarRewardDefinition> Pick(byte mode, params int[] rolls)

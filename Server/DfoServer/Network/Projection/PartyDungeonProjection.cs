@@ -62,12 +62,21 @@ internal static class PartyDungeonProjection
     public static async Task PublishAsync(IEnumerable<PartyDungeonNotice> notices)
     {
         var batch = notices.ToArray();
-        PrepareEvildomWarRewards(batch);
-        // 同一连接按事实顺序发送，尤其退场时须先迁移主机再释放加载；不同连接仍并行。
-        await Task.WhenAll(batch.GroupBy(n => n.Recipient.Actor.Session).Select(async notices =>
+        static bool IsCompletedWar(PartyDungeonNotice notice) =>
+            notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true };
+        if (batch.Any(IsCompletedWar) && batch.Any(notice => !IsCompletedWar(notice)))
         {
-            foreach (var notice in notices) await PublishOneAsync(notice);
-        }));
+            var preceding = batch.Where(notice => !IsCompletedWar(notice)).ToArray();
+            var completedWar = batch.Where(IsCompletedWar).ToArray();
+            await PublishBatchAsync(preceding);
+            PrepareEvildomWarRewards(completedWar);
+            await PublishBatchAsync(completedWar);
+        }
+        else
+        {
+            PrepareEvildomWarRewards(batch);
+            await PublishBatchAsync(batch);
+        }
         // 全员31发布完成后再计算共享资格，避免先完成者把仍在发送中的队友误判为不能再挑战。
         await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.Loaded or PartyDungeonNoticeKind.Move &&
                 n.Scene?.Entry.IsCosmo == true && n.Recipient.Actor.Session.FormalDungeonResultFocus() is not null)
@@ -76,6 +85,13 @@ internal static class PartyDungeonProjection
         await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.RaidBattleSync &&
                 n.Recipient.Actor.Session.RaidCombatKind() == Game.Raids.RaidKind.Fiendwar)
             .GroupBy(n => n.Recipient.Actor.Session).Select(group => PublishOneAsync(group.Last() with { Kind = PartyDungeonNoticeKind.FiendwarTitles })));
+
+        static Task PublishBatchAsync(PartyDungeonNotice[] items) =>
+            // 同一连接按事实顺序发送，尤其退场时须先迁移主机再释放加载；不同连接仍并行。
+            Task.WhenAll(items.GroupBy(n => n.Recipient.Actor.Session).Select(async notices =>
+            {
+                foreach (var notice in notices) await PublishOneAsync(notice);
+            }));
     }
 
     static void PrepareEvildomWarRewards(PartyDungeonNotice[] batch)

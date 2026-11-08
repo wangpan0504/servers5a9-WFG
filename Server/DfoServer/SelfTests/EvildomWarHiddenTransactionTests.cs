@@ -130,11 +130,12 @@ internal static class EvildomWarHiddenTransactionTests
                     battle.View.Revision == revision && Scalar("SELECT count(*) FROM character_dungeon_scene_clear_receipts") == count &&
                     Scalar("SELECT count(*) FROM character_evildom_war_rewards") == 0 &&
                     sessions.All(session => session.Selected!.Fatigue!.Used == 30), "重复物件仅重同步原隐藏事实，不推进战况、发王座奖或再扣费");
-                int amount = mode == 2 ? 9 : 15;
+                int amount = mode == 1 ? 15 : 9;
                 var reward = policy.PrepareHidden(mode);
                 That(reward.Items is [{ Group: 1, ItemId: 10310786 }] && reward.Items[0].Count == amount &&
-                    policy.Prepare(mode, sessions[0].Selected!, _ => 0).Items.All(row => row.Group != 1),
-                    "资源固定符文原石仅为本服隐藏额外奖，王座不重复包含该组");
+                    policy.Prepare(mode, sessions[0].Selected!, _ => 0).Items.All(row => row.Group is not (1 or 2)) &&
+                    policy.Prepare(mode, sessions[0].Selected!, _ => 0, includeHidden: true).Items.Single(row => row.Group == 1) == new EvildomWarRewardItem(1, 10310786, amount),
+                    "吉赛尔的实验室奖励普通与引导为9个、困难为15个符文原石，可在王座结算合并入第1组");
                 var hiddenSnapshot = new EvildomWarRewardSnapshot(battle.HiddenCompletion!, reward,
                     policy.Materialize(reward, battle.HiddenCompletion!.Created)) { Rule = EvildomWarRewardPolicy.HiddenRule };
                 Reject<InvalidOperationException>(() => repository.CommitEvildomWarHiddenReward(leases[^1], sessions[0].Selected!.Id,

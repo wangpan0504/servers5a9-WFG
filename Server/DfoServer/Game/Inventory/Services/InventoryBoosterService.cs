@@ -116,11 +116,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         int productId;
         try
         {
+            bool canBoostOwn = RuneBoxSelection.CanBoostOwnClass(character.Job, character.GrowType);
             if (RuneBoxSelection.Select(choose,
                     grade => box.Family == 0 ? catalog.RuneCandidates((byte)grade) : catalog.TalismanCandidates(grade),
-                    id => box.Family == 0
+                    id => canBoostOwn && (box.Family == 0
                         ? catalog.Rune(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true
-                        : catalog.Talisman(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true,
+                        : catalog.Talisman(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true),
                     draw.NextInt64, out _, out productId) is { } reason)
                 return RejectRuneBox(reason);
         }

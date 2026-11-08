@@ -66,13 +66,13 @@ internal sealed class DungeonDropControlSnapshot
         !entry.IsTutorial && !entry.IsPractice && !entry.IsTrainingRoom && !entry.IsClassExperience &&
         !entry.IsTournament && !entry.IsAltar && !entry.IsDespair && !entry.Maze.IsGriefTower &&
         !entry.IsBossRush && entry.LostLand is null && !entry.IsTagSystem &&
-        entry.Hope is null && entry.Dimension is null && entry.Marriage is null;
+        entry.Hope is null && entry.Dimension is null && entry.Marriage is null && entry.EvildomWarMode is null;
 
     public static DungeonDropGenerationPlan Apply(DungeonDropGenerationPlan plan, DungeonDropMultipliers? rates)
     {
         if (rates is null) return plan;
         rates.Validate();
-        return new(plan.ResourceSource + ";drop-control-v2", plan.Trials.Select(trial => ApplyTrial(trial, rates)), plan.ReferenceQuality, plan.Amplification)
+        return new(plan.ResourceSource + ";drop-control-v2", plan.Trials.Select(trial => ApplyTrial(trial, rates)), plan.ReferenceQuality, plan.Amplification, plan.Sarpoza)
             { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource, DropMultipliers = rates,
               ExcludeLowEquipment = rates.ExcludeLowEquipment, ExcludeLowMaterials = rates.ExcludeLowMaterials };
     }
