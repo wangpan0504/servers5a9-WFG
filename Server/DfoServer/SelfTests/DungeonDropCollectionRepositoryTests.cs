@@ -24,6 +24,7 @@ internal static class DungeonDropCollectionRepositoryTests
     {
         int checks = Count;
         EquipmentGoldBonusTests.RunResources(resources.Items);
+        EquipmentRarityBonusTests.RunResources(resources.Items);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-drop-collection-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string path = Path.Combine(root, "game.db");

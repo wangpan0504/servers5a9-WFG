@@ -84,7 +84,8 @@ internal sealed partial class GameSession
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
-        public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At)? PendingDeathReward { get; set; }
+        public (PreparedDungeonDeath Death, DungeonExperienceReward Reward, DateTimeOffset At,
+            EquipmentRarityBonus RarityBonus)? PendingDeathReward { get; set; }
         public DfoServer.Game.Tutorials.TutorialCheckpointPlan? PendingTutorialClear { get; set; }
         public ushort? TutorialClearTarget { get; set; }
         public AssaultModeSelection? Assault { get; init; }
@@ -658,6 +659,7 @@ internal sealed partial class GameSession
         HelperRotationCapture? helperRotation = null)
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
+        if (items is not null) EquipmentRarityBonusPolicy.Prepare(expected, items);
         state.Validate();
         // 保留 #693 的兼容游标和溢出重试；这个数值只选择新实例编号范围，不恢复旧房间或地面对象。
         // 只有完整准备超界才重试，沿用实例隔离的历史账本和单调尝试号。
@@ -1526,7 +1528,8 @@ internal sealed partial class GameSession
             }
             dungeon.PendingDeathReward = (pending, basis with
                 { BaseAmount = basis.Amount, Amount = bonuses.Total, GrowthContractExperience = bonuses.Amount(ExperienceBonusSource.GrowthContract),
-                    PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at);
+                    PotionExperience = bonuses.Amount(ExperienceBonusSource.Potion), Bonuses = bonuses }, at,
+                items is null ? default : EquipmentRarityBonusPolicy.Capture(Selected, items, at.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule));
         }
         var frozen = dungeon.PendingDeathReward.Value;
         if (!ReferenceEquals(frozen.Death, pending))
@@ -1565,6 +1568,7 @@ internal sealed partial class GameSession
                     if (dungeon.Entry.IsHellLegend)
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);
+                    boosted = boosted.WithEquipmentRarityBonus(frozen.RarityBonus);
                     bool epicRoadAvailable = dungeon.Entry.DungeonId is not (400000097 or 400000098) ||
                         serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active == true;
                     var ordinary = boosted.Generate(dungeon.Draw, now, epicRoadAvailable);
@@ -1635,6 +1639,7 @@ internal sealed partial class GameSession
             committed.Death.ClearFact, loot?.UsesCollectionLedger == true ? null : floorDrops.FirstOrDefault(), previousLevel)
         {
             Drops = floorDrops,
+            EquipmentRarityBonus = frozen.RarityBonus,
             DirectPickup = directPickup,
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,

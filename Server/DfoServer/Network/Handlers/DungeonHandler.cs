@@ -640,6 +640,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, Recognized = true, context.Session.Phase,
             result.Outcome, ObjectKey = objectKey, Report = audit,
+            result.EquipmentRarityBonus.RarePercent, result.EquipmentRarityBonus.UniquePercent,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact,
             DirectItems = result.DirectPickup.GroundKeys.Length });
