@@ -104,3 +104,73 @@ internal sealed record CharacterAttributeDefinition(string ScriptPath,
                 System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out index) && index > 0;
     }
 }
+
+internal sealed record CharacterAdditionalStatDefinition(string ScriptPath, int MaxLevel,
+    IReadOnlyDictionary<CharacterAttributeField, float> InitialFields,
+    IReadOnlyDictionary<CharacterAttributeField, float> GrowthFields)
+{
+    // 040BD87E..040BD976：解析 chn_add_stat.etc 的 [max level]、[add initial value stat] 与 [add growtype stat]。
+    public static CharacterAdditionalStatDefinition Parse(string path, ReadOnlySpan<PvfToken> tokens, Func<int, string> resolve)
+    {
+        int? maxLevel = null;
+        Dictionary<CharacterAttributeField, float>? initial = null, growth = null, current = null;
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (tokens[i].Type != 3)
+                continue;
+            string tag = resolve(tokens[i].Value);
+            int next = i + 1;
+            while (next < tokens.Length && tokens[next].Type != 3)
+                next++;
+            if (tag == "[max level]")
+            {
+                if (maxLevel is not null || next != i + 2 || tokens[i + 1].Type != 0 ||
+                    tokens[i + 1].Value is <= 0 or > CharacterGrowthCatalog.MaximumSupportedLevel)
+                    throw new InvalidDataException("角色额外属性最大等级缺失或非法");
+                maxLevel = tokens[i + 1].Value;
+                current = null;
+            }
+            else if (tag == "[add initial value stat]")
+            {
+                if (initial is not null)
+                    throw new InvalidDataException("角色额外初始属性块重复");
+                initial = current = new();
+            }
+            else if (tag == "[/add initial value stat]")
+            {
+                if (!ReferenceEquals(current, initial))
+                    throw new InvalidDataException("角色额外初始属性结束标签不匹配");
+                current = null;
+            }
+            else if (tag == "[add growtype stat]")
+            {
+                if (growth is not null)
+                    throw new InvalidDataException("角色额外成长属性块重复");
+                growth = current = new();
+            }
+            else if (tag == "[/add growtype stat]")
+            {
+                if (!ReferenceEquals(current, growth))
+                    throw new InvalidDataException("角色额外成长属性结束标签不匹配");
+                current = null;
+            }
+            else if (current is not null && CharacterAttributeDefinition.Tags.TryGetValue(tag, out var field))
+            {
+                if (next != i + 2 || tokens[i + 1].Type is not (0 or 2))
+                    throw new InvalidDataException("角色额外属性声明不是单个数值: " + tag);
+                float value = tokens[i + 1].Type == 2
+                    ? BitConverter.Int32BitsToSingle(tokens[i + 1].Value) : tokens[i + 1].Value;
+                if (!float.IsFinite(value) || !current.TryAdd(field, value))
+                    throw new InvalidDataException("角色额外属性声明非有限或重复: " + tag);
+            }
+            else
+                throw new InvalidDataException("未识别的角色额外属性标签: " + tag);
+            i = next - 1;
+        }
+        if (maxLevel is null || initial is null || growth is null || initial.Count == 0 || growth.Count == 0)
+            throw new InvalidDataException("角色额外属性资源块缺失");
+        return new(path, maxLevel.Value,
+            new ReadOnlyDictionary<CharacterAttributeField, float>(initial),
+            new ReadOnlyDictionary<CharacterAttributeField, float>(growth));
+    }
+}
