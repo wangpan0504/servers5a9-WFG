@@ -44,7 +44,7 @@ internal static class RevisedBeastProjection
         await context.Notify(NotiPacketType.BEAST_DUNGEON_RESULT,RevisedBeastPackets.Result(receipt),"revised_beast_terminal_result",Guard);
         await RevisedBeastCountProjection.RefreshAsync(context,rooms,Guard);
         log.Write("revised_beast_terminal",new {Connection=context.Id,receipt.Scene.Entry.DungeonId,receipt.Scene.Entry.Difficulty,
-            receipt.Terminal.Identity,receipt.Terminal.Success,receipt.ElapsedSeconds,receipt.Commit.Awarded,receipt.Commit.Duplicate,receipt.Commit.Mailed,
+            receipt.Terminal.Identity,receipt.Terminal.Success,receipt.ElapsedSeconds,receipt.Points,receipt.BestRecords,receipt.Commit.Awarded,receipt.Commit.Duplicate,receipt.Commit.Mailed,
             receipt.Commit.Rewards,receipt.DisplayRewards,receipt.Terminal.Bosses});
     }
 }

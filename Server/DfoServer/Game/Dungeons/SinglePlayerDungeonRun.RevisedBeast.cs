@@ -4,11 +4,15 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record RevisedBeastBossProgress(int MonsterId, bool Killed, ulong? ReportedSpawnHp,
     ulong? ReportedHpDecrease);
 internal sealed record RevisedBeastTerminal(DungeonRunIdentity Identity, bool Success,
-    IReadOnlyList<RevisedBeastBossProgress> Bosses);
+    IReadOnlyList<RevisedBeastBossProgress> Bosses)
+{
+    public uint ElapsedMilliseconds { get; init; }
+}
 
 internal sealed partial class SinglePlayerDungeonRun
 {
     readonly Dictionary<int,RevisedBeastBossProgress> revisedBeastProgress=[];
+    readonly long revisedBeastStartedTimestamp=System.Diagnostics.Stopwatch.GetTimestamp();
     public RevisedBeastStage? RevisedBeastAnneStage { get; private set; }
     public RevisedBeastTerminal? RevisedBeastTerminal { get; private set; }
     bool RevisedBeastVisible(ushort key) => !entry.IsRevisedBeast || current.Plan.Room.Map.Position != new DungeonPoint(1,0) ||
@@ -67,7 +71,10 @@ internal sealed partial class SinglePlayerDungeonRun
     void FreezeRevisedBeastTerminal(bool success)
     {
         var rules=entry.RevisedBeastEncounter!;
+        uint elapsed=RevisedBeastTerminal?.ElapsedMilliseconds ?? checked((uint)Math.Min(uint.MaxValue,
+            System.Diagnostics.Stopwatch.GetElapsedTime(revisedBeastStartedTimestamp).TotalMilliseconds));
         RevisedBeastTerminal=new(identity,success,new[]{rules.AnneId,rules.HierroId}
-            .Select(id=>revisedBeastProgress.GetValueOrDefault(id) ?? new(id,false,null,null)).ToArray());
+            .Select(id=>revisedBeastProgress.GetValueOrDefault(id) ?? new(id,false,null,null)).ToArray())
+            { ElapsedMilliseconds=elapsed };
     }
 }

@@ -10,7 +10,9 @@ internal interface IRevisedBeastRewardStore
     DungeonIncountUsage LoadRevisedBeastRewardUsage(AccountOwners.Lease owner, ushort characterId, DungeonIncountPeriod period);
     RevisedBeastRewardCommit CommitRevisedBeastStageReward(AccountOwners.Lease owner, SinglePlayerDungeonRun run, RevisedBeastStageRewardPlan plan);
     RevisedBeastRewardCommit CommitRevisedBeastReward(AccountOwners.Lease owner, SinglePlayerDungeonRun run, RevisedBeastRewardPlan plan);
+    ImmutableArray<RevisedBeastRecord> LoadRevisedBeastBestRecords(AccountOwners.Lease owner, ushort characterId, uint dungeonId, byte difficulty);
 }
+internal sealed record RevisedBeastRecord(uint Points, uint ElapsedSeconds);
 internal sealed record RevisedBeastCounts(uint DailyEntriesUsed, uint WeeklyEntriesUsed, byte DailyRewards, byte WeeklyRewards);
 internal sealed record RevisedBeastCountsReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonIncountPeriod Period, RevisedBeastCounts Counts);
@@ -24,6 +26,8 @@ internal sealed record RevisedBeastSettlementReceipt(FormalDungeonReceipt Scene,
     // 展示包括已在阶段到账的奖励；不能把展示列表重新提交为库存增量。
     public ImmutableArray<InventoryReward> DisplayRewards { get; init; } = [];
     public uint ElapsedSeconds { get; init; }
+    public uint Points { get; init; }
+    public ImmutableArray<RevisedBeastRecord> BestRecords { get; init; } = [];
 }
 
 internal sealed record RevisedBeastStage(DungeonRunIdentity Identity, int MonsterId);

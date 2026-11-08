@@ -790,7 +790,7 @@ internal sealed partial class GameSession
         if (entry.IsRevisedBeast)
         {
             var encounter = rooms.RevisedBeastEncounter(entry.Difficulty);
-            entry = entry with { RevisedBeastEncounter = encounter, CoinLimit = encounter.CoinLimit, CompanionMapRows = [] };
+            entry = entry with { RevisedBeastEncounter = encounter, CoinLimit = encounter.CoinLimit };
         }
         var plans = new List<DungeonMonsterPlan>();
         int bossRushOffset = 0;

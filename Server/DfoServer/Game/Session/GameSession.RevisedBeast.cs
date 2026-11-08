@@ -102,6 +102,8 @@ internal sealed partial class GameSession
             Selected=commit.Character;
             return dungeon.RevisedBeastSettlement=new(FormalReceipt(),terminal,commit)
             { DisplayRewards=stage.Commit.Rewards.AddRange(commit.Rewards),
+                Points=rules.PointsFor(terminal.Success,terminal.ElapsedMilliseconds),
+                BestRecords=store.LoadRevisedBeastBestRecords(owner,expected.Id,dungeon.Entry.DungeonId,dungeon.Entry.Difficulty),
                 ElapsedSeconds=dungeon.RevisedBeastElapsedSeconds ?? throw new InvalidOperationException("改版终局未冻结计时") };
         });
     }
@@ -128,8 +130,8 @@ internal sealed partial class GameSession
 
     // 使用本实例单调时钟；在终局事实成立时冻结，奖励提交或重发不能延长对局。
     static void FreezeRevisedBeastElapsed(FormalDungeon dungeon) =>
-        dungeon.RevisedBeastElapsedSeconds ??= checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(
-            dungeon.StartedTimestamp).TotalSeconds);
+        dungeon.RevisedBeastElapsedSeconds ??= (dungeon.Run.RevisedBeastTerminal ??
+            throw new InvalidOperationException("改版魔兽尚未终局")).ElapsedMilliseconds / 1000;
 
     public TimeSpan DungeonDeathDelay => owner.Execute(()=>TimeSpan.FromMilliseconds(
         formalDungeon?.RevisedBeastDeathDue is { } due ? Math.Max(0,due-(timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()) : 10000));

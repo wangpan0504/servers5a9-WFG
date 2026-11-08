@@ -33,6 +33,7 @@ internal sealed partial class CharacterRepository : IRevisedBeastRewardStore
         var expected=plan.Expected;
         ValidateRevisedBeastRewardInventory(expected,plan.Inventory,plan.Rewards);
         string snapshot=JsonSerializer.Serialize(new { plan.Terminal.Identity,plan.Terminal.Success,plan.DungeonId,plan.Difficulty,
+            plan.Terminal.ElapsedMilliseconds,Points=rules.PointsFor(plan.Terminal.Success,plan.Terminal.ElapsedMilliseconds),
             plan.Rewards,plan.Period,plan.DailyLimit,plan.WeeklyLimit });
         using var db=database.Open();
         using var write=db.BeginWrite("CharacterRepository.CommitRevisedBeastReward",deferred:true);
@@ -77,6 +78,28 @@ internal sealed partial class CharacterRepository : IRevisedBeastRewardStore
         RevisedBeastRewardCommit Result(Character character,bool duplicate,bool projection,bool awarded) =>
             new(character,duplicate,projection,awarded,awarded?plan.Rewards:[],
                 awarded?plan.Inventory.ChangedSlots:[],awarded && !plan.Inventory.OverflowItems.IsEmpty);
+    });
+    public ImmutableArray<RevisedBeastRecord> LoadRevisedBeastBestRecords(AccountOwners.Lease owner, ushort characterId,
+        uint dungeonId, byte difficulty) => owner.Execute(() =>
+    {
+        using var db=database.Open();
+        using var command=db.CreateCommand();
+        // 成绩与资产共用已提交的终局凭据；旧记录缺少计时数据，不伪造补分。
+        command.CommandText="""
+            SELECT json_extract(plan_snapshot,'$.Points'),json_extract(plan_snapshot,'$.ElapsedMilliseconds')/1000
+            FROM character_revised_beast_rewards
+            WHERE character_id=$id AND account=$account AND dungeon_id=$dungeon AND difficulty=$difficulty AND success=1
+              AND json_type(plan_snapshot,'$.Points')='integer'
+              AND json_type(plan_snapshot,'$.ElapsedMilliseconds')='integer'
+            ORDER BY json_extract(plan_snapshot,'$.Points') DESC,json_extract(plan_snapshot,'$.ElapsedMilliseconds'),instance_id
+            LIMIT 3
+            """;
+        command.Parameters.AddWithValue("$id",characterId);command.Parameters.AddWithValue("$account",owner.Account);
+        command.Parameters.AddWithValue("$dungeon",dungeonId);command.Parameters.AddWithValue("$difficulty",difficulty);
+        using var reader=command.ExecuteReader();
+        var records=ImmutableArray.CreateBuilder<RevisedBeastRecord>();
+        while(reader.Read()) records.Add(new(checked((uint)reader.GetInt64(0)),checked((uint)reader.GetInt64(1))));
+        return records.ToImmutable();
     });
     static void ValidateRevisedBeastRewardInventory(DfoServer.Game.Characters.Character expected, InventoryPlan inventory,
         ImmutableArray<DfoServer.Game.Inventory.Services.InventoryReward> rewards)

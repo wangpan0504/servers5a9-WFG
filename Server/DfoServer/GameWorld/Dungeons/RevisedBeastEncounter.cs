@@ -5,6 +5,9 @@ internal sealed record RevisedBeastEncounter(int AnneId, string AnnePath, int Hi
     int AnneRewardItem, int HierroRewardItem, int CoinLimit, int CoinTimeoutMilliseconds, int DailyRewardLimit, int WeeklyRewardLimit,
     int DailyEntryLimit, int WeeklyEntryLimit)
 {
+    public uint PointMax { get; init; }
+    public uint PointsFor(bool success, uint elapsedMilliseconds) =>
+        success && elapsedMilliseconds < PointMax ? PointMax - elapsedMilliseconds : 0;
     public DungeonIncountRow EntryCounts => new(0, [5335,5336,5337,5338,5339], DailyEntryLimit, false, WeeklyEntryLimit);
     internal bool UsesOrdinaryBossDeath(int monsterId) => monsterId == HierroId;
 
@@ -35,14 +38,18 @@ internal sealed record RevisedBeastEncounter(int AnneId, string AnnePath, int Hi
         var dailyEntry=Field("limit enter count"); var weeklyEntry=Field("limit weekly enter count");
         if (daily is not [>0 and <=255] || weekly is not [>0 and <=255] || dailyEntry is not [>0] || weeklyEntry is not [>0])
             throw new InvalidDataException("改版魔兽入场或领奖上限缺失或越界");
-        return new(anne,Path(anne),hierro,Path(hierro),rewards[at+3],rewards[at+1],limit[0],timeout[0],daily[0],weekly[0],dailyEntry[0],weeklyEntry[0]);
+        var pointMax=Field("beast point max");
+        if (pointMax is not [>0]) throw new InvalidDataException("改版魔兽积分上限非法");
+        return new(anne,Path(anne),hierro,Path(hierro),rewards[at+3],rewards[at+1],limit[0],timeout[0],daily[0],weekly[0],dailyEntry[0],weeklyEntry[0])
+            { PointMax=checked((uint)pointMax[0]) };
     }
 
     // 校验原生遭遇房，保留全部演员初始化资源；铜像由安妮入场动作呈现。
     public DungeonRoomDefinition Apply(DungeonRoomDefinition room)
     {
         if (room.Map.Position != new DungeonPoint(1,0))
-            return room with { Monsters=[], AiCharacters=[], SpecialObjects=[], MonsterTeams=null, AltarWaves=null };
+            // 首房不生成普通怪物；保留地图的 APC 原始行序，伴侣选择仍由入场计划控制。
+            return room with { Monsters=[], SpecialObjects=[], MonsterTeams=null, AltarWaves=null };
         if (room.Monsters.Count!=2 || !room.Monsters.Select(actor=>actor.MonsterId).Order().SequenceEqual(new[]{AnneId,HierroId}.Order()) ||
             room.Monsters.Any(actor=>actor.PlacementKind!="[fixed]" || actor.RankKind!="[boss]" || actor.RawValues.Count!=8) ||
             room.Monsters.Single(actor=>actor.MonsterId==AnneId).Path!=AnnePath ||

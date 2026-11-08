@@ -18,14 +18,18 @@ internal static class RevisedBeastPackets
     }
 
     // NOTI1409首u32为耗时秒，00CD1FA4存入结果+60，00B0C51A除60显示分秒。
-    // 成功时每人另有语义待确认的u32与附加列表；该字段继续填0。
+    // 成功时每人追加积分及至多三条个人纪录（积分/耗时秒），00B0C4F0读取+5C与+4C显示。
     public static byte[] Result(RevisedBeastSettlementReceipt receipt)
     {
         using var stream=new MemoryStream(); using var writer=new BinaryWriter(stream);
         writer.Write(receipt.ElapsedSeconds); writer.Write(receipt.Terminal.Success?(byte)1:(byte)0); writer.Write((byte)1);
         writer.Write(receipt.Scene.PartySlot); writer.Write(checked((byte)receipt.DisplayRewards.Length));
         foreach(var reward in receipt.DisplayRewards) { writer.Write(checked((uint)reward.ItemId));writer.Write(checked((uint)reward.Count)); }
-        if(receipt.Terminal.Success) { writer.Write(0u); writer.Write((byte)0); }
+        if(receipt.Terminal.Success)
+        {
+            writer.Write(receipt.Points); writer.Write(checked((byte)receipt.BestRecords.Length));
+            foreach(var record in receipt.BestRecords) { writer.Write(record.Points); writer.Write(record.ElapsedSeconds); }
+        }
         return stream.ToArray();
     }
 }

@@ -436,6 +436,26 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
+        // 魔兽使用专用终局与奖励凭据，不经过普通翻牌结算；原生菜单仍发送命令72。
+        if (option == (byte)DungeonResultOption.ReturnTown &&
+            context.Session.CurrentRevisedBeastSettlement() is { } beastResult)
+        {
+            if (state == 2)
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "revised_beast_result_focus", () => context.Session.CanPublishRevisedBeast(beastResult));
+                return CommandResult.Handled;
+            }
+            var travel = context.Session.ReturnFromFormalDungeon();
+            if (travel is null) return CommandResult.Unhandled;
+            if (context.Death is not null) await context.Death.StopAsync();
+            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                "revised_beast_result_return", () => context.Session.CanPublishTravel(travel));
+            await town.ReturnFromFormalDungeonAsync(context, travel, "revised_beast_result_town");
+            log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "revised_beast_result",
+                travel.Character.Id, travel.Character.Position });
+            return CommandResult.Handled;
+        }
         // 魔界Ins战况表在未通关时也发送72{1,2}，不能要求先产生结算菜单资格。
         if (state == 1 && option == (byte)DungeonResultOption.ReturnTown && context.Session.CanRetreatEvildomWar() &&
             context.Session.PartyDungeon is { } warParty)
