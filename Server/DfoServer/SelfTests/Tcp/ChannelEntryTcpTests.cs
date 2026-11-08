@@ -291,7 +291,7 @@ internal static class ChannelEntryTcpTests
         for (int attempt = 0; attempt < 2; attempt++)
         {
             peer.Select();
-            That(U16(peer.EventInfoPayload, 0) == 3 + peer.ExpectedOpenEvents.Length,
+            That(U16(peer.EventInfoPayload, 0) == 4 + peer.ExpectedOpenEvents.Length,
                 "无10999时完整活动目录仍包含2520");
             peer.Expect(0, 1800);
             peer.Expect(0, 1801);

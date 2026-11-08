@@ -192,8 +192,8 @@ internal static partial class CashShopTcpTests
             byte[] bytes = reader.ReadBytes(length);
             return Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback).GetString(bytes);
         }
-        That(reader.ReadUInt16() == 4 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
-        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. extraEvents])
+        That(reader.ReadUInt16() == 5 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
+        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. extraEvents.TakeWhile(id => id is 282 or 2449 or 414 or 181), 333, .. extraEvents.SkipWhile(id => id is 282 or 2449 or 414 or 181)])
             That(reader.ReadUInt16() == id && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 0,
                 "原赛丽亚/红包/乔纳森/开放活动每字段保留");
         That(reader.ReadUInt16() == 10999 && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 1,

@@ -6,6 +6,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     long quotaDisplayRevision;
+    internal long QuotaDisplayRevision => owner.Execute(() => quotaDisplayRevision);
 
     public DungeonEntryResetResult ResetDungeonEntries() => owner.Execute(() =>
     {

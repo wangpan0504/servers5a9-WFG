@@ -72,7 +72,7 @@ internal static class FiendWarRosterTests
             var both = repository.Create(owner, Role("FwBoth", [8672]));
             var questOnly = repository.Create(owner, Role("FwQuest", [8672]));
             var guildOnly = repository.Create(owner, Role("FwGuild", [10]));
-            // 旧资格历史仍可读取，但不再开启专用名册标志。
+            // 魔兽资格与漩涡资格独立，完成5927只开启魔兽标志。
             var beastDone = repository.Create(owner, Role("FwBeast", [5927]));
             var beastMiss = repository.Create(owner, Role("FwPlain", [10]));
             using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
@@ -90,8 +90,8 @@ internal static class FiendWarRosterTests
             var roster = repository.ListRoster(owner);
             bool Flag(ushort id) => roster.Single(row => row.Id == id).FiendWarEligible;
             TestCheck.That(Flag(both.Id) && Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询要求任务完成，无公会也可获得资格");
-            TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 0 &&
-                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "旧5927历史可读但名册保留字节始终为零");
+            TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 1 &&
+                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "名册魔兽资格按5927完成态独立发布");
             var full = repository.List(owner);
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");

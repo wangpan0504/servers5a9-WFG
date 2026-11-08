@@ -141,7 +141,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
                 Type = context.Session.ChannelEntry?.Type, Reason = "fresh-login-requires-channel-selection" });
             return CommandResult.Handled;
         }
-        if(context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
+        if(context.Session.BeastSelectionBlocked(selection) || context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
         {
             // 023428B1的96明确显示当前频道不允许此操作，失败无额外body且重置选角UI。
             await context.Reply(CmdPacketType.SELECT_CHARACTER,[0,96,0],"pvp_private_channel_rejected");

@@ -11,6 +11,8 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
     public static readonly TimeSpan ReturnDelay = TimeSpan.FromSeconds(10);
     PartyDungeonService? partyDungeons;
     Game.Party.PartyService? parties;
+    Func<Task>? revisedBeastPublication;
+    internal void ConfigureRevisedBeast(Func<Task> publish) => revisedBeastPublication = publish;
     readonly AsyncLocal<bool> running = new();
     CancellationTokenSource? cancellation;
     Task pending = Task.CompletedTask;
@@ -34,7 +36,7 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
         try
         {
             // 计时经注入的 TimeProvider，回归可按比例缩短等待；生产未注入时使用系统时钟。
-            await Task.Delay(ReturnDelay, time ?? TimeProvider.System, stop);
+            await Task.Delay(context.Session.DungeonDeathDelay, time ?? TimeProvider.System, stop);
             running.Value = true;
             if (context.Session.PartyDungeon is not null)
             {
@@ -55,6 +57,15 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
                     parties?.Publish(departure.PartyNotices);
                 }
                 return;
+            }
+            if (context.Session.CurrentFormalDungeonScene()?.Entry.IsRevisedBeast == true)
+            {
+                using var gate = await DispatchGateScope.EnterAsync(context, stop);
+                if (context.Session.FinishRevisedBeastDeathTimeout(scheduled) is not null)
+                {
+                    if (revisedBeastPublication is not null) await revisedBeastPublication();
+                    return;
+                }
             }
             if (context.Session.ReturnFromFormalDungeonOnDeath(scheduled) is not { } receipt) return;
             if (context.LostLand is not null) await context.LostLand.StopAsync();

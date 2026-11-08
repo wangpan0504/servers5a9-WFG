@@ -341,6 +341,18 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         if (!context.Session.ConfirmNewDungeonSelection(receipt)) return CommandResult.Handled;
+        if (DfoServer.Game.Characters.BeastChannel.IsEntry(context.Session.ChannelEntry))
+        {
+            if (!await projection.DetachForDungeonSelectionAsync(context, receipt)) return CommandResult.Handled;
+            bool BeastGuard() => context.Session.CanPublishDungeonSelection(receipt);
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "revised_beast_selection_opened", BeastGuard);
+            await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "revised_beast_selection_state", BeastGuard);
+            await projection.RefreshRevisedBeastCountsAsync(context, BeastGuard);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
+                DungeonPackets.RevisedBeastSelectNotice([DfoServer.Game.Dungeons.RevisedBeastSelection.DailyDungeon(context.Session.DungeonBusinessNow)]),
+                "revised_beast_selection_notice", BeastGuard);
+            return CommandResult.Handled;
+        }
         await EkernCycleProjection.RefreshAsync(context, () => context.Session.CanPublishDungeonSelection(receipt));
         int legendTarget = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))

@@ -43,6 +43,12 @@ internal sealed partial class GameSession
         public BossSelectionBuff? BossSelectionBuff { get; init; }
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
+        public long? RevisedBeastDeathDue { get; set; }
+        public RevisedBeastStageRewardPlan? RevisedBeastStageReward { get; set; }
+        public RevisedBeastStageReceipt? RevisedBeastStageReceipt { get; set; }
+        public RevisedBeastRewardPlan? RevisedBeastReward { get; set; }
+        public RevisedBeastSettlementReceipt? RevisedBeastSettlement { get; set; }
+        public uint? RevisedBeastElapsedSeconds { get; set; }
         public int ReviveCount { get; set; }
         public int ReviveCoinsSpent { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
@@ -150,12 +156,12 @@ internal sealed partial class GameSession
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
         bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true,
-        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null)
+        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null, bool revisedBeast = false)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
             prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards, allowDimensionHidden: allowDimensionHidden,
-            assaultRetry: assaultRetry, assaultRetryRewards: assaultRetryRewards);
+            assaultRetry: assaultRetry, assaultRetryRewards: assaultRetryRewards, revisedBeast: revisedBeast);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection ??= "state-changed-before-install";
@@ -177,8 +183,10 @@ internal sealed partial class GameSession
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true,
         byte partyMemberCount = 1, HelperRotationCapture? helperRotation = null,
         DfoServer.Game.Strongway2019.Strongway2019Admission? strongwayAdmission = null,
-        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null)
+        AssaultModeSelection? assaultRetry = null, AssaultModeRewardServices? assaultRetryRewards = null, bool revisedBeast = false)
     {
+        if (revisedBeast && (!RevisedBeastSelection.IsQuestContext(questId) || hellParty || hellLegend || sealDoor || practice ||
+            classExperience || retry is not null || partyAdmission)) return RejectFormal("revised-beast-mode-conflict");
         if (hellParty) questId = 0;
         InventoryEventPrecondition? requiredEvent = null;
         if (dungeonId is 400000097 or 400000098)
@@ -204,6 +212,9 @@ internal sealed partial class GameSession
         if (expected is null || expected.DungeonState is null ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        if (revisedBeast && !RevisedBeastAdmission.Check(ChannelEntry, expected, checked((int)dungeonId), difficulty, IncountNow()).Accepted)
+            return RejectFormal("revised-beast-qualification-or-rotation");
+        if (dungeonId is >= 5335 and <= 5339 && !revisedBeast) return RejectFormal("revised-beast-admission-required");
         DfoServer.Game.Strongway2019.Strongway2019Admission? strongway = null;
         if (DfoServer.Game.Strongway2019.Strongway2019EntryPolicy.Contains(dungeonId))
         {
@@ -409,7 +420,7 @@ internal sealed partial class GameSession
                 if (!catalog.EkernCycle.CanEnter(dungeonId,cycle.Normal,cycle.Trial))
                     return RejectFormal("ekern-cycle-not-available");
             }
-            channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection, dimension?.DailyBefore);
+            channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection, dimension?.DailyBefore, revisedBeast ? rooms.RevisedBeastEncounter(difficulty).EntryCounts : null);
             if (costRejection is not null) return RejectFormal(costRejection);
         }
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真
@@ -454,12 +465,17 @@ internal sealed partial class GameSession
         var bossBuff = hellParty && expected.Inventory.BossSelectionBuff is { } activeBossBuff &&
             activeBossBuff.Allows(dungeonId, partyAdmission, practice, (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds())
             ? activeBossBuff : null;
-        if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
+        DungeonEntryPlan? entry;
+        string entryReason;
+        bool entryReady = revisedBeast
+            ? DungeonEntryPlan.TryCreateRevisedBeast(catalog, expected, dungeonId, difficulty, out entry, out entryReason, approvedPartyRoute)
+            : DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out entry, out entryReason, allowClearedQuest, quest,draw,questCatalog,
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
-            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission, dimension: dimension))
+            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission, dimension: dimension);
+        if (!entryReady)
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         difficulty = entry!.Difficulty;
         entry = entry with { PartyMemberCount = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyMemberCount ?? partyMemberCount };
@@ -784,6 +800,11 @@ internal sealed partial class GameSession
                 CompanionProfiles = DungeonCompanion.FreezeProfiles(support, debugSettings?.SupportProfiles ?? SupportCompanionCatalog.Empty,
                     draw ?? RandomNumberGenerator.GetInt32) };
         }
+        if (entry.IsRevisedBeast)
+        {
+            var encounter = rooms.RevisedBeastEncounter(entry.Difficulty);
+            entry = entry with { RevisedBeastEncounter = encounter, CoinLimit = encounter.CoinLimit };
+        }
         var plans = new List<DungeonMonsterPlan>();
         int bossRushOffset = 0;
         uint next = firstObjectKey;
@@ -795,6 +816,7 @@ internal sealed partial class GameSession
             {
                 if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("整条路线对象key超界");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
+                if (entry.IsRevisedBeast) room = entry.RevisedBeastEncounter!.Apply(room);
                 if (entry.IsBossRush)
                 {
                     room = rooms.WithBossRushMonsters(room, bossRush ?? throw new InvalidDataException("BossRush 专表未装配"), bossRushOffset);
@@ -845,7 +867,7 @@ internal sealed partial class GameSession
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
         // 比赛副本 [disable drop item]，不准备掉落。
-        if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar && !entry.IsRevisedBeast)
         {
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops = null;
             if (entry.EvildomWarMode is null)
@@ -908,7 +930,7 @@ internal sealed partial class GameSession
                 }
             }
         }
-        else if (prepareDrops is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        else if (prepareDrops is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar && !entry.IsRevisedBeast)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
@@ -1096,7 +1118,7 @@ internal sealed partial class GameSession
                 consumption = plan;
             }
             if (prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
-                installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
+                installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
             {
                 // 活动前置、专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
@@ -1520,12 +1542,17 @@ internal sealed partial class GameSession
         if (pending.TagEvildomClear is not null)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, MonsterKey: pending.Death.MonsterKey)
                 { PendingTagEvildomClear = PrepareTagEvildomClear(dungeon, pending), ReportedTarget = target };
-        if (dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice || dungeon.Run.TagEvildomLife is not null)
+        if (dungeon.Entry.IsRevisedBeast || dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice || dungeon.Run.TagEvildomLife is not null)
         {
             // 体验、练习及尚无经济生产者的TAG只推进本次内存死亡，不写成长、掉落或任务账本。
             var death = dungeon.Run.ConfirmCommittedDeath(pending);
             if (death.Outcome != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("无经济死亡不能确认原实例准备");
+            if (dungeon.Entry.IsRevisedBeast)
+            {
+                dungeon.Run.RecordRevisedBeastDeathStatistics(pending.Monster.MonsterId, normal);
+                if (dungeon.Run.RevisedBeastTerminal is not null) FreezeRevisedBeastElapsed(dungeon);
+            }
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             if (death.ClearFact is not null)
                 dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);

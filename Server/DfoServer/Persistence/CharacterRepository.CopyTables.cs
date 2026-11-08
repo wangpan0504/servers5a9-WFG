@@ -114,6 +114,8 @@ internal sealed partial class CharacterRepository
         "cash_shop_promotion_orders",
         "character_beast_dungeon_reservations",
         "character_beast_stage_rewards",
+        "character_revised_beast_stage_rewards",
+        "character_revised_beast_rewards",
         "character_boss_selection_buff",
         "character_dungeon_card_options",
         "character_dungeon_card_rewards",

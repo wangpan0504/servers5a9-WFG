@@ -279,7 +279,7 @@ internal static class TownTravelPublicationTests
             using var expected = new MemoryStream();
             using (var writer = new BinaryWriter(expected, System.Text.Encoding.UTF8, leaveOpen: true))
             {
-                ushort[] ids = active ? [2037, 2378, 2395, 2532, 266, 2520] : [2037, 2378, 2395, 2532, 266];
+                ushort[] ids = active ? [2037, 2378, 2395, 333, 2532, 266, 2520] : [2037, 2378, 2395, 333, 2532, 266];
                 writer.Write(checked((ushort)ids.Length));
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(1u); writer.Write(0u); writer.Write(0u); writer.Write((byte)0); }
                 writer.Write((byte)(active ? 3 : 2));

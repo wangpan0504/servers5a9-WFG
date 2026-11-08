@@ -230,7 +230,7 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        !current.Dead.Contains(key) && !current.Culled.Contains(key) && (current.Altar is null || current.Altar.WasPublished(key))
+        !current.Dead.Contains(key) && !current.Culled.Contains(key) && RevisedBeastCombatReady(key) && (current.Altar is null || current.Altar.WasPublished(key))
             ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && (monster.CanReportDeath || monster.IsSpecialChild ||
                 entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))) : null;
     // 实验性（未在95客户端实证）：深渊派对波次怪不在 Monsters 里，客户端上报其死亡时只登记，不参与清房/经验/掉落。
@@ -307,7 +307,7 @@ internal sealed partial class SinglePlayerDungeonRun
         ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
-            !current.Culled.Contains(monster.ObjectKey) && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
+            !current.Culled.Contains(monster.ObjectKey) && RevisedBeastVisible(monster.ObjectKey) && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
             .Select(monster => monster.ObjectKey).ToArray()))
         { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(activeDummyStage) };
 
@@ -854,6 +854,8 @@ internal sealed partial class SinglePlayerDungeonRun
             CurrentLivingMonster(confirmed.MonsterKey) is null || !CanReportTournamentDeath(confirmed.MonsterKey))
             return new(DungeonRunOutcome.Rejected);
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
+        if (entry.IsRevisedBeast && current.Plan.Room.Map.Position == new DungeonPoint(1, 0))
+            return PrepareRevisedBeastDeath(confirmed, target);
         bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
             !HasPendingBossDeaths(confirmed.MonsterKey);
         // TAG终末尚无自己的到账合同；真实怪物死亡可提交，但不能产生普通翻牌/任务通关许可。
@@ -998,6 +1000,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (prepared.Result.ClearFact is { } clear)
             ClearFact = clear;
         pendingDeath = null;
+        ConfirmRevisedBeastDeath(prepared);
         RecordHopeTarget(prepared);
         return prepared.Result;
     }

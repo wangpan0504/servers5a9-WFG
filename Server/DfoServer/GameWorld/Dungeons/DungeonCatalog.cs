@@ -449,6 +449,7 @@ internal sealed class DungeonCatalog
     private readonly IReadOnlyDictionary<int, string> dungeons, maps;
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
     private readonly Lazy<DungeonMapPool> mapPool;
+    private readonly Lazy<IReadOnlyDictionary<(int Dungeon, byte Difficulty), DungeonMap>> revisedBeastBossMaps;
     private readonly Lazy<GriefTowerCatalog> griefTower;
     private readonly Lazy<BossRushCatalog> bossRush;
     private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
@@ -469,6 +470,7 @@ internal sealed class DungeonCatalog
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
+        revisedBeastBossMaps = new(() => RevisedBeastLayout.ReadBossMaps(archive, maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         bossRush = new(() => new BossRushCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
@@ -481,6 +483,9 @@ internal sealed class DungeonCatalog
             ? DungeonSpecificCardRewards.ParseSpecialClearRewards(archive.ReadTokens(DungeonCardPriceCatalog.ResourcePath), archive.ResolveString)
             : ImmutableDictionary<int, SpecialDungeonClearReward>.Empty, LazyThreadSafetyMode.ExecutionAndPublication);
     }
+    public DungeonMaze RevisedBeastMaze(int id, byte difficulty = 0) =>
+        RevisedBeastLayout.Read(Get(id), archive.ResolveString, maps, archive.Contains, revisedBeastBossMaps.Value, difficulty);
+
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
     // 裂缝1/2/3资源是同一地区的不同子变体，选图只列第一份；奖励核查不能只覆盖选图入口。
@@ -511,7 +516,7 @@ internal sealed class DungeonCatalog
         // 这里只加载两个目录；未知副本的脚本不会因加载目录而被强制解析。
         var dungeons = ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon", supplementalDungeons);
         var maps = ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map", supplementalMaps);
-        return new(pvf, dungeons, maps);
+        return new(pvf, dungeons, RevisedBeastLayout.ReadMapPaths(pvf, maps));
     }
 
     public DungeonDefinition Get(int id)
