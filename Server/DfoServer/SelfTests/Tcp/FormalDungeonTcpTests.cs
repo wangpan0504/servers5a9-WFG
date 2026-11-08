@@ -829,11 +829,12 @@ internal static partial class FormalDungeonTcpTests
             That(actor[0] == 0 && U16(actor, 121) == peer.Id && actor[129 + nameLength] == level,
                 "城镇升级仍同步Actor实际等级");
         }
+        int cappedLevel = Math.Min((int)level, 70);
         var player = peer.Expect(0, 2).Body;
         That(player[0] == 1 && U16(player, 22) == peer.Id && U64(player, 24) == experience && U32(player, 32) == 89 &&
-            U32(player, 40) == 1400 + 250 * (level - 1) &&
-            BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1),
-            "副本与结算升级只发Player，当前CHR基础/完整Core/双树来自实际提交角色");
+            U32(player, 40) == 1400 + 250 * (level - 1) + 150 * cappedLevel &&
+            BinaryPrimitives.ReadInt16LittleEndian(player.AsSpan(44)) == 75 + 48 * (level - 1) + 21 * cappedLevel,
+            "副本与结算升级只发Player，当前CHR+chn_add_stat.etc基础/完整Core/双树来自实际提交角色");
         SkillPacketsTests.WireTree[] skills;
         if (town)
             skills = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);

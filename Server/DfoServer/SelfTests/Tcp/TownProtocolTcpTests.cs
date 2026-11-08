@@ -602,7 +602,7 @@ internal static partial class TownProtocolTcpTests
                 }
 
                 if (job == 15)
-                    That(U32(player, 36) == 1700 && U32(player, 40) == 1500 && U16(player, 108) == 9000 && U16(player, 110) == 8000, "gunblade PVF stats");
+                    That(U32(player, 36) == 1840 && U32(player, 40) == 1650 && U16(player, 108) == 9000 && U16(player, 110) == 8000, "gunblade PVF stats");
                 peer.Send(35, Move(461, 234));
                 peer.Barrier();
             }
