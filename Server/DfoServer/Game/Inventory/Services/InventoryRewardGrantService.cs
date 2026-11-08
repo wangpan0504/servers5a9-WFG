@@ -90,6 +90,29 @@ internal static class InventoryRewardGrantService
         => Grant(character, instances.Select(item => new InventoryReward(item.Core.ItemId, item.Core.Count)).ToArray(),
             instances, catalog, goldLimits, pieces, utcNow, allowOverflowMail: allowOverflowMail);
 
+    public static InventoryPlan PlanPreMaterializedRewards(Character character, IReadOnlyList<InventoryItem> instances,
+        ItemCatalog catalog, DateTimeOffset utcNow)
+    {
+        var inventory = character.Inventory;
+        var overflow = new List<InventoryItem>();
+        var placement = new RewardPlacement(inventory, instances.Select(item => item.Core.ItemId), allowOverflowMail: true, overflow);
+        long nowSeconds = utcNow.ToUnixTimeSeconds();
+        foreach (var instance in instances)
+        {
+            var template = catalog.Get(instance.Core.ItemId);
+            if (!InventoryKindCompatibility.AcceptsKind(instance.Core.Kind, template) ||
+                instance.Core.Count <= 0 || instance.Core.Count > template.StackLimit ||
+                instance.IsExpired(nowSeconds))
+                throw new InvalidDataException("无效预冻结奖励实例: " + instance.Core.ItemId);
+            var normalized = instance with { Core = InventoryKindCompatibility.Normalize(instance.Core, template) };
+            if (!placement.TryAdd(template, normalized.Core, normalized.Core.Count, normalized))
+                throw new InvalidDataException("预冻结奖励放置失败: " + instance.Core.ItemId);
+        }
+        var after = inventory with { Items = placement.Items() };
+        after.Validate(allocating: true);
+        return new(inventory, after, "reward_grant", overflowItems: overflow);
+    }
+
     static InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards, IReadOnlyList<InventoryItem>? instances,
         ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset? utcNow, bool shopExpiration = false,
         PremiumContractCatalog? contracts = null, bool allowOverflowMail = false, bool ignoreUsablePeriod = false, bool raidReward = false, int? rentalDeadline = null)

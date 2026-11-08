@@ -187,7 +187,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (strongway2019 is not null) await strongway2019.RecoverRewardsAsync(context);
         if (warRewards is not null)
         {
-            var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy);
+            var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy, recoverHidden: false);
             if (!recovered.IsEmpty)
             {
                 await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_recovered",

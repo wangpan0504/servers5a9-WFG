@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Game.Dungeons;
@@ -7,6 +9,10 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record EvildomWarRewardPlan(EvildomWarCompletion Completion, SinglePlayerDungeonRun Run,
     EvildomWarRewardSelection Reward, ImmutableArray<InventoryItem> Items)
 {
+    [JsonIgnore]
+    public Character? ExpectedCharacter { get; init; }
+    [JsonIgnore]
+    public InventoryPlan? Inventory { get; init; }
     public EvildomWarRewardSnapshot Snapshot => new(Completion, Reward, Items);
     public DungeonClearFact Fact => Completion.Facts.Single(fact => fact.Identity.CharacterId == Run.Snapshot.Identity.CharacterId);
 
@@ -38,7 +44,7 @@ internal sealed record EvildomWarRewardSnapshot(EvildomWarCompletion Completion,
             Reward.Items.Length > EvildomWarRewardPolicy.MaximumProducts || Items.Length > EvildomWarRewardPolicy.MaximumProducts ||
             Reward.Items.Any(row => row.Group > 3 || row.ItemId <= 0 || row.Count <= 0))
             throw new InvalidDataException("魔界奖励必须冻结在同一战役真实王座终点");
-        if (Rule == EvildomWarRewardPolicy.Rule && Reward.Items.Any(row => row.Group == 1) ||
+        if (Rule == EvildomWarRewardPolicy.Rule && Reward.Items.Count(row => row.Group == 1) > 1 ||
             Rule == EvildomWarRewardPolicy.HiddenRule && (Reward.Items.Length != 1 || Reward.Items[0].Group != 1))
             throw new InvalidDataException("魔界实验室和王座奖励组不能混用");
         foreach (var item in Items)
@@ -55,7 +61,11 @@ internal sealed record EvildomWarRewardSnapshot(EvildomWarCompletion Completion,
     }
 }
 
-internal sealed record EvildomWarRewardCommit(EvildomWarRewardPlan Plan, ImmutableArray<uint> MailIds, bool Duplicate);
+internal sealed record EvildomWarRewardCommit(EvildomWarRewardPlan Plan, ImmutableArray<uint> MailIds, bool Duplicate)
+{
+    public Character? Character { get; init; }
+    public ImmutableArray<InventorySlot> ChangedSlots { get; init; } = [];
+}
 internal sealed record EvildomWarHiddenRewardCommit(ImmutableArray<uint> MailIds, bool Duplicate);
 internal interface IEvildomWarRewardStore
 {

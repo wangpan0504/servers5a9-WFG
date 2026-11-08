@@ -86,9 +86,6 @@ internal sealed partial class DungeonHandler
         if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
             context.Session.CommitPendingLukePhase(lukeLifecycle))
             log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = context.Session.RaidCombatKind(), Instance = context.Session.RaidCombatView()?.Instance });
-        var hiddenReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { } hiddenView &&
-            context.Session.CanPublishEvildomWar(hiddenView) && evildomRewards is not null && evildomRewardStore is not null
-            ? context.Session.CommitEvildomWarHiddenReward(evildomRewards, evildomRewardStore) : null;
         // 全员奖励已在并发投影前提交；此处只取本人的回执，不能在每个接收者重复抽全队奖励。
         var warReward = notice.EvildomWarRewards.SingleOrDefault(row => row.Member == notice.Recipient)?.Receipt;
         bool RejoinSceneCurrent() => notice.Recipient.Actor.IsCurrent() && notice.Scene is { } restoring &&
@@ -105,15 +102,6 @@ internal sealed partial class DungeonHandler
             await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode,
                 (int)(view.Deadline - context.Session.EvildomWarNow).TotalSeconds, view.Dungeons),
                 "evildom_war_info", () => context.Session.CanPublishEvildomWar(view));
-            if (hiddenReward is not null)
-            {
-                if (!hiddenReward.Commit.MailIds.IsEmpty)
-                    await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_hidden_reward_mail",
-                        () => context.Session.CanPublishEvildomWarHiddenReward(hiddenReward));
-                log.Write("evildom_war_hidden_reward_committed", new { Connection = context.Id, view.BattleId,
-                    Character = hiddenReward.Admission.CharacterId, hiddenReward.Commit.Duplicate,
-                    MailIds = hiddenReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.HiddenRule });
-            }
             if (warReward is not null)
             {
                 bool sent = false;
@@ -131,6 +119,12 @@ internal sealed partial class DungeonHandler
                 }
                 if (context.Session.ShouldPublishEvildomWarReward(warReward))
                 {
+                    if (warReward.Commit.Character is { } rewardCharacter && !warReward.Commit.ChangedSlots.IsEmpty)
+                    {
+                        foreach (var listGroup in warReward.Commit.ChangedSlots.GroupBy(slot => slot.List).OrderBy(group => group.Key))
+                            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(rewardCharacter.Inventory,
+                                listGroup.Key, [..listGroup]), "evildom_war_reward_items", Guard);
+                    }
                     var groups = notice.EvildomWarRewards.Select(member =>
                         new EvildomWarPackets.RewardGroup(member.Member.Slot, member.Receipt.Commit.Plan.Reward.Items.Select(row =>
                             new EvildomWarPackets.RewardRow(row.Group, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();

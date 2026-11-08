@@ -575,7 +575,12 @@ internal sealed partial class GameSession
         }
         // #233 强袭材料走自己的入场消耗；不叠加 [required item] / 入场一次性疲劳。
         if (assault is not null) entry = entry! with { EntryItem = null, StartFatigue = 0, EntryCostNote = null };
-        if (war is not null) entry = entry! with { StartFatigue = war.Charged ? (ushort)0 : war.Catalog.NeedFatigue };
+        if (war is not null) entry = entry! with
+        {
+            StartFatigue = war.Charged ? (ushort)0 : war.Catalog.NeedFatigue,
+            EvildomWarMode = war.Mode,
+            EvildomWarProfession = (expected.Job, expected.GrowType, expected.Level)
+        };
         DungeonSpecialEntry? specialEntry = despair?.Entry;
         if (despair is not null) entry = entry! with { EntryItem = despair.Ticket };
         if (dungeonId is 11006 or 11007)
@@ -743,6 +748,12 @@ internal sealed partial class GameSession
                     .Where(monster=>source.DropPlans.ContainsKey(monster.ObjectKey))
                     .ToImmutableDictionary(monster=>monster.ObjectKey,preparePersonal);
             }
+            else if (participantEntry.EvildomWarMode is not null && items is not null)
+            {
+                participantDropPlans = source.Route.Rooms.SelectMany(room => room.Monsters)
+                    .Where(monster => source.DropPlans.ContainsKey(monster.ObjectKey) && EvildomWarMonsterDropPolicy.IsThroneBoss(participantEntry, monster))
+                    .ToImmutableDictionary(monster => monster.ObjectKey, monster => EvildomWarMonsterDropPolicy.PrepareBoss(participantEntry, monster, items));
+            }
             var participantDungeon = new FormalDungeon(participant.Entry, source.Route, participant, participantAuthority, source.MapSeed,
                 participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, participantDropPlans)
                 { NextObjectKey = shared.Session.PreparedParty(shared).NextKey, QuestDrops = questDrops, RewardItems = items ?? SessionItems ?? source.RewardItems, OrdinaryReturnPosition = ordinaryReturn, EntryPieces = pieces,
@@ -836,25 +847,35 @@ internal sealed partial class GameSession
         // 比赛副本 [disable drop item]，不准备掉落。
         if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
         {
-            Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops;
-            try
+            Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops = null;
+            if (entry.EvildomWarMode is null)
             {
-                prepareMonsterDrops = prepareDrops?.Invoke(entry)
-                    ?? (TayberrsDropPolicy.Applies(entry) ? new TayberrsDropPolicy(new(), items.Get).Prepare(entry) : null);
+                try
+                {
+                    prepareMonsterDrops = prepareDrops?.Invoke(entry)
+                        ?? (TayberrsDropPolicy.Applies(entry) ? new TayberrsDropPolicy(new(), items.Get).Prepare(entry) : null);
+                }
+                catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
             }
-            catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
             foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
                 monster.IsBlocking && monster.Source is not null &&
-                (prepareMonsterDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
+                (entry.EvildomWarMode is not null || prepareMonsterDrops is not null || monster.MonsterId is 1 or 2 && monster.SpawnType == 0 ||
                     springTreasure is not null && SpringTreasureDropPolicy.MayDrop(entry, monster))))
             {
+                if (entry.EvildomWarMode is not null && !EvildomWarMonsterDropPolicy.IsThroneBoss(entry, monster))
+                    continue;
                 // 资源准备在owner锁外；每个真实monster保留自己的等级、类型、难度及完整数量规则。
                 DungeonDropGenerationPlan? dropGeneration;
-                try { dropGeneration = prepareMonsterDrops?.Invoke(monster); }
+                try
+                {
+                    dropGeneration = entry.EvildomWarMode is not null
+                        ? EvildomWarMonsterDropPolicy.PrepareBoss(entry, monster, items)
+                        : prepareMonsterDrops?.Invoke(monster);
+                }
                 catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
-                if (prepareMonsterDrops is not null && dropGeneration is null)
+                if ((prepareMonsterDrops is not null || entry.EvildomWarMode is not null) && dropGeneration is null)
                     throw new InvalidDataException("掉落规则准备不能以空引用替代未支持的怪物");
                 DungeonDropGenerationPlan? rewardGeneration = null;
                 if (dropGeneration is not null && monster.HellRewardRolls > 0)
@@ -866,7 +887,7 @@ internal sealed partial class GameSession
                     hellRewardPlans[monster.ObjectKey] = rewardGeneration;
                 }
                 if (dropGeneration is not null) dropPlans.Add(monster.ObjectKey, dropGeneration);
-                if (prepareMonsterDrops is null && !pools.ContainsKey(monster.MonsterId))
+                if (prepareMonsterDrops is null && entry.EvildomWarMode is null && !pools.ContainsKey(monster.MonsterId))
                     pools.Add(monster.MonsterId, DungeonExplicitDropPolicy.CreatePool("monster/monster.lst", drops.Get(monster.MonsterId), items.Get));
                 // 创建位置是已证资源位置；不将首次受击坐标冒充死亡瞬间位置。
                 // 地面RAW不携带最终库存目的槽，独立对象使用显式临时record slot0。
@@ -919,7 +940,7 @@ internal sealed partial class GameSession
         }
         if (!authority.BindTo(run!)) return RejectFormal("run-authority-bind-failed");
         var passiveGrounds = new List<DungeonGroundObject>();
-        if (passiveDrops is not null && !entry.IsAltar && entry.RaidEntry is null)
+        if (passiveDrops is not null && !entry.IsAltar && entry.RaidEntry is null && entry.EvildomWarMode is null)
         {
             try
             {

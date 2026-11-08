@@ -64,6 +64,8 @@ internal sealed record DungeonEntryPlan(
     public AntonNormalAdmission? AntonNormal { get; init; }
     // 仅由当前战役冻结路线审核后设置，允许无任务接取的真实物件终末。
     public bool IsEvildomWarHidden { get; init; }
+    public byte? EvildomWarMode { get; init; }
+    public (byte Job, byte Grow, byte Level)? EvildomWarProfession { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
@@ -344,6 +346,7 @@ internal sealed record DungeonEntryPlan(
                     character.ActiveMainQuests.ToImmutableArray().Add(hope.Acceptance), Hope = hope,
                 BypassedQuestTerrain = bypassedTerrain,
                 HopeRewardProfession = hope is null ? null : (character.Job,character.GrowType),
+                EvildomWarProfession = shared.EvildomWarMode is null ? null : (character.Job, character.GrowType, character.Level),
                 IsOrdinaryHunt = accepted is not null && shared.RouteQuestId == 0,
                 RecommendedQuestItems = !shared.IsPractice && !shared.IsTutorial && !shared.IsClassExperience && !shared.IsTrainingRoom &&
                     !shared.IsQuestReplay && shared.LostLand is null && !definition.IsRaid && DungeonLuckyStarPolicy.IsRecommendedLevel(definition, character.Level),

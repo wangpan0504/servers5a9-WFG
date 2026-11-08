@@ -48,6 +48,7 @@ internal sealed class DungeonDropGenerationPlan
     public bool ExcludeLowMaterials { get; init; }
     public DungeonDropMultipliers? DropMultipliers { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
+    public EvildomWarSarpozaDropPlan? Sarpoza { get; }
     public bool AcceptsEpicPieceBonus => Trials.Any(trial => trial.EpicPieceBonusCapacity > 0);
 
     public DungeonDropGenerationPlan WithEpicPieceBonus(int count)
@@ -59,7 +60,7 @@ internal sealed class DungeonDropGenerationPlan
             if (trial.EpicPieceBonusCapacity == 0) return trial;
             if (count > trial.EpicPieceBonusCapacity) throw new InvalidDataException("额外史诗碎片超过本次入场预留");
             return trial with { Attempts = checked(trial.Attempts + count), EpicPieceBonusCapacity = 0 };
-        }), ReferenceQuality, Amplification)
+        }), ReferenceQuality, Amplification, Sarpoza)
         {
             OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment,
             ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers
@@ -91,7 +92,7 @@ internal sealed class DungeonDropGenerationPlan
             changed = true;
             return trial with { EquipmentRarityAdjustment = new(bonus) };
         }).ToImmutableArray();
-        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification)
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification, Sarpoza)
         {
             OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment,
             ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers
@@ -103,7 +104,7 @@ internal sealed class DungeonDropGenerationPlan
         return new(ResourceSource, Trials.Select(trial => trial with
         {
             DisjointForbiddenRarities = (trial.DisjointForbiddenRarities ?? ImmutableHashSet<int>.Empty).Union(rarities)
-        }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource,
+        }), ReferenceQuality, Amplification, Sarpoza) { OrdinaryLukeDailySource = OrdinaryLukeDailySource,
             ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
     }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
@@ -140,7 +141,7 @@ internal sealed class DungeonDropGenerationPlan
             changed = true;
             return trial with { RarityPools = adjusted.ToImmutable() };
         }).ToImmutableArray();
-        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers } : this;
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification, Sarpoza) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers } : this;
     }
 
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
@@ -148,7 +149,7 @@ internal sealed class DungeonDropGenerationPlan
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
         return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial :
-            trial.WithChanceBonus(100L + percent, 100)), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
+            trial.WithChanceBonus(100L + percent, 100)), ReferenceQuality, Amplification, Sarpoza) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
     }
 
     public DungeonDropGenerationPlan WithAntoniumDropBonus(int basisPoints)
@@ -160,7 +161,7 @@ internal sealed class DungeonDropGenerationPlan
         return new(ResourceSource, Trials.Select(trial =>
             trial.Items?.Entries.Any(row => row.Template.Id == Adventure.AdventureBenefitPolicy.AntoniumItemId) != true
                 ? trial
-                : trial.WithChanceBonus(10000L + basisPoints, 10000)), ReferenceQuality, Amplification)
+                : trial.WithChanceBonus(10000L + basisPoints, 10000)), ReferenceQuality, Amplification, Sarpoza)
         {
             OrdinaryLukeDailySource = OrdinaryLukeDailySource,
             ExcludeLowEquipment = ExcludeLowEquipment,
@@ -170,15 +171,16 @@ internal sealed class DungeonDropGenerationPlan
     }
 
     public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false,
-        EquipmentAmplificationDropPolicy? amplification = null)
+        EquipmentAmplificationDropPolicy? amplification = null, EvildomWarSarpozaDropPlan? sarpoza = null)
     {
         if (string.IsNullOrWhiteSpace(resourceSource))
             throw new InvalidDataException("掉落生成计划必须有明确来源");
         ResourceSource = resourceSource;
         ReferenceQuality = referenceQuality;
         Amplification = amplification;
+        Sarpoza = sarpoza;
         Trials = trials.ToImmutableArray();
-        int maximum = 0;
+        int maximum = sarpoza?.MaximumObjects ?? 0;
         foreach (var trial in Trials)
         {
             int sources = (trial.Items is not null ? 1 : 0) + (trial.Gold is not null ? 1 : 0) + (!trial.RarityPools.IsDefaultOrEmpty ? 1 : 0);
@@ -352,6 +354,8 @@ internal sealed class DungeonDropGenerationPlan
                 }
             }
         }
+        if (Sarpoza is not null)
+            result.AddRange(Sarpoza.Generate(Sample, now));
         return epicRoad2019Available ? result.ToImmutable() : result.Where(content =>
             content.Item is null || !EpicRoad2019ItemLifetime.Includes(content.Item.ItemId)).ToImmutableArray();
 
