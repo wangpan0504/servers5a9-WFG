@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Dungeons;
@@ -13,8 +14,11 @@ internal sealed record HellPartyTicket(int ItemId, int Count);
 
 internal static class HellPartyEntryCost
 {
-    // 匹配客户端027AE644/027AE64F使用星空深渊灵石；数量取当前迷宫的legend声明。
+    // 匹配客户端027AE644/027AE64F与etc/detectionstone.etc星空深渊灵石，并兼容每日签到活动灵石；数量取当前迷宫或超星空声明。
     public const int LegendStone = 10305821;
+    public const int DailyAttendanceLegendStone = 490013046;
+    public const int EventLegendStone = 490013823;
+    public static readonly ImmutableArray<int> LegendStones = [DailyAttendanceLegendStone, EventLegendStone, LegendStone];
     public static int RequiredCount(DungeonHellPartyRoom room, int? minimumLevel)
     {
         if (room.RequiredItemCount > 0) return room.RequiredItemCount;
@@ -49,7 +53,7 @@ internal static class HellPartyEntryCost
             var pass = Plan(inventory,[candidate.ItemId],candidate.Count,pieces,utcNow);
             if (pass.Plan is null) continue;
             if (candidate.AdditionalStones == 0) return (pass.Ticket,null,pass.Plan);
-            var stones = Plan(pass.Plan.After,[LegendStone],candidate.AdditionalStones,pieces,utcNow);
+            var stones = Plan(pass.Plan.After,LegendStones,candidate.AdditionalStones,pieces,utcNow);
             if (stones.Plan is not null) return (pass.Ticket,stones.Ticket,stones.Plan);
         }
         return (null,null,null);

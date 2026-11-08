@@ -564,7 +564,7 @@ internal sealed partial class GameSession
             {
                 int count = entry.IsCosmo ? dungeonDefinition.CosmoStoneCount : entry.HellParty!.LegendRequiredCount;
                 var stones = pieces is null || ticketPlan.Item2 is null ? (null, null) :
-                    HellPartyEntryCost.Plan(ticketPlan.Item2.After, [HellPartyEntryCost.LegendStone], count, pieces, now);
+                    HellPartyEntryCost.Plan(ticketPlan.Item2.After, HellPartyEntryCost.LegendStones, count, pieces, now);
                 if (stones.Item1 is null) return RejectFormal("hell-party-item-required");
                 legendTicket = stones.Item1;
             }
