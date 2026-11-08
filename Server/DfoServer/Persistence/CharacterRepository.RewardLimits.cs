@@ -84,6 +84,18 @@ internal sealed partial class CharacterRepository
         int despair = ExecuteReward(db, tx, "UPDATE dungeon_despair_progress SET last_clear_day=0 WHERE account=$account AND last_clear_day=$day",
             ("$account", owner.Account), ("$day", day));
 
+        // 改版魔兽以安妮阶段扣领奖资格；两张回执表必须在同一事务退出当前日/周计数。
+        // 保留实例主键、冻结奖励JSON、积分与实际发奖事实，不删除回执或重新发奖。
+        var beast = DungeonIncountPolicy.Period(now);
+        string[] beastTables = ["character_revised_beast_stage_rewards", "character_revised_beast_rewards"];
+        int beastDay = beastTables.Max(table => NextKey(db, tx, table, "day_key", owner.Account, beast.Day));
+        int beastWeek = beastTables.Max(table => NextKey(db, tx, table, "week_key", owner.Account, beast.Week));
+        int ArchiveBeast(string table) => ExecuteReward(db, tx,
+            $"UPDATE {table} SET day_key=CASE WHEN day_key=$day THEN $newDay ELSE day_key END,week_key=CASE WHEN week_key=$week THEN $newWeek ELSE week_key END WHERE account=$account AND (day_key=$day OR week_key=$week)",
+            ("$newDay", beastDay), ("$newWeek", beastWeek), ("$account", owner.Account), ("$day", beast.Day), ("$week", beast.Week));
+        int beastStages = ArchiveBeast(beastTables[0]);
+        int beastTerminals = ArchiveBeast(beastTables[1]);
+
         // 四类团本只推进奖励轴；未领取及迟到阶段仍归原run世代，不改原JSON和周期。
         var raidAdvances = AdvanceRaidQuotaEpochs(db, tx, owner.Account, RaidQuotaAxis.Reward, FiendwarRewards.Cycle.Key(now));
         int raid = raidAdvances.Sum(row => row.ArchivedRuns);
@@ -91,7 +103,8 @@ internal sealed partial class CharacterRepository
         tx.Commit();
         return new RewardLimitResetResult(owner.Account, day, week, strongwayReward, strongwayCompletion, strongwayMatch,
             imperialDays, imperialRuns, imperialRewards, imperialChallenges, tagClearance, tagChallenge,
-            griefAccount, griefCharacter, special, despair, raid, raidReceipts) { RaidEpochsAdvanced = raidAdvances.Length };
+            griefAccount, griefCharacter, special, despair, raid, raidReceipts)
+            { RaidEpochsAdvanced = raidAdvances.Length, RevisedBeastStageRows = beastStages, RevisedBeastTerminalRows = beastTerminals };
     });
 
     static int NextKey(SqliteConnection db, SqliteTransaction tx, string table, string column, string account, int current)

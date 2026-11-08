@@ -15,6 +15,8 @@ internal static class CharacterSelection
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null,
         int? previousChannelType = null) => owner.Execute(() =>
     {
+        if (BeastChannel.IsEntry(channel) && !completed.Contains(BeastChannel.EntryQuest))
+            throw new InvalidDataException("魔兽频道要求完成5927");
         bool leavingRetiredTown = ChannelAreaLanding.LeavesRetiredTown(character.Position);
         bool leavingRaidInstance = ChannelAreaLanding.IsRaidInstanceArea(character.Position);
         // 同城普通/团队入口按来源频道区分；重启丢失频道历史时，保留已经独立记住的普通地区。
@@ -48,6 +50,17 @@ internal static class CharacterSelection
                 pvpArea.Map(completed).Error is null) landing=character.Position;
             if(character.Position!=landing || character.Return!=landing)
                 character=repository.Save(owner,character,landing,landing);
+        }
+        else if (BeastChannel.IsEntry(channel))
+        {
+            // 使用与普通频道完全相同的房间身份，原生房间装修、NPC和小地图都沿共享加载链。
+            // 专属中央公园仍由频道出门规则决定，不把它写入普通返回地区。
+            var landing = towns.Room;
+            if (towns.DestinationAdmission(landing, character.Level, completed) != "ready" || !towns.IsRoom(landing, completed))
+                throw new InvalidDataException("魔兽频道共享房间不可用");
+            var back = BeastChannel.OrdinaryReturn(towns, character, completed);
+            if (character.Position != landing || character.Return != back)
+                character = repository.Save(owner, character, landing, back);
         }
         else if (resumeTown)
         {

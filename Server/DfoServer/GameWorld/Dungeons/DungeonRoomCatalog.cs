@@ -123,6 +123,9 @@ internal sealed class DungeonRoomCatalog
         return paths.AsReadOnly();
     }
 
+    public RevisedBeastEncounter RevisedBeastEncounter(byte difficulty) =>
+        global::DfoServer.GameWorld.Dungeons.RevisedBeastEncounter.Read(archive, monsters, difficulty);
+
     public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true, bool allowUnresolvedSpecialMetadata = false)
     {
         string path = PvfArchive.NormalizePath(map.Path);

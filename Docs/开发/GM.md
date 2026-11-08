@@ -364,3 +364,5 @@ HTTP 接口保留 Host/Origin、自定义请求头 `X-GM-Request`、`confirm=tru
 
 GM通过`GET /api/events/catalog`读取服务端`ServerEventDefinition.Registered`目录，
 沿现有名称、用途、条件、默认状态和SupportsSchedule提供活动控制能力。
+
+奖励额度刷新包含改版魔兽的阶段及终局两张账本，按 UTC+8 06:00 日界、周四06:00周界归档当前键；保留实际发奖、成绩和回执身份，不重复发奖。在线额度修订后，后续服务日投影及重新打开选图读取更新后的1444计数。

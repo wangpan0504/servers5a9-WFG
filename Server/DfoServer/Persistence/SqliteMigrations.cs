@@ -373,6 +373,11 @@ internal static class SqliteMigrations
         new(197, "战令豪华044一次性订单", BattlePassDeluxeSchema.Upgrade),
         new(198, "账号公共物品容器45", UpgradeAccountCommon45),
         new(199, "怪物模拟战账号卡册与匹配索引", MonsterMockBattleSchema.Upgrade),
+        new(200, "改版魔兽阶段与终局奖励凭据", static (db, tx) =>
+        {
+            Execute(db, tx, RevisedBeastRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+            Execute(db, tx, RevisedBeastRewardSchema.StageDefinition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
+        }),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2764,6 +2769,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,instance_id,task_attempt,epoch,dungeon_id,difficulty,success,day_key,week_key,awarded,before_revision,revision,plan_snapshot FROM character_revised_beast_rewards LIMIT 0",
+        "SELECT character_id,account,instance_id,task_attempt,epoch,dungeon_id,difficulty,success,day_key,week_key,awarded,before_revision,revision,plan_snapshot FROM character_revised_beast_stage_rewards LIMIT 0",
         "SELECT inventory_items_revision FROM characters LIMIT 0",
         "SELECT inventory_items_revision FROM account_cargo LIMIT 0",
         "SELECT character_id,account,instance_id,attempt,entry_epoch,day,dungeon_id,expected_used,state FROM character_beast_dungeon_reservations LIMIT 0",

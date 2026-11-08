@@ -11,7 +11,7 @@ namespace DfoServer.Game.Characters;
 // evidence/popup1099-fiendwar-roster-flag-20261021.txt，KB-20261021T015635-5c920e4e59）。
 internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name, byte Job, byte GrowType,
     byte Level, ImmutableArray<InventoryItem> Equipment, bool FiendWarEligible = false,
-    bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
+    bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false, bool BeastEligible = false)
 {
     public bool RenamePending { get; init; }
     public uint CloneTitleItemId { get; init; }
@@ -28,6 +28,11 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     public const int PreyEntryQuest = 8935;
     public const byte PreyEntryLevel = 95;
 
+    public CharacterRosterEntry ForBeastChannel(bool available) => this with
+    {
+        BeastEligible = BeastChannel.CanProjectEntry(available, Level, IsPvpPrivate, BeastEligible)
+    };
+
     public static bool IsFiendWarEligible(bool questCompleted, bool guildMember) => questCompleted;
 
     public static bool IsPreyEligible(bool questCompleted, byte level) => questCompleted && level >= PreyEntryLevel;
@@ -39,6 +44,6 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         FiendWarEligible: IsFiendWarEligible(character.CompletedQuests.Contains(FiendWarEntryQuest), character.Guild is not null),
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
-        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate)
+        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate, BeastEligible: character.CompletedQuests.Contains(BeastChannel.EntryQuest))
         { CloneTitleItemId = character.CloneTitleItemId, WeaponSkin = character.Inventory.Skins.Selected };
 }

@@ -120,7 +120,7 @@ internal static partial class DevelopmentGm
                     ? session.ResetRewardLimits()
                     : WithLease(owners, request.Account, repository.ResetRewardLimits);
                 return "OK " + JsonSerializer.Serialize(reset) +
-                    " 已恢复当前周期奖励额度；四类团本入场额度单独刷新，历史奖励回执、通关事实、待领奖资格及已发邮件保留。";
+                    " 已恢复当前周期奖励额度（含改版魔兽日/周领奖次数）；入场额度单独刷新，历史奖励回执、通关事实、待领奖资格及已发邮件保留。";
             }
             if (request.Action == DevelopmentAction.CharacterScoreNotice)
                 return SendCharacterScoreNotice(request, noticeSender, catalog?.Resources, log);

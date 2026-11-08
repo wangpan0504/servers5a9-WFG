@@ -1532,19 +1532,19 @@ internal sealed partial class TcpPeer : IDisposable
                 EventInfoPayload = bounded[..length];
                 if (ValidateNativePromotionEvents is { } validate)
                     validate(EventInfoPayload);
-                else if (U16(EventInfoPayload, 0) != 3 + ExpectedOpenEvents.Length)
+                else if (U16(EventInfoPayload, 0) != 4 + ExpectedOpenEvents.Length)
                     CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents,
                         activeEvents: ExpectedActiveEvents, battlePassEnd: ExpectedBattlePassEnd, eventValues: ExpectedEventValues);
                 else
                 {
-                    int expectedLength = 98 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
+                    int expectedLength = 113 + 15 * ExpectedOpenEvents.Length + 50 * ExpectedActiveEvents.Length;
                     TestCheck.That(length == expectedLength + (ExpectedBattlePassEnd.HasValue ? 50 : 0),
                         ExpectedBattlePassEnd.HasValue && length == expectedLength
                             ? "EVENT2520_VALUE_ROW_MISSING" : "无促销页事件正文长度完整");
                     TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
-                        writer.Write((ushort)(3 + ExpectedOpenEvents.Length));
-                        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. ExpectedOpenEvents])
+                        writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
+                        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. ExpectedOpenEvents.TakeWhile(id => id is 282 or 2449 or 414 or 181), 333, .. ExpectedOpenEvents.SkipWhile(id => id is 282 or 2449 or 414 or 181)])
                         {
                             writer.Write(id);
                             writer.Write(1u);
@@ -1571,6 +1571,8 @@ internal sealed partial class TcpPeer : IDisposable
                     }), "独立核对赛丽亚2037、红包2378、乔纳森2395、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
                 }
             }
+            if (LoginEndpoint.Length > 3 && LoginEndpoint[3] == 40)
+                Expect(0, 1444, [0,0,0,0,0,0,0,0,2,4,2,4]);
             var gauge = Expect(0, 412);
             SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&

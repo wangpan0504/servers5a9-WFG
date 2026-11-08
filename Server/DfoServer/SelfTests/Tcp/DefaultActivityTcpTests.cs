@@ -75,7 +75,7 @@ internal static class DefaultActivityTcpTests
             var body = output.ToArray();
             ushort count = U16(body, 0);
             That(count is >= 9 and <= 11 && body.Length <= 32768, "bounded complete event catalog");
-            ushort[] expected = active ? [2037, 2378, 2395, 282, 2449, 414, 181, 2532, 266, 2520] : [2037, 2378, 2395, 282, 2449, 414, 181, 2532, 266];
+            ushort[] expected = active ? [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266, 2520] : [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266];
             for (int index = 0; index < expected.Length; index++)
                 That(U16(body, 2 + index * 15) == expected[index], "online toggle preserves other event entries");
             That(count == expected.Length || count == expected.Length + 1 && U16(body, 2 + expected.Length * 15) == 10999,
@@ -106,7 +106,7 @@ internal static class DefaultActivityTcpTests
         byte[] original;
         using (var peer = Open(fixture, "10000"))
         {
-            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 333, 2532, 266, 2520];
             peer.ExpectedBattlePassEnd = end;
             peer.Select(); peer.Expect(0, 1800); original = peer.Expect(0, 1801).Body; peer.Expect(0, 1802); peer.Barrier();
             await Toggle(2520, false); Events(peer, false); peer.Barrier();
@@ -194,7 +194,7 @@ internal static class DefaultActivityTcpTests
             "恢复默认选择后沿用原活动开关");
         using (var peer = Open(fixture, "10000"))
         {
-            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520]; peer.ExpectedBattlePassEnd = end;
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, 333, 2532, 266, 2520]; peer.ExpectedBattlePassEnd = end;
             peer.Select(); peer.Expect(0, 1800); peer.Expect(0, 1801); peer.Expect(0, 1802); peer.Barrier();
         }
         await fixture.StopAsync();

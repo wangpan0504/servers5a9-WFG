@@ -291,7 +291,7 @@ internal static class QuestCoverage
                     reasons.Add("部分回答缺少已核验的专用旅程跳过入口，普通回答分支可用");
                 bool profession = QuestProfessionReward.SupportedDeclaration(quest);
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
-                    QuestCharacterReward.TryHellChallenge(quest);
+                    QuestCharacterReward.SupportedChallengeReward(quest);
                 bool creatureReward = QuestCreatureReward.Evolution(quest);
                 bool expertJob = QuestExpertJobReward.Type(quest) is not null;
                 bool goldOnly = GoldOnlyReward(quest);
