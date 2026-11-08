@@ -225,7 +225,7 @@ internal static class DungeonPackets
             throw new ArgumentOutOfRangeException(nameof(error));
         return [0, (byte)error, (byte)((ushort)error >> 8), memberSlot];
     }
-    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
+    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，深渊门票/灵石不足沿0233AAA8(0x1B)提示并经03B9F7E0(1,1)复位选图深渊状态。
     public static byte[] HellPartyRejected(DungeonSelectionError code) => SelectionRejected(code);
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)

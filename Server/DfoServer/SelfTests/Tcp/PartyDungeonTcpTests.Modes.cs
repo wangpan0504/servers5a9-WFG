@@ -137,7 +137,7 @@ internal static partial class PartyDungeonTcpTests
             var rows=group.All();
             if (scenario!="success")
             {
-                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,(byte)(scenario=="quest" ? 9 : 0x11),0,0})) &&
+                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,(byte)(scenario=="quest" ? 9 : 0x1B),0,0})) &&
                     rows.All(r => !r.Any(p => p.Opcode is 28 or 29)) && fixture.Snapshot()==before,
                     "队员未开启深渊或少一张票时全队拒绝，队长也不扣材料");
                 continue;
@@ -188,7 +188,7 @@ internal static partial class PartyDungeonTcpTests
             var rows=group.All();
             if (shortfall)
             {
-                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,0x11,0,0})) &&
+                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,0x1B,0,0})) &&
                     rows.All(r => !r.Any(p => p.Opcode is 28 or 29)) && fixture.Snapshot()==before,
                     "传奇或超星空队员少灵石时全队不扣任何票据");
                 continue;
