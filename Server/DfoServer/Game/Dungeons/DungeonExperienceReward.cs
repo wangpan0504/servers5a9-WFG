@@ -22,6 +22,8 @@ internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, 
     public ExperienceBonuses? CommittedBonuses { get; init; }
     public DungeonDirectPickupCommit DirectPickup { get; init; } = DungeonDirectPickupCommit.Empty;
     public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Services.EquipmentGrowthChange> EquipmentChanges { get; init; } = [];
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.InventorySlot> SpecialClearRewardSlots { get; init; } = [];
+    public bool SpecialClearRewardMailOverflow { get; init; }
 }
 
 internal static class DungeonKillExperiencePolicy

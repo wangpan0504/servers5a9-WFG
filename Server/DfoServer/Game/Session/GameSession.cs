@@ -51,6 +51,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
+    ItemCatalog? SessionItems => items;
     Character? selected;
     public Character? Selected
     {

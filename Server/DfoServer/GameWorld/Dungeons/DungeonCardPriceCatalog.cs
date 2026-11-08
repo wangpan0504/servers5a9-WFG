@@ -12,6 +12,8 @@ internal sealed class DungeonCardPriceCatalog
         ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>>.Empty;
 
     public ImmutableArray<DungeonSpecificCardItem> TayberrsPaidRewards { get; private init; } = [];
+    public ImmutableDictionary<int, SpecialDungeonClearReward> SpecialClearRewards { get; private init; } =
+        ImmutableDictionary<int, SpecialDungeonClearReward>.Empty;
     public ImmutableArray<int> RarityDecision { get; private init; } = [];
     public ImmutableArray<DungeonDropItemReference> ItemReferences { get; private init; } = [];
 
@@ -43,6 +45,7 @@ internal sealed class DungeonCardPriceCatalog
         {
             SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve),
             TayberrsPaidRewards = DungeonSpecificCardRewards.ParseTayberrsPaid(tokens, resolve),
+            SpecialClearRewards = DungeonSpecificCardRewards.ParseSpecialClearRewards(tokens, resolve),
             RarityDecision = ReadRarity(),
             ItemReferences = ReadReferences()
         };

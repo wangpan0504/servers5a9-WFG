@@ -148,8 +148,13 @@ internal static class ParticularHellPartyTests
         That(sections.Any(row => row.Name == "specific goldcard group" && row.Use == ClearRewardSectionUse.PartlyRead) &&
             DungeonCardPriceCatalog.Load(pvf).TayberrsPaidRewards.Length == 4,
             "金币奖励只接入类型71的101组，其余组保留未发放状态");
-        foreach (string name in new[] { "special dungeon clear reward",
-            "chronicle set reward rate", "reward dungeon type list", "reward item list" })
+        That(sections.Any(row => row.Name == "special dungeon clear reward" && row.Use == ClearRewardSectionUse.PartlyRead) &&
+            sections.Any(row => row.Name == "clear reward" && row.Use == ClearRewardSectionUse.ReadAlready) &&
+            sections.Any(row => row.Name == "mail message" && row.Use == ClearRewardSectionUse.ReadAlready),
+            "特殊地下城通关奖励段只接入类型71泰波尔斯clear reward与mail message");
+        foreach (string name in new[] {
+            "chronicle set reward rate", "reward dungeon type list", "reward item list",
+            "special clear reward", "special clear reward item list" })
             That(sections.Any(row => row.Name == name && row.Use == ClearRewardSectionUse.NotGranted),
                 "未证明的通关奖励段不发放 " + name);
         That(ClearRewardSections.ExtraItemGrants().Count == 0, "未证明的通关奖励段不产生物品");

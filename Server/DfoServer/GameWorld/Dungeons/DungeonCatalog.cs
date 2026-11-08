@@ -163,6 +163,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public string? DungeonType { get; init; }
     // 仅三个正式泰波尔斯模式，任务版与升级版继续走各自合同。
     public bool IsTayberrs => Id is 291100320 or 291100322 or 5349 && WarriorsDungeon == "Tayberrs";
+    public bool IsTayberrsStory => Id == 291100321 &&
+        string.Equals(Path, "dungeon/legend/tayberrs/tayberrs_quest.dgn", StringComparison.OrdinalIgnoreCase);
+    public SpecialDungeonClearReward? SpecialClearReward { get; init; }
     public bool IsOperationHope => RawSections.Where(row => row.Tag == "operation hope dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
@@ -460,6 +463,8 @@ internal sealed class DungeonCatalog
     public PreyNormalCatalog PreyNormal => preyNormal.Value;
     private readonly Lazy<AntonNormalSequenceCatalog> antonNormalSequence;
     public AntonNormalSequenceCatalog AntonNormalSequence => antonNormalSequence.Value;
+    private readonly Lazy<ImmutableDictionary<int, SpecialDungeonClearReward>> specialClearRewards;
+    public ImmutableDictionary<int, SpecialDungeonClearReward> SpecialClearRewards => specialClearRewards.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
@@ -472,6 +477,9 @@ internal sealed class DungeonCatalog
         ekernCycle = new(() => EkernCycleCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         preyNormal = new(() => PreyNormalCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
         antonNormalSequence = new(() => AntonNormalSequenceCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
+        specialClearRewards = new(() => archive.Contains(DungeonCardPriceCatalog.ResourcePath)
+            ? DungeonSpecificCardRewards.ParseSpecialClearRewards(archive.ReadTokens(DungeonCardPriceCatalog.ResourcePath), archive.ResolveString)
+            : ImmutableDictionary<int, SpecialDungeonClearReward>.Empty, LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
@@ -516,6 +524,8 @@ internal sealed class DungeonCatalog
             var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains);
             if (definition.IsTournament)
                 definition = definition with { TournamentRewards = DungeonTournamentRewards.Parse(definition) };
+            if (definition.IsTayberrs && SpecialClearRewards.TryGetValue(id, out var specialClear))
+                definition = definition with { SpecialClearReward = specialClear };
             if (!definition.RequiresGriefEntryContract) return definition;
             if (!GriefTower.FloorsByDungeon.TryGetValue(id, out var floor))
                 throw new InvalidDataException("悲叹副本未登记于楼层专表: " + id);
