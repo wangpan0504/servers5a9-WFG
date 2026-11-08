@@ -75,7 +75,7 @@ internal static class QuestRelationProgress
     public static uint ThresholdScalar(StoryQuest parent, IReadOnlyCollection<int> completed)
     {
         if (!ThresholdShape(parent)) throw new NotSupportedException("阈值父任务需要完整sub4引用和最小完成数");
-        var done = completed.ToHashSet();
+        var done = completed as IReadOnlySet<int> ?? completed.ToHashSet();
         return parent.IntData.Count(done.Contains) >= parent.Definition!.MinimumClearCount!.Value ? 0u : 1u;
     }
 
@@ -99,7 +99,7 @@ internal static class QuestRelationProgress
     {
         if (ThresholdParent(parent,quests)) return ThresholdScalar(parent,completed);
         if (!SequentialParent(parent,quests)) throw new NotSupportedException("父任务不是已确认的完整顺序关系");
-        var done = completed.ToHashSet();
+        var done = completed as IReadOnlySet<int> ?? completed.ToHashSet();
         uint remaining = checked((uint)parent.IntData.Count(id => !done.Contains(id)));
         // 原生末子交付会转向父任务并再次检查scalar；条件达成不等于已交付，清图凭据和翻牌时机仍由领奖规划验证。
         if (remaining == 1 && (TerminalSeeking(parent,quests) ?? TerminalClearDialogue(parent,quests)) is { } terminal && !done.Contains(terminal.Id) &&
@@ -147,11 +147,29 @@ internal static class QuestRelationProgress
             ? parentId : null;
 
     public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active,
-        IReadOnlyCollection<int> completed, QuestCatalog quests)
+        IReadOnlyCollection<int> completed, QuestCatalog quests) =>
+        Refresh(active, () => completed as IReadOnlySet<int> ?? completed.ToHashSet(), quests);
+
+    public static ImmutableArray<ActiveMainQuest> Refresh(IReadOnlyList<ActiveMainQuest> active,
+        Func<IReadOnlySet<int>> completed, QuestCatalog quests)
     {
-        var done = completed.ToHashSet();
-        return active.Select(row => row.AcceptanceId != Guid.Empty &&
-            quests.TryGet(row.QuestId, out var parent) && (SequentialParent(parent, quests) || ThresholdParent(parent,quests) || ListParent(parent, quests))
-                ? row with { ConditionState = ListParent(parent, quests) ? ListScalar(parent, done) : Initial(parent,quests,done,active) } : row).ToImmutableArray();
+        if (active.Count == 0) return [];
+        IReadOnlySet<int>? done = null;
+        return active.Select(row =>
+        {
+            if (row.AcceptanceId == Guid.Empty || !quests.TryGet(row.QuestId, out var parent))
+                return row;
+            if (ListParent(parent, quests))
+            {
+                done ??= completed();
+                return row with { ConditionState = ListScalar(parent, done) };
+            }
+            if (SequentialParent(parent, quests) || ThresholdParent(parent, quests))
+            {
+                done ??= completed();
+                return row with { ConditionState = Initial(parent, quests, done, active) };
+            }
+            return row;
+        }).ToImmutableArray();
     }
 }

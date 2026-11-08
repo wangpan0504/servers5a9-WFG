@@ -7,7 +7,8 @@ internal sealed record EpicPieceBook(long Revision, string OrderHash, ImmutableA
 {
     public static EpicPieceBook Empty { get; } = new(0, "", []);
     public int Get(int index) => Counts.IsEmpty ? 0 : Counts[index];
-    public bool Same(EpicPieceBook other) => Revision == other.Revision && OrderHash == other.OrderHash && Counts.SequenceEqual(other.Counts);
+    public bool Same(EpicPieceBook other) => ReferenceEquals(this, other) ||
+        Revision == other.Revision && OrderHash == other.OrderHash && (Counts == other.Counts || Counts.SequenceEqual(other.Counts));
 
     public void Validate()
     {
@@ -32,6 +33,7 @@ internal sealed record EpicPieceBook(long Revision, string OrderHash, ImmutableA
         return this with { OrderHash = catalog.OrderHash, Counts = counts.SetItem(index, count) };
     }
 
-    public int[] ChangedIndexes(EpicPieceBook after) => Enumerable.Range(0, Math.Max(Counts.Length, after.Counts.Length))
-        .Where(index => Get(index) != after.Get(index)).ToArray();
+    public int[] ChangedIndexes(EpicPieceBook after) => Same(after) ? [] :
+        Enumerable.Range(0, Math.Max(Counts.Length, after.Counts.Length))
+            .Where(index => Get(index) != after.Get(index)).ToArray();
 }

@@ -32,8 +32,10 @@ internal sealed record AvatarPresetState(byte Capacity = AvatarPresetState.Defau
         Presets = (Presets.IsDefault ? [] : Presets).Where(row => row.Slot != slot).ToImmutableArray()
     };
 
-    public bool Same(AvatarPresetState other) => Capacity == other.Capacity && ActiveSlot == other.ActiveSlot &&
-        (Presets.IsDefault ? [] : Presets).SequenceEqual(other.Presets.IsDefault ? [] : other.Presets);
+    public bool Same(AvatarPresetState other) => ReferenceEquals(this, other) ||
+        Capacity == other.Capacity && ActiveSlot == other.ActiveSlot &&
+        (Presets == other.Presets && !Presets.IsDefault ||
+            (Presets.IsDefault ? [] : Presets).SequenceEqual(other.Presets.IsDefault ? [] : other.Presets));
 
     // 投影层据此补发 0x063F：槽位是身份、允许空洞，只比记录内容（名称与部位），
     // 容量与当前橱窗另有整表/选择回包。记录里的 ImmutableArray 默认按底层数组引用比较，

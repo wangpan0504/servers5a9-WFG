@@ -536,9 +536,9 @@ internal static partial class QuestCompletionPublicationTests
             BinaryPrimitives.ReadUInt64LittleEndian(player[24..]) == committed.Learning.Experience &&
             BinaryPrimitives.ReadUInt32LittleEndian(player[32..]) == 89 &&
             (expectedStats is null || BinaryPrimitives.ReadUInt32LittleEndian(player[36..]) == expectedStats.MaxHp) &&
-            BinaryPrimitives.ReadUInt32LittleEndian(player[40..]) == (expectedStats?.MaxMp ?? 2150) &&
-            BinaryPrimitives.ReadInt16LittleEndian(player[44..]) == (expectedStats?.PhysicalAttack ?? 219),
-            "Player当前Lv4 CHR基础/完整技能装备刷新，不用旧Lv1或叠加最终装备属性");
+            BinaryPrimitives.ReadUInt32LittleEndian(player[40..]) == (expectedStats?.MaxMp ?? 2750) &&
+            BinaryPrimitives.ReadInt16LittleEndian(player[44..]) == (expectedStats?.PhysicalAttack ?? 303),
+            "Player当前Lv4 CHR+chn_add_stat.etc基础/完整技能装备刷新，不用旧Lv1或叠加最终装备属性");
     }
     static void ValidateRejection(IReadOnlyList<byte[]> frames, ushort error) =>
         Check(frames.Count == 1 && frames[0][0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(frames[0].AsSpan(1)) == 34 &&

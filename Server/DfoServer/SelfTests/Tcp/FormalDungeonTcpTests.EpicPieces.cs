@@ -54,6 +54,13 @@ internal static partial class FormalDungeonTcpTests
                 .Concat(Enumerable.Range(9, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), gear)))
                 .Concat(Enumerable.Range(121, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot),
                     slot == 121 ? InventoryRewardGrantService.Create(items.Items.Get(ticket), 1000) : material))).ToImmutableArray();
+            if (index > 0)
+                contents = contents.Where(item => item.Position != new InventorySlot(InventoryListType.Equipment, 12))
+                    .Append(new(0, new(InventoryListType.Equipment, 12),
+                        InventoryRewardGrantService.Create(items.Items.Get(401000048)) with { SealFlag = 0 })).ToImmutableArray();
+            if (index == 2)
+                contents = contents.Select(item => item.Position == new InventorySlot(InventoryListType.Main, 122)
+                    ? item with { Core = InventoryRewardGrantService.Create(items.Items.Get(490008657)) } : item).ToImmutableArray();
             var seeded = created.Inventory with { Items = contents, Gold = 200000, EpicPieces = book,
                 AccountWallet = created.Inventory.AccountWallet.Set(CurrencyKind.EpicSoul, index == 0 ? 0 : 2) };
             roles.Add((account, InventoryService.Commit(repository, owner, created,
@@ -137,8 +144,8 @@ internal static partial class FormalDungeonTcpTests
                         }
                     }
                 }
-                That(fragmentDeaths == 1 && fragments == (map[7] == 1 ? 6 : 5) && shown,
-                    "仅真实末波末杀掉落本难度完整碎片数，测试出场率100使本次NPC可验收");
+                That(fragmentDeaths == 1 && fragments == (map[7] == 1 ? 6 : 5) + scenario && shown,
+                    "末波末杀保留原5/6基数，无来源/武器/武器加丹石分别额外0/1/2片，同源随机及钱包拾取完整");
                 string beforeChoice = fixture.Snapshot();
                 peer.Send(820, [1]); peer.Expect(1, 820, [0, 19, 0]); peer.Barrier();
                 peer.Send(818, Build(writer => writer.Write(104020146))); peer.Expect(1, 818, [0, 19, 0]); peer.Barrier();

@@ -484,6 +484,7 @@ internal static class SelfTestRunner
         DungeonItemDropCatalogTests.RunCore();
         DungeonDropGenerationPlanTests.RunCore();
         EquipmentRarityBonusTests.RunCore();
+        EpicPieceBonusDropTests.RunCore();
         EpicRoad2019SimulatedDropTests.RunCore();
         DungeonDropControlTests.RunCore();
         EquipmentAmplificationDropTests.RunCore();
@@ -807,6 +808,7 @@ internal static class SelfTestRunner
         DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         EquipmentGoldBonusTests.RunResources(itemResources.Items);
         EquipmentRarityBonusTests.RunResources(itemResources.Items);
+        EpicPieceBonusDropTests.RunResources(itemResources);
         DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
         EpicRoad2019SimulatedDropTests.RunResources(pvf, itemResources);
         EpicRoad2019SimulatedSessionTests.RunResources(pvf, itemResources);

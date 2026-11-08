@@ -90,38 +90,114 @@ internal static class CharacterAttributeResourceTests
         Reject(() => Parse([new(3, 0), new(3, 1), new(0, 1), new(3, 1), new(0, 2)]));
         Reject(() => Parse([new(3, 0), new(3, 3), new(3, 3)]));
 
-        Console.WriteLine("PASS 属性资源分块、float32、负值与缺项回归");
+        string[] addStrings = ["[max level]", "[add initial value stat]", "[add growtype stat]",
+            "[HP MAX]", "[MP MAX]", "[physical attack]", "[physical defense]", "[magical attack]", "[magical defense]",
+            "[dark resistance]", "[light resistance]", "[fire resistance]", "[water resistance]", "[move speed]", "[unknown]",
+            "[/add initial value stat]", "[/add growtype stat]"];
+        PvfToken[] addTokens =
+        [
+            new(3, 0), new(0, 70),
+            new(3, 1), new(3, 3), new(0, 14), new(3, 4), new(0, 15),
+            new(3, 5), new(2, unchecked((int)0x40066666)), new(3, 6), new(0, 2),
+            new(3, 7), new(2, unchecked((int)0x40066666)), new(3, 8), new(0, 2),
+            new(3, 9), new(0, 12), new(3, 10), new(0, 12), new(3, 11), new(0, 12), new(3, 12), new(0, 12),
+            new(3, 13), new(0, 20), new(3, 15),
+            new(3, 2), new(3, 3), new(0, 14), new(3, 4), new(0, 15),
+            new(3, 5), new(2, unchecked((int)0x40066666)), new(3, 6), new(0, 2),
+            new(3, 7), new(2, unchecked((int)0x40066666)), new(3, 8), new(0, 2), new(3, 16)
+        ];
+        var additional = ParseAdditional(addTokens);
+        Check(additional.MaxLevel == 70 && additional.InitialFields.Count == 11 && additional.GrowthFields.Count == 6 &&
+            BitConverter.SingleToInt32Bits(additional.InitialFields[CharacterAttributeField.PhysicalAttack]) == 0x40066666 &&
+            BitConverter.SingleToInt32Bits(additional.GrowthFields[CharacterAttributeField.MagicalAttack]) == 0x40066666,
+            "chn_add_stat.etc解析保留70级上限与2.1f位精度");
+        Check(CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 1, additional).PhysicalAttack == 21 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 19, additional).PhysicalAttack == 864 + 21 * 19 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 70, additional).MaxHp == 1800 + 500 * 52 + 140 * 70 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 71, additional).MaxHp == 1800 + 500 * 53 + 140 * 70 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 95, additional).PhysicalAttack == 48 * 17 + 1470 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 95, additional).DarkResistance == -80 &&
+            CharacterStatComputer.ComputeLevelBaseStats(definition, 1, 95, additional).MoveSpeed == 200,
+            "额外初始属性与1..70级额外成长属性在70级封顶且不覆盖71..95级CHR正常成长");
+        RejectRange(() => CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 1, additional with { MaxLevel = 0 }));
+        RejectRange(() => CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 1, additional with { MaxLevel = 96 }));
+        Reject(() => ParseAdditional([new(3, 1), new(3, 3), new(0, 14), new(3, 2), new(3, 3), new(0, 14)]));
+        Reject(() => ParseAdditional([new(3, 0), new(0, 0), new(3, 1), new(3, 3), new(0, 14), new(3, 2), new(3, 3), new(0, 14)]));
+        Reject(() => ParseAdditional([new(3, 0), new(0, 70), new(3, 1), new(3, 3), new(0, 14), new(3, 1), new(3, 3), new(0, 14), new(3, 2), new(3, 3), new(0, 14)]));
+        Reject(() => ParseAdditional([new(3, 0), new(0, 70), new(3, 1), new(3, 3), new(0, 14), new(3, 3), new(0, 14), new(3, 2), new(3, 3), new(0, 14)]));
+        Reject(() => ParseAdditional([new(3, 0), new(0, 70), new(3, 14), new(0, 1), new(3, 1), new(3, 3), new(0, 14), new(3, 2), new(3, 3), new(0, 14)]));
+
+        Console.WriteLine("PASS 属性资源分块、chn_add_stat.etc、float32、负值与缺项回归");
 
         CharacterAttributeDefinition Parse(PvfToken[] input) => CharacterAttributeDefinition.Parse("fixture.chr", input, id => strings[id]);
+        CharacterAdditionalStatDefinition ParseAdditional(PvfToken[] input) => CharacterAdditionalStatDefinition.Parse("character/chn_add_stat.etc", input, id => addStrings[id]);
     }
 
     public static void RunResources(CharacterCatalog characters)
     {
+        var additional = characters.AdditionalStats;
+        Check(additional.ScriptPath == "character/chn_add_stat.etc" && additional.MaxLevel == 70 &&
+            additional.InitialFields.Count == 11 && additional.GrowthFields.Count == 6 &&
+            additional.InitialFields[CharacterAttributeField.MaxHp] == 14 &&
+            additional.InitialFields[CharacterAttributeField.MaxMp] == 15 &&
+            BitConverter.SingleToInt32Bits(additional.InitialFields[CharacterAttributeField.PhysicalAttack]) == 0x40066666 &&
+            additional.InitialFields[CharacterAttributeField.PhysicalDefense] == 2 &&
+            BitConverter.SingleToInt32Bits(additional.InitialFields[CharacterAttributeField.MagicalAttack]) == 0x40066666 &&
+            additional.InitialFields[CharacterAttributeField.MagicalDefense] == 2 &&
+            additional.InitialFields[CharacterAttributeField.FireResistance] == 12 &&
+            additional.InitialFields[CharacterAttributeField.WaterResistance] == 12 &&
+            additional.InitialFields[CharacterAttributeField.DarkResistance] == 12 &&
+            additional.InitialFields[CharacterAttributeField.LightResistance] == 12 &&
+            additional.InitialFields[CharacterAttributeField.MoveSpeed] == 20 &&
+            additional.GrowthFields[CharacterAttributeField.MaxHp] == 14 &&
+            additional.GrowthFields[CharacterAttributeField.MaxMp] == 15 &&
+            BitConverter.SingleToInt32Bits(additional.GrowthFields[CharacterAttributeField.PhysicalAttack]) == 0x40066666 &&
+            additional.GrowthFields[CharacterAttributeField.PhysicalDefense] == 2 &&
+            BitConverter.SingleToInt32Bits(additional.GrowthFields[CharacterAttributeField.MagicalAttack]) == 0x40066666 &&
+            additional.GrowthFields[CharacterAttributeField.MagicalDefense] == 2,
+            "真实character/chn_add_stat.etc装载70级上限、11项额外初始属性与6项额外成长属性");
         var computer = new CharacterStatComputer(characters);
         for (byte job = 0; job <= 15; job++)
         {
             var profile = characters.Get(job);
-            Check(characters.GetAttributeDefinition(job).Blocks.Count >= 2 &&
-                computer.ComputeLevelBaseStats(job, 0, 1) == profile.InitialStats,
-                "全部16职业装载原始CHR，Lv1字节与现有创建一致");
+            var definition = characters.GetAttributeDefinition(job);
+            Check(definition.Blocks.Count >= 2 &&
+                CharacterStatComputer.ComputeLevelBaseStats(definition, 0, 1) == profile.InitialStats,
+                "全部16职业装载原始CHR，未叠加chn_add_stat.etc时Lv1与InitialStats一致");
             foreach (var option in profile.GrowthOptions.GrowTypes)
             for (int awakening = 0; awakening <= option.Awakenings.Count; awakening++)
-            foreach (byte level in new byte[] { 1, 2, 18, 19, 49, 50, 74, 75, 95 })
+            foreach (byte level in new byte[] { 1, 2, 18, 19, 49, 50, 70, 71, 74, 75, 95 })
             {
                 byte growType = checked((byte)(option.Value | awakening << 4));
+                var chrOnly = CharacterStatComputer.ComputeLevelBaseStats(definition, growType, level);
                 var stats = computer.ComputeLevelBaseStats(job, growType, level);
+                int cappedLevel = Math.Min((int)level, 70);
+                var expected = chrOnly with
+                {
+                    MaxHp = checked(chrOnly.MaxHp + (uint)(140 * cappedLevel)),
+                    MaxMp = checked(chrOnly.MaxMp + (uint)(150 * cappedLevel)),
+                    PhysicalAttack = checked((short)(chrOnly.PhysicalAttack + 21 * cappedLevel)),
+                    PhysicalDefense = checked((short)(chrOnly.PhysicalDefense + 20 * cappedLevel)),
+                    MagicalAttack = checked((short)(chrOnly.MagicalAttack + 21 * cappedLevel)),
+                    MagicalDefense = checked((short)(chrOnly.MagicalDefense + 20 * cappedLevel)),
+                    FireResistance = checked((short)(chrOnly.FireResistance + 120)),
+                    WaterResistance = checked((short)(chrOnly.WaterResistance + 120)),
+                    DarkResistance = checked((short)(chrOnly.DarkResistance + 120)),
+                    LightResistance = checked((short)(chrOnly.LightResistance + 120)),
+                    MoveSpeed = checked(chrOnly.MoveSpeed + 200)
+                };
                 var character = OrdinaryCharacter(profile.Skills, level) with { Job = job, GrowType = growType };
-                Check(computer.Compute(character) == stats &&
-                    (level == 1 || stats != profile.InitialStats),
-                    "全部职业、转职和两觉在等级边界均使用本职业成长，不回退InitialStats");
+                Check(stats == expected && computer.Compute(character) == stats && stats != profile.InitialStats,
+                    "全部16职业、转职和两觉在等级边界均合成CHR与chn_add_stat.etc，不回退InitialStats");
             }
         }
         var priest = computer.ComputeLevelBaseStats(14, 1, 19);
-        Check(priest.MaxHp == 10850 && priest.MaxMp == 4950 && priest.PhysicalAttack == 899,
-            "女圣职者真实CHR在18级后取转职块，四维与HP/MP保持各自声明");
-        Check(computer.ComputeLevelBaseStats(15, 0x11, 95).MaxHp == 50850 &&
-            computer.ComputeLevelBaseStats(15, 0x11, 95).MaxMp == 18150,
-            "枪剑士觉醒编码沿匹配正常基础公式，未将觉醒差异块当永久属性重复叠加");
+        Check(priest.MaxHp == 10850 + 140 * 19 && priest.MaxMp == 4950 + 150 * 19 && priest.PhysicalAttack == 899 + 21 * 19,
+            "女圣职者真实CHR在18级后取转职块并叠加chn_add_stat.etc，四维与HP/MP保持各自声明");
+        var gunblader = computer.ComputeLevelBaseStats(15, 0x11, 95);
+        Check(gunblader.MaxHp == 50850 + 9800 && gunblader.MaxMp == 18150 + 10500 &&
+            gunblader.PhysicalAttack == 5087 + 1470 && gunblader.MagicalAttack == 3493 + 1470,
+            "枪剑士觉醒编码沿匹配正常基础公式并叠加70级封顶chn_add_stat.etc（+980HP/+1050MP/+147力智），未重复叠加觉醒差异块");
         var blocks = characters.GetAttributeDefinition(0).Blocks;
         var initial = blocks.Single(block => block.ResourceGrowType == 0);
         var growth = blocks.Single(block => block.ResourceGrowType == 1 && block.Awakening == 0);
@@ -140,22 +216,28 @@ internal static class CharacterAttributeResourceTests
         var upgradedPlayer = DfoServer.Network.Builders.TownPackets.Player(upgraded, computer.Compute(upgraded), 1);
         var unknownOwner = upgraded with { DungeonState = null };
         var unknownOwnerPlayer = DfoServer.Network.Builders.TownPackets.Player(unknownOwner, computer.Compute(unknownOwner), 1);
-        Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(upgradedPlayer.AsSpan(40)) == 1650 &&
-            System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(upgradedPlayer.AsSpan(44)) == 123 &&
+        Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(upgradedPlayer.AsSpan(40)) == 1950 &&
+            System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(upgradedPlayer.AsSpan(44)) == 165 &&
             System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(unknownOwnerPlayer.AsSpan(40)) == 1400,
-            "既有Player通知按实际Lv2传已证CHR基础，未知存量owner保留旧字段，不重复加入装备/被动总量");
-        Check(computer.Compute(unknownOwner) == level1 &&
-            computer.Compute(upgraded with { Learning = CharacterLearningState.Uninitialized }) == level1,
-            "未知存量附属owner与不完整两树保持旧投影");
-        Check(level1 == characters.Get(0).InitialStats, "Lv1基础投影保留原匹配字节");
-        Check(level2.MaxHp == 2250 && level2.MaxMp == 1650 && level2.PhysicalAttack == 123 &&
-            level2.MagicalAttack == 87 && level2.InventoryLimit == 483000 && level2.MpRecovery == 525 &&
-            level2.HitRecovery == 6015, "Lv2按已证定点整数先转换后累计");
-        Check(level3.MaxHp == 2700 && level3.MaxMp == 1900 && level3.PhysicalAttack == 171 &&
-            level3.DarkResistance == 200 && level3.LightResistance == -200, "Lv3成长及抗性默认保持");
-        Check(computer.ComputeLevelBaseStats(0, 0, 19).PhysicalAttack == 75 + 48 * 18 &&
-            computer.ComputeLevelBaseStats(0, 0, 95).MaxMp == 1400 + 250 * 94, "grow0跨18分段与95上界整数一致");
-        Console.WriteLine("PASS 全16职业CHR等级基础资源回归");
+            "既有Player通知按实际Lv2传已证CHR+chn_add_stat.etc基础，未知存量owner保留旧字段，不重复加入装备/被动总量");
+        Check(computer.Compute(unknownOwner) == characters.Get(0).InitialStats &&
+            computer.Compute(upgraded with { Learning = CharacterLearningState.Uninitialized }) == characters.Get(0).InitialStats,
+            "未知存量附属owner与不完整两树保持旧InitialStats投影");
+        Check(level1.MaxHp == 1940 && level1.MaxMp == 1550 && level1.PhysicalAttack == 96 && level1.PhysicalDefense == 95 &&
+            level1.MagicalAttack == 66 && level1.MagicalDefense == 65 && level1.FireResistance == 120 && level1.WaterResistance == 120 &&
+            level1.DarkResistance == 320 && level1.LightResistance == -80 && level1.MoveSpeed == 8700,
+            "Lv1基础投影叠加chn_add_stat.etc额外初始属性");
+        Check(level2.MaxHp == 2530 && level2.MaxMp == 1950 && level2.PhysicalAttack == 165 &&
+            level2.MagicalAttack == 129 && level2.InventoryLimit == 483000 && level2.MpRecovery == 525 &&
+            level2.HitRecovery == 6015 && level2.MoveSpeed == 8700, "Lv2按已证定点整数先转换后累计CHR与额外成长");
+        Check(level3.MaxHp == 3120 && level3.MaxMp == 2350 && level3.PhysicalAttack == 234 &&
+            level3.DarkResistance == 320 && level3.LightResistance == -80, "Lv3成长及抗性额外初始值保持");
+        Check(computer.ComputeLevelBaseStats(0, 0, 19).PhysicalAttack == 75 + 48 * 18 + 21 * 19 &&
+            computer.ComputeLevelBaseStats(0, 0, 70).PhysicalAttack == 75 + 48 * 69 + 21 * 70 &&
+            computer.ComputeLevelBaseStats(0, 0, 71).PhysicalAttack == 75 + 48 * 70 + 21 * 70 &&
+            computer.ComputeLevelBaseStats(0, 0, 95).MaxMp == 1400 + 250 * 94 + 150 * 70,
+            "grow0跨18分段、70级chn_add_stat.etc封顶与95上界整数一致");
+        Console.WriteLine("PASS 全16职业CHR与chn_add_stat.etc等级基础资源回归");
     }
 
     private static void Check(bool result, string message)

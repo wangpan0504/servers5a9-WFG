@@ -44,7 +44,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Dungeons.RiftNamedEpicDropPolicy? riftNamedEpics = null,
     DfoServer.Game.Events.EndlessAdventurePolicy? endlessAdventure = null,
     DfoServer.Game.Events.DailyAttendanceService? dailyAttendance = null,
-    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null)
+    DfoServer.Game.MonsterMockBattle.MonsterMockBattleService? monsterMockBattle = null,
+    EpicPieceBonusDropCatalog? epicPieceBonuses = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
