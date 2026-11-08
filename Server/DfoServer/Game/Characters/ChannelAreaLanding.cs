@@ -204,7 +204,8 @@ internal static class ChannelAreaLanding
     internal static bool ClientKeepsTownSnapshot(TownCatalog? towns, ChannelEntry? channel, Location position)
     {
         if (position.Town == BeastChannel.Town || BeastChannel.IsEntry(channel))
-            return position.Town == BeastChannel.Town && BeastChannel.IsEntry(channel);
+            // 与客户端type40清快照规则配套，每次选角/换频道均重新进入共享房间。
+            return false;
         if (IsRaidInstanceArea(position)) return false;
         if (channel is null)
             return position.Town != EvildomWarChallengeTown;

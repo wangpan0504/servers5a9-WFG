@@ -4,6 +4,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Town;
 namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
@@ -109,7 +110,18 @@ internal sealed partial class GameSession
     }
 
     public RevisedBeastSettlementReceipt? CurrentRevisedBeastSettlement() => owner.Execute(() =>
-        formalDungeon?.RevisedBeastSettlement is { } receipt && CanPublishRevisedBeast(receipt) ? receipt : null);
+        formalDungeon?.RevisedBeastSettlement is { } receipt && CanUseRevisedBeastResult(receipt) ? receipt : null);
+
+    // 结果菜单属于实例终局；后续用药、扣材料等合法资产变化不能作废回城资格。
+    // 资产增量发布仍使用下面的严格角色快照守卫，不能借菜单资格重发旧背包。
+    public bool CanUseRevisedBeastResult(RevisedBeastSettlementReceipt receipt) => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Settlement && owner.Generation == receipt.Scene.Generation &&
+        SelectionEpoch == receipt.Scene.SelectionEpoch && Selected?.Id == receipt.Terminal.Identity.CharacterId &&
+        formalDungeon is { Entry.IsRevisedBeast:true } dungeon &&
+        ReferenceEquals(dungeon.RevisedBeastSettlement,receipt) && dungeon.Run.Snapshot.Identity == receipt.Terminal.Identity);
+
+    public TownTravelReceipt? ReturnFromRevisedBeastResult(RevisedBeastSettlementReceipt receipt) => owner.Execute(() =>
+        CanUseRevisedBeastResult(receipt) ? ReturnFromFormalDungeon() : null);
 
     public bool CanPublishRevisedBeast(RevisedBeastSettlementReceipt receipt) => owner.Execute(()=>Ready &&
         formalDungeon?.RevisedBeastSettlement == receipt && SelectionEpoch == receipt.Scene.SelectionEpoch &&

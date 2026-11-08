@@ -443,11 +443,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (state == 2)
             {
                 await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
-                    "revised_beast_result_focus", () => context.Session.CanPublishRevisedBeast(beastResult));
+                    "revised_beast_result_focus", () => context.Session.CanUseRevisedBeastResult(beastResult));
                 return CommandResult.Handled;
             }
-            var travel = context.Session.ReturnFromFormalDungeon();
-            if (travel is null) return CommandResult.Unhandled;
+            var travel = context.Session.ReturnFromRevisedBeastResult(beastResult);
+            if (travel is null)
+            {
+                log.Write("revised_beast_result_return_pending", new { Connection=context.Id, beastResult.Terminal.Identity });
+                return CommandResult.Unhandled;
+            }
             if (context.Death is not null) await context.Death.StopAsync();
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
                 "revised_beast_result_return", () => context.Session.CanPublishTravel(travel));

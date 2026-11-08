@@ -20,6 +20,7 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
     (long Epoch, int Day)? legacyPublished;
     int? missionDay;
     long missionEpoch = -1;
+    (long Epoch, long Revision)? quotaPublished;
     public async Task<bool> PublishAsync()
     {
         if (!context.Session.CanAdvanceServiceDay()) return false;
@@ -69,6 +70,11 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
         if (context.DailyAttendance is { } attendance) await attendance.RefreshAsync();
         if (context.MonsterMockBattle is { } mockBattle) await mockBattle.RefreshAsync();
         town.PublishLukeChannelCards(context);
+        var quota = (Epoch: context.Session.SelectionEpoch, Revision: context.Session.QuotaDisplayRevision);
+        if (quotaPublished is { } previousQuota && previousQuota.Epoch == quota.Epoch && previousQuota.Revision != quota.Revision)
+            await town.RefreshRevisedBeastCountsAsync(context, () => context.Session.SelectionEpoch == quota.Epoch &&
+                context.Session.QuotaDisplayRevision == quota.Revision);
+        quotaPublished = quota;
         var now = clock.GetUtcNow();
         long selectedEpoch = context.Session.SelectionEpoch;
         int localDay = FatigueDailyReset.Day(now, clock.LocalTimeZone);
