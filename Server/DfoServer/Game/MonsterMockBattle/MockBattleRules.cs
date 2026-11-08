@@ -124,7 +124,11 @@ internal static class MockBattleRules
                 Add(selectable ? booster.Draws[(int)argument1 - 1] : Roll(booster.Draws));
                 break;
             case 2:
-                throw new MockBattleRejectedException("出售返币规则尚未实现");
+                var released = Card(argument0);
+                if (argument1 != 0 || payload.ContainsAnyExcept((byte)0) || released.RawFlags != 0 || released.Position != -1)
+                    throw new MockBattleRejectedException("放归卡片参数、锁定或阵位无效");
+                cards[(int)argument0] = MockBattleCard.Empty;
+                break;
             case 3:
                 var target = Card(argument0);
                 var source = Card(argument1);
