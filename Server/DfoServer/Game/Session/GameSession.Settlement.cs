@@ -723,6 +723,6 @@ internal sealed partial class GameSession
         if (HellPartyEntryCost.CosmoPass(character.Inventory, dungeon.CosmoPasses, pieces, now).Ticket is not null) return true;
         var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, dungeon.CosmoInvitationCount, pieces, now);
         return invitations.Plan is { } plan &&
-            HellPartyEntryCost.Plan(plan.After, [HellPartyEntryCost.LegendStone], dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
+            HellPartyEntryCost.Plan(plan.After, HellPartyEntryCost.LegendStones, dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
     });
 }

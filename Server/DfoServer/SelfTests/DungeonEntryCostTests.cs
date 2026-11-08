@@ -28,8 +28,12 @@ internal static class DungeonEntryCostTests
         System.Collections.Immutable.ImmutableArray<CosmoPassCost> Parse(params int[] values) => CosmoPassCost.Parse(
             [new(3,1),.. values.Select(v=>new PvfToken(0,v)),new(3,2)],
             id=>id==1?"[hell cosmo freepass item]":"[/hell cosmo freepass item]");
-        That(Parse(100,1,-1,0,200,1,-1,2).SequenceEqual([new CosmoPassCost(100,1,0),new(200,1,2)]),
-            "超星空通行证四元组保留券数量和额外灵石，不把星空券当全免票");
+        That(Parse(100,1,-1,0,200,1,-1,2).SequenceEqual([
+                new CosmoPassCost(100,1,0),new(200,1,2),
+                new(CosmoPassCost.DailyAttendanceStarPass,1,2),new(CosmoPassCost.DailyAttendanceCosmoPass,1,0)]) &&
+            Parse(CosmoPassCost.DailyAttendanceStarPass,1,-1,2,CosmoPassCost.DailyAttendanceCosmoPass,1,-1,0).SequenceEqual([
+                new CosmoPassCost(CosmoPassCost.DailyAttendanceStarPass,1,2),new(CosmoPassCost.DailyAttendanceCosmoPass,1,0)]),
+            "超星空通行证四元组保留券数量和额外灵石，补充日签到星空/超星空通行证且不重复添加");
         foreach(var malformed in new[] {new[]{100,1,-1},new[]{100,0,-1,0},new[]{100,1,0,0},
             new[]{100,1,-1,-1},new[]{100,1,-1,0,100,1,-1,2}})
             Reject<InvalidDataException>(()=>Parse(malformed),"通行证残缺、零数量、未确认附加条件及重复条目拒绝");
@@ -125,9 +129,11 @@ internal static class DungeonEntryCostTests
         ImmortalCorridor(towns, characters, skills, growth, quests, dungeons, rooms);
 
         var passIds = items.Items.CosmoPasses();
-        That(passIds.Length == 48 && passIds.Count(row=>row.AdditionalStones==0)==36 && passIds.Count(row=>row.AdditionalStones==2)==12 &&
+        That(passIds.Length == 50 && passIds.Count(row=>row.AdditionalStones==0)==37 && passIds.Count(row=>row.AdditionalStones==2)==13 &&
+            passIds.Contains(new(CosmoPassCost.DailyAttendanceStarPass, 1, 2)) &&
+            passIds.Contains(new(CosmoPassCost.DailyAttendanceCosmoPass, 1, 0)) &&
             passIds.All(row=>row.Count==1) && !passIds.Any(row=>row.ItemId is 490703708 or 490703706),
-            "按freepassitem匹配48种声明：36种完整券和12种需额外2石的星空券，不按名称扩大旧券或礼盒");
+            "按freepassitem与签到活动声明匹配50种：37种完整券和13种需额外2石的星空券，不按名称扩大旧券或礼盒");
         var passNow = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
         InventoryItem Pass(long uid, short slot, int id = 490705255) =>
             new(uid, new(InventoryListType.Main, slot), new(id, ItemKind.Material, 1));
@@ -148,6 +154,25 @@ internal static class DungeonEntryCostTests
         That(HellPartyEntryCost.CosmoPass(starPaid,passIds,items.EpicPieces,passNow) is
             {Ticket:{ItemId:490703917,Count:1},Stone:{ItemId:10305821,Count:2},Plan.After.Items.Length:0},
             "资源声明的星空券与额外2灵石作为完整组合规划");
+        var attendanceStarMixed = new InventorySnapshot([
+            Pass(1, 152, CosmoPassCost.DailyAttendanceStarPass),
+            new(2, new(InventoryListType.Main, 154), new(HellPartyEntryCost.DailyAttendanceLegendStone, ItemKind.Material, 1)),
+            new(3, new(InventoryListType.Main, 155), new(HellPartyEntryCost.LegendStone, ItemKind.Material, 1)),
+        ]);
+        That(HellPartyEntryCost.CosmoPass(attendanceStarMixed, passIds, items.EpicPieces, passNow).Plan is null,
+            "签到星空裂缝通行证的2枚附加灵石不跨不同物品ID混扣");
+        var attendanceStarPaid = new InventorySnapshot([
+            Pass(1, 152, CosmoPassCost.DailyAttendanceStarPass),
+            new(2, new(InventoryListType.Main, 154), new(HellPartyEntryCost.DailyAttendanceLegendStone, ItemKind.Material, 2)),
+            new(3, new(InventoryListType.Main, 155), new(HellPartyEntryCost.LegendStone, ItemKind.Material, 2)),
+        ]);
+        That(HellPartyEntryCost.CosmoPass(attendanceStarPaid, passIds, items.EpicPieces, passNow) is
+            { Ticket: { ItemId: CosmoPassCost.DailyAttendanceStarPass, Count: 1 }, Stone: { ItemId: HellPartyEntryCost.DailyAttendanceLegendStone, Count: 2 }, Plan.After.Items: [{ Core: { ItemId: HellPartyEntryCost.LegendStone, Count: 2 } }] },
+            "签到星空裂缝通行证优先搭配2枚[活动]星空深渊灵石规划入场");
+        var attendanceCosmoPaid = new InventorySnapshot([Pass(1, 152, CosmoPassCost.DailyAttendanceCosmoPass)]);
+        That(HellPartyEntryCost.CosmoPass(attendanceCosmoPaid, passIds, items.EpicPieces, passNow) is
+            { Ticket: { ItemId: CosmoPassCost.DailyAttendanceCosmoPass, Count: 1 }, Stone: null, Plan.After.Items.Length: 0 },
+            "签到超·星空裂缝通行证单张免灵石规划入场");
         var fullFallback=starOnly with {Items=starOnly.Items.Add(Pass(3,122,490705255))};
         That(HellPartyEntryCost.CosmoPass(fullFallback,passIds,items.EpicPieces,passNow).Ticket is {ItemId:490705255},
             "前方星空券缺灵石时仍可使用后方完整超星空券");
@@ -245,11 +270,11 @@ internal static class DungeonEntryCostTests
                 "超星空加载不重复扣疲劳，消耗计数仍为8");
         }
 
-        foreach (bool partialPass in new[] {false,true})
+        foreach (var (passId, stoneId) in new[] { (490705255, 0), (490703917, 10305821), (CosmoPassCost.DailyAttendanceStarPass, HellPartyEntryCost.DailyAttendanceLegendStone), (CosmoPassCost.DailyAttendanceCosmoPass, 0) })
         {
-            int passId=partialPass?490703917:490705255;
+            bool partialPass = stoneId != 0;
             using (var passOnly = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,
-                [.. cosmoDone.Order()],position:cosmoPosition,items:partialPass?[(490703917,2),(10305821,4)]:[(490705255,2)],fatigueRemaining:16))
+                [.. cosmoDone.Order()],position:cosmoPosition,items:partialPass?[(passId,2),(stoneId,4)]:[(passId,2)],fatigueRemaining:16))
             {
                 var before = passOnly.Read();
                 passOnly.Sql("CREATE TRIGGER cosmo_pass_fail BEFORE UPDATE ON character_dungeon_state WHEN NEW.last_attempt>OLD.last_attempt BEGIN SELECT RAISE(ABORT,'cosmo pass rollback'); END");
@@ -261,10 +286,10 @@ internal static class DungeonEntryCostTests
                 var receipt = passOnly.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,
                     drops:Testing.SelfTestCatalogs.MonsterDrops(pvf),items:items.Items,pieces:items.EpicPieces,hellParty:true);
                 That(receipt is { HellTicket.Count: 1, EntryFatigueCharged: 8 } && receipt.HellTicket.ItemId==passId &&
-                    (partialPass?receipt.LegendTicket is {Count:2,ItemId:10305821}:receipt.LegendTicket is null) &&
+                    (partialPass?receipt.LegendTicket is {Count:2}&&receipt.LegendTicket.ItemId==stoneId:receipt.LegendTicket is null) &&
                     receipt.HellConsumedSlots.Length == (partialPass?2:1) && ItemCount(passOnly.Read(),passId) == 1 &&
-                    ItemCount(passOnly.Read(),10305821)==(partialPass?2:0),
-                    "入场重试按资源准确消耗一张券，星空券额外2石，超星空券无需灵石");
+                    (partialPass?ItemCount(passOnly.Read(),stoneId)==2:true),
+                    "入场重试按资源准确消耗一张券，星空券额外2石（含签到星空券+活动灵石），超星空券无需灵石");
             }
 
         }
