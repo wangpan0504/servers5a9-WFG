@@ -59,15 +59,24 @@ internal static class ClearRewardSections
             if (name == "reward group" && stack.Contains("specific goldcard group") &&
                 at + 1 < tokens.Count && tokens[at + 1] is { Type:0, Value:101 }) tayberrsGold = true;
             bool insideRead = tayberrsGold;
+            bool insideSpecialClear = false;
             foreach (string parent in stack)
+            {
                 if (parent is "gold card cost table" or "dungeon index privilege service reward rate")
                     insideRead = true;
+                else if (parent == "special dungeon clear reward")
+                    insideSpecialClear = true;
+            }
             bool specific = name == "dungeon type" && stack.Contains("dungeon_index specific reward rate") &&
                 at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 71 or 72 or 75 or 76 };
-            var use = insideRead || specific ? ClearRewardSectionUse.ReadAlready
-                : name is "gold card cost table" or "dungeon index privilege service reward rate"
-                    ? ClearRewardSectionUse.ReadAlready : name is "dungeon_index specific reward rate" or "specific goldcard group"
-                        ? ClearRewardSectionUse.PartlyRead : ClearRewardSectionUse.NotGranted;
+            var use = insideRead || specific || insideSpecialClear && name is "mail message" or "clear reward"
+                ? ClearRewardSectionUse.ReadAlready
+                : insideSpecialClear && name is "dungeon type" or "dungeon index"
+                    ? ClearRewardSectionUse.PartlyRead
+                    : name is "gold card cost table" or "dungeon index privilege service reward rate"
+                        ? ClearRewardSectionUse.ReadAlready
+                        : name is "dungeon_index specific reward rate" or "specific goldcard group" or "special dungeon clear reward"
+                            ? ClearRewardSectionUse.PartlyRead : ClearRewardSectionUse.NotGranted;
             rows.Add((name, use));
             if (Containers.Contains(name)) stack.Push(name);
         }

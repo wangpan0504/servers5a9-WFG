@@ -745,10 +745,17 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 直入包只发布已提交的真实实例差量；不发送依赖既有地面对象的NOTI39或伪造拾取ACK。
         var directCurrencySlots = result.DirectPickup.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
             .Where(slot => slot.HasValue).Select(slot => new InventorySlot(InventoryListType.Main, slot!.Value));
-        foreach (var changed in result.QuestDropSlots.Concat(result.DirectPickup.ChangedSlots).Concat(directCurrencySlots)
+        foreach (var changed in result.QuestDropSlots.Concat(result.DirectPickup.ChangedSlots)
+            .Concat(result.SpecialClearRewardSlots).Concat(directCurrencySlots)
             .Distinct().GroupBy(slot => slot.List))
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 changed.Key, [.. changed]), "formal_death_items", Guard);
+        if (result.SpecialClearRewardMailOverflow)
+            context.Session.NotifyMailbox(receipt.Character.Id, restoreOnTown: true);
+        if (!result.SpecialClearRewards.IsEmpty)
+            await context.Notify(NotiPacketType.SIMPLE_CLEAR_REWARD_INFO,
+                DungeonPackets.SimpleClearRewardInfo(result.SpecialClearRewards),
+                "formal_special_clear_reward", Guard);
         if (result.DirectPickup.ChangedCurrencies.Any(kind => kind is >= CurrencyKind.Cera and <= CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(receipt.Character.Inventory.AccountWallet),
                 "formal_direct_currency", Guard);

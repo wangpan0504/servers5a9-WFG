@@ -54,6 +54,9 @@ internal sealed record DungeonEntryPlan(
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
+    public bool IsTayberrs { get; init; }
+    public bool IsTayberrsStory { get; init; }
+    public SpecialDungeonClearReward? SpecialClearReward { get; init; }
     public bool IsOrdinaryLuke { get; init; }
     public bool IsOrdinaryPrey { get; init; }
     public PreyNormalAdmission? PreyNormal { get; init; }
@@ -716,6 +719,11 @@ internal sealed record DungeonEntryPlan(
                 ? DungeonRandomizedObjectSelection.Create(planMaze.RandomizedObjectGroups, draw) : null,
             LostLand = lostLandAdmission,
             BasisLevel = definition.BasisLevel,
+            IsTayberrs = definition.IsTayberrs,
+            IsTayberrsStory = definition.IsTayberrsStory,
+            SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
+                ? definition.SpecialClearReward : null,
+            DisableItemDrops = definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&

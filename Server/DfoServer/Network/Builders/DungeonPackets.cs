@@ -557,6 +557,25 @@ internal static class DungeonPackets
         return bytes.ToArray();
     }
 
+    // ARAD 0238E160(NOTI 1610 SIMPLE_CLEAR_REWARD_INFO)：u32 count(<=100)，后接 count × (u32 itemId, u32 itemCount)。
+    public static byte[] SimpleClearRewardInfo(IReadOnlyList<SpecialDungeonClearRewardGrant> rewards)
+    {
+        ArgumentNullException.ThrowIfNull(rewards);
+        if (rewards.Count is <= 0 or > 100)
+            throw new InvalidDataException("特殊地下城通关奖励条目数必须在1..100之间");
+        var body = new byte[4 + rewards.Count * 8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)rewards.Count));
+        for (int index = 0; index < rewards.Count; index++)
+        {
+            var reward = rewards[index];
+            if (reward.ItemId <= 0 || reward.Count <= 0)
+                throw new InvalidDataException("特殊地下城通关奖励物品ID与数量必须为正数");
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4 + index * 8), checked((uint)reward.ItemId));
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8 + index * 8), checked((uint)reward.Count));
+        }
+        return body;
+    }
+
     // 0238EFE8 只消费当前格的骑乘记录；其它格的 [map] 声明不进入本包。
     static IReadOnlyList<DungeonRandomizedObject> RoomRidables(DungeonEntryPlan plan)
     {

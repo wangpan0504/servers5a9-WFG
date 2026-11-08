@@ -11,7 +11,8 @@ internal sealed partial class GameSession
     // 同一owner内先提交SQL，再确认死亡和安装实际角色；此方法不发包、不签发死亡。
     public (DungeonGrowthCommit Commit, DungeonRunResult Death) CommitDungeonGrowth(long expectedSelectionEpoch,
         Character expected, SinglePlayerDungeonRun run, PreparedDungeonDeath prepared,
-        DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null) => owner.Execute(() =>
+        DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null,
+        QuestDropPlan? questDrops = null, PendingSpecialDungeonClearReward? specialClearReward = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -37,24 +38,36 @@ internal sealed partial class GameSession
                 items, (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider);
             var fiendwar = raidCombat is { Battle.Kind: Raids.RaidKind.Fiendwar } raid
                 ? raid.Battle.CaptureFiendwarTitleDeath(raid.Actor, run, prepared) : null;
+            var clock = timeProvider ?? TimeProvider.System;
+            var before = questDrops?.Inventory.After ?? expected.Inventory;
+            if (equipmentGrowth is not null)
+                foreach (var change in equipmentGrowth.Changes)
+                {
+                    if (before.Find(change.Before.Position) != change.Before)
+                        throw new InvalidOperationException("直入包的装备成长前提与任务材料规划冲突");
+                    before = before with { Items = before.Items.Replace(change.Before, change.After) };
+                }
             DungeonDirectPickupPlan? directPickup = null;
             if (loot is not null && items is not null && pieces is not null)
             {
                 // 与仓储既有组合次序相同：任务材料、装备成长、最后才放置本次普通掉落。
-                var before = questDrops?.Inventory.After ?? expected.Inventory;
-                if (equipmentGrowth is not null)
-                    foreach (var change in equipmentGrowth.Changes)
-                    {
-                        if (before.Find(change.Before.Position) != change.Before)
-                            throw new InvalidOperationException("直入包的装备成长前提与任务材料规划冲突");
-                        before = before with { Items = before.Items.Replace(change.Before, change.After) };
-                    }
-                var clock = timeProvider ?? TimeProvider.System;
                 directPickup = DungeonDirectPickupPlan.Create(expected, prepared, loot, before, items, pieces,
                     HelperDirectPickupEnabled, clock.GetUtcNow(), clock, directPickupGoldLimits);
+                if (directPickup is { IsExpired: false, Entries.IsEmpty: false })
+                    before = directPickup.After;
+            }
+            SpecialDungeonClearRewardPlan? specialClearPlan = null;
+            if (specialClearReward is not null)
+            {
+                if (!ReferenceEquals(specialClearReward.Death, prepared))
+                    throw new InvalidOperationException("特殊地下城通关奖励候选不属于当前待提交死亡");
+                var rewardItems = formalDungeon?.RewardItems ?? items
+                    ?? throw new InvalidOperationException("特殊地下城通关奖励缺少物品目录");
+                specialClearPlan = SpecialDungeonClearRewardPlan.Create(expected, prepared,
+                    specialClearReward.Reward, specialClearReward.Grants, before, rewardItems, clock.GetUtcNow());
             }
             committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth,
-                fiendwar, directPickup);
+                fiendwar, directPickup, specialClearPlan);
         }
         if (committed.Character.Id != expected.Id || committed.Character.Revision < expected.Revision)
             throw new InvalidOperationException("副本成长提交结果不属于原角色或revision回退");

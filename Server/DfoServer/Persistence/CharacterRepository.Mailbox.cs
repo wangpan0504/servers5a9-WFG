@@ -528,7 +528,9 @@ internal sealed partial class CharacterRepository
             }
             string key = $"inventory-overflow:{character.Id}:{character.Revision + 1}:{offset / 10}";
             string content = JsonSerializer.Serialize(new { plan.Reason, Items = items });
-            uint id = InsertMail(db, tx, recipient, 0, "奖励发放", "背包空间不足，奖励已通过邮件发放。", 0,
+            string sender = string.IsNullOrWhiteSpace(plan.OverflowMailSender) ? "奖励发放" : plan.OverflowMailSender;
+            string text = string.IsNullOrWhiteSpace(plan.OverflowMailText) ? "背包空间不足，奖励已通过邮件发放。" : plan.OverflowMailText;
+            uint id = InsertMail(db, tx, recipient, 0, sender, text, 0,
                 now, null, key, content);
             var held = ImmutableArray.CreateBuilder<InventoryItem>(items.Length);
             for (int index = 0; index < items.Length; index++)
