@@ -479,7 +479,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             byte[] rejection = altarError is { } code ? DungeonPackets.SelectionRejected(code) :
                 hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
                 ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? DungeonSelectionError.Silent :
-                    why == "hell-party-item-required" ? DungeonSelectionError.RequiredMaterials : DungeonSelectionError.NoAvailableDifficulty)
+                    why == "hell-party-item-required" ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.NoAvailableDifficulty)
                 : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
                 ? DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, memberSlot ?? 0)
                 : entryReason?.StartsWith("entry-item-required:", StringComparison.Ordinal) == true ||
