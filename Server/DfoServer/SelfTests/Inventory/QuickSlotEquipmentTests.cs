@@ -50,10 +50,40 @@ internal static class QuickSlotEquipmentTests
             JsonSerializer.Serialize(character.Inventory) == original,
             "真实整件移动保留UID、能量和打造，只沿既有规则清排序锁，规划不修改源快照");
         var active = character with { Inventory = inserted.Plan!.After };
-        That(!Move(active, 10, 9002, 8, 0).Accepted, "不能通过另一个快捷格同时装入第二个纹章");
+        var secondEquipped = Move(active, 8, 0, 10, 9002);
+        That(secondEquipped.Accepted && secondEquipped.Plan!.After.Find(Slot(3))?.Uid == 101 &&
+            secondEquipped.Plan.After.Find(Slot(8))?.Uid == 102,
+            "快捷栏已有纹章时允许继续拖入第二件快捷栏装备，与客户端025D96E5/02864073一致");
+        var multiRole = active with { Inventory = secondEquipped.Plan!.After with { Items = secondEquipped.Plan.After.Items.Add(limited) } };
+        var clientRightClickSwap = Move(multiRole, 3, 9001, 12, 9005);
+        var quickSlotSwap = Move(multiRole, 8, 9002, 3, 9001);
+        That(clientRightClickSwap.Accepted && clientRightClickSwap.Plan!.After.Find(Slot(3))?.Uid == 106 &&
+            clientRightClickSwap.Plan.After.Find(Slot(12))?.Uid == 101 &&
+            quickSlotSwap.Accepted && quickSlotSwap.Plan!.After.Find(Slot(3))?.Uid == 102 &&
+            quickSlotSwap.Plan.After.Find(Slot(8))?.Uid == 101,
+            "多件并存时按客户端029E6804真实顺序右键替换及快捷栏内互换均合法，AllowsAt正确排除双方原槽位");
         var exchanged = Move(active, 10, 9002, 3, 9001);
         That(exchanged.Accepted && exchanged.Plan!.After.Find(Slot(3))?.Uid == 102 &&
             exchanged.Plan.After.Find(Slot(10))?.Uid == 101, "直接替换已装备纹章是合法原子互换，不丢旧实例");
+        var expiredInQuickSlot = active with
+        {
+            Inventory = active.Inventory with
+            {
+                Items = active.Inventory.Items.Replace(active.Inventory.Find(Slot(3))!,
+                    active.Inventory.Find(Slot(3))! with { Core = first.Core with { ExpireTime = 999 } })
+            }
+        };
+        var expiredReplaced = Move(expiredInQuickSlot, 3, 9001, 10, 9002);
+        var expiredUnequipped = Move(expiredInQuickSlot, 9, 0, 3, 9001);
+        That(expiredReplaced.Accepted && expiredReplaced.Plan!.After.Find(Slot(3))?.Uid == 102 &&
+            expiredReplaced.Plan.After.Find(Slot(10))?.Uid == 101 &&
+            expiredUnequipped.Accepted && expiredUnequipped.Plan!.After.Find(Slot(9))?.Uid == 101 &&
+            !Move(expiredInQuickSlot, 8, 0, 3, 9001).Accepted &&
+            !Move(character with
+            {
+                Inventory = new([first with { Core = first.Core with { ExpireTime = 999 } }, second, ordinary])
+            }, 3, 0, 9, 9001).Accepted,
+            "快捷栏内已过期符咒可卸回背包或被新纹章右键替换，但不可在快捷栏内移位或从背包重新装入");
         That(!Move(character with { Level = 4 }, 9, 9001, 3, 0).Accepted &&
             Move(character with { Level = 4 }, 11, 9003, 3, 0).Accepted,
             "5级门槛只限制快捷栏装备，不收窄普通装备快捷栏移动");

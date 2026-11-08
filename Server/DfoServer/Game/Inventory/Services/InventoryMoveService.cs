@@ -158,7 +158,7 @@ internal static class InventoryMoveService
         }
         else if (destination is not null)
         {
-            if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core) ||
+            if (count != source.Core.Count || !AllowsAt(sourceSlot, destination.Core, destinationSlot) ||
                 sourceSlot.List != destinationSlot.List && !InventoryCargoService.AllowsInsert(destination.Core, sourceSlot.List, catalog.Get(destination.Core.ItemId)))
                 return InventoryResult.Reject(CannotMoveItem);
             planned[sourceSlot] = PrepareForDestination(destination, sourceSlot, source, catalog);
@@ -200,10 +200,10 @@ internal static class InventoryMoveService
             catch (InvalidDataException) { return false; }
         }
 
-        bool AllowsAt(InventorySlot position, ItemCore core)
+        bool AllowsAt(InventorySlot position, ItemCore core, InventorySlot? ignore = null)
         {
-            // 源槽作为 ignore：护石在两槽之间互换时，另一槽的占用者就是本次被移走的物品。
-            if (!Allows(character, position, core, catalog, utcSeconds, contracts, sourceSlot))
+            // 移动源槽作为 ignore：两槽互换时，另一槽的占用者就是本次被移走的物品。
+            if (!Allows(character, position, core, catalog, utcSeconds, contracts, ignore ?? sourceSlot))
                 return false;
             // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
             if (position.List == InventoryListType.Equipment && position.Index != InventoryCreatureSkinService.AuraTargetSlot &&
@@ -310,7 +310,10 @@ internal static class InventoryMoveService
     }
 
     static bool ExpiredMoveBlocked(InventoryItem item, InventorySlot from, InventorySlot to, long utcSeconds) =>
-        item.IsExpired(utcSeconds) && (from.List != InventoryListType.Equipment || to.List == InventoryListType.Equipment);
+        item.IsExpired(utcSeconds) && (!IsEquippedOrQuickSlot(from) || IsEquippedOrQuickSlot(to));
+
+    static bool IsEquippedOrQuickSlot(InventorySlot slot) =>
+        slot.List == InventoryListType.Equipment || QuickSlotEquipmentRules.IsQuickSlot(slot);
 
     static bool IsCreatureSkin(InventorySlot position) => position.List == InventoryListType.Equipment &&
         position.Index == InventoryCreatureSkinService.TargetSlot;

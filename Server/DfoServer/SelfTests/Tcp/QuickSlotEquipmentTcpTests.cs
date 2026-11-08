@@ -54,15 +54,16 @@ internal static class QuickSlotEquipmentTcpTests
             Move(peer, 3, 0, 9, 196386); Ack(peer, 3, 9); peer.Barrier();
             That(Read(3) == first.Core && Uid(3) == first.Uid && Read(9) is null,
                 "真实CMD19装入永久纹章，完整保存零Value、零耐久、UID及打造，无独立启用请求");
+            Move(peer, 8, 0, 10, 400360017); Ack(peer, 8, 10); peer.Barrier();
+            That(Read(3) == first.Core && Read(8) == second.Core && Uid(8) == second.Uid && Read(10) is null,
+                "快捷栏已有纹章时允许继续拖入第二件快捷栏装备，不返错误23");
+            Move(peer, 3, 196386, 11, 400360000); Ack(peer, 3, 11); peer.Barrier();
+            That(Read(3) == third.Core && Uid(3) == third.Uid && Uid(11) == first.Uid && Uid(8) == second.Uid,
+                "多件快捷栏装备并存时按客户端右键顺序直接替换首格成功，品级、耐久不互换，不重建实例");
+            Move(peer, 10, 0, 11, 196386); Ack(peer, 10, 11); peer.Barrier();
+            Move(peer, 8, 400360017, 3, 400360000); Ack(peer, 8, 3); peer.Barrier();
+            Move(peer, 11, 0, 3, 400360017); Ack(peer, 11, 3); peer.Barrier();
             string before = Assets();
-            Move(peer, 10, 400360017, 8, 0); peer.Expect(1, 19, [0, 23, 0, 0, 0]); peer.Barrier();
-            That(Assets() == before, "第二件快捷栏装备完整拒绝，不动两件源或审计");
-            Move(peer, 10, 400360017, 3, 196386); Ack(peer, 10, 3); peer.Barrier();
-            That(Read(3) == second.Core && Uid(3) == second.Uid && Uid(10) == first.Uid,
-                "直接替换经同一CMD19交换，品级、耐久不互换，不重建实例");
-            Move(peer, 3, 400360017, 8, 0); Ack(peer, 3, 8); peer.Barrier();
-            Move(peer, 11, 400360000, 8, 400360017); Ack(peer, 11, 8); peer.Barrier();
-            before = Assets();
             peer.Send(23, [0, 255, 255, 255, 255, 0, 0, 0]);
             peer.Expect(1, 23, Build(w =>
             { w.Write((byte)1); w.Write(created.Inventory.Gold); w.Write((byte)0); w.Write((short)-1); w.Write((ushort)0); }));
