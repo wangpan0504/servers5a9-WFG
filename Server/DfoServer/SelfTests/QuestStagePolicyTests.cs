@@ -21,7 +21,7 @@ internal static class QuestStagePolicyTests
             foreach (var edge in new (int Source,int Next,int Target)[] { (4875,3149,11),(3149,3150,13),(3150,3151,15),(3167,3168,19) })
             {
                 int[] done = edge.Source == 3167
-                    ? opening.Concat(Enumerable.Range(3149,19).Where(id=>id!=3154)).Append(6929).Append(transfers[job]).Distinct().ToArray()
+                    ? opening.Concat(Enumerable.Range(3149,19).Where(id=>id!=3154)).Append(transfers[job]).Distinct().ToArray()
                     : opening.Concat(edge.Source is 3149 or 3150 ? Enumerable.Range(3149,edge.Source-3148) : []).ToArray();
                 byte grow = edge.Source == 3167 && job is not (9 or 10) ? (byte)1 : (byte)0;
                 byte level = checked((byte)(edge.Target-1));
@@ -45,9 +45,9 @@ internal static class QuestStagePolicyTests
                 Learning=CharacterLearningState.Uninitialized with {Experience=growth.GetLevelStartExperience(15)}};
             var end = start with {Revision=2,CompletedQuests=completed,ActiveMainQuests=[]};
             var transfer = QuestStagePolicy.Prepare(start,end,quests.Get(3153),acceptance,quests,graph,growth.CumulativeExperience,new(1,1,[]));
-            That(QuestEligibility.Evaluate(end,quests.Get(6929),quests).Eligible &&
+            That(QuestEligibility.Evaluate(end,quests.Get(6929),quests) is { Eligible: false, Visible: true } &&
                 QuestEligibility.Evaluate(end,quests.Get(transfers[job]),quests).Eligible && transfer.Claim is null && transfer.BonusExperience == 0,
-                $"job{job} 3153后真实6929及本职业选择仍可做，不误补");
+                $"job{job} 3153后6929仅展示UI，本职业真实转职仍可接，不误补");
         }
         Console.WriteLine($"PASS {Count-checks} 真实Catalog四边×16职业及转职工作frontier断言（非实机）");
     }
