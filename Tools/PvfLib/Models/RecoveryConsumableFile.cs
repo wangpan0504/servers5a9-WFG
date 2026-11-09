@@ -40,6 +40,9 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
             if (!(duplicate.Key is "stackable type" && stackable.TypeDeclaration is not null ||
                 ItemUseFields.IsSharedTag(duplicate.Key) ||
+                // 图标标记属于显示元数据，可有多条完整声明，不构成使用字段冲突。
+                duplicate.Key is "icon mark" && duplicate.All(section => section is
+                    { Children.Length: 0, Values: [{ Type: 6 }, { Type: 0, Value: >= 0 }] }) ||
                 duplicate.Key is "impossible contents" && duplicate.All(section => section.IsBlock &&
                     section.Children.IsEmpty && section.Values.All(token => token.Type == 6)) ||
                 CompleteIntegerScalars(duplicate) && AllowsRepeatedScalar(duplicate.Key, duplicate)))

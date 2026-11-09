@@ -9,7 +9,7 @@ internal static class DisguiseUpgradeLuckPolicy
     {
         if (character.Disguise is not { } appearance || !appearance.Active(now) ||
             !consumables.TryGet(appearance.SourceItemId, out var source) || source.Disguise is not { } definition ||
-            definition.Type != appearance.Type || !definition.Allows(appearance.FormId))
+            !definition.Allows(appearance.Type, appearance.FormId))
             return default;
         EnhancementSuccessBonus bonus = default;
         // 本服兼容规则：原%100按十万分母取相对成功权重+0.1%，不声称原版算法。

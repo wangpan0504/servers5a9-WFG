@@ -11,7 +11,8 @@ internal static class RecoveryConsumableTests
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
             "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]",
             "[stat change]", "[/stat change]", "physical attack", "%", "physical attack bonus",
-            "[stackable type]", "[disguise]", "[string data]", "[/string data]", "monster", "[int data]", "[/int data]"];
+            "[stackable type]", "[disguise]", "[string data]", "[/string data]", "monster", "[int data]", "[/int data]",
+            "[icon mark]", "item/IconMark.img"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -25,6 +26,16 @@ internal static class RecoveryConsumableTests
         var disguise = RecoveryConsumableFile.Parse(10312386, "stackable/disguise.stk", [..disguiseHeader,..disguiseTail], Resolve);
         That(disguise.Disguise == new DisguiseDeclaration("monster",63039,60) && disguise.Diagnostics.IsEmpty,
             "变身保留完整形态及秒数，源模板ID与形态ID分离");
+        PvfToken[] marks = [new(3,31),new(6,32),new(0,142),new(3,31),new(6,32),new(0,34)];
+        var marked = RecoveryConsumableFile.Parse(490013485,"stackable/marked-disguise.stk",
+            [..disguiseHeader,..disguiseTail,..marks],Resolve);
+        That(marked.Diagnostics.IsEmpty && marked.Disguise == disguise.Disguise,
+            "多条完整图标标记不误拒绝变身，原形态与时长保持");
+        foreach (PvfToken[] invalidMarks in new PvfToken[][] { marks[..^1], [..marks[..^1],new(6,32)],
+            [..marks[..^1],new(0,-1)] })
+            That(!RecoveryConsumableFile.Parse(490013485,"stackable/marked-disguise.stk",
+                [..disguiseHeader,..disguiseTail,..invalidMarks],Resolve).Diagnostics.IsEmpty,
+                "重复图标标记含截断、错误类型或负索引时仍保留诊断");
         foreach (PvfToken[] tail in new PvfToken[][] {
             [new(3,26),new(6,28),new(3,27)],
             [new(3,26),new(6,28),new(3,27),new(3,29),new(0,63039),new(3,30)],

@@ -122,11 +122,10 @@ internal static class TitleChangeTests
         var catalog = new TitleChangeCatalog(SampleMain, SampleSub);
         That(catalog.TryGetMain(10007724, out var normalThread) && normalThread.SuccessRate == 10_000 &&
             normalThread.FinalTitleItemIds.SetEquals([400330033, 400330034]) &&
-            normalThread.AllowsSealState(1) && !normalThread.AllowsSealState(0) &&
             catalog.TryGetMain(10007725, out var gorgeousThread) && gorgeousThread.SuccessRate == 0 &&
             gorgeousThread.FinalTitleItemIds.Count == 0 &&
-            catalog.TryGetMain(10015205, out var unsealedThread) && unsealedThread.AllowsSealState(0) && !unsealedThread.AllowsSealState(1),
-            "称号变更表解析成功率、毕业列表与10015205未封装特例");
+            catalog.TryGetMain(10015205, out _),
+            "称号变更表解析成功率、毕业列表；普通线材和10015205均不额外限制封装");
         foreach (var (name, main, sub) in new[]
         {
             ("空主表", "", SampleSub),
@@ -194,8 +193,9 @@ internal static class TitleChangeTests
         {
             Inventory = new([originalTitle with { Core = originalTitle.Core with { SealFlag = 0 } }, threadStack], Gold: 50_000)
         };
-        That(service.Apply(unsealedCharacter, new(65, 9), out _, Now).Error == 19,
-            "非10015205变更道具拒绝未封装称号");
+        That(service.Apply(unsealedCharacter, new(65, 9), out _, Now) is { Accepted: true, Plan: { } unsealedPlan } &&
+            unsealedPlan.After.Find(new(InventoryListType.Main, 9))!.Core.SealFlag == 0,
+            "绣线可洗未封装哥特称号，原实例保留未封装标志");
 
         var lockedCharacter = character with
         {
@@ -210,10 +210,10 @@ internal static class TitleChangeTests
         var richCharacter = character with { Inventory = new([unsealedTarget, unsealedTicket], Gold: 5_000) };
         That(service.Apply(poorCharacter, new(67, 9), out _, Now).Error == 4 &&
             service.Apply(richCharacter with { Inventory = new([unsealedTarget with { Core = unsealedTarget.Core with { SealFlag = 1 } }, unsealedTicket], Gold: 5_000) },
-                new(67, 9), out _, Now).Error == 19 &&
+                new(67, 9), out _, Now).Accepted &&
             service.Apply(richCharacter, new(67, 9), out var paidOutcome, Now) is { Accepted: true, Plan.After.Gold: 0 } &&
             paidOutcome == new TitleChangeOutcome(false, 2676151, 10015205),
-            "10015205仅允许未封装称号并校验金币费用，金币不足返回错误码4");
+            "10015205按主表收取金币且不额外限制封装，金币不足返回错误码4");
     }
 
     public static void RunResources(PvfArchive pvf, ItemResources resources)
@@ -231,6 +231,33 @@ internal static class TitleChangeTests
         foreach (int id in new[] { 400330031, 400330032, 400330033, 400330034 })
             That(resources.Items.Get(id) is { Kind: ItemKind.Equipment, EquipmentSlot: 13 },
                 "真实PVF哥特称号模板均为部位13称号装备: " + id);
+        var stackableIds = pvf.ReadTokens("stackable/stackable.lst").Where(token => token.Type == 0)
+            .Select(token => token.Value).ToHashSet();
+        var service = new InventoryTitleChangeService(resources.Items,titles,nextRandom: _ => 0);
+        foreach (int id in new[] { 10005036,10007724,10007725,10014778,10014779,10014780,10014781,10014782,10014783,10015205 })
+        {
+            That(titles.TryGetMain(id,out var main),"当前主表全部十类变更道具均可读取：" + id);
+            if (!stackableIds.Contains(id))
+            {
+                Reject<InvalidDataException>(() => resources.Items.Get(id),"主表悬空身份不伪造物品模板：" + id);
+                continue;
+            }
+            foreach (int targetId in main.ResourceGoldCosts.Keys)
+            foreach (byte seal in new byte[] { 0,1 })
+            {
+                var now = DateTimeOffset.UtcNow;
+                var source = new InventoryItem(8,new(InventoryListType.Main,65),
+                    InventoryRewardGrantService.Create(resources.Items.Get(id),2,now));
+                var target = new InventoryItem(7,new(InventoryListType.Main,9),
+                    InventoryRewardGrantService.Create(resources.Items.Get(targetId),1,now) with { SealFlag=seal });
+                var role = new Character(1,0,"AllTitles",0,new(1,0,1,1),null)
+                    { Level=95,Inventory=new([source,target],Gold:100_000) };
+                var changed = service.Apply(role,new(65,9),out _,now);
+                That(changed.Accepted && changed.Plan!.After.Find(target.Position) is { Uid:7 } updated &&
+                    updated.Core.SealFlag == seal && changed.Plan.After.Find(source.Position)!.Core.Count == 1,
+                    "当前索引中全部线材/目标称号兼容封装与未封装并保留实例：" + id + "/" + targetId + "/" + seal);
+            }
+        }
         foreach (int id in new[] { 490702204, 490009242, 490004179, 490701640 })
         {
             var riding = resources.Items.ActionConsumable(id);
