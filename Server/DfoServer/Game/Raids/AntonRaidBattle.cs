@@ -11,6 +11,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
 {
     // 仅保存六个已证影片事件的最后规则写入代，随候选提交，不由网络快照制造事件。
     public ImmutableDictionary<int, long> AntonMovieEvents { get; init; } = ImmutableDictionary<int, long>.Empty;
+    public long AntonKillAllEvent { get; init; }
     public bool AntonVolcanoBarrierOpen { get; init; }
     public FiendwarFieldState? Fiendwar { get; init; }
     public ImmutableDictionary<int, FiendwarTimer> FiendwarDungeonTimers { get; init; } = ImmutableDictionary<int, FiendwarTimer>.Empty;
@@ -189,7 +190,7 @@ internal sealed partial class AntonRaidBattle
         // 四团资源均将其定义为击杀全员；按名称与编号匹配，不能误删其它同号状态。
         // 统一节奏已由服务端安全退场，不投递102；原规则仅保留真正非零的执行值。
         var symbols = script.Symbols.Where(row => row.Key != "[kill all character]" || row.Value != 102 ||
-            lukePacing is null && view.Symbols[row.Key] != 0)
+            Kind != RaidKind.Anton && lukePacing is null && view.Symbols[row.Key] != 0)
             // 64301的139=2同一ACT行为会直接SET HP 0；统一节奏以原Run安全退场接管，领域仍保留2和王座封锁。
             .Where(row => lukePacing is null || row.Key != "[energy save effect]" || row.Value != 139 || view.Symbols[row.Key] != 2)
             .ToDictionary(row => row.Value, row => view.Symbols[row.Key]);
@@ -451,15 +452,21 @@ internal sealed partial class AntonRaidBattle
             ? state with { AntonMovieEvents = state.AntonMovieEvents.SetItem(script.Symbols[symbol], checked(state.Revision + 1)) }
             : state;
 
+    AntonRaidBattleView StampAntonKillAll(AntonRaidBattleView state, string symbol, int value) =>
+        Kind == RaidKind.Anton && symbol == "[kill all character]" &&
+        script.Symbols.GetValueOrDefault(symbol) == 102 && value != 0
+            ? state with { AntonKillAllEvent = checked(state.Revision + 1) } : state;
+
     // 机制值只能来自服务端已验证的机制；影片相同值仍是新事件，网络 RAID_SET_SYMBOL 不调用本入口。
     public AntonRaidBattleChange? SetMechanism(Guid instance, long revision, string symbol, int value)
     {
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
-                !current.Symbols.TryGetValue(symbol, out int previous) || previous == value && !IsAntonMovieSymbol(symbol)) return null;
+                !current.Symbols.TryGetValue(symbol, out int previous) || previous == value && !IsAntonMovieSymbol(symbol) &&
+                !(Kind == RaidKind.Anton && symbol == "[kill all character]" && value != 0)) return null;
             var before = current;
-            CommitBattleCandidate(before, Evaluate(StampAntonMovie(StampLukeFacilityWrite(before with { Symbols = before.Symbols.SetItem(symbol, value) }, symbol), symbol), null, symbol, null));
+            CommitBattleCandidate(before, Evaluate(StampAntonKillAll(StampAntonMovie(StampLukeFacilityWrite(before with { Symbols = before.Symbols.SetItem(symbol, value) }, symbol), symbol), symbol, value), null, symbol, null));
             return new(before, current);
         }
     }
@@ -588,6 +595,8 @@ internal sealed partial class AntonRaidBattle
                             };
                             state = StampLukeFacilityWrite(state, key);
                             state = StampAntonMovie(state, key);
+                            // 安徒恩102是一次性执行事件；保留资源符号，另记事件代，不能随进图快照重播。
+                            state = StampAntonKillAll(state, key, value);
                             if (state.Symbols[key] != value)
                             { state = state with { Symbols = state.Symbols.SetItem(key, value) }; events.Enqueue((null, key, null, null)); }
                             break;

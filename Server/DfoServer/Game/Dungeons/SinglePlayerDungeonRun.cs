@@ -1261,7 +1261,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
-        if (antonTremorTargets is not null) return IsTerminalRoom() && AntonTremorTargetsCommitted;
+        if (antonTremorTargets is not null) return IsTerminalRoom() && AntonTremorTargetsCommitted &&
+            (HasCommittedPassiveClearCondition || passiveConfirmed);
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

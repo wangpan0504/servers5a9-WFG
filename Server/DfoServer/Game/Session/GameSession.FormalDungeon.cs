@@ -34,6 +34,7 @@ internal sealed partial class GameSession
         public bool CharacterDead { get; set; }
         public NpcFavorAppearance? FavorNpc { get; set; }
         public GriefTowerItemUse? GriefItems { get; init; }
+        public DungeonPotionUse? PotionUses { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
@@ -203,7 +204,7 @@ internal sealed partial class GameSession
         if (ChannelEntry?.Type is 23 or 32 or 45 or 50 && !HasRaidDungeonAdmission)
             return RejectFormal("raid-dungeon-admission-required");
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
-            return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
+            return PrepareRaidDungeon(dungeonId, questId, difficulty, catalog, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
                 shared, partyFirstKey, partyInstance, partyAdmission);
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) &&
@@ -650,6 +651,8 @@ internal sealed partial class GameSession
             helperRotation);
         if (prepared is not null && bossBuff is not null)
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
+        if (prepared is not null && catalog.StackableLimits.Dungeons.TryGetValue(checked((int)dungeonId), out int potionMaximum))
+            prepared = prepared with { Dungeon = prepared.Dungeon with { PotionUses = new(catalog.StackableLimits, potionMaximum) } };
         if (prepared is not null && entry.Maze.IsGriefTower)
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         if (prepared is not null && entry.IsBossRush)
@@ -937,7 +940,9 @@ internal sealed partial class GameSession
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
-            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } &&
+                entry.DungeonId is 212 or 214 && condition.TargetId == 15467 ||
+             entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
                 entry.LukeEnergyObject is { } energy && energy.MatchesEnergy(entry.DungeonId, entry.Maze, entry.BossMap,
                     condition.TargetId, energy.Ordinal) ||
              expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry))))

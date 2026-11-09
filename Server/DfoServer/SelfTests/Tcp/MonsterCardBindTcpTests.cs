@@ -97,10 +97,13 @@ internal static class MonsterCardBindTcpTests
             committedCardCount = Count("CardBindTcp", selected.CardItemId);
             committedRewardCount = Count("CardBindTcp", committedRewardItemId);
             committedSnapshot = Snapshot("CardBindTcp");
-            long expectedCards = committedRewardItemId == selected.CardItemId
-                ? cardBefore - 2 + rewardValue : cardBefore - 2;
+            // 回执Value是奖励槽提交后的总堆叠，不是新增量；抽中原卡时也只新增一张。
+            long expectedCards = cardBefore - 2 + (committedRewardItemId == selected.CardItemId ? 1 : 0);
+            long expectedReward = committedRewardItemId == selected.CardItemId ? expectedCards : 1;
             That(committedBinderCount == binderBefore - 1 && committedCardCount == expectedCards &&
-                committedRewardCount >= rewardValue && committedSnapshot != beforeCommit,
+                committedRewardCount == expectedReward && committedSnapshot != beforeCommit &&
+                fixture.Query("SELECT json_extract(i.item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) JOIN characters c ON c.id=s.character_id WHERE c.name=$p0 AND s.slot_index=$p1 AND s.list_type=0",
+                    "CardBindTcp", (int)U16(ack, 9)) is [[long slotCount]] && slotCount == rewardValue,
                 "同一提交扣1个合成器和两张卡片并持久化一次随机奖励");
         }
 

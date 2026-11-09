@@ -18,6 +18,9 @@ internal static partial class PreyTeamTcpTests
     internal static Task RunAsync(ServerOptions source, string root, TcpTestResources resources) =>
         RunFixtureAsync(source, root, resources, false);
 
+    internal static Task RunPotionLimitAsync(ServerOptions source, string root, TcpTestResources resources) =>
+        RunFixtureAsync(source, root, resources, false, potionLimit: true);
+
     internal static Task RunTeamAsync(ServerOptions source, string root, TcpTestResources resources) =>
         RunFixtureAsync(source, root, resources, true);
 
@@ -53,10 +56,10 @@ internal static partial class PreyTeamTcpTests
 
     static async Task RunFixtureAsync(ServerOptions source, string root, TcpTestResources resources, bool team, bool phases = false,
         bool lobbyOnly = false, bool landingOnly = false, bool landingTeam = false, bool phaseOneOnly = false, bool exitOnly = false,
-        bool rejoinParty = false, bool sideCapacity = false, bool defenceLanding = false)
+        bool rejoinParty = false, bool sideCapacity = false, bool defenceLanding = false, bool potionLimit = false)
     {
         var clock = new LukeRaidClockTests.Clock();
-        string name = defenceLanding ? "prey-team-defence-landing" : sideCapacity ? "prey-team-side-capacity" : rejoinParty ? "prey-team-rejoin-party" : exitOnly ? "prey-team-exit" : landingOnly ? landingTeam ? "prey-team-landing-squads" : "prey-team-landing" : lobbyOnly ? team ? "prey-team-lobby-squads" : "prey-team-lobby" :
+        string name = potionLimit ? "prey-potion-limit" : defenceLanding ? "prey-team-defence-landing" : sideCapacity ? "prey-team-side-capacity" : rejoinParty ? "prey-team-rejoin-party" : exitOnly ? "prey-team-exit" : landingOnly ? landingTeam ? "prey-team-landing-squads" : "prey-team-landing" : lobbyOnly ? team ? "prey-team-lobby-squads" : "prey-team-lobby" :
             phases ? phaseOneOnly ? "prey-team-phase1" : "prey-team-phases" : team ? "prey-team-squads" : "prey-team-flow";
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, name),
             resources: resources, clock: clock);
@@ -90,7 +93,8 @@ internal static partial class PreyTeamTcpTests
                     var items = resources.ItemResources;
                     InventoryService.Commit(repository, owner, character,
                         new InventoryService(items.Items, items.GoldLimits, items.EpicPieces).Grant(character,
-                            [new(cost.ItemId, checked(cost.Count * 2))]));
+                            potionLimit ? [new(cost.ItemId, checked(cost.Count * 2)), new(7740, 20), new(8, 20)] :
+                                [new(cost.ItemId, checked(cost.Count * 2))]));
                 }
                 var peer = Open(fixture, account, gamePort: ChannelTcpTests.Endpoints(fixture)[42], channelNumber: 42);
                 peers.Add(peer);
@@ -305,7 +309,21 @@ internal static partial class PreyTeamTcpTests
                     Board(fixture, peers[2], resources.Towns, 5);
                     AntonTcpProbe.Enter(peers[2], catalog, defences[1], reports[2], clear: true);
                 });
-            else AntonTcpProbe.Enter(leader, catalog, defences[0], reports[0], clear: true);
+            else
+            {
+                bool potionsChecked = false;
+                AntonTcpProbe.Enter(leader, catalog, defences[0], reports[0], clear: true, beforeRoomClear: potionLimit ? _ =>
+                {
+                    if (!potionsChecked)
+                    {
+                        VerifyPotionLimit(fixture, leader, resources, clock, packets[0]);
+                        potionsChecked = true;
+                    }
+                    else That(packets[0].Last(row => row is { Kind: 0, Opcode: 1596 }).Body is [0, 0, 0, 0],
+                        "过房继续同步零剩余额度，不恢复已用完的十次药品资格");
+                } : null);
+                That(!potionLimit || potionsChecked, "限药回归必须实际进入并加载普雷场景");
+            }
             for (int index = 0; index < peers.Count; index++)
             {
                 AntonTcpProbe.Note(reports[index], Read(peers[index], "final shared state"));

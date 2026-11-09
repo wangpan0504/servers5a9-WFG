@@ -34,5 +34,5 @@ internal sealed partial class SinglePlayerDungeonRun
 
     static bool IsDedicatedCompanion(DungeonPlannedMonster actor) => actor is
         { IsFriendly: true, IsBlocking: false, CanReportDeath: false, AiCharacter: { Faction: "[character]" } source } &&
-        SupportCompanionResources.IsSupportedBase(source.Id) && !SupportCompanionResources.IsBlocked(actor.MonsterId);
+        SupportCompanionResources.IsSupportedBase(source.Id);
 }
