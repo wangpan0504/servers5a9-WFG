@@ -662,8 +662,9 @@ internal sealed partial class ItemCatalog
             throw new InvalidDataException("无效 PVF 物品定义: " + id);
         string impossible = text.Block("impossible contents");
         string name = text.Section("name").Trim('`', ' ', '\r', '\n');
+        string normalizedStackableType = stackableType.Replace("`", "").Trim();
         ushort cargoTarget = 0;
-        if (!isEquipment && name.Contains("金库", StringComparison.Ordinal) &&
+        if (!isEquipment && normalizedStackableType == "[etc] 0" && name.Contains("金库", StringComparison.Ordinal) &&
             !name.Contains("帐号", StringComparison.Ordinal) && !name.Contains("账号", StringComparison.Ordinal) &&
             (name.Contains("升级", StringComparison.Ordinal) || path!.Contains("safe_upgradekit", StringComparison.OrdinalIgnoreCase)))
         {
@@ -677,7 +678,7 @@ internal sealed partial class ItemCatalog
         // 积分金库券的最终服务项未声明容量；该具名金库档位为120格，前两层仍走原礼包奖池。
         if (!isEquipment && id == 490705297 && kind == ItemKind.Consumable &&
             path!.Equals("cash/chn_490705297.stk", StringComparison.OrdinalIgnoreCase) &&
-            name == "坚固的金刚石金库扩展券" && stackableType.Replace("`", "").Trim() == "[etc] 0")
+            name == "坚固的金刚石金库扩展券" && normalizedStackableType == "[etc] 0")
             cargoTarget = 120;
         var accountTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } declaration &&
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
@@ -686,7 +687,7 @@ internal sealed partial class ItemCatalog
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
-            name, stackableType.Replace("`", "").Trim())
+            name, normalizedStackableType)
         {
             AntiEvil = isEquipment && (text.Has("anti evil") || text.Has("add anti evil"))
                 ? AntiEvilUpgradeCatalog.ReadEquipmentBase(source => AntiEvilUpgradeCatalog.ReadEquipmentBaseDocument(

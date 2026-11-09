@@ -123,7 +123,7 @@ internal static class InventoryRewardGrantService
         var overflow = new List<InventoryItem>();
         var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        bool acquiredCargo = false;
+        bool acquiredCargo = false, acquiredPersonalCargo = false, noOpPersonalCargo = false;
         int? accountMaterialWeek = null;
         var raidMaterialDefinitions = ImmutableDictionary.CreateBuilder<int, AccountMaterialDefinition>();
         long? acquisitionDeadline = null;
@@ -211,11 +211,19 @@ internal static class InventoryRewardGrantService
                     if (effectCore.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
                     expires = effectCore.ExpireTime;
                 }
+                bool noOpPersonal = template.PersonalCargoUpgradeTarget > 0 && template.PersonalCargoUpgradeTarget <= wallet.CargoCapacity;
+                if (template.PersonalCargoUpgradeTarget > 0 && acquiredPersonalCargo && (noOpPersonal || noOpPersonalCargo))
+                    return InventoryResult.Reject(19);
                 var acquired = InventoryAcquisitionService.Plan(character with { Inventory = wallet }, template, reward.Count, now);
                 if (!acquired.Accepted) return acquired;
                 if (template.AcquisitionContract is null)
                 {
                     acquiredCargo = true;
+                    if (template.PersonalCargoUpgradeTarget > 0)
+                    {
+                        acquiredPersonalCargo = true;
+                        noOpPersonalCargo |= noOpPersonal;
+                    }
                     if (expires > 0 && (acquisitionDeadline is null || expires < acquisitionDeadline)) acquisitionDeadline = expires;
                 }
                 wallet = acquired.Plan!.After;
