@@ -176,12 +176,12 @@ internal static partial class GmWebServer
         {
             if (b.Confirm != true) return Bad("需要二次确认");
             if (b.Companions is null || b.Companions.Length > 2 ||
-                b.Companions.Any(name => name is not ("wangfugui" or "guangbing")))
+                b.Companions.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress")))
                 return Bad("支援兵名单无效");
             string[] names = ["wangfugui", "female-crusader", "enchantress"];
             if (b.Tiers is null || b.Tiers.Count != names.Length ||
                 names.Any(name => !b.Tiers.TryGetValue(name, out var tier) || tier is not ("entry" or "graduate" or "huge")))
-                return Bad("请提交有效档次配置，并保留旧版三个档次字段；当前仅开放奶爸与光兵");
+                return Bad("请同时提交奶爸、奶妈、小魔女的门槛、毕业或超大档次");
             string selection = b.Companions.Length == 0 ? "off" : string.Join(',', b.Companions);
             string command = $"support-profile {selection} {string.Join(' ', names.Select(name => b.Tiers[name]))}";
             return Run(http, data, "support-companions", "-", "-", command, "support-profile");
@@ -399,19 +399,17 @@ internal static partial class GmWebServer
                 // 这里只校验传输标记，分组数量与重复项由同一开发命令执行器原子校验。
                 string[] names = b.Value?.Split(',') ?? [];
                 if (b.Value != "off" && (names.Length is < 1 or > 2 ||
-                    names.Any(name => name is not ("wangfugui" or "guangbing"))))
+                    names.Any(name => name is not ("wangfugui" or "guangbing" or "female-crusader" or "enchantress"))))
                     return Bad("支援兵选择无效");
                 return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
             }
             if (b.Key == "support-companion")
             {
-                if (b.Value is not ("off" or "wangfugui" or "guangbing"))
+                if (b.Value is not ("off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
                     return Bad("支援兵选择无效");
                 return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
             }
             if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
-            if (b.Value == "on" && (b.Key is "summon-female-crusader" or "summon-enchantress"))
-                return Bad("当前仅开放奶爸与光兵");
             if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room" or
                 "summon-wangfugui" or "summon-guangbing" or "summon-female-crusader" or "summon-enchantress")) return Bad("未知调试开关");
             return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
@@ -450,12 +448,12 @@ internal static partial class GmWebServer
                     unavailableCompanions = unavailable.Clone();
                 if (document.RootElement.TryGetProperty("supportCompanions", out var values) && values.ValueKind == JsonValueKind.Array &&
                     values.EnumerateArray().All(value => value.ValueKind == JsonValueKind.String &&
-                        value.GetString() is "wangfugui" or "guangbing"))
+                        value.GetString() is "wangfugui" or "guangbing" or "female-crusader" or "enchantress"))
                 {
                     selections = values.EnumerateArray().Select(value => value.GetString()!).ToArray();
                 }
                 else if (document.RootElement.TryGetProperty("supportCompanion", out var value) && value.ValueKind == JsonValueKind.String &&
-                    value.GetString() is "off" or "wangfugui" or "guangbing")
+                    value.GetString() is "off" or "wangfugui" or "guangbing" or "female-crusader" or "enchantress")
                     selections = value.GetString() == "off" ? [] : [value.GetString()!];
             }
             catch (JsonException) { }
