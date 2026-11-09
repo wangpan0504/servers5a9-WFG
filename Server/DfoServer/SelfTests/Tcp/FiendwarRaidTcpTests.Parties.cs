@@ -309,13 +309,18 @@ internal static partial class FiendwarRaidTcpTests
                     "提前击杀后仍可重新进入，原未完成元素不重抽、不冒充完成");
             }
             uint firstElement = symbols[(first[0].Id, firstElementSymbol)];
-            That(firstElement is >= 5 and <= 8, "单侧抵达真实本体即可获得元素，不等对侧上线");
+            That(firstElement is >= 5 and <= 8 && symbols[(first[0].Id, 94)] == 1111,
+                "单侧抵达真实本体即可获得元素并保持1111四行星生成状态，不等对侧上线");
             first[0].Send(1554, Build(writer => { writer.Write(1u); writer.Write(99u); }));
             That(!Drain(first[0]).Any(row => row is { Kind: 1, Opcode: 1554 }), "未知元素不授予成果或伪造成功");
-            for (int element = 0; element < 3; element++) BossReport(first, 1, symbols[(first[0].Id, firstElementSymbol)]);
-            That(symbols[(first[0].Id, firstElementSymbol)] == 9, "本侧三个不同真实元素完成后独立开原窗口");
+            for (int element = 0; element < 3; element++) BossReport(first, 1, symbols[(first[0].Id, firstElementSymbol)], element % first.Length);
+            That(symbols[(first[0].Id, firstElementSymbol)] == 9 && symbols[(first[0].Id, 94)] == 1111,
+                "本侧三个不同真实元素完成后独立开原窗口且四行星生成状态保持1111");
+            BossReport(first, 0, 20);
+            BossReport(first, 0, 100, first.Length - 1);
+            That(symbols[(first[0].Id, firstWorld == 30 ? 95u : 96u)] == 20, "自然回血或首帧满血百分比报告不回退已产生伤害");
             BossReport(first, 0, 0);
-            if (count == 4) { clock.Advance(15); BossReport(first, 2, 0); }
+            if (count == 4) { clock.Advance(15); BossReport(first, 2, 0, first.Length - 1); }
             else
             {
                 ClearMap(first, blackRoom[0].Single(row => row is { Kind: 0, Opcode: 29 }).Body, true);
@@ -970,13 +975,14 @@ internal static partial class FiendwarRaidTcpTests
                 That(returned.Contains(peer.Id), "保存本侧成果后自动正常返回战场"); Drain(peer);
             }
         }
-        void BossReport(TcpPeer[] team, uint operation, uint value)
+        void BossReport(TcpPeer[] team, uint operation, uint value, int reporterIndex = 0)
         {
-            team[0].Send(1554, Build(writer => { writer.Write(operation); writer.Write(value); }));
-            var frames = Drain(team[0]);
+            var reporter = team[reporterIndex];
+            reporter.Send(1554, Build(writer => { writer.Write(operation); writer.Write(value); }));
+            var frames = Drain(reporter);
             That(frames.Any(row => row is { Kind: 0, Opcode: 1530 }), "Boss报告通过正式实例校验后发布真实机制符号");
             That(!frames.Any(row => row.Opcode == 1554), "Boss报告不伪造同号支援通知或未知成功ACK");
-            foreach (var peer in team.Skip(1)) Drain(peer);
+            foreach (var peer in team.Where(peer => peer != reporter)) Drain(peer);
         }
         void SupportRequest(TcpPeer source, byte[] body, byte? accepted)
         {
