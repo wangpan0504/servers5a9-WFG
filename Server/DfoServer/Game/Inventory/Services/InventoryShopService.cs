@@ -161,15 +161,27 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     {
         if (!shops.Shops.Values.Any(shop => shop.NpcId == npcId) && !shops.IsTradingNpc(npcId))
             return null;
-        int today = ShopPurchaseCount.Today(utcNow ?? DateTimeOffset.UtcNow);
+        int today = ShopPurchaseCount.Today(utcNow ?? Clock.GetUtcNow());
         var stock = shops.Shops.Values.Where(shop => shop.NpcId == npcId || shop.Raid).SelectMany(shop => shop.Items).ToHashSet();
         if (shops.Trading.TryGetValue(npcId, out var trading)) stock.UnionWith(trading.Keys);
-        return character.Inventory.ShopPurchases.Where(row => row.Effective(today) > 0 &&
-            (row.Period == ItemPurchasePeriod.Legacy ? row.NpcId == npcId &&
-                catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily :
-                stock.Contains(row.ItemId) && catalog.Get(row.ItemId).ShopPrice.PeriodicLimit is { } periodic &&
-                periodic.AccountWide == row.AccountWide && periodic.Period == row.Period))
-            .OrderBy(row => row.Period).ThenBy(row => row.ItemId).ToArray();
+        var legacy = character.Inventory.ShopPurchases.Where(row => row.Period == ItemPurchasePeriod.Legacy &&
+            row.NpcId != 0 && (row.NpcId == npcId || stock.Contains(row.ItemId)) && row.Effective(today) > 0 &&
+            catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily)
+            .GroupBy(row => (row.ItemId, row.AccountWide, row.ResetDaily))
+            .Select(group =>
+            {
+                var first = group.FirstOrDefault(row => row.NpcId == npcId) ?? group.First();
+                return first with
+                {
+                    NpcId = npcId,
+                    Day = first.ResetDaily ? today : 0,
+                    Count = checked((int)group.Sum(row => (long)row.Effective(today)))
+                };
+            });
+        var periodic = character.Inventory.ShopPurchases.Where(row => row.Period != ItemPurchasePeriod.Legacy &&
+            row.Effective(today) > 0 && stock.Contains(row.ItemId) &&
+            catalog.Get(row.ItemId).ShopPrice.PeriodicLimit is { } periodic && periodic.AccountWide == row.AccountWide && periodic.Period == row.Period);
+        return legacy.Concat(periodic).OrderBy(row => row.Period).ThenBy(row => row.ItemId).ToArray();
     }
 
     public InventoryResult Sell(Character character, SellItemRequest request)
