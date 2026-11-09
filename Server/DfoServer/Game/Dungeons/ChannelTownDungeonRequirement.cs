@@ -28,6 +28,7 @@ internal static class ChannelTownDungeonRequirement
             return "channel-town-required-item-format";
         if (pieces is null)
             return "channel-town-required-item-unverifiable";
+        required = DaybreakEntryCost.Select(definition.Id, required, inventory, pieces, utcNow)!;
         return InventoryMaterialConsumptionService.Plan(inventory, [new ItemMaterialCost(required.ItemId, required.Count)], pieces, utcNow).Accepted
             ? null
             : "channel-town-required-item:" + required.ItemId;

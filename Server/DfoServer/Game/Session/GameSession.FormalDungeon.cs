@@ -1119,9 +1119,10 @@ internal sealed partial class GameSession
                 consumption = plan;
             }
             if (prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
-                installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
+                installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530 ||
+                cost.Incount is { HasCountNotification: false })
             {
-                // 活动前置、专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
+                // 活动前置、专用入场、远古无限与黎明在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
                 entryItems ??= consumption;
                 int countKey = cost.Incount?.CountKey ?? cost.DungeonId;
@@ -1129,8 +1130,8 @@ internal sealed partial class GameSession
                 if (installing.Entry.LostLand is not null && period != cost.Period) return null;
                 entryIncount = new(countKey, period, cost.Incount,
                     AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
-                // 远古的双材料仍属频道专属城镇代价，回包与日志按频道扣料槽位投影。
-                if (installing.Entry.IsAncientInfinite) channelSlots = consumption?.ChangedSlots ?? [];
+                // 远古双材料与黎明的实际抵料仍按频道扣料槽位投影，保留原包序。
+                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530) channelSlots = consumption?.ChangedSlots ?? [];
             }
             else
             {
