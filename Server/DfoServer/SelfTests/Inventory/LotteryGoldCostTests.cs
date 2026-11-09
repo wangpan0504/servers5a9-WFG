@@ -36,11 +36,20 @@ internal static class LotteryGoldCostTests
             { Available: true, LotteryGoldCost: 0 }, "说明字符串不构成费用声明");
         That(BoosterCatalog.Parse(header + "[price]\n123\n[need material]\n3314 1\n[/need material]\n" + pool) is
             { Available: true, LotteryGoldCost: 0, LotteryUseNeedItem: null }, "商店售价与购买材料不冒充开罐费用");
+        string tarot = Cost("100000").Replace("[upgradable legacy]` 1", "[monster tarot card]` 11");
+        That(BoosterCatalog.Parse(tarot) is { Available: true, Lottery: true, LotteryGoldCost: 100000,
+            AllowsLotteryGold: false, NpcPocketPot: false }, "塔罗牌沿独立抽奖入口收取声明费用，不取得NPC罐或金币产物资格");
+        foreach (string invalid in new[] { "", "-1", "11 12", "2147483648" })
+            That(!BoosterCatalog.Parse(tarot.Replace("card]` 11", "card]` " + invalid)).Available,
+                "塔罗牌子类型缺失、非法或溢出保持拒绝");
+        That(!BoosterCatalog.Parse(tarot.Replace("7542 1 1", "0 1 1")).Available,
+            "塔罗牌子类型末位为零也不允许零号金币奖励");
     }
 
     public static void RunResources(ItemResources items, TownCatalog towns)
     {
         LegacyPaidPotTests.Run(towns, items);
+        RunTarot(items, towns);
         int checks = Count;
         const int potId = 2749786;
         const uint cost = 2000;
@@ -80,6 +89,36 @@ internal static class LotteryGoldCostTests
     }
 
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
+
+    static void RunTarot(ItemResources items, TownCatalog towns)
+    {
+        int checks = Count;
+        var now = DateTimeOffset.UtcNow;
+        var random = new FirstRandom();
+        var service = new InventoryBoosterService(items.Items, items.Boosters, items.GoldLimits, items.EpicPieces, random);
+        foreach (int id in Enumerable.Range(10159697, 22))
+        {
+            var definition = items.Boosters.Get(id);
+            That(definition is { Available: true, Lottery: true, LotteryGoldCost: 100000, AllowsLotteryGold: false } &&
+                definition.Pools is [{ Draws: 1 }] && definition.Pools[0].Rewards.All(row => row.ItemId > 0 && row.Count > 0),
+                "当前候选二十二张卢克塔罗牌保留完整实物奖池及十万金币费用 " + id);
+            var source = new InventoryItem(1, Bag(117), InventoryRewardGrantService.Create(items.Items.Get(id), 2, now));
+            var role = new Character(1, 0, "Tarot", 0, towns.Room, towns.InitialReturn)
+                { Level = 95, Inventory = new([source], Gold: 99999) };
+            int calls = random.Calls;
+            var denied = service.OpenLottery(role, new(0, 117), out var deniedReceipt, now);
+            That(!denied.Accepted && deniedReceipt is null && random.Calls == calls && role.Inventory.Gold == 99999,
+                "塔罗牌金币不足在抽样前拒绝，不扣源或金币 " + id);
+            var funded = role with { Inventory = role.Inventory with { Gold = 100123 } };
+            var result = service.OpenLottery(funded, new(0, 117), out var receipt, now);
+            var expected = definition.Pools[0].Rewards[0];
+            That(result.Accepted && receipt?.ItemId == expected.ItemId && receipt.Count == expected.Count &&
+                result.Plan!.After.Gold == 123 && result.Plan.After.Find(source.Position)!.Core.Count == 1 &&
+                funded.Inventory.Gold == 100123 && funded.Inventory.Find(source.Position)!.Core.Count == 2,
+                "塔罗牌按原奖池一次抽取，金币、源和完整奖励共同规划且原快照不变 " + id);
+        }
+        Console.WriteLine($"PASS {Count - checks} 塔罗牌全系列资源、实际费用与单次抽取断言");
+    }
     sealed class FirstRandom : Random
     {
         public int Calls { get; private set; }
