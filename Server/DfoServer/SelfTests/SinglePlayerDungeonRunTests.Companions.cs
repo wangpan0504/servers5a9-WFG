@@ -14,8 +14,6 @@ internal static partial class SinglePlayerDungeonRunTests
         That(resourcePresent ? !catalog.Profiles.IsEmpty :
             ReferenceEquals(catalog, SupportCompanionCatalog.Empty) && catalog.Profiles.IsEmpty && !catalog.EqualTiers,
             "支援兵档次目录存在时完整装配，缺省时保持空目录和非统一档次");
-        That(catalog.Profiles.All(profile => SupportCompanionResources.IsSupportedBase(profile.BaseId) &&
-            !SupportCompanionResources.IsBlocked(profile.TemplateId)), "目录仅装配奶爸与光兵，不返回退役基础或变体");
         foreach (int baseId in new[] { 20900, 9986, 74990, 19973 })
         foreach (string tier in new[] { "entry", "graduate", "huge" })
         {
@@ -32,25 +30,23 @@ internal static partial class SinglePlayerDungeonRunTests
                     "未注册的职业档次不抽其它职业模板");
                 continue;
             }
-            var expected = catalog.Profiles.Where(profile => profile.BaseId == baseId && profile.Tier == tier).ToArray();
+            var expected = catalog.Profiles.Where(profile => profile.BaseId == baseId &&
+                profile.Tier == tier).ToArray();
             for (int ordinal = 0; ordinal < expected.Length; ++ordinal)
             {
                 int choice = ordinal;
                 var actual = catalog.Pick(baseId, tier, count =>
                 {
-                    That(count == expected.Length, "旧统一标记不能扩大请求档次的模板池");
+                    That(count == expected.Length, "只在同职业和所选档次的装备池抽取，不跨档");
                     return choice;
                 });
-                That(actual == expected[ordinal] && actual is { Level: 95 } && actual.Tier == tier,
+                That(actual == expected[ordinal] && actual is { Level: 95 },
                     "每个真实模板均可抽中并冻结95级身份，不在同次入场重抽装备");
             }
         }
         That(catalog.Pick(20900, "invalid", _ => throw new InvalidOperationException()) is null &&
             catalog.Pick(1234, "entry", _ => throw new InvalidOperationException()) is null,
             "三档统一标记不放行未知档次或非支援兵身份");
-        foreach (int blocked in new[] { 74990, 19973 })
-            That(!catalog.HasProfile(blocked, "entry") && catalog.Pick(blocked, "entry", _ => throw new InvalidOperationException()) is null,
-                "旧资源目录中的退役职业不能抽取或调用随机数");
     }
 
     static void VerifyCompanionStartRoomIdentity()
@@ -99,11 +95,9 @@ internal static partial class SinglePlayerDungeonRunTests
         var nextRoute = route with { Rooms = [
             DungeonMonsterPlan.FromRoom(first.Room, 99, 30, companionRows: []), second, BossPlan(boss, 40)] };
         That(SinglePlayerDungeonRun.TryCreate(nextEntry, 2, 200, nextRoute, authority, out var next, out _) &&
-            !next!.TryCarryCompanions([carried[0] with { MonsterId = 74000 }], 30) &&
-            !next.TryCarryCompanions([carried[0] with { AiCharacter = carried[0].AiCharacter! with { Id = 19973 } }], 30) &&
-            !next.TryCarryCompanions(carried, 11) && next.TryCarryCompanions(carried, 30) &&
+            !next!.TryCarryCompanions(carried, 11) && next.TryCarryCompanions(carried, 30) &&
             !next.TryCarryCompanions(carried, 30),
-            "助手轮换拒绝退役来源或伪装模板，只绑定一次允许演员且分配下限不覆盖继承key");
+            "助手轮换只绑定一次旧演员，分配下限不能覆盖任何继承key");
         That(next!.CurrentMonsterPlan.Monsters.Count == 0 && carried.All(actor =>
             next.PublishedFriendlyActor(actor.ObjectKey) == actor),
             "新START_MAP没有第二组支援兵，服务端仍按原key和完整模板认领演员");

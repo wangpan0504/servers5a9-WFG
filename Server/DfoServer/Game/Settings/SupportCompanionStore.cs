@@ -25,10 +25,7 @@ internal sealed class SupportCompanionStore(string directory)
         var value = JsonSerializer.Deserialize<SupportCompanionConfiguration>(File.ReadAllText(path))
             ?? throw new InvalidDataException("支援兵配置不能为空");
         GameDebugSettings.ValidateLegacySupportConfiguration(value);
-        var supported = value with { SelectionMask = value.SelectionMask & 3 };
-        // 先完成原子替换才返回配置；失败不发布已归一的内存状态，也不反复清空允许项。
-        if (supported != value) Write(supported);
-        return supported;
+        return value;
     }
 
     public void Write(SupportCompanionConfiguration value)
