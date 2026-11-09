@@ -75,7 +75,7 @@ internal sealed partial class GameSession
         bool cinematic = NonCombatCinematicTerminal(dungeon) is { } movie &&
             dungeon.Run.ClearFact.ConfirmedDeathEvents.Count > 0 && (PartyDungeon?.HasCompletedCinematic((uint)movie.Id,snapshot.CurrentMap) == true ||
                 Selected!.ActiveMainQuests.Any(active => active.QuestId == movie.Id && active.ConditionState == 0 && QuestHuntProgress.Bound(active,dungeon.Entry)));
-        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || cinematic
+        if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || dungeon.Run.HasCommittedAntonTremorClear || cinematic
             ? (FormalReceipt(), (ushort?)null) : ((FormalDungeonReceipt, ushort?)?)null;
         return (FormalReceipt(), boss.ObjectKey);
     });

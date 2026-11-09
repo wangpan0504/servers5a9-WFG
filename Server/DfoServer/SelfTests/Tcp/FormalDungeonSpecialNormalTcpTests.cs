@@ -22,7 +22,14 @@ internal static partial class FormalDungeonTcpTests
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
         MooncreekDungeonTcpTests.Verify(fixture,resources);
-        VerifyBossRushEntry(fixture,resources);
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"support-companions wangfugui,guangbing",out _),
+            "灵魂之冢回归先开启两类支援兵，避免默认关闭掩盖遗漏");
+        try { VerifyBossRushEntry(fixture,resources); }
+        finally
+        {
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"support-companions off",out _),
+                "灵魂之冢回归结束恢复支援兵关闭");
+        }
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
@@ -517,7 +524,9 @@ internal static partial class FormalDungeonTcpTests
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
         peer.Send(16,request);
         peer.Expect(0,28);
-        peer.Expect(0,29);
+        var startMap = peer.Expect(0,29).Body;
+        That(startMap.Length == 23 && startMap[18] == 0,
+            "灵魂之冢即使开启王富贵和光兵，起点真实29仍无额外AI演员");
         byte[] info = peer.Expect(0,1488).Body;
         byte[] data = peer.Expect(0,1487).Body;
         byte[] timeout = peer.Expect(0,1486).Body;

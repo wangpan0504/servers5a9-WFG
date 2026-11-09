@@ -119,11 +119,8 @@ internal static class StadiumQuestEntryTests
 
     static void CheckActors(DungeonRoomDefinition room,DungeonMonsterPlan plan)
     {
-        That(room.AiCharacters is [{Id:5409,Faction:"[character]",RankKind:"[normal]",Level:70,
-                Path:"aicharacter/fighter/28/28.aic"} native] &&
-            native.RawValues.SequenceEqual(room.Map.Id == 655510 ? [5409,645,444,0,0,0] : [5409,983,242,0,0,0]) &&
-            !DungeonCompanion.IsCompanionRow(room,0),
-            "五房独立资源预期：原序0的5409为Lv70原生友方AI，不能误过滤为伴侣");
+        That(room.AiCharacters.Count == 0,
+            "累计候选五房的ai character声明均为空，不从旧资源补造5409演员");
         var monsters = plan.Monsters.Where(row => row.AiCharacter is null).ToArray();
         var expectedAi = room.AiCharacters.Select((actor,ordinal) => (actor,ordinal))
             .Where(row => !DungeonCompanion.IsCompanionRow(room,row.ordinal)).ToArray();
@@ -159,8 +156,8 @@ internal static class StadiumQuestEntryTests
             "真敌与显示控制演员完整保留，显示品级仍3且不冒充dummy或战斗Boss");
         That(plan.Monsters[1].Source!.IsDisplayHuntDummy,"显示标记由原资源精确派生");
         var packet = DungeonPackets.StartMap(entry,plan,0x12345678);
-        That(actors.Length == 1 && packet[18] == 3 && packet.Length == 89,
-            "末房NOTI29固定保留两个原怪及一个原生5409，三条完整22B记录");
+        That(actors.Length == 0 && packet[18] == 2 && packet.Length == 67,
+            "累计候选末房NOTI29保留两个原怪、两条完整22B记录及尾字段");
         for (int index = 0; index < 2; index++)
         {
             var row = packet.AsSpan(19+22*index,22);

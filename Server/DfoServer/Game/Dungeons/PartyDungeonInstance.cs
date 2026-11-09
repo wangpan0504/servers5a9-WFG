@@ -264,7 +264,11 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             return rejoining ? AntonRejoinLoadedNotice(m, current, scene) : new PartyDungeonNotice(PartyDungeonNoticeKind.Loaded, m, current, scene);
         }).ToArray();
         loaded.Clear();
-        return GameSession.ObserveRaidPartyRun(current, Id, notices, observeMap: true);
+        // 震颤等终点在全员完成加载后才生成ClearFact，不能只在死亡请求路径登记团本贡献。
+        var completed = notices.ToList();
+        if (notices.Any(notice => notice.Scene is { Entry.RaidEntry: not null, Snapshot.Phase: SinglePlayerDungeonPhase.Settlement }))
+            AppendBattleNotices(current, completed);
+        return GameSession.ObserveRaidPartyRun(current, Id, completed.ToArray(), observeMap: true);
     }
 
     public PartyDungeonNotice[] Move(GameSession reporter, byte x, byte y, byte kind) => Execute(current =>

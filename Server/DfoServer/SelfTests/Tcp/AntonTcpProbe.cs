@@ -357,7 +357,7 @@ internal static partial class AntonTcpProbe
             peer.Send(45, move);
             var moved = Flush(peer, $"45 -> {path[i].X},{path[i].Y}");
             Note(report, moved);
-            map = moved.LastOrDefault(p => p is { Kind: 0, Opcode: 29 } && p.Body.Length >= 19)
+            map = moved.LastOrDefault(IsRoomMap)
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             peer.Send(37, new byte[8]);
             Note(report, Flush(peer, "37 下一房"));
@@ -390,9 +390,11 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
         if (formalSettles)
             RequireRunSettlement(report, confirmationsBefore, permissionsBefore, dungeon);
-        peer.Send(117, check);
+        // 震颤没有需要上报死亡的终点Boss；37已触发正式结算，不能补造key0的117。
+        bool tremor = dungeon is 212 or 214;
+        if (!tremor) peer.Send(117, check);
         int seen = report.Opcode586;
-        var cleared = Flush(peer, "117 确认 " + dungeon);
+        var cleared = Flush(peer, (tremor ? "终点加载结算 " : "117 确认 ") + dungeon);
         Note(report, cleared);
         // 正式Run已随39发送许可，117仅协调重放；未启用正式Run的诊断保持原确认合同。
         if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 } or { Kind: 1, Opcode: 72 }) ||
@@ -417,9 +419,14 @@ internal static partial class AntonTcpProbe
     {
         bossKey = 0;
         bossLevel = 0;
+        // 已清起点回访使用16B缓存29，不含演员表；不能要求重生或再次上报死亡。
+        if (map.Length == 16 && map[13] == 0) return;
         int count = map[18];
         if (map.Length < 19 + count * 22)
             throw new InvalidOperationException("29 演员表被截断");
+        // 震颤终点由已提交双支路击杀和37加载完成；假客户端不能击杀场景外69308伪造通过。
+        if (bossRoom && TcpPeer.U32(map, 14) is 32222 or 32242 && map[0] == 1 && map[1] == 0)
+            return;
         // 部分圣地将Boss排在演员表首行；先确认其他敌人，再击杀会立即结束Run的Boss。
         foreach (int i in Enumerable.Range(0, count).OrderBy(index => map[19 + index * 22 + 13] == 3))
         {
@@ -470,6 +477,14 @@ internal static partial class AntonTcpProbe
         if (avoidBossRooms)
             topology = topology with { Links = topology.Links!.Where(link =>
                 !maze.Bosses.Contains(link.First) && !maze.Bosses.Contains(link.Second)).ToArray() };
+        if (!avoidBossRooms && catalog.Type == 0 && dungeon is 212 or 214 &&
+            x == 1 && y == 1 && bossX == 1 && bossY == 0)
+        {
+            var route = new List<DungeonPoint> { new(x, y) };
+            foreach (var target in new DungeonPoint[] { new(0, 1), new(2, 1), new(bossX, bossY) })
+                route.AddRange(QuestStoryRouteTests.Path(topology, route[^1], target).Skip(1));
+            return route.ToArray();
+        }
         return QuestStoryRouteTests.Path(topology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
     }
 
@@ -611,7 +626,7 @@ internal static partial class AntonTcpProbe
             var memberMoved = Barrier(member, $"45 队员 -> {path[i].X},{path[i].Y}");
             Note(leaderReport, moved);
             Note(memberReport, memberMoved);
-            map = moved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19)
+            map = moved.LastOrDefault(IsRoomMap)
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
             SameSquadMap(map, memberMoved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 }));
             leader.Send(37, new byte[8]);
@@ -633,7 +648,7 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
         RequireRunSettlement(leaderReport, leaderConfirmations, leaderPermissions, dungeon);
         RequireRunSettlement(memberReport, memberConfirmations, memberPermissions, dungeon);
-        foreach (var sender in new[] { leader, member, leader })
+        foreach (var sender in dungeon is 212 or 214 ? Array.Empty<TcpPeer>() : new[] { leader, member, leader })
         {
             BinaryPrimitives.WriteUInt16LittleEndian(check, sender.Id);
             sender.Send(117, check);
@@ -663,15 +678,20 @@ internal static partial class AntonTcpProbe
 
     static void SameSquadMap(WirePacket leader, WirePacket? member)
     {
+        if (leader.Body.Length == 16 && leader.Body[13] == 0 && member is not null && member.Body.SequenceEqual(leader.Body)) return;
         if (member is null || member.Body.Length < 19 || leader.Body[0] != member.Body[0] || leader.Body[1] != member.Body[1] ||
             TcpPeer.U32(leader.Body, 14) != TcpPeer.U32(member.Body, 14))
             throw new InvalidOperationException("29 分队地图键或房间坐标不同步");
     }
 
+    static bool IsRoomMap(WirePacket packet) => packet is { Kind: 0, Opcode: 29 } &&
+        (packet.Body.Length >= 19 || packet.Body.Length == 16 && packet.Body[13] == 0);
+
     static void RequireRunSettlement(AntonProbeReport report, int confirmationsBefore, int permissionsBefore, int dungeon)
     {
-        if (report.Opcode115 != confirmationsBefore + 1 || report.Opcode31 != permissionsBefore + 1)
-            throw new InvalidOperationException(dungeon + " 的正式Run未向该参与成员恰好发送一次115和31");
+        int confirmations = dungeon is 212 or 214 ? 0 : 1;
+        if (report.Opcode115 != confirmationsBefore + confirmations || report.Opcode31 != permissionsBefore + 1)
+            throw new InvalidOperationException($"{dungeon} 的正式Run应向该成员发送{confirmations}次115和一次31");
     }
 
     static void RequireSettlementOrder(List<WirePacket> packets, ushort key)
@@ -722,6 +742,7 @@ internal static partial class AntonTcpProbe
                     throw new InvalidOperationException("601必须为成功10B、合法阶段/rank及已封存任务标志");
                 report.Opcode601++;
             }
+            if (IsRoomMap(packet)) report.MapVisits++;
             if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)
                 report.Maps.Add(packet.Body.ToArray());
         }
@@ -910,6 +931,7 @@ internal static partial class AntonTcpProbe
         public List<byte[]> Symbols { get; } = [];
         public List<byte[]> Timers { get; } = [];
         public List<byte[]> Maps { get; } = [];
+        public int MapVisits { get; set; }
         public string Summary() =>
             $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 600={Opcode600} 601={Opcode601} rejectedCards={RejectedCards} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";
     }

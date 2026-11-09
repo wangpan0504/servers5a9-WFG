@@ -163,8 +163,8 @@ internal static class GmWebAcceptTcpTests
         }
         // Paging / rarity / stat filters / index state against the real PVF (known counts + known items).
         await Read("items-page", "/api/items/search?q=18400&page=1&pageSize=3", d => d.GetProperty("total").GetInt32() == 1 && d.GetProperty("page").GetInt32() == 1 && d.GetProperty("pageSize").GetInt32() == 3 && d.GetProperty("items")[0].GetProperty("id").GetInt32() == 18400 && d.GetProperty("items")[0].GetProperty("rarity").GetInt32() == 0);
-        // 匹配原始列表的稀有度4仍为7174项；未登记的魔兽物品不计入搜索索引。
-        await Read("items-page", "/api/items/search?rarity=4&pageSize=5", d => d.GetProperty("total").GetInt32() == 7174 && d.GetProperty("items").GetArrayLength() == 5 && d.GetProperty("items").EnumerateArray().All(i => i.GetProperty("rarity").GetInt32() == 4));
+        // 最终累计候选登记的稀有度4共有7197项，分页与每项稀有度仍独立核对。
+        await Read("items-page", "/api/items/search?rarity=4&pageSize=5", d => d.GetProperty("total").GetInt32() == 7197 && d.GetProperty("items").GetArrayLength() == 5 && d.GetProperty("items").EnumerateArray().All(i => i.GetProperty("rarity").GetInt32() == 4));
         await Read("items-page", "/api/items/search?rarity=4&page=2&pageSize=5", d => d.GetProperty("page").GetInt32() == 2 && d.GetProperty("offset").GetInt32() == 5);
         await Read("items-rarity", "/api/items/filter?rarity=5&stat=separate_attack&pageSize=5", d => d.GetProperty("total").GetInt32() == 3828 && d.GetProperty("items").EnumerateArray().All(i => i.GetProperty("rarity").GetInt32() == 5));
         await Read("items-stat", "/api/items/stat-keys", d => d.EnumerateArray().Any(k => k.GetProperty("key").GetString() == "separate_attack" && k.GetProperty("count").GetInt32() > 0) && d.EnumerateArray().Any(k => k.GetProperty("count").GetInt32() == 0));

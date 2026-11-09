@@ -910,6 +910,8 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_beast_dungeon_entries VALUES({{id}},'planning',20261020,310,1);
                 INSERT INTO character_beast_dungeon_reservations VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',1,1,20261020,310,0,0);
                 INSERT INTO character_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',0,'abcdef1234567890abcdef1234567891',400363,1,10303240);
+                INSERT INTO character_revised_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567892',1,1,5335,2,1,20261101,20261029,1,0,1,'{}');
+                INSERT INTO character_revised_beast_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567892',1,1,5335,2,1,20261101,20261029,1,1,2,'{}');
                 INSERT INTO character_guild_hongbao_purchases(character_id,day_start_unix,cera) VALUES({{id}},2000000000,1);
                 INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix)
                   SELECT 65000,'删除福利夹具','deletion-benefits',id,1 FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;

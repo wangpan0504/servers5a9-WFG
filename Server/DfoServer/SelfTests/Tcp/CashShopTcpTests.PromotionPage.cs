@@ -183,6 +183,8 @@ internal static partial class CashShopTcpTests
         IReadOnlyDictionary<ushort, IReadOnlyList<uint>>? eventValues = null)
     {
         activeEvents ??= [2395];
+        // 333已有固定原生槽位；调用方的完整开放清单也可能含它，不得再作为追加项重复计数。
+        extraEvents = extraEvents.Where(id => id != 333).ToArray();
         using var input = new MemoryStream(payload);
         using var reader = new BinaryReader(input, Encoding.UTF8);
         string Text()

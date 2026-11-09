@@ -353,6 +353,7 @@ internal sealed partial class SinglePlayerDungeonRun
         dummyRooms = entry.Maze.DummyStages.Select(map => baseRooms.FirstOrDefault(room => room.Plan.Room.Map == map) ??
             new Room(route.Rooms.Single(plan => plan.Room.Map == map))).ToArray();
         allRooms = baseRooms.Concat(dummyRooms).Concat(layeredRooms.Values).Concat(conditionalRooms.Values).Distinct().ToArray();
+        antonTremorTargets = ResolveAntonTremorTargets();
         passiveClearTarget = route.PassiveClearTarget;
         if (ResolvePassiveLayerTerminal() is { } passiveTerminal)
             this.entry = entry with { PassiveClearTerminalMap = passiveTerminal.Plan.Room.Map };
@@ -706,6 +707,7 @@ internal sealed partial class SinglePlayerDungeonRun
         Phase == SinglePlayerDungeonPhase.Dungeon && CanAdvance() &&
         current.Elevator is not { Completed: false } &&
         !HasPendingLayer() && rooms.ContainsKey(target) &&
+        (antonTremorTargets is null || target != entry.BossMap.Position || AntonTremorTargetsCommitted) &&
         (CanEvildomWarChallengeWarp(target) ||
             (entry.DungeonId != EvildomWarChallengeEntryPolicy.DungeonId ||
                 current.Plan.Room.Map.Position.Y == 0 && target.Y == 0) &&
@@ -1259,6 +1261,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
+        if (antonTremorTargets is not null) return IsTerminalRoom() && AntonTremorTargetsCommitted;
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

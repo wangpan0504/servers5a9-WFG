@@ -143,7 +143,7 @@ internal static class RevisedBeastRewardTests
             That(Scalar("PRAGMA user_version")==SqliteMigrations.CurrentVersion && Scalar("SELECT count(*) FROM character_revised_beast_rewards")==0 &&
                 saved==JsonSerializer.Serialize(repository.LoadCharacter(owner,role.Slot)),"旧库升级新增空回执，保留原角色资产");
         }
-        finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
+        finally { if(Directory.Exists(root)) TestFiles.DeleteDirectory(root,true); }
         Console.WriteLine($"PASS {Count-before} 改版魔兽终局奖励原子性断言");
         void Execute(string sql){using var db=Open();using var cmd=db.CreateCommand();cmd.CommandText=sql;cmd.ExecuteNonQuery();}
         long Scalar(string sql){using var db=Open();using var cmd=db.CreateCommand();cmd.CommandText=sql;return Convert.ToInt64(cmd.ExecuteScalar());}
