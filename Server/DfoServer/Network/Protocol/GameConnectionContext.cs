@@ -61,6 +61,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal (Guid Instance, int Value)? AntonMeteoDisplay { get; set; }
     // 当前连接、当前实例最多6个影片符号；发送FIFO确认后更新。
     internal Guid AntonMovieDisplayInstance { get; set; }
+    internal (Guid Instance, long Event) AntonKillAllDisplay { get; set; }
     internal Dictionary<int, long> AntonMovieDisplays { get; } = [];
     internal System.Collections.Immutable.ImmutableDictionary<ushort, int> FiendwarUsers { get; set; } = System.Collections.Immutable.ImmutableDictionary<ushort, int>.Empty;
     internal System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit> FiendwarEnemies { get; set; } = System.Collections.Immutable.ImmutableDictionary<int, DfoServer.Game.Raids.FiendwarUnit>.Empty;

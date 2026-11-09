@@ -8,7 +8,7 @@ internal sealed partial class SinglePlayerDungeonRun
     readonly (Room Room, ushort Key)[]? antonTremorTargets;
 
     // 震颤A/B的真正战斗目标在左右支路；上方69308位于场景外，不能要求玩家再击杀该装置。
-    // 只承认本次正式Run中已提交的两次精英死亡，不把清退、回访或客户端自报通关当成击杀。
+    // 双精英死亡只开放终点；炮击销毁15467后沿原生物件39提交清图，不由加载提前许可菜单。
     (Room Room, ushort Key)[]? ResolveAntonTremorTargets()
     {
         if (entry.RaidEntry is not { Kind: RaidKind.Anton, Phase: 0 } || entry.DungeonId is not (212 or 214) ||
@@ -37,5 +37,7 @@ internal sealed partial class SinglePlayerDungeonRun
         targets.All(target => target.Room.Loaded && target.Room.Dead.Contains(target.Key));
 
     internal bool HasCommittedAntonTremorClear => ClearFact is not null &&
-        Phase == SinglePlayerDungeonPhase.Settlement && IsTerminalRoom() && AntonTremorTargetsCommitted;
+        Phase == SinglePlayerDungeonPhase.Settlement && IsTerminalRoom() && AntonTremorTargetsCommitted && HasCommittedPassiveClearCondition;
+
+    internal bool IsAntonTremor => antonTremorTargets is not null;
 }
