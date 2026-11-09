@@ -21,6 +21,24 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.SAVE_RECENT_EMOTICON_LIST, SaveRecentEmoticonsAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_QUEST_NOTIFY, SaveQuestNotifyAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.UPDATE_NPC_BOOKMARK_INFO, BookmarkAsync, nameof(SettingsHandler));
+    }
+
+    async Task<CommandResult> BookmarkAsync(GameConnectionContext context, Packet packet)
+    {
+        var request = SettingsRequests.NpcBookmark(packet.Body);
+        var receipt = context.Session.UpdateNpcBookmark(settings, request.Add, request.NpcId);
+        log.Write("npc_bookmark_saved", new { Connection = context.Id, request.Add, request.NpcId, Accepted = receipt is not null });
+        if (receipt is null)
+        {
+            await context.Reply(CmdPacketType.UPDATE_NPC_BOOKMARK_INFO, [0, 19, 0], "npc_bookmark_rejected");
+            return CommandResult.Handled;
+        }
+        bool Guard() => context.Session.CanPublishClientSettings(receipt);
+        // 先安装列表，再由成功ACK刷新已打开的辞典窗口。
+        await context.Notify(NotiPacketType.NPC_BOOKMARK_INFO, SettingsPackets.NpcBookmarks(receipt.Settings.NpcBookmarks), "npc_bookmarks_saved", Guard);
+        await context.Reply(CmdPacketType.UPDATE_NPC_BOOKMARK_INFO, [1], "npc_bookmark_success", Guard);
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> SaveQuestNotifyAsync(GameConnectionContext context, Packet packet)

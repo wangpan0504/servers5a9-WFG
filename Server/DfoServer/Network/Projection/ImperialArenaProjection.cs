@@ -42,8 +42,10 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
 
     public async Task DeathAsync(GameConnectionContext context, ImperialArenaDeathCommit commit, Func<bool> guard)
     {
-        await context.Notify(NotiPacketType.TAG_TOURNAMENT_NORMAL_REWARD, ImperialArenaPackets.Reward(commit.Plan.Reward),
-            "imperial_arena_round_reward", guard);
+        // 0177B770收到1402后无论count是否为0都会打开201逐关KO奖励窗；困难模式按累计回合结算、普通模式同日重打无奖励时均不下发。
+        if (commit.Plan.Admission.Mode == ImperialArenaMode.Normal && !commit.Plan.Reward.IsEmpty)
+            await context.Notify(NotiPacketType.TAG_TOURNAMENT_NORMAL_REWARD, ImperialArenaPackets.Reward(commit.Plan.Reward),
+                "imperial_arena_round_reward", guard);
         if (commit.MailId != 0)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "imperial_arena_reward_mail", guard);
         // 逐轮奖励窗不锁存副本通关；仅已提交的最后一轮发31，专用场景不会据此请求普通翻牌。

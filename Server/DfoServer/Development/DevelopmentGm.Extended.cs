@@ -66,6 +66,15 @@ internal static partial class DevelopmentGm
                 return SearchItems(catalog, args, false);
             case DevelopmentAction.ItemFilter:
                 return SearchItems(catalog, args, true);
+            case DevelopmentAction.NpcFavorMax:
+            {
+                // 全量资源解析在账号锁外，提交只处理有界的好感度行。
+                var targets = (catalog.NpcFavor ?? throw new InvalidDataException("NPC好感度目录未装配")).All();
+                var updated = Commit(live, owners, repository, request, true,
+                    character => InventoryNpcFavorMaxService.Plan(character, targets), "NPC好感度无法完整写入，请检查资源及255行上限");
+                return Ok(new { characterId = updated.Id, name = updated.Name, rev = updated.Revision, total = targets.Length,
+                    text = $"已将全部 {targets.Length} 个可培养NPC的好感度设为各自上限；重新进入角色后生效。" });
+            }
             case DevelopmentAction.Wallet:
                 return DescribeWallet(Target(live, owners, repository, request, false, (_, character) => character));
             case DevelopmentAction.ExpertJob:

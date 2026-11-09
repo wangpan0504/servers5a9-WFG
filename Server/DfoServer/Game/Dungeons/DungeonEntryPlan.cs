@@ -747,7 +747,7 @@ internal sealed record DungeonEntryPlan(
             IsTayberrsStory = definition.IsTayberrsStory,
             SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
                 ? definition.SpecialClearReward : null,
-            DisableItemDrops = definition.IsTayberrsStory,
+            DisableItemDrops = definition.DisableItemDrops || definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&

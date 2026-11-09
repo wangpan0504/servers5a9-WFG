@@ -7,7 +7,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     public DungeonIncountTicketResult UseDungeonIncountTicket(InventorySlot slot, DungeonIncountTicketService service,
-        IDungeonIncountTicketStore store, bool blocked = false)
+        IDungeonIncountTicketStore store, bool blocked = false, uint? requestedAction = null)
     {
         var capture = owner.Execute(() => (Guard: UseGuard(), Character: CanUseConsumable() && Phase == SessionPhase.Town ? Selected : null));
         DungeonIncountTicketResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, capture.Guard);
@@ -17,7 +17,7 @@ internal sealed partial class GameSession
         int sourceId = expected.Inventory.Find(slot)?.Core.ItemId ?? 0;
         if (!CanUseStackableItem(expected, sourceId)) return Reject("usable-place");
         DungeonIncountTicketPlan plan;
-        try { plan = service.Prepare(expected, slot); }
+        try { plan = service.Prepare(expected, slot, requestedAction); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or OverflowException)
         { return Reject("invalid-source-or-definition"); }
         return owner.Execute(() =>

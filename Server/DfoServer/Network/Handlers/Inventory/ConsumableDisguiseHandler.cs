@@ -21,7 +21,7 @@ internal sealed class ConsumableDisguiseHandler(TownProjection town, ServerLog l
         var request = ConsumableDisguiseRequests.Read(packet.Body);
         var result = context.Session.ApplyConsumableDisguise(request.Type, request.FormId, request.ItemId,
             clock.GetUtcNow().ToUnixTimeMilliseconds(), context.BlocksTownActions) ??
-            context.Session.ApplyUnlimitedRandomDisguise(request.Type, request.FormId, request.ItemId,
+            context.Session.ApplyUnlimitedDisguise(request.Type, request.FormId, request.ItemId,
                 consumables, context.BlocksTownActions);
         log.Write("consumable_disguise", new { Connection = context.Id, request.ItemId, Accepted = result is not null,
             Character = result?.Character.Id, Reason = result is null ? "no_matching_disguise_authorization" : "activated" });

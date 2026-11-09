@@ -14,7 +14,7 @@ internal static class HarlemAbyssBonusDropTests
         var rules = HarlemAbyssBonusRules.Parse("{}");
         That(rules.InvitationNumerator == 2 && rules.InvitationDenominator == 3 && rules.InvitationMaximumCount == 2 &&
             rules.SoulPermille == 10 && rules.CrystalPermille == 1 && rules.SkyFragmentPermille == 100 && rules.StoneBagPermille == 5 &&
-            rules.SkyFragments.SequenceEqual([2, 3, 4, 4, 5]) && rules.CosmoSkyFragmentMultiplier == 2,
+            rules.SkyFragments.SequenceEqual([4, 6, 8, 8, 10]) && rules.CosmoSkyFragmentMultiplier == 3,
             "默认参数为用户批准的本服概率，不能声称为PVF原值");
         foreach (string invalid in new[] { "null", "{\"InvitationDenominator\":0}", "{\"InvitationNumerator\":4}",
             "{\"InvitationNumerator\":-1}", "{\"InvitationMaximumCount\":0}", "{\"SoulPermille\":1001}",
@@ -64,18 +64,21 @@ internal static class HarlemAbyssBonusDropTests
             for (int roll = 0; roll < 1000; roll++)
             {
                 var drops = isolated.Generate(bound => bound == 1000 ? roll : 0, DateTimeOffset.UnixEpoch);
-                That(drops.Length == (roll < threshold ? trial.MaximumCount : 0) && drops.All(row => row.Item!.Count == 1),
-                    "四项概率各自按千分比边界命中，碎片整份命中后逐个落地");
+                That(drops.Length == (roll < threshold ? 1 : 0) && (drops.IsEmpty || drops[0].Item!.Count == trial.MaximumCount),
+                    "四项概率各自按千分比边界命中，碎片整份命中后按单堆地面物投放");
             }
         }
         for (byte difficulty = 0; difficulty < 5; difficulty++)
         {
             var plan = policy.Extend(empty, star with { Difficulty = difficulty }, wave);
-            That(plan.Generate(_ => 0, DateTimeOffset.UnixEpoch).Count(row => row.Item!.ItemId == HarlemAbyssBonusDropPolicy.SkyFragmentId)
-                == rules.SkyFragments[difficulty], "星空五档苍穹碎片数量完整");
+            var drops = plan.Generate(_ => 0, DateTimeOffset.UnixEpoch)
+                .Where(row => row.Item!.ItemId == HarlemAbyssBonusDropPolicy.SkyFragmentId).ToArray();
+            That(drops is [{ Item.Count: int count }] && count == rules.SkyFragments[difficulty], "星空五档苍穹碎片单堆数量完整");
         }
-        That(ultraPlan.Generate(_ => 0, DateTimeOffset.UnixEpoch).Count(row => row.Item!.ItemId == HarlemAbyssBonusDropPolicy.SkyFragmentId) == 10,
-            "超星空固定难度苍穹碎片命中后掉10个；不把概率或其它奖励数量翻倍");
+        var ultraFragments = ultraPlan.Generate(_ => 0, DateTimeOffset.UnixEpoch)
+            .Where(row => row.Item!.ItemId == HarlemAbyssBonusDropPolicy.SkyFragmentId).ToArray();
+        That(ultraFragments is [{ Item.Count: 30 }],
+            "超星空固定难度苍穹碎片命中后单堆掉30个；不把概率或其它奖励数量翻倍");
         foreach (var disabledRules in new[] { rules with { Enabled = false }, rules with { InvitationNumerator = 0, SoulPermille = 0,
             CrystalPermille = 0, SkyFragmentPermille = 0, StoneBagPermille = 0 } })
             That(ReferenceEquals(new HarlemAbyssBonusDropPolicy(disabledRules, epics, Item).Extend(empty, star, wave), empty),

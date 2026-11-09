@@ -290,10 +290,10 @@ internal static class HarlemHellEpicDropTests
         var material = new HarlemMaterialDropPolicy(new(), [1], id => new(id, ItemKind.Material, 0, 1, 0, 100, 1, 0, 1,
             "[free]", ushort.MaxValue, 0, "合成材料"), local);
         var materials = material.Extend(new("合成无掉落", []), ultraEntry, boss).Generate(_ => 0, DateTimeOffset.UnixEpoch);
-        That(materials.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId) == 30 &&
-            materials.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId) == 10 &&
-            materials.All(row => row.Item!.Count == 1),
-            "超星空固定难度下逐个生成碎片30、天空之愿10，材料翻倍不增加装备骰数");
+        That(materials.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId).ToArray() is { Length: 30 } cosmoFragments &&
+            cosmoFragments.All(row => row.Item!.Count == 1) &&
+            materials.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId).ToArray() is [{ Item.Count: 30 }],
+            "超星空固定难度下逐个生成碎片30、单堆生成天空之愿30，材料翻倍不增加装备骰数");
     }
 
     public static HarlemHellEpicDropPolicy RunResources(PvfArchive pvf, ItemResources items, uint[] harlem)

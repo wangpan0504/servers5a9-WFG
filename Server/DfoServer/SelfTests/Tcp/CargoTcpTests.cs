@@ -311,6 +311,49 @@ internal static class CargoTcpTests
             Cargo(peer.Select(1)[7].Body, 12, 40, 0, 0);
             peer.Barrier();
         }
+        short silverKitSlot, silverTicketSlot, goldSlot;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var items = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            var current = repo.LoadCharacter(owner, 0);
+            var granted = items.Grant(current, [new(490001422, 1), new(490705126, 1), new(490705125, 1)]);
+            That(granted.Accepted, "发放银质升级工具、黄金扩展券与银质扩展券");
+            current = InventoryService.Commit(repo, owner, current, granted);
+            silverKitSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 490001422).Position.Index;
+            goldSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 490705126).Position.Index;
+            silverTicketSlot = current.Inventory.Items.Single(item => item.Core.ItemId == 490705125).Position.Index;
+        }
+        using (var peer = Open(fixture))
+        {
+            var entered = peer.Select(0);
+            Cargo(entered[6].Body, 2, 40, 0, 0);
+            peer.Barrier();
+            byte[] BoosterOpen(short slot) => Build(w => { w.Write(slot); w.Write(1); });
+            byte[] BoosterAck(int itemId, short slot, int rewardId) => Build(w =>
+            {
+                w.Write((byte)1); w.Write((byte)0); w.Write(itemId); w.Write(slot);
+                w.Write(0); w.Write(0); w.Write((ushort)1); w.Write(rewardId); w.Write(1);
+            });
+            peer.Send(160, BoosterOpen(silverKitSlot));
+            peer.Expect(1, 160, BoosterAck(490001422, silverKitSlot, 110));
+            var clearSilverKit = peer.Expect(0, 14).Body;
+            That(clearSilverKit[0] == 0 && U16(clearSilverKit, 3) == silverKitSlot && U32(clearSilverKit, 5) == uint.MaxValue,
+                "已达40格时使用银质金库升级工具正常消费消失，不报未知错误或留下110实体");
+            peer.Barrier(packet => That(packet.Opcode is not (66 or 13), "容量未变化时不重发个人仓库扩容通知"));
+            peer.Send(160, BoosterOpen(goldSlot));
+            peer.Expect(1, 160, BoosterAck(490705126, goldSlot, 68));
+            That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "黄金金库扩展券消费后清空源槽");
+            peer.Expect(0, 66, [1, 0, 72, 0]);
+            Cargo(peer.Expect(0, 13).Body, 2, 72, 0, 0);
+            peer.Barrier();
+            peer.Send(160, BoosterOpen(silverTicketSlot));
+            peer.Expect(1, 160, BoosterAck(490705125, silverTicketSlot, 110));
+            That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "仓库等级超过银质金库扩展券时使用仍正常消失且不回退容量");
+            peer.Barrier(packet => That(packet.Opcode is not (66 or 13), "高于目标档位使用低阶扩展券保持72格且不重发扩容通知"));
+            That(fixture.Query("SELECT cargo_capacity FROM characters WHERE id=$p0", peer.Id) is [[72L]] &&
+                fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId') IN (490001422,490705125,490705126,110,68)", peer.Id) is [[0L]],
+                "金库扩展券在已达或超过目标档位时消费落库，保持72格且不残留内层服务项");
+        }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "warehouse transactions preserve database integrity");

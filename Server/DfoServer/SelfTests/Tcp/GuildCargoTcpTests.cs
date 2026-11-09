@@ -187,6 +187,7 @@ internal static class GuildCargoTcpTests
                         writer.Write(checked((byte)ids.Length));
                         foreach (ushort id in ids) { writer.Write(id); writer.Write((byte)5); }
                     }));
+                peer.Expect(0, 1737, [0,0,0,0]);
                 if (fixture.ExpectedChatEmoticons(peer.Id) is { } expectedChatEmoticons)
                 {
                     peer.Expect(0, 1384, fixture.ExpectedRecentEmoticons(peer.Id));

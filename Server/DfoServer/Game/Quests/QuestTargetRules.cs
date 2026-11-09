@@ -81,6 +81,11 @@ internal static class QuestTargetRules
     public static IEnumerable<QuestDropDefinition> Drops(StoryQuest quest, DungeonEntryPlan entry)
     {
         foreach (var row in quest.Definition!.Drops) yield return row;
+        if (MoonMountainDailyDrop(quest, entry) is { } moonMountain)
+        {
+            yield return moonMountain;
+            yield break;
+        }
         if (quest.TargetKind != QuestTargetKind.Seeking || quest.SubType != 20 || !entry.RecommendedQuestItems ||
             !QuestSeekingObjective.TryRead(quest, out var objective) || objective.MinimumClearDifficulty is not { } difficulty ||
             difficulty != -1 && entry.Difficulty < difficulty) yield break;
@@ -95,4 +100,13 @@ internal static class QuestTargetRules
             yield return new(0, 0, checked((int)entry.DungeonId), difficulty, item, 1, 100, -1);
         }
     }
+
+    // #1186 本服兼容规则：8557“进攻准备”在月轮山巨龙三图（3200/3201/3202固定难度1）真实终末通关时，
+    // 发放未精炼的念气结晶（10094602×10，受目标上限约束），随原死亡事务直接入包。
+    static QuestDropDefinition? MoonMountainDailyDrop(StoryQuest quest, DungeonEntryPlan entry) =>
+        !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsQuestReplay &&
+        entry.Difficulty == 1 && entry.DungeonId is >= 3200 and <= 3202 &&
+        QuestCycle.IsMoonMountainDailyMission(quest)
+            ? new(0, 0, checked((int)entry.DungeonId), 1, 10094602, 10, 100, 10)
+            : null;
 }

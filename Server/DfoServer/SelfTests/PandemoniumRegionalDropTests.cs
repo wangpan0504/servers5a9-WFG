@@ -18,34 +18,59 @@ internal static class PandemoniumRegionalDropTests
         var definition = new DungeonDefinition(310, "dungeon/metrocenter/time_plaza/time_plaza.dgn", 87, 90, [maze], []);
         var entry = new DungeonEntryPlan(1, 0, 310, 0, 0, 0, maze, map, map);
         var monster = new DungeonPlannedMonster(0, 10, 42, 90, new(42, [], "[fixed]", "[normal]", "monster/地区.mob"));
-        var seed = new ItemTemplate(10161610, ItemKind.Material, 0, 1, 2, 1000, 1, 0, 0, "[free]", ushort.MaxValue, 0, "诞生之芽");
+        var seed = new ItemTemplate(10161610, ItemKind.Material, 0, 1, 2, 1000, 1, 2, 1, "[free]", ushort.MaxValue, 0, "诞生之芽");
+        var radiance = seed with { Id = 10163136, Rarity = 6, Name = "次元光辉" };
         var card = seed with { Id = 99, Kind = ItemKind.Profession, IsMonsterCard = true };
-        ItemTemplate Item(int id) => id == seed.Id ? seed : card;
+        ItemTemplate Item(int id) => id switch
+        {
+            PandemoniumRegionalDropPolicy.BirthSeedId => seed,
+            PandemoniumRegionalDropPolicy.DimensionalRadianceId => radiance,
+            _ => card
+        };
         var declaration = new DungeonIndependentDropRule(0, 42, card.Id, [0, 100, 1000, 2000, 1000000],
             [1, 1, 2, 1, 1], 0, 0, -1, 3, []);
         var special = DungeonSpecialDropCatalog.Create([], [], [declaration]);
         var policy = new PandemoniumRegionalDropPolicy(_ => definition, Item, special);
         var original = new DungeonDropGenerationPlan("原掉落", []);
-        That(policy.Applies(entry) && policy.Applies(entry with { QuestId = 10, RouteQuestId = 10 }),
+        That(policy.Applies(entry) && policy.Applies(entry with { QuestId = 10, RouteQuestId = 10 }) &&
+            policy.AppliesDimensionalRadiance(entry) && policy.AppliesDimensionalRadiance(entry with { QuestId = 10, RouteQuestId = 10 }),
             "普通和剧情沿同一资源地区身份，不因任务ID漏掉材料");
-        That(seed.CreationRate == 0 && DungeonItemDropCatalog.Create([]).ReferencePool(false, 84, 92, 2).TotalWeight == 0,
-            "复现grade1且无creation rate的地区材料无法从通用等级池生成");
+        var genericCatalog = DungeonItemDropCatalog.Create(new[] { seed, radiance }.Where(item => item.CreationRate > 0));
+        That(seed.CreationRate == 0 && radiance.CreationRate == 0 &&
+            genericCatalog.ReferencePool(false, 84, 92, 2).TotalWeight == 0 &&
+            genericCatalog.ReferencePool(false, 84, 92, 6).TotalWeight == 0,
+            "复现grade1且无creation rate的诞生之芽与次元光辉无法从通用等级池生成");
         var plan = policy.Extend(original, entry, monster);
-        int successes = 0;
+        int seedSuccesses = 0, radianceSuccesses = 0;
         for (int roll = 0; roll < DungeonExplicitDropPolicy.TriggerDenominator; roll++)
         {
             var generated = plan.Generate(bound => bound == DungeonExplicitDropPolicy.TriggerDenominator ? roll : 0, DateTimeOffset.UnixEpoch);
-            if (!generated.IsEmpty) successes++;
-            That(generated.IsEmpty || generated is [{ Item.ItemId: 10161610, Item.Count: 1 }], "芽保持真实材料核心及单件数量");
+            seedSuccesses += generated.Count(row => row is { Item.ItemId: PandemoniumRegionalDropPolicy.BirthSeedId });
+            radianceSuccesses += generated.Count(row => row is { Item.ItemId: PandemoniumRegionalDropPolicy.DimensionalRadianceId });
+            That(generated.All(row => row is { Item: { ItemId: PandemoniumRegionalDropPolicy.BirthSeedId or PandemoniumRegionalDropPolicy.DimensionalRadianceId,
+                Count: 1 } }), "芽与次元光辉保持真实材料核心及单件数量");
         }
-        That(successes == DungeonExplicitDropPolicy.TriggerThreshold && plan.MaximumObjects == 1,
-            "地区芽沿现有显式触发边界，失败不保底、不截断、不伪造原版概率");
+        That(seedSuccesses == DungeonExplicitDropPolicy.TriggerThreshold &&
+            radianceSuccesses == PandemoniumRegionalDropPolicy.DimensionalRadianceTriggerThreshold && plan.MaximumObjects == 2,
+            "地轨中心芽与次元光辉沿显式触发边界独立抽样，失败不保底、不截断、不伪造原版概率");
+        var harlemDefinition = definition with { Id = 291100268, Path = "dungeon/harlem/borderquarantine/borderquarantine.dgn" };
+        var harlemEntry = entry with { DungeonId = 291100268 };
+        var harlemPolicy = new PandemoniumRegionalDropPolicy(_ => harlemDefinition, Item, special);
+        That(harlemPolicy.Applies(harlemEntry) && !harlemPolicy.AppliesDimensionalRadiance(harlemEntry),
+            "哈林地区适用诞生之芽与卡片，但不适用地轨中心次元光辉");
+        var harlemPlan = harlemPolicy.Extend(original, harlemEntry, monster);
+        That(harlemPlan.Trials.Length == 1 &&
+            harlemPlan.Trials[0].Items?.Entries is [{ Template.Id: PandemoniumRegionalDropPolicy.BirthSeedId }],
+            "哈林普通及剧情怪只追加诞生之芽，不混入次元光辉");
+        Reject<InvalidDataException>(() => new PandemoniumRegionalDropPolicy(_ => definition,
+            id => id == PandemoniumRegionalDropPolicy.DimensionalRadianceId ? radiance with { Rarity = 2 } : Item(id), special)
+            .Extend(original, entry, monster));
         for (byte difficulty = 0; difficulty < 5; difficulty++)
         {
             var current = policy.Extend(original, entry with { Difficulty = difficulty }, monster);
-            That(current.Trials.Length == (difficulty == 0 ? 1 : 2), "卡片零概率不补默认值");
+            That(current.Trials.Length == (difficulty == 0 ? 2 : 3), "卡片零概率不补默认值");
             if (difficulty == 0) continue;
-            var trial = current.Trials[1];
+            var trial = current.Trials[2];
             That(trial.Threshold == declaration.Probabilities[difficulty] && trial.Attempts == declaration.Attempts[difficulty] &&
                 trial.ProbabilityDenominator == 1000000 && trial.Category == DungeonDropCategory.MonsterItems,
                 "卡片逐档保留原概率、次数与单卡来源");
@@ -88,7 +113,7 @@ internal static class PandemoniumRegionalDropTests
             // 灾难入口5340是专用占位资源，不要求普通目录为其构造maze。
             .Where(pair => !new PvfDocument(pvf.ReadText(pair.Value)).Has("dungeon type"))
             .Select(pair => dungeons.Get(pair.Key)).ToArray();
-        int regionCount = 0, mapCount = 0;
+        int regionCount = 0, metroCenterCount = 0, mapCount = 0;
         var monsterIds = new HashSet<int>();
         var cardIds = new HashSet<int>();
         foreach (var dungeon in selected)
@@ -99,7 +124,11 @@ internal static class PandemoniumRegionalDropTests
             var entry = new DungeonEntryPlan(1, 0, checked((uint)dungeon.Id), 0, 0, 0, first, initial, initial)
                 { BasisLevel = dungeon.BasisLevel };
             if (!regional.Applies(entry)) continue;
+            bool metroCenter = dungeon.Path.StartsWith("dungeon/metrocenter/", StringComparison.OrdinalIgnoreCase);
+            That(regional.AppliesDimensionalRadiance(entry) == metroCenter,
+                "地轨中心与哈林的次元光辉区域边界与DGN路径一致");
             regionCount++;
+            if (metroCenter) metroCenterCount++;
             var prepare = Enumerable.Range(0, 5).Select(difficulty =>
                 resource.PrepareEntry(entry with { Difficulty = checked((byte)difficulty) })).ToArray();
             var dungeonCards = new HashSet<int>();
@@ -120,6 +149,11 @@ internal static class PandemoniumRegionalDropTests
                         var plan = prepare[difficulty](monster);
                         That(plan.Trials.Any(trial => trial.Items?.Entries.Any(item => item.Template.Id == 10161610) == true),
                             "地区真实普通及剧情MAP怪物接入芽生成计划");
+                        That(plan.Trials.Any(trial => trial.Threshold == PandemoniumRegionalDropPolicy.DimensionalRadianceTriggerThreshold &&
+                            trial.ProbabilityDenominator == DungeonExplicitDropPolicy.TriggerDenominator &&
+                            trial.Category == DungeonDropCategory.Materials &&
+                            trial.Items?.Entries is [{ Template.Id: PandemoniumRegionalDropPolicy.DimensionalRadianceId }]) == metroCenter,
+                            "次元光辉仅接入地轨中心真实普通及剧情MAP合法怪物，不扩散到哈林");
                         if (!special.CardsByMonster.TryGetValue(source.MonsterId, out var cards)) continue;
                         foreach (var card in cards.Where(card => card.ListFlag == 3 && card.Probabilities[difficulty] > 0 && card.Attempts[difficulty] > 0))
                         {
@@ -133,8 +167,11 @@ internal static class PandemoniumRegionalDropTests
             }
             Console.WriteLine($"REGIONAL dungeon={dungeon.Id} path={dungeon.Path} maps={maps.Length} cards={string.Join(',', dungeonCards.Order())}");
         }
-        That(regionCount == 16 && monsterIds.Count > 0 && cardIds.Count > 0, "两地区全部16个普通/剧情副本及非空卡片来源已核对");
-        That(items.Items.Get(10161610) is { Kind: ItemKind.Material, Grade: 1, CreationRate: 0 }, "真实芽身份复现通用候选缺口");
+        That(metroCenterCount == 7 && regionCount == 16 && monsterIds.Count > 0 && cardIds.Count > 0,
+            "地轨中心7个与哈林9个普通/剧情副本及非空卡片来源已核对");
+        That(items.Items.Get(10161610) is { Kind: ItemKind.Material, Grade: 1, CreationRate: 0 } &&
+            items.Items.Get(10163136) is { Kind: ItemKind.Material, Grade: 1, Rarity: 6, CreationRate: 0 },
+            "真实诞生之芽与次元光辉身份复现通用候选缺口");
         Console.WriteLine($"PASS {Count - before} regional drops: dungeons={regionCount} maps={mapCount} monsters={monsterIds.Count} cards={cardIds.Count}");
     }
 }

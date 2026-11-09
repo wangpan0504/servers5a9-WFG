@@ -96,6 +96,7 @@ internal static partial class CashShopTests
                 futureTemplate.Expiration.AbsoluteTime == distantTime, "普通创建将远期声明映射到核心或detail，仍保留到期清理资格 " + kind);
         }
         That(CashShopPackets.Failure().SequenceEqual(new byte[] { 0, 0, 0 }), "商城失败包完整3字节，u16错误码为0");
+        VerifyBuyRestrictionCore();
         var capped = InventorySnapshot.Empty with { ReviveCoins = int.MaxValue - 6 };
         That(InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 3)], 100_000) &&
             !InventoryCashShopService.CanGrantCurrencies(capped, [new(1, 3), new(42, 4)], 100_000),
@@ -330,7 +331,120 @@ internal static partial class CashShopTests
         VerifyAuctionCouponPurchases(character, resources);
         VerifyAvatars(towns, resources);
         VerifyRepeatedAbilityCasePurchase(repo, owner, towns, resources);
+        VerifyBuyRestrictions(repo, owner, character, resources);
         Console.WriteLine("PASS cash shop purchase parser, Cera charge, reward placement and ACK assertions");
+    }
+
+    static void VerifyBuyRestrictionCore()
+    {
+        var parsed = CashShopCatalog.Parse(
+            "[item]\n100902 2660698 1 0 0 100 0 0 0\n102401 2600028 1 0 0 200 0 0 0\n105515 490704503 1 0 0 300 0 0 0\n" +
+            "[buy restrict item]\n1 100902 90 1 0\n4 102401 1 1 0\n7 105515 0 1 1\n[/buy restrict item]");
+        That(parsed.BuyRestrictions.Count == 3 &&
+            parsed.BuyRestrictions[100902] is { RestrictId: 1, PeriodCode: 90, Maximum: 1, AccountWide: false } &&
+            parsed.BuyRestrictions[102401] is { RestrictId: 4, PeriodCode: 1, Maximum: 1, AccountWide: false } &&
+            parsed.BuyRestrictions[105515] is { RestrictId: 7, PeriodCode: 0, Maximum: 1, AccountWide: true },
+            "商城buy restrict item解析五元组(restrictId, commodityId, periodCode, maxCount, scopeCode)");
+        foreach (string invalid in new[]
+        {
+            "1 100902 90 1",
+            "0 100902 1 1 0",
+            "1 100902 99 1 0",
+            "1 100902 1 0 0",
+            "1 100902 1 1 2",
+            "1 100902 1 1 0\n1 102401 1 1 0",
+            "1 100902 1 1 0\n2 100902 1 1 0"
+        })
+        {
+            Reject<InvalidDataException>(() => CashShopCatalog.Parse(
+                "[item]\n100902 2660698 1 0 0 100 0 0 0\n102401 2600028 1 0 0 200 0 0 0\n[buy restrict item]\n" + invalid + "\n[/buy restrict item]"),
+                "畸形或冲突商城限购定义拒绝加载: " + invalid);
+        }
+        var beforeReset = new DateTimeOffset(2026, 11, 4, 21, 59, 59, TimeSpan.Zero);
+        int today = ShopPurchaseCount.Today(beforeReset);
+        var snapshot = InventorySnapshot.Empty with
+        {
+            ShopPurchases =
+            [
+                new(0, 100902, false, false, today, 1) { Period = ItemPurchasePeriod.Daily },
+                new(0, 102401, false, false, today, 1) { Period = ItemPurchasePeriod.Daily },
+                new(0, 105515, true, false, 0, 1) { Period = ItemPurchasePeriod.Accumulate }
+            ]
+        };
+        byte[] packet = CashShopPackets.BuyRestrictions(snapshot, parsed, beforeReset);
+        int I32(int at) => BinaryPrimitives.ReadInt32LittleEndian(packet.AsSpan(at, 4));
+        long expected90Reset = new DateTimeOffset(DateOnly.FromDayNumber(today).AddDays(90), new TimeOnly(6, 0), TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+        That(packet.Length == 4 + 3 * 12 && I32(0) == 3 &&
+            I32(4) == 1 && I32(8) == (int)expected90Reset && I32(12) == 0 &&
+            I32(16) == 4 && I32(20) == (int)beforeReset.AddSeconds(1).ToUnixTimeSeconds() && I32(24) == 0 &&
+            I32(28) == 7 && I32(32) == 0 && I32(36) == 0,
+            "Noti863按原生0239CF20编码restrictId、重置Unix时间及剩余可购次数");
+    }
+
+    sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    static void VerifyBuyRestrictions(CharacterRepository repository, AccountOwners.Lease owner, Character baseCharacter, ItemResources resources)
+    {
+        That(resources.CashShop.BuyRestrictions.Count == 54 &&
+            resources.CashShop.BuyRestrictions[100782] is { RestrictId: 1, PeriodCode: 7, Maximum: 1, AccountWide: false } &&
+            resources.CashShop.BuyRestrictions[100902] is { RestrictId: 2, PeriodCode: 90, Maximum: 1, AccountWide: false } &&
+            resources.CashShop.BuyRestrictions[101307] is { RestrictId: 34, PeriodCode: 0, Maximum: 1, AccountWide: false } &&
+            resources.CashShop.BuyRestrictions[105515] is { RestrictId: 119, PeriodCode: 101, Maximum: 1, AccountWide: true } &&
+            resources.CashShop.BuyRestrictions[105520] is { RestrictId: 124, PeriodCode: 102, Maximum: 2, AccountWide: true } &&
+            resources.CashShop.BuyRestrictions[105596] is { RestrictId: 125, PeriodCode: 1, Maximum: 1, AccountWide: true },
+            "真实(r)cerashop.etc全部54条商城限购规则完整加载");
+        var beforeReset = new DateTimeOffset(2026, 11, 4, 21, 59, 59, TimeSpan.Zero);
+        var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits,
+            resources.EpicPieces, resources.Cargo, contracts: resources.Contracts, clock: new FixedClock(beforeReset));
+        var current = repository.LoadCharacter(owner, baseCharacter.Slot);
+        var currency = new CurrencyService(resources.GoldLimits);
+        current = InventoryService.Commit(repository, owner, current, currency.Grant(current, CurrencyKind.Cera, 500_000));
+        var sibling = repository.Create(owner, new("CashLimitSib", new(1, 1, 100, 100), new(1, 1, 100, 100)) { Level = 60 });
+
+        // 同车重复购买角色永久限购1次的商品(101307 金质猫头鹰)必须整单拒绝。
+        That(service.Buy(current, new(0, [new(101307, 0), new(101307, 0)]), out _, beforeReset) is
+            { Accepted: false, Plan: null, RejectReason: "cash_shop_purchase_limit" },
+            "同车重复购买限购1次的商城商品整单拒绝");
+        current = InventoryService.Commit(repository, owner, current, service.Buy(current, new(0, [new(101307, 0)]), out _, beforeReset));
+        sibling = repository.LoadCharacter(owner, sibling.Slot);
+        That(service.Buy(current, new(0, [new(101307, 0)]), out _, beforeReset.AddYears(1)) is
+            { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(sibling, new(0, [new(101307, 0)]), out _, beforeReset).Accepted,
+            "角色永久商城限购跨年保持拦截且不阻塞同账号其他角色");
+
+        // 账号每日限购(105596)、账号每周限购(105515)与账号每月限购(105520, 每月2次)。
+        var dailyBought = service.Buy(current, new(0, [new(105596, 0)]), out _, beforeReset);
+        That(dailyBought.Accepted && dailyBought.Plan!.CharacterPrecondition?.QualificationExpiresAt == beforeReset.AddSeconds(1).ToUnixTimeSeconds(),
+            "账号每日商城限购商品首次购买成功并冻结06:00重置截止");
+        current = InventoryService.Commit(repository, owner, current, dailyBought);
+        sibling = repository.LoadCharacter(owner, sibling.Slot);
+        That(service.Buy(current, new(0, [new(105596, 0)]), out _, beforeReset) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(sibling, new(0, [new(105596, 0)]), out _, beforeReset) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(current, new(0, [new(105596, 0)]), out _, beforeReset.AddSeconds(1)).Accepted,
+            "账号每日商城限购跨角色共享拦截并在次日06:00重置");
+        current = InventoryService.Commit(repository, owner, current, service.Buy(current, new(0, [new(105515, 0)]), out _, beforeReset));
+        sibling = repository.LoadCharacter(owner, sibling.Slot);
+        That(service.Buy(sibling, new(0, [new(105515, 0)]), out _, beforeReset) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(sibling, new(0, [new(105515, 0)]), out _, beforeReset.AddSeconds(1)).Accepted,
+            "账号每周商城限购跨角色拦截并在周四06:00重置");
+        current = InventoryService.Commit(repository, owner, current,
+            service.Buy(current, new(0, [new(105520, 0)]), out _, beforeReset));
+        sibling = repository.LoadCharacter(owner, sibling.Slot);
+        sibling = InventoryService.Commit(repository, owner, sibling,
+            service.Buy(sibling, new(0, [new(105520, 0)]), out _, beforeReset));
+        current = repository.LoadCharacter(owner, current.Slot);
+        That(service.Buy(current, new(0, [new(105520, 0)]), out _, beforeReset) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(current, new(0, [new(105520, 0)]), out _, new DateTimeOffset(2026, 11, 30, 22, 0, 0, TimeSpan.Zero)).Accepted,
+            "账号月度商城限购(2次)跨角色累计拦截并在下月1日06:00重置");
+
+        // 角色90天限购(100902 角色更名卡)。
+        current = InventoryService.Commit(repository, owner, current, service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset));
+        That(service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset.AddDays(89)) is { Accepted: false, RejectReason: "cash_shop_purchase_limit" } &&
+            service.Buy(current, new(0, [new(100902, 0)]), out _, beforeReset.AddDays(90)).Accepted,
+            "角色90天商城限购在89天内拦截、满90天后放行");
     }
 
     static void VerifyAuctionCouponPurchases(Character character, ItemResources resources)

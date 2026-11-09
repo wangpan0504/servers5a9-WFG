@@ -27,6 +27,8 @@ internal sealed class SettingsProjection(ClientSettingsService settings, DfoServ
     public async Task InitializeAsync(GameConnectionContext context, ClientSettingsReceipt receipt)
     {
         bool CanSend() => context.Session.CanPublishClientSettings(receipt);
+        await context.Notify(NotiPacketType.NPC_BOOKMARK_INFO, SettingsPackets.NpcBookmarks(receipt.Settings.NpcBookmarks),
+            "npc_bookmarks_initialize", CanSend);
         if (context.ChatEmoticons is { } chat)
         {
             // 1384只安装最近列表；随后的411重建UI，填充第9至26格。

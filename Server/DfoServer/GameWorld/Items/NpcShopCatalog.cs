@@ -192,21 +192,32 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
         long gold = material.Length != 0 ? price < 0 ? 0 : (long)price + Read("add price") : price >= 0 ? price : value;
         gold = Math.Clamp(gold, 0, int.MaxValue);
         int sell = equipment ? 0 : Math.Max(0, value >= 0 ? value / 5 : price / 5);
-        string limited = text.Section("daily purchase limit");
+        bool resetDaily = text.Has("reset daily purchase item"), resetMonthly = text.Has("reset monthly purchase item");
+        if (resetDaily && resetMonthly)
+            throw new InvalidDataException("NPC 限购重置周期冲突");
         ItemPurchaseLimit? limit = null;
-        if (limited.Length != 0)
-        {
-            string scope = Regex.Match(limited, "`([^`]+)`").Groups[1].Value.ToLowerInvariant();
-            int count = Integers(limited).Single();
-            // trade：可交易商品的购买上限，按账号共享。chraracter 是 character 的笔误。
-            bool account = scope is "account" or "trade";
-            bool character = scope is "character" or "charac" or "chraracter";
-            if ((!account && !character) || count <= 0)
-                throw new InvalidDataException("NPC 限购定义无效");
-            limit = new(account, count, text.Has("reset daily purchase item"));
-        }
         ItemPurchaseLimit? periodicLimit = null;
         var unresolvedLimits = ImmutableArray.CreateBuilder<string>();
+        foreach (string limited in text.Sections("daily purchase limit"))
+        {
+            if (string.IsNullOrWhiteSpace(limited))
+            {
+                unresolvedLimits.Add(limited);
+                continue;
+            }
+            string[] scopes = Regex.Matches(limited, "`([^`]*)`").Select(match => match.Groups[1].Value.ToLowerInvariant()).ToArray();
+            int[] counts = Integers(limited);
+            // trade：可交易商品的购买上限，按账号共享。chraracter 是 character 的笔误。
+            bool account = scopes is ["account" or "trade"];
+            bool character = scopes is ["character" or "charac" or "chraracter"];
+            if ((!account && !character) || counts.Length != 1 || counts[0] <= 0)
+                throw new InvalidDataException("NPC 限购定义无效");
+            // 原生 0412D667 / 0413DE03 将 [reset monthly purchase item] 置为月度重置标志。
+            if (resetMonthly)
+                periodicLimit = new(account, counts[0], false) { Period = ItemPurchasePeriod.Monthly };
+            else
+                limit = new(account, counts[0], resetDaily);
+        }
         foreach (string body in text.Sections("purchase limit"))
         {
             // 已见空声明和角色公会战赛季声明保留原文；规则未闭合，购买端必须拒绝。

@@ -14,6 +14,7 @@ internal static partial class HarlemMaterialDropTests
         int before = Count;
         var rules = HarlemMaterialDropRules.Parse("{}");
         That(rules.NormalFragments.SequenceEqual([9, 10, 12, 13, 15]) && rules.LegendFragments == 15 &&
+            rules.SkyWishes.SequenceEqual([4, 6, 8, 8, 10]) && rules.CosmoMaterialMultiplier == 2 && rules.CosmoSkyWishMultiplier == 3 &&
             rules.DawnFragments == 200 && rules.DawnPurgedCrystallines == 120 && rules.DawnPurgedPermille == 50,
             "默认采用已授权本服规则，不冒充PVF概率或把9至15改成均匀随机");
         Reject<InvalidDataException>(() => HarlemMaterialDropRules.Parse("null"), "空规则不能静默启用默认奖励");
@@ -42,10 +43,11 @@ internal static partial class HarlemMaterialDropTests
             var legend = legendPlan.Generate(_ => 0, now);
             That(normal.Length == rules.NormalFragments[difficulty] && normalPlan.MaximumObjects == normal.Length &&
                 normal.All(row => row.Item is { ItemId: HarlemMaterialDropPolicy.FragmentId, Count: 1 }) &&
-                legend.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId) == 15 &&
-                legend.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId) == rules.SkyWishes[difficulty] &&
-                legend.All(row => row.Item!.Count == 1) && legendPlan.MaximumObjects == legend.Length,
-                "普通与星空材料逐个生成地面物品，五档总数量及完整对象容量不变；材料不乘装备骰数");
+                legend.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId).ToArray() is { Length: 15 } legendFragments &&
+                legendFragments.All(row => row.Item!.Count == 1) &&
+                legend.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId).ToArray() is [{ Item.Count: int wishCount }] &&
+                wishCount == rules.SkyWishes[difficulty] && legendPlan.MaximumObjects == 16,
+                "普通与星空异形碎片逐个生成地面物品，天空之愿按单堆生成，五档总数量及完整对象容量不变；材料不乘装备骰数");
         }
         var oversized = new HarlemMaterialDropPolicy(rules with { LegendFragments = 500 }, [291100308], Item);
         Reject<InvalidDataException>(() => oversized.Extend(empty, entry with { IsHellLegend = true }, wave),

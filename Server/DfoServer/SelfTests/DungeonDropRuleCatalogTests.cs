@@ -42,6 +42,7 @@ internal static class DungeonDropRuleCatalogTests
         string Resolve(int key) => names[key];
         DungeonDropRuleCatalog Parse(IEnumerable<PvfToken> tokens) => DungeonDropRuleCatalog.Parse(tokens.ToArray(), common, Resolve);
         var parsed = Parse(source);
+        CarbonCrystalDropTests.RunCore(parsed);
         var plan = DungeonDropRatePlan.Prepare(parsed, 1, 0, 0, 1);
         That(plan.Thresholds.SequenceEqual(new[] { 986, 60, 250, 17, 15 }) &&
             plan.Hit(0, 985) && !plan.Hit(0, 986) && plan.Hit(4, 14) && !plan.Hit(4, 15),

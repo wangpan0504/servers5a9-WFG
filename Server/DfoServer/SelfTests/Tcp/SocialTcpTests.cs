@@ -345,9 +345,23 @@ internal static class SocialTcpTests
         observer.Select(prepared: true);
         observer.Send(1426); observer.Batch((0, 23), (0, 24));
         observer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
-        observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        // 目录由独立投影发布，可穿插在切图通知中；仍逐包核对切图顺序及唯一完整名册。
+        bool directoryReceived = false;
+        foreach (ushort opcode in new ushort[] { 23, 24, 2, 3, 23, 22 })
+        {
+            var packet = observer.Read();
+            if (packet.Kind == 0 && packet.Opcode == 9)
+            {
+                That(!directoryReceived, "回城名册只刷新一次");
+                Bytes(packet.Body, edited, "回城名册保留完整队伍设置");
+                directoryReceived = true;
+                packet = observer.Read();
+            }
+            That(packet.Kind == 0 && packet.Opcode == opcode,
+                $"回城切图包序：期望0/{opcode}，实际{packet.Kind}/{packet.Opcode}");
+        }
         leader.Batch((0, 2), (0, 3), (0, 23), (0, 22));
-        observer.Expect(0, 9, edited);
+        if (!directoryReceived) observer.Expect(0, 9, edited);
         leader.Send(15, new byte[4]); leader.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));
         observer.Expect(0, 6);
         var hidden = observer.Expect(0, 9).Body;

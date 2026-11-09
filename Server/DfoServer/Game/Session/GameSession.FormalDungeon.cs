@@ -484,8 +484,6 @@ internal sealed partial class GameSession
             entry = entry! with { DisableMonsterAndClearExperience = true };
         if (strongway is not null)
         {
-            if (catalog.Get(checked((int)dungeonId)).RawSections.Any(row => row.Tag == "disable drop item" && row.Tokens.Count == 0))
-                entry = entry! with { DisableItemDrops = true, SpringTreasurePotential = false, SpringTreasureRecommended = false };
             if (catalog.Get(checked((int)dungeonId)).PersonalCoinInfoLimit(difficulty) is not { } coinLimit)
                 return RejectFormal("strongway2019-personal-coin-limit-missing");
             entry = entry! with { CoinLimit = coinLimit };
@@ -567,7 +565,10 @@ internal sealed partial class GameSession
                 entry.IsInfernoParty ? dungeonDefinition.HellPartyItemCount :
                 HellPartyEntryCost.RequiredCount(entry.HellParty!, dungeonDefinition.MinimumLevel);
             var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
-            var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) : (null, null, null);
+            var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) :
+                hellLegend && !entry.IsCosmo && items is not null && pieces is not null &&
+                HellPartyEntryCost.LegendPass(expected.Inventory, items.LegendHellPasses(), pieces, now) is ({ } legendPass, { } legendPlan)
+                ? (legendPass, null, legendPlan) : (null, null, null);
             bool usesPass = pass.Item1 is not null;
             // 普通券仅替代邀请函；魔界裂缝、时空裂缝及超星空保持各自费用入口。
             var ordinaryPass = !entry.IsCosmo && !entry.IsInfernoParty && entry.DungeonId != 316 && ticketCount > 0 && !hellTickets.IsEmpty &&
@@ -866,7 +867,7 @@ internal sealed partial class GameSession
         var hellRewardPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
-        // 比赛副本 [disable drop item]，不准备掉落。
+        // DGN禁掉落开关适用于所有模式；不准备怪物通用、显式或独立掉落。
         if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar && !entry.IsRevisedBeast)
         {
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops = null;

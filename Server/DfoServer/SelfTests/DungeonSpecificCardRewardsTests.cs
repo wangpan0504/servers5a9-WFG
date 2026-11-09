@@ -22,6 +22,19 @@ internal static partial class DungeonSpecificCardRewardsTests
         var policy = new DungeonCardRewardPolicy(DfoServer.Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
             items.Items, items.GoldLimits, items.EpicPieces, prices: prices);
         var rows = prices.SpecificRewards[530];
+        foreach (int dungeonId in new[] { 5097, 5098 })
+        {
+            That(prices.SpecificRewards[dungeonId].SequenceEqual(
+                [new DungeonSpecificCardItem(10161538, 9250, 1), new(10161612, 750, 1)]),
+                "艾肯实际PVF专表保留两种奖励与原权重");
+            foreach (var (roll, itemId) in new[] { (0, 10161538), (9249, 10161538), (9250, 10161612), (9999, 10161612) })
+            {
+                var card = policy.Prepare(dungeons.Get(dungeonId), 0, 1, draw: bound => bound == 10000 ? roll : 0);
+                That(card.Item is { Value: 1 } item && item.ItemId == itemId &&
+                    card.ResourceSource.Contains(DungeonCardPriceCatalog.ResourcePath, StringComparison.Ordinal),
+                    "艾肯专表权重边界不退回普通装备池");
+            }
+        }
         var withoutTable = new DungeonCardRewardPolicy(DfoServer.Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
             items.Items, items.GoldLimits, items.EpicPieces);
         Reject<NotSupportedException>(() => withoutTable.Prepare(dungeons.Get(530), 3, 1, draw: _ => 0),
@@ -161,14 +174,14 @@ internal static partial class DungeonSpecificCardRewardsTests
         var rows = DungeonSpecificCardRewards.Parse(tokens, index => strings[index]);
         That(rows[530].SequenceEqual([new DungeonSpecificCardItem(10305892, 5000, 50), new(10305892, 5000, 60)]),
             "黎明裂缝专表保留同副本多行权重和数量，不被通用装备池覆盖");
-        var other = tokens.ToArray(); other[2] = new(0, 53);
+        var other = tokens.ToArray(); other[2] = new(0, 54);
         That(DungeonSpecificCardRewards.Parse(other, index => strings[index]).IsEmpty,
             "其它类型不能借黎明裂缝的表形状发放奖励");
-        foreach (int type in new[] { 45,71,75,76,91 })
+        foreach (int type in new[] { 45,53,71,75,76,91 })
         {
             var supported = tokens.ToArray(); supported[2] = new(0,type);
             That(DungeonSpecificCardRewards.Parse(supported,index => strings[index])[530].SequenceEqual(rows[530]),
-                "安徒恩、泰波尔斯、超时空、代号希望与魔界英雄表沿严格五整数布局保留权重和数量");
+                "安徒恩、艾肯、泰波尔斯、超时空、代号希望与魔界英雄表沿严格五整数布局保留权重和数量");
             supported[4] = new(0,1);
             Reject<NotSupportedException>(() => DungeonSpecificCardRewards.Parse(supported,index => strings[index]),
                 "专用翻牌非零选择字段不作默认奖励");

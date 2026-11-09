@@ -86,7 +86,13 @@ internal static class QuestMainlineTests
             f.Session.SelectFormalDungeonFreeCard(0,0) is not null, "连续主线先完成真实结算翻牌，再交托比对话任务");
         Finish(3054); Finish(3146); Return();
         ClearQuest(3147); ClearQuest(3148); Meeting(4875); ClearQuest(3149); ClearQuest(3150); ClearQuest(3151);
-        Meeting(3152); Meeting(3153); Meeting(6929);
+        Meeting(3152); Meeting(3153);
+        var promptState = f.Read();
+        That(QuestEligibility.Candidates(promptState, quests).Contains(6929) &&
+            f.Session.ChangeQuest(6929, QuestLifecycleAction.Accept, quests, items.Items,
+                items.GoldLimits, items.EpicPieces)?.Commit is null &&
+            QuestCompletionRepositoryTests.Same(promptState, f.Read()),
+            "转职UI占位保留候选，但接取拒绝且不产生完成位、奖励或持久任务槽");
         var beforeTransfer = f.Read();
         var transfer = quests.All.Where(quest => quest.Condition == "[clear map]" && quest.IntData is [76196] && quest.MinimumLevel <= 20 &&
             QuestEligibility.Evaluate(beforeTransfer,quest,quests).Eligible).OrderBy(quest => quest.RewardType == "[grow type]" ? 0 : 1)

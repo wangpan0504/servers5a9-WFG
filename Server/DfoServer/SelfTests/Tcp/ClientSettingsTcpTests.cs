@@ -60,6 +60,19 @@ internal static partial class ClientSettingsTcpTests
             peer.Create("SettingTwo");
             secondId = peer.Id;
             Select(peer, 0, initial);
+            foreach (byte add in new byte[] { 1, 1, 0 })
+            {
+                peer.Send(1712, [add, 17, 0, 0, 0]);
+                peer.Expect(0, 1737, add == 1 ? [1,0,0,0,17,0,0,0] : [0,0,0,0]);
+                peer.Expect(1, 1712, [1]);
+                peer.Barrier();
+            }
+            peer.Send(1712, [1,255,255,255,127]);
+            peer.Expect(1, 1712, [0,19,0]);
+            peer.Barrier();
+            peer.Send(1712, [1,17,0,0,0]);
+            peer.Expect(0, 1737, [1,0,0,0,17,0,0,0]);
+            peer.Expect(1, 1712, [1]);
             byte[] chatMacro = [1, 0, 1, 0, 2, 0, 0, 0, (byte)'h', (byte)'i'];
             peer.Send(472, chatMacro);
             peer.Expect(1, 472, [1]);
@@ -86,8 +99,10 @@ internal static partial class ClientSettingsTcpTests
 
             ReturnSelection(peer);
             Select(peer, 0, shared, first);
+            Bytes(peer.NpcBookmarks, [1,0,0,0,17,0,0,0], "换角前恢复已保存人物辞典收藏");
             ReturnSelection(peer);
             Select(peer, 1, shared);
+            Bytes(peer.NpcBookmarks, [0,0,0,0], "另一角色不继承人物辞典收藏");
             Bytes(peer.RecentEmoticonInfo, recents, "同连接换角先回放1384，再由411重建最近两排");
             assets = Assets(fixture, timings);
             Save(peer, 447, second);
@@ -123,6 +138,7 @@ internal static partial class ClientSettingsTcpTests
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, shared, first);
+            Bytes(peer.NpcBookmarks, [1,0,0,0,17,0,0,0], "重新连接恢复人物辞典收藏");
             ReturnSelection(peer);
             Select(peer, 1, shared, second);
             Exit(peer);
@@ -138,6 +154,7 @@ internal static partial class ClientSettingsTcpTests
         {
             Select(peer, 0, shared, first);
             Bytes(peer.RecentEmoticonInfo, recents, "重建服务后重新登录恢复完整最近列表和原顺序");
+            Bytes(peer.NpcBookmarks, [1,0,0,0,17,0,0,0], "重建服务后人物辞典收藏保持");
             ReturnSelection(peer);
             Select(peer, 1, shared, second);
             Exit(peer);

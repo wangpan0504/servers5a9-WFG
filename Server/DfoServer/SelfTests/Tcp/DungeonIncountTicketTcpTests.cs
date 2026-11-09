@@ -28,6 +28,10 @@ internal static class DungeonIncountTicketTcpTests
             peer.Select(); peer.Barrier();
             Use(peer, 65, 1); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 214]); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM character_dungeon_incount_extra") is [[0L]], "错误动作参数不扣券或追加");
+            string mismatched = fixture.Snapshot();
+            peer.Send(515, Build(w => { w.Write((ushort)65); w.Write((byte)0); w.Write(0u); w.Write(213u); w.Write(0u); w.Write(0u); }));
+            peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 213]); peer.Barrier();
+            That(fixture.Snapshot() == mismatched, "真实券不能冒用另一类追加动作，拒绝后资产不变");
             Use(peer, 65); Ack(peer, 65); peer.Expect(0, 550, Convert.FromHexString("341500000203")); peer.Barrier();
             That(fixture.Query("SELECT daily_extra,weekly_extra FROM character_dungeon_incount_extra WHERE dungeon=5428") is [[1L, 1L]] &&
                 fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE list_type=0 AND slot_index=65") is [[0L]],

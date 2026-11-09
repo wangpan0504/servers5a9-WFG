@@ -36,6 +36,10 @@ internal static partial class ConsumableUseTcpTests
             if (account != "beta")
                 items = items.Add(new(0,new(InventoryListType.Main,66),
                     InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10312386),3,clock.GetUtcNow())));
+            if (account != "beta")
+                foreach (var (slot,id) in new[] { ((short)67,490010626),((short)68,10306815) })
+                    items = items.Add(new(0,new(InventoryListType.Main,slot),
+                        InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id),1,clock.GetUtcNow())));
             repository.Create(owner,candidate with { Level=95,InitialLearning=learning,Inventory=candidate.Inventory with { Items=items } });
         }
         await fixture.StartAsync();
@@ -47,6 +51,20 @@ internal static partial class ConsumableUseTcpTests
         source.Batch((0,2),(0,3),(0,23),(0,22)); source.Barrier();
         string originalSource = Source();
         string originalAssets = Assets();
+        foreach (var (id,wire) in new[] { (490010626,"035D02000002F8341D"),(10306815,"035D020000FF449D00") })
+        {
+            witness.Send(211,Convert.FromHexString(wire)); Empty(witness); Empty(source);
+            Send(2,605,id); Empty(source); Empty(witness);
+            source.Send(211,Convert.FromHexString(wire)); Changed(source,3,605); Changed(witness,3,605);
+            Send(3,605,id); Empty(source); Empty(witness);
+            source.Send(212); Changed(source,0,0); Changed(witness,0,0);
+            Send(3,605,id); Empty(source); Empty(witness);
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Send(3,605,id); Changed(source,3,605); Changed(witness,3,605);
+            clock.Advance(TimeSpan.FromSeconds(300));
+            Disguise(source.Expect(0,2).Body,0,0); source.Barrier(); Changed(witness,0,0);
+            That(Assets()==originalAssets,"引力恶魔药水及强者之路COS单体直接211保留源、遵守取消冷却和300秒期限，无44消费或额外审计："+id);
+        }
         // 实收右键只有211，不能人工预发44制造资格。
         witness.Send(211,Convert.FromHexString("0261DD00006401351D")); Empty(witness); Empty(source);
         foreach (var invalid in new[] { (Type:(byte)1,Form:forms[0],Item:itemId),
@@ -158,6 +176,7 @@ internal static partial class ConsumableUseTcpTests
             string expected = (type,form) switch
             {
                 (0,0) => "0000000000",
+                (3,605) => "035D020000",
                 (2,63039) => "023FF60000",
                 (2,58026) => "02AAE20000",
                 (2,1083) => "023B040000",

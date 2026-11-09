@@ -17,8 +17,8 @@ internal sealed record HarlemAbyssBonusRules
     public int CrystalPermille { get; init; } = 1;
     public int SkyFragmentPermille { get; init; } = 100;
     public int StoneBagPermille { get; init; } = 5;
-    public ImmutableArray<int> SkyFragments { get; init; } = [2, 3, 4, 4, 5];
-    public int CosmoSkyFragmentMultiplier { get; init; } = 2;
+    public ImmutableArray<int> SkyFragments { get; init; } = [4, 6, 8, 8, 10];
+    public int CosmoSkyFragmentMultiplier { get; init; } = 3;
 
     public static HarlemAbyssBonusRules Parse(string json)
     {
@@ -93,9 +93,9 @@ internal sealed class HarlemAbyssBonusDropPolicy
         {
             if (entry.Difficulty >= rules.SkyFragments.Length) throw new InvalidDataException("苍穹碎片奖励难度越界");
             int count = checked(rules.SkyFragments[entry.Difficulty] * (cosmo ? rules.CosmoSkyFragmentMultiplier : 1));
-            // 一次命中生成完整份数，数量逐个落地；不能改成每个碎片各自判定概率。
+            // 一次命中生成完整份数并按单堆地面物投放；不能改成每个碎片各自判定概率。
             if (rules.SkyFragmentPermille > 0)
-                trials.Add(new(rules.SkyFragmentPermille, skyFragments, count, count, ProbabilityDenominator: 1000, IndividualObjects: true));
+                trials.Add(new(rules.SkyFragmentPermille, skyFragments, count, count, ProbabilityDenominator: 1000));
             if (rules.StoneBagPermille > 0)
                 trials.Add(new(rules.StoneBagPermille, stoneBag, 1, 1, ProbabilityDenominator: 1000));
         }
