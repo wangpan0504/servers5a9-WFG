@@ -29,10 +29,19 @@ internal sealed class DungeonIncountTicketService(ItemCatalog items, DungeonInco
     public static bool Handles(uint action) => action is Action or AddDaybreakAction or ResetDaybreakAction;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
-    public DungeonIncountTicketPlan Prepare(Character expected, InventorySlot slot)
+    public DungeonIncountTicketPlan Prepare(Character expected, InventorySlot slot, uint? requestedAction = null)
     {
         var source = expected.Inventory.Find(slot) ?? throw new InvalidDataException("追加券源不存在");
         var definition = items.ActionConsumable(source.Core.ItemId) ?? throw new InvalidDataException("追加券动作目录不存在");
+        uint action = definition.Label switch
+        {
+            "[add dungeon incount item limit count]" => Action,
+            "[add crackofdaybreak dungeon enter count]" => AddDaybreakAction,
+            "[reset crackofdaybreak dungeon enter count]" => ResetDaybreakAction,
+            _ => 0
+        };
+        if (requestedAction is { } requested && requested != action)
+            throw new InvalidDataException("请求动作与真实追加券不符");
         int amount = 1;
         bool reset = false;
         DungeonIncountRow? row;

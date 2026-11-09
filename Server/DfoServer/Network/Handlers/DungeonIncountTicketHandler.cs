@@ -17,7 +17,7 @@ internal sealed class DungeonIncountTicketHandler(DungeonIncountTicketService se
         bool valid = DungeonIncountTicketService.Handles(request.Action) && request.List == 0 && request.Slot <= short.MaxValue &&
             request.Reserved == 0 && request.FirstArgument == 0 && request.SecondArgument == 0;
         var result = context.Session.UseDungeonIncountTicket(new(InventoryListType.Main, unchecked((short)request.Slot)), service, store,
-            !valid || context.BlocksTownActions);
+            !valid || context.BlocksTownActions, request.Action);
         if (result.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
         bool Guard() => context.Session.CanPublishConsumable(result.Guard);
         bool accepted = result.Outcome == ConsumableUseOutcome.Committed;
