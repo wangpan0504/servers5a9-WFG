@@ -98,14 +98,14 @@ internal static class OtherverseAncientTests
         That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0) &&
             f.ItemCount(10161066) == 1 && DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 5,
             "第一张五次券消耗一张，持久追加五次且基础上限不变");
-        That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 10, 0) &&
-            f.ItemCount(10161066) == 0 && DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 10 &&
-            f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit,
-            "第二张五次券继续消耗一张并持久追加至十次，不改已用次数");
+        var capped = f.Read();
+        That(!f.Session.UseDimensionEntryTicket(source, tickets).Accepted &&
+            QuestCompletionRepositoryTests.Same(capped, f.Read()) && f.ItemCount(10161066) == 1,
+            "每日已追加五次后第二张整拒且保留原券");
         f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
-        That(f.Session.DimensionEntranceInfo() is (5, 10, 0) && f.ItemCount(10161066) == 0,
-            "两张追加券的消费与十次额度重选角色后保持");
-        const int extraCapacity = 10;
+        That(f.Session.DimensionEntranceInfo() is (5, 5, 0) && f.ItemCount(10161066) == 1,
+            "五次额度及未消费第二张券重选后保持");
+        const int extraCapacity = 5;
         for (int extra = 0; extra < extraCapacity; extra++)
         {
             var opening = f.Enter(tierZero[extra % tierZero.Length], 0, _ => 0);
@@ -117,7 +117,7 @@ internal static class OtherverseAncientTests
         }
         That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit + extraCapacity &&
             f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon((uint)tierZero[0], 0, 0, SelfTestCatalogs.Dungeons(pvf), SelfTestCatalogs.Rooms(pvf), pieces: items.EpicPieces) is null,
-            "基础五次加十次追加合计十五次后不能进入第十六次");
+            "基础五次加五次追加合计十次后不能进入第十一次");
         That(f.Session.DimensionEntranceInfo() is (5, 0, 0), "追加次数用尽后815仍显示基础5/5、追加0、隐藏剩余0");
         // 旧版本把资源合计值当基础上限，可能留下 daily_used=10 的历史行。
         // 新规则只在超出“基础+已购追加”时把旧口径遗留降回基础，随后追加券仍可正常使用。
@@ -126,6 +126,8 @@ internal static class OtherverseAncientTests
             var grantedLegacy = legacy.Session.PlanAndCommitInventory(character => new InventoryService(items.Items, items.GoldLimits, items.EpicPieces)
                 .Grant(character, [new(10158125, 1), new(10158126, 1), new(490008217, 1)]));
             That(grantedLegacy.Accepted, "旧口径修复夹具发放三张一次追加券");
+            var initialPeriod = DungeonIncountPolicy.Period(DateTimeOffset.UtcNow);
+            legacy.Sql($"INSERT INTO character_dungeon_incount(character_id,account,dungeon,day,daily_used,week,weekly_used) SELECT id,account,{dimension.DailyRow.CountKey},{initialPeriod.Day},5,{initialPeriod.Week},0 FROM characters");
             var legacyTickets = new DimensionEntryTicketService(items.Items);
             foreach (int ticketId in new[] { 10158125, 10158126, 490008217 })
             {
@@ -425,34 +427,28 @@ internal static class OtherverseAncientTests
             That(granted.Accepted, "合成夹具发放两张真实五次券");
             var source = f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10161066).Position;
             var tickets = new DimensionEntryTicketService(items.Items);
-            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0) &&
-                f.ItemCount(10161066) == 1 && DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 5,
-                "第一张追加券与五次额度同事务保存，只消耗一张");
-            var ticketUsed = f.Read();
-            var onlineTicketUsed = f.Session.Selected!;
+            var ticketBefore = f.Read();
+            var onlineBefore = f.Session.Selected!;
             var usageBeforeTicket = f.Usage(dimension.DailyRow.CountKey);
             f.Sql("CREATE TRIGGER dimension_ticket_abort AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='dimension_entry_ticket' BEGIN SELECT RAISE(ABORT,'dimension ticket rollback'); END");
-            Reject<SqliteException>(() => f.Session.UseDimensionEntryTicket(source, tickets), "第二张追加券库存审计末段SQL失败");
-            That(QuestCompletionRepositoryTests.Same(ticketUsed, f.Read()) &&
-                QuestCompletionRepositoryTests.Same(onlineTicketUsed, f.Session.Selected!) &&
-                f.ItemCount(10161066) == 1 && f.Session.DimensionEntranceInfo() is (5, 5, 0) &&
+            Reject<SqliteException>(() => f.Session.UseDimensionEntryTicket(source, tickets), "首张合法追加券库存审计末段SQL失败");
+            That(QuestCompletionRepositoryTests.Same(ticketBefore, f.Read()) &&
+                QuestCompletionRepositoryTests.Same(onlineBefore, f.Session.Selected!) &&
+                f.ItemCount(10161066) == 2 && f.Session.DimensionEntranceInfo() is (5, 0, 0) &&
                 f.Usage(dimension.DailyRow.CountKey) == usageBeforeTicket && f.Usage(7100).WeeklyUsed == 2,
-                "失败完整回滚票数量、追加额度、库存revision和在线状态，日周次数不变");
+                "失败完整回滚票数量、额度、revision和在线状态，日周次数不变");
             f.Sql("DROP TRIGGER dimension_ticket_abort");
-            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 10, 0) &&
-                f.ItemCount(10161066) == 0 && DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 10 &&
-                f.Usage(dimension.DailyRow.CountKey) == usageBeforeTicket && f.Usage(7100).WeeklyUsed == 2,
-                "第二张追加券成功后票清零、额度精确加五至十次，日周已用次数不变");
-            f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
-            That(f.Session.DimensionEntranceInfo() is (5, 10, 0) && f.ItemCount(10161066) == 0,
-                "重选角色保留两张票消费及十次追加额度");
-            var ticketsExhausted = f.Read();
+            That(f.Session.UseDimensionEntryTicket(source, tickets).Accepted && f.Session.DimensionEntranceInfo() is (5, 5, 0) &&
+                f.ItemCount(10161066) == 1 && DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 5,
+                "移除故障后首张券只提交一次且增加五次");
+            var capped = f.Read();
             That(!f.Session.UseDimensionEntryTicket(source, tickets).Accepted &&
-                QuestCompletionRepositoryTests.Same(ticketsExhausted, f.Read()) &&
-                QuestCompletionRepositoryTests.Same(ticketsExhausted, f.Session.Selected!) &&
-                f.Session.DimensionEntranceInfo() is (5, 10, 0),
-                "已消费空槽重复使用被拒且不改库存、额度或revision");
-            const int extraCapacity = 10;
+                QuestCompletionRepositoryTests.Same(capped, f.Read()) && QuestCompletionRepositoryTests.Same(capped, f.Session.Selected!),
+                "到上限后重复请求整拒，保留第二张券和全部资产");
+            f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
+            That(f.Session.DimensionEntranceInfo() is (5, 5, 0) && f.ItemCount(10161066) == 1,
+                "重选角色保留五次追加与未消费的第二张券");
+            const int extraCapacity = 5;
             for (int extra = 0; extra < extraCapacity; extra++)
             {
                 int dungeon = 7165 + extra % 3;
@@ -463,7 +459,7 @@ internal static class OtherverseAncientTests
                     extraOpening.Entry.Difficulty == difficulty && remaining is (5, var extraRemaining, 0) &&
                     extraRemaining == (uint)(extraCapacity - extra - 1) &&
                     f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit + extra + 1 &&
-                    f.Usage(7100).WeeklyUsed == 2 && f.ItemCount(10161066) == 0,
+                    f.Usage(7100).WeeklyUsed == 2 && f.ItemCount(10161066) == 1,
                     "跨图追加入场逐次扣额外剩余并持久共用日次数，不重置隐藏周额度");
                 That(f.Session.ReturnFromFormalDungeon() is not null, "额外入场可正常返城");
             }
@@ -471,13 +467,13 @@ internal static class OtherverseAncientTests
             That(f.Usage(dimension.DailyRow.CountKey).DailyUsed == dimension.BaseDailyLimit + extraCapacity &&
                 f.Session.BeginDungeonSelection() is not null && f.Session.EnterFormalDungeon(7165, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
                 QuestCompletionRepositoryTests.Same(entriesExhausted, f.Read()) && f.Session.DungeonSnapshot is null,
-                "基础五次加两张券十次合计十五次，第十六次被拒且不扣资产或安装实例");
+                "基础五次加五次合计十次，第十一次被拒且不扣资产或安装实例");
             f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
             That(f.Session.DimensionEntranceInfo() is (5, 0, 0) &&
-                f.Usage(dimension.DailyRow.CountKey).DailyUsed == 15 &&
-                DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 10 &&
-                f.ItemCount(10161066) == 0,
-                "十五次用尽后重选仍保持基础5/5、追加剩余0与原十次额度账本");
+                f.Usage(dimension.DailyRow.CountKey).DailyUsed == 10 &&
+                DimensionEntryTicketService.Extra(f.Read().Inventory, tickets.Clock.GetUtcNow()) == 5 &&
+                f.ItemCount(10161066) == 1,
+                "十次用尽后重选仍保留原五次额度，不因用尽恢复追加资格");
         }
         using (var f = new Fixture(pvf, towns, items, incounts, 2))
         {

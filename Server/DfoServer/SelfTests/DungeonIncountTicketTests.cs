@@ -12,11 +12,13 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class DungeonIncountTicketTests
+internal static partial class DungeonIncountTicketTests
 {
     internal static void Run(TcpTestResources resources, string root)
     {
         int before = Count;
+        RunDimensionLimits(resources, root);
+        RunResetLimits(resources, root);
         string path = Path.Combine(root, "incount-ticket.db");
         var repository = new CharacterRepository(path);
         var owners = new AccountOwners();
@@ -109,6 +111,21 @@ internal static class DungeonIncountTicketTests
                 usedHope.Counts.Single(row => row.Dungeon == 8523) is { Daily: var daily, Weekly: var weekly } &&
                 daily == checked((byte)(hopeRow.Limit + 1)) && weekly == checked((byte)(hopeRow.WeeklyLimit + 1)),
                 "代号希望追加券同时增加日、周入场额度");
+            hopeSession.End();
+            repository = new CharacterRepository(path);
+            hopeSession = new GameSession(repository, resources.Towns, hopeOwner, incounts: incounts, timeProvider: clock);
+            hopeSession.Select(0); hopeSession.MarkReady();
+            That(hopeSession.Selected!.Inventory.Find(hopeSlot) is null && HopeUsage() == new DungeonIncountUsage(0, 0, 1, 1),
+                "代号希望重建仓储与会话恢复单次消费及日周额度");
+            clock.Advance(TimeSpan.FromDays(1));
+            That(HopeUsage() == new DungeonIncountUsage(0, 0, 0, 1), "代号希望06点日切不抹去本周追加");
+            clock.Advance(DateTimeOffset.Parse("2026-11-02T05:59:59+08:00") - clock.GetUtcNow());
+            That(incounts.WeeklyResetDay(hopeRow.CountKey) == 1 && HopeUsage() == new DungeonIncountUsage(0, 0, 0, 1),
+                "代号希望遵守资源指定周一，05:59:59仍保留本周追加");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            That(HopeUsage() == default, "代号希望周一06点清除旧周追加");
+            DungeonIncountUsage HopeUsage() => repository.LoadDungeonIncount(hopeOwner, hopeSession.Selected!.Id,
+                hopeRow.CountKey, DungeonIncountPolicy.Period(clock.GetUtcNow(), incounts.WeeklyResetDay(hopeRow.CountKey)));
         }
         finally { hopeSession.End(); }
         // 黎明裂缝：基础 2 次，追加券 +1，重置券仅在耗尽后清空已用和追加额度。
