@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory
 )
 $ErrorActionPreference = 'Stop'
+throw 'Legacy seven-category layout retired: it violates native callback/guide contracts. Use Prepare-Compatibility.ps1, Pack-Compatibility.ps1, Verify-Compatibility.ps1 and paired RaidShopCategory client patch.'
 $sourcePath = (Resolve-Path -LiteralPath $PvfPath).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw 'Use a new delta directory.' }
