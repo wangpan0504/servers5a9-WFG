@@ -28,10 +28,10 @@ namespace DfoServer;
 
 internal static class OperationHopeSessionTests
 {
-    public static void Run(PvfArchive pvf,ItemResources items)
+    public static void Run(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         int before = Count;
-        var resources = new Resources(pvf,items);
+        var resources = new Resources(towns,pvf,characters,items);
         VerifyHopeRewards(pvf,items,resources);
         using (var f = new Fixture(resources))
         {
@@ -201,7 +201,7 @@ internal static class OperationHopeSessionTests
             using var command=setup.CreateCommand(); command.CommandText="PRAGMA journal_mode=DELETE";
             That(string.Equals(Convert.ToString(command.ExecuteScalar()),"delete",StringComparison.OrdinalIgnoreCase),"isolated BP publication uses DELETE journal for real exclusive read lock");
         }
-        var stats=new CharacterStatComputer(CharacterCatalog.Load(pvf,resources.Items.Items));
+        var stats=new CharacterStatComputer(resources.Characters);
         var town=new TownProjection(resources.Towns,stats,null,resources.Items.EpicPieces);
         var inventory=new InventoryProjection(stats,town,resources.Items.EpicPieces);
         using var log=new ServerLog(System.IO.Path.GetDirectoryName(f.Path)!);
@@ -332,7 +332,7 @@ internal static class OperationHopeSessionTests
         That(settled is { Outcome:DungeonRunOutcome.Accepted, Card:not null, Receipt:not null } &&
             f.Session.AdvanceFormalDungeonCards(false) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null,
             "busy fixture settles actual hope and opens cards");
-        var stats=new CharacterStatComputer(CharacterCatalog.Load(pvf,resources.Items.Items));
+        var stats=new CharacterStatComputer(resources.Characters);
         var town=new TownProjection(resources.Towns,stats,null,resources.Items.EpicPieces);
         var inventory=new InventoryProjection(stats,town,resources.Items.EpicPieces);
         using var logOutput=new StringWriter();
@@ -489,10 +489,11 @@ internal static class OperationHopeSessionTests
         throw new InvalidOperationException("希望真实前向路线没有到达目标终点");
     }
 
-    sealed class Resources(PvfArchive pvf,ItemResources items)
+    sealed class Resources(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
     {
         public ItemResources Items { get; } = items;
-        public TownCatalog Towns { get; } = TownCatalog.Load(pvf);
+        public TownCatalog Towns { get; } = towns;
+        public CharacterCatalog Characters { get; } = characters;
         public QuestCatalog Quests { get; } = SelfTestCatalogs.Quests(pvf);
         public QuestRewardParameterCatalog Parameters { get; } = SelfTestCatalogs.QuestRewardParameters(pvf);
         public CharacterGrowthCatalog Growth { get; } = SelfTestCatalogs.Growth(pvf,SelfTestCatalogs.SkillLearning(pvf));

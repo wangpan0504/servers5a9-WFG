@@ -737,7 +737,7 @@ internal static class SelfTestRunner
         await QuestEpisodeChainTests.RunAsync(towns,pvf,characters,itemResources);
         OperationHopeTests.Run(pvf);
         OperationHopeRewardTests.Run(pvf,itemResources);
-        OperationHopeSessionTests.Run(pvf,itemResources);
+        OperationHopeSessionTests.Run(towns,pvf,characters,itemResources);
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
