@@ -361,6 +361,7 @@ internal sealed partial class DungeonHandler
                 if (scene.NavigationReplay) break;
                 await context.Reply(CmdPacketType.FINISH_LOADING, [1], "party_loading_ack", Current);
                 await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "party_loading_release", Current);
+                await DungeonPotionProjection.LoadedAsync(context, Current);
                 foreach (var member in notice.Members)
                     await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_player_state", Current);
                 // 只有重返加载回执携带死亡快照；新客户端重建名册后恢复原死状态，不生成死亡或复活事实。

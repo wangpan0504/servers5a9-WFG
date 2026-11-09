@@ -34,6 +34,7 @@ internal sealed partial class GameSession
         public bool CharacterDead { get; set; }
         public NpcFavorAppearance? FavorNpc { get; set; }
         public GriefTowerItemUse? GriefItems { get; init; }
+        public DungeonPotionUse? PotionUses { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
@@ -203,7 +204,7 @@ internal sealed partial class GameSession
         if (ChannelEntry?.Type is 23 or 32 or 45 or 50 && !HasRaidDungeonAdmission)
             return RejectFormal("raid-dungeon-admission-required");
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
-            return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
+            return PrepareRaidDungeon(dungeonId, questId, difficulty, catalog, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
                 shared, partyFirstKey, partyInstance, partyAdmission);
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) &&
@@ -650,6 +651,8 @@ internal sealed partial class GameSession
             helperRotation);
         if (prepared is not null && bossBuff is not null)
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
+        if (prepared is not null && catalog.StackableLimits.Dungeons.TryGetValue(checked((int)dungeonId), out int potionMaximum))
+            prepared = prepared with { Dungeon = prepared.Dungeon with { PotionUses = new(catalog.StackableLimits, potionMaximum) } };
         if (prepared is not null && entry.Maze.IsGriefTower)
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         if (prepared is not null && entry.IsBossRush)

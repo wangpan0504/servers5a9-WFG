@@ -68,6 +68,7 @@ internal static class TcpRegressionTests
         }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
         ("prey-team-flow", PreyTeamTcpTests.RunAsync),
+        ("prey-potion-limit", PreyTeamTcpTests.RunPotionLimitAsync),
         ("prey-team-lobby", PreyTeamTcpTests.RunLobbyAsync),
         ("prey-team-landing", PreyTeamTcpTests.RunLandingAsync),
         ("prey-team-landing-squads", PreyTeamTcpTests.RunTeamLandingAsync),
