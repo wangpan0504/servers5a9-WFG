@@ -2663,3 +2663,10 @@ CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_ru
             PRIMARY KEY(character_id,instance_id),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
+
+CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );

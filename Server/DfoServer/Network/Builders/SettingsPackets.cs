@@ -5,6 +5,15 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] NpcBookmarks(ImmutableArray<byte> entries)
+    {
+        if (entries.IsDefault) return new byte[4];
+        DfoServer.Game.Settings.ClientSettingsService.ValidateNpcBookmarks(entries);
+        byte[] body = new byte[4 + entries.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(body, entries.Length / 4);
+        entries.AsSpan().CopyTo(body.AsSpan(4));
+        return body;
+    }
     public static byte[] RecentEmoticons(ImmutableArray<byte> entries)
     {
         if (entries.IsDefault) return new byte[DfoServer.Game.Settings.ClientSettingsService.RecentEmoticonLength];

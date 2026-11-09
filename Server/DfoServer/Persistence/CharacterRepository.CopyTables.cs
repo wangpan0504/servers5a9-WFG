@@ -58,6 +58,7 @@ internal sealed partial class CharacterRepository
         new("character_quest_daily_clear", "character_id", "character_id,account,quest_id,day,event_id,revision"),
         new("character_quest_effect_receipts", "character_id", "character_id,operation_id,before_revision,revision,claimed_quests,changed_items"),
         new("character_quest_notify", "character_id", "character_id,account,entries"),
+        new("character_npc_bookmarks", "character_id", "character_id,account,entries"),
         new("character_quest_special_reward_claims", "character_id", "character_id,quest_id,operation_id"),
         new("character_quest_stage_claims", "character_id", "character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision"),
         new("character_quest_stage_witnesses", "character_id", "character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof"),

@@ -75,6 +75,7 @@ internal sealed class NpcFavorCatalog
     // 按共享owner去重，不为NPC不同形态建立平行好感度。
     public ImmutableArray<NpcFavorTarget> All() => [.. ids.Select(Get).OfType<NpcFavorTarget>().DistinctBy(row => row.OwnerId).OrderBy(row => row.OwnerId)];
     public NpcFavorRules? Rules => rules.Value;
+    public bool Contains(int id) => id > 0 && exists(id);
     // 未知客户端编号不进入缓存，容量至多为本份LST的NPC数量。
     public NpcFavorTarget? Get(int id) => id <= 0 || !exists(id) ? null : targets.GetOrAdd(id, key => new(() => read(key))).Value;
 }

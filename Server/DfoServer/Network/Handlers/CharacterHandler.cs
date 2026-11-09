@@ -226,6 +226,9 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             DfoServer.Network.Builders.Inventory.NpcFavorPackets.Snapshot(projectedCharacter.Character.Inventory.NpcFavor, time?.GetUtcNow()),
             "npc_favor_initialize", () => context.Owner.Execute(() => context.Session.Ready &&
                 ReferenceEquals(context.Session.Selected, projectedCharacter.Character)));
+        await projection.CashShopRestrictionsAsync(context, projectedCharacter.Character,
+            () => context.Owner.Execute(() => context.Session.Ready &&
+                ReferenceEquals(context.Session.Selected, projectedCharacter.Character)));
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         social?.Initialize(context);

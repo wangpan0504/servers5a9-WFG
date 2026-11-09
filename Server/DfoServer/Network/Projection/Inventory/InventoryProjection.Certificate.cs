@@ -17,6 +17,8 @@ internal sealed partial class InventoryProjection
         if (!CanSend()) return;
         var character = snapshot.Character;
         var current = character.Inventory;
+        if (!plan.Before.ShopPurchases.SequenceEqual(plan.After.ShopPurchases))
+            await town.CashShopRestrictionsAsync(context, character, CanSend, plan.Before);
         var lists = plan.ChangedSlots.Select(slot => slot.List).Where(list => list is InventoryListType.Main or
             InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.Equipment).ToHashSet();
         if (plan.Before.Expansion != plan.After.Expansion ||
