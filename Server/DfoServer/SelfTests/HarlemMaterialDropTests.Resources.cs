@@ -82,7 +82,7 @@ internal static partial class HarlemMaterialDropTests
             int expectedId = dungeonId == 530 && purgedPermille == 1000 ? HarlemMaterialDropPolicy.PurgedId : HarlemMaterialDropPolicy.FragmentId;
             int expectedCount = dungeonId == 530 ? purgedPermille == 1000 ? 120 : 200 : cosmo ? 30 : legend ? 15 : 9;
             var bonusAmounts = new Dictionary<int, int> { [3330] = 2, [10158124] = 1, [10305940] = 1 };
-            if (legend || cosmo) { bonusAmounts.Add(10305616, cosmo ? 10 : 2); bonusAmounts.Add(10307527, 1); }
+            if (legend || cosmo) { bonusAmounts.Add(10305616, cosmo ? 30 : 4); bonusAmounts.Add(10307527, 1); }
             var bonusBefore = bonusAmounts.Keys.ToDictionary(id => id, id => ItemAmount(id));
             var bonusCollected = bonusAmounts.Keys.ToDictionary(id => id, _ => 0);
             int bonusDeaths = 0;
@@ -144,7 +144,7 @@ internal static partial class HarlemMaterialDropTests
             }
             That(materialDeaths == 1 && collected == expectedCount && Amount() == expectedCount,
                 "每次真实挑战只由一个合法死亡源发放完整材料，拾取后写入库存");
-            That(wishCollected == (cosmo ? 10 : legend ? 2 : 0) && fixture.Read().Inventory.Items
+            That(wishCollected == (cosmo ? 30 : legend ? 4 : 0) && fixture.Read().Inventory.Items
                 .Where(item => item.Core.ItemId == HarlemMaterialDropPolicy.SkyWishId).Sum(item => item.Core.Count) == wishCollected,
                 "星空实际末杀仅一份天空之愿，死亡事务失败重试及重复包不多发，拾取保存完整数量");
             That(dungeonId == 530 ? epicDeaths == 0 : epicDeaths == 1 && epicCollected == expectedRolls && EpicAmount() == expectedRolls,
@@ -194,8 +194,9 @@ internal static partial class HarlemMaterialDropTests
                 if (extras.Length > 0) bonusDeaths++;
                 foreach (var ground in extras)
                 {
-                    That(bonus && ground.Core.Count == 1 && ground.ResourceIdentity.Contains(HarlemAbyssBonusDropPolicy.Rule),
-                        "补全奖励逐个拥有地面key并保留本服规则来源");
+                    That(bonus && ground.Core.Count == (ground.Core.ItemId == HarlemAbyssBonusDropPolicy.SkyFragmentId ? bonusAmounts[ground.Core.ItemId] : 1) &&
+                        ground.ResourceIdentity.Contains(HarlemAbyssBonusDropPolicy.Rule),
+                        "苍穹碎片按单堆地面物投放，其余补全奖励逐个拥有地面key并保留本服规则来源");
                     oldBonusKey = ground.Reservation.GroundKey;
                     if (bonusCollected.Values.All(count => count == 0))
                     {
@@ -208,7 +209,7 @@ internal static partial class HarlemMaterialDropTests
                     }
                     That(fixture.Session.PickFormalDungeonItem(oldBonusKey, items.Items, items.EpicPieces, items.GoldLimits)
                         .Outcome == DungeonRunOutcome.Accepted, "补全奖励沿原地面拾取事务持久化");
-                    bonusCollected[ground.Core.ItemId]++;
+                    bonusCollected[ground.Core.ItemId] += ground.Core.Count;
                     That(fixture.Session.PickFormalDungeonItem(oldBonusKey, items.Items, items.EpicPieces, items.GoldLimits)
                         .Outcome == DungeonRunOutcome.Rejected, "补全奖励不能重复拾取");
                 }
@@ -222,9 +223,11 @@ internal static partial class HarlemMaterialDropTests
                     That(fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits)
                         .Outcome == DungeonRunOutcome.Rejected, "稀有怪额外装备不能重复拾取");
                 }
-                foreach (var wish in death.Drops.Where(row => !row.IsGold && row.Core.ItemId == HarlemMaterialDropPolicy.SkyWishId))
+                var wishes = death.Drops.Where(row => !row.IsGold && row.Core.ItemId == HarlemMaterialDropPolicy.SkyWishId).ToArray();
+                That(wishes.Length <= 1, "天空之愿按单堆地面物投放");
+                foreach (var wish in wishes)
                 {
-                    That(wish.Core.Count == 1, "天空之愿每个地面物品各1个");
+                    That(wish.Core.Count == (cosmo ? 30 : 4), "天空之愿单堆数量匹配当前难度与超星空倍率");
                     var pickup = fixture.Session.PickFormalDungeonItem(wish.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits);
                     That(pickup.Outcome == DungeonRunOutcome.Accepted && pickup.Commit is { Duplicate: false }, "天空之愿沿真实拾取事务入库");
                     wishCollected += wish.Core.Count;

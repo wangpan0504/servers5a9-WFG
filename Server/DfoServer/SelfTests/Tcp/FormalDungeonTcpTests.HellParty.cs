@@ -274,16 +274,18 @@ internal static partial class FormalDungeonTcpTests
                     bossId = checked((int)U32(map, offset + 8));
                     peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]); peer.Expect(0, 31, []);
                     peer.Expect(0, 261, [0]);
-                    var ids = Enumerable.Range(0, U16(death, 2)).Select(index => checked((int)U32(death, 4 + index * 131 + 6))).ToArray();
-                    That(ids.Count(id => id == HarlemMaterialDropPolicy.FragmentId) >= 30 &&
-                        ids.Count(id => id == HarlemMaterialDropPolicy.SkyWishId) >= 10,
-                        "白斯增量不能覆盖超星空原有30碎片与10天空之愿");
-                    VerifyWhiteBossMaterials(ids, bossId);
+                    var items = Enumerable.Range(0, U16(death, 2)).Select(index => (
+                        Id: checked((int)U32(death, 4 + index * 131 + 6)),
+                        Count: checked((int)U32(death, 4 + index * 131 + 10)))).ToArray();
+                    That(items.Count(row => row.Id == HarlemMaterialDropPolicy.FragmentId && row.Count == 1) >= 30 &&
+                        items.Any(row => row.Id == HarlemMaterialDropPolicy.SkyWishId && row.Count == 30),
+                        "白斯增量不能覆盖超星空原有30碎片与单堆30天空之愿");
+                    VerifyWhiteBossMaterials(items, bossId);
                     if (bossId == 109007097)
                     {
                         var tayberrs = DungeonHellEpicCatalog.Load(resources.Archive).Pool(54, 4, resources.ItemResources.Items.Get)
                             .Entries.Select(row => row.Template.Id).ToHashSet();
-                        var epicIds = ids.Where(id => id != 0 && resources.ItemResources.Items.Get(id) is { Kind: ItemKind.Equipment, Rarity: 4 }).ToArray();
+                        var epicIds = items.Select(row => row.Id).Where(id => id != 0 && resources.ItemResources.Items.Get(id) is { Kind: ItemKind.Equipment, Rarity: 4 }).ToArray();
                         That(epicIds.All(tayberrs.Contains), "白斯socket所有已触发的史诗属于泰波尔斯池，不仅检查追加掉落");
                         Console.WriteLine($"Cosmo white boss socket epic hits: {epicIds.Length}");
                     }
@@ -294,14 +296,15 @@ internal static partial class FormalDungeonTcpTests
                 That(fixture.Snapshot() == saved, "超星空TCP重复死亡不重抽装备或材料、不给重复经验");
             }
         }
-        That(bossId is 65587 or 107013805 or 109007097 && picked >= 40, "超星空TCP实际击杀三候选之一并完成地面拾取");
+        That(bossId is 65587 or 107013805 or 109007097 && picked >= 31, "超星空TCP实际击杀三候选之一并完成地面拾取");
         Console.WriteLine($"PASS 超星空真实socket终点{bossId}：{picked}项掉落与拾取；指定白斯覆盖见受控资源用例");
     }
 
-    static void VerifyWhiteBossMaterials(int[] ids, int bossId)
+    static void VerifyWhiteBossMaterials((int Id, int Count)[] items, int bossId)
     {
-        That(ids.Count(id => id == 10306750) == (bossId == 109007097 ? 2 : 0) && !ids.Contains(10309041),
-            "白斯固定掉落2个普通反物质粒子，其他Boss不额外掉落且不误发账号绑定版本");
+        var particles = items.Where(row => row.Id == 10306750).ToArray();
+        That((bossId == 109007097 ? particles is [(10306750, 2)] : particles.Length == 0) && !items.Any(row => row.Id == 10309041),
+            "白斯固定单堆掉落2个普通反物质粒子，其他Boss不额外掉落且不误发账号绑定版本");
     }
 
 }
