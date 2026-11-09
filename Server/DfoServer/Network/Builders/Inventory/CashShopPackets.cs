@@ -35,4 +35,47 @@ internal static class CashShopPackets
         0,          // success = 0
         0, 0,       // error u16 = 0
     ];
+
+    // Noti 863 (0239CF20)：i32 条数 + 每条 (i32 restrictId, i32 expireTime, i32 remainingCount)。
+    public static byte[] BuyRestrictions(InventorySnapshot inventory, CashShopCatalog shop, DateTimeOffset utcNow)
+    {
+        int today = ShopPurchaseCount.Today(utcNow);
+        var entries = new List<(int RestrictId, int ExpireTime, int Remaining)>();
+        foreach (var restriction in shop.BuyRestrictions.Values.OrderBy(row => row.RestrictId))
+        {
+            if (restriction.TryGetPeriod(out var period))
+            {
+                var key = new ShopPurchaseCount(0, restriction.CommodityId, restriction.AccountWide, false,
+                    ShopPurchaseCount.PeriodDay(today, period), 0) { Period = period };
+                var row = inventory.ShopPurchases.SingleOrDefault(key.SameKey);
+                int used = row?.Effective(today) ?? 0;
+                if (used <= 0) continue;
+                int expireTime = (int)Math.Min(key.NextReset(today) ?? 0, ItemExpiration.MaximumUnixTime);
+                entries.Add((restriction.RestrictId, expireTime, Math.Max(0, restriction.Maximum - used)));
+            }
+            else
+            {
+                var probe = new ShopPurchaseCount(0, restriction.CommodityId, restriction.AccountWide, false, today, 0)
+                { Period = ItemPurchasePeriod.Daily };
+                var row = inventory.ShopPurchases.SingleOrDefault(probe.SameKey);
+                if (row is null || today < row.Day || today - row.Day >= restriction.PeriodCode || row.Count <= 0)
+                    continue;
+                long resetUnix = new DateTimeOffset(DateOnly.FromDayNumber(row.Day).AddDays(restriction.PeriodCode),
+                    new TimeOnly(6, 0), TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+                entries.Add((restriction.RestrictId, (int)Math.Min(resetUnix, ItemExpiration.MaximumUnixTime),
+                    Math.Max(0, restriction.Maximum - row.Count)));
+            }
+        }
+        byte[] body = new byte[4 + checked(12 * entries.Count)];
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(0, 4), entries.Count);
+        int offset = 4;
+        foreach (var (restrictId, expireTime, remaining) in entries)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(offset, 4), restrictId);
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(offset + 4, 4), expireTime);
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(offset + 8, 4), remaining);
+            offset += 12;
+        }
+        return body;
+    }
 }

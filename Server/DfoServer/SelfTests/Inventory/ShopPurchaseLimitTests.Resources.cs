@@ -93,6 +93,23 @@ internal static partial class ShopPurchaseLimitTests
             }
             That(shop.Buy(current, new(10309042, 1, 274, 626), out _, now.AddDays(7)).Accepted,
                 "持久化上周记录不阻止下周重新购买");
+            That(resources.Items.Get(490000394).ShopPrice.UnresolvedPurchaseLimits.Length == 1 &&
+                shop.Buy(current, new(490000394, 1, 1263, 20135), out _, now) is { Accepted: false, Error: 0x85 },
+                "真实空daily purchase limit在售商品490000394拒绝购买");
+            That(resources.Items.Get(10006470).ShopPrice.Limit is { AccountWide: true, Count: 2, ResetDaily: false },
+                "真实重复daily purchase limit商品10006470按末段取上限2");
+            That(resources.Items.Get(10157236).ShopPrice.PeriodicLimit is { AccountWide: false, Count: 1, Period: ItemPurchasePeriod.Monthly },
+                "真实reset monthly purchase item商品10157236解析为角色月度限购");
+            current = InventoryService.Commit(repo, owner, current, inventory.Grant(current, [new(10158124, 20)]));
+            current = InventoryService.Commit(repo, owner, current, shop.Buy(current, new(10309050, 4, 28, 45), out _, now));
+            current = InventoryService.Commit(repo, owner, current, shop.Buy(current, new(10309050, 6, 247, 486), out _, now));
+            sibling = repo.List(owner).Single(row => row.Id == sibling.Id);
+            That(shop.Buy(current, new(10309050, 1, 28, 45), out _, now) is { Accepted: false, Error: 0x85 } &&
+                shop.Buy(current, new(10309050, 1, 247, 486), out _, now) is { Accepted: false, Error: 0x85 } &&
+                shop.Buy(sibling, new(10309050, 1, 252, 598), out _, now) is { Accepted: false, Error: 0x85 } &&
+                shop.PurchaseCounts(current, 45, now)!.Single(row => row.ItemId == 10309050).Count == 10 &&
+                shop.PurchaseCounts(current, 486, now)!.Single(row => row.ItemId == 10309050).Count == 10,
+                "跨商人售卖的真实旧式限购商品10309050共享每日账号额度10并在各商人715聚合回显");
             SchemaUpgrade(Path.Combine(root, "upgrade.db"));
 
             int Materials(Character role) => role.Inventory.Items.Where(row => row.Core.ItemId == 10306750).Sum(row => row.Core.Count);

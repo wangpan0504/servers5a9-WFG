@@ -67,7 +67,9 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         ushort cargoCapacity = before.CargoCapacity;
         var serviceWallet = before.AccountWallet;
         var serviceInventory = before;
+        var shopPurchases = before.ShopPurchases;
         bool unlockSkillTree = false;
+        int today = ShopPurchaseCount.Today(now);
         foreach (var requested in request.Items)
         {
             var product = shop.Product(requested.CommodityId) ?? shop.Mileage.Products.GetValueOrDefault(requested.CommodityId);
@@ -119,6 +121,36 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 product.CommodityId == deluxe.CommodityId && product.ItemId == deluxe.ItemId;
             bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
             bool privilegeProduct = product.Section == "privilege service";
+            if (!privilegeProduct && shop.BuyRestrictions.TryGetValue(product.CommodityId, out var restriction))
+            {
+                if (restriction.TryGetPeriod(out var period))
+                {
+                    var key = new ShopPurchaseCount(0, product.CommodityId, restriction.AccountWide, false,
+                        ShopPurchaseCount.PeriodDay(today, period), 1) { Period = period };
+                    var previous = shopPurchases.SingleOrDefault(key.SameKey);
+                    int used = previous?.Effective(today) ?? 0;
+                    if (previous?.Day > key.Day || used + 1 > restriction.Maximum)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    key = key with { Count = used + 1 };
+                    shopPurchases = previous is null ? shopPurchases.Add(key) : shopPurchases.Replace(previous, key);
+                    if (key.NextReset(today) is { } reset) Deadline(reset);
+                }
+                else
+                {
+                    var probe = new ShopPurchaseCount(0, product.CommodityId, restriction.AccountWide, false, today, 1)
+                    { Period = ItemPurchasePeriod.Daily };
+                    var previous = shopPurchases.SingleOrDefault(probe.SameKey);
+                    if (previous is not null && today < previous.Day)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    bool expired = previous is null || today - previous.Day >= restriction.PeriodCode;
+                    int used = expired ? 0 : previous!.Count;
+                    if (used + 1 > restriction.Maximum)
+                        return InventoryResult.Reject(17) with { RejectReason = "cash_shop_purchase_limit" };
+                    var key = probe with { Day = expired ? today : previous!.Day, Count = used + 1 };
+                    shopPurchases = previous is null ? shopPurchases.Add(key) : shopPurchases.Replace(previous, key);
+                    Deadline(DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds());
+                }
+            }
             if (privilegeProduct)
             {
                 if (privileges is null) return InventoryResult.Reject(17) with { RejectReason = "privilege_catalog_missing" };
@@ -323,7 +355,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (!spent.Accepted) return InventoryResult.Reject(10);
             paid = spent.Plan!.After;
         }
-        paid = paid with { AvatarExpansion = avatarExpansion, CargoCapacity = cargoCapacity };
+        paid = paid with { AvatarExpansion = avatarExpansion, CargoCapacity = cargoCapacity, ShopPurchases = shopPurchases };
         // 主商品和附赠按真实货币归属合计；付费购买不能沿普通发奖的上限截断规则少发奖励。
         if (!CanGrantCurrencies(paid, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(17);
@@ -380,9 +412,9 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         if (serverItems is not null)
             foreach (var product in products)
             {
-                if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, product.ItemId, 1, now, TimeZoneInfo.Local, out var usage))
+                if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, product.ItemId, product.Count, now, time.LocalTimeZone, out var usage))
                     return InventoryResult.Reject(17);
-                if (!usage.Same(after.ServerItems)) Deadline(FatigueDailyReset.NextReset(now, TimeZoneInfo.Local).ToUnixTimeSeconds());
+                if (!usage.Same(after.ServerItems)) Deadline(FatigueDailyReset.NextReset(now, time.LocalTimeZone).ToUnixTimeSeconds());
                 after = after with { ServerItems = usage };
             }
         receipt = new(products.ToImmutableArray(), bonuses);
