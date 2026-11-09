@@ -228,11 +228,14 @@ internal static class EvildomWarChallengeTcpTests
                     {
                         int bossAt = Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
                             .Single(at => U32(map, at + 8) == 407000556);
+                        ushort rejectedKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        byte[] wrong = SpawnBody(leader, U16(map, bossAt + 6), 407000557, rejectedKey, spawnSequence++);
+                        Spawn(leader, wrong); Spawn(leader, wrong);
+                        ChildDeath(rejectedKey, map[bossAt + 12], expected: false);
+                        Spawn(leader, SpawnBody(leader, U16(map, bossAt + 6), 407000559, rejectedKey, spawnSequence++));
+                        ChildDeath(rejectedKey, map[bossAt + 12], expected: false);
                         ushort dummyKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         byte[] dummyReport = SpawnBody(leader, U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence++);
-                        byte[] wrong = (byte[])dummyReport.Clone();
-                        BinaryPrimitives.WriteUInt32LittleEndian(wrong.AsSpan(32), 407000557);
-                        Spawn(leader, wrong); ChildDeath(dummyKey, map[bossAt + 12], expected: false);
                         if (count == 4)
                         {
                             Spawn(peers[1], SpawnBody(peers[1], U16(map, bossAt + 6), 407000559, dummyKey, spawnSequence));
@@ -272,9 +275,13 @@ internal static class EvildomWarChallengeTcpTests
                         ushort sealKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         byte[] sealReport = SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, sealKey, spawnSequence++);
                         Spawn(leader, sealReport);
-                        ushort nextSealKey = AntonTcpProbe.PeekFiendwarKey(leader);
+                        ushort nextSealKey = AntonTcpProbe.TakeFiendwarKey(leader);
                         Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, nextSealKey, spawnSequence++));
                         ChildDeath(nextSealKey, sealMap[sealAt + 12], expected: false);
+                        // 复现现场：缓存Boss的延迟559在封印房上报，重复557亦被活槽拒绝；已采用键仍须补齐。
+                        ushort cachedKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        Spawn(leader, SpawnBody(leader, U16(map, bossAt + 6), 407000559, cachedKey, spawnSequence++));
+                        ChildDeath(cachedKey, map[bossAt + 12], expected: false);
                         ChildDeath(dummyKey, map[bossAt + 12], expected: false);
                         leader.Send(45, unsupported);
                         That(All().All(rows => !rows.Any(packet => packet is { Kind: 0, Opcode: 29 })),
@@ -305,8 +312,9 @@ internal static class EvildomWarChallengeTcpTests
                         Spawn(leader, sealReport);
                         ChildDeath(sealKey, sealMap[sealAt + 12]);
                         ChildDeath(sealKey, sealMap[sealAt + 12]);
-                        That(AntonTcpProbe.TakeFiendwarKey(leader) == nextSealKey,
-                            "活槽拒绝没有消费服务端租约，跨房后仍以同一已授未用键发起合法下一轮");
+                        nextSealKey = AntonTcpProbe.TakeFiendwarKey(leader);
+                        That(nextSealKey != rejectedKey && nextSealKey != cachedKey,
+                            "被拒绝登记的原生已采用键保持墓碑，跨房补号后不复用旧键");
                         Spawn(leader, SpawnBody(leader, U16(sealMap, sealAt + 6), 407000557, nextSealKey, spawnSequence++));
                         ChildDeath(nextSealKey, sealMap[sealAt + 12]);
                         for (int round = 0; round < 3; round++)

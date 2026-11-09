@@ -63,13 +63,15 @@ internal static partial class FiendwarRaidTcpTests
                 Send(leader, bad);
                 NoDeath(first, level, "错误房间或身份没有安装动态对象");
             }
-            // 有效key与错误模板均保留原seq；拒绝不能抢占本次正常报告的流或活跃槽。
+            // 原生已采用键即使登记被拒也会消费；错误模板用独立键，仍不能抢占正常流或活跃槽。
             byte[] crossed = (byte[])valid.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(crossed.AsSpan(32), guide ? 107013169u : 109008120u);
-            Send(leader, crossed); NoDeath(first, level, "未在当前父ACT声明的另一模式子模板不能使用");
+            ushort crossedKey = NextKey(); BinaryPrimitives.WriteUInt32LittleEndian(crossed.AsSpan(36), crossedKey);
+            Send(leader, crossed); NoDeath(crossedKey, level, "未在当前父ACT声明的另一模式子模板不能使用");
             byte[] wrongFamily = (byte[])valid.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(wrongFamily.AsSpan(32), children[0] == 107013155 ? 107013173u : 107013155u);
-            Send(leader, wrongFamily); NoDeath(first, level, "同属团队前缀也不能越过精确父子模板白名单");
+            ushort familyKey = NextKey(); BinaryPrimitives.WriteUInt32LittleEndian(wrongFamily.AsSpan(36), familyKey);
+            Send(leader, wrongFamily); NoDeath(familyKey, level, "同属团队前缀也不能越过精确父子模板白名单");
             foreach (ushort collision in staticCollisions)
             {
                 byte[] bad = (byte[])valid.Clone();
@@ -89,8 +91,9 @@ internal static partial class FiendwarRaidTcpTests
             Send(leader, valid); Send(leader, valid);
             live.Add((children[0], first, valid));
             ushort replacement = NextKey();
-            Send(leader, Report(leader, first, children[0], replacement, sequence + 1));
-            NoDeath(replacement, level, "新活跃子对象不能冒充正式静态父对象继续召唤");
+            ushort wrongParentKey = NextKey();
+            Send(leader, Report(leader, first, children[0], wrongParentKey, sequence + 1));
+            NoDeath(wrongParentKey, level, "新活跃子对象不能冒充正式静态父对象继续召唤");
             Send(leader, Report(leader, first, children[0], first, sequence + 1));
             // 错父拒绝后，原登记及原身份重放仍必须保留；不让错误报告改写活跃对象。
             Send(leader, valid);
@@ -120,8 +123,8 @@ internal static partial class FiendwarRaidTcpTests
                 Retire(actor.Key, level);
             }
             Send(leader, Report(leader, parentKey, children[0], first, ++sequence));
-            // 原有限槽复用先前被拒键；猫/幻影采用新租约键进入下一轮，墓碑不复用。
-            ushort nextWave = singleSlot ? replacement : NextKey();
+            // 被拒登记的原生键亦已采用；下一轮统一领取新租约键，不能复用墓碑。
+            ushort nextWave = NextKey();
             Send(leader, Report(leader, parentKey, children[0], nextWave, ++sequence));
             Retire(nextWave, level);
             Retire(first, level);
