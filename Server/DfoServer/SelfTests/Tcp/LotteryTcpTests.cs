@@ -114,6 +114,7 @@ internal static partial class LotteryTcpTests
         await RestrictedPotsAsync(source, root, resources);
         await FiniteGoldAsync(source, root, resources);
         await GoldCostAsync(source, root, resources);
+        await GoldCostAsync(source, root, resources, pot: 10159699, cost: 100000, openings: 1);
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, shopExpiration: true);
         short SourceSlot()
         {

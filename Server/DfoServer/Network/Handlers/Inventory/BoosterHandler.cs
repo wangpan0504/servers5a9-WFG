@@ -57,7 +57,7 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
         log.Write("lottery_open", new { Connection = context.Id, request?.Mode, request?.Slot,
             SourceItemId = request is null ? null : capture.Selected?.Inventory.Find(new(InventoryListType.Main, request.Slot))?.Core.ItemId,
-            result.Accepted, result.Error, Reason = result.Accepted ? "accepted" : "operation_rejected", Reward = receipt,
+            result.Accepted, result.Error, Reason = result.RejectReason ?? (result.Accepted ? "accepted" : "operation_rejected"), Reward = receipt,
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_LOTTERY_ITEM, LotteryPackets.Opened(result, receipt),
             result.Accepted ? "lottery_opened" : "lottery_rejected", Guard);
