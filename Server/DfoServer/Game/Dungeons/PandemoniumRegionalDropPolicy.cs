@@ -3,22 +3,37 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Dungeons;
 
-// 芽的地区生成表不在当前PVF内；沿本服既有显式掉落规则补全，不冒充原版概率。
+// 芽与次元光辉的地区生成表不在当前PVF内；沿本服既有显式掉落规则补全，不冒充原版概率。
 internal sealed class PandemoniumRegionalDropPolicy(Func<int, DungeonDefinition> resolveDungeon,
     Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog special)
 {
     public const string Rule = "pandemonium-regional-local-v1";
     public const int BirthSeedId = 10161610;
+    public const int DimensionalRadianceId = 10163136;
+    public const int DimensionalRadianceTriggerThreshold = 100;
 
     public bool Applies(DungeonEntryPlan entry)
     {
         if (entry.IsPractice || entry.IsQuestReplay) return false;
         var dungeon = resolveDungeon(checked((int)entry.DungeonId));
-        return string.IsNullOrEmpty(dungeon.DungeonType) && !dungeon.IsRaid &&
-            !dungeon.RawSections.Any(section => section.Tag == "disable drop item") &&
-            (dungeon.Path.StartsWith("dungeon/metrocenter/", StringComparison.OrdinalIgnoreCase) ||
+        return IsOrdinaryRegionalDungeon(dungeon) &&
+            (IsMetroCenterPath(dungeon.Path) ||
              dungeon.Path.StartsWith("dungeon/harlem/", StringComparison.OrdinalIgnoreCase));
     }
+
+    public bool AppliesDimensionalRadiance(DungeonEntryPlan entry)
+    {
+        if (entry.IsPractice || entry.IsQuestReplay) return false;
+        var dungeon = resolveDungeon(checked((int)entry.DungeonId));
+        return IsOrdinaryRegionalDungeon(dungeon) && IsMetroCenterPath(dungeon.Path);
+    }
+
+    static bool IsOrdinaryRegionalDungeon(DungeonDefinition dungeon) =>
+        string.IsNullOrEmpty(dungeon.DungeonType) && !dungeon.IsRaid &&
+        !dungeon.RawSections.Any(section => section.Tag == "disable drop item");
+
+    static bool IsMetroCenterPath(string path) =>
+        path.StartsWith("dungeon/metrocenter/", StringComparison.OrdinalIgnoreCase);
 
     public static bool CanReward(DungeonPlannedMonster monster) => monster.CanReportDeath && !monster.IsFriendly &&
         !monster.IsScriptedBoss && !monster.IsDummyMapBoss && !monster.IsScriptedRetirement && monster.SpawnType <= 3 &&
@@ -26,7 +41,7 @@ internal sealed class PandemoniumRegionalDropPolicy(Func<int, DungeonDefinition>
 
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, DungeonEntryPlan entry, DungeonPlannedMonster monster)
     {
-        if (!CanReward(monster)) return plan;
+        if (!CanReward(monster) || !Applies(entry)) return plan;
         var seed = resolveItem(BirthSeedId);
         if (seed.Id != BirthSeedId || seed.Kind != ItemKind.Material || seed.StackLimit <= 0 || !seed.Expiration.SupportsCreation)
             throw new InvalidDataException("地区诞生之芽模板不支持材料创建");
@@ -34,6 +49,16 @@ internal sealed class PandemoniumRegionalDropPolicy(Func<int, DungeonDefinition>
         trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold,
             new DungeonItemDropPool([new DungeonWeightedDropItem(seed, 1)]), 1, 1,
             ProbabilityDenominator: DungeonExplicitDropPolicy.TriggerDenominator, Category: DungeonDropCategory.Materials));
+        if (AppliesDimensionalRadiance(entry))
+        {
+            var radiance = resolveItem(DimensionalRadianceId);
+            if (radiance.Id != DimensionalRadianceId || radiance.Kind != ItemKind.Material || radiance.Rarity != 6 ||
+                radiance.StackLimit <= 0 || !radiance.Expiration.SupportsCreation)
+                throw new InvalidDataException("地轨中心次元光辉模板不支持传说材料创建");
+            trials.Add(new(DimensionalRadianceTriggerThreshold,
+                new DungeonItemDropPool([new DungeonWeightedDropItem(radiance, 1)]), 1, 1,
+                ProbabilityDenominator: DungeonExplicitDropPolicy.TriggerDenominator, Category: DungeonDropCategory.Materials));
+        }
         if (special.CardsByMonster.TryGetValue(monster.MonsterId, out var cards))
         foreach (var card in cards)
         {
