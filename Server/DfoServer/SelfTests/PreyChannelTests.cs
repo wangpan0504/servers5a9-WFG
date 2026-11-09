@@ -82,19 +82,19 @@ internal static class PreyChannelTests
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(67, 0, 1, 1)),
             "普通、漩涡团队、魔界大战与普雷不混用快照；普通超时空之战115不能作为普雷旧城镇快照");
 
-        // 卢克 0x20 / 安徒恩 0x17 与普通频道 vt+0x28 不同：普通→团本不记快照，必须按服务端落点入城；团本页签之间互换保留快照。
+        // 四团跨类型切换都重新落点；同团与普通地区的原生兼容规则保留。
         var luke = new ChannelEntry(new(2, 20), 0x20, "[luke_raid]");
         var anton = new ChannelEntry(new(2, 19), 0x17, "[raid]");
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, anton, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(32, 0, 1, 1)) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(32, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(32, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(115, 0, 1, 1)) &&
-            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(59, 0, 1, 1)) &&
+            !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(59, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, new(32, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, anton, new(19, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, new(19, 0, 1, 1)),
-            "卢克/普雷之间及安徒恩非专属城镇仍保留快照，漩涡团队和普通超时空115继续独立隔离");
+            "卢克与普雷不互留快照；安徒恩同团及普通19地区仍兼容，普通超时空115继续独立隔离");
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, prey, new(57, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, luke, new(57, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiendwar, new(57, 0, 1, 1)),
