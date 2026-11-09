@@ -9,7 +9,7 @@ internal static class AiPrograms
         [ScriptToken.Tag("[input]"), ScriptToken.String("target current direction"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(30),
          ScriptToken.Tag("[input]"), ScriptToken.String("x"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(300)];
     // 专用负选择器只在成功分支使用目标；未闭合的能力仍阻止写包。
-    internal static Dictionary<string, List<ScriptToken>> Action(TemplateDefinition definition)
+    internal static Dictionary<string, List<ScriptToken>> Action(TemplateDefinition definition, bool includeBasicAttack = false)
     {
         var keys = definition.Active.Select((id, ordinal) => (id, ordinal)).ToDictionary(pair => pair.id, pair => pair.ordinal);
         var rules = new List<Func<List<ScriptToken>, List<ScriptToken>>>();
@@ -40,7 +40,7 @@ internal static class AiPrograms
                 break;
             default: throw new InvalidDataException("Unsupported support identity");
         }
-        if (HasBasicAttack(definition))
+        if (HasBasicAttack(definition) || includeBasicAttack)
             rules.Add(next => BattleForDefinition(Target(100, Return(definition.Active.Length), next, 50), next));
         var programs = new Dictionary<string, List<ScriptToken>>(StringComparer.Ordinal);
         if (rules.Count is < 1 or > 64) throw new InvalidDataException("Support decision graph exceeds bounded rule count");

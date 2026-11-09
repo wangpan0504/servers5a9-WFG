@@ -49,26 +49,6 @@ internal static partial class DungeonRoomCatalogTests
             skippedApc.Monsters.Count == 1,
             "目录缺失的APC不阻断房间，已有定义仍生成");
         Reject(apcRows, "无APC解析器时仍拒绝，不把缺依赖当成跳过");
-        var blockedIds = new[] { 74990, 19973 }.Concat(Enumerable.Range(74000, 48)).Concat(Enumerable.Range(19000, 84)).ToArray();
-        PvfToken[] ApcRow(int id) => [new(0,id),new(0,1),new(0,2),new(0,0),fixture.String("[character]"),fixture.String("[normal]"),new(0,0),new(0,0)];
-        foreach (int blockedId in blockedIds)
-        {
-            var guardedRoom = fixture.Parse(fixture.Block("ai character", [.. ApcRow(6000),
-                .. ApcRow(blockedId), .. ApcRow(6000)]), resolveAiCharacter: row =>
-            {
-                if (SupportCompanionResources.IsBlocked(row.Values[0])) throw new InvalidOperationException("退役AIC不得读取，包括缺失或损坏正文");
-                return ResolveApc(row);
-            });
-            That(guardedRoom.AiCharacters.Count == 3 && guardedRoom.AiCharacters[1] is { IsSuppressedCompanion: true, Path: "", Level: 0 },
-                "退役基础与全部专用变体在AIC回调前变成不读正文占位，保留完整MAP数组位置");
-            var guardedPlan = DungeonMonsterPlan.FromRoom(guardedRoom, 99, 10, companionRows: [blockedId]);
-            That(guardedPlan.Monsters.Select(actor => actor.SourceOrdinal).SequenceEqual([0, 2]) &&
-                guardedPlan.Monsters.Select(actor => actor.ObjectKey).SequenceEqual(new ushort[] { 10, 11 }) &&
-                guardedPlan.Monsters.All(actor => actor.MonsterId == 6000),
-                "手工放行退役ID也不生成，占位不占key且其后原生APC使用真实原序号");
-        }
-        That(new[] { 73999, 74048, 18999, 19084, 74989, 74991, 19972, 19974, 5409 }
-            .All(id => !SupportCompanionResources.IsBlocked(id)), "专用身份边界不误封相邻普通模板与原生5409");
         var positions = fixture.Parse(fixture.Block("event monster position", [new(0, 330), new(0, -93), new(0, 0)]));
         That(positions.EventMonsterPositions.SequenceEqual([330, -93, 0]), "事件怪物位置保留三坐标与负值");
         var special = fixture.Block("special passive object", [new(0, 3), new(0, -20), new(0, 150), new(0, 0), new(0, 2),

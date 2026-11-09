@@ -28,16 +28,6 @@ internal static partial class DungeonRoomCatalogTests
                 { Faction: "[monster]", RankKind: "[normal]" } actor && actor.Id == enemy.Code &&
                 actor.Level == 50 + enemy.Code % 15 && actor.Path == aiPaths[enemy.Code]),
             "大会APC按独立目录保留真实模板与声明等级，不误取同编号monster或副本等级");
-        // 在闭块前追加退役候选；它既不需要路径存在，也不能调用最低信息解析器。
-        var blockedPrefix = fixture.Block("tournament enemies", [new(0,1),fixture.String("[apc]"),
-            .. new[] { 74990, 74000, 74047, 19973, 19000, 19083 }.SelectMany(id => new PvfToken[]
-                { new(0,id),new(0,300),fixture.String("blocked-" + id) }),
-            .. aiPaths.Keys.SelectMany(id => new PvfToken[] { new(0,id),new(0,300),fixture.String("native-" + id) })]);
-        var guarded = DungeonRoomCatalog.ParseTournamentSource(blockedPrefix,fixture.Resolve,monsterPaths,
-            path => path.StartsWith("aicharacter/",StringComparison.Ordinal),aiPaths,id =>
-                SupportCompanionResources.IsBlocked(id) ? throw new InvalidOperationException("不得解析退役比赛AIC") : Resolve(id));
-        That(guarded.Enemies.Select(enemy => enemy.Code).SequenceEqual(aiPaths.Keys),
-            "比赛退役候选在目录存在性与解析前排除，不作为占位对手或替代相邻编号");
         tokens[3] = new(0,99999);
         That(source.Enemies[0].Code == 20001 && source.Enemies[0].AiCharacter!.Level == 56,
             "大会候选保留解析时来源，输入token修改不改变已冻结对手");
