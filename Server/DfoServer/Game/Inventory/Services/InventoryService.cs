@@ -26,9 +26,9 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
         // 已选中装扮预设时，穿戴/卸下在同一事务内实时回写该预设。
         AvatarPresetService.SyncActive(InventoryMoveService.Plan(character, request, catalog,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement, allowQuickSlotEquipmentChange));
-    public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, time.GetUtcNow().ToUnixTimeSeconds());
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
-        request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);
+        request.Kind, request.Condition, catalog, time.GetUtcNow().ToUnixTimeSeconds(), request.List);
     public InventoryResult Grant(Character character, IReadOnlyList<InventoryReward> rewards) =>
         InventoryRewardGrantService.TryGrantBatch(character, rewards, catalog, goldLimits, pieces, contracts: contracts);
     public InventoryResult Delete(Character character, InventoryDeleteRequest request, bool preserveMaterials = false) =>
