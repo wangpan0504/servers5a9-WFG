@@ -103,8 +103,9 @@ internal static class AntonFailureResultTests
                         "换选角epoch后旧失败601静默丢弃，不发布到新角色或清新团");
                 }
                 That(sender.PendingBytes == 0 && store.Attempts == 2 &&
-                    Scalar("SELECT count(*) FROM character_raid_reward_receipts") == 0,
-                    "发送成功、旧代或失败均释放预算且不重跑阶段SQL、退款或发奖励：" + scenario);
+                    Scalar("SELECT count(*) FROM character_raid_reward_receipts") == 0 &&
+                    Scalar("SELECT count(*) FROM mailbox_messages WHERE delivery_key LIKE 'anton-refund:%'") == 1,
+                    "发送成功、旧代或失败均释放预算、不重跑阶段SQL，退票一次且不发通关奖励：" + scenario);
 
                 long Scalar(string sql)
                 {
@@ -119,9 +120,10 @@ internal static class AntonFailureResultTests
     }
 
     sealed class Busy : Exception;
-    sealed class Store(CharacterRepository repository) : ILukeRaidLifecycleStore, IAntonRaidLifecycleStore
+    sealed class Store(CharacterRepository repository) : ILukeRaidLifecycleStore, IAntonRaidLifecycleStore, IRaidFailureRefundStore
     {
         internal int Attempts;
+        public void CommitRaidFailureRefund(AntonRaidBattle.RaidFailureRefund candidate) => repository.CommitRaidFailureRefund(candidate);
         public bool IsRetryable(Exception error) => error is Busy || ((IAntonRaidLifecycleStore)repository).IsRetryable(error);
         public LukePhaseCommit CommitLukePhase(AntonRaidBattle.LukePhaseSettlement candidate) => throw new InvalidOperationException("不是卢克夹具");
         public ImmutableArray<RaidPhaseEligibility> CommitAntonPhase(AntonRaidBattle.AntonPhaseSettlement candidate)

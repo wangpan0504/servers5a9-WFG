@@ -231,7 +231,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
             fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
             fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide);
-        battle.PrepareFiendwarPayments(reservations);
+        battle.PrepareRaidPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");
         bool installed = false;

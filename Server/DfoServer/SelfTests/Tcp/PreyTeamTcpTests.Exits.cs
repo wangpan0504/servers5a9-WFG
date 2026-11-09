@@ -23,7 +23,8 @@ internal static partial class PreyTeamTcpTests
                 (0, peers[0].Id), (1, peers[1].Id), (2, peers[2].Id)) == party,
                 "原两成员同步完整三人实际队伍");
 
-        string inventory = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY character_id,item_uid");
+        const string ownedItems = "SELECT * FROM character_inventory_items WHERE item_uid NOT IN (SELECT item_uid FROM mailbox_attachments) ORDER BY character_id,item_uid";
+        string inventory = fixture.Snapshot(ownedItems);
         peers[0].Send(665, Build(writer => writer.Write(peers[0].Id)));
         var departed = Read(peers[0], "active raid leave");
         Ack(departed, 665, [1, 0], "主动退出原665使用非强退成功标志");
@@ -103,9 +104,13 @@ internal static partial class PreyTeamTcpTests
             RejectTravel(fixture, peer, BoardingRequest, 3,
                 "失效的原登船请求不能在退团后重新进入59/3鸟背", reply: false);
         }
-        That(inventory == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY character_id,item_uid") &&
+        That(inventory == fixture.Snapshot(ownedItems) &&
             fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE raid_type=3") is [[0L]],
-            "主动退团、超时和拒绝旧入场都不重扣门票、退款或发奖");
+            "主动退团、超时和拒绝旧入场不重扣门票或发奖，退票附件不改原背包");
+        foreach (var peer in peers)
+            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0 AND delivery_key LIKE 'prey-refund:%'", peer.Id)
+                is [[var mails]] && Convert.ToInt64(mails) == (peer == peers[0] ? 0 : 1),
+                "主动离团者不退票，留团成员失败后各退原票一次");
 
         bool Returned(List<WirePacket> rows, TcpPeer peer, byte area)
         {
