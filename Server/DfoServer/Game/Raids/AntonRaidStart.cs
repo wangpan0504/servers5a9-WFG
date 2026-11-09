@@ -56,7 +56,7 @@ internal sealed class RaidStartCommands : IDisposable
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
-    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null)
+    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null, DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null)
 {
 #if DEBUG
     internal bool DebugIgnorePreyEntryLimits { get; init; }
@@ -180,12 +180,13 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             if (!timeout.Matches(definition.Resources.Script)) return new(19, "anton-phase-timeout-unavailable");
         }
         ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>>? memberRewards = null;
-        var completion = preyGuide ? preyRewards!.Create(actor.Session.PremiumPcRoom) : null;
+        decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.Raid)?.Equipment ?? 1;
+        var completion = preyGuide ? preyRewards!.Create(actor.Session.PremiumPcRoom, epicMultiplier: epicMultiplier) : null;
         if (preyTeam)
         {
             var policies = reservations.ToDictionary(member => member.Actor.Character,
                 member => preyTeamRewards!.CreateTeam(member.Actor.Session.PremiumPcRoom,
-                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())));
+                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier));
             completion = policies[actor.Character];
             memberRewards = policies.ToImmutableDictionary(row => row.Key,
                 row => row.Value.Phases.Select(phase => phase.Rewards).ToImmutableArray());
@@ -217,9 +218,9 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             // 在全团owner/事务之外抽取每人完整结果，SQL重试与网络重发均复用原冻结产物。
             var policies = reservations.ToDictionary(member => member.Actor.Character,
                 member => expected.Guide ? fiendwarRewards!.CreateGuide(member.Actor.Session.PremiumPcRoom,
-                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())) :
+                    member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier) :
                     fiendwarRewards!.Create(member.Actor.Session.PremiumPcRoom,
-                        member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds())));
+                        member.Expected.Inventory.PrivilegeService.IsActive(now.ToUnixTimeSeconds()), epicMultiplier: epicMultiplier));
             completion = policies[actor.Character];
             memberRewards = policies.ToImmutableDictionary(row => row.Key,
                 row => row.Value.Phases.Select(phase => phase.Rewards).ToImmutableArray());
@@ -230,7 +231,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
             antonPhaseProgress: !prey && !fiendwar && phaseProgress, clock: clock, antonRewards: prey || fiendwar ? null : rewards, phaseTimeout: timeout,
             fiendwar: fiendwar ? definition.Resources.Fiendwar : null, memberRewards: memberRewards, fiendwarRoute: guideRoute,
-            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide);
+            fiendwarMazeRandom: fiendwarMazeRandom, preyGuide: preyGuide, epicMultiplier: epicMultiplier);
         battle.PrepareRaidPayments(reservations);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");

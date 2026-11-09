@@ -11,12 +11,14 @@ internal sealed class LukeResourceRewards
 {
     internal const string Source = "95jp/luke/rewards-v1;direct;undefeated=25+75;privilege=qualified";
     readonly RaidScript script;
+    readonly RaidRewardContainers odds;
     readonly ImmutableDictionary<int, BoosterDefinition> containers;
 
     internal LukeResourceRewards(RaidScript script, ItemCatalog items, BoosterCatalog boosters)
     {
         if (script.Phases.Length != 2 || !script.Issues.IsEmpty) throw new InvalidDataException("卢克奖励阶段声明无效");
         this.script = script;
+        odds = new(script, items, boosters);
         var loaded = ImmutableDictionary.CreateBuilder<int, BoosterDefinition>();
         var visiting = new HashSet<int>();
         void Load(int id, int depth)
@@ -43,7 +45,7 @@ internal sealed class LukeResourceRewards
         containers = loaded.ToImmutable();
     }
 
-    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, bool privilege = false, Func<int, int>? draw = null)
+    internal ImmutableArray<RaidPhaseRewardPolicy> Create(bool pcroom, bool privilege = false, Func<int, int>? draw = null, decimal epicMultiplier = 1)
     {
         int Roll(int maximum)
         {
@@ -94,7 +96,8 @@ internal sealed class LukeResourceRewards
             if (squad.Length != 0)
             {
                 int value = Roll(squad.Aggregate(0, (sum, row) => checked(sum + row.RawB)));
-                var winner = squad.First(row => (value -= row.RawB) < 0);
+                var adjusted = odds.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
+                var winner = squad.Where((row, index) => (value -= adjusted[index]) < 0).First();
                 var grants = new List<InventoryReward>(); Resolve(winner.ItemId, 1, grants);
                 offers.Add(Offer(0, grants));
             }

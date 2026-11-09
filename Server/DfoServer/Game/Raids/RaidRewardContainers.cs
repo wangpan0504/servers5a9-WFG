@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Raids;
 
@@ -11,6 +12,32 @@ namespace DfoServer.Game.Raids;
 internal sealed class RaidRewardContainers(RaidScript script, ItemCatalog items, BoosterCatalog? boosters)
 {
     readonly ImmutableDictionary<int, ImmutableArray<BoosterReward>> legacyPools = LoadLegacyPools(script, items, boosters);
+
+    readonly ImmutableHashSet<int> epicRewards = LoadEpicRewards(script, items, boosters);
+
+    static ImmutableHashSet<int> LoadEpicRewards(RaidScript script, ItemCatalog items, BoosterCatalog? boosters)
+    {
+        var odds = new EpicRewardOdds(items, boosters);
+        return script.Phases.SelectMany(phase => phase.Rewards).Select(row => row.ItemId).Distinct()
+            .Where(odds.Guaranteed).ToImmutableHashSet();
+    }
+
+    // 史诗容器按最终产物判断，外层只加成一次；箱内保底史诗不再增加数量。
+    internal int[] Weights<T>(IEnumerable<T> rows, Func<T, int> itemId, Func<T, int> weight, decimal multiplier)
+    {
+        var source = rows.ToArray();
+        var widths = source.Select(weight).ToArray();
+        if (multiplier == 1) return widths;
+        // 全史诗池是必得奖励，降低倍率不能缩小总权重而让原生抽样落空。
+        if (source.Where((_, index) => widths[index] > 0).All(row => epicRewards.Contains(itemId(row)))) return widths;
+        int total = 0;
+        var cumulative = widths.Select(value => total = checked(total + value)).ToImmutableArray();
+        var adjusted = DungeonEpicRateAdjustment.Adjust(cumulative,
+            source.Select(row => epicRewards.Contains(itemId(row))).ToImmutableArray(), total, multiplier);
+        int previous = 0;
+        for (int i = 0; i < widths.Length; i++) { widths[i] = adjusted[i] - previous; previous = adjusted[i]; }
+        return widths;
+    }
 
     static ImmutableDictionary<int, ImmutableArray<BoosterReward>> LoadLegacyPools(RaidScript script, ItemCatalog items, BoosterCatalog? boosters)
     {

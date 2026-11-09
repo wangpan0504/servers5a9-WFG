@@ -45,6 +45,15 @@ internal static class EpicRoad2019SimulatedDropTests
             if (id == 400000097)
                 That(plan.Generate(_ => 1, DateTimeOffset.UnixEpoch).IsEmpty, "普通星河史诗骰1至4未命中，仅骰0命中");
         }
+        foreach (decimal factor in new[] { 0.5m, 1.5m, 2.5m })
+        foreach (uint id in new uint[] { 400000097, 400000098 })
+        {
+            var controlled = policy.Extend(DungeonDropControlSnapshot.Apply(baseline, new(Equipment: factor)),
+                entry with { DungeonId = id }, monster).Trials.Single();
+            decimal expected = Math.Min(1, (id == 400000097 ? 0.2m : 1m) * factor);
+            That(controlled.Threshold / (decimal)controlled.ProbabilityDenominator == expected,
+                "两活动小数GM倍率保留真实概率，不按五分之一或整数格截断");
+        }
         var activityMaterial = Equipment(490013716) with { Kind = ItemKind.Material, StackLimit = 100, Rarity = 0 };
         var retainedEquipment = new DungeonItemDropPool([new DungeonWeightedDropItem(Equipment(9503), 1)]);
         var activityMaterials = new DungeonItemDropPool([new DungeonWeightedDropItem(activityMaterial, 1)]);
@@ -143,6 +152,10 @@ internal static class EpicRoad2019SimulatedDropTests
         That(controlled.PrepareEntry(entry)(monster).Trials[^1] is { Threshold: 1, ProbabilityDenominator: 5 } &&
             controlled.PrepareEntry(entry with { DungeonId = 400000098 })(monster).Trials[^1].Threshold == 0,
             "活动沿用明确副本集合，集合外不借其它图的零倍率");
+        control.Replace([new(DungeonDropScope.All, [], new(Equipment: 100))], true);
+        That(controlled.PrepareEntry(entry with { DropControlCaptured = true, DropMultipliers = null })(monster).Trials[^1].Threshold == 1 &&
+            controlled.PrepareEntry(entry with { DropControlCaptured = true, DropMultipliers = new(Equipment: 0) })(monster).Trials[^1].Threshold == 0,
+            "正式入场已经冻结关闭或零倍率时，活动准备不能偷读后来百倍设置");
     }
 
     public static void RunResources(PvfArchive pvf, ItemResources items)
@@ -152,6 +165,8 @@ internal static class EpicRoad2019SimulatedDropTests
         var policy = new EpicRoad2019SimulatedDropPolicy(pool, true);
         var catalog = DungeonCatalog.Load(pvf, EpicRoadResourcePaths.Dungeons, EpicRoadResourcePaths.Maps);
         var rooms = DungeonRoomCatalog.Load(pvf);
+        var previewPolicy = new DungeonResourceDropPolicy(DungeonDropRuleCatalog.Load(pvf), DungeonItemDropCatalog.Create([]),
+            id => new(id, "monster/epic-preview.mob", null, null), items.Items.Get, epicRoadSimulated: policy);
         var seen = new HashSet<int>();
         var character = new Character(1, 0, "EpicDrop", 1, new(1, 0, 1, 1, 0), null) { Level = 95 };
         foreach (int id in new[] { 400000097, 400000098 })
@@ -162,6 +177,13 @@ internal static class EpicRoad2019SimulatedDropTests
                 out var entry, out var reason), "真实入场冻结两图每条路线：" + reason);
             var monsters = DungeonMonsterPlan.FromRoom(rooms.Get(map, requirePassiveDefinitions: false), 1, 10, 95).Monsters;
             var boss = monsters.Single(row => row.IsBoss);
+            var preview = previewPolicy.PrepareEpicRoadPreview(catalog.Get(id), boss, 2);
+            var simulated = preview.Trials.Single(trial => trial.EpicRoad2019Simulated);
+            That(simulated.Threshold == 1 && simulated.ProbabilityDenominator == (id == 400000097 ? 5 : 1),
+                "活动预览包含正式末房史诗池及真实基础概率");
+            That(DungeonDropControlSnapshot.Apply(preview, new(Equipment: 0)).Trials.Single(trial => trial.EpicRoad2019Simulated).Threshold == 0 &&
+                DungeonDropControlSnapshot.Apply(preview, new(Equipment: 2)).Trials.Single(trial => trial.EpicRoad2019Simulated).Threshold == (id == 400000097 ? 2 : 1),
+                "真实活动预览零倍率禁用、两倍只应用一次，百分百基础仍封顶");
             seen.Add(boss.MonsterId);
             var generated = policy.Extend(new("resource-test", []), entry!, boss).WithDisjointRestrictions(entry!.DisjointForbiddenDropRarities)
                 .Generate(_ => 0, DateTimeOffset.UtcNow);

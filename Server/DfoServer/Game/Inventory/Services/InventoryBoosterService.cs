@@ -10,8 +10,10 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
     AvatarPackageCatalog? avatars = null, TimeProvider? clock = null, RandomOptionCatalog? randomOptions = null,
-    IndependentAttributePairCatalog? attributePairs = null)
+    IndependentAttributePairCatalog? attributePairs = null, DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null)
 {
+    readonly EpicRewardOdds epicOdds = new(catalog, boosters);
+
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
         => OpenCore(character, request, out receipt, out _, utcNow, ceraPackage: false);
@@ -319,6 +321,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     {
         receipt = null;
         grantBefore = null;
+        decimal epicMultiplier = dropControl?.Current.ResolveReward(DfoServer.Game.Dungeons.DungeonDropScope.All)?.Equipment ?? 1;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
@@ -538,7 +541,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         Add(choice.ItemId, choice.Count, request.Count);
                 foreach (var pool in pools)
                 {
-                    var candidates = pool.Rewards.Where(row => row.Weight > 0).ToArray();
+                    var candidates = epicOdds.Apply(pool.Rewards, epicMultiplier).Where(row => row.Weight > 0).ToArray();
                     long draws = (long)pool.Draws * request.Count;
                     if (candidates.Length == 1)
                     {

@@ -11,6 +11,7 @@ internal static partial class DungeonDropControlTests
 {
     public static void RunCore()
     {
+        DungeonEpicRateAdjustmentTests.RunCore();
         int before = Count;
         var map = new DungeonMap("boss", new(0, 0), 3, "map/control.map");
         var maze = new DungeonMaze(0, 1, 1, "", [map.Position], [map.Position], [map], []);
