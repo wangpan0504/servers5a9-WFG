@@ -229,6 +229,7 @@ internal static class SelfTestRunner
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         NpcFavorTests.RunCore();
+        NpcFavorMaxGmTests.RunCore();
         DisjointSpecialTests.RunCore();
         PlayerDisjointTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
@@ -802,6 +803,7 @@ internal static class SelfTestRunner
         DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
         DungeonDropRuleCatalogTests.RunResources(pvf);
+        CarbonCrystalDropTests.RunResources(itemResources.Items);
         DungeonItemDropCatalogTests.RunParsedResources(pvf);
         DungeonItemDropCatalogTests.RunSnapshotResources(pvf, itemResources.Items);
         DungeonItemDropCatalogTests.RunResources(itemResources.DungeonDropItems);

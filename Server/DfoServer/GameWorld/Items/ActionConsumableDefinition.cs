@@ -16,9 +16,9 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
     public bool RaidUseForbidden { get; init; }
     // [village] 覆盖整座城镇（含赛丽亚房间），与强化/宠物地点判定同一口径；[seria room] 仍只限房间。
     public bool AllowsPlace(string place) => StackableUsePlaces.Allows(Places, place);
+    // [action usable dungeon] 与普通 STK 一致交客户端 029B9DB0 核对，服务端保留禁用副本与团本限制。
     public bool AllowsDungeon(uint dungeonId, bool inRaid = false) =>
-        dungeonId > 0 && (!RaidUseForbidden || !inRaid) && !ExcludedDungeons.Contains(dungeonId) &&
-        (AllowedDungeons is null || AllowedDungeons.Contains(dungeonId));
+        dungeonId > 0 && (!RaidUseForbidden || !inRaid) && !ExcludedDungeons.Contains(dungeonId);
 
     public static ActionConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {

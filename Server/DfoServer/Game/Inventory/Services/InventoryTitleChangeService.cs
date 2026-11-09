@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 // CMD970 称号变更（绣线/华丽的绣线等）：按 etc/aradtitlechange_main.etc 与 etc/aradtitlechange_sub.etc
-// 校验变更道具、封装状态、毕业排除、金币费用与目标称号，消耗 1 个变更道具及对应金币并在原槽位替换称号模板。
+// 校验变更道具、毕业排除、金币费用与目标称号，消耗 1 个变更道具及对应金币并在原槽位替换称号模板。
 internal sealed class InventoryTitleChangeService(ItemCatalog items, TitleChangeCatalog titles,
     TimeProvider? time = null, Func<int, int>? nextRandom = null)
 {
@@ -56,7 +56,6 @@ internal sealed class InventoryTitleChangeService(ItemCatalog items, TitleChange
             return InventoryResult.Reject(17);
 
         if (titleTemplate.Kind != ItemKind.Equipment || titleTemplate.EquipmentSlot != 13 ||
-            !mainEntry.AllowsSealState(target.Core.SealFlag) ||
             mainEntry.FinalTitleItemIds.Contains(target.Core.ItemId) ||
             !mainEntry.ResourceGoldCosts.TryGetValue(target.Core.ItemId, out int goldCost) ||
             !titles.TryGetSub(target.Core.ItemId, out var subEntry))

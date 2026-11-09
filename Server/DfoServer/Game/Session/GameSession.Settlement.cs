@@ -239,7 +239,7 @@ internal sealed partial class GameSession
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
         bool noClearCards = dungeon.Entry.MockBattle is not null || dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
-            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
+            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || dungeon.Entry.DisableClearReward;
         DungeonCardReward? normalCard = null;
         var settlementNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var rarityItems = items ?? griefItems;

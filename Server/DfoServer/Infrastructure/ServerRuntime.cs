@@ -201,8 +201,9 @@ internal static class ServerRuntime
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var creatureTransportMailPolicy = new CreatureTransportMailPolicy(1);
         var titleCatalog = new TitleCatalog(pvf, quests);
+        var npcFavor = new NpcFavorCatalog(pvf);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
-            CharacterEmotionCatalog.Load(pvf), titleCatalog);
+            CharacterEmotionCatalog.Load(pvf), titleCatalog, npcFavor);
         var chatEmoticons = ChatEmoticonCatalog.Load(pvf, itemResources.Contracts);
         var settingsProjection = new SettingsProjection(settings, chatEmoticons);
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
@@ -334,7 +335,7 @@ internal static class ServerRuntime
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled, cashShop: itemResources.CashShop);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -607,7 +608,7 @@ internal static class ServerRuntime
         DungeonRoomCatalog? questRooms = null;
         DungeonCatalog? selectionDungeons = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
-        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
+        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory, NpcFavor = npcFavor };
         IGameCommandModule dungeon;
         Strongway2019Catalog? strongwayCatalog = null;
         Strongway2019MatchingService? strongwayMatching = null;
@@ -704,7 +705,7 @@ internal static class ServerRuntime
                 assaultMaterials: new AssaultMaterialDropPolicy(assaultMode, itemResources.Items.Get),
                 epicRoadSimulated: epicRoad2019Enabled && options.EpicRoad2019SimulatedDropsEnabled
                     ? new EpicRoad2019SimulatedDropPolicy(dawnEpicPool, true) : null,
-                tayberrs: tayberrsDrops);
+                tayberrs: tayberrsDrops, carbonCrystal: new CarbonCrystalDropPolicy(itemResources.Items.Get));
             dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops,
                 dropControl.Settings);
@@ -740,6 +741,9 @@ internal static class ServerRuntime
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
                 RegionalMaterialRule = PandemoniumRegionalDropPolicy.Rule, RegionalCardSource = DungeonSpecialDropCatalog.CardPath,
                 SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
+                CarbonCrystalRule = CarbonCrystalDropPolicy.Rule,
+                CarbonCrystalPermille = CarbonCrystalDropPolicy.DefaultPermille,
+                CarbonCrystalCount = CarbonCrystalDropPolicy.DefaultCount,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),
                 HellEpicRule = HarlemHellEpicDropPolicy.Rule, HellEpicSource = DungeonHellEpicCatalog.Path,
                 HellEpicArea = HarlemHellEpicDropPolicy.Area, NormalEpicList = HarlemHellEpicDropPolicy.NormalList,
@@ -810,7 +814,6 @@ internal static class ServerRuntime
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
-        var npcFavor = new NpcFavorCatalog(pvf);
         var battlePassSeason = options.BattlePassSeasonKey;
         var battlePassStart = options.BattlePassSeasonStart;
         if (battlePassSeason is null)

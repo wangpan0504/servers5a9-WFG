@@ -49,6 +49,7 @@ internal static class DungeonSettlementSessionTests
         RetryCollectionRules();
         FreeCards(false);
         FreeCards(true);
+        DisabledClearCards();
         LostCardResult();
         LostFreeResult();
         DoubleCardRewards();
@@ -64,6 +65,34 @@ internal static class DungeonSettlementSessionTests
         AdventureSettlement();
         EquipmentRarityCards();
         Console.WriteLine($"PASS {TestCheck.Count - before} 通关Session经验、冻结报告、空翻牌及返回断言（非实机）");
+
+        void DisabledClearCards()
+        {
+            // 只在独立目录副本替换一份不可变定义，不改共享资源或增加生产测试入口。
+            var isolated = DungeonCatalog.Load(pvf);
+            var definitions = (System.Collections.Concurrent.ConcurrentDictionary<int, Lazy<DungeonDefinition>>)
+                typeof(DungeonCatalog).GetField("definitions", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(isolated)!;
+            definitions[3] = new(() => definition with
+                { RawSections = [.. definition.RawSections, new("disable clear reward", [])] });
+            using var f = new Fixture("NoClearCards", towns, characters, learning, quests);
+            f.Session.SetCardMembership(f.Created.Name, CardMembershipKind.BlackDiamond,
+                DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds());
+            f.SelectEntry();
+            Check(f.Session.EnterFormalDungeon(3, 3145, 0, isolated, rooms) is { Entry.DisableClearReward: true },
+                "普通正式入场冻结禁通关奖励声明，不依赖特殊模式分类");
+            ClearRun(f);
+            int draws = 0;
+            var policy = PremiumPolicy(_ => { draws++; return 0; });
+            var result = f.Session.SettleFormalDungeon(f.Created.Id, 99, 99, [71, 72], isolated, clear, growth, policy);
+            Check(result.Outcome == DungeonRunOutcome.Accepted && result.Card is null && result.Options is null &&
+                result.BlackDiamond is null && draws == 0 && f.Count("character_dungeon_card_rewards") == 0 &&
+                f.Count("character_dungeon_card_options") == 0,
+                "禁通关奖励的普通Run不抽免费付费或会员牌，也不保存虚假翻牌资格");
+            Check(f.Session.SelectFormalDungeonFreeCard(0, 0) is null &&
+                f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town,
+                "无翻牌资格仍可沿正式结算回城，不强制领取空普通牌");
+        }
 
         void EquipmentRarityCards()
         {

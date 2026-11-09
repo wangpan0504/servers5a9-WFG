@@ -32,7 +32,7 @@ internal static class DevelopmentGmExtendedTests
         using var f = new MailboxPersistenceTests.Fixture();
         f.OtherOwner.Dispose();
         var mailbox = new MailboxService(f.Repository, resources.Items, resources.GoldLimits, resources.EpicPieces);
-        var catalog = new DevelopmentCatalog(pvf, resources, quests) { Stats = new DfoServer.Game.Characters.CharacterStatComputer(characters) };
+        var catalog = new DevelopmentCatalog(pvf, resources, quests) { Stats = new DfoServer.Game.Characters.CharacterStatComputer(characters), NpcFavor = new NpcFavorCatalog(pvf) };
         MarriagePersistenceTests.RunDirectResources(catalog);
         string Answer(string line, GameSession? session = null) => DevelopmentGm.Answer(line, "other", f.Repository, f.Owners,
             _ => session, mailbox, resources.Items, catalog: catalog);
@@ -46,6 +46,15 @@ internal static class DevelopmentGmExtendedTests
             using var lease = f.Owners.Acquire("other", () => { });
             return f.Repository.LoadCharacter(lease, 0);
         }
+        var favorTargets = catalog.NpcFavor!.All();
+        TestCheck.That(favorTargets.Length is > 0 and <= 255, "累计PVF全量可培养NPC可由完整快照表示");
+        var favorReceipt = Json(Answer("npc-favor-max Other"));
+        TestCheck.That(favorReceipt.GetProperty("total").GetInt32() == favorTargets.Length &&
+            favorTargets.All(target => Load().Inventory.NpcFavor.Any(row => row.NpcId == target.OwnerId && row.Points == target.Maximum)),
+            "真实GM命令按累计资源各NPC上限一次写满");
+        long favorRevision = Load().Revision;
+        _ = Json(Answer("npc-favor-max Other"));
+        TestCheck.That(Load().Revision == favorRevision, "真实GM重复命令不重复写入");
         string first = Answer("item-search 0 0 0 * * 18400");
         TestCheck.That(first.StartsWith("OK ") || first.Contains("后台构建", StringComparison.Ordinal), "索引首次查询不阻塞GM端口");
         catalog.Warm(true, true, TimeSpan.FromMinutes(10));
@@ -408,6 +417,8 @@ internal static class DevelopmentGmExtendedTests
         session.Select(0, resources.GoldLimits);
         session.MarkReady();
         TestCheck.That(Answer("rename Other Z_z", session).StartsWith("ERR ") && Answer("char-delete Other Other", session).StartsWith("ERR "), "游戏中的角色拒绝改名与删除");
+        TestCheck.That(Answer("npc-favor-max Other", session).StartsWith("ERR 角色正在游戏中", StringComparison.Ordinal),
+            "已选角色拒绝好感度GM写入，不能绕过在线内存");
         byte slotFlags = session.Selected!.EquipmentSlotFlags;
         TestCheck.That(Answer("equip-slots Other 1", session).StartsWith("ERR 角色正在游戏中", StringComparison.Ordinal) && Answer("equip-slots Other", session).StartsWith("OK ") &&
             session.Selected!.EquipmentSlotFlags == slotFlags, "游戏中的角色拒绝开扩展装备栏，只读查询仍可用");

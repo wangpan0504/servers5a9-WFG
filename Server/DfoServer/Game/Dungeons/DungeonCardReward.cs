@@ -98,10 +98,11 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             return new(checked((int)Math.Max(1, amount)), item, DimensionRewardPolicy.Rule,
                 cardSource, now.ToUnixTimeSeconds());
         }
-        // 专表只属于资源里写了行的团本。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
+        // 已解释的专表优先于通用装备池。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
         // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
-        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
+        if (prices?.SpecificRewards.ContainsKey(dungeon.Id) == true ||
+            dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
             dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
                 prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {

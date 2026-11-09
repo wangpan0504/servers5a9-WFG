@@ -48,10 +48,26 @@ internal sealed partial class GameSession
             (byte)Math.Max(0, dimension.HiddenWeeklyLimit - hidden.WeeklyUsed));
     });
 
-    public InventoryResult UseDimensionEntryTicket(DfoServer.Game.Inventory.Models.InventorySlot position,
-        DimensionEntryTicketService service) => PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
-            ? service.Plan(character, position, DimensionEntryTicketService.UnlimitedExtraEntries, towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet())
-                ? "[seria room]" : "[village]") : InventoryResult.Reject(19), 19, usedItem: position);
+    public InventoryResult UseDimensionEntryTicket(InventorySlot position,
+        DimensionEntryTicketService service)
+    {
+        return PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
+            ? service.Plan(character, position, dimension.ExtraLimit,
+                towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet()) ? "[seria room]" : "[village]")
+            : InventoryResult.Reject(19), 19, requireTown: true, allowSettlement: false,
+            additionalGuard: HasRequiredBaseUsage, usedItem: position);
+
+        bool HasRequiredBaseUsage()
+        {
+            // 该活动变体明确要求先耗尽基础次数；其余六款仍允许预存追加额度。
+            // 捕获及提交前均在原owner内复核，防止规划期间日切或GM刷新后沿用旧资格。
+            if (Selected is not { } character || character.Inventory.Find(position)?.Core.ItemId != 490008217) return true;
+            return incounts?.Dimension is { } dimension &&
+                repository.LoadDungeonIncount(owner, character.Id, dimension.DailyRow.CountKey,
+                    DungeonIncountPolicy.Period(service.Clock.GetUtcNow(), incounts.WeeklyResetDay(dimension.DailyRow.CountKey)))
+                    .DailyUsed >= dimension.BaseDailyLimit;
+        }
+    }
 
     DateTimeOffset IncountNow() => (timeProvider ?? TimeProvider.System).GetUtcNow();
 
