@@ -202,11 +202,17 @@ internal static class ActionConsumableTcpTests
         ConsumableUseSessionTests.FakeClock clock, CharacterRepository repo, AccountOwners owners)
     {
         const int potionId = 490702204;
+        const int signInPotionId = 490004179;
         var items = resources.ItemResources.Items;
         That(items.ActionConsumable(potionId) is { Label: "[riding]", Parameters: [107000902, 300000], CoolTime: 10000 } riding &&
-            riding.AllowedDungeons is { } allowed && allowed.Contains(3),
-            "真实PVF厄伽勒变身药水(490702204)按action100([riding] 107000902 300000)注册动作消费");
+            riding.AllowedDungeons is { } allowed && allowed.Contains(3) &&
+            items.ActionConsumable(signInPotionId) is { Label: "[riding]", Parameters: [107000902, 300000], CoolTime: 10000 } signInRiding &&
+            riding.AllowsDungeon(7165) && riding.AllowsDungeon(291100268) &&
+            signInRiding.AllowsDungeon(3) && signInRiding.AllowsDungeon(7165) && signInRiding.AllowsDungeon(291100268),
+            "真实PVF厄伽勒变身药水(490702204/490004179)按action100([riding] 107000902 300000)注册动作消费且允许异界与哈林普通本");
         var source = InventoryRewardGrantService.Create(items.Get(potionId), 2, utcNow: clock.GetUtcNow(), shopExpiration: true)
+            with { ExpireTime = 0 };
+        var signInSource = InventoryRewardGrantService.Create(items.Get(signInPotionId), 2, utcNow: clock.GetUtcNow(), shopExpiration: true)
             with { ExpireTime = 0 };
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var candidate = DfoServer.Game.Characters.CharacterCreation.Prepare("RidingTcp", resources.Characters.Get(0),
@@ -221,39 +227,134 @@ internal static class ActionConsumableTcpTests
                 InitialLearning = learning,
                 Inventory = candidate.Inventory with
                 {
-                    Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), source))
+                    Items = candidate.Inventory.Items
+                        .Add(new(0, new(InventoryListType.Main, 65), source))
+                        .Add(new(0, new(InventoryListType.Main, 66), signInSource))
                 }
             });
 
-        long SlotCount() => fixture.Query(
-            "SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=65",
-            role.Id) is [[long value]] ? value : 0;
+        long SlotCount(long characterId, short slotIndex = 65) => fixture.Query(
+            "SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s ON s.item_uid=i.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1",
+            characterId, slotIndex) is [[long value]] ? value : 0;
 
-        using var peer = Open(fixture);
-        peer.Select(role.Slot);
-        Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
-        That(SlotCount() == 2, "城镇阶段拒绝厄伽勒变身药水(action100)，不扣源或写入冷却");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(role.Slot);
+            Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
+            That(SlotCount(role.Id) == 2, "城镇阶段拒绝厄伽勒变身药水(action100)，不扣源或写入冷却");
 
-        FormalDungeonTcpTests.EntryTown(peer);
-        FormalDungeonTcpTests.Enter(peer);
-        Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
-        That(SlotCount() == 2, "副本Loading阶段拒绝厄伽勒变身药水(action100)，不扣源");
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
+            That(SlotCount(role.Id) == 2, "副本Loading阶段拒绝厄伽勒变身药水(action100)，不扣源");
 
-        FormalDungeonTcpTests.Load(peer);
-        Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
-        That(SlotCount() == 1 &&
-            fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND kind=1", role.Id) is [[1L]] &&
-            fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0 AND action_name='action_consumable_source'", role.Id) is [[1L]],
-            "正式副本内厄伽勒变身药水经ACK515(action100)消费1瓶并写入10秒冷却账本，不重复发送源槽NOTI14");
+            FormalDungeonTcpTests.Load(peer);
+            Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
+            That(SlotCount(role.Id) == 1 &&
+                fixture.Query("SELECT count(*) FROM character_consumable_states WHERE character_id=$p0 AND kind=1", role.Id) is [[1L]] &&
+                fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0 AND action_name='action_consumable_source'", role.Id) is [[1L]],
+                "正式副本内厄伽勒变身药水经ACK515(action100)消费1瓶并写入10秒冷却账本，不重复发送源槽NOTI14");
 
-        Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
-        That(SlotCount() == 1, "10秒冷却期内重复请求被拒绝且不额外扣药");
+            Use(peer, 65, 100); peer.Expect(1, 515, [0, 0, 0, 65, 0, 0, 100]); peer.Barrier();
+            That(SlotCount(role.Id) == 1, "10秒冷却期内重复请求被拒绝且不额外扣药");
 
-        clock.Advance(TimeSpan.FromSeconds(10));
-        Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
-        That(SlotCount() == 0 &&
-            fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=65", role.Id) is [[0L]],
-            "冷却结束后第二瓶厄伽勒变身药水正常消费并清空源槽");
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
+            That(SlotCount(role.Id) == 0 &&
+                fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=65", role.Id) is [[0L]],
+                "冷却结束后第二瓶厄伽勒变身药水正常消费并清空源槽");
+
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Use(peer, 66, 100); Ack(peer, 66, 100); peer.Barrier();
+            That(SlotCount(role.Id, 66) == 1, "签到厄伽勒变身药水(490004179)在旧名单未列的普通副本(3)同样可正常消费");
+        }
+
+        const int harlemDungeonId = 291100268;
+        var harlemArea = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == harlemDungeonId && option.QuestId == -1));
+        var harlemDone = harlemArea.Quests.Concat(harlemArea.AnyQuests.Take(1)).ToHashSet();
+        harlemDone.UnionWith(harlemArea.Map(harlemDone).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+        var harlemBounds = harlemArea.Map(harlemDone).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(harlemDone.Contains)).Bounds;
+        var harlemPos = new DfoServer.GameWorld.Towns.Location(harlemArea.Town, harlemArea.Area,
+            checked((ushort)(harlemBounds.X + harlemBounds.Width / 2)), checked((ushort)(harlemBounds.Y + harlemBounds.Height / 2)));
+
+        var ovArea = resources.Towns.Areas[(17, 2)];
+        var ovDone = ovArea.Quests.Concat(ovArea.AnyQuests).Concat(ovArea.Default.DungeonGates.SelectMany(gate => gate.Quests)).Distinct().ToArray();
+        var ovBounds = ovArea.Map(ovDone.ToHashSet()).DungeonGates.First(gate => gate.Conditions.Length == 0 && gate.Quests.All(ovDone.Contains)).Bounds;
+        var ovPos = new DfoServer.GameWorld.Towns.Location(17, 2,
+            checked((ushort)(ovBounds.X + ovBounds.Width / 2)), checked((ushort)(ovBounds.Y + ovBounds.Height / 2)));
+
+        var lv95Learning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(0, 0, 95,
+            candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning);
+        DfoServer.Game.Characters.Character harlemRole, ovRole;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var harlemSeed = DfoServer.Game.Characters.CharacterCreation.Prepare("RidingHlm", resources.Characters.Get(0),
+                harlemPos, harlemPos, resources.Learning.Get);
+            harlemRole = repo.Create(owner, harlemSeed with
+            {
+                Level = 95,
+                AcceptedStoryLevel = 95,
+                CompletedQuests = harlemDone.ToArray(),
+                InitialLearning = lv95Learning,
+                Inventory = harlemSeed.Inventory with
+                {
+                    Items = harlemSeed.Inventory.Items
+                        .Add(new(0, new(InventoryListType.Main, 65), signInSource))
+                        .Add(new(0, new(InventoryListType.Main, 66), source))
+                }
+            });
+            var ovSeed = DfoServer.Game.Characters.CharacterCreation.Prepare("RidingOv", resources.Characters.Get(0),
+                ovPos, ovPos, resources.Learning.Get);
+            ovRole = repo.Create(owner, ovSeed with
+            {
+                GrowType = 1,
+                Level = 95,
+                AcceptedStoryLevel = 95,
+                CompletedQuests = ovDone,
+                InitialLearning = lv95Learning,
+                Inventory = ovSeed.Inventory with
+                {
+                    Items = ovSeed.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), signInSource))
+                }
+            });
+            var invService = new InventoryService(items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
+            InventoryService.Commit(repo, owner, ovRole, invService.Grant(ovRole, [new(3332, 100), new(3037, 1000)]));
+        }
+
+        using (var peer = Open(fixture))
+        {
+            peer.Select(harlemRole.Slot, prepared: true, resumeTown: true, room: false);
+            peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]);
+            peer.Expect(0, 3); peer.Expect(0, 1536); peer.Expect(0, 1545); peer.Expect(0, 550); peer.Expect(0, 27);
+            byte[] harlemEntry = new byte[25];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(harlemEntry, harlemDungeonId);
+            harlemEntry[9] = harlemEntry[10] = 255;
+            peer.Send(16, harlemEntry); peer.Expect(0, 28); peer.Expect(0, 29);
+            FormalDungeonTcpTests.Load(peer); peer.Barrier();
+
+            Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Use(peer, 66, 100); Ack(peer, 66, 100); peer.Barrier();
+            That(SlotCount(harlemRole.Id, 65) == 1 && SlotCount(harlemRole.Id, 66) == 1,
+                "哈林普通本亡命杀镇(291100268)内厄伽勒变身药水(490004179/490702204)均正常经ACK515消费");
+        }
+
+        using (var peer = Open(fixture))
+        {
+            peer.Select(ovRole.Slot, prepared: true, resumeTown: true, room: false);
+            peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]);
+            peer.Expect(0, 3); peer.Expect(0, 27);
+            byte[] ovEntry = new byte[25];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(ovEntry, 7165);
+            ovEntry[9] = ovEntry[10] = 255;
+            peer.Send(16, ovEntry); peer.Expect(0, 28); peer.Expect(0, 29); peer.Expect(0, 14); peer.Expect(0, 815);
+            FormalDungeonTcpTests.Load(peer); peer.Barrier();
+
+            Use(peer, 65, 100); Ack(peer, 65, 100); peer.Barrier();
+            That(SlotCount(ovRole.Id, 65) == 1,
+                "现代异界黑色大地外围(7165)内签到厄伽勒变身药水(490004179)正常经ACK515消费");
+        }
     }
 
     static void TitleChange(TcpTestFixture fixture, TcpTestResources resources,
