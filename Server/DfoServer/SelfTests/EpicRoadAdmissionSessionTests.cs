@@ -13,7 +13,11 @@ using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Persistence;
+using DfoServer.Network;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Projection;
+using DfoServer.Network.Protocol;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -250,6 +254,7 @@ internal static class EpicRoadAdmissionSessionTests
                     "重复加载不重复计活动次数、门票、疲劳或角色revision");
                 That(session.FormalDungeonResultFocus() is null && session.OpenFormalDungeonOtherSelection() is null,
                     "尚未清图的活动实例不能借结果菜单提前选图");
+                int expectedFreeUsed = beforeUsed + (dungeon == 400000097 ? 1 : 0);
                 if (!syntheticRoute && dungeon == 400000097)
                 {
                     That(loaded!.Monsters.Monsters.Any(monster => monster.IsBlocking) && session.MoveFormalDungeon(1, 0) is null &&
@@ -354,14 +359,30 @@ internal static class EpicRoadAdmissionSessionTests
                     }
                     That(lastDeath?.ClearFact is not null && session.Phase == SessionPhase.Settlement,
                         "原末房合法清场产生本实例唯一清图事实");
-                    That(session.FormalDungeonResultFocus() is null && session.OpenFormalDungeonOtherSelection() is null,
-                        "真实清图后尚未发布通关许可时不能提前操作结果菜单");
-                    var enabled = session.EnableFormalDungeonSettlement();
-                    That(enabled is not null && session.FormalDungeonResultFocus() is null,
-                        "准备通关通知不等于已成功发布，仍不开放结果菜单");
-                    session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);
-                    That(session.FormalDungeonResultFocus() is { } focus &&
+                    That(session.FormalDungeonResultFocus() is null && session.OpenFormalDungeonOtherSelection() is null &&
+                        !session.CanUseSettlementNpcServices() && !session.CanRetryEpicRoadDungeon(current),
+                        "真实清图后尚未发布通关许可时不能提前操作结果菜单、德利拉服务或再挑战资格");
+                    bool canRetryFree = !closeBeforeBoss && !(simulatedDrops && nativeTown);
+                    if (expires)
+                    {
+                        var enabled = session.EnableFormalDungeonSettlement();
+                        That(enabled is not null && session.FormalDungeonResultFocus() is null && !session.CanUseSettlementNpcServices(),
+                            "准备通关通知不等于已成功发布，仍不开放结果菜单或结算服务");
+                        session.ConfirmFormalDungeonSettlementEnabled(enabled!.Value.Receipt);
+                    }
+                    else
+                    {
+                        var frames = PublishSettlementEnable(owner, session);
+                        That(frames.Select(row => row.Opcode).SequenceEqual(new ushort[] { 115, 31, 261 }) &&
+                            frames[^1].Body.SequenceEqual(DungeonSettlementPackets.RetryEligibility(canRetryFree)),
+                            "普通星河裂缝发布通关通知115/31后紧随单字节261再挑战资格");
+                    }
+                    That(session.CanUseSettlementNpcServices(),
+                        "星河裂缝无普通结果页活动图在通关许可发布后开放德利拉结算修理与分解服务");
+                    var focus = session.FormalDungeonResultFocus();
+                    That(focus is not null &&
                         focus.Snapshot.Identity == current.Snapshot.Identity &&
+                        session.CanRetryEpicRoadDungeon(focus) == canRetryFree &&
                         QuestCompletionRepositoryTests.Same(session.Selected!, repository.LoadCharacter(owner, before.Slot)),
                         "活动无普通翻牌结算，但真实清图和通关许可发布后仍可操作72结果菜单且不额外发奖");
                     paid = session.Selected;
@@ -377,6 +398,121 @@ internal static class EpicRoadAdmissionSessionTests
                         QuestCompletionRepositoryTests.Same(paid, repository.LoadCharacter(owner, paid.Slot)) &&
                         repository.LoadAccountDungeonIncount(owner, 400000097, period) == beforeUsed + 1,
                         "重复普通结果页报告不改变已提交死亡、资产或账号次数，仍可按原入口返城");
+                    if (!expires)
+                    {
+                        if (canRetryFree)
+                        {
+                            wrapper.BeforeDungeonEntryCommit = _ => events.Override(ServerEventService.EpicRoadId, false);
+                            That(session.RetryFormalDungeon(focus!, catalog, rooms, drops: monsterDrops,
+                                    items: simulatedDrops ? itemResources.Items : null) is null &&
+                                session.LastFormalDungeonRejection == "epic-road-event-closed" &&
+                                QuestCompletionRepositoryTests.Same(paid, repository.LoadCharacter(owner, paid.Slot)) &&
+                                repository.LoadAccountDungeonIncount(owner, 400000097, period) == beforeUsed + 1 &&
+                                session.FormalDungeonResultFocus()?.Snapshot.Identity == focus!.Snapshot.Identity,
+                                "普通星河裂缝再挑战在事务前遇活动关闭时原子拒绝，保留原结算实例与账号次数");
+                            wrapper.BeforeDungeonEntryCommit = null;
+                            events.Override(ServerEventService.EpicRoadId, true);
+                            var retriedFree = session.RetryFormalDungeon(focus!, catalog, rooms, drops: monsterDrops,
+                                items: simulatedDrops ? itemResources.Items : null);
+                            expectedFreeUsed = beforeUsed + 2;
+                            That(retriedFree is not null &&
+                                session.Selected!.DungeonState!.LastAttempt == paid.DungeonState!.LastAttempt + 1 &&
+                                repository.LoadAccountDungeonIncount(owner, 400000097, period) == expectedFreeUsed &&
+                                session.CompleteFormalDungeonLoading() is not null,
+                                "普通星河裂缝F10再挑战沿原入口重开新尝试并累加一次账号日次数");
+                            paid = session.Selected;
+                        }
+                        else
+                        {
+                            That(session.RetryFormalDungeon(focus!, catalog, rooms, drops: monsterDrops,
+                                    items: simulatedDrops ? itemResources.Items : null) is null &&
+                                session.LastFormalDungeonRejection == "epic-road-event-closed" &&
+                                session.FormalDungeonResultFocus()?.Snapshot.Identity == focus!.Snapshot.Identity,
+                                "活动已关闭时普通星河裂缝拒绝再挑战并保留原结算实例");
+                        }
+                    }
+                }
+                else if (!syntheticRoute && dungeon == 400000098 && !expires)
+                {
+                    var kills = DungeonKillExperienceCatalog.Load(pvf);
+                    FormalDungeonReceipt ClearPaidRun(FormalDungeonReceipt start, bool applyRunClose)
+                    {
+                        var room0 = start;
+                        foreach (var monster in room0.Monsters.Monsters.Where(m => m.IsBlocking).ToArray())
+                            room0 = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(room0, monster), kills, growth).Receipt!;
+                        That(session.MoveFormalDungeon(1, 0) is not null, "超星河首房清怪后进入次房");
+                        var room1 = session.CompleteFormalDungeonLoading()!;
+                        foreach (var monster in room1.Monsters.Monsters.Where(m => m.IsBlocking).ToArray())
+                            room1 = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(room1, monster), kills, growth).Receipt!;
+                        That(session.MoveFormalDungeon(2, 0) is not null, "超星河次房清怪后进入末房");
+                        var room2 = session.CompleteFormalDungeonLoading()!;
+                        if (applyRunClose && closeBeforeBoss) events.Override(ServerEventService.EpicRoadId, false);
+                        foreach (var monster in room2.Monsters.Monsters.Where(m => m.IsBlocking).ToArray())
+                        {
+                            room2 = session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(room2, monster), kills, growth).Receipt!;
+                            if (applyRunClose && simulatedDrops && nativeTown && monster.IsBoss && !closeBeforeBoss)
+                                events.Override(ServerEventService.EpicRoadId, false);
+                        }
+                        return room2;
+                    }
+                    var clearedPaid = ClearPaidRun(loaded!, applyRunClose: true);
+                    That(session.Phase == SessionPhase.Settlement && !session.CanUseSettlementNpcServices() &&
+                        !session.CanRetryEpicRoadDungeon(clearedPaid),
+                        "超星河裂缝清图后尚未发布通关许可时不提前开放德利拉服务或再挑战资格");
+                    bool canRetryPaid = !closeBeforeBoss && !(simulatedDrops && nativeTown);
+                    var frames = PublishSettlementEnable(owner, session);
+                    That(frames.Select(row => row.Opcode).SequenceEqual(new ushort[] { 115, 31, 261 }) &&
+                        frames[^1].Body.SequenceEqual(DungeonSettlementPackets.RetryEligibility(canRetryPaid)),
+                        "超星河裂缝发布通关通知115/31后紧随单字节261再挑战资格");
+                    var paidFocus = session.FormalDungeonResultFocus();
+                    That(session.CanUseSettlementNpcServices() &&
+                        paidFocus is { Entry.SuppressOrdinaryResultBoard: true } &&
+                        session.CanRetryEpicRoadDungeon(paidFocus) == canRetryPaid,
+                        "超星河裂缝通关许可发布后开放德利拉结算修理/分解服务与F10再挑战资格");
+                    paid = session.Selected;
+                    if (canRetryPaid)
+                    {
+                        wrapper.BeforeDungeonEntryCommit = _ => events.Override(ServerEventService.EpicRoadId, false);
+                        That(session.RetryFormalDungeon(paidFocus!, catalog, rooms, drops: monsterDrops,
+                                items: simulatedDrops ? itemResources.Items : null) is null &&
+                            session.LastFormalDungeonRejection == "epic-road-event-closed" &&
+                            QuestCompletionRepositoryTests.Same(paid!, repository.LoadCharacter(owner, paid!.Slot)) &&
+                            session.FormalDungeonResultFocus()?.Snapshot.Identity == paidFocus!.Snapshot.Identity &&
+                            session.CanUseSettlementNpcServices(),
+                            "超星河裂缝再挑战遇晚期活动关闭时回滚门票与疲劳，保留原结算实例及德利拉服务");
+                        wrapper.BeforeDungeonEntryCommit = null;
+                        events.Override(ServerEventService.EpicRoadId, true);
+                        var retriedPaid = session.RetryFormalDungeon(paidFocus!, catalog, rooms, drops: monsterDrops,
+                            items: simulatedDrops ? itemResources.Items : null);
+                        ticketCount = session.Selected!.Inventory.Items.Where(item => item.Core.ItemId == 490013728).Sum(item => item.Core.Count);
+                        That(retriedPaid is not null && ticketCount == 0 &&
+                            session.Selected.Fatigue!.Used == paid.Fatigue!.Used + diagnosticEntry.StartFatigue &&
+                            repository.LoadAccountDungeonIncount(owner, 400000097, period) == beforeUsed,
+                            "超星河裂缝再挑战复用原实例EntryPieces扣除第二张花瓣与10疲劳，不计免费图账号次数");
+                        paid = session.Selected;
+                        var secondCleared = ClearPaidRun(session.CompleteFormalDungeonLoading()!, applyRunClose: false);
+                        var secondFrames = PublishSettlementEnable(owner, session);
+                        That(secondFrames.Select(row => row.Opcode).SequenceEqual(new ushort[] { 115, 31, 261 }) &&
+                            secondFrames[^1].Body.SequenceEqual(DungeonSettlementPackets.RetryEligibility(false)) &&
+                            session.CanUseSettlementNpcServices() && !session.CanRetryEpicRoadDungeon(secondCleared),
+                            "第二把超星河裂缝耗尽花瓣后通关仍开放德利拉服务，但261同步禁用F10再挑战");
+                        paid = session.Selected;
+                        var retryExhausted = session.RetryFormalDungeon(session.FormalDungeonResultFocus()!, catalog, rooms, drops: monsterDrops,
+                            items: simulatedDrops ? itemResources.Items : null);
+                        That(retryExhausted is null &&
+                            session.LastFormalDungeonRejection is "channel-town-required-item:490013728" or "dungeon-required-item:490013728" or "entry-item-required:490013728" &&
+                            QuestCompletionRepositoryTests.Same(paid!, repository.LoadCharacter(owner, paid!.Slot)) &&
+                            session.CanUseSettlementNpcServices(),
+                            "无剩余花瓣时超星河裂缝拒绝再挑战，不改变资产且保留当前结算实例");
+                    }
+                    else
+                    {
+                        That(session.RetryFormalDungeon(paidFocus!, catalog, rooms, drops: monsterDrops,
+                                items: simulatedDrops ? itemResources.Items : null) is null &&
+                            session.LastFormalDungeonRejection == "epic-road-event-closed" &&
+                            session.CanUseSettlementNpcServices(),
+                            "活动关闭后超星河裂缝拒绝再挑战但保留当前通关实例的德利拉服务");
+                    }
                 }
                 Character? returnedCharacter;
                 if (!syntheticRoute && dungeon == 400000097 && expires)
@@ -392,7 +528,7 @@ internal static class EpicRoadAdmissionSessionTests
                     returnedCharacter.Inventory.StaminaUntil == before.Inventory.StaminaUntil &&
                     returnedCharacter.Fatigue!.Used == paid!.Fatigue!.Used &&
                     returnedCharacter.Inventory.Items.Where(item => item.Core.ItemId == 490013728).Sum(item => item.Core.Count) == ticketCount &&
-                    repository.LoadAccountDungeonIncount(owner, 400000097, period) == beforeUsed + (dungeon == 400000097 ? 1 : 0),
+                    repository.LoadAccountDungeonIncount(owner, 400000097, period) == expectedFreeUsed,
                     "活动放弃或通关菜单返回不加虚弱、不退款或重复扣费，并释放原实例");
                 passed = true;
             }
@@ -403,6 +539,22 @@ internal static class EpicRoadAdmissionSessionTests
                 if (passed) TestFiles.DeleteDirectory(fixture, true);
                 else Console.WriteLine("FAIL fixture: " + fixture);
             }
+        }
+
+        static List<(byte Kind, ushort Opcode, byte[] Body)> PublishSettlementEnable(AccountOwners.Lease owner, GameSession session)
+        {
+            using var stop = new CancellationTokenSource();
+            using var output = new MemoryStream();
+            var sent = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+            async Task RunAsync()
+            {
+                await using var sender = new GameConnectionSender(owner, output, stop, 0,
+                    (kind, opcode, _, body, _) => sent.Add((kind, opcode, body.ToArray())));
+                var context = new GameConnectionContext(new(180, System.Net.IPAddress.Loopback, output, stop), owner, session, sender);
+                await DungeonSettlementProjection.EnableAsync(context);
+            }
+            RunAsync().GetAwaiter().GetResult();
+            return sent;
         }
     }
 }

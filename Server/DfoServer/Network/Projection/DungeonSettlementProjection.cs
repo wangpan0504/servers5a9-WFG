@@ -36,17 +36,22 @@ internal static class DungeonSettlementProjection
         if (enabled)
         {
             context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
-            if (completion.Receipt.Entry.IsCosmo && context.Session.PartyDungeon is null) await RefreshCosmoRetryAsync(context);
+            if ((completion.Receipt.Entry.IsCosmo || completion.Receipt.Entry.SuppressOrdinaryResultBoard) && context.Session.PartyDungeon is null)
+                await RefreshCosmoRetryAsync(context);
         }
         return change;
     }
 
     internal static async Task RefreshCosmoRetryAsync(GameConnectionContext context)
     {
-        if (context.Session.FormalDungeonResultFocus() is not { Entry.IsCosmo: true } receipt) return;
+        if (context.Session.FormalDungeonResultFocus() is not { } receipt ||
+            !receipt.Entry.IsCosmo && !receipt.Entry.SuppressOrdinaryResultBoard) return;
         await context.Notify(NotiPacketType.EPLP_RECHALLENGE,
-            DungeonSettlementPackets.RetryEligibility(context.Session.PartyDungeon is { } party
-                ? party.CanRetryCosmoDungeon() : context.Session.CanRetryCosmoDungeon(receipt)),
-            "formal_cosmo_retry_eligibility", () => context.Session.CanPublishDungeonSettlement(receipt));
+            DungeonSettlementPackets.RetryEligibility(receipt.Entry.IsCosmo
+                ? context.Session.PartyDungeon is { } party
+                    ? party.CanRetryCosmoDungeon() : context.Session.CanRetryCosmoDungeon(receipt)
+                : context.Session.PartyDungeon is null && context.Session.CanRetryEpicRoadDungeon(receipt)),
+            receipt.Entry.IsCosmo ? "formal_cosmo_retry_eligibility" : "formal_epic_road_retry_eligibility",
+            () => context.Session.CanPublishDungeonSettlement(receipt));
     }
 }

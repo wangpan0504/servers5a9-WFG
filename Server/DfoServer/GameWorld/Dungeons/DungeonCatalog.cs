@@ -286,6 +286,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public DungeonRequiredItem? RequiredItem => RawSections.Where(row => row.Tag == "required item").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } item, { Type: 0, Value: > 0 } count, { Type: 0 } flag] }] ? new(item.Value, count.Value, flag.Value) : null;
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
+    // 040974CC读取[forced create delilah]单整数并复制到Dungeon+0x54E；仅识别唯一整数1声明。
+    public bool ForcedCreateDelilah => RawSections.Where(row => row.Tag == "forced create delilah").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // 只采用完整结果块中的唯一整数0；缺省或未确认形状不改变原结算入口。
     public bool HasNoResultBoard
     {

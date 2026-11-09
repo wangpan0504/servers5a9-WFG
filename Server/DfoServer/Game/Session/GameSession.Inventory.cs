@@ -103,6 +103,22 @@ internal sealed partial class GameSession
         });
     }
 
+    public InventoryResult SortInventory(InventorySortRequest request, InventoryService inventory)
+    {
+        if (request.List is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo))
+            return MutateInventory(character => inventory.Sort(character, request), requireTown: false);
+        bool Guard() => (Phase == SessionPhase.Town || CanAccessPortableCargo(request.List)) &&
+            formalDungeon?.PendingInventoryDiscard is null && formalDungeon?.AltarSettlement is not { Stage: < 2 };
+        var capture = owner.Execute(() => CanPlanInventory(Phase == SessionPhase.Town, false, null, Guard)
+            ? new InventoryPlanningCapture(Selected!, SelectionEpoch, Phase, formalDungeon, formalDungeon?.Run.Snapshot.Identity) : null);
+        if (capture is null)
+            return InventoryResult.Reject(1);
+        var planned = inventory.Sort(capture.Character, request);
+        return owner.Execute(() => InventoryPlanIsCurrent(capture, Phase == SessionPhase.Town, false, null, Guard)
+            ? CommitInventory(capture.Character, planned, 1)
+            : InventoryResult.Reject(1));
+    }
+
     public InventoryResult MutateInventory(Func<Character, InventoryResult> operation, ushort invalidStateError = 1,
         bool requireTown = true) => owner.Execute(() =>
     {

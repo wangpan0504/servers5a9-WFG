@@ -70,6 +70,7 @@ internal sealed record DungeonEntryPlan(
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
     public bool SuppressOrdinaryResultBoard { get; init; }
+    public bool ForcedCreateDelilah { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public DfoServer.Game.Raids.FiendwarCombatScale? FiendwarScale { get; init; }
     // 仅由团本准入根据当前maze和精确OBJ/ACT证据冻结，不以模板号单独授予清图资格。
@@ -764,6 +765,7 @@ internal sealed record DungeonEntryPlan(
                 (definition.HasNoResultBoard || EpicRoadResourcePaths.Dungeons.GetValueOrDefault(checked((int)dungeonId)) == definition.Path &&
                     !definition.RawSections.Any(section => section.Tag is "dungeon clear result" or "/dungeon clear result" or "result board" or "reward card")) &&
                 definition.DisableClearReward && experienceWeight == 0,
+            ForcedCreateDelilah = definition.ForcedCreateDelilah,
             IsTagEvildom = tagEvildom is not null,
             IsImperialArena = imperialArena is not null,
             DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null || imperialArena is not null,

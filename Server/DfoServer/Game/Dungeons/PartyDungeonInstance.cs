@@ -214,7 +214,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
 
     internal DfoServer.Game.Raids.AntonRaidBattleChange? ReportFiendwarBoss(GameSession reporter, uint operation, uint value) => Execute(current =>
         pendingDeath is null && pendingScene is null && loaded.Count == 0 &&
-        current.Any(member => member.Slot == Leader && ReferenceEquals(member.Actor.Session, reporter)) &&
+        current.Any(member => ReferenceEquals(member.Actor.Session, reporter)) &&
         current.All(member => member.Actor.Session.CanMoveWithParty()) ? reporter.ReportFiendwarBoss(operation, value) : null);
 
     public LukeFacilityReportReceipt? ReportLukeFacility(GameSession reporter, int symbol, uint value, byte operation) => Execute(current =>

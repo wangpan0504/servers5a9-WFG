@@ -47,6 +47,21 @@ internal static class EpicRoadResourceTests
             That(definition.Path.StartsWith("dungeon/gcontents/191210_tayberrs_road/", StringComparison.Ordinal) &&
                 definition.MinimumLevel == 95 && definition.DisjointForbiddenDropRarities.SetEquals([4]),
                 "星河裂缝两图真实资源冻结史诗禁止分解声明");
+            That(definition.DisableClearReward &&
+                definition.RawSections.Where(section => section.Tag == "direct eplp on clear dungeon").ToArray() is [{ Tokens.Count: 0 }] &&
+                !definition.ForcedCreateDelilah,
+                "星河裂缝两图保留叶声明disable clear reward与direct eplp on clear dungeon，未单独声明forced create delilah");
+            var forcedDelilah = new DungeonRawSection("forced create delilah", [new(0, 1)]);
+            That((definition with { RawSections = definition.RawSections.Append(forcedDelilah).ToArray() }).ForcedCreateDelilah,
+                "显式单条forced create delilah=1可被识别");
+            foreach (var sections in new[]
+            {
+                definition.RawSections.ToArray(),
+                definition.RawSections.Append(forcedDelilah).Append(forcedDelilah).ToArray(),
+                definition.RawSections.Append(forcedDelilah with { Tokens = [new(0, 0)] }).ToArray()
+            })
+                That(!(definition with { RawSections = sections }).ForcedCreateDelilah,
+                    "强制德利拉声明缺失、重复或非1时不启用forced create delilah标记");
             That(definition.Mazes.Count > 1 &&
                 !DungeonEntryPlan.TryCreate(definition, character, (uint)id, 0, 2, out _, out var ambiguous) &&
                 ambiguous == "route-maze-ambiguous",
@@ -62,7 +77,8 @@ internal static class EpicRoadResourceTests
             var singleRoute = definition with { Mazes = [maze] };
             That(DungeonEntryPlan.TryCreate(singleRoute, character, (uint)id, 0, 2, out var plan, out var reason),
                 "真实星河脚本的逐条测试路线能生成95级入场计划：" + reason);
-            That(plan!.DisjointForbiddenDropRarities.IsEmpty && plan.DisableClearReward && plan.DisableGiveupPenalty,
+            That(plan!.DisjointForbiddenDropRarities.IsEmpty && plan.DisableClearReward && plan.DisableGiveupPenalty &&
+                !plan.ForcedCreateDelilah,
                 "本服活动两图入场解除史诗来源限制并保留无普通翻牌及虚弱惩罚");
             That(plan.ExperienceWeight == DungeonKillExperienceCatalog.GetDungeonWeight(catalog.Get(291100308)) &&
                 plan.ExperienceWeight > 0 && plan.SuppressOrdinaryResultBoard,
