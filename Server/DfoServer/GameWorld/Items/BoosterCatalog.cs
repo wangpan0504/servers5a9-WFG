@@ -200,14 +200,24 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         if (ParseUsePlaces(text).PendingRule is { } placeError) return new([], placeError);
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
         if (type is not ("cera package" or "usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
-            "upgradable legacy" or "legacy"))
+            "upgradable legacy" or "legacy" or "monster tarot card"))
             return new([], "其他开箱入口");
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
         bool finiteLegacy = Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+1$");
-        // 普通实物罐只复用有限奖池；动作型旧物品不能借此跳过独立玩法。
-        if (finiteLegacy && Regex.IsMatch(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase))
+        bool monsterTarot = type == "monster tarot card";
+        // 塔罗牌尾值是牌面参数，不是请求模式或金币奖池标记。
+        if (monsterTarot)
+        {
+            var tarotType = Regex.Match(PvfScript.Section(text, "stackable type").Trim(),
+                @"^`\[monster tarot card\]`\s+(?<face>[0-9]+)$");
+            if (!tarotType.Success || !int.TryParse(tarotType.Groups["face"].Value,
+                    NumberStyles.None, CultureInfo.InvariantCulture, out _))
+                return new([], "塔罗牌牌面参数无效");
+        }
+        // 普通实物罐和塔罗牌只复用有限奖池；动作型物品不能借此跳过独立玩法。
+        if ((finiteLegacy || monsterTarot) && Regex.IsMatch(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase))
             return new([], "普通袖珍罐动作声明未支持");
         ItemMaterialCost? lotteryUseNeedItem = null;
         uint lotteryGoldCost = 0;
@@ -218,8 +228,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             var declaration = goldCosts[0];
             int end = declaration.Index + declaration.Length;
             int next = tags.IndexOf('[', end);
-            // 付费金币奖励的净增量回包尚未闭合；费用只接入类型1的有限实物池。
-            if ((!finiteLegacy && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
+            // 付费金币奖励的净增量回包尚未闭合；费用只接入有限实物池。
+            if ((!finiteLegacy && !monsterTarot && !Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[upgradable legacy\]`\s+1$")) ||
                 goldCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
                 !declaration.Value.Equals("[lottery use cost]", StringComparison.OrdinalIgnoreCase) ||
                 !IsRootDeclaration(tags, declaration.Index) ||
@@ -343,13 +353,13 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], pending!);
             return new([], null) { RuneBox = (family, tier), Lottery = true };
         }
-        if (type == "upgradable legacy" || finiteLegacy)
+        if (type == "upgradable legacy" || finiteLegacy || monsterTarot)
         {
             // 此类型经独立的CMD27入口一次抽取一行；不能交给CMD160忽略其回包合同。
             string lotteryType = PvfScript.Section(text, "stackable type").Trim();
-            if (!finiteLegacy && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
+            if (!finiteLegacy && !monsterTarot && !Regex.IsMatch(lotteryType, @"^`\[upgradable legacy\]`\s+[01]$"))
                 return new([], "袖珍罐子类型待确认");
-            bool allowsGold = lotteryType.EndsWith('0');
+            bool allowsGold = !monsterTarot && lotteryType.EndsWith('0');
             var data = Regex.Matches(text, @"\[int data\](.*?)\[/int data\]", RegexOptions.Singleline);
             if (data.Count != 1 || Regex.Matches(tags, @"\[int data\]").Count != 1 ||
                 Regex.Matches(tags, @"\[/int data\]").Count != 1)
@@ -368,7 +378,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             return rewards.Sum(row => row.Weight) > 0
                 ? new([new(1, rewards.ToImmutable())], Lottery: true,
                     // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
-                    NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
+                    NpcPocketPot: !monsterTarot && Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
                     { LotteryUseNeedItem = lotteryUseNeedItem, LotteryGoldCost = lotteryGoldCost,
                         AllowsLotteryGold = allowsGold, SetsDisjointInstanceType = setsDisjointInstanceType,
                         ForbidsDestructionSouls = setsDisjointInstanceType }

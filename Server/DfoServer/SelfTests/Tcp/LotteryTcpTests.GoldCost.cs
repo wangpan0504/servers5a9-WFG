@@ -89,6 +89,7 @@ internal static partial class LotteryTcpTests
                 "重启与重登保留收费结果、完整实例和UID，数据库完整");
         }
         LegacyPaid(fixture, resources, repo, owners);
+        MonsterTarot(fixture, resources, repo, owners);
         await fixture.StopAsync();
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +

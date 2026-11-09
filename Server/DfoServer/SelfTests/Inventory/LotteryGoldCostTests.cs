@@ -13,6 +13,7 @@ internal static class LotteryGoldCostTests
 {
     public static void RunCore()
     {
+        MonsterTarotTests.RunCore();
         const string header = "[stackable type]\n`[upgradable legacy]` 1\n";
         const string pool = "[int data]\n7542 1 1\n[/int data]\n";
         string Cost(string value) => header + "[lottery use cost]\n" + value + "\n" + pool;
@@ -40,6 +41,7 @@ internal static class LotteryGoldCostTests
 
     public static void RunResources(ItemResources items, TownCatalog towns)
     {
+        MonsterTarotTests.RunResources(items, towns);
         LegacyPaidPotTests.Run(towns, items);
         int checks = Count;
         const int potId = 2749786;
