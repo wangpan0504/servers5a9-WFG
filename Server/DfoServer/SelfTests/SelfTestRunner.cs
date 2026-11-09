@@ -471,6 +471,7 @@ internal static class SelfTestRunner
         DungeonMapPoolTests.RunCore();
         BossRushTests.RunCore();
         GriefTowerResourceTests.RunCore();
+        DungeonPotionLimitTests.RunCore();
         GriefTowerRewardTests.RunCore();
         GriefTowerPersistenceTests.RunCore();
         DungeonClassExperienceTests.RunCore();

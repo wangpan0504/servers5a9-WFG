@@ -88,6 +88,8 @@ internal sealed class QuestLifecyclePlan
             run.IsPassiveClearCondition(scene.Identity, scene.TemplateId, scene.SourceOrdinal));
 
     static bool AllowsSceneOnly(DungeonEntryPlan entry, QuestSceneEvent scene) => entry.PartyRoute is not null ||
+        entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } && entry.DungeonId is 212 or 214 &&
+        scene.TemplateId == 15467 && entry.BossMap.Id == scene.MapId ||
         entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } && entry.LukeEnergyObject is { } binding &&
         entry.Maze.MapSpecification?.SingleOrDefault(map => map.Id == scene.MapId && binding.Room.Kind == map.Kind &&
             binding.Room.Position == map.Position && binding.Room.Path == map.Path) is { } map &&
