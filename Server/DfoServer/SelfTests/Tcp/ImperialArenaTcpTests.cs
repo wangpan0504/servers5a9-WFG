@@ -94,7 +94,7 @@ internal static class ImperialArenaTcpTests
                     var map = Enter(peer, dungeon, uint.MaxValue);
                     for (int room = 0; room <= route.Length; room++)
                     {
-                        ClearRoom(peer, map, room == 0 ? 0 : route[room - 1].MonsterId, clock, attempt == 0,
+                        ClearRoom(peer, map, room == 0 ? 0 : route[room - 1].MonsterId, clock, attempt == 0 && mode == 1,
                             attempt == 0 && (mode == 1 || room == route.Length),
                             room == 0 && attempt == 0 ? () => Restricted(peer) : null, final: room == route.Length,
                             elapsedMilliseconds: checked((uint)(route.Length + 1) * 10_000u));
@@ -149,7 +149,7 @@ internal static class ImperialArenaTcpTests
                 {
                     var move = new byte[100]; move[0] = checked((byte)room);
                     peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
-                    ClearRoom(peer, map, partial[room - 1].MonsterId, clock, room == attempt + 1, false);
+                    ClearRoom(peer, map, partial[room - 1].MonsterId, clock, false, false);
                 }
                 That(fixture.Query("SELECT count(*) FROM mailbox_messages") is [[long beforeEnd]] && beforeEnd == countBefore + attempt,
                     "困难部分通关的累计奖励不会提前发信");
@@ -302,7 +302,7 @@ internal static class ImperialArenaTcpTests
             peer.Send(39, FormalDungeonTcpTests.Death(U16(map, at + 6), peer.Id, map[at + 12])); peer.Expect(0, 38);
             if (opponent != 0 && U32(map, at + 8) == opponent)
             {
-                That(peer.Expect(0, 1402).Body[0] == (reward ? 2 : 0), "帝国只展示本次实际新增奖励");
+                if (reward) That(peer.Expect(0, 1402).Body[0] == 2, "帝国仅普通模式首次通关单回合下发1402打开201逐关奖励窗");
                 if (mail) peer.Expect(0, 99);
                 if (final)
                 {
