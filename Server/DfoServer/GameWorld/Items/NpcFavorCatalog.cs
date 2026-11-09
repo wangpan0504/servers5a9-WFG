@@ -17,6 +17,7 @@ internal sealed class NpcFavorCatalog
 {
     readonly Func<int, NpcFavorTarget?> read;
     readonly Func<int, bool> exists;
+    readonly int[] ids;
     readonly Lazy<NpcFavorRules?> rules;
     readonly ConcurrentDictionary<int, Lazy<NpcFavorTarget?>> targets = new();
 
@@ -24,6 +25,7 @@ internal sealed class NpcFavorCatalog
     {
         var paths = PvfScript.List(archive.ReadText("npc/npc.lst"));
         exists = paths.ContainsKey;
+        ids = paths.Keys.Order().ToArray();
         rules = new(() => archive.Contains("etc/npcfavorsystem.etc") ? NpcFavorRules.Parse(
             new(archive.ReadTokens("etc/npcfavorsystem.etc"), archive.ResolveString)) : null);
         read = id =>
@@ -63,12 +65,15 @@ internal sealed class NpcFavorCatalog
         };
     }
 
-    internal NpcFavorCatalog(Func<int, NpcFavorTarget?> read, NpcFavorRules? rules = null)
+    internal NpcFavorCatalog(Func<int, NpcFavorTarget?> read, NpcFavorRules? rules = null, int[]? ids = null)
     {
         this.read = read;
+        this.ids = ids ?? [];
         exists = _ => true;
         this.rules = new(() => rules);
     }
+    // 按共享owner去重，不为NPC不同形态建立平行好感度。
+    public ImmutableArray<NpcFavorTarget> All() => [.. ids.Select(Get).OfType<NpcFavorTarget>().DistinctBy(row => row.OwnerId).OrderBy(row => row.OwnerId)];
     public NpcFavorRules? Rules => rules.Value;
     // 未知客户端编号不进入缓存，容量至多为本份LST的NPC数量。
     public NpcFavorTarget? Get(int id) => id <= 0 || !exists(id) ? null : targets.GetOrAdd(id, key => new(() => read(key))).Value;

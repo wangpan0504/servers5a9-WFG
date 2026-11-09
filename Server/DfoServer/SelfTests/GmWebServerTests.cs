@@ -50,6 +50,7 @@ internal static partial class GmWebServerTests
             if (line.StartsWith("item-filter")) return "OK {\"total\":0,\"offset\":0,\"items\":[]}";
             if (line.Contains(" stats ")) return "OK {\"stats\":{}}";
             if (line.Contains(" title-list ")) return "OK {\"total\":0,\"quests\":[]}";
+            if (line.Contains(" npc-favor-max ")) return InGame ? "ERR 角色正在游戏中" : "OK {\"name\":\"Hero\",\"characterId\":7,\"total\":36}";
             if (InGame && line.Contains(" title-complete ")) return "ERR 角色正在游戏中，客户端背包或邮箱不会即时刷新；请先回到选角再执行";
             if (line.StartsWith("item-search")) return "OK {\"total\":1,\"offset\":0,\"items\":[{\"id\":100,\"name\":\"剑\",\"tag\":\"x\",\"minLevel\":1,\"rarity\":2,\"set\":0}]}";
             if (line.Contains(" show ")) return "OK Hero id=7 level=" + (Commands.Count(c => c.Contains(" level ")) == 0 ? 50 : 60);
@@ -409,6 +410,21 @@ internal static partial class GmWebServerTests
             && data.Commands.Contains("account acct grant Hero 7 1 0 0 direct"), "直接入包对在线角色同样要求先小退");
         data.InGame = true;
         TestCheck.That((await Post("/api/direct/set", new { account = "acct", name = "Hero", setIndex = 2, upgrade = 0, refine = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "直接发套装同样要求先小退");
+
+        int beforeFavor = data.Commands.Count;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero" })).StatusCode == HttpStatusCode.BadRequest &&
+            data.Commands.Count == beforeFavor, "好感度拉满缺确认不执行GM命令");
+        data.InGame = true;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true })).StatusCode == HttpStatusCode.BadRequest,
+            "好感度拉满沿服务端拒绝在线角色");
+        data.InGame = false;
+        var favorMax = await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true });
+        TestCheck.That(favorMax.IsSuccessStatusCode && data.Commands.Last() == "account acct npc-favor-max Hero" &&
+            (await favorMax.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("data").GetProperty("total").GetInt32() == 36,
+            "HTTP好感度拉满传递明确账号角色并返回真实凭据");
+        var favorAudit = await http.GetFromJsonAsync<JsonElement>("/api/audit?action=npc-favor-max&limit=50");
+        TestCheck.That(favorAudit.EnumerateArray().Any(row => row.GetProperty("ok").GetBoolean()) &&
+            favorAudit.EnumerateArray().Any(row => !row.GetProperty("ok").GetBoolean()), "好感度写入成功与拒绝均保留GM审计");
 
         // 扩展装备栏：只读走命令；写入只接受1/2/16组合，在线角色须 returnFirst 先小退，两步都审计。
         TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/equip-slots")).IsSuccessStatusCode && data.Commands.Contains("account acct equip-slots Hero"), "扩展装备栏只读接口");
