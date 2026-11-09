@@ -55,9 +55,16 @@ internal static class CargoTests
         foreach (var row in resources.Cargo.AcquisitionItems)
             That(resources.Items.Get(row.Key).AcquisitionAccountCargo == row.Value, "账号工具绑定同一合法档位目录 " + row.Key);
         foreach (ushort capacity in new ushort[] { 24, 40, 264 })
+        {
+            var sameOrHigher = InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { CargoCapacity = capacity } },
+                [new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+            That(sameOrHigher.Accepted && sameOrHigher.Plan!.After.CargoCapacity == capacity && sameOrHigher.Plan.After.Items.IsEmpty,
+                "已达或超过目标时消费来源并保持当前更高容量，不退成STK " + capacity);
+        }
+        foreach (ushort capacity in new ushort[] { 32, 280 })
             That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { CargoCapacity = capacity } },
                 [new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
-                "已达或超过目标时拒绝，不退成STK " + capacity);
+                "表外非法当前容量高于目标时仍拒绝，不退成STK " + capacity);
         foreach (ushort capacity in new ushort[] { 0, 1, 16, 240 })
             That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: capacity) } },
                 [new(2681921, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
@@ -182,8 +189,9 @@ internal static class CargoTests
         That(leaf.Kind == GameWorld.Items.ItemKind.Consumable && leaf.StackableType == "[etc] 0" &&
             leaf.PersonalCargoUpgradeTarget == 120 && leaf.HasAcquisitionEffect && leaf.IsPremiumService,
             "积分金库券终叶保持原类型并识别具名120格服务");
-        That(new[] { 490705277, 490705285 }.All(id => resources.Items.Get(id).PersonalCargoUpgradeTarget == 0 &&
-            !resources.Items.Get(id).HasAcquisitionEffect), "两层原包装不提前识别为扩容服务");
+        That(new[] { 490705277, 490705285, 490705125, 490705126, 490704517, 2660042, 490001422, 490013840 }
+            .All(id => resources.Items.Get(id).PersonalCargoUpgradeTarget == 0 &&
+                !resources.Items.Get(id).HasAcquisitionEffect), "外层扩展券与升级工具包装不提前识别为扩容服务");
         var source = new Character(1, 0, "MileCargo", 0, towns.Room, towns.InitialReturn)
         {
             Level = 95,
@@ -214,10 +222,28 @@ internal static class CargoTests
         {
             var holder = source with { Inventory = source.Inventory with { CargoCapacity = capacity } };
             holder = Apply(holder, items.Grant(holder, [new(490705285, 1)]));
-            string before = JsonSerializer.Serialize(holder);
-            var rejected = boosters.Open(holder, new(Slot(holder, 490705285), 1), out _, now);
-            That(!rejected.Accepted && rejected.Plan is null && JsonSerializer.Serialize(holder) == before,
-                "已达或超过120格时整包拒绝并保留285 " + capacity);
+            var consumed = Apply(holder, boosters.Open(holder, new(Slot(holder, 490705285), 1), out _, now));
+            That(consumed.Inventory.CargoCapacity == capacity && consumed.Inventory.Items.IsEmpty &&
+                consumed.Inventory.Gold == source.Inventory.Gold && consumed.Inventory.AccountWallet.Same(source.Inventory.AccountWallet),
+                "已达或超过120格时开启285正常消费扩展券并保持原容量，不留STK " + capacity);
+        }
+        foreach (var (ticketId, targetCapacity, capacities) in new (int TicketId, ushort Target, ushort[] Capacities)[]
+        {
+            (490705125, 40, [8, 24, 40, 72, 264]),
+            (490705126, 72, [8, 40, 72, 120, 264]),
+            (490001422, 40, [8, 40, 72])
+        })
+        {
+            foreach (ushort capacity in capacities)
+            {
+                var holder = source with { Inventory = source.Inventory with { CargoCapacity = capacity } };
+                holder = Apply(holder, items.Grant(holder, [new(ticketId, 1)]));
+                var opened = Apply(holder, boosters.Open(holder, new(Slot(holder, ticketId), 1), out _, now));
+                That(opened.Inventory.CargoCapacity == Math.Max(capacity, targetCapacity) && opened.Inventory.Items.IsEmpty &&
+                    opened.Inventory.Gold == source.Inventory.Gold && opened.Inventory.AccountWallet.Same(source.Inventory.AccountWallet) &&
+                    opened.Inventory.AccountCargo == source.Inventory.AccountCargo,
+                    $"金库扩展券{ticketId}在容量{capacity}下开启后保持max({capacity},{targetCapacity})并消费扩展券");
+            }
         }
         var core = InventoryRewardGrantService.Create(leaf, utcNow: now);
         var frozen = InventoryRewardGrantService.TryGrantCore(source, core, leaf, resources.EpicPieces, now);
