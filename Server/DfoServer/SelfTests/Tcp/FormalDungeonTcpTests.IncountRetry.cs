@@ -139,6 +139,7 @@ internal static partial class FormalDungeonTcpTests
     static void ClearTayberrs(TcpTestFixture fixture, TcpPeer peer, DungeonDefinition definition, byte[] map, byte[] info,
         TcpTestResources resources)
     {
+        bool defaultDrops = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DFO_TAYBERRS_DROP_RULES"));
         int startMap = (int)U32(map, 14);
         var maze = definition.Mazes.First(row => row.HellParty is null && row.QuestConnectionTokens.Count == 0 &&
             row.MapSpecification is { } maps && maps.Any(spec => spec.Id == startMap));
@@ -166,8 +167,9 @@ internal static partial class FormalDungeonTcpTests
                         for (int dropIndex = 0; dropIndex < dropCount; dropIndex++)
                         {
                             uint dropItemId = U32(notice.Body, 4 + dropIndex * 131 + 6);
-                            That(dropItemId is TayberrsDropPolicy.CarbonCrystalId or TayberrsDropPolicy.AbyssInvitationId,
-                                "泰波尔斯领主地面只掉落碳结晶体或深渊派对邀请函：" + dropItemId);
+                            That(defaultDrops ? dropItemId == TayberrsDropPolicy.CarbonCrystalId :
+                                dropItemId is TayberrsDropPolicy.CarbonCrystalId or TayberrsDropPolicy.AbyssInvitationId,
+                                "泰波尔斯默认领主地面只掉碳结晶体，邀请函须显式配置：" + dropItemId);
                         }
                     }
                     PickupResourceDrops(fixture, peer, notice.Body, 0, resources);

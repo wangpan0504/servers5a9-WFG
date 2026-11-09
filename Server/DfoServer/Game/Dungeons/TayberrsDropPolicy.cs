@@ -8,12 +8,12 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Dungeons;
 
 // 本服泰波尔斯地面掉落规则：剧情图(291100321)全怪无掉落，正式三模式(291100320/291100322/5349)普通怪与绿名怪无地面掉落，
-// 仅领主掉落碳结晶体(10163135)与深渊派对邀请函(3330)。
+// 仅领主默认掉落碳结晶体(10163135)；匹配PVF无这两只领主的邀请函来源，3330仅允许显式自定义配置。
 internal sealed record TayberrsDropRules(
     int CarbonCrystalRate = 1000,
     int CarbonCrystalMinimumCount = 1,
     int CarbonCrystalMaximumCount = 3,
-    int AbyssInvitationRate = 500,
+    int AbyssInvitationRate = 0,
     int AbyssInvitationMinimumCount = 1,
     int AbyssInvitationMaximumCount = 5)
 {
