@@ -4,6 +4,67 @@ using PvfLib;
 // 只恢复两女专用资源；地图必须同时有原迁移证明、当前准入和未变动友方行。
 internal static class FemaleRestoreDelta
 {
+    internal static void WriteBeastMaps(PvfArchive source, string approvalPath, string outputPath)
+    {
+        if (Directory.Exists(outputPath) || File.Exists(outputPath)) throw new IOException("Output already exists: " + outputPath);
+        using var approval = JsonDocument.Parse(File.ReadAllBytes(approvalPath));
+        var root = approval.RootElement;
+        if (root.GetProperty("schema").GetString() != "female-beast-map-approval-v1")
+            throw new InvalidDataException("Unsupported beast MAP approval");
+        var registry = Registry(TemplateDelta.Read(source, "aicharacter/aicharacter.lst"));
+        foreach (int id in new[] {74990, 19973})
+            if (!registry.TryGetValue(id, out string? path) || !IsFemalePath(path) || !source.Contains(path))
+                throw new InvalidDataException("Female base template is not restored");
+        var entries = new Dictionary<string, object>(StringComparer.Ordinal);
+        var owners = new Dictionary<string, int>(StringComparer.Ordinal);
+        var maps = root.GetProperty("entries").EnumerateArray().ToArray();
+        if (maps.Length != 20) throw new InvalidDataException("Expected exactly20 reachable beast MAPs");
+        foreach (var map in maps)
+        {
+            string path = map.GetProperty("path").GetString()!;
+            string digest = map.GetProperty("expected_before_sha256").GetString()!;
+            if (!path.StartsWith("map/devildom_beast/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal) ||
+                path.Contains("..", StringComparison.Ordinal) || path.Contains("/legacy_mirror/", StringComparison.OrdinalIgnoreCase) ||
+                !source.Contains(path) || MapMigration.Hash(source.ReadRaw(path)) != digest)
+                throw new InvalidDataException("Unapproved or changed beast MAP: " + path);
+            var mapOwners = map.GetProperty("owners").EnumerateArray().Select(v => v.GetString()!).ToArray();
+            if (mapOwners.Length == 0 || mapOwners.Distinct(StringComparer.Ordinal).Count() != mapOwners.Length)
+                throw new InvalidDataException("Missing or duplicate beast MAP owner");
+            foreach (string owner in mapOwners)
+            {
+                string[] parts = owner.Split('/');
+                if (parts.Length != 2 || !int.TryParse(parts[0], out int id) || id is < 5335 or > 5339 ||
+                    !int.TryParse(parts[1], out int difficulty) || difficulty is < 0 or > 2)
+                    throw new InvalidDataException("Invalid beast MAP owner");
+                owners[owner] = owners.GetValueOrDefault(owner) + 1;
+            }
+            var rows = MapMigration.Rows(source, path);
+            if (rows.Count != 2 || rows[0].Values[0] != 20900 || rows[1].Values[0] != 9986 ||
+                !rows[0].Values.AsSpan(1).SequenceEqual(rows[1].Values.AsSpan(1)) ||
+                rows.Any(row => row.Faction != "[character]" || row.Rank != "[normal]"))
+                throw new InvalidDataException("Expected unchanged paired friendly support rows: " + path);
+            var tokens = TemplateDelta.Read(source, path);
+            int end = tokens.FindIndex(t => t is { Kind: 3, Text: "[/ai character]" });
+            if (end < 0) throw new InvalidDataException("Missing actor block end: " + path);
+            var additions = new List<ScriptToken>();
+            foreach (int id in new[] {74990, 19973})
+            {
+                additions.AddRange(rows[1].Values.Take(4).Select((v, i) => ScriptToken.Int(i == 0 ? id : v)));
+                additions.Add(ScriptToken.String(rows[1].Faction));
+                additions.Add(ScriptToken.String(rows[1].Rank));
+                additions.AddRange(rows[1].Values.Skip(4).Select(ScriptToken.Int));
+            }
+            tokens.InsertRange(end, additions);
+            if (!entries.TryAdd(path, new { path, data_type = 1, append = false, expected_before_sha256 = digest, tokens }))
+                throw new InvalidDataException("Duplicate beast MAP: " + path);
+        }
+        if (owners.Count != 15 || owners.Values.Any(count => count != 2))
+            throw new InvalidDataException("Incomplete beast dungeon/difficulty coverage");
+        Directory.CreateDirectory(outputPath);
+        File.WriteAllText(Path.Combine(outputPath, "delta.json"), JsonSerializer.Serialize(new { schema = "support-profile-delta-v1", entries = entries.Values }, new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine("FEMALE_BEAST_DELTA maps=20 appendedRows=40; source PVF read-only");
+    }
+
     internal static void Write(PvfArchive source, string sourcePath, string configPath, string outputPath)
     {
         string output = Path.GetFullPath(outputPath);
