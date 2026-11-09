@@ -7,6 +7,7 @@ param(
     [switch]$SkipRawAudit
 )
 $ErrorActionPreference = 'Stop'
+throw 'Legacy seven-category layout retired: it violates native callback/guide contracts. Use Prepare-Compatibility.ps1, Pack-Compatibility.ps1, Verify-Compatibility.ps1 and paired RaidShopCategory client patch.'
 Add-Type -Path (Resolve-Path -LiteralPath $PvfLibPath).Path
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema -cne 'anton-same-version-shop-delta-v1') { throw 'Unexpected delta schema.' }
