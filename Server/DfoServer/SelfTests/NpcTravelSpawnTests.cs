@@ -1,17 +1,19 @@
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Town;
 using DfoServer.GameWorld.Towns;
 using Microsoft.Data.Sqlite;
 using DfoServer.Development;
 using DfoServer.Network.Parsers;
 using DfoServer.Persistence;
+using PvfLib;
 
 namespace DfoServer;
 
 internal static class NpcTravelSpawnTests
 {
-    public static void Run(TownCatalog towns, CharacterPreparation preparation)
+    public static void Run(TownCatalog towns, CharacterPreparation preparation, PvfArchive pvf)
     {
         int checks = Count;
 
@@ -85,6 +87,28 @@ internal static class NpcTravelSpawnTests
         That(live.Travel(actualReturn with { PathKind = 255 }) && live.Selected!.Position == new Location(60, 1, 1140, 90), "actual reverse Arthur request preserves 1140,90 despite npc/static walking mismatch");
         That(live.Travel(request with { X = 65535, Y = 65535 }) && live.Selected!.Position == new Location(118, 0, 65535, 65535), "NPC travel does not clamp the unsigned coordinate range");
         var beforeFail = repo.List(owner).Single();
+        // 实际换频道请求：123/0仍在客户端快照中，但新Session没有旧NPC入场票据。
+        var rift = new Location(123, 0, 1190, 164, 5);
+        var roomReturn = new AreaRequest(38, 1, 493, 219, 5, 123, 0, 0, 0);
+        repo.Save(owner, beforeFail, rift, towns.InitialReturn);
+        var riftTowns = TownCatalog.Load(pvf, EpicRoad2019NpcRestoreTests.Geometry(pvf), epicRoad2019Enabled: true);
+        var resumedRift = new GameSession(repo, riftTowns, owner);
+        resumedRift.Select(0, resumeTown: true);
+        resumedRift.MarkReady();
+        var riftBefore = resumedRift.Selected!;
+        That(resumedRift.TownSnapshotResumed && riftBefore.Position == rift,
+            "换频道保留超星空入口地图，不能以登录重置掩盖返回缺陷");
+        foreach (var invalid in new[] { roomReturn with { Town = 39, Area = 0 },
+            roomReturn with { X = ushort.MaxValue, Y = ushort.MaxValue }, roomReturn with { PreviousTown = 38 },
+            roomReturn with { TargetNpc = uint.MaxValue }, roomReturn with { Movement = 4 }, roomReturn with { PathKind = 1 } })
+            That(!resumedRift.Travel(invalid) && resumedRift.Selected == riftBefore &&
+                repo.List(owner).Single().Revision == riftBefore.Revision,
+                "恢复NPC返回仍拒绝伪造来源、目的、坐标和请求形状，且不写库");
+        That(resumedRift.Travel(roomReturn) && resumedRift.Selected!.Position == new Location(38, 1, 493, 219, 5) &&
+            resumedRift.Selected.Return == towns.InitialReturn &&
+            repo.List(owner).Single().Position == resumedRift.Selected.Position,
+            "丢失NPC临时票据后按原资源双向路线返回房间并保存，保留街区返回点");
+        beforeFail = repo.List(owner).Single();
         Execute("CREATE TRIGGER fail_spawn BEFORE UPDATE ON characters BEGIN SELECT RAISE(ABORT,'spawn-test'); END;");
         var failed = new GameSession(repo, towns, owner);
         bool thrown = false;

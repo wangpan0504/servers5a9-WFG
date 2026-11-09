@@ -287,6 +287,6 @@ internal static class CharacterPreparationTests
         TownTravelTests.Run(towns, definition, pvf);
         DockTravelTests.Run(towns, definition);
         RoomPortalTests.Run(towns, definition);
-        NpcTravelSpawnTests.Run(towns, definition);
+        NpcTravelSpawnTests.Run(towns, definition, pvf);
     }
 }

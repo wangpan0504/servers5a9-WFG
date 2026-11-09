@@ -240,8 +240,7 @@ internal static class TownSelectionTests
         f.Session.ReturnToRoster();
         f.Session.Select(0, Limits, resumeTown: true);
         f.Session.MarkReady();
-        That(!f.Session.Travel(leave) && f.Session.Selected!.Position.Town == 4,
-            "换选角或重连不能沿用上个客户端缓存的NPC返回来源");
+        That(f.Session.Selected!.Position.Town == 4, "换频道保留NPC地图，不靠重置登录落点回避返回规则");
         var noExit = f.Towns.Areas[(4, 0)].Default with { Npcs = [] };
         var areas = f.Towns.Areas.ToDictionary(pair => pair.Key, pair => pair.Value);
         areas[(4, 0)] = areas[(4, 0)] with { Default = noExit };
@@ -249,6 +248,15 @@ internal static class TownSelectionTests
             f.Towns.RoomPortals, f.Towns.NpcMoves) { NpcExits = f.Towns.NpcExits };
         That(!TownTravel.Plan(f.Session.Selected!, leave, unavailable, Quests, npcVisit: new(origin, 4, 0)).Accepted,
             "当前阶段无exit NPC不能借历史来源开门");
+        That(!TownTravel.Plan(f.Session.Selected!, leave, unavailable, Quests).Accepted,
+            "重连恢复也不能从没有出口NPC的地图返回");
+        var noEntry = new TownCatalog(f.Towns.Areas.ToDictionary(pair => pair.Key, pair => pair.Value),
+            f.Towns.Room, f.Towns.InitialReturn, f.Towns.Dock, f.Towns.RoomPortals,
+            new Dictionary<uint, uint[]>()) { NpcExits = f.Towns.NpcExits };
+        That(!TownTravel.Plan(f.Session.Selected!, leave, noEntry, Quests).Accepted,
+            "重连恢复仍要求房间当前NPC声明了通往出口NPC的入场路线");
+        That(f.Session.Travel(leave) && f.Session.Selected!.Position == origin && Equal(f.Session.Selected, f.Read()),
+            "重连丢失旧票据后仅凭当前资源合法路线返回房间，不复用旧会话票据");
     }
 
     static bool Equal(Character left, Character right) => JsonSerializer.Serialize(left) == JsonSerializer.Serialize(right);
