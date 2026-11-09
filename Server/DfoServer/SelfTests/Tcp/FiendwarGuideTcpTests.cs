@@ -242,10 +242,16 @@ internal static class FiendwarGuideTcpTests
                     "引导独立原奖励非零卡位实际领取，原16B产物展示先于660成功");
                 if (kind == 0) That(teamReward is not null && display!.Body.AsSpan(6).SequenceEqual(teamReward),
                     "引导第二页已准备的产物与本人真实资产领取完全一致");
+                else That(display!.Body[5] == 1 && U32(display.Body, 7) == 10308807 && U16(display.Body, 11) == 90,
+                    "引导沿独立资源直接显示90不渝，不套团队150或发源盒");
                 string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
+                string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                    fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
                 peer.Send(660, [kind, 3]);
                 That(Read().Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) && receipts ==
-                    fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                    fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id) && assets ==
+                    fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                        fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
                     "引导重复660只重放原卡位，不重复资产或收据");
             }
             peer.Send(665, BitConverter.GetBytes(peer.Id)); Read();

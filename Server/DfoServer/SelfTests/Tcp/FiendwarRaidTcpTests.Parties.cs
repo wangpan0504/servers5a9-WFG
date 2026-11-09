@@ -463,41 +463,32 @@ internal static partial class FiendwarRaidTcpTests
                         "真实产物先提交与展示，再回复660成功，通用16B行属于本人");
                     if (kind == 0) That(teamRewards[peer.Id][peer.Id].AsSpan().SequenceEqual(display!.Body.AsSpan(6)),
                         "完整团队页本人的冻结产物与真实660资产回执逐字节一致");
+                    else That(display!.Body[5] == 1 && U32(display.Body, 7) == 10308807 && U16(display.Body, 11) == 150 &&
+                        claimed.Any(row => row is { Kind: 0, Opcode: 563, Body.Length: 10 } && row.Body[0] == 1 &&
+                            U32(row.Body, 2) == 10308807 && U32(row.Body, 6) == 150) &&
+                        claimed.Any(row => row is { Kind: 0, Opcode: 1460 }) && claimed.Any(row => row is { Kind: 0, Opcode: 1461 }),
+                        "第一轮直接显示150不渝并同步账号余额及两级周额度，不显示源礼盒");
                     var receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id);
+                    string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                        fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
                     peer.Send(660, [kind, 3]);
                     That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 660, Body: [1] }) &&
-                        receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id),
+                        receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE character_id=$p0 ORDER BY kind", peer.Id) &&
+                        assets == fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) +
+                            fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
                         "660重放不增加收据、不重抽已冻结奖励");
                 }
             That(peers.All(peer => fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0 AND raid_type=2", peer.Id) is [[2L]]),
                 "同框架1/4/8人实际各领取两类末期奖励");
             foreach (var peer in peers)
             {
-                That(fixture.Query("SELECT m.balance FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807 AND m.balance<>0", peer.Id).Length == 0,
-                    "660领取的是原始不渝礼盒，未兑换不提前记材料或周获得");
-                var box = fixture.Query("SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=10306817", peer.Id);
-                That(box.Length == 1, "真实翻牌领取150不渝礼盒，重复660不复制礼盒");
-                short slot = Convert.ToInt16(box[0][0]);
-                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
-                var opened = Drain(peer);
-                var expectedAck = Build(writer =>
-                {
-                    writer.Write((byte)1); writer.Write((byte)0); writer.Write(10306817); writer.Write(slot);
-                    writer.Write(0); writer.Write(0); writer.Write((ushort)1); writer.Write(10308807); writer.Write(150);
-                });
-                That(opened.Count(row => row is { Kind: 1, Opcode: 160 } && row.Body.SequenceEqual(expectedAck)) == 1 &&
-                    opened.Any(row => row is { Kind: 0, Opcode: 563, Body.Length: 10 } && row.Body[0] == 1 &&
-                    U32(row.Body, 2) == 10308807 && U32(row.Body, 6) == 150) &&
-                    opened.Any(row => row is { Kind: 0, Opcode: 1460 }) && opened.Any(row => row is { Kind: 0, Opcode: 1461 }),
-                    "真实160开盒后同步账号余额与两级周额度");
-                string materialState = fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id");
-                peer.Send(160, Build(writer => { writer.Write(slot); writer.Write(1); }));
-                That(Drain(peer).Any(row => row is { Kind: 1, Opcode: 160, Body: [0, 19, 0] }) &&
-                    materialState == fixture.Snapshot("SELECT * FROM account_material_balances ORDER BY account,item_id"),
-                    "重复打开已消费礼盒不再计余额或周额度");
+                That(fixture.Query("SELECT m.balance,m.raid_earned FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807", peer.Id)
+                    is [[150L, 150L]], "660直接到账150不渝及周获得，重复翻牌不重复计入");
+                That(fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10306817", peer.Id)
+                    is [[0L]], "翻牌不再发需要另开160的150不渝源盒");
             }
             That(peers.All(peer => fixture.Query("SELECT m.balance,m.raid_earned FROM account_material_balances m JOIN characters c ON c.account=m.account WHERE c.id=$p0 AND m.item_id=10308807", peer.Id)
-                is [[150L, 150L]]), "团队原始礼盒实际兑换150不渝，重复660和160均不重复计入");
+                is [[150L, 150L]]), "团队翻牌直接到账150不渝，完整团队和本人结果不重复发放");
             That(guildSnapshot == fixture.Snapshot("SELECT * FROM guild_contribution_events WHERE source=5 ORDER BY character_id"),
                 "通关贡献不依赖660翻牌，领取及重复请求均不再发分");
             Console.WriteLine("PASS fiendwar native encounter roster=" + count);

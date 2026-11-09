@@ -9,6 +9,7 @@ namespace DfoServer.Game.Raids;
 // 末期材料数量由实际箱内容给出；外层权重只代表本地资源，不宣称官方公开概率。
 internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog items, BoosterCatalog boosters, FiendwarScript? guideDefinition = null)
 {
+    // 保留来源作为已有资格和收据身份；只有新开团规划展开容器，不重写历史冻结奖励。
     internal const string Source = "fiendwar-cn95-resource-v1;weighted-squad=1;per-character=1;privilege=entitled";
     internal static readonly RaidWeeklyCycle Cycle = new(DayOfWeek.Tuesday, new(6, 0), TimeSpan.FromHours(8));
     readonly RaidRewardContainers containers = new(definition.Script, items, boosters);
@@ -30,7 +31,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
                 throw new InvalidDataException("漩涡固定奖励声明不唯一：" + kind);
             Require(row.ItemId);
             if (kind == "pcroom_card" && !pcroom || kind == "privilege_card" && !privilege) continue;
-            fixedGrants.Add(containers.Resolve(row.ItemId, draw));
+            fixedGrants.AddRange(containers.ResolveAll(row.ItemId, draw));
         }
         var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();
         if (squad.Length is < 1 or > 32 || squad.Any(row => row.RawA != -1 || row.RawB <= 0 || row.RawD is not (0 or 1)))
@@ -48,7 +49,7 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
                 InventoryRewardGrantService.Create(items.Get(grant.ItemId), upgrade: grant.Upgrade, refinement: grant.Refinement).EnchantUpgrade)).ToImmutableArray()
         };
         var reward = new RaidPhaseRewardPolicy(Source,
-            [Offer(1, fixedGrants.ToImmutable()), Offer(0, [containers.Resolve(selected.ItemId, draw)])],
+            [Offer(1, fixedGrants.ToImmutable()), Offer(0, containers.ResolveAll(selected.ItemId, draw))],
             new(0, 0, 0, 0, 2, 0));
         return new(Source, definition.WeeklyClearLimit, Cycle,
             [new(definition.MinimumClears, definition.WeeklyClearLimit, reward)], LukeParticipationCutoff.TerminalCommittedFacts);
