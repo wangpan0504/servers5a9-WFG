@@ -22,6 +22,7 @@ internal static class InventorySortService
         bool runePage = page?.Start == 70;
         if (list == InventoryListType.Talisman ? page is null :
             !cargo && (!Enum.IsDefined(kind) || ItemSlotBoundService.List(kind) != list) ||
+            cargo && (list == InventoryListType.PersonalCargo ? before.CargoCapacity : before.AccountCargo.Capacity) == 0 ||
             list == InventoryListType.PersonalCargo && (byte)kind is not (11 or 20))
             return InventoryResult.Reject();
         var range = page ?? (!cargo ? ItemSlotBoundService.Range(kind, before) :

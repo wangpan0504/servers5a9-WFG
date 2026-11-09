@@ -253,13 +253,26 @@ internal static partial class ConsumableUseTcpTests
                 w.Write((byte)0); w.Write((short)71); w.Write(1114); w.Write(1);
                 w.Write((byte)2); w.Write((short)0); w.Write(0); w.Write(0); w.Write(-1); w.Write((ushort)0);
             });
-            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            byte[] sortPersonalCargo = Convert.FromHexString("06000000100218142000");
+            byte[] sortAccountCargo = Build(w => { w.Write(8); w.Write(new byte[] { 8, 20, 16, 12, 24, 0, 32, 0 }); });
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]);
+            peer.Send(20, sortPersonalCargo); peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 2, 16, 1]); peer.Barrier();
             Use(peer, 71, 0, 10); Refused(peer, 0, 10); peer.Barrier();
-            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]); peer.Barrier();
+            peer.Send(19, depositOwlCargo); peer.Expect(1, 19, [0, 1, 0, 0, 2]);
+            peer.Send(20, sortPersonalCargo); peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 2, 16, 1]); peer.Barrier();
             Use(peer, 70, 0, 10); Accepted(peer, 70, 0, 10); peer.Barrier();
             That(Count(70) == 0, "一次性猫头鹰耗尽后本副本资格仍可使用");
-            CargoTcpTests.Transfer(peer, 0, 71, 1114, 1, 2, 0, 0, 1);
+            CargoTcpTests.Transfer(peer, 0, 71, 1114, 1, 2, 3, 0, 1);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2, "猫头鹰放入沿原CMD19差量");
+            peer.Send(20, sortPersonalCargo);
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]);
+            var sortedPersonalCargo = peer.Expect(0, 13).Body;
+            That(sortedPersonalCargo[0] == 2 && U16(sortedPersonalCargo, 1) == 8 && U16(sortedPersonalCargo, 3) == 1 &&
+                U16(sortedPersonalCargo, 5) == 0 && U32(sortedPersonalCargo, 7) == 1114,
+                "副本使用猫头鹰后个人仓库整理成功并回放完整列表移至0槽");
+            peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "副本个人仓库整理沿全量路径，不发14/1681差量"));
+            peer.Send(20, sortAccountCargo);
+            peer.Expect(1, 20, [0, 4, 0, 0, 0, 8, 12, 16, 1]); peer.Barrier();
             CargoTcpTests.Transfer(peer, 2, 0, 1114, 1, 0, 71, 1114, 1);
             That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2 && Count(71) == 2,
                 "猫头鹰取出提交后恢复两件且同步源目标");

@@ -26,6 +26,7 @@ internal sealed partial class GameSession
         list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
         !AntonRejoinPresentationPending && Ready && Selected is { } character &&
         Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+        (list == InventoryListType.PersonalCargo ? character.Inventory.CargoCapacity : character.Inventory.AccountCargo.Capacity) > 0 &&
         (portableCargo is { } access &&
             (list == InventoryListType.PersonalCargo ? access.Personal : access.Account) &&
             access.Generation == owner.Generation && access.SelectionEpoch == SelectionEpoch &&
