@@ -608,8 +608,10 @@ internal sealed partial class GameSession
         (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo || dungeon.Entry.SuppressOrdinaryResultBoard) &&
             dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);
 
-    bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
-        dungeon.Settlement is { Committed: true } && dungeon.Run.ClearFact is not null &&
+    internal bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&
+        (dungeon.Settlement is { Committed: true } || (dungeon.Entry.IsCosmo || dungeon.Entry.SuppressOrdinaryResultBoard || dungeon.Entry.ForcedCreateDelilah) &&
+            dungeon.SettlementEnabled && !dungeon.Entry.IsPractice) &&
+        dungeon.Run.ClearFact is not null &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         pendingQuestCompletion is null && !HasPendingQuestScene;
 
@@ -643,7 +645,7 @@ internal sealed partial class GameSession
     });
 
     public FormalDungeonReceipt? RetryFormalDungeon(FormalDungeonReceipt expected, DungeonCatalog dungeons,
-        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog drops, ItemCatalog items, EpicPieceCatalog? pieces = null,
+        DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
         bool assaultNextHidden = false)
     {
         var original = owner.Execute(() => CanEnterFormalDungeon(expected) ? formalDungeon : null);
@@ -701,7 +703,7 @@ internal sealed partial class GameSession
 
         if (retryTarget is not { } targetId) return null;
         return EnterFormalDungeon(targetId, quest, expected.Entry.Difficulty, dungeons, rooms, drops, items,
-            draw: original.Draw, pieces: assaultRewards?.Pieces ?? pieces, requiredCharacter: expected.Character, retry: expected,
+            draw: original.Draw, pieces: assaultRewards?.Pieces ?? pieces ?? original.EntryPieces ?? original.HellPieces, requiredCharacter: expected.Character, retry: expected,
             prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
             hellParty: expected.Entry.HellParty is not null || expected.Entry.IsCosmo || expected.Entry.IsInfernoParty,
             hellLegend: expected.Entry.IsHellLegend, allowDimensionHidden: false,
@@ -724,5 +726,37 @@ internal sealed partial class GameSession
         var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, dungeon.CosmoInvitationCount, pieces, now);
         return invitations.Plan is { } plan &&
             HellPartyEntryCost.Plan(plan.After, HellPartyEntryCost.LegendStones, dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
+    });
+    public bool CanRetryEpicRoadDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>
+    {
+        if (!Ready || partyAdmission || !expected.Entry.SuppressOrdinaryResultBoard ||
+            expected.Entry.DungeonId is not (400000097 or 400000098) ||
+            !CanEnterFormalDungeon(expected) || formalDungeon is not { } dungeon ||
+            Selected is not { } character) return false;
+        if (serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active != true) return false;
+        if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
+            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
+             FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
+        var done = QuestEligibility.Completed(character);
+        if (SelectionRejection(character, done, dungeon.Entry.DungeonId) is not null) return false;
+        if (incounts is not null)
+        {
+            int id = checked((int)dungeon.Entry.DungeonId);
+            var row = IncountRow(dungeon.Entry.DungeonId);
+            var period = IncountPeriod(row?.CountKey ?? id);
+            if (row is not null && !DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, period)) ||
+                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >= charge.Limit))
+                return false;
+        }
+        if (dungeon.Entry.EntryItem is { } entryItem)
+        {
+            if (dungeon.EntryPieces is not { } entryPieces) return false;
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                [new ItemMaterialCost(entryItem.ItemId, entryItem.Count)], entryPieces,
+                (timeProvider ?? TimeProvider.System).GetUtcNow());
+            if (!spent.Accepted || spent.Plan is null) return false;
+        }
+        return true;
     });
 }
