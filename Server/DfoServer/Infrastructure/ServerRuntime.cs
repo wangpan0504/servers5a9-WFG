@@ -201,8 +201,9 @@ internal static class ServerRuntime
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var creatureTransportMailPolicy = new CreatureTransportMailPolicy(1);
         var titleCatalog = new TitleCatalog(pvf, quests);
+        var npcFavor = new NpcFavorCatalog(pvf);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
-            CharacterEmotionCatalog.Load(pvf), titleCatalog);
+            CharacterEmotionCatalog.Load(pvf), titleCatalog, npcFavor);
         var chatEmoticons = ChatEmoticonCatalog.Load(pvf, itemResources.Contracts);
         var settingsProjection = new SettingsProjection(settings, chatEmoticons);
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
@@ -334,7 +335,7 @@ internal static class ServerRuntime
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, promotionItem) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields, epicRoadAvailable: epicRoad2019Enabled, cashShop: itemResources.CashShop);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -607,7 +608,6 @@ internal static class ServerRuntime
         DungeonRoomCatalog? questRooms = null;
         DungeonCatalog? selectionDungeons = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
-        var npcFavor = new NpcFavorCatalog(pvf);
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory, NpcFavor = npcFavor };
         IGameCommandModule dungeon;
         Strongway2019Catalog? strongwayCatalog = null;

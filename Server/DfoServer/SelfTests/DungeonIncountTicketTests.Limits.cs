@@ -32,13 +32,17 @@ internal static partial class DungeonIncountTicketTests
             using var owner = owners.Acquire("dimension-limit-" + id, () => { });
             int amount = resources.ItemResources.Items.ActionConsumable(id)!.Parameters[0];
             var candidate = CharacterCreation.Prepare("Dt" + id, resources.Characters.Get(0), resources.Towns.Room, resources.Towns.InitialReturn, null);
-            repository.Create(owner, candidate with { Level = 95, Inventory = candidate.Inventory with
+            var created = repository.Create(owner, candidate with { Level = 95, Inventory = candidate.Inventory with
             {
                 Items = candidate.Inventory.Items.Add(new(0, slot, new(id, ItemKind.Consumable, 1) { ExpireTime = 2145852000 }))
-                    .Add(new(0, spare, new(id, ItemKind.Consumable, 1) { ExpireTime = 2145852000 })),
-                DailyBoosterUses = amount == 1 ? [new(DimensionEntryTicketService.SharedCounterItem,
-                    ShopPurchaseCount.Today(clock.GetUtcNow()), 4)] : []
+                    .Add(new(0, spare, new(id, ItemKind.Consumable, 1) { ExpireTime = 2145852000 }))
             } });
+            if (amount == 1)
+                repository.CommitInventory(owner, created, new(created.Inventory, created.Inventory with
+                {
+                    DailyBoosterUses = [new(DimensionEntryTicketService.SharedCounterItem,
+                        ShopPurchaseCount.Today(clock.GetUtcNow()), 4)]
+                }, "dimension_limit_fixture"));
             var session = NewSession();
             try
             {

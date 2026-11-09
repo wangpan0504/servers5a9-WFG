@@ -378,6 +378,7 @@ internal static class SqliteMigrations
             Execute(db, tx, RevisedBeastRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
             Execute(db, tx, RevisedBeastRewardSchema.StageDefinition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
         }),
+        new(201, "人物辞典角色收藏", static (db, tx) => Execute(db, tx, NpcBookmarkSchema)),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2643,6 +2644,7 @@ internal static class SqliteMigrations
             ("character_epic_wishes",EpicWishSchema.Definition),
             ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
+            ("character_npc_bookmarks",NpcBookmarkSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
@@ -2906,6 +2908,7 @@ internal static class SqliteMigrations
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
         "SELECT character_id,account,entries FROM character_quest_notify LIMIT 0",
+        "SELECT character_id,account,entries FROM character_npc_bookmarks LIMIT 0",
         "SELECT character_id,started_at,expires_at,purchase_season,reward_season,last_login_day,login_days,daily_claim_day,claimed_milestones FROM character_privilege_service LIMIT 0",
         "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity],[quest_cycle_day],[equipment_slot_flags] FROM [characters] LIMIT 0",
@@ -3023,6 +3026,15 @@ internal static class SqliteMigrations
             character_id INTEGER PRIMARY KEY,
             account TEXT NOT NULL,
             entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=16),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal const string NpcBookmarkSchema = """
+        CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
         """;

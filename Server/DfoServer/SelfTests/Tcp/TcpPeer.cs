@@ -13,6 +13,7 @@ internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Pr
 // 独立实现测试帧与 CRC，不能调用服务端的 Frame、Parser、Builder 来自证。
 internal sealed partial class TcpPeer : IDisposable
 {
+    internal byte[] CashShopRestrictions { get; private set; } = [];
     public byte[]? DimensionEntranceState { get; private set; }
     public uint? AncientGateEnergy { get; private set; }
     internal void ReadAncientGate(WirePacket packet)
@@ -120,6 +121,7 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket[] ClientSettings { get; private set; } = [];
     public byte[] ChatEmoticonInfo { get; private set; } = [];
     public byte[] RecentEmoticonInfo { get; private set; } = [];
+    public byte[] NpcBookmarks { get; private set; } = [];
 
     internal void ReadChatEmoticons(WirePacket packet)
     {
@@ -987,6 +989,10 @@ internal sealed partial class TcpPeer : IDisposable
                 TestCheck.That(NpcFavor[favorOffset] < 4 && channels.Add(NpcFavor[favorOffset]), "NPC颜色通道不越界、不重复");
         }
         TestCheck.That(favorOffset == NpcFavor.Length, "好感度按完整绝对快照恢复，无尾随字节");
+        CashShopRestrictions = Expect(0, 863).Body;
+        TestCheck.That(CashShopRestrictions.Length >= 4 &&
+            CashShopRestrictions.Length == 4 + 12L * U32(CashShopRestrictions, 0),
+            "商城限购恢复完整计数及每行三个32位字段，空快照也清除旧角色缓存");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
@@ -1633,6 +1639,10 @@ internal sealed partial class TcpPeer : IDisposable
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(guideCount); }
             })).Body).ToArray();
             var expectedChatEmoticons = fixture?.ExpectedChatEmoticons(Id);
+            var bookmarks = Expect(0, 1737).Body;
+            NpcBookmarks = bookmarks;
+            TestCheck.That(bookmarks.Length >= 4 && bookmarks.Length == 4 + U32(bookmarks, 0) * 4L,
+                "人物辞典收藏恢复完整32位计数与编号列表");
             if (expectedChatEmoticons is not null)
             {
                 RecentEmoticonInfo = Expect(0, 1384, fixture!.ExpectedRecentEmoticons(Id)).Body;

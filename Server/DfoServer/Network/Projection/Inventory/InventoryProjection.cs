@@ -51,6 +51,8 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         if (!CanSend())
             return;
         var current = receipt.Character;
+        if (!plan.Before.ShopPurchases.SequenceEqual(current.Inventory.ShopPurchases))
+            await town.CashShopRestrictionsAsync(context, current, CanSend, plan.Before);
         if (plan.Before.PrivilegeService != current.Inventory.PrivilegeService)
             await PrivilegeServiceProjection.PostAsync(context, receipt);
         // CMD19只转移已有实例；登记已配置时不能用本人Player重新初始化登记，否则0267BFA0会关闭UI355。

@@ -21,6 +21,7 @@ internal static partial class ClientSettingsStoreTests
     {
         int before = TestCheck.Count;
         QuestNotifyStorage();
+        NpcBookmarkStorage();
         CloneTitleStorage();
         SaveAndIsolation();
         CharacterGameSnapshots();
@@ -692,7 +693,7 @@ internal static partial class ClientSettingsStoreTests
         {
             using var db = Open(Path);
             using var tables = db.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify') ORDER BY name";
+            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons','character_quest_notify','character_npc_bookmarks') ORDER BY name";
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));
