@@ -69,7 +69,7 @@ internal static class RevisedBeastTcpTests
                 peer.Expect(0, 1444, [1,0,0,0,1,0,0,0,2,4,2,4]);
                 var info = peer.Expect(0, 28).Body;
                 That(U32(info) == dungeon && info[4] == role.Slot, "0和5970上下文均进入真实对应难度实例");
-                peer.Expect(0, 29);
+                var map = peer.Expect(0, 29).Body;
                 // 正式装配在入场后发布实际记次，任务记录不得因兼容入口被改写。
                 peer.Barrier(packet => That(packet.Opcode is 1444 or 14 or 36 or 550,
                     $"入场仅接收费用和次数投影，实际{packet.Opcode}: {Convert.ToHexString(packet.Body)}"));
@@ -77,12 +77,64 @@ internal static class RevisedBeastTcpTests
                     is [[1L, 1L]], "五图入场提交共享5335账本");
                 That(f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", role.Id) == active,
                     "5970接取身份与材料进度不因入图被清除或自动完成");
-                peer.Send(42);
-                peer.Expect(1, 42, [1]);
+                // 合成击杀走真实TCP死亡、阶段奖励及终局提交，结果菜单不能借普通翻牌资格。
+                peer.Send(72, [1, 1]); peer.Barrier();
+                That(f.Query("SELECT count(*) FROM character_revised_beast_rewards WHERE character_id=$p0", role.Id) is [[0L]],
+                    "未终局不能借选择其他地下城产生奖励或退场");
+                FormalDungeonTcpTests.Load(peer); peer.Barrier();
+                var move = new byte[100]; move[0] = 1;
+                peer.Send(45, move);
+                map = PartyDungeonTcpTests.Drain(peer).Single(packet => packet is { Kind: 0, Opcode: 29 }).Body;
+                FormalDungeonTcpTests.Load(peer); peer.Barrier();
+                var beast = SelfTestCatalogs.Rooms(resources.Archive).RevisedBeastEncounter(checked((byte)role.Slot))!;
+                var bosses = Enumerable.Range(0, map[18]).Select(i => 19 + i * 22)
+                    .OrderBy(at => U32(map, at + 8) == beast.AnneId ? 0 : 1).ToArray();
+                That(bosses.Length == 2, "改版遭遇房同时部署两名领主");
+                foreach (int at in bosses)
+                {
+                    peer.Send(39, FormalDungeonTcpTests.Death(U16(map, at + 6), peer.Id, map[at + 12]));
+                    bool anne = U32(map, at + 8) == beast.AnneId;
+                    if (anne) peer.Expect(1, 39, [0,0,0,map[at + 6],map[at + 7]]);
+                    else
+                    {
+                        var death = peer.Expect(0, 38).Body;
+                        That(U16(death) == U16(map, at + 6), "领主真实死亡广播保持对象键");
+                    }
+                    int results = 0;
+                    peer.Barrier(packet =>
+                    {
+                        That(packet.Opcode is 14 or 1409 or 1410 or 1444, "魔兽死亡只发布资产、阶段/终局及次数");
+                        if (packet.Opcode == 1409) results++;
+                    });
+                    That(results == (anne ? 0 : 1), "仅歇罗死亡发布一次终局结果");
+                }
+                That(f.Query("SELECT count(*) FROM character_revised_beast_rewards WHERE character_id=$p0", role.Id) is [[1L]],
+                    "真实双领主死亡提交专用终局");
+                string settled = f.Snapshot();
+                byte option = role.Slot == 0 ? (byte)1 : (byte)2;
+                peer.Send(72, [2, option]); peer.Expect(1, 72, [1, 2, option]); peer.Barrier();
+                That(f.Snapshot() == settled, "结果焦点请求只确认菜单，不退场或再次发奖");
+                peer.Send(72, [1, option]); peer.Expect(1, 72, [1, 1, option]);
+                if (option == 1)
+                {
+                    peer.Expect(1, 15, [1]);
+                    peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+                    peer.Expect(0, 1444, [1,0,0,0,1,0,0,0,1,3,1,3]);
+                    selection = peer.Expect(0, 27).Body;
+                    That(selection.Length == 46 && selection[41] == 1 && U32(selection, 42) == dungeon,
+                        "选择其他地下城发布完整魔兽选图与真实入场/领奖次数");
+                    peer.Barrier();
+                    peer.Send(72, [1, 1]); peer.Barrier();
+                    That(f.Query("SELECT count(*) FROM character_revised_beast_rewards WHERE character_id=$p0", role.Id) is [[1L]],
+                        "重复旧结果请求不能再次退场、扣次或发奖");
+                    peer.Send(132); peer.Expect(1, 132, [1]);
+                }
                 peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+                if (option == 1)
+                    That(U16(peer.Expect(0, 23).Body) == peer.Id, "取消重选同步本人候场区位置");
                 peer.Expect(0, 24);
-                peer.Expect(0, 21);
-                peer.Expect(0, 356);
+                if (option == 2) peer.Expect(0, 21);
+                if (option == 2) peer.Expect(0, 356);
                 peer.Barrier();
                 That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 2L]],
                     "副本退场恢复魔兽候场区，仍可继续使用频道");

@@ -437,13 +437,34 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
         // 魔兽使用专用终局与奖励凭据，不经过普通翻牌结算；原生菜单仍发送命令72。
-        if (option == (byte)DungeonResultOption.ReturnTown &&
+        if (option is 1 or (byte)DungeonResultOption.ReturnTown &&
             context.Session.CurrentRevisedBeastSettlement() is { } beastResult)
         {
             if (state == 2)
             {
                 await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
                     "revised_beast_result_focus", () => context.Session.CanUseRevisedBeastResult(beastResult));
+                return CommandResult.Handled;
+            }
+            if (option == 1)
+            {
+                var selection = context.Session.OpenRevisedBeastOtherSelection(beastResult);
+                if (selection is null) return CommandResult.Unhandled;
+                if (context.Death is not null) await context.Death.StopAsync();
+                if (!await town.DetachForDungeonSelectionAsync(context, selection)) return CommandResult.Handled;
+                bool SelectionGuard() => context.Session.CanPublishDungeonSelection(selection);
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "revised_beast_other_selection", SelectionGuard);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(),
+                    "revised_beast_selection_opened", SelectionGuard);
+                await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selection.Character.Id),
+                    "revised_beast_selection_state", SelectionGuard);
+                await town.RefreshRevisedBeastCountsAsync(context, SelectionGuard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
+                    DungeonPackets.RevisedBeastSelectNotice([RevisedBeastSelection.DailyDungeon(context.Session.DungeonBusinessNow)]),
+                    "revised_beast_selection_notice", SelectionGuard);
+                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "revised_beast_other_selection",
+                    selection.Character.Id, selection.SelectionId });
                 return CommandResult.Handled;
             }
             var travel = context.Session.ReturnFromRevisedBeastResult(beastResult);

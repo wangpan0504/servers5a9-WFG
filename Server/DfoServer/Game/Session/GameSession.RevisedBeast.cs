@@ -123,6 +123,16 @@ internal sealed partial class GameSession
     public TownTravelReceipt? ReturnFromRevisedBeastResult(RevisedBeastSettlementReceipt receipt) => owner.Execute(() =>
         CanUseRevisedBeastResult(receipt) ? ReturnFromFormalDungeon() : null);
 
+    public DungeonSelectionReceipt? OpenRevisedBeastOtherSelection(RevisedBeastSettlementReceipt receipt) =>
+        owner.Execute<DungeonSelectionReceipt?>(() =>
+        {
+            if (!CanUseRevisedBeastResult(receipt) || ReturnFromFormalDungeon() is not { } returning) return null;
+            CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position);
+            SetState(SessionPhase.MapSelect);
+            return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId)
+            { ConsumableCooldowns = returning.ConsumableCooldowns, ConsumableEffects = returning.ConsumableEffects };
+        });
+
     public bool CanPublishRevisedBeast(RevisedBeastSettlementReceipt receipt) => owner.Execute(()=>Ready &&
         formalDungeon?.RevisedBeastSettlement == receipt && SelectionEpoch == receipt.Scene.SelectionEpoch &&
         ReferenceEquals(Selected,receipt.Commit.Character) && formalDungeon.Run.Snapshot.Identity == receipt.Terminal.Identity);
