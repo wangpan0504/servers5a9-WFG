@@ -93,8 +93,23 @@ internal static class DungeonSettlementProtocolTests
             doubleEquipment.Item!.Value == 345 && doubleEquipment.ExtraItem == doubleEquipment.Item,
             "双倍装备保持品级和两个完整核心，显示数量2且金币首项为零占位");
         byte[] noEquipment = DungeonSettlementPackets.CardSelected(new(options, true, equipment with { Item = null }));
-        That(noEquipment.Length == 41 && noEquipment[3] == 1 && U32(noEquipment,4) == 0 && U32(noEquipment,8) == 0,
-            "空付费牌只有零金币首项，没有伪造补偿或第二个装备槽金币");
+        That(noEquipment.Length == 33 && noEquipment[3] == 0,
+            "完全空付费牌使用零条目，不显示零金币或伪造补偿");
+        var emptyReward = equipment with { Item = null };
+        byte[] emptyFree = DungeonSettlementPackets.CardReward(reward, 1200, emptyReward);
+        That(emptyFree[156] == 0 && emptyFree.Length == 218 &&
+            DungeonSettlementPackets.CardReward(reward, 1200, emptyReward, blackDiamond: emptyReward).Length == 218,
+            "次数耗尽的免费及黑钻空牌均不生成金币图标，后续字段位置完整");
+        var itemOnly = CardRewards(DungeonSettlementPackets.CardReward(reward, 1200, equipment));
+        That(itemOnly[0][0].SequenceEqual(new (uint, uint)[] { (0, 0), (10400, 1) }),
+            "无金币但有物品时仍保留客户端首槽，不把真实物品误作金币");
+        var emptyParty = new DungeonCardView?[8];
+        emptyParty[3] = new(null, true, emptyReward) { Slot = 3, Free = emptyReward, BlackDiamond = emptyReward };
+        var partyEmpty = CardRewards(DungeonSettlementPackets.PartyCardReward(emptyFree, 0, emptyParty));
+        That(partyEmpty[0][3].Length == 0 && partyEmpty[2][3].Length == 0 &&
+            CardMembers(DungeonSettlementPackets.CardSelected(emptyParty[3]!, emptyParty))[3] is
+                { Free: 3, Paid: 3, Items.Length: 0 },
+            "组队空牌同步仍揭示领取状态，各奖励组均无虚假零金币");
         var eventOptions = options with { DoublePaidItems = true };
         byte[] eventCard = DungeonSettlementPackets.CardReward(reward,1200,bonus,eventOptions,bonus);
         That(eventCard[^26] == 1 && eventCard[^27] == 0 && eventCard.AsSpan(eventCard.Length-8).IndexOfAnyExcept((byte)0) == -1 &&

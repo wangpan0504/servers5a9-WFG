@@ -53,6 +53,20 @@ internal static class DungeonEntryPlanTests
         var ordinary = definition with { Mazes = [maze with { QuestConnectionTokens = [] }] };
         That(DungeonEntryPlan.TryCreate(ordinary, character with { ActiveMainQuests = [] }, 17, 0, 0, out var normal, out _) &&
             normal is { IsOrdinary: true, Difficulty: 0, RouteQuestId: 0 }, "无任务普通入场不变");
+        foreach (var markers in new DungeonRawSection[][]
+        {
+            [], [new("disable drop item", [])],
+            [new("disable drop item", []), new("disable drop item", [])],
+            [new("disable drop item", [new(0, 0)])]
+        })
+        {
+            var declared = ordinary with { RawSections = [.. sections, .. markers] };
+            bool disabled = markers.Any(marker => marker.Tokens.Count == 0);
+            That(declared.DisableItemDrops == disabled && DungeonEntryPlan.TryCreate(declared,
+                character with { ActiveMainQuests = [] }, 17, 0, 0, out var planned, out _) &&
+                planned!.DisableItemDrops == disabled && !planned.DisableClearReward,
+                "普通入场冻结无参数禁掉落声明，重复标记幂等，不误禁独立翻牌");
+        }
         That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze with { QuestConnectionTokens = [new(0, 0), new(0, 100), new(0, 2)] }] },
             character, 17, 100, 1, out _, out var connectionReason) && connectionReason == "quest-maze-unavailable",
             "非-1连接第三字段保留精确难度匹配，不擅自解释成最低难度");

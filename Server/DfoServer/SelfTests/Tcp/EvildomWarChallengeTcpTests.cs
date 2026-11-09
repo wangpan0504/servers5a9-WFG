@@ -335,8 +335,11 @@ internal static class EvildomWarChallengeTcpTests
                         byte[] death = FormalDungeonTcpTests.Death(U16(map, offset + 6), leader.Id, map[offset + 12]);
                         if (x == 12 && U32(map, offset + 8) == 407000556) bossDeath = death;
                         leader.Send(39, death);
-                        That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 })),
-                            "英雄真实演员死亡由共享实例逐成员提交后发布");
+                        That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 }) &&
+                            rows.Where(packet => packet is { Kind: 0, Opcode: 38 }).All(packet =>
+                                packet.Body is { Length: 9 } body && U16(body, 2) == 0) &&
+                            !rows.Any(packet => packet is { Kind: 0, Opcode: 40 })),
+                            "英雄各房真实怪物及Boss死亡同步零掉落38，不产生地面物品");
                     }
                     if (x == 12) break;
                     byte[] move = new byte[100]; move[0] = (byte)(x + 1);
@@ -372,6 +375,9 @@ internal static class EvildomWarChallengeTcpTests
                         "每位真实成员由46提交自己唯一正式结算");
                     That(settled.Any(packet => packet is { Kind: 0, Opcode: 35 }),
                         "英雄同次结算明确发布真实通关牌，不以另一次Drain漏看结果");
+                    var cardGroups = DungeonSettlementProtocolTests.CardRewards(settled.Single(packet => packet is { Kind: 0, Opcode: 35 }).Body);
+                    That(cardGroups[0][peers.IndexOf(peer)].SequenceEqual(new (uint, uint)[] { (0, 0), (490014021, 1) }),
+                        "英雄翻牌只预载零金币首槽及PVF唯一装饰，不附加护石符文或碎片");
                     string committed = Assets();
                     peer.Send(46, report);
                     That(All(peer)[peers.IndexOf(peer)].Any(packet => packet is { Kind: 0, Opcode: 34 }) && Assets() == committed,
