@@ -7,6 +7,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Events;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.MonsterMockBattle;
 using DfoServer.GameWorld.MonsterMockBattle;
 using DfoServer.Persistence;
@@ -40,12 +41,22 @@ internal static class MonsterMockBattleTcpTests
         var owners = new AccountOwners();
         byte[] stateBody = [];
         string beforeFailedEntry = "";
+        int avatarId, originalWorn;
+        short avatarSlot;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var candidate = CharacterCreation.Prepare("MockRunner", resources.Characters.Get(0),
                 resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get);
             var primary = repository.Create(owner, candidate);
             repository.Create(owner, candidate with { Name = "MockRunnerB" });
+            var items = resources.ItemResources;
+            avatarId = resources.Characters.Get(0).DefaultAvatarEquipment[3];
+            var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
+            var granted = inventory.Grant(primary, [new(avatarId, 1)]);
+            That(granted.Accepted, "模拟战刷新夹具发放当前职业可穿时装");
+            primary = InventoryService.Commit(repository, owner, primary, granted);
+            avatarSlot = primary.Inventory.Items.Single(row => row.Position.List == InventoryListType.Avatar && row.Core.ItemId == avatarId).Position.Index;
+            originalWorn = primary.Inventory.Find(new(InventoryListType.Equipment, 3))?.Core.ItemId ?? 0;
             // 实际旧首版空档：只有revision=1、零体力与三小时前时点，不预置新补给字段。
             var oldEmpty = MockBattleAccount.Create(clock.GetUtcNow().AddHours(-3), primary.Name);
             repository.CommitMockBattle(owner, primary, new(oldEmpty, new(oldEmpty, []),
@@ -115,6 +126,15 @@ internal static class MonsterMockBattleTcpTests
             var duplicate = Request(first, 1736, Command(7, 1));
             That(Material(490013685) == 5100 && DailyMails() == 0 && duplicate.All(row => row.Opcode != 563),
                 "同日再次刷新不重复增加硬币或发余额差量");
+            That(duplicate.Count(row => row is { Kind: 0, Opcode: 1766 }) == 1,
+                "状态相同的显式面板操作仍完整刷新一次1766");
+            var beforeAppearance = stateBody.ToArray();
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                MoveAvatar(first, 1, avatarSlot, avatarId, 3, 3, originalWorn);
+                MoveAvatar(first, 3, 3, avatarId, 1, avatarSlot, originalWorn);
+            }
+            Bytes(stateBody, beforeAppearance, "反复穿脱时装不改变模拟战卡册和硬币体力");
         }
         using (var alternate = OpenBattle())
         {
@@ -430,6 +450,21 @@ internal static class MonsterMockBattleTcpTests
                 rows.Add(packet);
             }
             throw new InvalidOperationException("活动响应超过有界预算");
+        }
+        void MoveAvatar(TcpPeer peer, byte sourceList, short sourceSlot, int sourceId, byte targetList, short targetSlot, int targetId)
+        {
+            var packets = Request(peer, 19, Build(writer =>
+            {
+                writer.Write(sourceList); writer.Write(sourceSlot); writer.Write(sourceId); writer.Write(1);
+                writer.Write(targetList); writer.Write(targetSlot); writer.Write(targetId);
+                writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
+            }));
+            That(packets.Single(row => row is { Kind: 1, Opcode: 19 }).Body[0] == 1,
+                "真实CMD19时装穿脱成功");
+            That(packets.Any(row => row is { Kind: 0, Opcode: 1681 }) && packets.Any(row => row is { Kind: 0, Opcode: 2 }),
+                "时装穿脱保留库存差量与本人外观刷新");
+            That(packets.All(row => row is not { Kind: 0, Opcode: 1766 }),
+                "背包快照变化但完整模拟战状态相同，不重复发送1766");
         }
         WirePacket[] Enter(TcpPeer peer, uint dungeon, uint opponent)
         {

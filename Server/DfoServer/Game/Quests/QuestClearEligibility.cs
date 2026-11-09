@@ -87,6 +87,7 @@ internal static class QuestClearEligibility
                 entry.QuestId < 30000 && entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty &&
                 entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId && row.Slot == entry.ActiveQuestSlot && row.AcceptanceId == entry.QuestAcceptanceId)) &&
             (entry.IsEvildomWarHidden && entry.PartyRoute is not null && entry.QuestId == 0 && entry.RouteQuestId == 0 ||
+             run.IsAntonTremor && entry.QuestId == 0 && entry.RouteQuestId == 0 && scene.TemplateId == 15467 ||
              entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } && entry.QuestId == 0 &&
              entry.RouteQuestId == 0 && clear?.ClearMap is { } energyMap && entry.LukeEnergyObject?.MatchesEnergy(
                  entry.DungeonId, entry.Maze, energyMap, scene.TemplateId, scene.SourceOrdinal) == true ||

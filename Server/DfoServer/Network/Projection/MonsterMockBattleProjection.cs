@@ -13,6 +13,8 @@ internal sealed class MonsterMockBattleProjection(GameConnectionContext context,
     InventoryProjection inventory, TownProjection town, ServerLog log)
 {
     long publishedEpoch = -1;
+    long infoEpoch = -1;
+    byte[]? publishedInfo;
     DfoServer.Game.Inventory.Models.InventorySnapshot? publishedInventory;
     Packet? committedPacket;
     MockBattleView? committedView;
@@ -60,6 +62,7 @@ internal sealed class MonsterMockBattleProjection(GameConnectionContext context,
                 MonsterMockBattlePackets.Spawns(receipt.Monsters.Monsters.Where(row => row.MockBattleSpawn is not null)
                     .Select(row => row.MockBattleSpawn!).ToArray()), "monster_mock_battle_spawns", Guard);
         publishedEpoch = -1;
+        publishedInfo = null;
     }
     public async Task RefreshAsync()
     {
@@ -67,7 +70,7 @@ internal sealed class MonsterMockBattleProjection(GameConnectionContext context,
             service.Now < nextRefresh) return;
         if (context.Session.ReadMockBattle(service) is not { } view) return;
         if (view.Inventory is { } changed) await inventory.RefreshAsync(context, changed);
-        await PublishAsync(view);
+        await PublishAsync(view, automatic: true);
         if (context.Session.CanPublishMockBattle(view)) { publishedEpoch = view.Epoch; publishedInventory = view.Character.Inventory; }
     }
 
@@ -116,10 +119,24 @@ internal sealed class MonsterMockBattleProjection(GameConnectionContext context,
             Revision = view.Account.Revision, Count = view.AcquiredSlots.IsDefault ? 0 : view.AcquiredSlots.Length });
     }
 
-    async Task PublishAsync(MockBattleView view)
+    async Task PublishAsync(MockBattleView view, bool automatic = false)
     {
-        await context.Notify(NotiPacketType.MONSTER_MOCK_BATTLE_INFO,
-            MonsterMockBattlePackets.Info(view.Account.Snapshot), "monster_mock_battle_info", () => context.Session.CanPublishMockBattle(view));
+        var body = MonsterMockBattlePackets.Info(view.Account.Snapshot);
+        bool Guard() => context.Session.CanPublishMockBattle(view);
+        // 只去重同一选角已实际写出的完整状态；显式操作仍按原协议刷新面板。
+        if (context.Sender.IsPublicationQueued)
+        {
+            publishedInfo = null;
+            await context.Notify(NotiPacketType.MONSTER_MOCK_BATTLE_INFO, body, "monster_mock_battle_info", Guard);
+        }
+        else if (!automatic || infoEpoch != view.Epoch || publishedInfo is null || !body.AsSpan().SequenceEqual(publishedInfo))
+        {
+            if (!await context.Sender.SendConfirmedAsync(0, (ushort)NotiPacketType.MONSTER_MOCK_BATTLE_INFO,
+                body, "monster_mock_battle_info", Guard)) return;
+            if (!Guard()) return;
+            infoEpoch = view.Epoch;
+            publishedInfo = body;
+        }
         if (!context.Session.CanPublishMockBattle(view)) return;
         var now = service.Now;
         var local = now.ToOffset(TimeSpan.FromHours(8));

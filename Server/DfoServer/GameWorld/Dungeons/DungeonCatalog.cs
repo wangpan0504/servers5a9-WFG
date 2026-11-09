@@ -455,6 +455,8 @@ internal sealed class DungeonCatalog
     private readonly Lazy<DungeonMapPool> mapPool;
     private readonly Lazy<IReadOnlyDictionary<(int Dungeon, byte Difficulty), DungeonMap>> revisedBeastBossMaps;
     private readonly Lazy<GriefTowerCatalog> griefTower;
+    private readonly Lazy<StackableDungeonLimitCatalog> stackableLimits;
+    internal StackableDungeonLimitCatalog StackableLimits => stackableLimits.Value;
     private readonly Lazy<BossRushCatalog> bossRush;
     private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
     public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
@@ -476,6 +478,7 @@ internal sealed class DungeonCatalog
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
         revisedBeastBossMaps = new(() => RevisedBeastLayout.ReadBossMaps(archive, maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        stackableLimits = new(() => new StackableDungeonLimitCatalog(archive), LazyThreadSafetyMode.ExecutionAndPublication);
         bossRush = new(() => new BossRushCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);

@@ -12,7 +12,8 @@ internal static partial class LukeRaidRunTcpTests
         ReadOtherPartyDeparture(first, second);
         Enter(second, second[0], 5055); Load(second);
         foreach (var peer in peers) Drain(peer);
-        string assets = fixture.Snapshot("SELECT character_id,item_uid,item_core FROM character_inventory_items ORDER BY character_id,item_uid");
+        const string ownedItems = "SELECT character_id,item_uid,item_core FROM character_inventory_items WHERE item_uid NOT IN (SELECT item_uid FROM mailbox_attachments) ORDER BY character_id,item_uid";
+        string assets = fixture.Snapshot(ownedItems);
         string coins = fixture.Snapshot("SELECT id,revive_coins FROM characters ORDER BY id");
         clock.Advance(2099);
         foreach (var peer in peers) That(!Drain(peer).Any(packet => packet.Opcode == 24), "deadline前不强退任一分队");
@@ -34,9 +35,12 @@ internal static partial class LukeRaidRunTcpTests
         }
         That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE phase0_receipt IS NOT NULL OR phase1_receipt IS NOT NULL OR state=2") is [[0L]],
             "阶段失败无成功资格或周clear行");
-        That(fixture.Snapshot("SELECT character_id,item_uid,item_core FROM character_inventory_items ORDER BY character_id,item_uid") == assets &&
+        That(fixture.Snapshot(ownedItems) == assets &&
             fixture.Snapshot("SELECT id,revive_coins FROM characters ORDER BY id") == coins,
-            "自动失败退场不再次扣票/扣币，也不伪造退款或奖励");
+            "自动失败退场不再次扣票/扣币，退票附件不改原背包或发通关奖励");
+        foreach (var peer in peers)
+            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0 AND delivery_key LIKE 'luke-refund:%'", peer.Id)
+                is [[1L]], "卢克失败后两队八人分别获得一次原票邮件");
         first[0].Send(15, BitConverter.GetBytes(5054));
         That(Drain(first[0]).Single(packet => packet is { Kind: 1, Opcode: 15 }).Body[0] == 0, "本次失败攻坚不可重新选图，需离团重建");
     }
