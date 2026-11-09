@@ -14,12 +14,8 @@ internal static partial class DevelopmentGm
         {
             supportCompanion = GameDebugSettings.SupportCompanionName(GameDebugSettings.LegacySupportCompanion(mask)),
             supportCompanions = GameDebugSettings.SupportCompanionNames(mask),
-            supportedCompanions = new[] { "wangfugui", "guangbing" },
-            unavailableCompanions = new[]
-            {
-                new { companion = "female-crusader", reason = "当前客户端不支持该支援兵" },
-                new { companion = "enchantress", reason = "当前客户端不支持该支援兵" }
-            },
+            supportedCompanions = new[] { "wangfugui", "guangbing", "female-crusader", "enchantress" },
+            unavailableCompanions = Array.Empty<object>(),
             supportCompanionTiers = new Dictionary<string, string>
             {
                 ["wangfugui"] = snapshot.WangFuguiTier,

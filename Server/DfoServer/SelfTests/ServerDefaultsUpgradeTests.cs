@@ -119,7 +119,7 @@ internal static class ServerDefaultsUpgradeTests
         Parallel.For(0, 24, index => settings.SupportConfiguration = chosen with { SelectionMask = index % 2 == 0 ? 3 : 2 });
         That(store.Read() == settings.SupportConfiguration, "并发更新的最终磁盘与内存属于同一完整快照");
         Reject<ArgumentOutOfRangeException>(() => settings.SupportConfiguration = chosen with { SelectionMask = 5 },
-            "退役辅助和多辅助非法组合均拒绝");
+            "多辅助非法组合拒绝");
         if (OperatingSystem.IsWindows())
         {
             VerifySupportFileReplacement(directory, store, settings);
@@ -129,12 +129,11 @@ internal static class ServerDefaultsUpgradeTests
         foreach (int oldMask in new[] { 1, 3, 4, 6, 8, 10 })
         {
             var old = chosen with { SelectionMask = oldMask };
-            if (oldMask > 3)
-                Reject<ArgumentOutOfRangeException>(() => store.Write(old), "新的配置写入不能重新启用退役职业");
+            store.Write(old);
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(old));
-            var normalized = old with { SelectionMask = oldMask & 3 };
+            var normalized = old;
             That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
-                File.ReadAllText(path)) == normalized, "旧合法选择移除退役位并持久化，允许光兵与三个档次完整保留");
+                File.ReadAllText(path)) == normalized, "四类合法选择与光兵组合及三个档次完整保留");
             var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
             File.SetLastWriteTimeUtc(path, stamp);
             That(new GameDebugSettings(store.Read(), store.Write).SupportConfiguration == normalized && File.GetLastWriteTimeUtc(path) == stamp,
@@ -194,31 +193,31 @@ internal static class ServerDefaultsUpgradeTests
         settings.SupportConfiguration = expected;
         That(store.Read() == expected && settings.SupportConfiguration == expected, "解除只读属性后仍可保存");
 
-        // 旧合法名单的读取需要回写归一结果，失败不能返回尚未持久化的配置。
+        // 四类合法名单读取不改写；只读及不共享删除句柄不能阻止恢复已有设置。
         var legacy = expected with { SelectionMask = 6 };
-        var normalized = legacy with { SelectionMask = 2 };
+        var normalized = legacy;
         string raw = System.Text.Json.JsonSerializer.Serialize(legacy);
         File.WriteAllText(path, raw);
         using (var blocked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Reject<IOException>(() => store.Read(), "旧名单迁移遇到不共享删除读句柄时报告真实写入失败");
+            That(store.Read() == legacy, "合法旧名单读取无需替换不共享删除的文件");
             That(File.ReadAllText(path) == raw && Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
-                "迁移共享冲突保留旧JSON和全部档次且清理临时文件");
+                "读取保留旧JSON和全部档次且不创建临时文件");
         }
         That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
-            File.ReadAllText(path)) == normalized, "解除共享冲突后读取真实迁移旧名单并完整保留档次");
+            File.ReadAllText(path)) == normalized, "解除共享冲突后仍保留原名单和档次");
         File.WriteAllText(path, raw);
         attributes = File.GetAttributes(path);
         try
         {
             File.SetAttributes(path, attributes | FileAttributes.ReadOnly);
-            Reject<UnauthorizedAccessException>(() => store.Read(), "旧名单迁移遇到只读目标时报告真实写入失败");
+            That(store.Read() == legacy, "合法旧名单从只读目标正常读取");
             That(File.ReadAllText(path) == raw && Directory.GetFiles(directory, "support-companions.json.*.tmp").Length == 0,
-                "迁移只读拒绝保留旧JSON和全部档次且清理临时文件");
+                "只读读取保留旧JSON和全部档次且不创建临时文件");
         }
         finally { File.SetAttributes(path, attributes); }
         That(store.Read() == normalized && System.Text.Json.JsonSerializer.Deserialize<SupportCompanionConfiguration>(
-            File.ReadAllText(path)) == normalized, "解除只读属性后读取真实迁移旧名单并完整保留档次");
+            File.ReadAllText(path)) == normalized, "解除只读属性后仍完整保留合法名单和档次");
     }
 
     static void VerifySupportReplacementRecovery(string directory)
@@ -387,12 +386,12 @@ internal static class ServerDefaultsUpgradeTests
                 File.Copy(source, target, true);
                 File.Delete(source);
             });
-            try { returned = retryStore.Read(); }
+            try { retryStore.Write(before); returned = retryStore.Read(); }
             catch (IOException error) { observed = error; }
             That(attempts == 4 && sameSource && oldTarget && Directory.GetFiles(retryDirectory, "*.tmp").Length == 0 &&
                 (recover ? observed is null && returned == before && File.ReadAllText(path) == beforeJson
                     : ReferenceEquals(observed, fault) && returned is null && File.ReadAllText(path) == legacyJson),
-                "旧名单迁移1175恢复后才返回完整归一结果，耗尽仍抛原错误并保持旧文件");
+                "旧名单替换1175恢复后才返回完整配置，耗尽仍抛原错误并保持旧文件");
         }
 
         string migrationDirectory = Path.Combine(directory, "migration-partial");
@@ -404,13 +403,13 @@ internal static class ServerDefaultsUpgradeTests
         sourcePath = null;
         var migrationStore = new SupportCompanionStore(migrationDirectory, (source, target) =>
         { attempts++; sourcePath = source; File.Delete(target); throw migrationFault; });
-        try { _ = migrationStore.Read(); }
+        try { migrationStore.Write(before); }
         catch (IOException error) { migrationError = error; }
         That(migrationError is not null && ReferenceEquals(migrationError.InnerException, migrationFault) &&
             migrationError.HResult == migrationFault.HResult && migrationError.Message.Contains(sourcePath!, StringComparison.Ordinal) && attempts == 1 &&
             Equals(migrationError.Data["SupportCompanionRecoveryPath"], sourcePath) &&
             Equals(migrationFault.Data["SupportCompanionRecoveryPath"], sourcePath) && File.ReadAllText(sourcePath!) == beforeJson,
-            "旧名单迁移部分失败可见错误保留原异常及HResult，不返回未提交配置且保留完整归一恢复源");
+            "旧名单替换部分失败可见错误保留原异常及HResult，不返回未提交配置且保留完整恢复源");
     }
 
     static void VerifyLogs(string directory)

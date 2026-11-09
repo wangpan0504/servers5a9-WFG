@@ -16,7 +16,20 @@ SupportApcResourcePatch pair-resources map-manifest.json template-plan.json clie
 SupportApcResourcePatch export-evidence current.pvf template-plan.json new-evidence-directory
 SupportApcResourcePatch prepare-overdrive current.pvf Tools/SupportApcResourcePatch/OverdriveConfiguration.json new-output-directory
 SupportApcResourcePatch prepare-combat current.pvf new-output-directory
+SupportApcResourcePatch prepare-female-restore current.pvf restore-config.json new-output-directory
+SupportApcResourcePatch audit-profile-delta source.pvf candidate.pvf delta.json new-report.json
 ```
+
+## 两女专用资源恢复
+
+`prepare-female-restore`按配置中的有序历史token计划恢复两女专属模板、AI、KEY与注册，
+字符串按当前池重新登记，保留现行奶爸、光兵资源。地图仅取历史迁移证据、当前正式准入
+和当前唯一9986友方普通行精确匹配的交集；禁止模式共用地图跳过。两行追加到块尾，原行及ordinal保留。
+恢复报告逐图给出补齐或跳过理由；显示world须按同一批准集合同步端点，不能全图复制。
+
+`audit-profile-delta`逐token回读目标，按原生MAP八字段结构核验原行与追加行，
+逐份核对非目标资源raw、类型、大小及资源数量闭包。审计通过仍需服务端资源测试、
+客户端插件与native/wide完整配套验证，不自动成为可发行候选。
 
 ## 两职业战斗动作差量
 
