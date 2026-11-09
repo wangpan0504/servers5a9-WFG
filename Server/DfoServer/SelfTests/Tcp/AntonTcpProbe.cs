@@ -388,10 +388,17 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        bool tremor = dungeon is 212 or 214;
+        if (tremor)
+        {
+            if (report.Opcode31 != permissionsBefore)
+                throw new InvalidOperationException("震颤炮击落地前提前许可菜单");
+            peer.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            Note(report, Flush(peer, "炮击销毁终点指引"));
+        }
         if (formalSettles)
             RequireRunSettlement(report, confirmationsBefore, permissionsBefore, dungeon);
-        // 震颤没有需要上报死亡的终点Boss；37已触发正式结算，不能补造key0的117。
-        bool tremor = dungeon is 212 or 214;
+        // 震颤由炮击物件39结算，不补造key0的117。
         if (!tremor) peer.Send(117, check);
         int seen = report.Opcode586;
         var cleared = Flush(peer, (tremor ? "终点加载结算 " : "117 确认 ") + dungeon);
@@ -646,6 +653,14 @@ internal static partial class AntonTcpProbe
         BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
         BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
         BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        if (dungeon is 212 or 214)
+        {
+            if (leaderReport.Opcode31 != leaderPermissions || memberReport.Opcode31 != memberPermissions)
+                throw new InvalidOperationException("双人震颤炮击落地前提前许可菜单");
+            leader.Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+            Note(leaderReport, Flush(leader, "炮击销毁分队终点指引"));
+            Note(memberReport, Barrier(member, "炮击分队结算"));
+        }
         RequireRunSettlement(leaderReport, leaderConfirmations, leaderPermissions, dungeon);
         RequireRunSettlement(memberReport, memberConfirmations, memberPermissions, dungeon);
         foreach (var sender in dungeon is 212 or 214 ? Array.Empty<TcpPeer>() : new[] { leader, member, leader })

@@ -99,13 +99,13 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadCompound(packet.Body);
-        var type = context.Owner.Execute(() => context.Session.Selected?.ExpertJobType ?? 0);
+        var current = context.Session.CapturePersonalExpertJob();
+        var type = current?.ExpertJobType ?? 0;
         if (type is not (1 or 2 or 4))
         {
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(19), "expert_job_compound_type");
             return CommandResult.Handled;
         }
-        var current = context.Owner.Execute(() => context.Session.Selected);
         ushort craftError = 19;
         if (current is not null && ExpertJobCraft.TryPlan(current, scripts, items, goldLimits, pieces, parsed.First, parsed.Second,
             parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError, enchantments?.Catalog))
@@ -120,7 +120,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             RefreshOpenStore(context, craftedReceipt.Character);
             await inventory.RefreshAsync(context, crafted);
             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+                sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
                 "expert_job_compound_actor", Crafted);
             await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info", current);
             await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB,
@@ -148,7 +148,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadEnchantStore(packet.Body);
-        var current = context.Session.CaptureExpertJobTrade();
+        var current = context.Session.CapturePersonalExpertJob();
         if (current is not null && parsed.First != current.Id && parsed.Third == 2 && parsed.Fourth == 0 && parsed.Sixth == 0 &&
             parsed.Second <= int.MaxValue && parsed.Fifth <= short.MaxValue && parsed.Seventh <= short.MaxValue)
             return await TradeStoreAsync(context, parsed.First, 1, candidate => cardEnchanting?.Plan(candidate,
@@ -178,7 +178,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, craftedReceipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_enchant_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info", current);
         var priorRarities = scripts.LearnedRarities(scripts.LearnedRecipes(current!.ExpertJobType,
@@ -210,7 +210,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadExtraction(packet.Body);
-        var current = context.Owner.Execute(() => context.Session.Selected);
+        var current = context.Session.CapturePersonalExpertJob();
         ushort error = 19;
         if (current is null || !ExpertJobCraft.TryPlanExtract(current, scripts, items, goldLimits, pieces, parsed.ExtractorSlot,
             parsed.TargetList, parsed.TargetSlot, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out error))
@@ -236,7 +236,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         acknowledged.Add(new((InventoryListType)parsed.TargetList, parsed.TargetSlot));
         await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(craftedReceipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_extract_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info", current);
         return CommandResult.Handled;
@@ -244,10 +244,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
 
     async Task<CommandResult> DisjointAsync(GameConnectionContext context, Packet packet)
     {
-        if (context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
+        if (context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement && packet.Body.Length == 0 &&
+            context.Session.CurrentFormalDungeonScene() is { Entry.HellParty: not null } scene)
         {
-            var scene = context.Session.CurrentFormalDungeonScene();
-            if (scene?.Entry.HellParty is null) return CommandResult.Unhandled;
             log.Write("formal_hell_party_start_observed", new { Connection = context.Id, scene.Entry.DungeonId,
                 Length = packet.Body.Length, Body = Convert.ToHexString(packet.Body), Experimental = true });
             return CommandResult.Handled;
@@ -259,10 +258,11 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Reply(CmdPacketType.REQUEST_DISJOINT_ITEM, ExpertJobPackets.Fail(19), "expert_job_disjoint_malformed");
             return CommandResult.Handled;
         }
-        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var captured = context.Owner.Execute(() => (Character: context.Session.CapturePersonalExpertJob(),
+            Selected: context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         bool Guard() => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
             context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase);
-        var current = captured.Selected;
+        var current = captured.Character;
         if (current is not null && request.OwnerActor != current.Id && request.SourceList == 0 && request.SourceSlot <= short.MaxValue)
             return await TradeStoreAsync(context, request.OwnerActor, 3, candidate => disassembly?.Plan(candidate,
                 new(InventoryListType.Main, (short)request.SourceSlot), ownMachine: false));
@@ -292,7 +292,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         }
         RefreshOpenStore(context, receipt.Character);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);
+            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);
         await NotifyInfo(context, receipt.Character, Current, "expert_job_disjoint_info");
         log.Write("expert_job_disjoint", new { Connection = context.Id, Character = current.Id, Accepted = true,
             Rule = "pvf-disjointer-v1", request.SourceSlot, SourceItem = current.Inventory.Find(new(InventoryListType.Main, (short)request.SourceSlot))?.Core.ItemId,
@@ -525,7 +525,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             await context.Reply(opcode, ExpertJobPackets.Fail(19), "expert_job_machine_blocked");
             return CommandResult.Handled;
         }
-        var current = context.Owner.Execute(() => context.Session.Selected);
+        var current = context.Session.CapturePersonalExpertJob();
         byte expected = disjointer ? (byte)3 : (byte)1;
         ushort error = 19;
         InventoryPlan? plan = null;
@@ -555,7 +555,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         RefreshOpenStore(context, receipt.Character);
         await inventory.RefreshAsync(context, committed);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
-            adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+            sceneState: ActorSceneState(receipt.Phase), adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_machine_actor", Guard);
         await NotifyInfo(context, receipt.Character, Guard, "expert_job_machine_info");
         byte[] body = opcode switch
@@ -569,6 +569,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         await context.Reply(opcode, body, "expert_job_machine_committed", Guard);
         return CommandResult.Handled;
     }
+
+    static ActorSceneState ActorSceneState(SessionPhase phase) =>
+        phase is SessionPhase.Dungeon or SessionPhase.Settlement ? DfoServer.Network.Builders.ActorSceneState.Dungeon : DfoServer.Network.Builders.ActorSceneState.Town;
 
     void RefreshOpenStore(GameConnectionContext context, DfoServer.Game.Characters.Character character) => context.Owner.Execute(() =>
     {

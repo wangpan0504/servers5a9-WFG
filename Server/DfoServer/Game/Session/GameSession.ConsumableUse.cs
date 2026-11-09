@@ -63,6 +63,7 @@ internal sealed partial class GameSession
     }
 
     bool CanUseDungeonConsumableState(int itemId) => !IsImperialArenaCombat &&
+        (formalDungeon?.PotionUses?.CanUse(itemId) ?? true) &&
         (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true);
 
     // 非普通恢复药入口仍保留尚未接入对应玩法的能力边界，不借模板资格委派开放资产类道具。
@@ -71,9 +72,14 @@ internal sealed partial class GameSession
 
     void CommitDungeonItemUse(int itemId)
     {
+        formalDungeon?.PotionUses?.Commit(itemId);
         if (formalDungeon is { Entry.Maze.IsGriefTower: true } grief)
             (grief.GriefItems ?? throw new InvalidOperationException("悲叹实例缺少物品使用规则")).CommitUse(itemId);
     }
+
+    internal int? RemainingDungeonPotions() => owner.Execute<int?>(() =>
+        Ready && Selected is not null && formalDungeon is { } dungeon && Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+            ? dungeon.PotionUses?.Remaining : null);
 
     bool CanUseConsumable() => !AntonRejoinPresentationPending && pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.HasPendingFatigue != true &&
@@ -123,6 +129,8 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
             if (requiresPcRoom && !PremiumPcRoom) return Reject("pcroom-required");
             if (!CanUseStackableItem(character, useItemId, places: definition.Places)) return Reject("usable-qualification");
+            if (formalDungeon?.PotionUses?.CanUse(request.ItemId) == false)
+                return Reject("dungeon-potion-limit-exhausted");
             if (!CanUseDungeonConsumableState(request.ItemId))
                 return Reject("grief-item-not-allowed-or-exhausted");
             if ((definition.SummonsApc || definition.RequiresDungeon) && (formalDungeon?.CharacterDead != false ||

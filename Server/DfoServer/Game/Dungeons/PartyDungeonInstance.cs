@@ -306,7 +306,13 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session,reporter)) || pendingDeath is not null ||
             reporter.CurrentFormalDungeonScene() is not { } scene) return [];
+        bool tremor = scene.Entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } &&
+            scene.Entry.DungeonId is 212 or 214;
         bool energy = current.Any(member => member.Actor.Session.IsLukeEnergyDungeon);
+        bool requireAll = energy || tremor;
+        if (tremor && (loaded.Count != 0 || !current.Any(member => member.Slot == Leader && ReferenceEquals(member.Actor.Session, reporter)) ||
+            current.Any(member => member.Actor.Session.CurrentFormalDungeonScene() is not { } own ||
+                own.Snapshot.CurrentMap != scene.Snapshot.CurrentMap || own.Snapshot.Identity.InstanceId != Id))) return [];
         if (energy && (loaded.Count != 0 || current.Any(member => !member.Actor.Session.IsLukeEnergyDungeon ||
             member.Actor.Session.CurrentFormalDungeonScene() is not { Snapshot.Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement } loadedScene ||
             loadedScene.Snapshot.CurrentMap != scene.Snapshot.CurrentMap))) return [];
@@ -329,10 +335,10 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             {
                 var receipt = pending.Observe(member.Actor.Session);
                 // 能源图必须全员持久化；SQL失败保留已提交成员，重放只补剩余事务。
-                if (!energy || receipt is not null) pending.Completed.Add(id, receipt);
+                if (!requireAll || receipt is not null) pending.Completed.Add(id, receipt);
             }
         }
-        if (energy && pending.Completed.Count != current.Length)
+        if (requireAll && pending.Completed.Count != current.Length)
         {
             // 无成员提交的非法报告不得占住事件；部分提交仍保留原候选供重放补齐。
             if (pending.Completed.Count == 0) pendingScene = null;

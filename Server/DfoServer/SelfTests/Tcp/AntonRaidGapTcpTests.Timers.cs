@@ -46,7 +46,8 @@ internal static partial class AntonRaidGapTcpTests
                     That(AntonTcpProbe.Barrier(peer, "超时前停留选图").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "实际进入选图");
                 }
             }
-            string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2");
+            const string ownedItems = "SELECT * FROM character_inventory_items WHERE item_uid NOT IN (SELECT item_uid FROM mailbox_attachments) ORDER BY 1,2";
+            string assets = fixture.Snapshot(ownedItems);
             string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2");
             int advanced = 0;
             if (phase == 1)
@@ -126,6 +127,8 @@ internal static partial class AntonRaidGapTcpTests
             Bytes(frames[resultAt].Body, [1, checked((byte)phase), 0x60, 9, 0, 0, 0, 0, 2, 0],
                 "失败601精确10B，A1/F0及原阶段2400秒、0死亡和rank2沿封存统计");
             AntonTcpProbe.Barrier(peer, "超时退场完成");
+            That(fixture.Query("SELECT count(*) FROM mailbox_messages m JOIN characters c ON c.id=m.recipient_id WHERE c.account=$p0 AND m.delivery_key LIKE 'anton-refund:%'", account)
+                is [[1L]], "安徒恩两阶段攻坚超时均返还本次原票一次");
             string prefix = phase == 0 ? "phase0" : "phase1";
             That(fixture.Query($"SELECT r.state,json_extract(r.{prefix}_receipt,'$.Eligible'),json_extract(r.{prefix}_receipt,'$.Reason'),r.clear_week FROM character_raid_runs r JOIN characters c ON c.id=r.character_id WHERE c.account=$p0", account)
                     is [[1L, 0L, "phase-timeout", DBNull]], "失败发布前持久state1和不合格阶段回执，无周通关");
@@ -144,8 +147,8 @@ internal static partial class AntonRaidGapTcpTests
             var rest = AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED休息边界");
             That(rest.All(packet => packet.Opcode is not (587 or 596 or 597 or 601 or 665)) && failed == fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2"),
                 "UNIMPLEMENTED：600声明不擅自重开失败阶段、自动换phase或签发新事件");
-            That(assets == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") &&
-                receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2"), "超时与重复请求不扣票、退款或发奖");
+            That(assets == fixture.Snapshot(ownedItems) &&
+                receipts == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2"), "退票沿邮件发放，超时与重复请求不再扣票或发通关奖励");
         }
         await fixture.StopAsync();
         string saved = fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2");

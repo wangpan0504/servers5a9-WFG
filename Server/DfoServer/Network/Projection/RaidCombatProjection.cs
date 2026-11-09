@@ -130,6 +130,13 @@ internal static partial class RaidCombatProjection
         // 585尾值保留感染身份；01DCF210会对非零身份置symbol7=1，随后583恢复本次真实开闭值及剩余HP。
         var key = new AntonSymbolDisplayKey(view.Instance, view.Phase, context.Session.SelectionEpoch, context.Sender.Epoch);
         bool Full() => restore || context.AntonSymbols.Key != key;
+        // 仅向已在本场景中的接收者执行本次炸团；进图、重连及显式恢复只安装状态。
+        var killEvent = (view.Instance, view.AntonKillAllEvent);
+        if (view.AntonKillAllEvent != 0)
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+                RaidCombatPackets.Symbols([(102, view.Symbols["[kill all character]"])]), "anton_kill_all_event",
+                () => Guard() && !Full() && context.AntonKillAllDisplay != killEvent,
+                () => context.AntonKillAllDisplay = killEvent);
         IReadOnlyList<(int Id, GameWorld.Raids.RaidDungeonState State)> published = [];
         // 585与586共用01DD9DD0，重复Clear也会弹横幅；在FIFO实际写帧时过滤。
         context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
@@ -161,6 +168,7 @@ internal static partial class RaidCombatProjection
             }, "raid_infection_state", Guard, allowShorter: true, written: () =>
             {
                 context.AntonSymbols.Record(key, publishedSymbols);
+                context.AntonKillAllDisplay = killEvent;
                 foreach (var row in publishedSymbols)
                     if (row.Id == 2) context.AntonMeteoDisplay = (view.Instance, row.Value);
                 // 只在当前快照成功写帧后确认。以规则事件代去重，保留未归零的再次SET 1。
