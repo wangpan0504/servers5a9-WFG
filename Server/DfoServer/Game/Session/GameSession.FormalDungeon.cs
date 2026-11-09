@@ -34,6 +34,7 @@ internal sealed partial class GameSession
         public bool CharacterDead { get; set; }
         public NpcFavorAppearance? FavorNpc { get; set; }
         public GriefTowerItemUse? GriefItems { get; init; }
+        public DungeonPotionUse? PotionUses { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
@@ -203,7 +204,7 @@ internal sealed partial class GameSession
         if (ChannelEntry?.Type is 23 or 32 or 45 or 50 && !HasRaidDungeonAdmission)
             return RejectFormal("raid-dungeon-admission-required");
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
-            return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
+            return PrepareRaidDungeon(dungeonId, questId, difficulty, catalog, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
                 shared, partyFirstKey, partyInstance, partyAdmission);
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) &&
@@ -650,6 +651,8 @@ internal sealed partial class GameSession
             helperRotation);
         if (prepared is not null && bossBuff is not null)
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
+        if (prepared is not null && catalog.StackableLimits.Dungeons.TryGetValue(checked((int)dungeonId), out int potionMaximum))
+            prepared = prepared with { Dungeon = prepared.Dungeon with { PotionUses = new(catalog.StackableLimits, potionMaximum) } };
         if (prepared is not null && entry.Maze.IsGriefTower)
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         if (prepared is not null && entry.IsBossRush)
@@ -937,7 +940,9 @@ internal sealed partial class GameSession
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
-            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } &&
+                entry.DungeonId is 212 or 214 && condition.TargetId == 15467 ||
+             entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
                 entry.LukeEnergyObject is { } energy && energy.MatchesEnergy(entry.DungeonId, entry.Maze, entry.BossMap,
                     condition.TargetId, energy.Ordinal) ||
              expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry))))
@@ -1119,9 +1124,10 @@ internal sealed partial class GameSession
                 consumption = plan;
             }
             if (prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
-                installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || cost.Incount is { HasCountNotification: false })
+                installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530 ||
+                cost.Incount is { HasCountNotification: false })
             {
-                // 活动前置、专用入场与远古无限在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
+                // 活动前置、专用入场、远古无限与黎明在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
                 entryItems ??= consumption;
                 int countKey = cost.Incount?.CountKey ?? cost.DungeonId;
@@ -1129,8 +1135,8 @@ internal sealed partial class GameSession
                 if (installing.Entry.LostLand is not null && period != cost.Period) return null;
                 entryIncount = new(countKey, period, cost.Incount,
                     AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
-                // 远古的双材料仍属频道专属城镇代价，回包与日志按频道扣料槽位投影。
-                if (installing.Entry.IsAncientInfinite) channelSlots = consumption?.ChangedSlots ?? [];
+                // 远古双材料与黎明的实际抵料仍按频道扣料槽位投影，保留原包序。
+                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530) channelSlots = consumption?.ChangedSlots ?? [];
             }
             else
             {

@@ -148,7 +148,8 @@ internal sealed partial class GameSession
         // [required item] 第三列非 0（客户端 018E6EDC 选 47702「消耗%d个」）：与次数同一范围（任意城镇、非练习的普通入场）都在入场提交时扣除。
         // 频道专属城镇已由 ChannelTownDungeonRequirement 核对持有；其它城镇在这里按入场前背包核对，缺物品拒绝，与 400000016 相同。
         // 第三列为 0（只持有）在普通城镇仍不核对：只有频道专属城镇启用持有检查。
-        var consume = definition.RequiredItem is { Flag: not 0, Count: > 0 } required ? required : null;
+        var consume = DaybreakEntryCost.Select(id, definition.RequiredItem, expected.Inventory, pieces, IncountNow()) is
+            { Flag: not 0, Count: > 0 } required ? required : null;
         ImmutableArray<ItemMaterialCost> additional = [];
         if (definition.IsAncientInfinite)
         {

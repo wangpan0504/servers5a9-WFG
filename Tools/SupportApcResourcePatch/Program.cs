@@ -103,6 +103,15 @@ else if (args[0] is "preview-maps" or "generate-maps" && args.Length == 4)
     if (args[0] == "generate-maps") MapDelta.Write(patches, audit.Unknown, args[3]);
     Console.WriteLine($"MAP_DELTA resources={patches.Count} changed={patches.Count(p => p.Changed)} unknownPreserved={audit.Unknown.Length} preview={args[0] == "preview-maps"}; source PVF read-only");
 }
+else if (args[0] == "audit-profile-delta" && args.Length == 5)
+{
+    ProfileDeltaAudit.Run(args[1], args[2], args[3], args[4]);
+}
+else if (args[0] == "prepare-female-restore" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    FemaleRestoreDelta.Write(source, args[1], args[2], args[3]);
+}
 else if (args[0] == "prepare-combat" && args.Length == 3)
 {
     using var source = PvfArchive.Open(args[1]);

@@ -63,6 +63,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             : null;
         if (PrepareBattle(out var preparedBattle, memberRewards, now) is { } executionRejection) return new(19, executionRejection);
         var battle = preparedBattle!;
+        battle.PrepareRaidPayments(reservations);
         var instance = battle.Instance;
         bool needsClock = policy.Timers is not null || policy.PhaseTimeout is not null;
         var timerLease = needsClock ? timers?.Reserve(battle) : null;

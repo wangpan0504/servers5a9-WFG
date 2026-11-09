@@ -11,7 +11,7 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 换频道先进赛丽亚房间再出门到频道地区（安徒恩除外）；原生换频道进出卢克 0x20 / 安徒恩 0x17 / 超时空之战 0x2D / 魔界大战 0x36 / 普雷 0x32 的落点与快照（ARAD 01EB5AF0 谓词）：
-// 普通与团队、漩涡与其他类型、进出魔界大战不保留快照；其余团队类型仍执行原生谓词。
+// 普通与团队、四团跨类型、进出魔界大战不保留快照；同团仍执行原生谓词。
 // 每次换频道后按客户端随后的same-area位置回放与移动核对服务端接受。
 internal static partial class RaidChannelLandingTcpTests
 {
@@ -19,6 +19,10 @@ internal static partial class RaidChannelLandingTcpTests
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        // 定向入口同时核对依赖相同落点规则的资源合同，防止旧跨团预期漏检。
+        ChannelAreaLandingTests.Run(resources.Towns, resources.Archive);
+        PreyChannelTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+        EvildomWarChannelTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "raid-channel-landing"), resources: resources);
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
@@ -38,10 +42,15 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(normal, land: true, town: 38, "再战→普通仍回共享房间及原普通地区", area: 1, exit: 38);
         string originalReturn = fixture.Snapshot(returnSql, character.Id);
         // 用户确认：换频道先到赛丽亚房间 38/1，再出门才是对应地区。只有安徒恩 0x17（ARAD 03B87FE0 起始地点 19/0）直接落战舰。
-        // 团本页签谓词相同（01EB5AF0）的换频道客户端保留城镇快照，服务端保留原位置；在赛丽亚房间里互换则出门按新频道落点。
+        // 配套客户端额外隔离四团类型，即使原生团队页签谓词相同也重新解析目标频道落点。
         Switch(19, land: true, town: 19, "普通→安徒恩 19（0x17 直接落 19/0）");
         Switch(normal, land: true, town: 38, "安徒恩→普通（进赛丽亚房间，出门到艾尔文 38/0）", area: 1, exit: 38);
         Switch(20, land: true, town: 38, "普通→卢克 20（进赛丽亚房间，出门 32/3）", area: 1, exit: 32);
+        Switch(19, land: true, town: 19, "卢克20→安徒恩19清除卢克快照并直接落战舰19/0");
+        Switch(normal, land: true, town: 38, "卢克→安徒恩→普通恢复原普通地区", area: 1, exit: 38);
+        That(fixture.Snapshot(returnSql, character.Id) == originalReturn && fixture.Snapshot(positionSql, character.Id) == originalReturn,
+            "用户复现链不再把卢克或安徒恩街区带回普通频道，普通返回五字段保持不变");
+        Switch(20, land: true, town: 38, "再次进入卢克检查其他跨团边界", area: 1, exit: 32);
         Switch(39, land: true, town: 38, "卢克20→漩涡39清除旧城镇快照", area: 1, exit: 57);
         That(fixture.Snapshot(returnSql, character.Id) == originalReturn, "卢克→漩涡两次出门不污染普通返回五字段");
         Switch(normal, land: true, town: 38, "卢克→漩涡→普通出门恢复原普通地区", area: 1, exit: 38);
@@ -57,7 +66,7 @@ internal static partial class RaidChannelLandingTcpTests
         That(fixture.Snapshot(positionSql, character.Id) == "[[59,1,1217,98,0]]" &&
             fixture.Snapshot(returnSql, character.Id) == beforePreyReturn,
             "普雷1426一次出门保存59/1完整位置，原普通返回地区五字段不变");
-        Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/1）");
+        Switch(19, land: true, town: 19, "普雷42→安徒恩19清除普雷快照并落19/0");
         Switch(normal, land: true, town: 38, "普雷→安徒恩→普通恢复原普通地区", area: 1, exit: 38);
         That(fixture.Snapshot(returnSql, character.Id) == originalReturn && fixture.Snapshot(positionSql, character.Id) == originalReturn,
             "四团多跳链结束仍保留原普通返回地区，普雷与安徒恩未产生同类污染");
@@ -250,7 +259,7 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(normal, land: true, town: 38, "五陵返回普通频道不再回五陵", area: 1, exit: 17);
         fixture.Sql("UPDATE characters SET town=38,area=1,x=450,y=234,return_town=117,return_area=1,return_x=1070,return_y=213 WHERE id=$p0", character.Id);
         Switch(normal, land: false, town: null, "普通房间重连修复旧五陵返回地区", exit: 38);
-        // 勇士对决 0x3F/0x3E 在团队页签谓词里：普通→勇士对决不留快照，出门 119；两者之间及与超时空之战 0x2D 互换保留快照。
+        // 勇士对决两种频道之间保留快照；普通或漩涡团队与勇士对决之间重新落点。
         Switch(44, land: true, town: 38, "普通→勇士对决-自由 44（出门 119）", area: 1, exit: 119);
         Switch(45, land: false, town: null, "勇士对决-自由 44→排位 45（同为团本页签）");
         Switch(39, land: true, town: 38, "勇士对决排位→漩涡39清除旧城镇快照", area: 1, exit: 57);

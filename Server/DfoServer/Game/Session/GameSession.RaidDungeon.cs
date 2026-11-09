@@ -145,7 +145,7 @@ internal sealed partial class GameSession
         return new(character, owner.Generation, SelectionEpoch, dungeonSelectionId);
     }
 
-    PreparedFormalDungeon? PrepareRaidDungeon(uint dungeonId, uint questId, byte difficulty, DungeonRoomCatalog rooms,
+    PreparedFormalDungeon? PrepareRaidDungeon(uint dungeonId, uint questId, byte difficulty, DungeonCatalog catalog, DungeonRoomCatalog rooms,
         Func<int, int>? draw, Character? requiredCharacter, bool incompatibleMode, PartyDungeonPreparation? shared, uint? firstKey, Guid? partyInstance,
         bool partyAdmission)
     {
@@ -195,6 +195,8 @@ internal sealed partial class GameSession
         var prepared = PrepareFormalDungeonResources(character, captured.SelectionEpoch, entry, rooms, null, null, draw, null,
             shared: shared, partyFirstKey: firstKey, partyInstance: partyInstance);
         if (prepared is null) return null;
+        if (catalog.StackableLimits.Dungeons.TryGetValue(checked((int)dungeonId), out int potionMaximum))
+            prepared = prepared with { Dungeon = prepared.Dungeon with { PotionUses = new(catalog.StackableLimits, potionMaximum) } };
         return owner.Execute(() => ReferenceEquals(raidDungeonAdmission, admission) && admission.Allows((int)dungeonId) &&
             ReferenceEquals(Selected, character) && ReferenceEquals(CurrentDungeonSelection, captured.CurrentDungeonSelection) &&
             SelectionEpoch == captured.SelectionEpoch ? prepared : RejectFormal(prefix + "-entry-authorization-changed"));

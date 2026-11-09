@@ -100,7 +100,8 @@ internal static partial class AntonRaidMapEntryTcpTests
                 InventoryService.Commit(repository, owner, character,
                     new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces)
                         .Grant(character, [new(10096296, 1)]));
-                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"), timeProvider: clock);
+                var session = new GameSession(repository, resources.Towns, owner, entry: new(new(2, 19), 23, "[raid]"), timeProvider: clock,
+                    questCatalog: SelfTestCatalogs.Quests(resources.Archive));
                 session.Select(0); session.MarkReady();
                 session.CurrentParty = () => parties.Current(session);
                 session.HasMultiplePartyMembers = () => parties.HasMultipleMembers(session);
@@ -451,13 +452,20 @@ internal static partial class AntonRaidMapEntryTcpTests
                     peers[0].Send(37, new byte[8]);
                     That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "只有队长完成加载时不提前签发震颤结算");
                     peers[1].Send(37, new byte[8]);
-                    var memberSettlement = ReadPhase(peers[1]);
+                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31) &&
+                        ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "震颤全员终点加载后仍等待炮击，不能显示菜单");
+                    peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31), "非host不能代报炮击终末");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "无线电兵不能代替炮击指引物件");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
                     loadedSettlement = ReadPhase(peers[0]);
+                    var memberSettlement = ReadPhase(peers[1]);
                     That(new[] { loadedSettlement, memberSettlement }.All(rows =>
                             rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) == 1 &&
                             rows.All(packet => packet.Opcode != 115)) &&
                         sessions.All(session => session.Phase == SessionPhase.Settlement),
-                        "震颤全员终点加载各获得一次31，不伪造Boss115");
+                        "炮击指引物件提交后全员各获得一次31，不伪造Boss115");
                     break;
                 }
                 That(party.Move(sessions[0], (byte)next.X, (byte)next.Y, 0).Length == 2, "清房后两名队员进入下一房");

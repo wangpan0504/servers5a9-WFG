@@ -52,6 +52,8 @@ internal static class MapGeometryHttpTests
             var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             start.ArgumentList.Add(vectors);
             start.ArgumentList.Add(app.Urls.Single() + "/client/displaycompat-world");
+            // 完整宽屏向量包含碰撞方案，客户端须载入本轮同一world才能计算DCG4。
+            start.ArgumentList.Add(configuration);
             using var process = Process.Start(start) ?? throw new IOException("C++ geometry test process not started");
             var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();

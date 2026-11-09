@@ -26,6 +26,11 @@ internal static class ChannelAreaLandingTests
     public static void Run(TownCatalog towns, PvfArchive pvf)
     {
         int before = Count;
+        foreach (int from in new[] { 23, 32, 45, 50 })
+            foreach (int to in new[] { 23, 32, 45, 50, 22, 62, 63 })
+                That(ChannelAreaLanding.SameSnapshotPredicates(from, to) == (from == to) &&
+                    ChannelAreaLanding.SameSnapshotPredicates(to, from) == (from == to),
+                    "四团跨类型双向隔离快照，同团保留原生快照资格");
         RunPvp(towns);
         var none = new HashSet<int>();
         var elven = new ChannelEntry(new(2, 1), 22, "[elven_guard]");

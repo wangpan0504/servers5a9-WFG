@@ -409,6 +409,8 @@ internal static class AntonRaidTimerTests
                     battle.View.Symbols["[kill all character]"] == 0, "299秒前不得提前重置或签发强杀符号");
                 clock.Advance(1);
                 var reset = battle.View;
+                That(reset.AntonKillAllEvent > 0 && battle.SymbolSnapshot(reset).All(row => row.Id != 102),
+                    "炸团强杀记录一次事件，重进黑雾的状态快照不得携带102");
                 That(reset.Dungeons[210] == RaidDungeonState.Open && reset.Symbols["[210 dgn hp]"] == 4 &&
                     new[] { 211, 212, 213, 214, 215, 216 }.All(id => reset.Dungeons[id] == RaidDungeonState.Hide) &&
                     reset.Symbols["[kill all character]"] == 1 && reset.Symbols["[1phase fail]"] == 0 &&
