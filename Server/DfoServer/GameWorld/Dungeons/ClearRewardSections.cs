@@ -68,7 +68,7 @@ internal static class ClearRewardSections
                     insideSpecialClear = true;
             }
             bool specific = name == "dungeon type" && stack.Contains("dungeon_index specific reward rate") &&
-                at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 71 or 72 or 75 or 76 };
+                at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 53 or 71 or 72 or 75 or 76 or 91 };
             var use = insideRead || specific || insideSpecialClear && name is "mail message" or "clear reward"
                 ? ClearRewardSectionUse.ReadAlready
                 : insideSpecialClear && name is "dungeon type" or "dungeon index"

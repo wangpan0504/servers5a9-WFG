@@ -484,8 +484,6 @@ internal sealed partial class GameSession
             entry = entry! with { DisableMonsterAndClearExperience = true };
         if (strongway is not null)
         {
-            if (catalog.Get(checked((int)dungeonId)).RawSections.Any(row => row.Tag == "disable drop item" && row.Tokens.Count == 0))
-                entry = entry! with { DisableItemDrops = true, SpringTreasurePotential = false, SpringTreasureRecommended = false };
             if (catalog.Get(checked((int)dungeonId)).PersonalCoinInfoLimit(difficulty) is not { } coinLimit)
                 return RejectFormal("strongway2019-personal-coin-limit-missing");
             entry = entry! with { CoinLimit = coinLimit };
@@ -869,7 +867,7 @@ internal sealed partial class GameSession
         var hellRewardPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
-        // 比赛副本 [disable drop item]，不准备掉落。
+        // DGN禁掉落开关适用于所有模式；不准备怪物通用、显式或独立掉落。
         if (drops is not null && items is not null && !entry.DisableItemDrops && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar && !entry.IsRevisedBeast)
         {
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops = null;

@@ -299,10 +299,11 @@ internal static class DungeonSettlementPackets
 
     public static byte[] ResultCommand(byte state, byte option) => [1, state, option];
 
-    // 039F8B40/039F63E0 固定把首项作为金币，空装备也必须保留金币占位。
+    // 039F8B40/039F63E0固定把首项作为金币，含物品牌保留占位；完全空牌使用零条目。
     static List<(uint Id, uint Count)> Display(DungeonCardReward reward)
     {
         reward.Validate();
+        if (reward.Gold == 0 && !reward.Items().Any()) return [];
         var result = new List<(uint, uint)> { (0, checked((uint)reward.Gold)) };
         result.AddRange(reward.Items().GroupBy(core => core.ItemId).Select(group =>
             (checked((uint)group.Key), checked((uint)group.Sum(core => (long)core.Count)))));

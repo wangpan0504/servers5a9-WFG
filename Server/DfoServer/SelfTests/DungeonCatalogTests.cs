@@ -574,6 +574,20 @@ internal static class DungeonCatalogTests
         // 当前原始索引实测1372项；配套输入可追加七个古代无限副本和五个魔兽网关。
         // 分支取原dungeon.lst完整声明，不按catalog漏装的数量降低期望，也不把物理DGN存在当作登记。
         var declaredDungeons = PvfScript.List(pvf.ReadText("dungeon/dungeon.lst"));
+        foreach (var (id, relativePath) in declaredDungeons)
+        {
+            string path = PvfArchive.NormalizePath("dungeon/" + relativePath);
+            var tokens = pvf.ReadTokens(path);
+            foreach (string tag in new[] { "[disable drop item]", "[disable clear reward]" })
+            {
+                bool declared = tokens.Select((token, index) => (token, index)).Any(row =>
+                    row.token.Type == 3 && pvf.ResolveString(row.token.Value).Equals(tag, StringComparison.OrdinalIgnoreCase) &&
+                    (row.index + 1 == tokens.Length || tokens[row.index + 1].Type == 3));
+                if (declared)
+                    That(tag == "[disable drop item]" ? catalog.Get(id).DisableItemDrops : catalog.Get(id).DisableClearReward,
+                        "全部登记副本的无参数奖励门禁须进入统一领域定义：" + id + " " + tag);
+            }
+        }
         int ancientDeclarations = Enumerable.Range(7101, 7).Count(declaredDungeons.ContainsKey);
         int beastDeclarations = Enumerable.Range(5335, 5).Count(declaredDungeons.ContainsKey);
         That(ancientDeclarations is 0 or 7 && beastDeclarations is 0 or 5,
