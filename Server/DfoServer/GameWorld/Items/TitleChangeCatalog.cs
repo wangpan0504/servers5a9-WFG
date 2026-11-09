@@ -12,11 +12,7 @@ internal sealed record TitleChangeMainEntry(
     int ThreadItemId,
     int SuccessRate,
     FrozenDictionary<int, int> ResourceGoldCosts,
-    FrozenSet<int> FinalTitleItemIds)
-{
-    public bool RequiresUnsealedTarget => ThreadItemId == TitleChangeCatalog.UnsealedOnlyThreadItemId;
-    public bool AllowsSealState(byte sealFlag) => RequiresUnsealedTarget ? sealFlag == 0 : sealFlag != 0;
-}
+    FrozenSet<int> FinalTitleItemIds);
 
 internal sealed record TitleChangeSubEntry(
     int ResourceTitleItemId,
@@ -47,8 +43,6 @@ internal sealed class TitleChangeCatalog
 {
     public const string MainResourcePath = "etc/aradtitlechange_main.etc";
     public const string SubResourcePath = "etc/aradtitlechange_sub.etc";
-    // ARAD.exe CTitleChangeWindow::SetTargetItem (0252C2B0)：10015205 仅允许未封装称号，其余变更道具要求封装状态称号。
-    public const int UnsealedOnlyThreadItemId = 10015205;
 
     readonly FrozenDictionary<int, TitleChangeMainEntry> mains;
     readonly FrozenDictionary<int, TitleChangeSubEntry> subs;

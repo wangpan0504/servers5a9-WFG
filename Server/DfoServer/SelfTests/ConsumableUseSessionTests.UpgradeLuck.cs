@@ -17,7 +17,7 @@ internal static partial class ConsumableUseSessionTests
     {
         const int disguiseId = 490013028, formId = 56673, gearId = 31440, couponId = 490705402;
         That(r.RecoveryConsumables.TryGet(disguiseId, out var disguise) && disguise.Disguise is
-            { Type: 2, Seconds: 300 } definition && definition.Allows(formId), "028强化幸运回归使用真实资源形态池和期限");
+            { Type: 2, Seconds: 300 } definition && definition.Allows(2, formId), "028强化幸运回归使用真实资源形态池和期限");
         var clock = new FakeClock();
         clock.Advance(TimeSpan.FromMilliseconds(123));
         long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 300000;
@@ -118,7 +118,7 @@ internal static partial class ConsumableUseSessionTests
             f.Repository.CommitInventory(f.Owner, seed, new(seed.Inventory, seed.Inventory with { Items = items, ConsumableStates = effects },
                 "disguise_luck_seed", new(seed)));
             f.Select();
-            That(f.Session.ApplyUnlimitedRandomDisguise(2, formId, disguiseId, f.Service) is not null,
+            That(f.Session.ApplyUnlimitedDisguise(2, formId, disguiseId, f.Service) is not null,
                 "会话概率回归经真实直接211激活028，不预置在线Disguise");
             var appearance = f.Session.CurrentConsumableDisguise()!.Value.Appearance;
             f.Clock.Advance(TimeSpan.FromSeconds(60));
@@ -137,7 +137,7 @@ internal static partial class ConsumableUseSessionTests
                 else if (scenario == "replace")
                 {
                     f.Session.CancelConsumableDisguise();
-                    That(f.Session.ApplyUnlimitedRandomDisguise(2, 58026, disguiseId, f.Service) is not null,
+                    That(f.Session.ApplyUnlimitedDisguise(2, 58026, disguiseId, f.Service) is not null,
                         "规划后重新激活池内另一形态，制造真实快照替换");
                 }
                 else f.Clock.Advance(TimeSpan.FromMilliseconds(scenario == "before" ? 239999 : 240000));

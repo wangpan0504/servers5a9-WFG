@@ -677,6 +677,7 @@ internal static partial class ConsumableUseSessionTests
     public static void RunDisguiseInventoryLifetime(TownCatalog towns, CharacterCatalog characters,
         RecoveryConsumableCatalog consumables)
     {
+        DisguiseSourceQualifications(towns,characters,consumables);
         const int itemId = 490013028, formId = 56673;
         That(consumables.TryGet(itemId, out var definition) && definition is
             { Unlimited: true, Disguise: { Type: 2, Seconds: 300 } },
@@ -686,7 +687,7 @@ internal static partial class ConsumableUseSessionTests
         var source = f.Session.Selected!.Inventory.Find(f.Request.Position)!;
         uint originalGold = f.Session.Selected.Inventory.Gold;
         long started = f.Clock.GetUtcNow().ToUnixTimeMilliseconds();
-        var activated = f.Session.ApplyUnlimitedRandomDisguise(2, formId, itemId, f.Service);
+        var activated = f.Session.ApplyUnlimitedDisguise(2, formId, itemId, f.Service);
         That(activated is not null && f.Session.CurrentConsumableDisguise() is not null,
             "真实028持有源经直接211用例激活，不预发44或伪造在线Disguise");
         var original = f.Session.CurrentConsumableDisguise()!.Value;

@@ -278,7 +278,7 @@ internal static class ActionConsumableTcpTests
         };
         var unsealedTitle = sealedTitle with { SealFlag = 0 };
         var normalThreads = InventoryRewardGrantService.Create(items.Get(threadId), 2, utcNow: clock.GetUtcNow()) with { ExpireTime = 0 };
-        var gorgeousThreads = InventoryRewardGrantService.Create(items.Get(gorgeousThreadId), 2, utcNow: clock.GetUtcNow()) with { ExpireTime = 0 };
+        var gorgeousThreads = InventoryRewardGrantService.Create(items.Get(gorgeousThreadId), 3, utcNow: clock.GetUtcNow()) with { ExpireTime = 0 };
         DfoServer.Game.Characters.Character role;
         long titleUid;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -311,7 +311,6 @@ internal static class ActionConsumableTcpTests
             {
                 ([65, 0], 19),
                 ([9, 0, 9, 0], 19),
-                ([65, 0, 10, 0], 19),
                 ([9, 0, 10, 0], 17)
             })
             {
@@ -319,7 +318,7 @@ internal static class ActionConsumableTcpTests
                 peer.Expect(1, opcode, [0, error, 0]);
             }
             peer.Barrier();
-            That(StateSnapshot() == baseline, "CMD970畸形长度、同槽、未封装哥特称号与非变更道具源全部拒绝且不改库");
+            That(StateSnapshot() == baseline, "CMD970畸形长度、同槽与非变更道具源全部拒绝且不改库");
 
             peer.Send(opcode, [65, 0, 9, 0]);
             var ack1 = ExpectTitleChange(peer, opcode);
@@ -352,6 +351,16 @@ internal static class ActionConsumableTcpTests
             peer.Barrier();
             That(StateSnapshot() == baseline, "哥特白昼/黑夜毕业称号不能再被普通绣线(10007724)洗练，不扣剩余绣线");
 
+            peer.Send(opcode, [65, 0, 10, 0]);
+            var unsealedAck = ExpectTitleChange(peer, opcode);
+            That(unsealedAck[0] == 1 && unsealedAck[1] == 1,"未封装哥特称号可用普通绣线洗练");
+            peer.Send(opcode, [66, 0, 10, 0]);
+            var unsealedFancyAck = ExpectTitleChange(peer, opcode);
+            That(unsealedFancyAck[0] == 1 && unsealedFancyAck[1] == 0,"未封装哥特称号可继续用华丽绣线洗练");
+            using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                That(repo.LoadCharacter(owner, role.Slot).Inventory.Find(new(InventoryListType.Main,10))!.Core.SealFlag == 0,
+                    "两次真实事务均保留未封装状态，不凭空封装目标");
+            baseline = StateSnapshot();
             fixture.Sql("CREATE TRIGGER fail_title_change BEFORE INSERT ON inventory_audit_log WHEN NEW.action_name='title_change' BEGIN SELECT RAISE(ABORT,'title change rollback'); END");
             peer.Send(opcode, [66, 0, 9, 0]);
             peer.Closed();
