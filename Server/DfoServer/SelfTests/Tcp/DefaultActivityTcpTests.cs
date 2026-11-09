@@ -95,7 +95,6 @@ internal static class DefaultActivityTcpTests
         byte[] original;
         using (var peer = Open(fixture, "10000"))
         {
-            // 333由TcpPeer及促销校验器在团本目录后统一插入，此处只传额外活动。
             peer.ExpectedOpenEvents = [282, 2449, 414, 181, 2532, 266, 2520];
             peer.ExpectedBattlePassEnd = end;
             peer.Select(); peer.Expect(0, 1800); original = peer.Expect(0, 1801).Body; peer.Expect(0, 1802); peer.Barrier();

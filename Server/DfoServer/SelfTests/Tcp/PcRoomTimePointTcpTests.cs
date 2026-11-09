@@ -333,7 +333,7 @@ internal static class PcRoomTimePointTcpTests
         byte[] actual = bounded[..length];
         if (U16(actual, 0) == extra.Length + 1)
             CashShopTcpTests.AssertPromotionNativeEvents(actual, (long?)0, (bool?)false,
-                enabled ? [282, 2449, 414, 181, 2532, 266, 228] : [282, 2449, 414, 181, 2532, 266], activeEvents: enabled ? [2395, 228] : [2395]);
+                enabled ? [282, 2449, 414, 181, 333, 2532, 266, 228] : [282, 2449, 414, 181, 333, 2532, 266], activeEvents: enabled ? [2395, 228] : [2395]);
         else
             Bytes(actual, expected, "228同时进入extra与active全零12字段，关闭只移除228并保留全部原活动");
     }
