@@ -9,9 +9,51 @@ namespace DfoServer;
 
 internal static class QuestEligibilityTests
 {
+    static void ClassChangeSelection()
+    {
+        var prompt = Quest(6929) with { Path = "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_10_dummy.qst",
+            Grade = "[epic]", CompleteNpc = -1, Rewards = [], MinimumLevel = 15,
+            Definition = new([]) { JobChange = 1, PrerequisiteGroups = [[3153]] } };
+        var retain = Quest(6935) with { Grade = "[epic]", Condition = "[clear map]", MinimumLevel = 15,
+            Rewards = [new(0,0,null),new(0,0,null)],
+            Definition = new([]) { JobChange = 1, TargetCharacters = [new("[at swordman]", -1, -1)],
+                PrerequisiteGroups = [[3153]], Collisions = [6936] } };
+        var branch = retain with { Id = 6936, RewardType = "[grow type]", Rewards = [new(0, 1, null)],
+            Definition = retain.Definition! with { TargetCharacters = [new("[at swordman]", 0, -1)], Collisions = [6935] } };
+        var catalog = new QuestCatalog(new[] { prompt, retain, branch, Quest(3153) }.ToDictionary(row => row.Id));
+        var character = new Character(1, 0, "Selection", 1, new(38, 2, 450, 240), null)
+            { Job = 11, Level = 17, CompletedQuests = [3153] };
+        That(!QuestEligibility.Evaluate(character, prompt, catalog).Eligible,
+            "6929只打开客户端转职窗口，不能形成服务端接取");
+        That(QuestEligibility.Candidates(character, catalog).Contains(6929),
+            "保留合格6929候选以触发客户端窗口，拒绝接取不等于删除UI入口");
+        That(!QuestEligibility.Candidates(character with { CompletedQuests = [] }, catalog).Contains(6929),
+            "UI入口仍核对真实前置");
+        That(QuestEligibility.TransferredStoryAlternative(retain, catalog, character.Job), "夹具必须命中真实保留转职形状");
+        That(QuestEligibility.Evaluate(character, retain, catalog).Eligible &&
+            QuestEligibility.Evaluate(character, branch, catalog).Eligible,
+            "未转职可以保留转职或选择真实分支");
+        That(QuestEligibility.Evaluate(character with { GrowType = 1 }, retain, catalog).Eligible &&
+            !QuestEligibility.Evaluate(character with { GrowType = 1 }, branch, catalog).Eligible,
+            "已转职只允许普通衔接，不重复执行转职奖励");
+        That(!QuestEligibility.Evaluate(character with { Job = 0 }, retain, catalog).Eligible &&
+            !QuestEligibility.Evaluate(character with { CompletedQuests = [] }, retain, catalog).Eligible &&
+            !QuestEligibility.Evaluate(character with { ActiveMainQuests = [new(1,6936,1)] }, retain, catalog).Eligible,
+            "保留转职仍核对职业、前置及互斥接取");
+        var existing = character with { ActiveMainQuests = [new(0,6929,1) { AcceptanceId = Guid.NewGuid() },
+            new(1,6935,1) { AcceptanceId = Guid.NewGuid() }] };
+        That(QuestQuickClearPlan.TryCreateOrphanRepair(existing, catalog, out var repair) &&
+            repair!.RemovedActive.Select(row => (int)row.QuestId).SequenceEqual([6929]) &&
+            repair.ActiveAfter.Select(row => (int)row.QuestId).SequenceEqual([6935]) &&
+            repair.CompletedAfter.SequenceEqual(existing.CompletedQuests) && !repair.Inventory.Changed,
+            "历史占位接取只移除6929，不补完成、不发奖励、不改真实分支");
+        That(!QuestQuickClearPlan.TryCreateOrphanRepair(character, catalog, out _), "无历史占位不产生修复事务");
+    }
+
     public static void Run()
     {
         int checks = Count;
+        ClassChangeSelection();
         var origin = new Character(1, 0, "Quest", 1, new Location(38, 2, 450, 240), null);
         var first = Quest(100);
         var next = Quest(101) with { Definition = new QuestDefinition([]) { PrerequisiteGroups = [[100, 102], [103]] } };
@@ -181,8 +223,8 @@ internal static class QuestEligibilityTests
             Definition=new([]) {JobChange=1,TargetCharacters=[new("[demonic lancer]",0,-1)],PrerequisiteGroups=[[100]]}};
         var transferCatalog=new QuestCatalog(new[]{first,transferStory,transferGoal}.ToDictionary(row=>row.Id));
         That(QuestEligibility.Evaluate(advanced,transferStory,transferCatalog).Visible &&
-            !QuestEligibility.Evaluate(advanced with {GrowType=0},transferStory,transferCatalog).Eligible,
-            "GM已转职可以使用零奖励普通替代，未转职不能借其越过转职");
+            QuestEligibility.Evaluate(advanced with {GrowType=0},transferStory,transferCatalog).Eligible,
+            "GM已转职与未转职保留选择均可使用零奖励衔接，实际职业状态不在此修改");
         var materials = Quest(123) with { Condition = "[seek n meet npc]", IntData = [3033,200,3034,200,3035,200,3036,200,1] };
         var materialCatalog = new QuestCatalog(new() { [materials.Id] = materials });
         var emptyInventory = DfoServer.Game.Inventory.Models.InventorySnapshot.Empty;

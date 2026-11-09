@@ -200,6 +200,12 @@ internal sealed partial class QuestQuickClearPlan
         var active=expected.ActiveMainQuests.Select(row=>(int)row.QuestId).ToHashSet();
         foreach(var row in expected.ActiveMainQuests)
         {
+            // 选角沿既有孤儿修复事务移除旧版误接的UI占位；不登记完成、不发奖。
+            if (quests.TryGet(row.QuestId, out var prompt) && QuestEligibility.ClientJobChangePrompt(prompt))
+            {
+                removal.Add(row.QuestId);
+                continue;
+            }
             if(row.AcceptanceId==Guid.Empty || !quests.TryGet(row.QuestId,out var child) || child.Grade!="[sub]" ||
                 child.MainQuest is not { } parentId || QuestRelationProgress.ZeroRewardChild(child) || !child.Attributes.Contains("not give exp quest") ||
                 !quests.TryGet(parentId,out var parent) || parent.Grade!="[epic]" || !QuestRelationProgress.SequentialParent(parent,quests) ||

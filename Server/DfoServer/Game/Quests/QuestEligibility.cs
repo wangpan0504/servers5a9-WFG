@@ -169,6 +169,9 @@ internal static class QuestEligibility
             access.Entry == QuestResourceEntry.Profession && definition.ExposedByNpc && OrdinaryGrade(quest.Grade) ||
             access.Entry == QuestResourceEntry.Creature && definition.ExposedByNpc && OrdinaryGrade(quest.Grade)) &&
             !definition.HideOnCompletedQuests.Any(completed.Contains);
+        // 6929必须留在NOTI21候选中供客户端打开266窗口，但绝不能占用持久任务槽。
+        if (ClientJobChangePrompt(quest))
+            return new(false, visible, "客户端转职选择占位任务不能接取");
         return new(true, visible, visible ? "资格满足" : "需要专用任务入口");
     }
 
@@ -192,7 +195,7 @@ internal static class QuestEligibility
             return Reject("旧外传主线觉醒只面向尚未觉醒角色");
         bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
         if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
-                quest.RewardType != "[grow type]" && ((TransferredStoryAlternative(quest,catalog,character.Job) || TransferredAutoMeet(quest)) ? grow == 0 : grow != 0)) ||
+                quest.RewardType != "[grow type]" && (TransferredAutoMeet(quest) ? grow == 0 : !TransferredStoryAlternative(quest,catalog,character.Job) && grow != 0)) ||
             definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
             definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
             definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
@@ -220,7 +223,14 @@ internal static class QuestEligibility
                 definition.PrerequisiteGroups.Length==other.PrerequisiteGroups.Length &&
                 definition.PrerequisiteGroups.Zip(other.PrerequisiteGroups).All(pair=>pair.First.SequenceEqual(pair.Second)));
 
-    // 转职主线的零奖励互斥替代仅服务已转职角色；GM设置状态也不要求伪造旧转职任务记录。
+    // 本版6929由客户端拦截打开转职选择窗；精确资源身份和形状避免误清同号的自定义任务。
+    internal static bool ClientJobChangePrompt(StoryQuest quest) => quest is
+        { Id: 6929, Grade: "[epic]", Condition: "[meet npc]", CompleteNpc: -1, RewardType: "[item]", Rewards.Count: 0,
+          Definition: { JobChange: 1, GrowType: -1, SelectRewards.IsEmpty: true, AcceptanceRewards.IsEmpty: true } } &&
+        quest.Path == "n_quest/quest_renewal/epic_quest/elvengard/elvengard_epic_10_dummy.qst";
+
+    // 转职主线的零奖励互斥替代也用于窗口的“保留转职”，允许未转职角色继续主线。
+    // 已转职（包括GM设置状态）仍可走同一衔接，不要求伪造旧转职任务记录。
     public static bool TransferredStoryAlternative(StoryQuest quest,QuestCatalog catalog,byte job)
         => job<Jobs.Length && quest is {Grade:"[epic]",Condition:"[clear map]",RewardType:"[item]",Definition:{JobChange:1} definition} &&
             quest.Rewards is [{Type:0,Text:null,Value:0},{Type:0,Text:null,Value:0}] && definition.SelectRewards.IsEmpty &&
