@@ -18,7 +18,7 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
         !offer.PreyDisplay.IsDefaultOrEmpty && offer.PreyDisplay.Length == offer.Grants.Length && offer.Grants.Length <= 32 &&
         offer.PreyDisplay.Select((row, index) => row.Matches(offer with { Grants = [offer.Grants[index]] })).All(value => value);
 
-    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null)
+    internal LukeRaidCompletionPolicy Create(bool pcroom, Func<int, int>? draw = null, decimal epicMultiplier = 1)
     {
         if (!script.Issues.IsEmpty || script.Phases.Length != 2) throw new InvalidDataException("普雷引导奖励声明不完整");
         var phases = ImmutableArray.CreateBuilder<LukePhaseCompletionPolicy>(2);
@@ -38,10 +38,11 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
             var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();
             if (squad.Length is < 1 or > 32) throw new InvalidDataException("普雷引导分队奖池不完整");
             foreach (var row in squad) Require(row);
+            var adjusted = containers.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
             int total = squad.Aggregate(0, (sum, row) => checked(sum + row.RawB));
             int roll = (draw ?? RandomNumberGenerator.GetInt32)(total);
             if (roll < 0 || roll >= total) throw new InvalidDataException("普雷引导随机数越界");
-            var selected = squad.First(row => (roll -= row.RawB) < 0);
+            var selected = squad.Where((row, index) => (roll -= adjusted[index]) < 0).First();
             RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants, [])
             {
                 // 本服普通产物显示：code/flag为0，不启用特殊牌效；尾列显式0，附魔升级取真实core。
@@ -64,7 +65,7 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
         }
     }
 
-    internal LukeRaidCompletionPolicy CreateTeam(bool pcroom, bool privilege, Func<int, int>? draw = null)
+    internal LukeRaidCompletionPolicy CreateTeam(bool pcroom, bool privilege, Func<int, int>? draw = null, decimal epicMultiplier = 1)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsDefaultOrEmpty) throw new InvalidDataException("普雷普通奖励声明不完整");
         var weeklyRows = script.Headers.Where(row => row.Tag == "[weekly clear count]").ToArray();
@@ -89,11 +90,12 @@ internal sealed class PreyGuideRewards(RaidScript script, ItemCatalog items, Boo
             var squad = phase.Rewards.Where(row => row.Kind == "squad_item").ToArray();
             if (squad.Length == 0 || squad.Any(row => row.RawB < 0)) throw new InvalidDataException("普雷普通分队奖池无效");
             foreach (var row in squad) Require(row.ItemId);
+            var adjusted = containers.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
             int total = squad.Aggregate(0, (sum, row) => checked(sum + row.RawB));
             if (total == 0) throw new InvalidDataException("普雷普通分队奖池总权重为零");
             int roll = (draw ?? RandomNumberGenerator.GetInt32)(total);
             if (roll < 0 || roll >= total) throw new InvalidDataException("普雷普通奖励随机数越界");
-            var selected = squad.First(row => (roll -= row.RawB) < 0);
+            var selected = squad.Where((row, index) => (roll -= adjusted[index]) < 0).First();
             RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants, [])
             {
                 // 原资源末列保留在声明中；展示沿实际产物的通用16B合同，不猜测牌效列。

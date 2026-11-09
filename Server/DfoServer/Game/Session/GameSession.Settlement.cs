@@ -253,7 +253,7 @@ internal sealed partial class GameSession
                 clearRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit, ClearRewardLimitPolicy.Period(settlementNow));
             normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count, utcNow: settlementNow, job: Selected!.Job, grow: Selected.GrowType,
-                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus);
+                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
             ? cards!.PrepareAssault(normalCard.Gold, settlementNow)
@@ -264,7 +264,7 @@ internal sealed partial class GameSession
             var membership = repository.LoadCardMembership(owner,Selected!.Id,settlementNow);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count,membership,settlementNow,goldCardEvent,Selected.Job,Selected.GrowType,
-                clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus);
+                clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
             dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);

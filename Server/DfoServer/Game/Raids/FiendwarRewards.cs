@@ -15,10 +15,10 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
     readonly RaidRewardContainers containers = new(definition.Script, items, boosters);
 
     readonly FiendwarRewards? guide = guideDefinition is null ? null : new(guideDefinition, items, boosters);
-    internal LukeRaidCompletionPolicy CreateGuide(bool pcroom, bool privilege = false) => guide?.Create(pcroom, privilege) ??
+    internal LukeRaidCompletionPolicy CreateGuide(bool pcroom, bool privilege = false, decimal epicMultiplier = 1) => guide?.Create(pcroom, privilege, epicMultiplier: epicMultiplier) ??
         throw new InvalidDataException("漩涡引导奖励尚未装配");
 
-    internal LukeRaidCompletionPolicy Create(bool pcroom, bool privilege = false, Func<int, int>? draw = null)
+    internal LukeRaidCompletionPolicy Create(bool pcroom, bool privilege = false, Func<int, int>? draw = null, decimal epicMultiplier = 1)
     {
         var script = definition.Script;
         if (!script.Issues.IsEmpty || script.Phases.Length != 1) throw new InvalidDataException("漩涡奖励声明不完整");
@@ -37,10 +37,11 @@ internal sealed class FiendwarRewards(FiendwarScript definition, ItemCatalog ite
         if (squad.Length is < 1 or > 32 || squad.Any(row => row.RawA != -1 || row.RawB <= 0 || row.RawD is not (0 or 1)))
             throw new InvalidDataException("漩涡分队奖励声明无效");
         foreach (var row in squad) Require(row.ItemId);
+        var adjusted = containers.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
         int total = squad.Aggregate(0, (sum, row) => checked(sum + row.RawB));
         int roll = (draw ?? RandomNumberGenerator.GetInt32)(total);
         if (roll < 0 || roll >= total) throw new InvalidDataException("漩涡奖励随机数越界");
-        var selected = squad.First(row => (roll -= row.RawB) < 0);
+        var selected = squad.Where((row, index) => (roll -= adjusted[index]) < 0).First();
         RaidRewardOffer Offer(byte kind, ImmutableArray<InventoryReward> grants) => new(kind, 0, grants, [])
         {
             // type2使用原生通用16B结果行；展示绑定冻结的实际产物，不先广播未领取卡片。

@@ -27,7 +27,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         if (TayberrsDropPolicy.Applies(entry))
         {
             var tayberrsPolicy = tayberrs ?? new TayberrsDropPolicy(new(), resolveItem);
-            var tayberrsMultipliers = dropControl?.Current.Resolve(entry);
+            var tayberrsMultipliers = entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry);
             return monster => DungeonDropControlSnapshot.Apply(tayberrsPolicy.Prepare(entry, monster), tayberrsMultipliers)
                 .WithDisjointRestrictions(entry.DisjointForbiddenDropRarities);
         }
@@ -36,7 +36,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
         var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal, bool RiftRewards, bool RegionalReward, bool AssaultMaterial, bool EpicRoadSimulated, bool CarbonCrystal), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
-        var dropMultipliers = dropControl?.Current.Resolve(entry);
+        var dropMultipliers = entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry);
         bool regionalDrops = regional?.Applies(entry) == true;
         return monster =>
         {
@@ -202,5 +202,18 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             monster.MonsterId is not (TayberrsDropPolicy.PartyBossMonsterId or TayberrsDropPolicy.SingleBossMonsterId))
             return new(TayberrsDropPolicy.Rule, []);
         return (tayberrs ?? new TayberrsDropPolicy(new(), resolveItem)).PrepareBossPreview();
+    }
+
+    public DungeonDropGenerationPlan PrepareEpicRoadPreview(DungeonDefinition definition, DungeonPlannedMonster monster, byte difficulty)
+    {
+        if (EpicRoadResourcePaths.Dungeons.GetValueOrDefault(definition.Id) != definition.Path || monster.SourceMap is not { } map)
+            throw new InvalidDataException("活动掉落预览需要正式副本与实际来源地图");
+        var maze = definition.Mazes.FirstOrDefault(maze => maze.MapSpecification?.Contains(map) == true)
+            ?? throw new InvalidDataException("活动掉落来源地图不在正式迷宫");
+        var boss = maze.MapSpecification!.Single(row => row.Kind == "boss");
+        // 预览不创建角色或实例；只把已核的正式路线交给同一个奖励准备器，倍率随后仅应用一次。
+        var entry = new DungeonEntryPlan(0, 0, checked((uint)definition.Id), 0, 0, difficulty, maze, maze.MapSpecification![0], boss)
+            { BasisLevel = definition.BasisLevel, DropControlCaptured = true };
+        return PrepareEntry(entry)(monster);
     }
 }

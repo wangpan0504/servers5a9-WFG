@@ -815,6 +815,8 @@ internal static class SelfTestRunner
         EpicPieceBonusDropTests.RunResources(itemResources);
         DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
         EpicRoad2019SimulatedDropTests.RunResources(pvf, itemResources);
+        RaidEpicRewardRateTests.RunResources(pvf, itemResources);
+        InventoryEpicRewardRateTests.RunResources(towns, itemResources);
         EpicRoad2019SimulatedSessionTests.RunResources(pvf, itemResources);
         EpicRoad2019NativeTownSessionTests.RunResources(pvf, itemResources);
         EpicRoad2019ClosedRunSessionTests.RunResources(pvf, itemResources);

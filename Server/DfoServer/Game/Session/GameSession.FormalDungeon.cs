@@ -744,7 +744,8 @@ internal sealed partial class GameSession
             var source = shared.Session.PreparedParty(shared).Dungeon;
             // 物理路线及伴侣集合均取队长已冻结快照，不能用成员重新读取的开关或空集合复验同一场景。
             var participantEntry = entry with { CharacterRevision = checked(expected.Revision + 1),
-                CompanionMapRows = source.Entry.CompanionMapRows, CompanionProfiles = source.Entry.CompanionProfiles };
+                CompanionMapRows = source.Entry.CompanionMapRows, CompanionProfiles = source.Entry.CompanionProfiles,
+                DropControlCaptured = source.Entry.DropControlCaptured, DropMultipliers = source.Entry.DropMultipliers };
             var participantAuthority = new NativeDungeonCombatAuthority();
             if (!SinglePlayerDungeonRun.TryCreate(participantEntry, state.LastAttempt + 1, epoch, source.Route, participantAuthority,
                 out var participant, out var reason, timeProvider, battleLevels: monsterBattleLevels, sharedBattleLevels: source.Run.BattleLevels,
@@ -781,6 +782,8 @@ internal sealed partial class GameSession
             return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey)
             { QuickSlotEnergySource = CaptureQuickSlotEnergy(expected, items) };
         }
+        if (!entry.DropControlCaptured)
+            entry = entry with { DropControlCaptured = true, DropMultipliers = dropControl?.Current.Resolve(entry) };
         if (state.LastAttempt == long.MaxValue) return RejectFormal("attempt-overflow");
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
         var topology = entry!.Maze.StaticTopology;
