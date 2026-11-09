@@ -9,9 +9,11 @@ internal static class AiPrograms
         [ScriptToken.Tag("[input]"), ScriptToken.String("target current direction"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(30),
          ScriptToken.Tag("[input]"), ScriptToken.String("x"), ScriptToken.Int(30), ScriptToken.String("time"), ScriptToken.Int(300)];
     // 专用负选择器只在成功分支使用目标；未闭合的能力仍阻止写包。
-    internal static Dictionary<string, List<ScriptToken>> Action(TemplateDefinition definition, bool includeBasicAttack = false)
+    internal static Dictionary<string, List<ScriptToken>> Action(TemplateDefinition definition, bool includeBasicAttack = false,
+        IReadOnlyDictionary<int, int>? skillOrdinals = null)
     {
-        var keys = definition.Active.Select((id, ordinal) => (id, ordinal)).ToDictionary(pair => pair.id, pair => pair.ordinal);
+        bool revised = skillOrdinals is not null;
+        var keys = skillOrdinals ?? definition.Active.Select((id, ordinal) => (id, ordinal)).ToDictionary(pair => pair.id, pair => pair.ordinal);
         var rules = new List<Func<List<ScriptToken>, List<ScriptToken>>>();
         switch (definition.Id)
         {
@@ -19,28 +21,37 @@ internal static class AiPrograms
                 Heal(51, 70); Heal(26, 80); Heal(239, 60);
                 Buff(52); Buff(240);
                 foreach (int skill in new[] {45,20,19,23,22,21}) Buff(skill);
-                Awakening(84); Awakening(238); Small(107);
+                Awakening(84); if (!revised) Awakening(238); Small(107);
                 break;
             case 9986:
                 Field(42);
                 Buff(30); Toggle(36);
-                Awakening(67); Awakening(26);
+                if (revised) { Small(46); Small(58); }
+                else { Awakening(67); Awakening(26); }
                 break;
             case 74990:
                 Heal(3, 70); Heal(32, 55); Buff(6); Revive(30);
                 foreach (int skill in new[] {14,21,23,28}) Buff(skill);
+                if (keys.ContainsKey(36)) Buff(36);
+                if (keys.ContainsKey(91)) Buff(91, battle: true);
                 Buff(24, battle: true);
-                Awakening(33); Awakening(93); Small(31); Small(16);
+                Awakening(33); if (!revised) Awakening(93);
+                if (revised) { Small(16); Small(31); } else { Small(31); Small(16); }
                 break;
             case 19973:
                 Heal(367, 70); Heal(339, 50);
                 Buff(330, firstOnly: true); Buff(335);
                 Revive(345); Buff(337, battle: true); Buff(332, battle: true);
-                Awakening(343); Awakening(350); Small(333);
+                if (keys.ContainsKey(341)) Heal(341, 35);
+                Awakening(343); if (!revised) Awakening(350);
+                // 两项高阶技能承担控制与续杯辅助，不作为低阶攻击的替代。
+                if (keys.ContainsKey(344)) Small(344);
+                if (keys.ContainsKey(349)) Small(349);
+                Small(333); if (revised) { Small(370); Small(372); }
                 break;
             default: throw new InvalidDataException("Unsupported support identity");
         }
-        if (HasBasicAttack(definition) || includeBasicAttack)
+        if (!revised && (HasBasicAttack(definition) || includeBasicAttack))
             rules.Add(next => BattleForDefinition(Target(100, Return(definition.Active.Length), next, 50), next));
         var programs = new Dictionary<string, List<ScriptToken>>(StringComparer.Ordinal);
         if (rules.Count is < 1 or > 64) throw new InvalidDataException("Support decision graph exceeds bounded rule count");
@@ -101,9 +112,9 @@ internal static class AiPrograms
             Think("check skill on", [ScriptToken.Int(skill)], next,
                 Select(1, Ready(skill, BattleForDefinition(Return(keys[skill]), next), next), next)));
         void Awakening(int skill) => rules.Add(next => Select(1, Ready(skill,
-            BattleForDefinition(HasBasicAttack(definition) ? Return(keys[skill]) : Target(600, Return(keys[skill]), next), next), next), next));
+            BattleForDefinition(revised || HasBasicAttack(definition) ? Return(keys[skill]) : Target(600, Return(keys[skill]), next), next), next), next));
         void Small(int skill) => rules.Add(next => Select(1, Ready(skill, BattleForDefinition(Target(350, Return(keys[skill]), next), next), next), next));
-        List<ScriptToken> BattleForDefinition(List<ScriptToken> yes, List<ScriptToken> no) => Battle(yes, no, HasBasicAttack(definition) ? RoomRange : 1200);
+        List<ScriptToken> BattleForDefinition(List<ScriptToken> yes, List<ScriptToken> no) => Battle(yes, no, revised || HasBasicAttack(definition) ? RoomRange : 1200);
         List<ScriptToken> Ready(int skill, List<ScriptToken> yes, List<ScriptToken> no) => Think("check use skill", [ScriptToken.Int(skill)], yes, no);
     }
 

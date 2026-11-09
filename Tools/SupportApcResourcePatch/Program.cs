@@ -107,10 +107,39 @@ else if (args[0] == "audit-profile-delta" && args.Length == 5)
 {
     ProfileDeltaAudit.Run(args[1], args[2], args[3], args[4]);
 }
+else if (args[0] == "prepare-female-beast-maps" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    FemaleRestoreDelta.WriteBeastMaps(source, args[2], args[3]);
+}
 else if (args[0] == "prepare-female-restore" && args.Length == 4)
 {
     using var source = PvfArchive.Open(args[1]);
     FemaleRestoreDelta.Write(source, args[1], args[2], args[3]);
+}
+else if (args[0] == "export-support-map-eligibility" && args.Length == 4)
+{
+    SupportMapEligibilityExport.Write(args[1], args[2], args[3]);
+}
+else if (args[0] == "prepare-paired-companion-maps" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    PairedCompanionMapDelta.Write(source, args[1], args[2], args[3]);
+}
+else if (args[0] == "prepare-support-natural-tiers" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportNaturalTierDelta.Write(source, args[2], args[3]);
+}
+else if (args[0] == "prepare-support-auxiliary" && args.Length == 3)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportAuxiliaryDelta.Write(source, args[2]);
+}
+else if (args[0] == "prepare-support-behavior" && args.Length == 3)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportBehaviorDelta.Write(source, args[2]);
 }
 else if (args[0] == "prepare-combat" && args.Length == 3)
 {

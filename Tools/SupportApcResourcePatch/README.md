@@ -31,6 +31,37 @@ SupportApcResourcePatch audit-profile-delta source.pvf candidate.pvf delta.json 
 逐份核对非目标资源raw、类型、大小及资源数量闭包。审计通过仍需服务端资源测试、
 客户端插件与native/wide完整配套验证，不自动成为可发行候选。
 
+## 魔兽两女地图补齐
+
+魔兽5335–5339不使用普通`DungeonDefinition.Mazes`列表；不能把列表为空当成没有实际地图。
+先用`Tools/Export-RevisedBeastCompanionMaps.ps1 -PvfPath <最终累计PVF> -ServerAssembly <正式DfoServer.dll> -OutputPath <新批准JSON>`，
+通过正式`RevisedBeastMaze`解析五副本三档，核准20张可达地图及原raw摘要。
+再运行`prepare-female-beast-maps <同一PVF> <批准JSON> <不存在的新输出目录>`。
+只复制现存唯一光兵友方行的坐标、阵营和品级，在末尾追加74990/19973；保留王富贵、光兵序号及所有非演员token。
+工具拒绝摘要变化、缺失两女模板、非本模式路径、镜像、重复地图、异常原行及不完整三档覆盖；重复执行不会覆盖既有产物。
+候选重包后仍须`audit-profile-delta`逐资源raw和全部目标token回读；未部署，实机表现待QA。
+回归入口：`dotnet run --project Tools/SupportApcResourcePatch.Tests -c Release -- --female-beast <最终累计PVF> <批准JSON> <新输出目录>`。
+
+## 现行四职业调度、地图与自然档次
+
+按当前累计输入依次生成差量；这些命令不覆盖输入，输出目录必须不存在：
+
+```text
+SupportApcResourcePatch export-support-map-eligibility DfoServer.dll current.pvf eligibility.json
+SupportApcResourcePatch prepare-paired-companion-maps current.pvf eligibility.json new-map-output
+SupportApcResourcePatch prepare-support-behavior current.pvf new-behavior-output
+SupportApcResourcePatch prepare-support-auxiliary behavior.pvf new-auxiliary-output
+SupportApcResourcePatch prepare-support-natural-tiers auxiliary.pvf verified-overdrive-report.json new-tier-output
+```
+
+地图准入通过指定的正式服务端程序集解析，包含两活动及魔兽三档专用迷宫；只在允许且没有被禁止模式共用、已有王富贵或光兵专用友方行的地图末尾补缺失两女，原行及序号不变。解析错误单独输出，不默认为允许。
+
+四职业现行行为不调度普攻，原KEY及其序号保留，新KEY仅在末尾追加。攻击使用学习门槛低于50的主动小技能；保留增益觉醒及辅助职责，近敌350×100，客户端靠近真人500×250；房内索敌使用有限范围1048576。奶妈补36/91，小魔女补341/344/349与实际前置；增益按缺失或将到期补，净化仅在可解除异常时使用，原生冷却、执行态、人偶、复活和维持态门禁继续生效。客户端仅对专用支援身份禁止光兵念气波12、奶妈二觉93、奶爸正义审判81及原有光之复仇23；技能定义、学习与KEY保留。
+
+女性主BUFF按实际装备技能加成反算学习等级，有效档次为20/30/35；职业被动按原学习基线、增加5级、增加10级且不超过真实上限。工具校验旧报告中的模板、装备和原学习值，不修改共享SKL系数或装备；客户端保留自然智力，不写统一8500。最终适用智力、队友增益与自然跟随施法仍须实机验收。
+
+专项入口为测试项目的`--behavior`、`--paired-maps`、`--auxiliary`、`--natural-tiers`。各步写包后必须逐资源raw审计；下述旧生成器仅供历史输入迁移，不能覆盖现行累计调度。
+
 ## 两职业战斗动作差量
 
 `prepare-combat` 只读最终累计输入，输出 `support-profile-delta-v1` 的 `delta.json` 和逐模板
