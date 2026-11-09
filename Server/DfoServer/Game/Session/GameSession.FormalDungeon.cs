@@ -937,7 +937,9 @@ internal sealed partial class GameSession
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
-            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Anton, Phase: 0 } &&
+                entry.DungeonId is 212 or 214 && condition.TargetId == 15467 ||
+             entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
                 entry.LukeEnergyObject is { } energy && energy.MatchesEnergy(entry.DungeonId, entry.Maze, entry.BossMap,
                     condition.TargetId, energy.Ordinal) ||
              expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry))))
