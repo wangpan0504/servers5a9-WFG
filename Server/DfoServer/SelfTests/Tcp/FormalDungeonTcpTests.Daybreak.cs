@@ -26,7 +26,7 @@ internal static partial class FormalDungeonTcpTests
         var position = new Location(area.Town, area.Area, (ushort)(bounds.X + bounds.Width / 2), (ushort)(bounds.Y + bounds.Height / 2));
         var repository = new CharacterRepository(fixture.Database);
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
-        Character Create(string name)
+        Character Create(string name, int passes, int buds)
         {
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             var candidate = CharacterCreation.Prepare(name, resources.Characters.Get(0), position, position, resources.Learning.Get);
@@ -35,18 +35,20 @@ internal static partial class FormalDungeonTcpTests
             var character = repository.Create(owner, candidate with { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = done, InitialLearning = learning });
             var items = resources.ItemResources;
             var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-            return InventoryService.Commit(repository, owner, character, inventory.Grant(character, [new(10161610, 100)]));
+            var grants = new List<InventoryReward> { new(490011739, passes) };
+            if (buds > 0) grants.Add(new(10161610, buds));
+            return InventoryService.Commit(repository, owner, character, inventory.Grant(character, grants));
         }
-        var first = Create("Dawn900A");
-        var second = Create("Dawn900B");
+        var first = Create("Dawn900A", 3, 100);
+        var second = Create("Dawn900B", 1, 0);
         byte[] request = Selection(3);
         BinaryPrimitives.WriteUInt32LittleEndian(request, 530);
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), 0);
-        void Enter(TcpPeer peer, byte remaining)
+        void Enter(TcpPeer peer, byte remaining, bool usePass = true)
         {
             SelectMap(peer, incompleteHellQuest: false, daybreakRemaining: remaining, assaultDay: (byte)clock.GetLocalNow().DayOfWeek);
-            long Tickets() => Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10161610", peer.Id)[0][0]);
-            long tickets = Tickets();
+            long CountItem(int item) => Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", peer.Id, item)[0][0]);
+            long buds = CountItem(10161610), passes = CountItem(490011739);
             long fatigue = Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]);
             peer.Send(16, request);
             peer.Expect(0, 28); peer.Expect(0, 29); peer.Expect(0, 14);
@@ -63,8 +65,9 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(0, 1545, afterEntry);
             peer.Expect(0, 550, [0x12, 0x02, 0, 0, checked((byte)(remaining - 1)), 0]);
             Load(peer, fatigue: false); peer.Expect(0, 36); peer.Barrier();
-            That(Tickets() == tickets - 20 && Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]) == fatigue - 8,
-                "黎明每次成功入场完整扣20诞生之芽及8疲劳");
+            That(CountItem(10161610) == buds - (usePass ? 0 : 20) && CountItem(490011739) == passes - (usePass ? 1 : 0) &&
+                Convert.ToInt64(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id)[0][0]) == fatigue - 8,
+                "黎明有券先扣一张、无券扣20芽，每次正常扣次数及8疲劳");
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3); peer.Expect(0, 24);
             RefreshedQuests(peer); peer.Barrier();
         }
@@ -100,6 +103,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Select(first.Slot, prepared: true, resumeTown: true, room: false);
             Enter(peer, 2);
+            Enter(peer, 1, usePass: false);
         }
     }
 }
