@@ -223,14 +223,14 @@ internal static partial class DungeonSpecificCardRewardsTests
                             That(death.Drops.All(row => row.DeathIdentity.CharacterId == receipt.Character.Id &&
                                 row.DeathIdentity.InstanceId == receipt.Snapshot.Identity.InstanceId && row.Reservation.MonsterKey == monster.ObjectKey),
                                 "超星空全部掉落绑定实际领主、角色和当前副本实例，不能借旧来源领取");
-                            That(death.Drops.Count(row => row.Content.Item?.ItemId == HarlemMaterialDropPolicy.FragmentId) >= 30 &&
-                                death.Drops.Count(row => row.Content.Item?.ItemId == HarlemMaterialDropPolicy.SkyWishId) >= 10,
-                                "新增白斯奖励保留原30碎片及10天空之愿，不被装备骰数覆盖");
+                            That(death.Drops.Count(row => row.Content.Item is { ItemId: HarlemMaterialDropPolicy.FragmentId, Count: 1 }) >= 30 &&
+                                death.Drops.Any(row => row.Content.Item is { ItemId: HarlemMaterialDropPolicy.SkyWishId, Count: 30 }),
+                                "新增白斯奖励保留原30碎片及单堆30天空之愿，不被装备骰数覆盖");
                             var antimatter = death.Drops.Where(row => row.Content.Item?.ItemId == 10306750).ToArray();
-                            That(antimatter.Length == (bossRoll == 90 ? 2 : 0) &&
-                                antimatter.All(row => row.Content.Item is { Count: 1, Kind: ItemKind.Material }) &&
+                            That(antimatter.Length == (bossRoll == 90 ? 1 : 0) &&
+                                antimatter.All(row => row.Content.Item is { Count: 2, Kind: ItemKind.Material }) &&
                                 death.Drops.All(row => row.Content.Item?.ItemId != 10309041),
-                                "白斯固定两份普通反物质10306750，其他领主不额外发放，不混入账号绑定10309041");
+                                "白斯固定单堆两份普通反物质10306750，其他领主不额外发放，不混入账号绑定10309041");
                             int antimatterBefore = ItemCount(fixture.Read(), 10306750);
                             foreach (var particle in antimatter)
                             {
@@ -247,7 +247,7 @@ internal static partial class DungeonSpecificCardRewardsTests
                                     .Outcome != DungeonRunOutcome.Accepted && QuestCompletionRepositoryTests.Same(stored, fixture.Read()),
                                     "已领取反物质对象不得再次增加资产");
                             }
-                            That(ItemCount(fixture.Read(), 10306750) == antimatterBefore + antimatter.Length,
+                            That(ItemCount(fixture.Read(), 10306750) == antimatterBefore + antimatter.Sum(row => row.Content.Item!.Count),
                                 "反物质精确到账两份且不会随史诗骰数或重放翻倍");
                             var beforePickup=fixture.Read();
                             // 运行态拾取回执已归缓存；在真实库存审计写入处注入晚期SQL失败，保留资产与地面回滚、原对象重试断言。

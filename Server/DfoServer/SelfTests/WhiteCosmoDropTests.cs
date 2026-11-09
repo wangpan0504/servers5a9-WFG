@@ -53,9 +53,11 @@ internal static class WhiteCosmoDropTests
         var materialPolicy = new HarlemMaterialDropPolicy(new(), [1], Material, policy);
         var plan = materialPolicy.Extend(empty, entry, boss);
         var contents = plan.Generate(_ => 0, now);
-        That(contents.Length == 42 && plan.MaximumObjects == 42 && contents.All(row => row.Item!.Count == 1) &&
-            contents.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId) == 2,
-            "白斯独立增加两颗普通反物质，保留30碎片和10天空之愿，完整对象容量计入42");
+        That(contents.Length == 32 && plan.MaximumObjects == 32 &&
+            contents.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId).All(row => row.Item!.Count == 1) &&
+            contents.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId).ToArray() is [{ Item.Count: 30 }] &&
+            contents.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId).ToArray() is [{ Item.Count: 2 }],
+            "白斯独立增加单堆两颗普通反物质，保留30碎片和单堆30天空之愿，完整对象容量计入32");
         foreach (var invalid in new[] { entry with { DungeonId = 530 }, entry with { IsPractice = true },
             entry with { Difficulty = 0 }, entry with { RouteQuestId = 1 }, entry with { BossMap = map with { Path = "map/其它.map" } } })
             That(!policy.IsWhiteBoss(invalid, boss) && ReferenceEquals(materialPolicy.Extend(empty, invalid, boss), empty),
@@ -66,10 +68,10 @@ internal static class WhiteCosmoDropTests
                 "友方、假首领、伪造来源、其它怪物和深渊波次不借白斯发奖");
         var disabled = new HarlemMaterialDropPolicy(new() { Enabled = false }, [1], Material, policy);
         That(ReferenceEquals(disabled.Extend(empty, entry, boss), empty), "关闭本服材料规则同时关闭白斯追加，不另造奖励入口");
-        var multiplied = new HarlemMaterialDropPolicy(new() { CosmoMaterialMultiplier = 3 }, [1], Material, policy)
+        var multiplied = new HarlemMaterialDropPolicy(new() { CosmoMaterialMultiplier = 3, CosmoSkyWishMultiplier = 4 }, [1], Material, policy)
             .Extend(empty, entry, boss).Generate(_ => 0, now);
-        That(multiplied.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId) == 2,
-            "白斯固定2粒子不随通用材料倍数或装备骰数放大");
+        That(multiplied.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId).ToArray() is [{ Item.Count: 2 }],
+            "白斯固定单堆2粒子不随通用材料倍数或装备骰数放大");
     }
 
     static void VerifyOriginalTrials(HarlemHellEpicDropPolicy policy, DungeonEntryPlan entry, DungeonPlannedMonster boss,
@@ -146,10 +148,12 @@ internal static class WhiteCosmoDropTests
         var materials = new HarlemMaterialDropPolicy(new(), [], items.Items.Get, policy)
             .Extend(new("真实白斯材料", []), entry, boss).Generate(_ => 0, DateTimeOffset.FromUnixTimeSeconds(1800000000));
         bool white = boss.MonsterId == HarlemHellEpicDropPolicy.WhiteBossId;
-        That(materials.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId) == (white ? 2 : 0) &&
-            materials.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId) == 30 &&
-            materials.Count(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId) == 10 &&
-            materials.All(row => row.Item!.Count == 1 && row.Item.ItemId != account.Id),
-            "真实三个终点仅白斯追加2普通粒子，原有材料不丢失也不改账号绑定版");
+        That((white ? materials.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId).ToArray() is [{ Item.Count: 2 }]
+                : !materials.Any(row => row.Item!.ItemId == HarlemMaterialDropPolicy.AntimatterId)) &&
+            materials.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.FragmentId).ToArray() is { Length: 30 } realFragments &&
+            realFragments.All(row => row.Item!.Count == 1) &&
+            materials.Where(row => row.Item!.ItemId == HarlemMaterialDropPolicy.SkyWishId).ToArray() is [{ Item.Count: 30 }] &&
+            materials.All(row => row.Item!.ItemId != account.Id),
+            "真实三个终点仅白斯追加单堆2普通粒子，原有材料不丢失也不改账号绑定版");
     }
 }

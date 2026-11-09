@@ -12,8 +12,9 @@ internal sealed record HarlemMaterialDropRules
     public bool Enabled { get; init; } = true;
     public ImmutableArray<int> NormalFragments { get; init; } = [9, 10, 12, 13, 15];
     public int LegendFragments { get; init; } = 15;
-    public ImmutableArray<int> SkyWishes { get; init; } = [2, 3, 4, 4, 5];
+    public ImmutableArray<int> SkyWishes { get; init; } = [4, 6, 8, 8, 10];
     public int CosmoMaterialMultiplier { get; init; } = 2;
+    public int CosmoSkyWishMultiplier { get; init; } = 3;
     public int DawnFragments { get; init; } = 200;
     public int DawnPurgedCrystallines { get; init; } = 120;
     public int DawnPurgedPermille { get; init; } = 50;
@@ -33,8 +34,9 @@ internal sealed record HarlemMaterialDropRules
         if (NormalFragments.IsDefault || NormalFragments.Length != 5 || NormalFragments.Any(count => count is < 1 or > 10000) ||
             LegendFragments is < 1 or > 10000 || DawnFragments is < 1 or > 10000 || DawnPurgedCrystallines is < 1 or > 10000 ||
             DawnPurgedPermille is < 0 or > 1000 || SkyWishes.IsDefault || SkyWishes.Length != 5 ||
-            SkyWishes.Any(count => count is < 1 or > 10000) || CosmoMaterialMultiplier is < 1 or > 10 ||
-            (long)LegendFragments * CosmoMaterialMultiplier > 10000 || (long)SkyWishes.Max() * CosmoMaterialMultiplier > 10000)
+            SkyWishes.Any(count => count is < 1 or > 10000) || CosmoMaterialMultiplier is < 1 or > 10 || CosmoSkyWishMultiplier is < 1 or > 10 ||
+            (long)LegendFragments * CosmoMaterialMultiplier > 10000 || (long)SkyWishes.Max() * CosmoMaterialMultiplier > 10000 ||
+            (long)SkyWishes.Max() * CosmoSkyWishMultiplier > 10000)
             throw new InvalidDataException("哈林材料规则须提供五档正数量、1至10000的材料数量及0至1000的净化分支概率");
     }
 }
@@ -108,18 +110,18 @@ internal sealed class HarlemMaterialDropPolicy
             if (entry.IsHellLegend)
             {
                 int wishes = rules.SkyWishes[entry.Difficulty];
-                rewards.Add(new(1000, skyWishes, 1, 1, ProbabilityDenominator: 1000, Attempts: wishes));
+                rewards.Add(new(1000, skyWishes, wishes, wishes, ProbabilityDenominator: 1000));
             }
         }
         else if (hellEpics?.IsCosmoBoss(entry, monster) == true)
         {
             int count = checked(rules.LegendFragments * rules.CosmoMaterialMultiplier);
-            int wishes = checked(rules.SkyWishes[entry.Difficulty] * rules.CosmoMaterialMultiplier);
+            int wishes = checked(rules.SkyWishes[entry.Difficulty] * rules.CosmoSkyWishMultiplier);
             rewards.Add(new(1000, fragments, 1, 1, ProbabilityDenominator: 1000, Attempts: count));
-            rewards.Add(new(1000, skyWishes, 1, 1, ProbabilityDenominator: 1000, Attempts: wishes));
-            // 白斯固定追加两个普通反物质，不替换账号绑定材料，不乘装备骰数或材料倍数。
+            rewards.Add(new(1000, skyWishes, wishes, wishes, ProbabilityDenominator: 1000));
+            // 白斯固定追加两个普通反物质，按单堆地面物投放，不替换账号绑定材料，不乘装备骰数或材料倍数。
             if (hellEpics.IsWhiteBoss(entry, monster))
-                rewards.Add(new(1000, antimatter, 1, 1, ProbabilityDenominator: 1000, Attempts: 2));
+                rewards.Add(new(1000, antimatter, 2, 2, ProbabilityDenominator: 1000));
         }
         // 当前530的真实Boss为41207中的Molech；不把绿名、dummy或其它副本的同模板怪当作奖励源。
         else if (entry.DungeonId == 530 && entry.BossMap.Id == 41207 && monster.MonsterId == 71030 && monster.IsBoss)

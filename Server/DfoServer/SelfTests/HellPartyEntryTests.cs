@@ -26,6 +26,7 @@ internal static partial class HellPartyEntryTests
     {
         HellApcFactionTests.RunCore();
         OrdinaryPassCore();
+        LegendPassCore();
         Bytes(DungeonPackets.SelectionNotice(), new byte[42], "空深渊资格名单保持原42字节选图通知");
         byte[] expected = new byte[46];
         expected[8] = 2; expected[11] = 3;
@@ -109,6 +110,7 @@ internal static partial class HellPartyEntryTests
         var position = new Location(area.Town, area.Area, checked((ushort)(walk.X + walk.Width / 2)), checked((ushort)(walk.Y + walk.Height / 2)));
         done.Add(6080);
         RunSealRetry(towns, pvf, characters, items, quests, skills, growth, dungeons, rooms, done, position);
+        RunLegendPass(towns, pvf, characters, items, quests, skills, growth, dungeons, rooms, done, position);
         foreach (int invitationCount in new[] { 0, 30 })
         {
             var passFixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
