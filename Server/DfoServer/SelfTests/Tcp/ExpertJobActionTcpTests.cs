@@ -9,7 +9,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class ExpertJobActionTcpTests
+internal static partial class ExpertJobActionTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
@@ -154,6 +154,7 @@ internal static class ExpertJobActionTcpTests
         await fixture.StopAsync();
         await ExpertJobCompoundTutorialTcpTests.RunAsync(options, root, resources);
         await ExpertJobExtractionTcpTests.RunAsync(options, root, resources);
+        await VerifyDungeonExpertJobsAsync(options, root, resources);
 
         string Daily(ushort id)
         {
