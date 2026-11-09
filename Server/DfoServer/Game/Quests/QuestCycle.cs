@@ -32,7 +32,7 @@ internal static class QuestCycle
             4100 => seeking && quest.SubType == -1 && quest.IntData is [4731,12] && definition.Drops.Length > 0 && ValidMaterialDrops(),
             4111 => seeking && quest.SubType == -1 && quest.IntData is [3329,10] && definition.Drops.Length == 0,
             4112 => seeking && quest.SubType == -1 && quest.IntData is [3323,10] && definition.Drops.Length == 0,
-            8557 => seeking && quest.SubType == -1 && quest.IntData is [10094602,10] && definition.Drops.Length == 0,
+            8557 => IsMoonMountainDailyMission(quest),
             8714 => seeking && quest.SubType == -1 && quest.IntData is [490014160,2] && definition.Drops.Length > 0 && ValidMaterialDrops(),
             6117 => quest.Condition == "[hunt monster]" && quest.SubType == -1 && quest.IntData is [7322,-1,-3,1],
             2942 => quest.Condition == "[hunt enemy]" && quest.SubType == -1 && quest.IntData is [5097,-1,53764,3,3,5098,-1,107001865,1,1],
@@ -44,6 +44,13 @@ internal static class QuestCycle
             row.Difficulty == -1 && row.Rate is > 0 and <= 100 && row.Count > 0 && (row.MaximumHeld == -1 || row.MaximumHeld > 0) &&
             Enumerable.Range(0,quest.IntData.Count / 2).Any(at => quest.IntData[at * 2] == row.ItemId));
     }
+
+    // #1186：8557“进攻准备”要求前往月轮山收集未精炼的念气结晶（10094602×10），当前PVF的QST/MOB/独立掉落均无该任务材料产源。
+    internal static bool IsMoonMountainDailyMission(StoryQuest quest) =>
+        quest is { Id: 8557, Grade: "[daily mission]", Condition: "[seeking]", SubType: -1, MainQuest: null,
+            RewardType: "[item]", IntData: [10094602, 10],
+            Definition: { Diagnostics.Length: 0, AccountQuest: false, ExposedByNpc: true, Drops.Length: 0, Dungeons.Length: 0 } } &&
+        QuestLifecyclePlan.ValidSeeking(quest);
 
     public static bool Repeat(StoryQuest quest) => quest.Grade == "[normaly repeat]";
 
