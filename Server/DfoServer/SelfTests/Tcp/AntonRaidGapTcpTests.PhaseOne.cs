@@ -89,12 +89,12 @@ internal static partial class AntonRaidGapTcpTests
         // 先清212/214，避免其SET1在300秒同时触发脚本的黑雾重置，覆盖211开放。
         foreach (int dungeon in new[] { 212, 214 })
         {
-            int mapsBefore = report.Maps.Count;
+            int mapsBefore = report.MapVisits;
             AntonTcpProbe.Enter(peer, catalog, dungeon, report, clear: true);
-            // PVF strongleg_high/high2：起点(1,1)、Boss(1,0)，两房只完成震颤单图。
-            That(report.Maps.Count - mapsBefore == 2 && !report.Reward &&
+            // 双支路及两次起点回访后才进入上方终点，不再击杀场景外装置冒充真实流程。
+            That(report.MapVisits - mapsBefore == 6 && !report.Reward &&
                 fixture.Query("SELECT phase0_receipt IS NOT NULL,phase1_receipt IS NOT NULL FROM character_raid_runs") is [[0L,0L]],
-                "震颤两房不产生阶段资格或进入Reward");
+                "震颤双支路和终点只完成单图，不产生阶段资格或进入Reward");
         }
         AntonTcpProbe.Enter(peer, catalog, 216, report, clear: true);
         AssertState(report, 216, 1);

@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
@@ -66,20 +65,10 @@ internal static class DefaultActivityTcpTests
         }
         void Events(TcpPeer peer, bool active)
         {
-            var packet = peer.Expect(0, 108);
-            That(packet.Protected, "online event replacement remains protected");
-            using var input = new MemoryStream(packet.Body);
-            using var zlib = new ZLibStream(input, CompressionMode.Decompress);
-            using var output = new MemoryStream();
-            zlib.CopyTo(output);
-            var body = output.ToArray();
-            ushort count = U16(body, 0);
-            That(count is >= 9 and <= 11 && body.Length <= 32768, "bounded complete event catalog");
-            ushort[] expected = active ? [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266, 2520] : [2037, 2378, 2395, 282, 2449, 414, 181, 333, 2532, 266];
-            for (int index = 0; index < expected.Length; index++)
-                That(U16(body, 2 + index * 15) == expected[index], "online toggle preserves other event entries");
-            That(count == expected.Length || count == expected.Length + 1 && U16(body, 2 + expected.Length * 15) == 10999,
-                "only configured promotion may extend the event catalog");
+            // 累计资源默认带原生促销页，沿已有完整校验器消费目录、设计页和战令状态尾段。
+            ushort[] expected = active ? [282, 2449, 414, 181, 2532, 266, 2520] : [282, 2449, 414, 181, 2532, 266];
+            CashShopTcpTests.AssertPromotionNativeRefresh(peer.Expect(0, 108), 0, false, expected,
+                active ? peer.ExpectedBattlePassEnd : null);
             peer.Expect(0, 706);
         }
 

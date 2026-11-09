@@ -81,6 +81,7 @@ internal static class SelfTestRunner
         NativeMonsterSpawnsTests.RunCore();
         NativePassiveObjectLifecycleTests.RunCore();
         AntonDungeonObjectTests.RunCore();
+        AntonTremorClearTests.Run();
         Testing.PcRoomTests.RunCore();
         PcRoomRewardTests.RunCore();
         PcRoomQualificationTests.RunCore();

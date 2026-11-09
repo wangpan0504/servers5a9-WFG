@@ -585,7 +585,7 @@ internal static class DungeonCatalogTests
             "原1372项与可选增量逐ID/path完整装载，不允许目录漏项或凭物理文件补登记");
         if (ancientDeclarations == 7 && beastDeclarations == 5)
             That(catalog.DungeonCount == 1384, "副本索引保留原1379项并追加五个魔兽兼容入口");
-        string[] gatewayNames = ["time_plaza", "canyon_of_beast", "hideout_of_fear", "gust_zone", "forest_of_redwitch"];
+        string[] gatewayNames = ["canyon_of_beast", "forest_of_redwitch", "hideout_of_fear", "gust_zone", "time_plaza"];
         for (int index = 0; index < gatewayNames.Length; index++)
         {
             int gateway = 5335 + index;
