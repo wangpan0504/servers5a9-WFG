@@ -61,7 +61,8 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(normal, land: true, town: 38, "普雷→安徒恩→普通恢复原普通地区", area: 1, exit: 38);
         That(fixture.Snapshot(returnSql, character.Id) == originalReturn && fixture.Snapshot(positionSql, character.Id) == originalReturn,
             "四团多跳链结束仍保留原普通返回地区，普雷与安徒恩未产生同类污染");
-        That(!endpoints.ContainsKey(49), "真实监听目录不再发布退役49频道");
+        That(endpoints.TryGetValue(49, out int beastPort) && beastPort > 0,
+            "真实监听目录保留已恢复的49魔兽频道及独立端口，登录类型和落点由revised-beast组覆盖");
         var ordinaryReturn = new Location(38,0,622,196,0);
         string expectedReturn = $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X},{ordinaryReturn.Y},{ordinaryReturn.Direction}]]";
         That(fixture.Snapshot(positionSql,character.Id) == expectedReturn && fixture.Snapshot(returnSql,character.Id) == expectedReturn,

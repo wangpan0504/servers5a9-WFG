@@ -45,11 +45,11 @@ internal static class RevisedBeastTcpTests
                 That(peer.LoginEndpoint[3] == 40, "魔兽49号入口登录投影真实type40");
                 peer.Select(role.Slot, prepared: true, nativeSwitch: true);
                 peer.Barrier();
-                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 0L]],
-                    "频道入场落专属赛丽亚房间51/0");
+                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[38L, 1L]],
+                    "魔兽频道入场落共享赛丽亚房间38/1，出门才进入专属地区");
                 var done = new HashSet<int> { 5927 };
                 var street = ChannelAreaLanding.DecideArea(resources.Towns, 51, 1, 95, done).Spot!;
-                peer.Travel(51, 1, street.X, street.Y, 51, 0, bottom: true);
+                peer.Travel(51, 1, street.X, street.Y, 38, 1, bottom: true);
                 var waiting = resources.Towns.Entrance(street, new Location(51, 2, 0, 0), done)!;
                 peer.Travel(51, 2, waiting.X, waiting.Y, 51, 1);
                 string active = f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", role.Id);

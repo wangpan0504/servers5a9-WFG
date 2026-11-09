@@ -345,12 +345,17 @@ internal static class DungeonEntryPlanTests
             soul.Mazes.Single().Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
             soulPlan.Maze.IsBossRush && soulPlan.Maze.StaticTopology.Supported,
             "真实337不耗疲劳，按已有最远格规划结算房且不改共享目录的6,6声明；拓扑只核起点，并冻结 120 秒 BossRush 合同");
-        // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
-        // 7601 眩惑之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
+        // 按真实亡者峡谷选图清单覆盖全部入口，包括灵魂之冢；楼层与特殊模式继续沿资源标记排除。
         DeathTowerCompanionPolicy(pvf, catalog);
-        That(new[] { 7601, 11006, 11007, 11008 }.All(id => !catalog.Get(id).AllowsCompanionAi) &&
-            catalog.Get(337).AllowsCompanionAi && catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi,
-            "祭坛、塔与亡者峡谷不注入伴侣AIC，普通副本与Boss Rush保持放行");
+        var valley = TownDungeonMap.Read(0,"worldmap/towers.wdm",pvf.ReadTokens("worldmap/towers.wdm"),pvf.ResolveString);
+        That(valley.Options.Select(row => row.DungeonId).SequenceEqual([11006,11007,11008,5115,7601,337]) &&
+            valley.Options.All(row => !catalog.Get(checked((int)row.DungeonId)).AllowsCompanionAi) &&
+            catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi && !soulPlan!.AllowsCompanionAi,
+            "亡者峡谷六个入口及灵魂之冢计划均不注入伴侣AIC，普通副本仍可放行");
+        var ordinaryCompanion = new DungeonDefinition(1,"dungeon/ordinary.dgn",null,null,[],[]);
+        That(!(ordinaryCompanion with { DungeonType = "boss rush dungeon" }).AllowsCompanionAi &&
+            !(ordinaryCompanion with { Path = "dungeon/boss_rush/future.dgn" }).AllowsCompanionAi,
+            "灵魂之冢类型与资源目录各自阻止新增同类副本注入伴侣");
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
         var noQuests = new QuestCatalog(new());
         var cosmoCharacter = new Character(18, 0, "CosmoMode", 0, new Location(54, 2, 0, 0), null) { Level = 95 };

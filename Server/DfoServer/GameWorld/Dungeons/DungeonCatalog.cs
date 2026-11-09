@@ -222,10 +222,10 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
     // GM伴侣AIC只在普通副本注入。祭坛（[blood dungeon]）、塔与亡者峡谷各图由资源自带AI演员、
     // 波次或楼层合同，再叠加伴侣会与地图断言、重复演员或楼层规则冲突；按资源标记整类排除，新增同类副本自动覆盖。
-    // Boss Rush（337）由用户指定放行，与普通副本同一合同。
     static readonly string[] CompanionBlockedTypes = ["advance altar", "tower of death", "tower of boss"];
-    public bool AllowsCompanionAi => AltarKind == 0 && !IsDespairTower && !IsDazzlementTower &&
+    public bool AllowsCompanionAi => AltarKind == 0 && !IsDespairTower && !IsDazzlementTower && !IsBossRushDungeon &&
         !RequiresGriefEntryContract && !Path.StartsWith("dungeon/towers/", StringComparison.OrdinalIgnoreCase) &&
+        !Path.StartsWith("dungeon/boss_rush/", StringComparison.OrdinalIgnoreCase) &&
         !CompanionBlockedTypes.Contains(DungeonType?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
     // 0409EC16 把唯一整数收成非零字节；本资源里合法形状是单独的 1。
     public bool EnterWithoutFatigue => RawSections.Where(row => row.Tag == "enter without fatigue").ToArray() is

@@ -40,8 +40,12 @@ internal static class RequiredItemConsumeTests
             if (dgn.RequiredItem is { Flag: not 0, Count: > 0 } required) flagged.Add((id, dgn, required));
         }
         var flaggedSelectable = flagged.Where(row => selectable.Contains(row.Id)).ToArray();
-        That(flaggedSelectable.Length == 46 && flaggedSelectable.Any(row => row.Id == 400000016),
-            $"选图可选、[required item] 第三列非 0 的副本 46 个（含 400000016）: {flaggedSelectable.Length}，全表 {flagged.Count}");
+        That(flaggedSelectable.Length == 51 && flaggedSelectable.Any(row => row.Id == 400000016) &&
+            flaggedSelectable.Where(row => row.Id is >= 5335 and <= 5339).Select(row => row.Id).Order()
+                .SequenceEqual(Enumerable.Range(5335,5)) &&
+            flaggedSelectable.Where(row => row.Id is >= 5335 and <= 5339)
+                .All(row => row.Item is { ItemId:10303752, Count:1, Flag:1 }),
+            $"累计候选可选消耗副本51个（含400000016及五个魔兽入口，每图10303752×1）: {flaggedSelectable.Length}，全表 {flagged.Count}");
         Console.WriteLine($"INFO required item consume: flagged {flagged.Count}, selectable {flaggedSelectable.Length}: " +
             string.Join(',', flaggedSelectable.Select(row => $"{row.Id}:{row.Item.ItemId}x{row.Item.Count}")));
 
