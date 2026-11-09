@@ -392,6 +392,8 @@ internal static class CargoTests
             "个人仓库别名不放开未知类别或主背包范围");
         That(InventorySortService.Plan(InventorySnapshot.Empty, sortRequest.Kind, 0, catalog, 2, sortRequest.List) is
             { Accepted: true, Plan.After.Items.Length: 0 }, "空个人仓库整理成功且不生成物品");
+        That(!InventorySortService.Plan(InventorySnapshot.Empty, 0, 0, catalog, 2, InventoryListType.AccountCargo).Accepted,
+            "未开通零容量账号仓库拒绝整理");
         foreach (var (level, job, allowed) in new (byte, byte, bool)[] { (9, 0, false), (10, 0, true), (20, 0, true), (21, 0, false), (10, 1, true), (10, 255, false) })
         {
             var result = service.PersonalUpgrade(role with { Level = level, Job = job }, 65);
