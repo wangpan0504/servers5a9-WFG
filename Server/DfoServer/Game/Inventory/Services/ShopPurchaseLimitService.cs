@@ -16,13 +16,19 @@ internal static class ShopPurchaseLimitService
         {
             if (limit is null) continue;
             bool periodic = limit.Period != ItemPurchasePeriod.Legacy;
-            // 新声明按商品共享额度，不能通过换商人/商店页绕过；旧式限购仍按原商人保存。
+            // 新声明按商品共享额度；旧式限购仍按原商人持久化，但跨商人/攻坚商店共享同一商品额度。
             var key = new ShopPurchaseCount(periodic ? 0 : npcId, itemId, limit.AccountWide, limit.ResetDaily,
                 periodic ? ShopPurchaseCount.PeriodDay(today, limit.Period) : limit.ResetDaily ? today : 0, count)
             { Period = limit.Period };
             var previous = after.ShopPurchases.SingleOrDefault(key.SameKey);
             int used = previous?.Effective(today) ?? 0;
-            if (count <= 0 || previous?.Day > key.Day || (long)used + count > limit.Count)
+            var matching = periodic
+                ? (previous is null ? [] : new[] { previous })
+                : after.ShopPurchases.Where(row => row.Period == ItemPurchasePeriod.Legacy &&
+                    (row.NpcId != 0 || npcId == 0) && row.ItemId == itemId &&
+                    row.AccountWide == limit.AccountWide && row.ResetDaily == limit.ResetDaily).ToArray();
+            long totalUsed = matching.Sum(row => (long)row.Effective(today));
+            if (count <= 0 || matching.Any(row => row.Day > key.Day) || totalUsed + count > limit.Count)
             {
                 after = before;
                 deadline = null;

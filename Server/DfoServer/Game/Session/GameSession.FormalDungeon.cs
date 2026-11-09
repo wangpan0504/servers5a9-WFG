@@ -567,7 +567,10 @@ internal sealed partial class GameSession
                 entry.IsInfernoParty ? dungeonDefinition.HellPartyItemCount :
                 HellPartyEntryCost.RequiredCount(entry.HellParty!, dungeonDefinition.MinimumLevel);
             var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
-            var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) : (null, null, null);
+            var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) :
+                hellLegend && !entry.IsCosmo && items is not null && pieces is not null &&
+                HellPartyEntryCost.LegendPass(expected.Inventory, items.LegendHellPasses(), pieces, now) is ({ } legendPass, { } legendPlan)
+                ? (legendPass, null, legendPlan) : (null, null, null);
             bool usesPass = pass.Item1 is not null;
             // 普通券仅替代邀请函；魔界裂缝、时空裂缝及超星空保持各自费用入口。
             var ordinaryPass = !entry.IsCosmo && !entry.IsInfernoParty && entry.DungeonId != 316 && ticketCount > 0 && !hellTickets.IsEmpty &&
