@@ -23,6 +23,12 @@ internal static partial class DungeonSpecificCardRewardsTests
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var prices = Testing.SelfTestCatalogs.CardPrices(pvf);
         var rules = Testing.SelfTestCatalogs.DropRules(pvf);
+        var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
+        var monsterDrops = Testing.SelfTestCatalogs.MonsterDrops(pvf);
+        var defaultDrops = new DungeonResourceDropPolicy(rules, items.DungeonDropItems, monsterDrops.Get, items.Items.Get);
+        var customDropRules = System.Text.Json.JsonSerializer.Deserialize<TayberrsDropRules>(
+            """{"AbyssInvitationRate":1000,"AbyssInvitationMinimumCount":2,"AbyssInvitationMaximumCount":2}""")!;
+        var customDrops = new TayberrsDropPolicy(customDropRules, items.Items.Get);
         var clearLimits = ClearRewardLimitCatalog.Load(pvf);
         int draws = 0;
         var policy = new DungeonCardRewardPolicy(rules, items.DungeonDropItems, items.Items, items.GoldLimits,
@@ -36,6 +42,26 @@ internal static partial class DungeonSpecificCardRewardsTests
         {
             var definition = dungeons.Get(dungeonId);
             byte difficulty = (byte)Enumerable.Range(0, 5).First(value => definition.AllowsDifficulty((byte)value, false));
+            var maze = definition.Mazes.First(row => row.HellParty is null && row.QuestConnectionTokens.Count == 0);
+            var bossMap = maze.MapSpecification!.Single(map => map.Kind == "boss");
+            var entry = new DungeonEntryPlan(1, 0, checked((uint)dungeonId), 0, byte.MaxValue, difficulty, maze, bossMap, bossMap)
+                { IsTayberrs = definition.IsTayberrs, BasisLevel = definition.BasisLevel };
+            var boss = DungeonMonsterPlan.FromRoom(rooms.Get(bossMap, requirePassiveDefinitions: false), 1, 100,
+                definition.BasisLevel).Monsters.Single(row => row.IsBoss &&
+                    row.MonsterId is TayberrsDropPolicy.PartyBossMonsterId or TayberrsDropPolicy.SingleBossMonsterId);
+            var defaultPlan = defaultDrops.PrepareEntry(entry)(boss);
+            foreach (bool maximum in new[] { false, true })
+            {
+                var ground = defaultPlan.Generate(bound => maximum ? bound - 1 : 0, now);
+                That(ground.Length == (maximum ? 3 : 1) && ground.All(row => row.GoldAmount == 0 &&
+                    row.Item is { ItemId: TayberrsDropPolicy.CarbonCrystalId, Count: 1 }),
+                    "泰波尔斯默认地面保留碳结晶体1至3个，不合成PVF没有领主来源的邀请函：" + dungeonId);
+            }
+            var customGround = customDrops.Prepare(entry, boss).Generate(_ => 0, now);
+            That(customGround.Count(row => row.Item?.ItemId == TayberrsDropPolicy.AbyssInvitationId) == 2 &&
+                customGround.All(row => row.Item is { Count: 1 }) &&
+                customGround.Count(row => row.Item?.ItemId == TayberrsDropPolicy.CarbonCrystalId) == 1,
+                "泰波尔斯显式JSON仍可配置邀请函概率与数量，不改变默认碳规则：" + dungeonId);
             That(string.Equals(definition.WarriorsDungeon, "Tayberrs", StringComparison.OrdinalIgnoreCase) &&
                 prices.SpecificRewards.TryGetValue(dungeonId, out var rows) &&
                 rows.SequenceEqual([new DungeonSpecificCardItem(itemId, 10000, 1)]) &&
@@ -91,8 +117,6 @@ internal static partial class DungeonSpecificCardRewardsTests
             "泰波尔斯剧情地下城(291100321)标记为无特殊通关奖励");
 
         const int representative = 291100320;
-        var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
-        var monsterDrops = Testing.SelfTestCatalogs.MonsterDrops(pvf);
         var growth = Testing.SelfTestCatalogs.Growth(pvf, skills);
         var kills = Testing.SelfTestCatalogs.KillExperience(pvf);
         var clear = Testing.SelfTestCatalogs.ClearExperience(pvf);
@@ -157,13 +181,13 @@ internal static partial class DungeonSpecificCardRewardsTests
                 else
                     That(!death.Drops.IsEmpty &&
                         death.Drops.All(drop => drop.Content.GoldAmount == 0 &&
-                            drop.Content.Item?.ItemId is TayberrsDropPolicy.CarbonCrystalId or TayberrsDropPolicy.AbyssInvitationId) &&
+                            drop.Content.Item?.ItemId == TayberrsDropPolicy.CarbonCrystalId) &&
                         death.SpecialClearRewards.SequenceEqual([new SpecialDungeonClearRewardGrant(10305821, 2),
                             new SpecialDungeonClearRewardGrant(10305820, 1)]) &&
                         death.SpecialClearRewardSlots.Length == 2 && !death.SpecialClearRewardMailOverflow &&
                         fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10305821 && row.Core.Count == 2 && row.Uid > 0) &&
                         fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10305820 && row.Core.Count == 1 && row.Uid > 0),
-                        "泰波尔斯领主地面只掉碳结晶体与深渊票，死亡同事务自动入包灵石x2与原石x1");
+                        "泰波尔斯默认领主地面只掉碳结晶体，死亡同事务自动入包灵石x2与原石x1");
                 receipt = death.Receipt!;
             }
             if (index + 1 < path.Length)
