@@ -607,7 +607,8 @@ internal static class ServerRuntime
         DungeonRoomCatalog? questRooms = null;
         DungeonCatalog? selectionDungeons = null;
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
-        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
+        var npcFavor = new NpcFavorCatalog(pvf);
+        var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory, NpcFavor = npcFavor };
         IGameCommandModule dungeon;
         Strongway2019Catalog? strongwayCatalog = null;
         Strongway2019MatchingService? strongwayMatching = null;
@@ -810,7 +811,6 @@ internal static class ServerRuntime
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
-        var npcFavor = new NpcFavorCatalog(pvf);
         var battlePassSeason = options.BattlePassSeasonKey;
         var battlePassStart = options.BattlePassSeasonStart;
         if (battlePassSeason is null)

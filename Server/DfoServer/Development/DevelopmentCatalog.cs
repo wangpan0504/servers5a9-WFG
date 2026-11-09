@@ -122,6 +122,7 @@ internal sealed partial class DevelopmentCatalog(PvfArchive pvf, ItemResources r
         return built;
     }
 
+    public NpcFavorCatalog? NpcFavor { get; init; }
     public ItemResources Resources => resources;
     // 服务端属性计算器（只读）；未装配时 stats 命令明确拒绝。
     public DfoServer.Game.Characters.CharacterStatComputer? Stats { get; init; }
