@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Raids;
 using DfoServer.GameWorld.Items;
@@ -38,8 +39,9 @@ internal static class LukeProductionTests
                     That(phases[0].Offers.Length == 1 && phases[0].Offers.Single().Kind == 1 && phases[1].Offers.Length == 2,
                         "P1仅个人奖励，P2个人及团队奖励类别独立");
                     var all = phases.SelectMany(phase => phase.Offers).SelectMany(offer => offer.Grants).ToArray();
-                    That(all.Where(row => row.ItemId == 10308807).Sum(row => row.Count) == 100,
-                        "一场完整团队无论人数固定总100不渝，不把P2箱100叠成125");
+                    That(phases.Select(phase => phase.Offers.Single(offer => offer.Kind == 1).Grants
+                            .Single(row => row.ItemId == 10308807).Count).SequenceEqual(new[] { 25, 100 }),
+                        "两阶段分别保留匹配资源的25和100不渝，不覆盖为固定总量");
                     That(all.All(row => !new[] { 10308804, 10304817, 10161938, 10161939, 10161940, 10161941, 10160380, 10160381, 10160382, 10160384 }.Contains(row.ItemId)),
                         "随机容器全部展开，不发箱和内容双份奖励");
                     That(phases[1].Offers.Single(offer => offer.Kind == 0).Grants.Single(row => row.ItemId == 10159623).Count == 13,
@@ -55,6 +57,11 @@ internal static class LukeProductionTests
                             "原Luke结果按实际条数编码，无Anton八字节错位");
                     }
                 }
+        var directScript = raw with { Phases = raw.Phases.Select(phase => phase with
+            { Rewards = phase.Rewards.Select(row => row.Kind == "party_card" ? row with { ItemId = 10308807 } : row).ToImmutableArray() }).ToImmutableArray() };
+        That(new LukeResourceRewards(directScript, resources.Items, resources.Boosters).Create(false, draw: _ => 0)
+                .All(phase => phase.Offers.Single(offer => offer.Kind == 1).Grants.Single(row => row.ItemId == 10308807).Count == 1),
+            "合法直接材料声明按数量1保留，不用当前25/100替代资源值");
         Console.WriteLine($"PASS {Count - before} Luke production reward resource assertions");
     }
 }
