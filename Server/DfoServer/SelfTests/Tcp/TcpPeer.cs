@@ -348,11 +348,21 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         bool griefAnnounced = false;
+        bool particularAnnounced = false;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode is 550 or 1608 or 815 or 772))
+                packet.Opcode is 550 or 1608 or 815 or 772 or 832))
         {
+            if (packet.Opcode == 832)
+            {
+                TestCheck.That(!particularAnnounced && fixture?.ExpectsParticularHellSelection(Id) == true,
+                    "仅包含316的当前世界地图选图允许一组832/833，不吞无关或重复通知");
+                particularAnnounced = true;
+                ReadParticularHellCounts(packet);
+                packet = Read();
+                continue;
+            }
             if (packet.Opcode == 1536)
             {
                 AssaultDailyInfo = packet.Body;
@@ -785,6 +795,13 @@ internal sealed partial class TcpPeer : IDisposable
                 TestCheck.That(packet.Body.Length == 6 && U32(packet.Body) > 0 &&
                     (EnterCounts.Any(row => U32(row) == U32(packet.Body)) || DungeonEnterCounts.ContainsKey((int)U32(packet.Body))),
                     "在线副本次数属于初始化的当前角色副本且包含完整字段");
+                break;
+            case 832:
+                TestCheck.That(packet.Body.Length == 264 && U32(packet.Body) == 3 &&
+                    packet.Body.AsSpan(4).IndexOfAnyExcept((byte)0) == -1, "日切魔界832恢复真实总额度并清旧表");
+                break;
+            case 833:
+                CheckParticularHellUsage(packet.Body);
                 break;
             case 1536:
                 TestCheck.That(packet.Body.Length == 5 && packet.Body[2] <= 6 && packet.Body[3] == 0 && packet.Body[4] == 0,
@@ -1382,6 +1399,11 @@ internal sealed partial class TcpPeer : IDisposable
                 if (packet is { Kind: 0, Opcode: 772 })
                 {
                     ReadAncientGate(packet);
+                    packet = Read();
+                }
+                if (enterCounts.Count == 16)
+                {
+                    ReadParticularHellCounts(packet);
                     packet = Read();
                 }
                 TestCheck.That(enterCounts.Count is 0 or 16 && enterCounts.All(body => U32(body, 0) is not (11006 or 11007)) && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,

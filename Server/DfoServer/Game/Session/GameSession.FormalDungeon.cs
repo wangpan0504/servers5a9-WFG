@@ -1146,8 +1146,8 @@ internal sealed partial class GameSession
                 if (installing.Entry.LostLand is not null && period != cost.Period) return null;
                 entryIncount = new(countKey, period, cost.Incount,
                     AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
-                // 远古双材料与黎明的实际抵料仍按频道扣料槽位投影，保留原包序。
-                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530) channelSlots = consumption?.ChangedSlots ?? [];
+                // 远古双材料、魔界与黎明的实际抵料按原频道扣料槽位投影。
+                if (installing.Entry.IsAncientInfinite || installing.Entry.DungeonId is 316 or 530) channelSlots = consumption?.ChangedSlots ?? [];
             }
             else
             {

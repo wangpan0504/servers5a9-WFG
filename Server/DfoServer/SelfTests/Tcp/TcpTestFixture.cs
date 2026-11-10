@@ -47,6 +47,15 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return map.HellQuests.Any(quest => !completed.Contains(quest));
     }
 
+    internal bool ExpectsParticularHellSelection(ushort characterId)
+    {
+        var towns = townCatalog ?? resources?.Towns;
+        if (towns is null) return false;
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        return towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 316);
+    }
+
     // 选图状态预期取当前角色位置与独立日账本，不从收到的1545正文反推。
     internal byte? ExpectedDaybreakSelectionRemaining(ushort characterId)
     {

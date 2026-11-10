@@ -391,6 +391,21 @@ internal static class TcpRegressionTests
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("rift-daily-rules", (_, _, _) =>
+        {
+            RiftDailyPacketTests.Run();
+            ParticularHellPartyTests.Run();
+            WorldMapHoverTests.Run();
+            return Task.CompletedTask;
+        }),
+        ("particular-hell-entry", (_, _, resources) =>
+        {
+            RiftDailyPacketTests.RunResources(resources.Archive);
+            ParticularHellEntryTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("particular-hell-socket", FormalDungeonTcpTests.RunParticularHellAsync),
         ("sleepy-hollow-socket", FormalDungeonTcpTests.RunSleepyHollowAsync),
         ("pandemonium-regional-drops", FormalDungeonTcpTests.RunRegionalDropsAsync),
         ("sleepy-hollow-materials", (_, _, resources) =>
@@ -749,6 +764,7 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "rift-daily-rules", "particular-hell-entry",
         "tayberrs-settlement",
         "epic-road-admission",
         "fiendwar-reward-rules",

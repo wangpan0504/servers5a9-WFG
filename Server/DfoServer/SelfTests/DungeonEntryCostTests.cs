@@ -519,7 +519,7 @@ internal static class DungeonEntryCostTests
             dungeonId + " 完成 " + questId + " 后不再被选图准入拒绝（实际 " + open.Session.LastFormalDungeonRejection + "）");
     }
 
-    static (HashSet<int> Done, Location Position) Selection(TownCatalog towns, int dungeonId)
+    internal static (HashSet<int> Done, Location Position) Selection(TownCatalog towns, int dungeonId)
     {
         var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world && towns.DungeonMaps.TryGetValue(world, out var map) &&
             map.Error is null && map.Options.Any(option => option.DungeonId == dungeonId));

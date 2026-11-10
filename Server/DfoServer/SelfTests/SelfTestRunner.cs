@@ -698,6 +698,7 @@ internal static class SelfTestRunner
         Testing.Inventory.EpicRoadBoosterTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
         AssaultModePacketTests.RunResources(pvf);
         RiftDailyPacketTests.RunResources(pvf);
+        ParticularHellEntryTests.Run(towns, pvf, characters, itemResources, sharedQuests, sharedSkills);
         ParticularHellPartyTests.RunResources(pvf);
         AssaultHuntQuestTests.RunResources(pvf, sharedQuests);
         DungeonGreedGridTests.Run(pvf);

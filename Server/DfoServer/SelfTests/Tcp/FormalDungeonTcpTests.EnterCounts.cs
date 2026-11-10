@@ -60,8 +60,12 @@ internal static partial class FormalDungeonTcpTests
                 dailyCounts.Any(row => U32(row.Body) == 11006 && row.Body[4] == 3 && row.Body[5] == 0) &&
                 dailyCounts.Any(row => U32(row.Body) == 11007 && row.Body[4] == 3 && row.Body[5] == 0) &&
                 notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
-                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 1343 or 1349 or 1536),
+                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 832 or 833 or 1343 or 1349 or 1536),
                 "跨日主动推送真实祭坛剩余和强袭视图，其余通知属于已登记的每日刷新");
+            var particular = notices.Where(row => row.Opcode is 832 or 833).ToArray();
+            That(particular is [{ Kind: 0, Opcode: 832, Body.Length: 264 }, { Kind: 0, Opcode: 833, Body.Length: 8 }],
+                "通用日切也按固定顺序刷新魔界总额度与当前角色次数");
+            foreach (var packet in particular) peer.ValidateServiceDayNotice(packet);
             Enter(peer, 2);
             Load(peer); Return(peer);
             That(Entries(first.Id) == 4, "06:00跨游戏日后原连接可入场，历史三次保留且本日只扣一次");
