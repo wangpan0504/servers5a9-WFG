@@ -29,6 +29,7 @@ internal sealed class InventoryPlan
     // 同一次扣药事务写入的限时经验加成。Until 为 Unix 秒，Permille 1000 表示在原经验上加 100%。
     public (long Until, int Permille)? ExpBonus { get; set; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
+    public uint? CloneTitleItemIdAfter { get; init; }
     public bool UnlockSkillTree { get; init; }
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     public InventoryEventPrecondition? RequiredEvent { get; init; }
@@ -89,6 +90,7 @@ internal sealed class InventoryPlan
         DailyItemMails = DailyItemMails,
         ResetItemIds = ResetItemIds,
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
+        CloneTitleItemIdAfter = CloneTitleItemIdAfter,
         UnlockSkillTree = UnlockSkillTree,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
         RequiredEvent = requiredEvent ?? RequiredEvent,
@@ -120,7 +122,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
     public bool AccountMaterialsChanged => !Before.AccountWallet.SameMaterials(After.AccountWallet);
-    public bool Changed => Before.PrivilegeService != After.PrivilegeService || !Before.ShieldDeck.Same(After.ShieldDeck) || !Before.ServerItems.Same(After.ServerItems) || !AccountRefillClaims.IsEmpty || !BossSelectionBuff.Same(Before.BossSelectionBuff, After.BossSelectionBuff) || !Before.NpcFavor.SequenceEqual(After.NpcFavor) || UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.VariousBuffs.SequenceEqual(After.VariousBuffs) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
+    public bool Changed => Before.PrivilegeService != After.PrivilegeService || !Before.ShieldDeck.Same(After.ShieldDeck) || !Before.ServerItems.Same(After.ServerItems) || !AccountRefillClaims.IsEmpty || !BossSelectionBuff.Same(Before.BossSelectionBuff, After.BossSelectionBuff) || !Before.NpcFavor.SequenceEqual(After.NpcFavor) || UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.VariousBuffs.SequenceEqual(After.VariousBuffs) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || CloneTitleItemIdAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
         AccountMaterialsChanged || !Before.AccountWallet.MileageShop.Same(After.AccountWallet.MileageShop) ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||

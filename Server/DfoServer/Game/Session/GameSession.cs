@@ -94,7 +94,17 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     }
 
     IReadOnlySet<int> completed = new HashSet<int>();
-    public CharacterRosterEntry[] Roster() => repository.ListRoster(owner);
+    public CharacterRosterEntry[] Roster() => ProjectCloneTitles(repository.ListRoster(owner));
+    // 登录 NOTI2 走 PrepareRoster，不能只改查询入口。读路径只投影，清零落库留在选角清理。
+    CharacterRosterEntry[] ProjectCloneTitles(CharacterRosterEntry[] roster)
+    {
+        var catalog = items ?? questCatalog?.Items;
+        if (catalog is null) return roster;
+        return roster.Select(entry => entry.CloneTitleItemId != 0 &&
+            DfoServer.Game.Inventory.Services.InventoryCloneAppearanceService.ShouldClearCloneTitle(
+                entry.CloneTitleItemId, new(entry.Equipment), catalog)
+            ? entry with { CloneTitleItemId = 0 } : entry).ToArray();
+    }
     public Character[] QueryCharacters() => repository.List(owner);
 
     internal OnlineCharacterSnapshot? OnlineCharacter()
@@ -278,7 +288,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (ChannelEntry?.Type == ChannelAreaLanding.EvildomWarChallengeType &&
                 character.Position.Town != ChannelAreaLanding.EvildomWarChallengeTown)
                 resumed = false;
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry, previousType);
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items ?? questCatalog?.Items, timeProvider, ChannelEntry, previousType);
             TownSnapshotResumed = resumed;
             if (ChannelEntry is not null)
                 channelHistory?.Record(owner.Account, ChannelEntry.Type);

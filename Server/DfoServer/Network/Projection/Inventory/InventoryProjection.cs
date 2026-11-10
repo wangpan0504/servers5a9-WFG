@@ -58,7 +58,7 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         // CMD19只转移已有实例；登记已配置时不能用本人Player重新初始化登记，否则0267BFA0会关闭UI355。
         // 完整穿戴差量安装核心/时装孔位，Actor保留克隆来源和宠物实体，1372随后更新同UID登记位置。
         bool preserveSkillSwitch = receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect &&
-            plan.Reason == "move_item" && plan.EquipmentSlotFlagsAfter is null &&
+            plan.Reason == "move_item" && plan.EquipmentSlotFlagsAfter is null && plan.CloneTitleItemIdAfter is null &&
             (!receipt.PreviousSkillSwitchInventory.Same(SkillSwitchInventoryState.Empty) ||
              !current.SkillSwitchInventory.Same(SkillSwitchInventoryState.Empty));
         foreach (var usage in current.Inventory.ServerItems.Uses.Where(row => row.Type<=1 && !plan.Before.ServerItems.Uses.Contains(row)))
@@ -203,17 +203,18 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
         }
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
+        bool cloneTitleChanged = plan.CloneTitleItemIdAfter is not null;
         if (skins is not null && plan.Before.Skins.SelectedPartyFrame != current.Inventory.Skins.SelectedPartyFrame)
             await skins.RefreshPartyFrameAsync(context, receipt);
-        if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
+        if (refreshEquipment && (equipmentChanged || weaponSkinChanged || cloneTitleChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
             var skillCharacter = context.Session.ReadSkillCharacter(current);
             DfoServer.Game.Pvp.PvpDisplayGrade? pvpGrade = null;
             string? adventureName = null;
-            bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
+            bool appearanceChanged = cloneTitleChanged || plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&
                 slot.Index is 9 or 11 or 13 or 26 or 33 && plan.BeforeIndex.Find(slot) != receipt.Index.Find(slot));
             // 称号、光环与宠物真槽/外观槽变化都刷新Actor；副本保留当前场景状态，不重新入城。
-            if ((equipmentChanged || weaponSkinChanged) && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
+            if ((equipmentChanged || weaponSkinChanged || cloneTitleChanged) && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
                 (appearanceChanged || weaponSkinChanged) && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
             {
                 pvpGrade = context.Session.ReadPvpGrade(current);
@@ -225,12 +226,12 @@ internal sealed partial class InventoryProjection(CharacterStatComputer stats, T
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
             }
             // 登记配置下的纯移动由上面的完整差量和Actor完成；其它装备/开栏变更仍同步完整本人属性。
-            if (equipmentChanged && !preserveSkillSwitch || plan.EquipmentSlotFlagsAfter is not null)
+            if (equipmentChanged && !preserveSkillSwitch || cloneTitleChanged || plan.EquipmentSlotFlagsAfter is not null)
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Player(skillCharacter, stats.Compute(skillCharacter), context.Session.ReadAdventureLevel(), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
-                if ((equipmentChanged || weaponSkinChanged) && CanSend() && context.Session.Phase == SessionPhase.Town)
+                if ((equipmentChanged || weaponSkinChanged || cloneTitleChanged) && CanSend() && context.Session.Phase == SessionPhase.Town)
                     town.Refresh(context, adventureName: adventureName, pvpGrade: pvpGrade);
                 return true;
             });
