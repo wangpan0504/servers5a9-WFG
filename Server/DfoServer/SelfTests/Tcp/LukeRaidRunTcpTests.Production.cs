@@ -439,8 +439,17 @@ internal static partial class LukeRaidRunTcpTests
                                 foreach (var row in frozen)
                                 {
                                     That(row.Eligible, "二阶段权益页只取阶段事务真实签发的成员资格");
+                                    var personalOffer = row.Offers.Single(offer => offer.Kind == 1);
                                     var offer = row.Offers.Single(offer => offer.Kind == 0);
                                     var items = offer.LukeAdditionalResults.Insert(0, offer.LukeResult!);
+                                    int rockCount = offer.Grants.Single(grant => grant.ItemId == 10159623).Count;
+                                    byte expectedSquadCode = offer.Grants.Length == 3 || rockCount >= 30 ? (byte)1 :
+                                        offer.Grants.Length == 2 && rockCount < 30 ? (byte)0 :
+                                        throw new InvalidOperationException("二阶段团队档位形状不在官方8档");
+                                    That(personalOffer.LukeResult!.RawCode == 0 &&
+                                        personalOffer.LukeAdditionalResults.All(item => item.RawCode == 0) &&
+                                        items.All(item => item.RawCode == expectedSquadCode),
+                                        "二阶段持久资格按所中团队档位RawD冻结一致code，同阶段个人奖励保持code0");
                                     var itemBody = Build(itemsWriter =>
                                     {
                                         itemsWriter.Write(checked((byte)items.Length));

@@ -24,7 +24,7 @@ internal static class LukeRewardPackets
     {
         var items = result.AdditionalItems.Insert(0, result.Item);
         if (result.Kind is not (0 or 1) || items.Length is < 1 or > 32 || items.Any(item =>
-            item.RawCode is null || item.ItemId is not > 0 || item.DisplayNumber is not > 0 ||
+            item.RawCode is null || item.RawCode != result.Item.RawCode || item.ItemId is not > 0 || item.DisplayNumber is not > 0 ||
             item.RawFlag is null || item.RawTail1 is null || item.EnchantUpgrade is not <= byte.MaxValue))
             throw new InvalidDataException("卢克结果字段不完整");
         byte[] body = new byte[6 + 16 * items.Length];

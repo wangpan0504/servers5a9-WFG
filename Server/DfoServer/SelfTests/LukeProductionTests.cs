@@ -49,14 +49,68 @@ internal static class LukeProductionTests
                     foreach (var offer in phases.SelectMany(phase => phase.Offers))
                     {
                         That(offer.LukeResult!.Matches(offer), "每项实际产物与16字节结果字段对应");
+                        byte expectedCode = offer.Kind == 0 && high ? (byte)1 : (byte)0;
+                        That(offer.LukeResult.RawCode == expectedCode &&
+                            offer.LukeAdditionalResults.All(item => item.RawCode == expectedCode),
+                            "个人与低档团队奖励保持code0，高档团队奖励全部展开项携带code1");
                         var replay = JsonSerializer.Deserialize<RaidRewardOffer>(JsonSerializer.Serialize(offer))!;
                         That(AntonRaidBattle.SameLukeOffers([offer], [replay]), "多项奖励及展示持久JSON往返保持一致");
                         var packet = LukeRewardPackets.Result(new(offer.Kind, 7, offer.Card, offer.LukeResult)
                             { AdditionalItems = offer.LukeAdditionalResults });
-                        That(packet.Length == 6 + 16 * offer.Grants.Length && packet[5] == offer.Grants.Length,
-                            "原Luke结果按实际条数编码，无Anton八字节错位");
+                        That(packet.Length == 6 + 16 * offer.Grants.Length && packet[5] == offer.Grants.Length &&
+                            Enumerable.Range(0, offer.Grants.Length).All(index => packet[6 + 16 * index] == expectedCode),
+                            "原Luke结果按实际条数编码且每项16B首字节code一致，无Anton八字节错位");
                     }
                 }
+        var squadRows = raw.Phases[1].Rewards.Where(row => row.Kind == "squad_item")
+            .Select(row => (row.ItemId, row.RawB, row.RawD)).ToArray();
+        That(squadRows.SequenceEqual(new[]
+        {
+            (10161938, 4500, 0), (10161939, 2500, 0), (10161940, 2000, 0), (10161941, 500, 1),
+            (10160384, 10, 1), (10160380, 125, 1), (10160381, 125, 1), (10160382, 240, 1)
+        }), "卢克二阶段8个团队奖励档位权重与RawD金牌标记精确匹配PVF");
+        int darkSourceId = resources.Boosters.Get(10161941).Pools
+            .SelectMany(pool => pool.Rewards).Select(row => row.ItemId).Distinct().Single(id => id != 10159623);
+        int squadTotal = squadRows.Sum(row => row.RawB);
+        int cursor = 0;
+        foreach (var (containerId, weight, rawD) in squadRows)
+        {
+            int squadPick = cursor;
+            cursor += weight;
+            byte expectedCode = rawD == 0 ? (byte)0 : (byte)1;
+            foreach (bool poolHigh in new[] { false, true })
+            {
+                int rollIndex = 0;
+                var phases = policy.ResourceRewards!.Create(false, false,
+                    maximum => rollIndex++ == 2 ? squadPick : poolHigh ? maximum - 1 : 0);
+                var p1Personal = phases[0].Offers.Single(offer => offer.Kind == 1);
+                var p2Personal = phases[1].Offers.Single(offer => offer.Kind == 1);
+                var p2Squad = phases[1].Offers.Single(offer => offer.Kind == 0);
+                That(p1Personal.LukeResult!.RawCode == 0 && p1Personal.LukeAdditionalResults.All(item => item.RawCode == 0) &&
+                    p2Personal.LukeResult!.RawCode == 0 && p2Personal.LukeAdditionalResults.All(item => item.RawCode == 0) &&
+                    p2Personal.Grants.Single(row => row.ItemId == 10308807).Count == 100,
+                    "二阶段同槽个人100不渝之咏始终保持code0");
+                var squadItems = p2Squad.LukeAdditionalResults.Insert(0, p2Squad.LukeResult!);
+                var sortedByItemId = squadItems.OrderBy(item => item.ItemId!.Value).ToArray();
+                That(squadItems.Length >= 2 && sortedByItemId[0].ItemId > 0 &&
+                     sortedByItemId.All(item => item.ItemId > 0 && item.RawCode == expectedCode),
+                    $"二阶段团队档位{containerId}展开全部正数道具条目code={expectedCode}，按itemId排序首项一致");
+                if (containerId == 10161941)
+                    That(p2Squad.Grants.Single(row => row.ItemId == 10159623).Count == 30 &&
+                        p2Squad.Grants.Single(row => row.ItemId == darkSourceId).Count == (poolHigh ? 4 : 2) &&
+                        expectedCode == 1,
+                        "10161941（30魔岩石+2~4暗之根源）展开条目均为金牌code1");
+                var teamPacket = LukeRewardPackets.TeamResults([new(0, 7, 2, p2Squad.LukeResult!)
+                    { AdditionalItems = p2Squad.LukeAdditionalResults }]);
+                That(teamPacket.Length == 6 + 16 * squadItems.Length && teamPacket[5] == squadItems.Length &&
+                    Enumerable.Range(0, squadItems.Length).All(index => teamPacket[6 + 16 * index] == expectedCode),
+                    "wire3团队页逐项编码与选中档位code一致");
+            }
+        }
+        var invalidSquadRawD = raw with { Phases = raw.Phases.SetItem(1, raw.Phases[1] with
+            { Rewards = raw.Phases[1].Rewards.Select(row => row.ItemId == 10161941 ? row with { RawD = 2 } : row).ToImmutableArray() }) };
+        Reject<InvalidDataException>(() => new LukeResourceRewards(invalidSquadRawD, resources.Items, resources.Boosters).Create(false),
+            "卢克团队奖励RawD越界拒绝");
         var directScript = raw with { Phases = raw.Phases.Select(phase => phase with
             { Rewards = phase.Rewards.Select(row => row.Kind == "party_card" ? row with { ItemId = 10308807 } : row).ToImmutableArray() }).ToImmutableArray() };
         That(new LukeResourceRewards(directScript, resources.Items, resources.Boosters).Create(false, draw: _ => 0)

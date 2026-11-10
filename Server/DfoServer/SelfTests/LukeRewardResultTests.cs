@@ -45,6 +45,15 @@ internal static class LukeRewardResultTests
         var missing=JsonSerializer.Deserialize<LukeRewardResultSpec>("{\"RawCode\":0,\"ItemId\":305419896,\"DisplayNumber\":3,\"RawFlag\":0,\"EnchantUpgrade\":0}")!;
         That(missing.RawTail1 is null&&!missing.Matches(offer),"JSON缺tail1与显式零区分");
         That((spec with {RawCode=0,RawFlag=0,RawTail1=0,EnchantUpgrade=0}).Matches(offer),"显式零可用，不把零当缺字段");
+        var multiGoldFirst = new LukeRewardResultSpec(1, 10159648, 4, 0, 0, 0);
+        var multiGoldSecond = new LukeRewardResultSpec(1, 10159623, 30, 0, 0, 0);
+        var multiGoldOffer = new RaidRewardOffer(0, 0, [new(10159648, 4), new(10159623, 30)], [])
+            { LukeResult = multiGoldFirst, LukeAdditionalResults = [multiGoldSecond] };
+        That(multiGoldFirst.Matches(multiGoldOffer), "多项金牌团队奖励全部条目code=1一致匹配");
+        var mismatchedCodeOffer = multiGoldOffer with { LukeAdditionalResults = [multiGoldSecond with { RawCode = 0 }] };
+        That(!multiGoldFirst.Matches(mismatchedCodeOffer), "同一团队奖励展开项code不一致拒绝，防止客户端按itemId排序后金牌判定失真");
+        Reject<InvalidDataException>(() => LukeRewardPackets.Result(new(0, 0x4321, 1, multiGoldFirst)
+            { AdditionalItems = [multiGoldSecond with { RawCode = 0 }] }), "encoder拒绝同槽展开项code不一致");
         Console.WriteLine($"PASS {Count-before} 卢克结果600合同断言");
     }
 }

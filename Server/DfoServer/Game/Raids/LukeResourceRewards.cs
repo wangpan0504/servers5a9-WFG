@@ -66,12 +66,12 @@ internal sealed class LukeResourceRewards
                 Resolve(selected.ItemId, selected.Count, grants);
             }
         }
-        RaidRewardOffer Offer(byte kind, List<InventoryReward> grants)
+        RaidRewardOffer Offer(byte kind, List<InventoryReward> grants, byte code = 0)
         {
             var actual = grants.GroupBy(row => row.ItemId).Select(group => new InventoryReward(group.Key, group.Sum(row => row.Count))).ToImmutableArray();
             if (actual.IsEmpty || actual.Length > 32 || actual.Any(row => row.Count > ushort.MaxValue))
                 throw new InvalidDataException("卢克奖励结果数量越界");
-            var display = actual.Select(row => new LukeRewardResultSpec(0, checked((uint)row.ItemId), checked((ushort)row.Count), 0, 0, row.EnchantUpgrade)).ToImmutableArray();
+            var display = actual.Select(row => new LukeRewardResultSpec(code, checked((uint)row.ItemId), checked((ushort)row.Count), 0, 0, row.EnchantUpgrade)).ToImmutableArray();
             return new(kind, 0, actual, []) { LukeResult = display[0], LukeAdditionalResults = display.RemoveAt(0) };
         }
         return script.Phases.Select((phase, index) =>
@@ -101,7 +101,7 @@ internal sealed class LukeResourceRewards
                 var adjusted = odds.Weights(squad, row => row.ItemId, row => row.RawB, epicMultiplier);
                 var winner = squad.Where((row, index) => (value -= adjusted[index]) < 0).First();
                 var grants = new List<InventoryReward>(); Resolve(winner.ItemId, 1, grants);
-                offers.Add(Offer(0, grants));
+                offers.Add(Offer(0, grants, checked((byte)winner.RawD)));
             }
             return new RaidPhaseRewardPolicy(Source, offers.ToImmutable(), new(0, checked((byte)index), 0, 0, 2, 0));
         }).ToImmutableArray();
