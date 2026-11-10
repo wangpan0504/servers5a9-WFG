@@ -7,6 +7,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Raids;
 using DfoServer.GameWorld.BattlePass;
+using DfoServer.Network.Builders;
 using DfoServer.Persistence;
 using DfoServer.Testing;
 using Microsoft.Data.Sqlite;
@@ -48,6 +49,7 @@ internal static class LukeNonzeroRewardRecoveryTests
             // 数量是历史冻结输入，不能因读取当前资源而把75补成100或重新抽取。
             foreach (var (source, amount) in new[] { (LukeResourceRewards.LegacySource, 75), (LukeResourceRewards.Source, 100) })
                 foreach (byte card in new byte[] { 0, 1, 2, 3 }) Formal(source, amount, card);
+            SquadGoldCodeFidelity();
             OtherSources();
             passed = true;
             Console.WriteLine($"LukeNonzeroRewardRecoveryTests SQLite: {Count - checks} passed");
@@ -139,6 +141,62 @@ internal static class LukeNonzeroRewardRecoveryTests
 
                 RaidRewardCommit Claim(LukeRewardRecoveryTarget selected, Guid eventId, long anchor) => LukeRewardRecovery.Claim(owner, role,
                     selected, eventId, anchor, repository, () => (items.Items, items.GoldLimits, items.EpicPieces), now);
+            }
+
+            void SquadGoldCodeFidelity()
+            {
+                int darkSourceId = items.Boosters.Get(10161941).Pools
+                    .SelectMany(pool => pool.Rewards).Select(row => row.ItemId).Distinct().Single(id => id != 10159623);
+                foreach (var (source, savedCode, selectedCard) in new[]
+                {
+                    (LukeResourceRewards.LegacySource, (byte)0, (byte)2),
+                    (LukeResourceRewards.Source, (byte)0, (byte)1),
+                    (LukeResourceRewards.Source, (byte)1, (byte)3)
+                })
+                {
+                    string suffix = $"gold-{savedCode}-{selectedCard}-{(source == LukeResourceRewards.Source ? "cur" : "leg")}";
+                    using var owner = owners.Acquire("luke-" + suffix, () => { });
+                    repository.Create(owner, new NewCharacter("LkGold" + savedCode + selectedCard + (source == LukeResourceRewards.Source ? "C" : "L"),
+                        resources.Towns.Room, resources.Towns.InitialReturn) { Level = 95 });
+                    var role = repository.LoadCharacter(owner, 0);
+                    var personalOffer = new RaidRewardOffer(1, 0, [new(BattlePassUndefeatedSongSource.ItemId, 100)], [])
+                        { LukeResult = new(0, (uint)BattlePassUndefeatedSongSource.ItemId, 100, 0, 0, 0) };
+                    var squadOffer = new RaidRewardOffer(0, 0, [new(darkSourceId, 4), new(10159623, 30)], [])
+                    {
+                        LukeResult = new(savedCode, checked((uint)darkSourceId), 4, 0, 0, 0),
+                        LukeAdditionalResults = [new(savedCode, 10159623, 30, 0, 0, 0)]
+                    };
+                    var eligibility = new RaidPhaseEligibility(Guid.NewGuid(), RaidKind.Luke, 1, Guid.NewGuid(), now.ToUnixTimeSeconds(),
+                        role.Id, true, true, "fixture-qualified", source, week, [personalOffer, squadOffer]);
+                    Seed(owner.Account, eligibility);
+                    var beforeClaim = repository.ListLukeRewardRecovery(owner, role).Entries.Single();
+                    var restoredPersonal = beforeClaim.AvailableOffers.Single(offer => offer.Kind == 1);
+                    var restoredSquad = beforeClaim.AvailableOffers.Single(offer => offer.Kind == 0);
+                    That(restoredPersonal.LukeResult!.RawCode == 0 &&
+                        restoredSquad.LukeResult!.RawCode == savedCode &&
+                        restoredSquad.LukeAdditionalResults.Single().RawCode == savedCode &&
+                        AntonRaidBattle.SameLukeOffers(eligibility.Offers, beforeClaim.Eligibility.Offers),
+                        "持久化冻结资格恢复时严格保真已保存code（新冻结code=1仍为1，旧历史code=0不重抽或改写为1）");
+                    var target = new LukeRewardRecoveryTarget(role.Id, eligibility.Instance, 1, 0, selectedCard);
+                    var snapshot = repository.ReadLukeRewardRecovery(owner, role, target);
+                    That(!snapshot.Claimed && snapshot.Prepared.Card == selectedCard &&
+                        snapshot.Prepared.Grants.SequenceEqual(squadOffer.Grants),
+                        "二阶段团队奖励0号冻结权益支持非零牌位只读恢复");
+                    var commit = LukeRewardRecovery.Claim(owner, role, target, eligibility.Event, eligibility.Anchor, repository,
+                        () => (items.Items, items.GoldLimits, items.EpicPieces), now);
+                    role = commit.Character;
+                    var afterClaim = repository.ListLukeRewardRecovery(owner, role).Entries.Single();
+                    var savedSquadFromEntry = afterClaim.Eligibility.Offers.Single(offer => offer.Kind == 0);
+                    var bound = LukeRewardResults.Bind(new(snapshot.Prepared, savedSquadFromEntry with { Card = selectedCard },
+                        commit, new(true, 0), owner.Generation, 0), items.Items, now)!;
+                    var packet = LukeRewardPackets.Result(bound);
+                    var teamPacket = LukeRewardPackets.TeamResults([bound with { Card = 0 }]);
+                    That(!commit.Duplicate && bound.Card == selectedCard && bound.Item.RawCode == savedCode &&
+                        bound.AdditionalItems.Single().RawCode == savedCode &&
+                        packet[6] == savedCode && packet[22] == savedCode &&
+                        teamPacket[6] == savedCode && teamPacket[22] == savedCode,
+                        "非零牌位领取及600结果/团队页重放完整保留原冻结code与全部展开道具");
+                }
             }
 
             void OtherSources()
