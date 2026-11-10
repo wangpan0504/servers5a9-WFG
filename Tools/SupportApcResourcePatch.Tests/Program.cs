@@ -1,6 +1,11 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--effective-tiers", var effectivePvf, var effectiveEvidence, var effectiveOutput])
+{
+    SupportEffectiveTierTests.Run(effectivePvf, effectiveEvidence, effectiveOutput);
+    return;
+}
 if (args is ["--natural-tiers", var naturalPvf, var naturalEvidence, var naturalOutput])
 {
     SupportNaturalTierTests.Run(naturalPvf, naturalEvidence, naturalOutput);
