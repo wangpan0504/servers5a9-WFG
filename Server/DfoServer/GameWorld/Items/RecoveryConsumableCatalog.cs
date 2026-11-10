@@ -41,11 +41,14 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool Allows(byte level) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel;
 }
 
+internal readonly record struct ConsumableDisguiseForm(byte Type, int FormId);
+
 internal sealed record ConsumableDisguiseDefinition(byte Type, int FormId, int Seconds)
 {
-    public ImmutableArray<int> Forms { get; init; } = [];
+    public ImmutableArray<ConsumableDisguiseForm> Forms { get; init; } = [];
     public ImmutableArray<ConsumableStatChange> Appendages { get; init; } = [];
-    public bool Allows(int formId) => Forms.IsEmpty ? formId == FormId : Forms.Contains(formId);
+    public bool Allows(byte type, int formId) => Forms.IsEmpty
+        ? type == Type && formId == FormId : Forms.Contains(new(type, formId));
 }
 internal sealed record ConsumableStatChange(string Operation, int Amount, string Stat);
 
@@ -164,11 +167,11 @@ internal sealed class RecoveryConsumableCatalog
             file.StatChangeDuration is { Milliseconds: > 0 } && !file.StatChanges.IsEmpty &&
             file.StructureDiagnostics.IsEmpty;
         bool nativeSingleDisguise = raw.TypeDeclaration is { Label: "[disguise]", Parameters: [0] } &&
-            file.Disguise is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 };
-        // 目前兑现同一截止的monster池；028的九项均300秒，不从异长候选猜持续时间。
+            file.Disguise is { Kind: "npc" or "monster" or "creature", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 };
+        // 211保留每个候选的资源种类；仅装配持续时间一致的池，不猜测异长候选的截止。
         bool nativeRandomDisguise = raw.TypeDeclaration is { Label: "[random disguise]", Parameters: [0] } &&
             !file.RandomDisguises.IsEmpty && file.RandomDisguises.All(row =>
-                row is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
+                row is { Kind: "npc" or "monster" or "creature", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
                 row.Seconds == file.RandomDisguises[0].Seconds);
         bool nativeDisguise = (nativeSingleDisguise || nativeRandomDisguise) && file.Diagnostics.IsEmpty &&
             file.UnlimitedWaste is null or 0 or 1;
@@ -249,10 +252,10 @@ internal sealed class RecoveryConsumableCatalog
             VillageMoveSpeedBuff = villageSpeedBuff,
             EnhancementPotion = enhancementPotion,
             Disguise = nativeDisguise ? nativeRandomDisguise
-                ? new(2, file.RandomDisguises[0].FormId, file.RandomDisguises[0].Seconds)
-                    { Forms = file.RandomDisguises.Select(row => row.FormId).ToImmutableArray(),
+                ? new(DisguiseType(file.RandomDisguises[0].Kind), file.RandomDisguises[0].FormId, file.RandomDisguises[0].Seconds)
+                    { Forms = file.RandomDisguises.Select(row => new ConsumableDisguiseForm(DisguiseType(row.Kind), row.FormId)).ToImmutableArray(),
                         Appendages = file.DisguiseAppendages.Select(change => new ConsumableStatChange(change.Operation, change.Amount, change.Stat)).ToImmutableArray() }
-                : new(2, file.Disguise!.FormId, file.Disguise.Seconds)
+                : new(DisguiseType(file.Disguise!.Kind), file.Disguise.FormId, file.Disguise.Seconds)
                     { Appendages = file.DisguiseAppendages.Select(change => new ConsumableStatChange(change.Operation, change.Amount, change.Stat)).ToImmutableArray() } : null,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
@@ -272,6 +275,12 @@ internal sealed class RecoveryConsumableCatalog
             ExcludedDungeons = file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet(),
             RaidUseForbidden = file.ImpossibleContents.Contains("raid dungeon", StringComparer.OrdinalIgnoreCase) };
     }
+
+    static byte DisguiseType(string kind) => kind switch
+    {
+        "npc" => 1, "monster" => 2, "creature" => 3,
+        _ => throw new InvalidDataException("未知变身资源种类")
+    };
 
     public bool TryGet(int id, out RecoveryConsumableDefinition definition)
     {

@@ -29,7 +29,7 @@ internal sealed partial class CharacterRepository
         "character_tutorial_receipts", "character_tutorial_state",
         "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",
         "character_fiendwar_counter_stream", "character_fiendwar_title_facts", "character_title_book_slots", "character_title_progress", "character_title_sections",
-        "character_dungeon_tournament_rewards", "character_dungeon_card_options", "character_dungeon_card_rewards",
+        "character_dungeon_reward_extra", "character_dungeon_tournament_rewards", "character_dungeon_card_options", "character_dungeon_card_rewards",
         "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches",
         "character_dungeon_passive_pickups",
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
@@ -44,7 +44,7 @@ internal sealed partial class CharacterRepository
         "character_quest_special_reward_claims", "character_quest_effect_receipts",
         "character_active_main_quests", "character_completed_quests", "character_skill_bindings",
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
-        "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings", "character_quest_notify", "character_epic_wishes",
+        "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings", "character_quest_notify", "character_npc_bookmarks", "character_epic_wishes",
         "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_exp_bonus", "character_consumable_states", "character_various_buffs", "character_expert_job", "character_expert_meta", "character_assault_daily", "character_beast_dungeon_entries", "character_crack_daily", "character_growup_change", "character_weekly_dungeon", "character_dungeon_incount",
         "character_collectbox_slots", "character_collectbox_expirations", "character_collectbox_state", "character_epic_production", "character_pvp_training_skills",
         "character_skill_switch_inventory_items", "character_skill_switch_inventory",
@@ -205,6 +205,8 @@ internal sealed partial class CharacterRepository
             "account_pvp_total_ratings", "account_pvp_total_rating_claims",
             // 疲劳owner删除时级联清除日戳，不对没有account列的子表重复执行删除。
             "character_fatigue_reset_days",
+            // 原翻牌回执删除时级联清除刷新标记，子表没有account列。
+            "character_clear_reward_resets",
             "character_server_item_usage",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。

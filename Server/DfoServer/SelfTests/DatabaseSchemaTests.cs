@@ -219,6 +219,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            ClearRewardResetUpgrade(root);
             InventoryItemRevisionUpgrade(root);
             GuildExtensionsUpgrade(root);
             SkillTreeUpgrade(root);

@@ -236,6 +236,7 @@ internal static partial class SettingsProtocolTests
     sealed class SettingsStore : IClientSettingsStore
     {
         public bool SaveQuestNotify(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> entries) => throw new NotSupportedException();
+        public bool SaveNpcBookmarks(AccountOwners.Lease owner, ushort id, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries) => throw new NotSupportedException();
         public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) => throw new NotSupportedException();
         public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort id, uint itemId, long? expiresAt = null) => throw new NotSupportedException("此夹具只验证原有设置正文");

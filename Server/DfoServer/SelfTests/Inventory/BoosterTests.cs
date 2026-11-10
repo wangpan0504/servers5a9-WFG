@@ -60,6 +60,7 @@ internal static class BoosterTests
         OrdinaryEventCoinResources(itemResources);
         OrdinaryTalmaResources(towns, itemResources);
         BoosterCreatureTests.RunResources(towns, itemResources);
+        BoosterDisguiseTests.Run(towns,itemResources);
         var random = new EdgeRandom();
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces, random);
         var now = DateTimeOffset.UtcNow;

@@ -63,11 +63,12 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     public const string Rule = "pvf-free-clear-card-v1";
     static readonly decimal[] DifficultyRates = [1.02m, 1.38m, 1.60m, 1.90m, 2.00m];
     public ClearRewardLimitCatalog? ClearRewardLimits => tayberrsRewards?.Limits;
+    public int? LimitedContainer(int dungeon) => tayberrsRewards?.LimitedContainer(dungeon);
 
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true,
         bool ancientBonus = false, DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null,
-        EquipmentRarityBonus equipmentRarityBonus = default)
+        EquipmentRarityBonus equipmentRarityBonus = default, DungeonDropMultipliers? dropMultipliers = null)
     {
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
@@ -98,19 +99,27 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             return new(checked((int)Math.Max(1, amount)), item, DimensionRewardPolicy.Rule,
                 cardSource, now.ToUnixTimeSeconds());
         }
-        // 专表只属于资源里写了行的团本。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
+        // 已解释的专表优先于通用装备池。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
         // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
-        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
+        if (prices?.SpecificRewards.ContainsKey(dungeon.Id) == true ||
+            dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
             dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
                 prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {
             if (prices is null || !prices.SpecificRewards.TryGetValue(dungeon.Id, out var specific))
                 throw new NotSupportedException("副本缺少已解释的专用翻牌行，不能退回普通装备池");
             int roll = Next(10000);
-            foreach (var row in specific)
+            var cumulative = specific.Select(row => row.Weight).ToArray();
+            for (int i = 1; i < cumulative.Length; i++) cumulative[i] = checked(cumulative[i] + cumulative[i - 1]);
+            var adjusted = DungeonEpicRateAdjustment.Adjust([..cumulative],
+                [..specific.Select(row => DungeonEpicDropAdjustment.IsEpic(items.Get(row.ItemId)))], 10000, dropMultipliers?.Equipment ?? 1);
+            int previous = 0;
+            for (int i = 0; i < specific.Length; i++)
             {
-                if (roll >= row.Weight) { roll -= row.Weight; continue; }
+                var row = specific[i];
+                int width = adjusted[i] - previous; previous = adjusted[i];
+                if (roll >= width) { roll -= width; continue; }
                 var item = DungeonDropCreation.Create(items.Get(row.ItemId), row.Count, Next, now);
                 var declared = new DungeonCardReward(checked((int)Math.Max(1, amount)), item, Rule,
                     $"{DungeonCardPriceCatalog.ResourcePath};{dungeon.Path}", now.ToUnixTimeSeconds())
@@ -125,6 +134,9 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
                 declared.Validate();
                 return declared;
             }
+            if (adjusted[^1] < 10000)
+                return new(checked((int)Math.Max(1, amount)), null, Rule,
+                    $"{DungeonCardPriceCatalog.ResourcePath};{dungeon.Path};gm-epic-rate", now.ToUnixTimeSeconds());
             throw new InvalidDataException("副本翻牌奖励未命中已验证权重池");
         }
         // 专用牌先按原专表返回；普通等级引用不能成为专用奖励的新门禁。
@@ -138,6 +150,9 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             rarityThresholds = EquipmentRarityDistribution.Adjust(rarityThresholds, equipmentRarityBonus,
                 candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, 2).TotalWeight > 0,
                 candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, 3).TotalWeight > 0);
+        if (dropMultipliers is not null && candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, 4).TotalWeight > 0)
+            rarityThresholds = DungeonEpicRateAdjustment.Adjust(rarityThresholds, [false, false, false, false, true, false, false],
+                DungeonDropRatePlan.RarityDenominator, dropMultipliers.Equipment);
         int rarity = DungeonDropRatePlan.Rarity(rarityThresholds.AsSpan(), rarityRoll);
         var pool = candidates.ReferencePool(true, level - reference.Value0, level + reference.Value1 - 1, rarity);
         ItemCore? core = pool.TotalWeight == 0 ? null : DungeonDropCreation.Create(pool.Select(Next(pool.TotalWeight)), 1, Next, now, referenceQuality: true);
@@ -231,7 +246,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     public DungeonCardOptions? PrepareOptions(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null, byte job = 0, byte grow = 0,
         DungeonIncountUsage? clearRewardUsage = null, DungeonIncountUsage? itemRewardUsage = null,
-        EquipmentRarityBonus equipmentRarityBonus = default)
+        EquipmentRarityBonus equipmentRarityBonus = default, DungeonDropMultipliers? dropMultipliers = null)
     {
         if (prices is null) return null;
         if (dungeon.BasisLevel is not > 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
@@ -246,13 +261,13 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
         var paid = dungeon.IsTayberrs ? PrepareTayberrsPaid(dungeon, now)
             : Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
-                clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus) with { Gold = 0 };
+                clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus,dropMultipliers:dropMultipliers) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
             membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
                 ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false,
-                    clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus) : null)
+                    clearRewardUsage:clearRewardUsage,itemRewardUsage:itemRewardUsage,equipmentRarityBonus:equipmentRarityBonus,dropMultipliers:dropMultipliers) : null)
         {
             PaidDisabled = dungeon.DisablePaidCard,
             DoublePaidItems = doubled,

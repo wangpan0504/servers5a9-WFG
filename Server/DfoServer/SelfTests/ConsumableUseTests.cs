@@ -11,7 +11,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class ConsumableUseTests
+internal static partial class ConsumableUseTests
 {
     internal static RecoveryConsumableDefinition Hp { get; } = new(1108, 16, 10000, 0);
     internal static RecoveryConsumableDefinition Mp { get; } = new(1114, 16, 10000, 1);
@@ -19,6 +19,7 @@ internal static class ConsumableUseTests
     public static void RunCore()
     {
         RandomDisguiseRepeatedStackLimit();
+        DisguiseKinds();
         BossSelectionMappings();
         EpicDropMappings();
         HellLegendMappings();
@@ -287,6 +288,7 @@ internal static class ConsumableUseTests
 
     public static void RunResources(ItemResources resources)
     {
+        AllDisguiseResources(resources);
         uint[] fiendwarDungeons = [..Enumerable.Range(291100339, 26).Select(id => checked((uint)id)),
             ..Enumerable.Range(5350, 9).Select(id => checked((uint)id))];
         foreach (int id in new[] { 10312384, 10312387 })

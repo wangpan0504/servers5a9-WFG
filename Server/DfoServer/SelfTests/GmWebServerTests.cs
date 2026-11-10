@@ -32,12 +32,7 @@ internal static partial class GmWebServerTests
             if (line is "event initialize-default 312" or "event initialize-default 2520")
                 return "OK " + JsonSerializer.Serialize(new { eventId = int.Parse(line.Split(' ')[2]), active = false, mode = "off", Revision = 3,
                     StartsAt = (long?)null, EndsAt = (long?)null, initialized = false });
-            if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new
-            {
-                supportCompanion = Companion, supportedCompanions = new[] { "wangfugui", "guangbing" },
-                unavailableCompanions = new[] { new { companion = "female-crusader", reason = "当前客户端不支持该支援兵" },
-                    new { companion = "enchantress", reason = "当前客户端不支持该支援兵" } }
-            });
+            if (line == "support-companion") return "OK " + JsonSerializer.Serialize(new { supportCompanion = Companion });
             if (line.StartsWith("support-companion ", StringComparison.Ordinal))
             {
                 Companion = line[18..];
@@ -50,6 +45,7 @@ internal static partial class GmWebServerTests
             if (line.StartsWith("item-filter")) return "OK {\"total\":0,\"offset\":0,\"items\":[]}";
             if (line.Contains(" stats ")) return "OK {\"stats\":{}}";
             if (line.Contains(" title-list ")) return "OK {\"total\":0,\"quests\":[]}";
+            if (line.Contains(" npc-favor-max ")) return InGame ? "ERR 角色正在游戏中" : "OK {\"name\":\"Hero\",\"characterId\":7,\"total\":36}";
             if (InGame && line.Contains(" title-complete ")) return "ERR 角色正在游戏中，客户端背包或邮箱不会即时刷新；请先回到选角再执行";
             if (line.StartsWith("item-search")) return "OK {\"total\":1,\"offset\":0,\"items\":[{\"id\":100,\"name\":\"剑\",\"tag\":\"x\",\"minLevel\":1,\"rarity\":2,\"set\":0}]}";
             if (line.Contains(" show ")) return "OK Hero id=7 level=" + (Commands.Count(c => c.Contains(" level ")) == 0 ? 50 : 60);
@@ -114,20 +110,18 @@ internal static partial class GmWebServerTests
         TestCheck.That(page.Headers.Contains("Content-Security-Policy"), "GM接口保留内容安全策略");
         using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
         {
-            Content = JsonContent.Create(new { key = "support-companion", value = "guangbing", confirm = true })
+            Content = JsonContent.Create(new { key = "support-companion", value = "enchantress", confirm = true })
         })
         {
             request.Headers.Add("X-GM-Request", "1");
             using var response = await http.SendAsync(request);
-            TestCheck.That(response.IsSuccessStatusCode && data.Companion == "guangbing", "管理端单次请求提交允许枚举选择");
+            TestCheck.That(response.IsSuccessStatusCode && data.Companion == "enchantress", "管理端单次请求提交枚举选择");
         }
         int beforeCompanionRead = data.Commands.Count;
         var debug = (await http.GetFromJsonAsync<JsonElement>("/api/debug")).GetProperty("data");
-        TestCheck.That(debug.GetProperty("supportCompanion").GetString() == "guangbing" &&
-            !debug.GetProperty("summonEnchantress").GetBoolean() && !debug.GetProperty("summonWangFugui").GetBoolean() &&
-            debug.GetProperty("summonGuangbing").GetBoolean() && !debug.GetProperty("summonFemaleCrusader").GetBoolean() &&
-            debug.GetProperty("supportedCompanions").EnumerateArray().Select(value => value.GetString()).SequenceEqual(["wangfugui", "guangbing"]) &&
-            debug.GetProperty("unavailableCompanions").GetArrayLength() == 2 &&
+        TestCheck.That(debug.GetProperty("supportCompanion").GetString() == "enchantress" &&
+            debug.GetProperty("summonEnchantress").GetBoolean() && !debug.GetProperty("summonWangFugui").GetBoolean() &&
+            !debug.GetProperty("summonGuangbing").GetBoolean() && !debug.GetProperty("summonFemaleCrusader").GetBoolean() &&
             data.Commands.Skip(beforeCompanionRead).Count(line => line.StartsWith("support-companion", StringComparison.Ordinal)) == 1 &&
             data.Commands.Skip(beforeCompanionRead).All(line => !line.StartsWith("summon-", StringComparison.Ordinal)),
             "管理回读一次原子选择派生四个兼容字段");
@@ -140,32 +134,7 @@ internal static partial class GmWebServerTests
             int beforeInvalidSelection = data.Commands.Count;
             using var response = await http.SendAsync(request);
             TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeInvalidSelection &&
-                data.Companion == "guangbing", "无效单选在调用GM前拒绝，不先清空当前项");
-        }
-        foreach (string blocked in new[] { "female-crusader", "enchantress" })
-        {
-            foreach (var choice in new[] { (Key: "support-companion", Value: blocked),
-                (Key: "support-companions", Value: blocked + ",guangbing"), (Key: "summon-" + blocked, Value: "on") })
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
-                { Content = JsonContent.Create(new { key = choice.Key, value = choice.Value, confirm = true }) };
-                request.Headers.Add("X-GM-Request", "1");
-                int commandCount = data.Commands.Count;
-                using var response = await http.SendAsync(request);
-                TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == commandCount &&
-                    data.Companion == "guangbing", "旧HTTP单选、批量及召唤入口拒绝退役职业，不执行GM或清空原选择");
-            }
-            using var profileRequest = new HttpRequestMessage(HttpMethod.Post, "/api/support-companions")
-            {
-                Content = JsonContent.Create(new { companions = new[] { blocked },
-                    tiers = new Dictionary<string,string> { ["wangfugui"] = "entry", ["female-crusader"] = "graduate", ["enchantress"] = "huge" },
-                    confirm = true })
-            };
-            profileRequest.Headers.Add("X-GM-Request", "1");
-            int beforeProfile = data.Commands.Count;
-            using var profileResponse = await http.SendAsync(profileRequest);
-            TestCheck.That(profileResponse.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == beforeProfile,
-                "档次HTTP入口同样在转发前拒绝退役名单");
+                data.Companion == "enchantress", "无效单选在调用GM前拒绝，不先清空当前项");
         }
         using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/reward-limit-reset")
         {
@@ -409,6 +378,21 @@ internal static partial class GmWebServerTests
             && data.Commands.Contains("account acct grant Hero 7 1 0 0 direct"), "直接入包对在线角色同样要求先小退");
         data.InGame = true;
         TestCheck.That((await Post("/api/direct/set", new { account = "acct", name = "Hero", setIndex = 2, upgrade = 0, refine = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "直接发套装同样要求先小退");
+
+        int beforeFavor = data.Commands.Count;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero" })).StatusCode == HttpStatusCode.BadRequest &&
+            data.Commands.Count == beforeFavor, "好感度拉满缺确认不执行GM命令");
+        data.InGame = true;
+        TestCheck.That((await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true })).StatusCode == HttpStatusCode.BadRequest,
+            "好感度拉满沿服务端拒绝在线角色");
+        data.InGame = false;
+        var favorMax = await Post("/api/npc-favor/max", new { account = "acct", name = "Hero", confirm = true });
+        TestCheck.That(favorMax.IsSuccessStatusCode && data.Commands.Last() == "account acct npc-favor-max Hero" &&
+            (await favorMax.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("data").GetProperty("total").GetInt32() == 36,
+            "HTTP好感度拉满传递明确账号角色并返回真实凭据");
+        var favorAudit = await http.GetFromJsonAsync<JsonElement>("/api/audit?action=npc-favor-max&limit=50");
+        TestCheck.That(favorAudit.EnumerateArray().Any(row => row.GetProperty("ok").GetBoolean()) &&
+            favorAudit.EnumerateArray().Any(row => !row.GetProperty("ok").GetBoolean()), "好感度写入成功与拒绝均保留GM审计");
 
         // 扩展装备栏：只读走命令；写入只接受1/2/16组合，在线角色须 returnFirst 先小退，两步都审计。
         TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/equip-slots")).IsSuccessStatusCode && data.Commands.Contains("account acct equip-slots Hero"), "扩展装备栏只读接口");

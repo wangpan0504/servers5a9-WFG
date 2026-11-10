@@ -49,8 +49,7 @@ internal sealed partial class GameSession
             formalDungeon is null && !HasPendingTownQuestCommit ? Selected : null, Epoch: SelectionEpoch, Previous: hopeSelection));
         if (capture.Character is not { IsPvpPrivate: false } character || character.Level is < 95 or > 99 ||
             character.DungeonState is null || character.ActiveMainQuests.Length >= 30 ||
-            character.ActiveMainQuests.Any(row => catalog.Missions.ContainsKey(row.QuestId)) ||
-            debugSettings?.InfiniteFatigue != true && (character.Fatigue is null || character.Fatigue.Remaining < catalog.NeedFatigue)) return false;
+            character.ActiveMainQuests.Any(row => catalog.Missions.ContainsKey(row.QuestId))) return false;
         HopeSelection selection;
         if (capture.Previous is { } previous && previous.CharacterId == character.Id && previous.SelectionEpoch == capture.Epoch)
         {

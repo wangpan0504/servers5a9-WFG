@@ -56,10 +56,12 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(1, 515, Build(writer => { writer.Write((byte)1); writer.Write(ticket); writer.Write((byte)0); writer.Write(159u); }));
             Drain(peer);
             Bytes(peer.DimensionEntranceState!, [0,0,0,0,5,0,0,0,2], "515成功后815刷新真实额外次数");
+            string capped = State(modern);
             UseTicket(peer);
-            peer.Expect(1, 515, Build(writer => { writer.Write((byte)1); writer.Write(ticket); writer.Write((byte)0); writer.Write(159u); }));
+            peer.Expect(1, 515, Build(writer => { writer.Write((byte)0); writer.Write((ushort)0); writer.Write(ticket); writer.Write((byte)0); writer.Write((byte)159); }));
             Drain(peer);
-            Bytes(peer.DimensionEntranceState!, [0,0,0,0,10,0,0,0,2], "第二张五次券继续增加额外次数，不受PVF五次上限限制");
+            Bytes(peer.DimensionEntranceState!, [0,0,0,0,5,0,0,0,2], "第二张五次券被拒，已提交额度保持五次");
+            That(State(modern) == capped, "超限重复请求不扣券、不改revision或额度");
             string stable = State(modern);
             SelectEntrance(peer);
             var entry = Entry(7165, 0);
@@ -71,11 +73,11 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(modern.Slot, prepared: true, resumeTown: true, room: false);
-            Bytes(peer.DimensionEntranceState!, [0,0,0,0,10,0,0,0,2], "失败重连回放原815额外次数");
+            Bytes(peer.DimensionEntranceState!, [0,0,0,0,5,0,0,0,2], "失败重连回放原815额外次数");
             SelectEntrance(peer);
             peer.Send(16, Entry(7167, 2)); var info = peer.Expect(0, 28).Body; var map = peer.Expect(0, 29).Body;
             Drain(peer);
-            That(peer.DimensionEntranceState is { Length: 9 } state && U32(state, 0) == 1 && U32(state, 4) == 10 && state[8] is 1 or 2,
+            That(peer.DimensionEntranceState is { Length: 9 } state && U32(state, 0) == 1 && U32(state, 4) == 5 && state[8] is 1 or 2,
                 "现代实际副本入场计一次基本次数，不发送虚构550");
             var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(7167).Mazes.Single(m => m.SourceOrdinal == info[7]);
             var route = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), new(info[8], info[9]));

@@ -131,7 +131,8 @@ internal static partial class EvildomWarChallengeTests
         var maze = definition.Mazes.Single();
         That(definition.IsEvildomWarChallenge && definition.MinimumPartyCount == 4 && definition.MinimumLevel == 95 &&
             definition.TryGetDesignatedDifficulty(out byte difficulty) && difficulty == 2 &&
-            definition.DisableFatigueConsumption && definition.EnterWithoutFatigue && definition.DisableMonsterAndClearExperience,
+            definition.DisableFatigueConsumption && definition.EnterWithoutFatigue && definition.DisableMonsterAndClearExperience &&
+            definition.DisableItemDrops && !definition.DisableClearReward,
             "候选英雄DGN独立标签、min4、95级、fixed2及无疲劳无普通经验合同");
         That(maze is { Width: 13, Height: 3, MapSpecification.Count: 15 } &&
             maze.Starts.SequenceEqual([new DungeonPoint(0, 0)]) && maze.Bosses.SequenceEqual([new DungeonPoint(12, 0)]) &&
@@ -238,6 +239,9 @@ internal static partial class EvildomWarChallengeTests
                         team.All(session => ReferenceEquals(session.PartyDungeon, team[0].PartyDungeon) &&
                             session.FormalEnteredDungeonId == 400000105 && session.Phase == SessionPhase.Loading),
                         "四真实成员进入同一正式共享Run，不创建mode3或平行实例");
+                    That(team.All(session => session.CurrentFormalDungeonScene() is
+                        { Entry.DisableItemDrops: true, Entry.DisableClearReward: false }),
+                        "英雄禁掉落由PVF冻结到每名成员，保留专用翻牌资格");
                     for (int index = 0; index < team.Length; index++)
                         That(team[index].Selected!.Fatigue == before[index].Fatigue && team[index].ReadEvildomWar() is null,
                             "英雄入场不扣普通战役30疲劳、不借54战役资格：" + index);

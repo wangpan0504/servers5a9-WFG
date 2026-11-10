@@ -285,6 +285,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // [required item] 物品 数量 第三列：只识别三个整数且前两项为正的单行声明；第三列含义未确认，原样保留。
     public DungeonRequiredItem? RequiredItem => RawSections.Where(row => row.Tag == "required item").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 } item, { Type: 0, Value: > 0 } count, { Type: 0 } flag] }] ? new(item.Value, count.Value, flag.Value) : null;
+    public bool DisableItemDrops => RawSections.Any(row => row.Tag == "disable drop item" && row.Tokens.Count == 0);
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     // 040974CC读取[forced create delilah]单整数并复制到Dungeon+0x54E；仅识别唯一整数1声明。
     public bool ForcedCreateDelilah => RawSections.Where(row => row.Tag == "forced create delilah").ToArray() is
@@ -454,6 +455,8 @@ internal sealed class DungeonCatalog
     private readonly Lazy<DungeonMapPool> mapPool;
     private readonly Lazy<IReadOnlyDictionary<(int Dungeon, byte Difficulty), DungeonMap>> revisedBeastBossMaps;
     private readonly Lazy<GriefTowerCatalog> griefTower;
+    private readonly Lazy<StackableDungeonLimitCatalog> stackableLimits;
+    internal StackableDungeonLimitCatalog StackableLimits => stackableLimits.Value;
     private readonly Lazy<BossRushCatalog> bossRush;
     private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
     public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
@@ -475,6 +478,7 @@ internal sealed class DungeonCatalog
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
         revisedBeastBossMaps = new(() => RevisedBeastLayout.ReadBossMaps(archive, maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        stackableLimits = new(() => new StackableDungeonLimitCatalog(archive), LazyThreadSafetyMode.ExecutionAndPublication);
         bossRush = new(() => new BossRushCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);

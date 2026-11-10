@@ -22,6 +22,9 @@ internal static class AdventureRepresentativeTcpTests
             Execute("UPDATE characters SET level=95,grow_type=33 WHERE id IN(" + first + "," + second + ")");
             Execute("UPDATE character_dungeon_state SET proficiency_level=197 WHERE character_id=" + second);
             peer.Select();
+            Execute("UPDATE characters SET grow_type=35 WHERE id=" + second + ";" +
+                "INSERT INTO account_adventure_representatives VALUES('representative',0,3," + second + ");" +
+                "UPDATE characters SET grow_type=33 WHERE id=" + second);
             peer.Send(1476, [0, 33]);
             var candidates = peer.Expect(1, 1476).Body;
             That(candidates.Length == 108 && candidates[1] == 1 && candidates[2] == 2 && candidates[3] == 2 &&
@@ -37,6 +40,9 @@ internal static class AdventureRepresentativeTcpTests
             peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Query("SELECT character_id FROM account_adventure_representatives WHERE account='representative'") is [[long chosen]] && chosen == second,
                 "账号绑定真实第二名角色，不仍使用第一候选");
+            peer.Send(1476, [0, 33]); peer.Expect(1, 1476); peer.Barrier();
+            That(fixture.Query("SELECT count(*) FROM account_adventure_representatives WHERE grow=3") is [[0L]],
+                "旧转职代表被清理，完整1477刷新后同连接继续查询，不因旧绑定断线");
             string state = fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures");
             peer.Send(1477, Set(second)); peer.Expect(1, 1477); peer.Expect(0, 1345); peer.Expect(0, 1343); peer.Expect(0, 1349); peer.Barrier();
             That(fixture.Snapshot("SELECT revision,name,level,experience FROM account_adventures") == state, "合法重复设置应答但不重复writer或revision");

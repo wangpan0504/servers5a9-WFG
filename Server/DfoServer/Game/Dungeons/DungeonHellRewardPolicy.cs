@@ -17,7 +17,8 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
 
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, int basisLevel, byte mode, int rolls,
         byte dungeonDifficulty = 0, bool suppressEpicFragments = false, DungeonItemDropPool? epicEquipment = null,
-        int? fragmentRolls = null, (int Minimum, int Maximum)? equipmentRange = null)
+        int? fragmentRolls = null, (int Minimum, int Maximum)? equipmentRange = null,
+        bool excludeLegacyHellLowEquipment = false)
     {
         if (rolls <= 0 || rules.Rate(basisLevel, mode) is not { } rate || rules.Rarity(mode) is not { } rarity ||
             rules.GradeRange(basisLevel) is not { } range) return plan;
@@ -28,7 +29,8 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
                     index == 4 ? epicRange.Maximum : range.Maximum, index))).ToImmutableArray();
         var trial = new DungeonDropTrial(Math.Clamp(rate + 1, 0, Denominator), null, 1, 1, ProbabilityDenominator: Denominator,
             RarityPools: pools, Attempts: rolls, Category: DungeonDropCategory.Equipment)
-            { RarityBonusGroup = DungeonRarityBonusGroup.HellEquipment };
+            { RarityBonusGroup = DungeonRarityBonusGroup.HellEquipment,
+                ExcludeLegacyHellLowEquipment = excludeLegacyHellLowEquipment };
         var trials = plan.Trials.Append(trial);
         // PVF没有逐骰概率；本服默认每骰产一片，保留显式0关闭及千分比调试，不把creation rate当掉率。
         // 候选权重来自碎片模板，等级区间来自本次深渊资源引用；数量不冒充原服服务端公式。

@@ -70,7 +70,8 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                 if (member.Actor.Session.EvildomWarStartRejection(catalog, party) is { } reason) return reason;
             if (party.Settings.KindArgument == 2 && guideStore is not null && !leader.TryBindEvildomWarGuide(guideStore))
                 return "guide-account-limit";
-            var deadline = leader.EvildomWarNow.AddSeconds(catalog.LimitTime);
+            var startedAt = leader.EvildomWarNow;
+            var deadline = startedAt.AddSeconds(catalog.LimitTime);
             byte[] attributes = [0, 1, 2, 3];
             RandomNumberGenerator.Shuffle(attributes.AsSpan());
             int ordinal = 0;
@@ -80,7 +81,7 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
                     row.Kind == 0 ? (byte)0 : (byte)3)).ToImmutableArray();
             byte mode = checked((byte)party.Settings.KindArgument);
             var hidden = EvildomWarHiddenPolicy.Select(mode, dungeons, catalog.HiddenDungeons, hiddenDraw ?? RandomNumberGenerator.GetInt32);
-            var battle = new EvildomWarBattle(mode, deadline, dungeons, hidden);
+            var battle = new EvildomWarBattle(mode, deadline, dungeons, hidden, startedAt);
             var bound = parties.BindEvildomWar(party, battle.View.BattleId);
             if (bound is null) return "party-changed";
             foreach (var member in bound.Members) member.Actor.Session.StartEvildomWar(catalog, bound, battle, warStore);
@@ -256,6 +257,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         }
         catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
         {
+            return [];
+        }
+        catch (SingleDungeonAdmissionRejectedException error)
+        {
+            onRejected?.Invoke(error.Message, party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
             return [];
         }
         catch (Exception error) { entryFailure = error; throw; }

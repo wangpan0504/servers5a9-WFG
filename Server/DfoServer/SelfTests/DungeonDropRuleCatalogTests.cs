@@ -42,6 +42,7 @@ internal static class DungeonDropRuleCatalogTests
         string Resolve(int key) => names[key];
         DungeonDropRuleCatalog Parse(IEnumerable<PvfToken> tokens) => DungeonDropRuleCatalog.Parse(tokens.ToArray(), common, Resolve);
         var parsed = Parse(source);
+        CarbonCrystalDropTests.RunCore(parsed);
         var plan = DungeonDropRatePlan.Prepare(parsed, 1, 0, 0, 1);
         That(plan.Thresholds.SequenceEqual(new[] { 986, 60, 250, 17, 15 }) &&
             plan.Hit(0, 985) && !plan.Hit(0, 986) && plan.Hit(4, 14) && !plan.Hit(4, 15),
@@ -71,6 +72,15 @@ internal static class DungeonDropRuleCatalogTests
             random: _ => { cardDraws++; return 0; }, prices: cardPrices);
         var cardDungeon = new DungeonDefinition(1, "dungeon/合成活动隔离.dgn", 1, 1, [], []);
         var cardNow = DateTimeOffset.FromUnixTimeSeconds(1800000000);
+        var cardEpic = Template(2100, ItemKind.Equipment, 1) with { Rarity = 4 };
+        var epicCards = new DungeonCardRewardPolicy(parsed, DungeonItemDropCatalog.Create([cardEpic]), null!, null!, null!);
+        int CardDraw(int bound) => bound == DungeonDropRatePlan.RarityDenominator ? 750000 : 0;
+        That(epicCards.Prepare(cardDungeon, 0, 1, CardDraw, cardNow).Item is null &&
+            epicCards.Prepare(cardDungeon, 0, 1, CardDraw, cardNow, dropMultipliers: new(Equipment: 2)).Item?.ItemId == cardEpic.Id,
+            "正式普通翻牌史诗区间受GM两倍影响，原空候选不会伪造装备");
+        That(epicCards.Prepare(cardDungeon, 0, 1, _ => 0, cardNow, dropMultipliers: new(Equipment: 100)).Item?.ItemId == cardEpic.Id &&
+            epicCards.Prepare(cardDungeon, 0, 1, CardDraw, cardNow, dropMultipliers: new(Equipment: 0)).Item is null,
+            "正式翻牌史诗倍率零禁用和百倍封顶，仍只生成一件");
         var goldEvent = new DfoServer.Game.Events.ServerEventState(new(64, 7, OverrideActive: true), true);
         var goldOptions = cards.PrepareOptions(cardDungeon, 0, 1, new(), cardNow, goldEvent);
         That(goldOptions is { DoublePaidItems: true, GoldCardEventRevision: 7, Price: 100, UseGoldCard: false, Paid.Gold: 0 } && cardDraws == 2,

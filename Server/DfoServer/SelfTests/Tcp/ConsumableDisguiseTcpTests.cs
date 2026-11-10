@@ -31,6 +31,10 @@ internal static partial class ConsumableUseTcpTests
                 foreach (short slot in new short[] {65,66,67})
                     items = items.Add(new(0,new(InventoryListType.Main,slot),
                         InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(itemId),3)));
+            if (account != "beta")
+                foreach (var (slot,id) in new[] { ((short)68,7432),((short)69,10002384) })
+                    items = items.Add(new(0,new(InventoryListType.Main,slot),
+                        InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id),3)));
             repository.Create(owner,candidate with { Level=20,InitialLearning=learning,Inventory=candidate.Inventory with { Items=items } });
         }
         await fixture.StartAsync();
@@ -81,6 +85,16 @@ internal static partial class ConsumableUseTcpTests
         Disguise(source.Expect(0,2).Body,0,0); source.Barrier(); Changed(witness,0,0);
         That(Assets()==before,"60秒等号由独立任务清理本人和同屏形态，不重扣或产生新资产审计");
 
+        // 保持观察角色在同屏，验证新增种类也沿共用Actor投影广播。
+        foreach (var (slot,id,type,form) in new[] { ((ushort)68,7432,(byte)1,17),((ushort)69,10002384,(byte)3,191) })
+        {
+            Send(type,form,id); Empty(source); Empty(witness);
+            Use(source,slot,200u+slot,id); Accepted(source,slot,200u+slot,id); source.Barrier(); Empty(witness);
+            Send(2,form,id); Empty(source); Empty(witness);
+            Send(type,form,id); Changed(source,type,checked((uint)form)); Changed(witness,type,checked((uint)form));
+            That(Count((short)slot)==2,"NPC与混合随机变身仅由真实44扣一件取得对应种类资格，不扣商店兑换材料");
+            source.Send(212); Changed(source,0,0); Changed(witness,0,0);
+        }
         Consume(66,105); Send(2,63039,itemId); Changed(source,2,63039); Changed(witness,2,63039);
         // 上面双方已通过1426出房，直接走公共区到副本入口，不能再次套用“从房间出发”的辅助流程。
         source.Travel(38,2,1085,249,38,0,kind:5);
@@ -151,6 +165,8 @@ internal static partial class ConsumableUseTcpTests
             string expected = (type,form) switch
             {
                 (0,0) => "0000000000",
+                (1,17) => "0111000000",
+                (3,191) => "03BF000000",
                 (2,63039) => "023FF60000",
                 _ => throw new InvalidDataException("未登记的原生Actor形态金样")
             };

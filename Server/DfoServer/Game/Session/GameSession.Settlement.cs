@@ -239,7 +239,7 @@ internal sealed partial class GameSession
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
         bool noClearCards = dungeon.Entry.MockBattle is not null || dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.IsTournament || dungeon.Entry.Maze.IsGriefTower ||
-            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || strongwayNormal && dungeon.Entry.DisableClearReward;
+            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null || dungeon.Entry.DisableClearReward;
         DungeonCardReward? normalCard = null;
         var settlementNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var rarityItems = items ?? griefItems;
@@ -247,13 +247,19 @@ internal sealed partial class GameSession
             ? EquipmentRarityBonusPolicy.Capture(Selected!, rarityItems, settlementNow.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule)
             : default;
         DungeonIncountUsage? clearRewardUsage = null;
+        DungeonIncountUsage? itemRewardUsage = null;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
             if (cards.ClearRewardLimits?.FindDungeon(checked((int)dungeon.Entry.DungeonId)) is { } rewardLimit)
+            {
                 clearRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit, ClearRewardLimitPolicy.Period(settlementNow));
+                if (cards.LimitedContainer(checked((int)dungeon.Entry.DungeonId)) is { } container)
+                    itemRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit,
+                        ClearRewardLimitPolicy.Period(settlementNow), container);
+            }
             normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count, utcNow: settlementNow, job: Selected!.Job, grow: Selected.GrowType,
-                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus);
+                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
             ? cards!.PrepareAssault(normalCard.Gold, settlementNow)
@@ -264,7 +270,7 @@ internal sealed partial class GameSession
             var membership = repository.LoadCardMembership(owner,Selected!.Id,settlementNow);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count,membership,settlementNow,goldCardEvent,Selected.Job,Selected.GrowType,
-                clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus);
+                clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
             dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);
@@ -746,7 +752,8 @@ internal sealed partial class GameSession
             var row = IncountRow(dungeon.Entry.DungeonId);
             var period = IncountPeriod(row?.CountKey ?? id);
             if (row is not null && !DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, period)) ||
-                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >= charge.Limit))
+                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >=
+                    (long)charge.Limit + repository.LoadAccountDungeonIncountExtra(owner, charge.Dungeon, charge.Period)))
                 return false;
         }
         if (dungeon.Entry.EntryItem is { } entryItem)

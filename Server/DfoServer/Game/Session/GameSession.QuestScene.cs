@@ -146,7 +146,7 @@ internal sealed partial class GameSession
         bool energyClear = current.Entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
             current.Entry.LukeEnergyObject?.MatchesEnergy(current.Entry.DungeonId, current.Entry.Maze, scene.CurrentMap,
                 (int)templateId, chosen.ordinal) == true;
-        if (pending is null && mazeClear && current.Entry.PartyRoute is null && !energyClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
+        if (pending is null && mazeClear && current.Entry.PartyRoute is null && !energyClear && !current.Run.IsAntonTremor && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
         if (pending is null && reportedQuest is null && !recordsQuest &&
             (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;

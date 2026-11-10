@@ -378,7 +378,11 @@ internal static class SqliteMigrations
             Execute(db, tx, RevisedBeastRewardSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
             Execute(db, tx, RevisedBeastRewardSchema.StageDefinition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal));
         }),
-        new(201, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(201, "人物辞典角色收藏", static (db, tx) => Execute(db, tx, NpcBookmarkSchema)),
+        new(202, "普通清图奖励限次刷新标记", static (db, tx) => Execute(db, tx,
+            DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
+        new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2644,6 +2648,7 @@ internal static class SqliteMigrations
             ("character_epic_wishes",EpicWishSchema.Definition),
             ("account_battle_pass_deluxe_orders",BattlePassDeluxeSchema.Definition),
             ("character_privilege_service",PrivilegeServiceSchema.Definition),
+            ("character_npc_bookmarks",NpcBookmarkSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_various_buffs",VariousBuffSchema.Definition),
@@ -2652,6 +2657,7 @@ internal static class SqliteMigrations
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),
+            ("character_clear_reward_resets",DungeonCardRewardSchema.ResetSql),
             ("character_dungeon_loot_receipts",DungeonLootSchema),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
             ("character_dungeon_drop_batches",DungeonDropCollectionSchema.Definition.Split(';').Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal))),
@@ -2727,6 +2733,9 @@ internal static class SqliteMigrations
             ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_dungeon_incount_extra",DungeonTicketQuotaSchema.AccountDefinition),
+            ("character_dungeon_reward_extra",DungeonTicketQuotaSchema.RewardDefinition),
+            ("account_single_dungeon_bindings",DungeonTicketQuotaSchema.SingleDefinition),
             ("guild_hongbao_records",GuildHongbaoSchema.Records.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_hongbao_claims",GuildHongbaoSchema.Claims.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_ranking_party_clears",GuildRankingSchema.Parties.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2858,6 +2867,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,service_day,used FROM character_gold_card_uses LIMIT 0",
         "SELECT character_id,account,instance_id,options_json,black_diamond_reward_json,bonus_mail_id,paid_reward_json,paid_mail_id,paid_cost,paid_revision,paid_day FROM character_dungeon_card_options LIMIT 0",
         "SELECT character_id,account,instance_id,plan_json,reward_json,mail_id,revision,claimed FROM character_dungeon_card_rewards LIMIT 0",
+        "SELECT character_id,instance_id FROM character_clear_reward_resets LIMIT 0",
         "SELECT event_id,revision,starts_at,ends_at,override_active FROM server_events LIMIT 0",
         "SELECT account,day,elapsed_ms,qualified FROM account_pcroom_timepoint_days LIMIT 0",
         "SELECT account,day,earned FROM account_endless_adventure_days LIMIT 0",
@@ -2909,6 +2919,7 @@ internal static class SqliteMigrations
         "SELECT [account],[game_options] FROM [account_client_settings] LIMIT 0",
         "SELECT [character_id],[account],[character_options] FROM [character_client_settings] LIMIT 0",
         "SELECT character_id,account,entries FROM character_quest_notify LIMIT 0",
+        "SELECT character_id,account,entries FROM character_npc_bookmarks LIMIT 0",
         "SELECT character_id,started_at,expires_at,purchase_season,reward_season,last_login_day,login_days,daily_claim_day,claimed_milestones FROM character_privilege_service LIMIT 0",
         "SELECT [character_id],[account],[game_options] FROM [character_game_settings] LIMIT 0",
         "SELECT [id],[account],[slot],[name],[revision],[town],[area],[x],[y],[direction],[return_town],[return_area],[return_x],[return_y],[return_direction],[job],[grow_type],[level],[accepted_story_level],[gold],[experience],[inventory_expansion],[revive_coins],[win_points],[gold_carry_limit],[auction_gold_limit],[cargo_capacity],[quest_cycle_day],[equipment_slot_flags] FROM [characters] LIMIT 0",
@@ -3026,6 +3037,15 @@ internal static class SqliteMigrations
             character_id INTEGER PRIMARY KEY,
             account TEXT NOT NULL,
             entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=16),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        """;
+
+    internal const string NpcBookmarkSchema = """
+        CREATE TABLE IF NOT EXISTS character_npc_bookmarks(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)<=4096 AND length(entries)%4=0),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
         """;

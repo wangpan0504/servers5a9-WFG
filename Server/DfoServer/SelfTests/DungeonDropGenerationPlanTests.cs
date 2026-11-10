@@ -67,6 +67,7 @@ internal static class DungeonDropGenerationPlanTests
         EpicDropBonus(stack, equipment);
         BossDropBonus(stack, equipment);
         SourceRestrictions(stack, equipment);
+        LegacyHellEquipmentFilter(stack, equipment);
         Console.WriteLine($"PASS {Count - before} 完整掉落生成数量、未命中及独立装备属性断言");
     }
 
@@ -91,7 +92,7 @@ internal static class DungeonDropGenerationPlanTests
         var doubled = original.WithBossDropBonus(100);
         That(doubled.Trials[0].Threshold == 10000 &&
             doubled.Trials[1].BossDropAdjustment!.Widths(doubled.Trials[1])[0] == 1000000,
-            "领主参数100表示原概率乘2，不和史诗效果的万分比语义混用");
+            "领主参数100表示原概率乘2，与史诗效果一致使用百分比相对增量");
         That(boosted.Trials[0].Threshold == 5050 && boosted.Trials[0].Attempts == 2 &&
             boosted.Trials[1].BossDropAdjustment!.Widths(boosted.Trials[1]).SequenceEqual(new long[] { 505000, 495000 }) &&
             ReferenceEquals(boosted.Trials[2], nonEquipment) && ReferenceEquals(boosted.Trials[4], original.Trials[4]) &&
@@ -130,6 +131,59 @@ internal static class DungeonDropGenerationPlanTests
             ReferenceEquals(new DungeonDropGenerationPlan("非装备独立物保持原样", [nonEquipment]).WithBossDropBonus(1).Trials[0], nonEquipment),
             "零加成及纯非装备独立池复用原规则");
         Reject<InvalidDataException>(() => original.WithBossDropBonus(-1), "负领主加成拒绝");
+    }
+
+    static void LegacyHellEquipmentFilter(ItemTemplate stack, ItemTemplate equipment)
+    {
+        DungeonDropTrial Drop(ItemTemplate item, bool filtered) => new DungeonDropTrial(10000,
+            new DungeonItemDropPool([new DungeonWeightedDropItem(item, 1)]), 1, 1)
+            { ExcludeLegacyHellLowEquipment = filtered };
+        foreach (int rarity in new[] { 0, 1, 2, 3, 4 })
+        foreach (bool sealedEquipment in new[] { false, true })
+        {
+            var item = equipment with { Rarity = rarity, RandomOptionEquipment = true,
+                MagicSealedEquipment = sealedEquipment && (rarity is 2 or 3) };
+            var plan = new DungeonDropGenerationPlan("旧地区额外装备过滤边界", [Drop(item, true)]);
+            bool excluded = rarity is 0 or 1 || item.MagicSealedEquipment;
+            var result = plan.Generate(_ => 0, DateTimeOffset.UnixEpoch);
+            That(result.IsEmpty == excluded && (excluded || result.Single().Item!.ItemId == item.Id),
+                "仅排除白蓝和精确魔封，标签存在不误删非魔封紫粉或史诗: " + rarity + "/" + sealedEquipment);
+        }
+        var blue = equipment with { Rarity = 1 };
+        var material = stack with { Id = 3000, Kind = ItemKind.Material, StackLimit = 10 };
+        var unrelated = new DungeonDropGenerationPlan("同怪不同来源隔离", [Drop(blue, true), Drop(blue, false),
+            Drop(material, false), new(10000, null, 1, 1, new DungeonDropGoldReference(95, 100, 0))]);
+        var otherDrops = unrelated.Generate(_ => 0, DateTimeOffset.UnixEpoch);
+        That(otherDrops.Length == 3 && otherDrops[0].Item!.ItemId == blue.Id &&
+            otherDrops[1].Item!.ItemId == material.Id && otherDrops[2].GoldAmount == 100,
+            "同怪原普通装备、材料、金币保留，不扩大为整个怪物计划的低品质过滤");
+        var purple = equipment with { Id = 2001, Rarity = 2 };
+        var weighted = new DungeonItemDropPool([new DungeonWeightedDropItem(blue, 2), new DungeonWeightedDropItem(purple, 3)]);
+        var mixed = new DungeonDropGenerationPlan("旧深渊原权重不重抽", [new DungeonDropTrial(10000, weighted, 1, 1)
+            { ExcludeLegacyHellLowEquipment = true }]);
+        for (int roll = 0; roll < 5; roll++)
+        {
+            int draws = 0;
+            var result = mixed.Generate(bound => { draws++; return bound == 5 ? roll : 0; }, DateTimeOffset.UnixEpoch);
+            That(weighted.TotalWeight == 5 && result.IsEmpty == (roll < 2) && draws == (roll < 2 ? 2 : 3) &&
+                (result.IsEmpty || result.Single().Item!.ItemId == purple.Id),
+                "原加权区间命中白蓝只为空，不删除池项、重抽或侵占紫装区间: " + roll);
+        }
+        var pools = Enumerable.Range(0, 7).Select(rarity => new DungeonDropRarityPool(
+            rarity == 6 ? 1000000 : (rarity + 1) * 100000,
+            new DungeonItemDropPool([new DungeonWeightedDropItem(equipment with { Id = 4000 + rarity, Rarity = rarity }, 1)])))
+            .ToImmutableArray();
+        var original = new DungeonDropGenerationPlan("旧深渊派生标记保留", [new DungeonDropTrial(1000, null, 1, 1,
+            RarityPools: pools, GrowthContractEligible: true, Category: DungeonDropCategory.Equipment)
+            { RarityBonusGroup = DungeonRarityBonusGroup.HellEquipment, ExcludeLegacyHellLowEquipment = true }]);
+        var derived = new[] { original.WithGrowthContract(10), original.WithEpicDropBonus(100),
+            original.WithEquipmentRarityBonus(new(10, 10)), DungeonDropControlSnapshot.Apply(original, new(Equipment: 2)),
+            original.WithDisjointRestrictions(ImmutableHashSet.Create(4)) };
+        That(derived.All(plan => !ReferenceEquals(plan, original) && plan.Trials.Single().ExcludeLegacyHellLowEquipment &&
+            plan.Trials.Single().RarityBonusGroup == DungeonRarityBonusGroup.HellEquipment),
+            "成长、史诗药剂、稀有度加成、掉落控制和分解限制派生不丢额外装备过滤");
+        That(original.Trials.Single().RarityPools.Select(pool => pool.Threshold).SequenceEqual(pools.Select(pool => pool.Threshold)),
+            "派生处理不改写已冻结的原始稀有度阈值");
     }
 
     static void SourceRestrictions(ItemTemplate stack, ItemTemplate equipment)

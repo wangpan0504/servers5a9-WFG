@@ -376,6 +376,7 @@ internal static partial class ShopTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");
         await VerifyTargetBatchAndRoomAdmissionAsync(source, root, resources);
         await VerifyPeriodicLimitsAsync(source, root, resources);
+        await VerifyAntonRaidExchangeAsync(source, root, resources);
 
         void Counts(TcpPeer peer)
         {

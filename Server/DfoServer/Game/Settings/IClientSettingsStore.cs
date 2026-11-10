@@ -14,6 +14,7 @@ internal interface IClientSettingsStore
     bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros);
     bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries);
     bool SaveQuestNotify(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries);
+    bool SaveNpcBookmarks(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> entries);
     bool SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion);
     bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null);
 }

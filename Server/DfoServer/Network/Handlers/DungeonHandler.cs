@@ -546,6 +546,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
+        await DungeonPotionProjection.LoadedAsync(context, Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
         RaidCombatProjection.PostPreyDungeonTime(context, receipt);
         // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。

@@ -459,6 +459,8 @@ internal static class QuestCompletionRepositoryTests
             inner.LoadDungeonIncount(owner, characterId, dungeon, now);
         public int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) =>
             inner.LoadAccountDungeonIncount(owner, dungeon, period);
+        public int LoadAccountDungeonIncountExtra(AccountOwners.Lease owner, int dungeon, int period) =>
+            inner.LoadAccountDungeonIncountExtra(owner, dungeon, period);
         public DfoServer.Game.Dungeons.DungeonIncountCommit? CommitDungeonIncountEntry(AccountOwners.Lease owner,
             Character expected, int dungeon, DfoServer.Game.Dungeons.DungeonIncountPeriod now,
             DfoServer.GameWorld.Dungeons.DungeonIncountRow? row, InventoryPlan? consumption,

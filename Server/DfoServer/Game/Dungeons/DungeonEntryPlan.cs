@@ -22,6 +22,9 @@ internal sealed record DungeonEntryPlan(
     // 实验性（未在95客户端实证）：深渊派对入场（op16 请求 [7]=1）。非空表示本次入场走 maze 的 [hell dungeon] 深渊房间，
     // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
     public DungeonHellPartyRoom? HellParty { get; init; }
+    // 同次入场的地面与翻牌共用一个快照；null也可能是已冻结的关闭状态。
+    public bool DropControlCaptured { get; init; }
+    public DungeonDropMultipliers? DropMultipliers { get; init; }
     // 时空裂缝（[inferno dungeon]）：按深渊派对模式进入，但整条路线本身就是深渊场地，没有密门房间可换图。
     // 与密门深渊共用 HellPartyMode/深渊标志，区别只在 HellParty 为空、不抽柱子波次。
     public bool IsInfernoParty { get; init; }
@@ -749,7 +752,7 @@ internal sealed record DungeonEntryPlan(
             IsTayberrsStory = definition.IsTayberrsStory,
             SpecialClearReward = !practice && !definition.IsTutorial && !definition.IsClassExperience && !definition.DisableClearReward && !lostLand
                 ? definition.SpecialClearReward : null,
-            DisableItemDrops = definition.IsTayberrsStory,
+            DisableItemDrops = definition.DisableItemDrops || definition.IsTayberrsStory,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&

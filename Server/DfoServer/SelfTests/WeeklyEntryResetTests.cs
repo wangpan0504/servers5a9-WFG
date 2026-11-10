@@ -15,7 +15,7 @@ namespace DfoServer;
 // 账号刷新地下城入场次数：覆盖角色日/周次数、账号次数（日键与任意周起点）、冒险团面板、历史退役记录、强袭、
 // 魔界塔当日入场、悲叹塔账号额度与角色当日通关锁、祭坛/绝望当日入场回执、卢克团本周通关、再战魔界周次数。
 // 旧周期行、其他账号、次元裂缝的每日奖励进度、普通卢克的当日楼层顺序保持原样。
-public static class WeeklyEntryResetTests
+public static partial class WeeklyEntryResetTests
 {
     public static void RunCore()
     {
@@ -208,6 +208,7 @@ public static class WeeklyEntryResetTests
             f.Query($"SELECT used FROM account_dungeon_incount WHERE account='other' AND dungeon=400000018") is 3L,
             "再刷一次仍然成功，旧周期行还在");
         RunRewardLimitCore();
+        RunClearRewardReset();
         RunRewardLimitImperialDays(false);
         RunRewardLimitImperialDays(true);
         RunRewardLimitMultipleDays();
@@ -229,6 +230,7 @@ public static class WeeklyEntryResetTests
         var tag = TagEvildomPeriod.At(DateTimeOffset.UtcNow);
         int griefDay = QuestCycle.Day(DateTimeOffset.UtcNow);
         long id = f.Other.Id;
+        SeedClearReward(f, f.Other.Id, "other", 291100320, 21, DateTimeOffset.UtcNow);
         f.Execute($"""
             INSERT INTO account_strongway2019_rewards(account,instance_id,character_id,task_attempt,run_epoch,dungeon_id,bucket,day,week,created_at,reward_json,fact_json,mail_id)
               VALUES('other','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',{id},1,1,5359,0,{strongway.Day},{strongway.Week},1,json_object(),json_object(),1);
@@ -284,7 +286,8 @@ public static class WeeklyEntryResetTests
             result.GetProperty("SpecialEntryRows").GetInt32() == 1 &&
             result.GetProperty("DespairRows").GetInt32() == 1 &&
             result.GetProperty("RaidRows").GetInt32() == 1 &&
-            result.GetProperty("RaidReceiptRows").GetInt32() == 1,
+            result.GetProperty("RaidReceiptRows").GetInt32() == 1 &&
+            result.GetProperty("ClearRewardRows").GetInt32() == 1,
             "奖励刷新按玩法返回当前周期迁移行数");
         That(f.Query($"SELECT count(*) FROM account_strongway2019_rewards WHERE account='other'") is 1L &&
             f.Query($"SELECT count(*) FROM character_strongway2019_completions WHERE account='other'") is 1L &&

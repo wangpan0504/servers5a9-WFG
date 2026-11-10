@@ -388,7 +388,7 @@ internal sealed partial class CharacterRepository
     }
 
     public DungeonIncountUsage LoadClearRewardLimitUsage(AccountOwners.Lease owner, ushort characterId,
-        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period) => owner.Execute<DungeonIncountUsage>(() =>
+        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period, int? containerItemId = null) => owner.Execute<DungeonIncountUsage>(() =>
     {
         if (limit.Dungeons.IsEmpty) return default;
         using var db = database.Open();
@@ -407,6 +407,8 @@ internal sealed partial class CharacterRepository
             JOIN character_dungeon_settlement_receipts s
               ON s.character_id=r.character_id AND s.instance_id=r.instance_id
             WHERE r.character_id=$id AND r.account=$account AND s.dungeon_id IN({dungeonIn})
+              AND NOT EXISTS(SELECT 1 FROM character_clear_reward_resets reset
+                WHERE reset.character_id=r.character_id AND reset.instance_id=r.instance_id)
             """;
         int daily = 0, weekly = 0;
         using var reader = command.ExecuteReader();
@@ -418,6 +420,9 @@ internal sealed partial class CharacterRepository
             if (rowPeriod.Day == period.Day) daily++;
             if (rowPeriod.Week == period.Week) weekly++;
         }
-        return new(daily, weekly);
+        // 容器沿共享组的真实领奖历史计数，追加额度按券声明的具体容器独立读取。
+        var extra = ReadRewardTicketExtra(db, null, owner.Account, characterId, containerItemId is null ? 0 : 1,
+            containerItemId ?? limit.GroupId, period);
+        return new(daily, weekly, extra.DailyExtra, extra.WeeklyExtra);
     });
 }

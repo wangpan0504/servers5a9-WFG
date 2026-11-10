@@ -33,6 +33,18 @@ internal static class AdventureRepresentativeTests
         var removed = snapshot with { State = snapshot.State with { Representatives = [new(0, 1, null)] } };
         That(removed.Representatives(catalog).IsEmpty && !service.Prepare(removed, 1, 0, 1, null)!.Changed,
             "显式解除保留职业空位，重复解除为合法零变化");
+        var expanded = new AdventureRepresentativeService(AdventureCoreTests.SyntheticCatalog(true));
+        var stale = snapshot with { State = snapshot.State with { Representatives =
+            [new(0, 2, second.Id), new(1, 1, null), new(0, 1, first.Id)] } };
+        var repaired = expanded.Prepare(stale, first.Id, 0, 1, second.Id)!;
+        That(repaired.After.SequenceEqual([new(0, 1, second.Id), new(1, 1, null)]),
+            "改职业后的失效旧代表被清理，有效选择和显式空位保持原语义");
+        var expedition = new AdventureExpedition(1, Guid.NewGuid(), 1, 2, 1, 0, [], [second.Id])
+            { FrozenMembers = [new(second.Id, 0, second.Name, 0, 34, 95)] };
+        var busy = stale with { State = stale.State with { Expeditions = [expedition] } };
+        That(expanded.Prepare(busy, first.Id, 0, 2, null) is null &&
+            expanded.Prepare(busy, first.Id, 0, 1, first.Id)!.Before.State.Expeditions.Single() == expedition,
+            "旧代表出征中的职业仍禁止改选，清理其它失效绑定不重算冻结远征");
         That(AdventureRequests.Representative([2, 2, 0, 0, 0, 0, 33]) == (2, 2, 0, 1),
             "代表设置保留region、UID32及二觉打包成长字段");
         That(AdventureRequests.Profession([9, 0x20]) == (9, 1) && AdventureRequests.Profession([10, 0x20]) == (10, 1) &&
@@ -98,9 +110,16 @@ internal static class AdventureRepresentativeTests
                 "账号与真实代表UID外键完整");
             var latest = repo.ReadAdventure(current, service.Catalog, now);
             var assigned = repo.CommitAdventureRepresentative(current, service.Prepare(latest, actor.Id, 0, 1, member.Id)!, service.Catalog, now);
+            Execute(db, "INSERT INTO account_adventure_representatives VALUES('rep',1,1," + member.Id + ")");
+            var stale = repo.ReadAdventure(current, service.Catalog, now);
+            var repaired = repo.CommitAdventureRepresentative(current,
+                service.Prepare(stale, actor.Id, 0, 1, member.Id)!, service.Catalog, now);
+            That(repaired.State.Revision == assigned.State.Revision + 1 && repaired.State.Representatives is [{ Job: 0, Grow: 1 }] &&
+                new CharacterRepository(path).ReadAdventure(current, service.Catalog, now).State.Representatives.SequenceEqual(repaired.State.Representatives),
+                "存量错误职业绑定与新设置同事务清理，重开库保留有效代表");
             repo.Delete(current, repo.LoadDeletionTarget(current, member.Slot));
             var afterDelete = repo.ReadAdventure(current, service.Catalog, now);
-            That(afterDelete.State.Revision == assigned.State.Revision + 1 && afterDelete.State.Representatives.Single().CharacterId is null &&
+            That(afterDelete.State.Revision == repaired.State.Revision + 1 && afterDelete.State.Representatives.Single().CharacterId is null &&
                 afterDelete.State.Name == assigned.State.Name && Query(db, "SELECT count(*) FROM characters") is 1L &&
                 Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
                 "删除代表角色保留显式NULL职业格与账号进度，只推进一次账号版本，不级联清空冒险团");

@@ -1,6 +1,42 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--opening", var openingPvf, var openingOutput])
+{
+    SupportOpeningTests.Run(openingPvf, openingOutput);
+    return;
+}
+
+if (args is ["--effective-tiers", var effectivePvf, var effectiveEvidence, var effectiveOutput])
+{
+    SupportEffectiveTierTests.Run(effectivePvf, effectiveEvidence, effectiveOutput);
+    return;
+}
+if (args is ["--natural-tiers", var naturalPvf, var naturalEvidence, var naturalOutput])
+{
+    SupportNaturalTierTests.Run(naturalPvf, naturalEvidence, naturalOutput);
+    return;
+}
+if (args is ["--auxiliary", var auxiliaryPvf, var auxiliaryOutput])
+{
+    SupportAuxiliaryTests.Run(auxiliaryPvf, auxiliaryOutput);
+    return;
+}
+if (args is ["--paired-maps", var pairedPvf, var pairedEligibility, var pairedOutput])
+{
+    PairedCompanionMapTests.Run(pairedPvf, pairedEligibility, pairedOutput);
+    return;
+}
+if (args is ["--behavior", var behaviorPvf, var behaviorOutput])
+{
+    SupportBehaviorTests.Run(behaviorPvf, behaviorOutput);
+    return;
+}
+if (args is ["--female-beast", var pvf, var approval, var output])
+{
+    FemaleBeastMapTests.Run(pvf, approval, output);
+    return;
+}
 if (args.Length != 2) throw new ArgumentException("Usage: SupportApcResourcePatch.Tests <cumulative-pvf> <new-output>");
 int checks = 0;
 void Check(bool value, string name) { checks++; if (!value) throw new InvalidOperationException(name); }
@@ -90,6 +126,7 @@ internal sealed record Enemy(int X, int Y, int Rank, bool Hostile = true, bool D
 internal sealed class DecisionReplay(Dictionary<string, List<ScriptToken>> programs, TemplateDefinition definition)
 {
     public bool Party;
+    public float Hp = 100;
     public Enemy? Enemy;
     public HashSet<int> Skills = [];
     public HashSet<int> Buffs = [];
@@ -145,7 +182,7 @@ internal sealed class DecisionReplay(Dictionary<string, List<ScriptToken>> progr
             case "[check use skill]": return Skills.Contains(args[0].Value);
             case "[check party buff on]": return Buffs.Contains(args[1].Value);
             case "[check skill on]": return Active.Contains(args[0].Value) && (args[0].Value != 42 || definition.Id == 9986);
-            case "[party member hp]": return false;
+            case "[party member hp]": return args[0].Text == "%<" && Hp < Number(1);
             case "[last result]": return args[0].Text == ">=" && lastResult >= Number(1);
             case "[void]":
                 bool eligible = Enemy is { Hostile: true, Dead: false } && (Enemy.Type & 0x11) == 0x11;

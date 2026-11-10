@@ -16,9 +16,9 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
     public bool RaidUseForbidden { get; init; }
     // [village] 覆盖整座城镇（含赛丽亚房间），与强化/宠物地点判定同一口径；[seria room] 仍只限房间。
     public bool AllowsPlace(string place) => StackableUsePlaces.Allows(Places, place);
+    // [action usable dungeon] 与普通 STK 一致交客户端 029B9DB0 核对，服务端保留禁用副本与团本限制。
     public bool AllowsDungeon(uint dungeonId, bool inRaid = false) =>
-        dungeonId > 0 && (!RaidUseForbidden || !inRaid) && !ExcludedDungeons.Contains(dungeonId) &&
-        (AllowedDungeons is null || AllowedDungeons.Contains(dungeonId));
+        dungeonId > 0 && (!RaidUseForbidden || !inRaid) && !ExcludedDungeons.Contains(dungeonId);
 
     public static ActionConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {
@@ -36,6 +36,11 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[character name change]", Parameters.Count: 0 } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [8523, -1, -1] } or
+                { Label: "[add dungeon incount item limit count]", Parameters: [291100320, 10305620, 10306736] } or
+                { Label: "[add enter limit dungeonincount]" or "[add account enter limit dungeonincount]", Parameters.Count: >= 2 } or
+                { Label: "[init dimension dungeon count]", Parameters.Count: >= 2 } or
+                { Label: "[dungeon reward reset]", Parameters: [28, 0] } or
+                { Label: "[reset single dungeon]", Parameters: [>= 1 and <= 4] } or
                 { Label: "[riding]", Parameters: [> 0, > 0] } or
                 { Label: "[add crackofdaybreak dungeon enter count]", Parameters: [> 0 and <= 10000] } or
                 { Label: "[reset crackofdaybreak dungeon enter count]", Parameters.Count: 0 } or
@@ -46,7 +51,9 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[change creature]", Parameters.Count: 4 } or
                 { Label: "[creature effect]", Parameters: [> 0] }) ||
             (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 :
-                action.Label is "[add dungeon incount item limit count]" or "[riding]" ? raw.DeclaredUseActionPacket is not (null or 1) :
+                action.Label is "[add dungeon incount item limit count]" or "[add enter limit dungeonincount]" or
+                    "[add account enter limit dungeonincount]" or "[init dimension dungeon count]" or
+                    "[dungeon reward reset]" or "[reset single dungeon]" or "[riding]" ? raw.DeclaredUseActionPacket is not (null or 1) :
                 raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||

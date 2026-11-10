@@ -68,6 +68,7 @@ internal static class TcpRegressionTests
         }),
         ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
         ("prey-team-flow", PreyTeamTcpTests.RunAsync),
+        ("prey-potion-limit", PreyTeamTcpTests.RunPotionLimitAsync),
         ("prey-team-lobby", PreyTeamTcpTests.RunLobbyAsync),
         ("prey-team-landing", PreyTeamTcpTests.RunLandingAsync),
         ("prey-team-landing-squads", PreyTeamTcpTests.RunTeamLandingAsync),
@@ -105,6 +106,7 @@ internal static class TcpRegressionTests
         ("prey-guide-battlepass-death", PreyGuideTcpTests.RunBattlePassDeathAsync),
         ("battle-pass-luke-raid-death", LukeRaidRunTcpTests.RunBattlePassDeathAsync),
         ("anton-symbol-rules", (_, _, _) => AntonSymbolProjectionTests.RunAsync()),
+        ("raid-failure-refund", (_, root, resources) => RaidFailureRefundTests.RunAsync(root, resources)),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
         ("anton-raid-reward-formal", (_, _, resources) =>
         {
@@ -403,6 +405,17 @@ internal static class TcpRegressionTests
         {
             TayberrsCardRewardTests.RunCore();
             TayberrsCardRewardTests.RunResources(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
+        ("tayberrs-settlement", (_, _, resources) =>
+        {
+            DungeonSpecificCardRewardsTests.RunTayberrsResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("epic-road-admission", (_, _, resources) =>
+        {
+            EpicRoadAdmissionSessionTests.RunResources(resources.Archive, resources.ItemResources);
             return Task.CompletedTask;
         }),
         ("dungeon-clear-battle-pass", (_, _, resources) =>
@@ -726,6 +739,8 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "tayberrs-settlement",
+        "epic-road-admission",
         "fiendwar-reward-rules",
         "fiendwar-recovery-movie",
         "fiendwar-shared-limits",

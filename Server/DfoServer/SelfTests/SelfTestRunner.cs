@@ -229,6 +229,7 @@ internal static class SelfTestRunner
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         NpcFavorTests.RunCore();
+        NpcFavorMaxGmTests.RunCore();
         DisjointSpecialTests.RunCore();
         PlayerDisjointTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
@@ -470,6 +471,7 @@ internal static class SelfTestRunner
         DungeonMapPoolTests.RunCore();
         BossRushTests.RunCore();
         GriefTowerResourceTests.RunCore();
+        DungeonPotionLimitTests.RunCore();
         GriefTowerRewardTests.RunCore();
         GriefTowerPersistenceTests.RunCore();
         DungeonClassExperienceTests.RunCore();
@@ -737,7 +739,7 @@ internal static class SelfTestRunner
         await QuestEpisodeChainTests.RunAsync(towns,pvf,characters,itemResources);
         OperationHopeTests.Run(pvf);
         OperationHopeRewardTests.Run(pvf,itemResources);
-        OperationHopeSessionTests.Run(pvf,itemResources);
+        OperationHopeSessionTests.Run(towns,pvf,characters,itemResources);
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
@@ -804,6 +806,7 @@ internal static class SelfTestRunner
         DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
         DungeonDropRuleCatalogTests.RunResources(pvf);
+        CarbonCrystalDropTests.RunResources(itemResources.Items);
         DungeonItemDropCatalogTests.RunParsedResources(pvf);
         DungeonItemDropCatalogTests.RunSnapshotResources(pvf, itemResources.Items);
         DungeonItemDropCatalogTests.RunResources(itemResources.DungeonDropItems);
@@ -814,6 +817,8 @@ internal static class SelfTestRunner
         EpicPieceBonusDropTests.RunResources(itemResources);
         DungeonExplicitDropPolicyTests.RunResources(global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), itemResources.Items);
         EpicRoad2019SimulatedDropTests.RunResources(pvf, itemResources);
+        RaidEpicRewardRateTests.RunResources(pvf, itemResources);
+        InventoryEpicRewardRateTests.RunResources(towns, itemResources);
         EpicRoad2019SimulatedSessionTests.RunResources(pvf, itemResources);
         EpicRoad2019NativeTownSessionTests.RunResources(pvf, itemResources);
         EpicRoad2019ClosedRunSessionTests.RunResources(pvf, itemResources);

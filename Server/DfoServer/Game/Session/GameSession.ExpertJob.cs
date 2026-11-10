@@ -17,6 +17,7 @@ internal sealed partial class GameSession
     internal AccountOwners.Lease ExpertJobOwner => owner;
     ICharacterRepository ExpertJobRepository => repository;
     public Character? CaptureExpertJobTrade() => owner.Execute(() => CanUseExpertJob() ? Selected : null);
+    public Character? CapturePersonalExpertJob() => owner.Execute(() => CanUsePersonalExpertJob() ? Selected : null);
 
     public static (InventoryResult Customer, InventoryResult Owner)? CommitExpertJobTrade(
         GameSession customer, GameSession provider, ExpertJobTradePlan plan, Func<bool> eligible)
@@ -67,6 +68,17 @@ internal sealed partial class GameSession
         pendingQuestQuickClear is not { CommitStarted: true } && !HasPendingFormalCard && !HasPendingQuestScene &&
         !HasActiveDungeonContinuation && !HasPendingQuestReplay;
 
+    bool CanUsePersonalExpertJob() => Ready && Selected is not null && !AntonRejoinPresentationPending &&
+        pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null &&
+        pendingQuestLifecycle is null && pendingQuestQuickClear is not { CommitStarted: true } &&
+        !HasPendingTownQuestCommit && !HasPendingFormalCard && !HasPendingQuestScene &&
+        !HasActiveDungeonContinuation && !HasPendingQuestReplay &&
+        formalDungeon?.PendingTutorialClear is null && formalDungeon?.PendingInventoryDiscard is null &&
+        formalDungeon?.AltarSettlement is not { Stage: < 2 } && formalDungeon?.Ground.HasPendingOperation != true &&
+        (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+            !HasUncommittedQuestQuickClear && formalDungeon is { HasPendingFatigue: false } dungeon &&
+            !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
+
     public ExpertJobGiveUpResult GiveUpExpertJob(ExpertJobScriptCatalog scripts)
     {
         var capture = owner.Execute(() => (Allowed: CanUseExpertJob(), Selected, SelectionEpoch, Phase, owner.Generation));
@@ -92,20 +104,17 @@ internal sealed partial class GameSession
 
     public InventoryResult CommitExpertJobMachine(InventoryPlan inventory, int grade, int endurance) => owner.Execute(() =>
     {
-        if (!CanUseExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
+        if (!CanUsePersonalExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
             return InventoryResult.Reject(19);
         var committed = repository.CommitExpertJobMachine(owner, current, inventory, grade, endurance);
         Selected = committed;
-        return new InventoryResult(true, 0, inventory)
-        {
-            Receipt = new(committed, owner.Generation, SelectionEpoch) { Phase = Phase }
-        };
+        return new InventoryResult(true, 0, inventory) { Receipt = InventoryReceipt(current) };
     });
 
     public InventoryResult CommitExpertJobCraft(InventoryPlan inventory, int experience, QuestCatalog? tutorialQuests = null,
         bool enchanting = false) => owner.Execute(() =>
     {
-        if (!CanUseExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
+        if (!CanUsePersonalExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
             return InventoryResult.Reject(19);
         Character committed;
         QuestLifecyclePlan? tutorial = null;
@@ -116,17 +125,14 @@ internal sealed partial class GameSession
         try { committed = repository.CommitExpertJobCraft(owner, current, inventory, experience, tutorial); }
         catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(19); }
         Selected = committed;
-        return new InventoryResult(true, 0, inventory)
-        {
-            Receipt = new(committed, owner.Generation, SelectionEpoch)
-            { Phase = Phase, PreviousQuests = current.ActiveMainQuests, PreviousSkillSwitchInventory = current.SkillSwitchInventory }
-        };
+        return new InventoryResult(true, 0, inventory) { Receipt = InventoryReceipt(current) };
     });
 
     public InventoryResult UseExpertJobBead(Character expected, InventoryEnchantmentService enchantments,
         ExpertJobScriptCatalog scripts, EnchantmentRequest request, QuestCatalog tutorialQuests)
     {
-        var capture = owner.Execute(() => (Allowed: CanUseExpertJob() && ReferenceEquals(Selected, expected), SelectionEpoch, Phase));
+        var capture = owner.Execute(() => (Allowed: CanUsePersonalExpertJob() && ReferenceEquals(Selected, expected),
+            SelectionEpoch, Phase, Identity: formalDungeon?.Run.Snapshot.Identity));
         if (!capture.Allowed) return InventoryResult.Reject(19);
         var source = expected.Inventory.Find(request.Source);
         // 只接原宝珠服务，卡片配方及职业扣料保持各自业务路径。
@@ -141,8 +147,10 @@ internal sealed partial class GameSession
             return InventoryResult.Reject(error == 0 ? (ushort)19 : error);
         return owner.Execute(() =>
         {
-            if (!CanUseExpertJob() || CheckStackableUse(expected, capture.SelectionEpoch, capture.Phase,
-                qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
+            if (!CanUsePersonalExpertJob() || SelectionEpoch != capture.SelectionEpoch || Phase != capture.Phase ||
+                formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
+                CheckStackableUse(expected, capture.SelectionEpoch, capture.Phase,
+                    qualification.Rules, qualification.TargetWorlds) != StackableUseRejection.None)
                 return InventoryResult.Reject(InventoryEnchantmentService.Rejection);
             return CommitExpertJobCraft(inventory, experience, tutorialQuests, enchanting: true);
         });
@@ -150,7 +158,7 @@ internal sealed partial class GameSession
 
     public Character? CommitExpertJobExperience(int experience) => owner.Execute(() =>
     {
-        if (!CanUseExpertJob() || Selected is not { ExpertJobType: >= 1 and <= 4 } current)
+        if (!CanUsePersonalExpertJob() || Selected is not { ExpertJobType: >= 1 and <= 4 } current)
             return null;
         var committed = repository.CommitExpertJobExperience(owner, current, experience);
         Selected = committed;
@@ -159,7 +167,7 @@ internal sealed partial class GameSession
 
     public InventoryResult CommitExpertJobAction(DfoServer.Game.ExpertJob.ExpertJobActionPlan plan, QuestCatalog? tutorialQuests = null) => owner.Execute(() =>
     {
-        if (!CanUseExpertJob() || !ReferenceEquals(Selected, plan.Expected)) return InventoryResult.Reject(19);
+        if (!CanUsePersonalExpertJob() || !ReferenceEquals(Selected, plan.Expected)) return InventoryResult.Reject(19);
         if (plan.Succeeded && tutorialQuests is not null && expertJobStoreOpen &&
             QuestExpertJobProgress.TutorialQuest(plan.Expected.ExpertJobType) is { } questId)
             plan = plan with { Tutorial = QuestLifecyclePlan.ObserveExpertJobTutorial(plan.Expected, tutorialQuests, questId) };
@@ -167,34 +175,25 @@ internal sealed partial class GameSession
         try { committed = repository.CommitExpertJobAction(owner, plan); }
         catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(19); }
         Selected = committed;
-        return new InventoryResult(true, 0, plan.Inventory)
-        {
-            Receipt = new(committed, owner.Generation, SelectionEpoch)
-            { Phase = Phase, PreviousQuests = plan.Expected.ActiveMainQuests, PreviousSkillSwitchInventory = plan.Expected.SkillSwitchInventory }
-        };
+        return new InventoryResult(true, 0, plan.Inventory) { Receipt = InventoryReceipt(plan.Expected) };
     });
 
     public InventoryResult LearnExpertJobRecipe(InventorySlot slot, int itemId, DfoServer.Game.ExpertJob.ExpertJobLearning learning)
     {
-        var captured = owner.Execute(() => (Character: CanUseExpertJob() ? Selected : null, SelectionEpoch, Phase));
+        var captured = owner.Execute(() => (Character: CanUsePersonalExpertJob() ? Selected : null,
+            SelectionEpoch, Phase, Identity: formalDungeon?.Run.Snapshot.Identity));
         if (captured.Character is not { } expected || learning.Plan(expected, slot, itemId) is not { } plan)
             return InventoryResult.Reject(123);
         return owner.Execute(() =>
         {
-            if (!CanUseExpertJob() || SelectionEpoch != captured.SelectionEpoch || Phase != captured.Phase ||
+            if (!CanUsePersonalExpertJob() || SelectionEpoch != captured.SelectionEpoch || Phase != captured.Phase ||
+                formalDungeon?.Run.Snapshot.Identity != captured.Identity ||
                 !ReferenceEquals(Selected, expected)) return InventoryResult.Reject(123);
             Character committed;
             try { committed = repository.CommitExpertJobLearning(owner, plan); }
             catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(123); }
             Selected = committed;
-            return new InventoryResult(true, 0, plan.Inventory)
-            {
-                Receipt = new(committed, owner.Generation, SelectionEpoch)
-                {
-                    Phase = Phase, PreviousQuests = expected.ActiveMainQuests,
-                    PreviousSkillSwitchInventory = expected.SkillSwitchInventory
-                }
-            };
+            return new InventoryResult(true, 0, plan.Inventory) { Receipt = InventoryReceipt(expected) };
         });
     }
 

@@ -3,6 +3,12 @@ using System.Text.Json;
 using PvfLib;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+if (args is ["prepare-support-opening", var openingPvf, var openingOutput])
+{
+    using var source = PvfArchive.Open(openingPvf);
+    SupportOpeningDelta.Write(source, openingOutput);
+    return;
+}
 if (args.Length < 2) throw new ArgumentException("Usage: inspect pvf path... | audit-migration before.pvf after.pvf current.pvf output.json");
 if (args[0] == "inspect")
 {
@@ -102,6 +108,49 @@ else if (args[0] is "preview-maps" or "generate-maps" && args.Length == 4)
     var patches = MapDelta.Prepare(source, audit);
     if (args[0] == "generate-maps") MapDelta.Write(patches, audit.Unknown, args[3]);
     Console.WriteLine($"MAP_DELTA resources={patches.Count} changed={patches.Count(p => p.Changed)} unknownPreserved={audit.Unknown.Length} preview={args[0] == "preview-maps"}; source PVF read-only");
+}
+else if (args[0] == "audit-profile-delta" && args.Length == 5)
+{
+    ProfileDeltaAudit.Run(args[1], args[2], args[3], args[4]);
+}
+else if (args[0] == "prepare-female-beast-maps" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    FemaleRestoreDelta.WriteBeastMaps(source, args[2], args[3]);
+}
+else if (args[0] == "prepare-female-restore" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    FemaleRestoreDelta.Write(source, args[1], args[2], args[3]);
+}
+else if (args[0] == "export-support-map-eligibility" && args.Length == 4)
+{
+    SupportMapEligibilityExport.Write(args[1], args[2], args[3]);
+}
+else if (args[0] == "prepare-paired-companion-maps" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    PairedCompanionMapDelta.Write(source, args[1], args[2], args[3]);
+}
+else if (args[0] == "prepare-support-effective-tiers" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportEffectiveTierDelta.Write(source, args[2], args[3]);
+}
+else if (args[0] == "prepare-support-natural-tiers" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportNaturalTierDelta.Write(source, args[2], args[3]);
+}
+else if (args[0] == "prepare-support-auxiliary" && args.Length == 3)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportAuxiliaryDelta.Write(source, args[2]);
+}
+else if (args[0] == "prepare-support-behavior" && args.Length == 3)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportBehaviorDelta.Write(source, args[2]);
 }
 else if (args[0] == "prepare-combat" && args.Length == 3)
 {

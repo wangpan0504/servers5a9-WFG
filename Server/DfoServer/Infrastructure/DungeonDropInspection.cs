@@ -28,7 +28,7 @@ internal sealed class DungeonDropInspection(DungeonCatalog dungeons, DungeonRoom
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException)
             { warnings.Add("地图 " + map.Id + "：" + error.Message); }
         }
-        var samples = monsters.DistinctBy(monster => (monster.MonsterId, monster.CandidateLevel, monster.RewardType)).ToArray();
+        var samples = monsters.DistinctBy(monster => (monster.MonsterId, monster.CandidateLevel, monster.RewardType, monster.SourceMap?.Id)).ToArray();
         if (samples.Length == 0) throw new InvalidDataException("该副本没有可预览的普通怪物；祭坛及脚本专用演员使用独立生成规则");
         if (monsterIndex >= samples.Length) throw new InvalidDataException("怪物索引超出本副本清单");
         var sample = samples[monsterIndex];
@@ -36,7 +36,8 @@ internal sealed class DungeonDropInspection(DungeonCatalog dungeons, DungeonRoom
         bool Matches(DungeonDropControlRule rule) => rule.DungeonIds.IsEmpty || rule.DungeonIds.Contains(dungeonId);
         var rate = snapshot.Enabled ? snapshot.Rules.FirstOrDefault(rule => rule.Scope == scope && Matches(rule))?.Multipliers ??
             snapshot.Rules.FirstOrDefault(rule => rule.Scope == DungeonDropScope.All && Matches(rule))?.Multipliers : null;
-        var original = definition.IsTayberrs || definition.IsTayberrsStory
+        bool epicRoad = EpicRoadResourcePaths.Dungeons.GetValueOrDefault(definition.Id) == definition.Path;
+        var original = epicRoad ? policy.PrepareEpicRoadPreview(definition, sample, difficulty) : definition.IsTayberrs || definition.IsTayberrsStory
             ? policy.PrepareTayberrsPreview(definition, sample)
             : policy.Prepare(sample.MonsterId, sample.CandidateLevel, sample.RewardType, difficulty, definition.BasisLevel);
         var rows = DungeonDropListing.ComparisonRows(original, rate).Skip(checked(page * 64)).Take(65).ToArray();

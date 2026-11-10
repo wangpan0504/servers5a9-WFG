@@ -36,12 +36,11 @@ internal sealed class SpringTreasureDropPolicy
     // 独立玩法沿现有typed合同排除，不能只凭入口看似普通便进入活动经济。
     static bool SupportedDefinition(DungeonDefinition definition) => definition.Id is not (530 or SleepyHollowRewardCatalog.DungeonId) &&
         !definition.IsRaid && !definition.IsOrdinaryAnton && !definition.IsOrdinaryLuke && !definition.IsOrdinaryPrey &&
-        !definition.IsTayberrs && !definition.IsNormalFiendwar && string.IsNullOrEmpty(definition.WarriorsDungeon) &&
+        !definition.DisableItemDrops && !definition.IsTayberrs && !definition.IsNormalFiendwar && string.IsNullOrEmpty(definition.WarriorsDungeon) &&
         !definition.IsOperationHope && !definition.IsCrackOfDimension && !definition.RequiresCosmoEntryContract && !definition.IsInfernoDungeon &&
         !definition.IsDazzlementTower && !definition.IsDespairTower && !definition.RequiresGriefEntryContract &&
         !definition.Path.StartsWith("dungeon/towers/", StringComparison.OrdinalIgnoreCase) &&
-        !definition.RawSections.Any(section => section.Tag is "evildom war dungeon" or "warriors dungeon" ||
-            section.Tag == "disable drop item" && section.Tokens.Count == 0);
+        !definition.RawSections.Any(section => section.Tag is "evildom war dungeon" or "warriors dungeon");
 
     public static bool IsRecommended(DungeonDefinition definition, DungeonEntryPlan entry, int level) =>
         SupportedMode(entry) && SupportedDefinition(definition) && GuildDungeonMileageEligibility.IsEligible(definition, level);

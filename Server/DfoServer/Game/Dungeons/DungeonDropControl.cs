@@ -58,6 +58,11 @@ internal sealed class DungeonDropControlSnapshot
             Rules.FirstOrDefault(rule => rule.Scope == DungeonDropScope.All && Matches(rule))?.Multipliers;
     }
 
+    // 脱离单张地图的奖励只使用未限定副本ID的范围规则，不能把某张图的设置扩散到整个攻坚队。
+    public DungeonDropMultipliers? ResolveReward(DungeonDropScope scope) => !Enabled ? null :
+        Rules.FirstOrDefault(rule => rule.Scope == scope && rule.DungeonIds.IsEmpty)?.Multipliers ??
+        Rules.FirstOrDefault(rule => rule.Scope == DungeonDropScope.All && rule.DungeonIds.IsEmpty)?.Multipliers;
+
     static bool IsStory(DungeonEntryPlan entry) => entry.RaidEntry is null && !entry.IsTutorial &&
         !entry.IsPractice && !entry.IsTrainingRoom && !entry.IsClassExperience &&
         (entry.RouteQuestId != 0 || entry.QuestId != 0 && !entry.IsOrdinaryHunt);
@@ -89,7 +94,15 @@ internal sealed class DungeonDropControlSnapshot
             else if (multiplier != rates.Equipment)
                 epicAdjustment = new(trial.Threshold * rates.Equipment);
         }
-        int threshold = (int)decimal.Min(trial.ProbabilityDenominator, decimal.Floor(trial.Threshold * multiplier));
+        int probabilityDenominator = trial.ProbabilityDenominator;
+        decimal probability = decimal.Min(probabilityDenominator, trial.Threshold * multiplier);
+        int threshold = (int)decimal.Floor(probability);
+        // 活动原表用1/5和1/1表示概率；小数倍率须提高精度，不能把0.5倍误截为零。
+        if (trial.EpicRoad2019Simulated && probability != threshold)
+        {
+            threshold = (int)decimal.Floor(probability * 1000000 / probabilityDenominator);
+            probabilityDenominator = 1000000;
+        }
         var pools = trial.RarityPools;
         // 外层装备概率封顶后，剩余史诗倍率进入稀有度骰，不能把封顶误报成史诗继续增加。
         if (trial.Category == DungeonDropCategory.Equipment && threshold > 0 && !pools.IsDefaultOrEmpty && pools.Length == 7 &&
@@ -113,7 +126,7 @@ internal sealed class DungeonDropControlSnapshot
                 }).ToImmutableArray();
             }
         }
-        return trial with { Threshold = threshold, RarityPools = pools, EpicAdjustment = epicAdjustment };
+        return trial with { Threshold = threshold, ProbabilityDenominator = probabilityDenominator, RarityPools = pools, EpicAdjustment = epicAdjustment };
     }
 }
 

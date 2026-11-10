@@ -38,6 +38,13 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitRaidStart");
             using var tx = write.Transaction;
+            foreach (var reservation in reservations)
+                if (reservation.SingleBinding is { } single)
+                {
+                    if (kind != RaidKind.Prey || single.Group.Id != 3)
+                        throw new InvalidDataException("攻坚单人绑定与原模式不符");
+                    BindSingleDungeonInTransaction(db, tx, reservation.Actor.Owner, reservation.Expected, single);
+                }
             if (kind == RaidKind.Luke || reservations.Any(row => row.Lifecycle is not null))
                 AdmitRaidLifecycle(db, tx, instance, reservations, kind);
             if (kind == RaidKind.Fiendwar)

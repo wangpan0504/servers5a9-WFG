@@ -40,18 +40,25 @@ internal static class RevisedBeastTcpTests
         await f.StartAsync();
         foreach (var role in roles)
         {
+            string ReturnSnapshot() => f.Snapshot("SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", role.Id);
+            string ordinaryReturn = ReturnSnapshot();
             using (var peer = Open(f, account, gamePort: ChannelTcpTests.Endpoints(f)[49], channelNumber: 49))
             {
                 That(peer.LoginEndpoint[3] == 40, "魔兽49号入口登录投影真实type40");
                 peer.Select(role.Slot, prepared: true, nativeSwitch: true);
                 peer.Barrier();
-                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[38L, 1L]],
-                    "魔兽频道入场落共享赛丽亚房间38/1，出门才进入专属地区");
+                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[38L, 1L]] && ReturnSnapshot() == ordinaryReturn,
+                    "魔兽选角进入共享赛丽亚房间38/1，完整普通返回地区保持不变");
                 var done = new HashSet<int> { 5927 };
                 var street = ChannelAreaLanding.DecideArea(resources.Towns, 51, 1, 95, done).Spot!;
+                // bottom发送空body1426，沿真实频道出房规则解析落点，不用普通36模拟出房。
                 peer.Travel(51, 1, street.X, street.Y, 38, 1, bottom: true);
+                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 1L]] && ReturnSnapshot() == ordinaryReturn,
+                    "1426以23/24直达魔兽街道51/1，不覆盖普通返回地区");
                 var waiting = resources.Towns.Entrance(street, new Location(51, 2, 0, 0), done)!;
                 peer.Travel(51, 2, waiting.X, waiting.Y, 51, 1);
+                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 2L]] && ReturnSnapshot() == ordinaryReturn,
+                    "进入魔兽候战区51/2仍保留完整普通返回地区");
                 string active = f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", role.Id);
                 peer.Send(15, new byte[4]);
                 peer.Expect(1, 15, [1]);
@@ -136,14 +143,14 @@ internal static class RevisedBeastTcpTests
                 if (option == 2) peer.Expect(0, 21);
                 if (option == 2) peer.Expect(0, 356);
                 peer.Barrier();
-                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 2L]],
-                    "副本退场恢复魔兽候场区，仍可继续使用频道");
+                That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[51L, 2L]] && ReturnSnapshot() == ordinaryReturn,
+                    "副本退场恢复魔兽候场区并保留普通返回地区，仍可继续使用频道");
             }
             using var ordinary = Open(f, account);
             ordinary.Select(role.Slot, prepared: true, nativeSwitch: true);
             ordinary.Barrier();
-            That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[38L, 1L]],
-                "离开魔兽频道回普通共享房间，不复用51号快照");
+            That(f.Query("SELECT town,area FROM characters WHERE id=$p0", role.Id) is [[38L, 1L]] && ReturnSnapshot() == ordinaryReturn,
+                "离开魔兽频道回普通共享房间及原返回地区，不复用51号快照");
         }
     }
 }

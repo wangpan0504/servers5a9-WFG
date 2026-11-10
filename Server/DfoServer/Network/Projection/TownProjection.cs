@@ -23,7 +23,8 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
     Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null,
-    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null, bool epicRoadAvailable = false)
+    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null, bool epicRoadAvailable = false,
+    CashShopCatalog? cashShop = null)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal const ushort BattlePassEventId = 2520;
@@ -34,6 +35,18 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
     internal Strongway2019ProfileProjection? Strongway2019Profile { get; set; }
     internal bool MileageAvailable => mileageShop?.Available == true;
     internal bool EpicRoadAvailable => epicRoadAvailable;
+    internal Task CashShopRestrictionsAsync(GameConnectionContext context, Character character, Func<bool> canSend,
+        DfoServer.Game.Inventory.Models.InventorySnapshot? before = null)
+    {
+        if (cashShop is null) return Task.CompletedTask;
+        // NPC商店与商城共用次数账本；只刷新商城目录实际引用的次数，避免普通商店多发空通知。
+        if (before is not null && before.ShopPurchases.Where(Relevant).SequenceEqual(character.Inventory.ShopPurchases.Where(Relevant)))
+            return Task.CompletedTask;
+        return context.Notify(NotiPacketType.BUY_RESTRICT_ITEM_LIST,
+            CashShopPackets.BuyRestrictions(character.Inventory, cashShop, timer.GetUtcNow()), "cash_shop_restrictions", canSend);
+
+        bool Relevant(DfoServer.Game.Inventory.Models.ShopPurchaseCount row) => row.NpcId == 0 && cashShop.BuyRestrictions.ContainsKey(row.ItemId);
+    }
     internal async Task AccountMaterialsAsync(GameConnectionContext context, Character character,
         DfoServer.Game.Currency.AccountWallet? before = null, Func<bool>? canSend = null,
         DfoServer.Game.Inventory.Models.InventorySnapshot? beforeInventory = null)

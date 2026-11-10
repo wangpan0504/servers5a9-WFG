@@ -20,6 +20,7 @@ internal static class SkillPointLedgerTests
         int before = TestCheck.Count;
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, catalog);
+        BasicMasteryLevels(characters, catalog);
         const byte level = 20;
         const int bonus = 137;
         int total = catalog.TotalSp(level) + bonus;
@@ -132,6 +133,34 @@ internal static class SkillPointLedgerTests
             "职业重建和等级重算保留已开通权益及当前第二方案");
         Persist(towns, characters, catalog, growth, state, add.State!);
         Console.WriteLine($"PASS {TestCheck.Count - before} SP扣除、退款、固有成长、契约和来源存档断言");
+    }
+
+    private static void BasicMasteryLevels(CharacterCatalog characters, SkillLearningCatalog catalog)
+    {
+        foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
+        {
+            var mastery = catalog.FixedSkills(job).Single(skill => skill.Path.EndsWith("/basicattackup.skl", StringComparison.Ordinal));
+            Check(mastery.DeclaredMaximumLevels!.All(maximum => maximum == 95), "基础精通全职业上限95 " + job);
+            for (int level = 1; level <= 95; level++)
+                Check(mastery.GetFixedLevel(level, 0, 0) == level && mastery.GetFixedLevel(level, 0, 5) == level,
+                    "基础精通随角色等级且不受达人额外提升 " + job + "/" + level);
+            Check(mastery.GetFixedLevel(100, 0, 0) == 95, "历史超上限角色仍受95封顶 " + job);
+            var initial = SkillLearning.Initialize(job, characters.Get(job).Skills, catalog).State!;
+            foreach (byte level in new byte[] { 1, 20, 94, 95 })
+            {
+                var synced = SkillPointLedger.Synchronize(job, 0, level, initial, catalog);
+                Check(synced.Trees.All(tree => tree.Skills.Single(skill => skill.Id == mastery.SkillId).Level == level),
+                    "创建及升级双树基础精通按等级同步 " + job + "/" + level);
+                var old = synced with { Trees = Array.AsReadOnly(synced.Trees.Select(tree => tree with
+                {
+                    Skills = Array.AsReadOnly(tree.Skills.Select(skill => skill.Id == mastery.SkillId ? skill with { Level = 100 } : skill).ToArray())
+                }).ToArray()) };
+                var restored = SkillPointLedger.Synchronize(job, 0, level, old, catalog);
+                Check(restored.Trees.All(tree => tree.Skills.Single(skill => skill.Id == mastery.SkillId).Level == level) &&
+                    restored.Trees.Zip(synced.Trees).All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp),
+                    "旧双树超等级基础精通加载校正且不收取SP/TP " + job + "/" + level);
+            }
+        }
     }
 
     private static void AwakeningGrants(SkillLearningCatalog catalog)

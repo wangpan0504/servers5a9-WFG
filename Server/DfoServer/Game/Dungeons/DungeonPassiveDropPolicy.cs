@@ -18,7 +18,7 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
         DungeonEntryPlan entry, DungeonDropGenerationPlan? monsterPlan = null)
     {
         // 正式入场复用怪物计划的同次快照；无怪物的地图在此单次读取，所有房间共用。
-        var rates = monsterPlan is null ? dropControl?.Current.Resolve(entry) : monsterPlan.DropMultipliers;
+        var rates = monsterPlan is null ? (entry.DropControlCaptured ? entry.DropMultipliers : dropControl?.Current.Resolve(entry)) : monsterPlan.DropMultipliers;
         return (room, draw, now) => Prepare(entry, room, draw, now, rates);
     }
 
@@ -32,7 +32,7 @@ internal sealed class DungeonPassiveDropPolicy(Func<int, DungeonDefinition> reso
             entry.DisableItemDrops || entry.IsTayberrs || entry.IsTayberrsStory)
             return [];
         var definition = resolveDungeon(checked((int)entry.DungeonId));
-        if (definition.RawSections.Any(section => section.Tag == "disable drop item" && section.Tokens.Count == 0))
+        if (definition.DisableItemDrops)
             return [];
         var groups = DungeonPassiveItemGroup.Parse(definition.RawSections);
         var result = new List<DungeonPassiveDropPreparation>();

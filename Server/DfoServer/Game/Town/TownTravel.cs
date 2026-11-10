@@ -103,6 +103,20 @@ internal static class TownTravel
             return admission == "ready" ? new(visit.Origin with { Direction = character.Position.Direction }, character.Return, "ready")
                 : TownTravelPlan.Reject(admission);
         }
+        // 换频道会丢失本次NPC入场票据，客户端仍保留返回房间的原坐标。
+        // 仅从带exit town的地图返回实际房间，并要求该房间的enter town明确指向当前出口NPC；
+        // 不恢复任意旧来源，也不放宽目标可站、等级和任务限制。
+        if (npcVisit is null && request is { TargetNpc: 0, Movement: 5, PathKind: 0 } &&
+            towns.IsRoom(target, completed) && towns.IsPosition(target, completed) &&
+            towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var npcSource) &&
+            npcSource.Map(completed) is { Error: null } npcMap &&
+            towns.Areas[(target.Town, target.Area)].Map(completed).Npcs.Any(entry =>
+                towns.NpcMoves.TryGetValue(entry.Id, out var destinations) &&
+                npcMap.Npcs.Any(exitNpc => towns.NpcExits.Contains(exitNpc.Id) && destinations.Contains(exitNpc.Id))))
+        {
+            string admission = towns.DestinationAdmission(target, character.Level, completed);
+            return admission == "ready" ? new(target, character.Return, "ready") : TownTravelPlan.Reject(admission);
+        }
         // 特殊区域与团队频道的赛丽亚房间按频道落点出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)

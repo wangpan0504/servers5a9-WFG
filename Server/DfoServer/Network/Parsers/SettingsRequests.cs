@@ -6,6 +6,12 @@ namespace DfoServer.Network.Parsers;
 
 internal static class SettingsRequests
 {
+    public static (bool Add, int NpcId) NpcBookmark(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 5 || body[0] > 1 || BinaryPrimitives.ReadInt32LittleEndian(body[1..]) <= 0)
+            throw new InvalidDataException("人物辞典收藏请求无效");
+        return (body[0] == 1, BinaryPrimitives.ReadInt32LittleEndian(body[1..]));
+    }
     public static ImmutableArray<byte> QuestNotify(ReadOnlySpan<byte> body)
     {
         // 02280B00：count:u8及至多四个qid:u32；选角恢复则固定读取四个u32。

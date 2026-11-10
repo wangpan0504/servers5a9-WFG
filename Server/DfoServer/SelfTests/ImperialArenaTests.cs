@@ -37,6 +37,7 @@ internal static class ImperialArenaTests
         That(ImperialArenaRequests.Purchase([2]) == ImperialArenaMode.Hard, "购券模式保留客户端选择");
         Bytes(ImperialArenaPackets.Reward([new(10304532, 3), new(10304533, 6)]),
             [2, 0x14, 0x3C, 0x9D, 0, 3, 0, 0x15, 0x3C, 0x9D, 0, 6, 0], "1402为u8行数及u32物品/u16数量金样");
+        Reject<InvalidDataException>(() => ImperialArenaPackets.Reward([]), "1402拒绝空奖励以免客户端弹出0数量201奖励窗");
         Bytes(ImperialArenaPackets.Challenge(new(new(20261027, 20261022), Guid.NewGuid(), 80000, [0, 1, 17, 18], 240000, true, 0)),
             [0x80, 0x38, 1, 0, 0, 1, 17, 18, 0x80, 0xA9, 3, 0, 1], "1632首时间、双职业双转职、目标时间及领奖位金样");
         var display = new ImperialArenaState(ImperialArenaConfiguration.Empty, ImperialArenaPeriod.At(after), ImperialArenaMode.Normal,
