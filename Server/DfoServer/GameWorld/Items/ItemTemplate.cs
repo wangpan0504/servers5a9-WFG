@@ -86,6 +86,8 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public EquipmentResealConsumable? ResealConsumable { get; init; }
     public bool GrowthEquipment { get; init; }
     public bool RandomOptionEquipment { get; init; }
+    // 精确魔封资格与标签存在性分开；零值、坏值不在普通掉落中猜作魔封。
+    public bool MagicSealedEquipment { get; init; }
     public bool PeriodEquipment { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }

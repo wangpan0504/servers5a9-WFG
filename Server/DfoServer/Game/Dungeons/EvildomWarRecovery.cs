@@ -9,6 +9,7 @@ internal sealed record EvildomWarCheckpoint(EvildomWarView View, EvildomWarCompl
     public void Validate()
     {
         if (View.BattleId == Guid.Empty || View.Revision < 0 || View.Mode > 2 || View.Deadline.ToUnixTimeSeconds() < 0 ||
+            View.StartedAt is { } started && (started.ToUnixTimeSeconds() < 0 || started >= View.Deadline) ||
             View.Dungeons.IsDefault || View.Dungeons.Length != 5 || View.Dungeons.Select(row => row.Id).Distinct().Count() != 5 ||
             View.Dungeons.Any(row => row.Id <= 0 || row.Kind > 1 || row.State > 3 || row.Attribute > 3) ||
             View.Dungeons.Count(row => row.Kind == 0) != 4 || View.Dungeons.Count(row => row.Kind == 1) != 1 ||
@@ -22,6 +23,7 @@ internal sealed record EvildomWarCheckpoint(EvildomWarView View, EvildomWarCompl
             View.Dungeons.Any(row => row.Id == hidden.Dungeon) || !View.Dungeons.Any(row => row.Id == hidden.StageDungeon && row.Kind == 0)))
             throw new InvalidDataException("魔界隐藏路线不是本场前置图的独立替代副本");
         if (Completion is { } completed && (completed.BattleId != View.BattleId || completed.Mode != View.Mode ||
+            completed.ElapsedMilliseconds != EvildomWarCompletion.MeasureElapsed(View.StartedAt, completed.Created) ||
             completed.Created >= View.Deadline || View.Dungeons.Any(row => row.State == 1) || completed.Facts.IsDefaultOrEmpty ||
             completed.Facts.Length > 4 || completed.Facts.Select(fact => fact.Identity.CharacterId).Distinct().Count() != completed.Facts.Length ||
             completed.Facts.Any(fact => fact.DungeonId != View.Dungeons.Single(row => row.Kind == 1).Id ||
@@ -30,6 +32,7 @@ internal sealed record EvildomWarCheckpoint(EvildomWarView View, EvildomWarCompl
         if (HiddenCompletion is { } laboratory && (View.Hidden is not { } route ||
             !View.Dungeons.Any(row => row.Id == route.StageDungeon && row.State == 2) ||
             laboratory.BattleId != View.BattleId || laboratory.Mode != View.Mode || laboratory.Created >= View.Deadline ||
+            laboratory.ElapsedMilliseconds != EvildomWarCompletion.MeasureElapsed(View.StartedAt, laboratory.Created) ||
             laboratory.Created.ToUnixTimeSeconds() < 0 || laboratory.Facts.IsDefaultOrEmpty || laboratory.Facts.Length > 4 ||
             laboratory.Facts.Select(fact => fact.Identity.CharacterId).Distinct().Count() != laboratory.Facts.Length ||
             laboratory.Facts.Any(fact => fact.DungeonId != route.Dungeon || fact.Identity.InstanceId == Guid.Empty ||

@@ -61,9 +61,11 @@ internal static class EvildomWarRewardBatchTests
                     "批次夹具真实邀请两名队员");
             That(service.StartEvildomWar(sessions[0], catalog) is null, "真实三人普通战役开战");
             var battle = sessions[0].ReadEvildomWar()!.Battle;
+            var startedAt = clock.GetUtcNow();
             PartyDungeonNotice[] completed = [];
             for (int stage = 0; stage < 5; stage++)
             {
+                if (stage == 4) clock.Advance(TimeSpan.FromMilliseconds(256780));
                 var next = battle.View.Dungeons.FirstOrDefault(row => row.Kind == 0 && row.State == 0)
                     ?? battle.View.Dungeons.Single(row => row.Kind == 1 && row.State == 0);
                 uint dungeon = checked((uint)next.Id);
@@ -114,6 +116,9 @@ internal static class EvildomWarRewardBatchTests
             }
             That(completed.Length == 3 && battle.Completion is { Facts.Length: 3 } && battle.View.Completed,
                 "只有三人真实王座Run完成才取得原奖励通知批次");
+            var completedBattle = battle.Completion!;
+            That(battle.View.StartedAt == startedAt && completedBattle.Created == startedAt.AddMilliseconds(256780) &&
+                completedBattle.ElapsedMilliseconds == 256780, "真实全员王座完成冻结开战至终点的256780毫秒");
             var members = completed[0].Members.OrderBy(member => member.Slot).ToArray();
             That(members.Select(member => member.Slot).SequenceEqual(new byte[] { 0, 1, 2 }), "夹具使用真实席位0、1、2");
             var admissions = members.Select(member => member.Actor.Session.ReadEvildomWar()!).ToArray();
@@ -163,6 +168,7 @@ internal static class EvildomWarRewardBatchTests
             string firstAssets = Assets(idsBySlot[0]);
             string secondSaved = Snapshot("SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$id", idsBySlot[1]);
             Sql("DROP TRIGGER reject_war_batch_receipt");
+            clock.Advance(TimeSpan.FromSeconds(37));
             PartyDungeonProjection.PublishAsync(completed).GetAwaiter().GetResult();
             That(ReferenceEquals(admissions[0].RewardCommit, firstCommit) && ReferenceEquals(admissions[0].RewardPlan, firstPlan) &&
                 RewardState(idsBySlot[0]) == firstSaved && Assets(idsBySlot[0]) == firstAssets,
@@ -177,6 +183,9 @@ internal static class EvildomWarRewardBatchTests
                 table.Select(row => row.Member.Slot).SequenceEqual(new byte[] { 0, 1, 2 }) &&
                 table.All(row => row.IsFrom(battle.View) && row.Receipt.Commit.Plan.Completion.BattleId == battle.View.BattleId),
                 "全员投影收到同一immutable底层表，均为原席位真实已提交回执");
+            That(table.All(row => row.Receipt.Commit.Plan.Completion.ElapsedMilliseconds == 256780 &&
+                row.Receipt.Commit.Plan.Completion.Created == startedAt.AddMilliseconds(256780)),
+                "奖励SQL故障后延迟37秒重试，三名成员仍显示同一原完成用时，不计入交付等待");
             for (int slot = 0; slot < 3; slot++)
             {
                 That(Scalar("SELECT delivered FROM character_evildom_war_rewards WHERE character_id=$id", idsBySlot[slot]) == 1 &&

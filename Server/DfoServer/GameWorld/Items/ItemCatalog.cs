@@ -687,8 +687,9 @@ internal sealed partial class ItemCatalog
             declaration.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase) ? declaration : null;
         var expiration = ItemExpiration.Parse(text);
         var partSetIds = isEquipment ? AntiEvilSetCatalog.ReadMemberSetIds(text) : [];
+        int rarity = Int("rarity", 0);
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
-            Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
+            Int("weight", 0), rarity, Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
             name, normalizedStackableType)
         {
@@ -741,6 +742,8 @@ internal sealed partial class ItemCatalog
             GrowthEquipment = isEquipment && (text.Has("level section ani") || !string.IsNullOrWhiteSpace(text.Section("level linear ability")) ||
                 PvfScript.Integers(text.Section("equipment grow")) is [> 0, > 0]),
             RandomOptionEquipment = isEquipment && text.Has("random option"),
+            MagicSealedEquipment = kind == ItemKind.Equipment && (rarity is 2 or 3) &&
+                text.TryGetInt32("random option", out int randomOption) && randomOption > 0,
             PeriodEquipment = isEquipment && (PvfScript.Integers(text.Section("usable period")).Any(value => value > 0) ||
                 PvfScript.Integers(text.Section("expiration date")).Any(value => value > 0)),
 

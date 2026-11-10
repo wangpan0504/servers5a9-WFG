@@ -25,6 +25,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
 {
     public DungeonRarityBonusGroup RarityBonusGroup { get; init; }
     public DungeonEquipmentRarityAdjustment? EquipmentRarityAdjustment { get; init; }
+    // 只登记旧地区普通密门深渊的额外装备骰，不扩大到同一怪物的其它掉落。
+    public bool ExcludeLegacyHellLowEquipment { get; init; }
     // 仅正式深渊碎片骰登记。入场预留上界，死亡时才把本人冻结增量变为实际次数。
     public int EpicPieceBonusCapacity { get; init; }
     public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
@@ -312,6 +314,9 @@ internal sealed class DungeonDropGenerationPlan
             if (adjustedTemplate is null && pool!.TotalWeight == 0)
                 continue;
             var template = adjustedTemplate ?? pool!.Select(Sample(pool.TotalWeight));
+            if (trial.ExcludeLegacyHellLowEquipment && template.Kind == ItemKind.Equipment &&
+                (template.Rarity is 0 or 1 || template.MagicSealedEquipment))
+                continue;
             // 禁用的品质只冻结为空；不重抽、不把垃圾转为史诗，也不改变其它候选的中奖概率。
             if (ExcludeLowEquipment && template is { Kind: ItemKind.Equipment, Rarity: >= 0 and <= 3 } ||
                 ExcludeLowMaterials && template is { Kind: ItemKind.Material, Rarity: 0 or 1 })

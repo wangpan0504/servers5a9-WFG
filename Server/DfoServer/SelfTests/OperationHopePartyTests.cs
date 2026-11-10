@@ -47,6 +47,7 @@ internal static class OperationHopePartyTests
             var leases = Enumerable.Range(0,size).Select(i=>owners.Acquire("hope-party-"+i,()=>{})).ToArray();
             try
             {
+                var clock = new HopeClock(DateTimeOffset.UtcNow);
                 var repository = new CharacterRepository(path,quests,adventure,growth);
                 var sessions = leases.Select((owner,i)=>
                 {
@@ -64,8 +65,18 @@ internal static class OperationHopePartyTests
                         Inventory=inventory,
                         InitialLearning=new(growth.GetLevelStartExperience(95),[new(0,10,0,[]),new(1,20,0,[])])
                     });
-                    repository.InitializeAdventure(owner,adventure,DateTimeOffset.UtcNow);
-                    var session = new GameSession(repository,towns,owner,questCatalog:quests,operationHope:hope,incounts:counts);
+                    repository.InitializeAdventure(owner,adventure,clock.Now);
+                    // 复用本轮2/4人实例，分别覆盖队长和非零槽队员疲劳不足，不另启动服务。
+                    if (i == (size == 2 ? 0 : 1))
+                    {
+                        using var db = new SqliteConnection("Data Source="+path+";Pooling=False");
+                        db.Open();
+                        using var command = db.CreateCommand();
+                        command.CommandText = "UPDATE character_fatigue SET used=maximum-3,remaining=3 WHERE account=$account";
+                        command.Parameters.AddWithValue("$account",owner.Account);
+                        command.ExecuteNonQuery();
+                    }
+                    var session = new GameSession(repository,towns,owner,questCatalog:quests,operationHope:hope,incounts:counts,timeProvider:clock);
                     session.Select(0,resumeTown:true);session.MarkReady();return session;
                 }).ToArray();
                 var parties = new PartyService(repository);
@@ -91,12 +102,13 @@ internal static class OperationHopePartyTests
                     "1598重复请求保留全员冻结选择，不重新抽签");
                 That(service.BeginSelection(sessions[0]).Length==size,"希望队长15开启全员选图");
                 var preparedProfessions=new HashSet<(byte,byte)>();
+                (string Reason,byte Slot)? rejection = null;
                 PartyDungeonNotice[] Enter()=>service.Enter(sessions[0],8523,hope.Difficulty,dungeons,rooms,drops,items.Items,items.EpicPieces,
                     entry=>
                     {
                         preparedProfessions.Add(entry.HopeRewardProfession!.Value);
                         return monster=>rewards.Extend(new("hope-equipment-fixture",[]),entry,monster);
-                    });
+                    },onRejected:(reason,slot)=>rejection=(reason,slot));
                 string State()=>JsonSerializer.Serialize(leases.Select(owner=>repository.LoadCharacter(owner,0)));
                 long Scalar(string sql)
                 {
@@ -108,6 +120,17 @@ internal static class OperationHopePartyTests
                     using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();
                     using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();
                 }
+                string insufficient = State();
+                int failedIndex = size == 2 ? 0 : 1;
+                byte failedSlot = parties.Current(sessions[0])!.Members.Single(member=>ReferenceEquals(member.Actor.Session,sessions[failedIndex])).Slot;
+                That(Enter().Length == 0 && rejection == ("start-fatigue-insufficient:4",failedSlot) &&
+                    State() == insufficient && Scalar("SELECT count(*) FROM character_dungeon_incount") == 0 &&
+                    sessions.All(session=>session.PartyDungeon is null && session.Phase == SessionPhase.MapSelect),
+                    "希望疲劳不足精确报告实际队长或非零成员槽，全队不扣费、不接任务、不安装实例");
+                clock.Now = clock.Now.AddDays(1);
+                That(sessions[failedIndex].AdvanceFatigueDay(clock.Now) is not null &&
+                    sessions[0].BeginPartyOperationHope(hope,dungeons,_=>throw new InvalidOperationException("unexpected recovery reroll")) &&
+                    missionDraws == size,"疲劳恢复后刷新全队原选择的角色版本，不重新抽取任务或迷宫");
                 string original=State();
                 Sql($"CREATE TRIGGER fail_hope_member AFTER INSERT ON character_active_main_quests WHEN NEW.character_id={sessions[^1].Selected!.Id} BEGIN SELECT RAISE(ABORT,'hope party late rollback'); END");
                 Reject<SqliteException>(()=>Enter(),"末位希望成员接取SQL失败");
@@ -251,5 +274,11 @@ internal static class OperationHopePartyTests
                 if(Directory.Exists(root)) TestFiles.DeleteDirectory(root,true);
             }
         }
+    }
+
+    sealed class HopeClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow()=>Now;
     }
 }
