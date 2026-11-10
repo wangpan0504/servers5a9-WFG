@@ -176,7 +176,7 @@ internal static class DungeonDropGenerationPlanTests
         var original = new DungeonDropGenerationPlan("旧深渊派生标记保留", [new DungeonDropTrial(1000, null, 1, 1,
             RarityPools: pools, GrowthContractEligible: true, Category: DungeonDropCategory.Equipment)
             { RarityBonusGroup = DungeonRarityBonusGroup.HellEquipment, ExcludeLegacyHellLowEquipment = true }]);
-        var derived = new[] { original.WithGrowthContract(10), original.WithEpicDropBonus(100),
+        var derived = new[] { original.WithGrowthContract(10), original.WithEpicDropBonus(100), original.WithBossDropBonus(10),
             original.WithEquipmentRarityBonus(new(10, 10)), DungeonDropControlSnapshot.Apply(original, new(Equipment: 2)),
             original.WithDisjointRestrictions(ImmutableHashSet.Create(4)) };
         That(derived.All(plan => !ReferenceEquals(plan, original) && plan.Trials.Single().ExcludeLegacyHellLowEquipment &&

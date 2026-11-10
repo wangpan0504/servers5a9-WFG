@@ -6,7 +6,7 @@ namespace DfoServer;
 
 internal static partial class DatabaseSchemaTests
 {
-    static void VariousBuffUpgrade(string root)
+    internal static void VariousBuffUpgrade(string root)
     {
         root = Path.Combine(root, "various-buff-upgrade");
         Directory.CreateDirectory(root);
