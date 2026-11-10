@@ -65,14 +65,16 @@ internal sealed class DungeonDropRuleCatalog
             rows.Add(new(minimum, maximum, probabilities.AsSpan(at + 2, 5).ToArray().ToImmutableArray()));
         }
         ProbabilityRows = rows.MoveToImmutable();
-        RarityDecision = Integers(monster, resolve, "basis of rarity dicision", 28).ToImmutableArray();
+        int[] rarity = Integers(monster, resolve, "basis of rarity dicision", 28);
         for (int row = 0; row < 4; row++)
         for (int column = 0; column < 7; column++)
         {
             int at = row * 7 + column;
-            if (RarityDecision[at] < 0 || column != 0 && RarityDecision[at] < RarityDecision[at - 1])
+            if (rarity[at] < 0 || column != 0 && rarity[at] < rarity[at - 1])
                 throw new InvalidDataException("掉落稀有度阈值必须按原序非递减");
         }
+        // 官方尾档1000001/1000002/1000003在百万骰之外；归一后稀有度骰、史诗掉落Buff与GM掉落控制使用同一份可达区间。
+        RarityDecision = DungeonRarityThresholds.Normalize(rarity);
         PartyBonus = objectRules ? [] : Numbers(monster, resolve, "party member drop bonusrate", 20);
         DifficultyBonus = Numbers(monster, resolve, "dungeon difficulty drop bonusrate", 25);
         MonsterTypeBonus = Numbers(monster, resolve, "monster type drop bonusrate", 20);

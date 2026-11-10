@@ -9,7 +9,7 @@ internal sealed record DungeonDropRatePlan(int MonsterLevel, byte MonsterType, b
     ImmutableArray<int> Thresholds, DungeonDropItemReference ItemReference, DungeonDropGoldReference GoldReference)
 {
     public const int ProbabilityDenominator = 10000;
-    public const int RarityDenominator = 1000000;
+    public const int RarityDenominator = DungeonRarityThresholds.Denominator;
 
     public static DungeonDropRatePlan Prepare(DungeonDropRuleCatalog rules, int monsterLevel,
         byte monsterType, byte difficulty, byte partyMembers, int? dungeonLevel = null)

@@ -34,7 +34,7 @@ internal sealed class DungeonHellDropRules
                 var values = rarity[(1 + row * 7)..(1 + (row + 1) * 7)];
                 if (values.Any(value => value < 0)) throw new InvalidDataException("深渊稀有度阈值不能为负或包含非整数");
                 for (int i = 0; i < values.Length; i++)
-                    values[i] = Math.Max(Math.Min(values[i], 1000000), i == 0 ? 0 : values[i - 1]);
+                    values[i] = Math.Max(Math.Min(values[i], DungeonRarityThresholds.Denominator), i == 0 ? 0 : values[i - 1]);
                 rules.rarityRows.Add(values);
             }
         }
