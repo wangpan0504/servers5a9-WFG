@@ -452,20 +452,19 @@ internal static partial class AntonRaidMapEntryTcpTests
                     peers[0].Send(37, new byte[8]);
                     That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "只有队长完成加载时不提前签发震颤结算");
                     peers[1].Send(37, new byte[8]);
-                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31) &&
-                        ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "震颤全员终点加载后仍等待炮击，不能显示菜单");
-                    peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
-                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31), "非host不能代报炮击终末");
-                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
-                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31), "无线电兵不能代替炮击指引物件");
-                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
                     loadedSettlement = ReadPhase(peers[0]);
                     var memberSettlement = ReadPhase(peers[1]);
                     That(new[] { loadedSettlement, memberSettlement }.All(rows =>
                             rows.Count(packet => packet is { Kind: 0, Opcode: 31 }) == 1 &&
                             rows.All(packet => packet.Opcode != 115)) &&
                         sessions.All(session => session.Phase == SessionPhase.Settlement),
-                        "炮击指引物件提交后全员各获得一次31，不伪造Boss115");
+                        "官方空条件下全员终点加载后各获得一次31，不伪造Boss115");
+                    peers[1].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                    That(ReadPhase(peers[1]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "通关后非host的15467不能再发31或115");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15470));
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "无线电兵不能代替或重复结算");
+                    peers[0].Send(39, QuestPassiveClearTcpTests.PassiveDeath(15467));
+                    That(ReadPhase(peers[0]).All(packet => packet.Opcode != 31 && packet.Opcode != 115), "官方空条件通关后的15467不能再发31或115");
                     break;
                 }
                 That(party.Move(sessions[0], (byte)next.X, (byte)next.Y, 0).Length == 2, "清房后两名队员进入下一房");
