@@ -213,6 +213,7 @@ public static partial class WeeklyEntryResetTests
         RunRewardLimitImperialDays(true);
         RunRewardLimitMultipleDays();
         RunRewardLimitUnclaimedChallenges();
+        GmAccountLimitsTests.RunCore();
         RaidQuotaEpochTests.RunCore();
         RaidQuotaSessionTests.RunCore();
         Console.WriteLine($"PASS {Count - before} 地下城入场次数刷新核心断言");

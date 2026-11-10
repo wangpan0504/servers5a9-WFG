@@ -16,16 +16,23 @@ internal sealed partial class CharacterRepository
     // 各表使用账号范围内的 MAX+1 作为历史键，避开唯一键冲突；归档键超过合法日期，防止未来日切重新计入。
     public RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) => owner.Execute(() =>
     {
-        var now = DateTimeOffset.UtcNow;
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.ResetRewardLimits");
+        using var tx = write.Transaction;
+        var result = ResetRewardLimitsInTransaction(db, tx, owner, DateTimeOffset.UtcNow);
+        tx.Commit();
+        return result;
+    });
+
+    static RewardLimitResetResult ResetRewardLimitsInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, DateTimeOffset now)
+    {
         var strongway = Strongway2019RewardPeriod.At(now);
         var imperial = ImperialArenaPeriod.At(now);
         var tag = TagEvildomPeriod.At(now);
         int day = ShopPurchaseCount.Today(now);
         int week = WeeklyDungeonPolicy.WeekKey(now);
         int griefDay = QuestCycle.Day(now);
-        using var db = database.Open();
-        using var write = db.BeginWrite("CharacterRepository.ResetRewardLimits");
-        using var tx = write.Transaction;
 
         // 奖励冻结即占用次数，已领与未领都退出后续限次统计；领取回放仍只认原回执。
         int clearRewards = ExecuteReward(db, tx, """
@@ -110,13 +117,12 @@ internal sealed partial class CharacterRepository
         var raidAdvances = AdvanceRaidQuotaEpochs(db, tx, owner.Account, RaidQuotaAxis.Reward, FiendwarRewards.Cycle.Key(now));
         int raid = raidAdvances.Sum(row => row.ArchivedRuns);
         int raidReceipts = raidAdvances.Sum(row => row.ArchivedRewardReceipts);
-        tx.Commit();
         return new RewardLimitResetResult(owner.Account, day, week, strongwayReward, strongwayCompletion, strongwayMatch,
             imperialDays, imperialRuns, imperialRewards, imperialChallenges, tagClearance, tagChallenge,
             griefAccount, griefCharacter, special, despair, raid, raidReceipts)
             { RaidEpochsAdvanced = raidAdvances.Length, ClearRewardRows = clearRewards,
                 RevisedBeastStageRows = beastStages, RevisedBeastTerminalRows = beastTerminals };
-    });
+    }
 
     static int NextKey(SqliteConnection db, SqliteTransaction tx, string table, string column, string account, int current)
     {

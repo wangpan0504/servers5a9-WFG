@@ -55,9 +55,10 @@ internal sealed class OnlineSessionDirectory
             { GuardedProbe = guardedProbe, RefreshFatigue = refreshFatigue });
 
     // 复用同一连接索引与有界发送队列；回调只捕获内存并入队，不等待接收者socket。
-    public void RefreshFatigueDisplays()
+    public void RefreshFatigueDisplays(string? account = null)
     {
-        foreach (var connection in connections.SnapshotValues()) connection.RefreshFatigue?.Invoke();
+        foreach (var connection in connections.SnapshotValues())
+            if (account is null || ReferenceEquals(connection.Session, Find(account))) connection.RefreshFatigue?.Invoke();
     }
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>

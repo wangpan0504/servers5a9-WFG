@@ -726,12 +726,12 @@ internal sealed partial class GameSession
         if (entry.RequiresFatigueOwner && expected.Fatigue is null) return RejectFormal("fatigue-owner-missing");
         // 希望1598只冻结选择；疲劳不足交正式16的错误22恢复选图，不在1598的静默失败分支截断。
         // need fatigue是准入门槛，独立于fatigue value的首区收费，不能因当前两者相等而省略。
-        if (entry.Hope is { } hopeAdmission && debugSettings?.InfiniteFatigue != true &&
+        if (entry.Hope is { } hopeAdmission && !InfiniteFatigue &&
             (expected.Fatigue is not { } hopeFatigue || hopeFatigue.Remaining < hopeAdmission.Catalog.NeedFatigue))
             return RejectFormal("start-fatigue-insufficient:" + hopeAdmission.Catalog.NeedFatigue);
         if (entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
-        if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true)
+        if (entry.StartFatigue > 0 && !InfiniteFatigue)
         {
             if (expected.Fatigue is not { } storedFatigue) return RejectFormal("fatigue-owner-missing");
             if (storedFatigue.Remaining < entry.StartFatigue || FatigueForClient(expected).Remaining < entry.StartFatigue)
@@ -1214,7 +1214,7 @@ internal sealed partial class GameSession
             entryItems = entryItems is null ? new(before, after, "various_buff_entry") : entryItems.WithAfter(after);
         }
         int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
-        ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+        ushort entryFatigue = InfiniteFatigue ? (ushort)0 :
             DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(installing.Entry.StartFatigue,
                 accelerationPercent, character.Fatigue?.Remaining ?? 0);
         if (installing.Dazzlement is { } dazzlement &&
@@ -1363,13 +1363,13 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.Hope is not null && !InfiniteFatigue)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
                 dungeon.HasPendingFatigue = false;
             }
-            if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
+            if (dungeon.Entry.UsesRoomFatigue && !InfiniteFatigue)
             {
                 dungeon.HasPendingFatigue = true;
                 Selected = repository.ConsumeDungeonRoomFatigue(owner, expected, dungeon.Run,timeProvider ?? TimeProvider.System, energySource);
@@ -1457,7 +1457,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.PartyRoute is null && !Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
             dungeon.Run.CancelRidable();
         var target = new DungeonPoint(x,y);
-        if (dungeon.Run.HopeCatalog is { } hope && debugSettings?.InfiniteFatigue != true &&
+        if (dungeon.Run.HopeCatalog is { } hope && !InfiniteFatigue &&
             dungeon.Entry.Maze.MapSpecification?.SingleOrDefault(map => map.Position == target) is { } targetMap &&
             hope.Maps.TryGetValue(targetMap.Id,out var area) && !dungeon.Run.HasLoadedHopeArea(area.AreaId) &&
             (Selected.Fatigue is null || Selected.Fatigue.Remaining < hope.FatigueValue)) return null;

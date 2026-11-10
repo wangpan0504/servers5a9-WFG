@@ -168,6 +168,27 @@ internal static partial class GmWebServerTests
             TestCheck.That(response.IsSuccessStatusCode && data.Commands.Contains("account acct reward-limit-reset"),
                 "奖励限额刷新确认后透传账号命令并返回真实回执");
         }
+        foreach (var row in new[] { (Account: "acct", Confirm: false, Accept: false),
+            (Account: "bad account", Confirm: true, Accept: false), (Account: "acct", Confirm: true, Accept: true) })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dungeon-limit-reset")
+            { Content = JsonContent.Create(new { account = row.Account, confirm = row.Confirm }) };
+            request.Headers.Add("X-GM-Request", "1");
+            int previous = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.IsSuccessStatusCode == row.Accept && (row.Accept
+                ? data.Commands.Skip(previous).SequenceEqual(["account acct dungeon-limit-reset"])
+                : data.Commands.Count == previous), "组合额度刷新验证确认和账号，只执行一次原子命令");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/debug")
+        { Content = JsonContent.Create(new { key = "infinite-fatigue", value = "on", confirm = true }) })
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            int previous = data.Commands.Count;
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest && data.Commands.Count == previous,
+                "疲劳开关缺当前账号时不回退全局命令");
+        }
         foreach (string path in new[] { "/index.html", "/assets/app.js", "/assets/gm.css", "/assets/missing.js", "/assets/..%2Findex.html" })
             TestCheck.That((await http.GetAsync(path)).StatusCode == HttpStatusCode.NotFound, "旧静态入口均为404：" + path);
         string[] embeddedPages = ["DfoServer.GmWeb.recharge.html", "DfoServer.GmWeb.client.includeImg.htm",

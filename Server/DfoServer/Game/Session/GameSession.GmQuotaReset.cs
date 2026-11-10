@@ -26,6 +26,15 @@ internal sealed partial class GameSession
         return result;
     });
 
+    public DungeonQuotaResetResult ResetDungeonLimits() => owner.Execute(() =>
+    {
+        EnsureQuotaResetAllowed();
+        long next = checked(quotaDisplayRevision + 1);
+        var result = repository.ResetDungeonLimits(owner);
+        quotaDisplayRevision = next;
+        return result;
+    });
+
     void EnsureQuotaResetAllowed()
     {
         if (Phase is SessionPhase.Dungeon or SessionPhase.Settlement || raidCombat is { } raid &&
