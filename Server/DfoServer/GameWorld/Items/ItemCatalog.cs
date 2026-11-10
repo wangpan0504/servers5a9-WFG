@@ -141,9 +141,10 @@ internal sealed partial class ItemCatalog
     public bool TryGet(int id, [NotNullWhen(true)] out ItemTemplate? template)
     {
         if (templates.TryGetValue(id, out template)) return true;
-        bool isEquipment = equipment.TryGetValue(id, out string? path);
-        if (!isEquipment && !stackable.TryGetValue(id, out path)) return false;
-        if (!pvf.Contains((isEquipment ? "equipment/" : "stackable/") + path)) return false;
+        string? path = null;
+        bool isEquipment = equipment?.TryGetValue(id, out path) == true;
+        if (!isEquipment && stackable?.TryGetValue(id, out path) != true) return false;
+        if (pvf is null || !pvf.Contains((isEquipment ? "equipment/" : "stackable/") + path)) return false;
         template = Get(id);
         return true;
     }
@@ -750,6 +751,8 @@ internal sealed partial class ItemCatalog
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),
             BorrowAvatarAppearance = kind == ItemKind.Avatar,
+            CannotBeCloneTitle = isEquipment && text.ContainsString("item category", "cannot be clone title"),
+            CannotBeHiddenByCloneTitle = isEquipment && text.ContainsString("item category", "cannot be hidden by clone title"),
             AvatarGiftType = isEquipment ? null : AvatarTypeSelectionFile.GiftType(text),
             EmblemTargetSockets = kind == ItemKind.Emblem ? ReadEmblemTargetSockets(text) : (ushort)0,
             GuardianGemEffects = kind == ItemKind.GuardianGem ? ReadGuardianGemEffects(text) : [],

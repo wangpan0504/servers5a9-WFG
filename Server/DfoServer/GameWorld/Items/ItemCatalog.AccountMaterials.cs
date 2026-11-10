@@ -30,6 +30,8 @@ internal sealed partial class ItemCatalog
 
     static ImmutableDictionary<int, AccountMaterialDefinition> ReadAccountMaterialLimits(PvfArchive archive)
     {
+        // 核心自测用空档案构造目录。没有 PVF 时额度文件不存在，与 Contains 为假相同。
+        if (archive is null) return ImmutableDictionary<int, AccountMaterialDefinition>.Empty;
         var rows = ImmutableDictionary.CreateBuilder<int, AccountMaterialDefinition>();
         foreach (string path in new[] { "etc/raid/raidrewardlimit.etc", "etc/raid/chn_raidrewardlimit.etc" })
         {

@@ -181,7 +181,12 @@ internal static class InventoryMoveService
         after.Validate(allocating: true);
         // 自动合并必须按实际移动方向回复；其他移动（尤其穿脱）仍保持原请求顺序。
         bool forward = sourceSlot == request.Source || source.Core.IsStackable && sourceSlot.List != destinationSlot.List;
-        return new(true, 0, new(before, after, "move_item", Precondition()), count,
+        var titleSlot = new InventorySlot(InventoryListType.Equipment, 13);
+        bool titleSlotChanged = sourceSlot == titleSlot || destinationSlot == titleSlot;
+        return new(true, 0, new(before, after, "move_item", Precondition())
+        {
+            CloneTitleItemIdAfter = titleSlotChanged ? InventoryCloneAppearanceService.CloneTitleAfter(character, after, catalog) : null
+        }, count,
             forward ? sourceSlot : destinationSlot, forward ? destinationSlot : sourceSlot);
 
         InventoryCharacterPrecondition Precondition() => new(character, qualificationExpiresAt);
