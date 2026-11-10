@@ -22,6 +22,7 @@ internal static partial class DungeonIncountTicketTests
         RunResetLimits(resources, root);
         RunExpandedTickets(resources, root);
         RunSingleBindingAdmission(resources, root);
+        RunSingleBindingReset(resources, root);
         RunPeriodWriter(resources, root);
         string path = Path.Combine(root, "incount-ticket.db");
         var repository = new CharacterRepository(path);
