@@ -42,7 +42,10 @@ internal sealed partial class GameSession
             foreach (byte kind in kinds)
             {
                 if (!Current()) return true;
-                var receipt = ClaimRaidReward(kind, 0, store, items, gold, pieces, now, automaticLuke: kind == 3);
+                // 已提交牌种沿原回执选位重放；固定0会拒绝本人先前选择的非零牌，阻断剩余牌种。
+                byte card = owner.Execute(() => raidCombat is { } raid && ReferenceEquals(raid.Battle, battle) &&
+                    raid.Receipts.TryGetValue((phase, kind), out var committed) ? committed.Prepared.Card : (byte)0);
+                var receipt = ClaimRaidReward(kind, card, store, items, gold, pieces, now, automaticLuke: kind == 3);
                 if (receipt is null) return !Current();
                 // 已提交资产先排入原连接FIFO；自动领取不伪造客户端请求的ACK。
                 AntonAutoRewardArrived?.Invoke(receipt);
