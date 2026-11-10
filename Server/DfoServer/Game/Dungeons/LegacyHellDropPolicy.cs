@@ -86,11 +86,13 @@ internal sealed class LegacyHellDropPolicy
         entry.IsOrdinary && !entry.IsPractice && (entry.HellParty is not null || entry.IsInfernoParty) &&
         regions.TryGetValue(entry.DungeonId, out var region) ? (region.Minimum, region.Maximum) : null;
 
+    public bool MatchesOrdinaryReward(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
+        EquipmentRange(entry) is not null && !entry.IsInfernoParty && !entry.IsHellLegend && !entry.IsCosmo && monster.HellWave is not null &&
+        monster.HellRewardRolls > 0 && monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss;
+
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, DungeonEntryPlan entry, DungeonPlannedMonster monster)
     {
-        if (EquipmentRange(entry) is null || entry.IsInfernoParty || entry.IsHellLegend || monster.HellWave is null ||
-            monster.HellRewardRolls <= 0 || !monster.CanReportDeath || monster.IsFriendly || monster.IsScriptedBoss)
-            return plan;
+        if (!MatchesOrdinaryReward(entry, monster)) return plan;
         var trials = bonuses[regions[entry.DungeonId].Crystal];
         return trials.IsEmpty ? plan : new(plan.ResourceSource + ";" + Rule, plan.Trials.Concat(trials), plan.ReferenceQuality, plan.Amplification);
     }

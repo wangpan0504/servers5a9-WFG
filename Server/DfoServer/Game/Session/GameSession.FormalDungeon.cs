@@ -722,6 +722,11 @@ internal sealed partial class GameSession
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
         if (entry.RequiresFatigueOwner && expected.Fatigue is null) return RejectFormal("fatigue-owner-missing");
+        // 希望1598只冻结选择；疲劳不足交正式16的错误22恢复选图，不在1598的静默失败分支截断。
+        // need fatigue是准入门槛，独立于fatigue value的首区收费，不能因当前两者相等而省略。
+        if (entry.Hope is { } hopeAdmission && debugSettings?.InfiniteFatigue != true &&
+            (expected.Fatigue is not { } hopeFatigue || hopeFatigue.Remaining < hopeAdmission.Catalog.NeedFatigue))
+            return RejectFormal("start-fatigue-insufficient:" + hopeAdmission.Catalog.NeedFatigue);
         if (entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
         if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true)

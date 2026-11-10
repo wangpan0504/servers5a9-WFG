@@ -13,13 +13,14 @@ internal static class EvildomWarPackets
     public static byte[] Start(bool accepted) => accepted ? [1] : [0, 0, 0];
 
     // 0239F4E0按外层队伍槽位建表；00891B80再按每行Type选择该成员的奖励卡种。
-    // 调用方提供已提交的展示值；首字段保留原始读宽，本构包器不产生资产。
-    public static byte[] Rewards(uint firstRaw, IReadOnlyList<RewardGroup> groups)
+    // 首u32为结果用时毫秒；0088CA00将显示上限夹到3600000，0088E1C0拆成分、秒及百分秒。
+    // 调用方提供已提交的冻结值；本构包器不重新计时或产生资产。
+    public static byte[] Rewards(uint elapsedMilliseconds, IReadOnlyList<RewardGroup> groups)
     {
         if (groups.Count > byte.MaxValue || groups.Any(group => group.Rows.Length > byte.MaxValue))
             throw new ArgumentOutOfRangeException(nameof(groups), "魔界奖励组数及行数必须适配客户端u8");
         byte[] body = new byte[5 + groups.Sum(group => 2 + group.Rows.Length * 9)];
-        BinaryPrimitives.WriteUInt32LittleEndian(body, firstRaw);
+        BinaryPrimitives.WriteUInt32LittleEndian(body, elapsedMilliseconds);
         body[4] = (byte)groups.Count;
         int at = 5;
         foreach (var group in groups)
@@ -37,10 +38,11 @@ internal static class EvildomWarPackets
         return body;
     }
 
-    public static byte[] Info(byte mode, int remainingSeconds, IReadOnlyList<EvildomWarDungeonState> rows)
+    public static byte[] Info(byte mode, bool completed, int remainingSeconds, IReadOnlyList<EvildomWarDungeonState> rows)
     {
         byte[] body = new byte[10 + rows.Count * 7];
-        body[0] = 2;
+        // 0080C530的3为成功态；窗口沿0080AC70的原关闭队列收尾，不伪造剩余时间。
+        body[0] = completed ? (byte)3 : (byte)2;
         body[1] = mode;
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), Math.Max(0, remainingSeconds));
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(6), rows.Count);

@@ -867,6 +867,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,0,2,20261022,1,'{}','[]',1);
                 INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES({{id}},'planning','instance','{}','{}',NULL,1);
+                INSERT INTO character_clear_reward_resets(character_id,instance_id) VALUES({{id}},'instance');
                 INSERT INTO character_dungeon_card_options VALUES({{id}},'planning','instance','{}',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
                 INSERT INTO character_dungeon_tournament_rewards VALUES({{id}},'planning','instance','{}',0,0,'[{},{}]',NULL,1);
                 INSERT INTO character_tutorial_state VALUES({{id}},'planning',7115,0,0);

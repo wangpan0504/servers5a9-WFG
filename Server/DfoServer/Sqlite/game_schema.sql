@@ -1025,6 +1025,11 @@ CREATE TABLE character_dungeon_card_rewards(
   FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_settlement_receipts(character_id,instance_id),
   FOREIGN KEY(mail_id) REFERENCES mailbox_messages(mail_id));
 
+CREATE TABLE character_clear_reward_resets(
+  character_id INTEGER NOT NULL,instance_id TEXT NOT NULL,
+  PRIMARY KEY(character_id,instance_id),
+  FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_card_rewards(character_id,instance_id) ON DELETE CASCADE);
+
 CREATE TABLE server_events(
   event_id INTEGER NOT NULL PRIMARY KEY CHECK(event_id BETWEEN 1 AND 65535),
   revision INTEGER NOT NULL CHECK(revision>0),starts_at INTEGER,ends_at INTEGER,

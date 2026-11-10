@@ -75,6 +75,7 @@ internal sealed record RewardLimitResetResult(string Account, int Day, int Week,
     int SpecialEntryRows, int DespairRows, int RaidRows, int RaidReceiptRows)
 {
     public int RaidEpochsAdvanced { get; init; }
+    public int ClearRewardRows { get; init; }
     public int RevisedBeastStageRows { get; init; }
     public int RevisedBeastTerminalRows { get; init; }
 }

@@ -32,6 +32,7 @@ internal static class OperationHopeSessionTests
     {
         int before = Count;
         var resources = new Resources(towns,pvf,characters,items);
+        VerifyFatigueAdmission(resources,pvf);
         VerifyHopeRewards(pvf,items,resources);
         using (var f = new Fixture(resources))
         {
@@ -140,6 +141,83 @@ internal static class OperationHopeSessionTests
         TimerBusy(resources,pvf).GetAwaiter().GetResult();
         HopeTimerBattlePass(resources,pvf).GetAwaiter().GetResult();
         Console.WriteLine($"PASS {Count-before} 代号希望Session入场与领奖链断言");
+    }
+
+    static void VerifyFatigueAdmission(Resources resources, PvfArchive pvf)
+    {
+        var start = DateTimeOffset.UtcNow;
+        for (ushort remaining = 0; remaining < 4; remaining++)
+        {
+            // 各疲劳边界独立记次，避免前例恢复后的入场耗尽同周额度而遮蔽本例门槛。
+            var clock = new HopeClock(start);
+            using (var f = new Fixture(resources,clock:clock))
+            {
+                f.Session.ReturnToRoster();
+                f.Sql($"UPDATE character_fatigue SET used=maximum-{remaining},remaining={remaining}");
+                f.Session.Select(f.Created.Slot,resumeTown:true);
+                f.Session.MarkReady();
+                var before = f.Read();
+                var counts = f.Usage();
+                int draws = 0;
+                int Draw(int bound) { draws++; return 0; }
+                That(f.Session.BeginOperationHope(resources.Hope,resources.Dungeons,Draw),
+                    "希望低疲劳1598仅冻结选择，不在静默分支截断");
+                int frozenDraws = draws;
+                That(f.Session.BeginDungeonSelection() is not null,"低疲劳仍经原15建立选图返回上下文");
+                var selection = f.Session.CurrentDungeonSelection;
+                var rejected = f.Session.EnterFormalDungeon(8523,0,resources.Hope.Difficulty,resources.Dungeons,resources.Rooms);
+                That(rejected is null,$"希望{remaining}疲劳正式16不得安装实例");
+                That(f.Session.LastFormalDungeonRejection == "start-fatigue-insufficient:4",
+                    $"希望{remaining}疲劳正式16应报告疲劳门槛，实际：{f.Session.LastFormalDungeonRejection}");
+                That(f.Session.Phase == SessionPhase.MapSelect,$"希望{remaining}疲劳拒绝后保持MapSelect，实际：{f.Session.Phase}");
+                That(ReferenceEquals(f.Session.CurrentDungeonSelection,selection),$"希望{remaining}疲劳拒绝后保留原选择返回上下文");
+                That(f.Session.DungeonSnapshot is null,$"希望{remaining}疲劳拒绝后不安装副本快照");
+                That(JsonSerializer.Serialize(f.Read()) == JsonSerializer.Serialize(before),
+                    $"希望{remaining}疲劳拒绝后完整角色、任务、尝试号与资产保持不变");
+                That(f.Usage() == counts,$"希望{remaining}疲劳拒绝后日周次数保持不变，原：{counts}，实际：{f.Usage()}");
+                That(f.Session.ReturnFromDungeonSelection() is not null && f.Session.Phase == SessionPhase.Town,
+                    "低疲劳拒绝后可沿原取消选图返回城镇");
+                That(f.Session.BeginOperationHope(resources.Hope,resources.Dungeons,Draw) && draws == frozenDraws,
+                    "取消后重选复用本次任务与迷宫，不重新抽签");
+                clock.Now = clock.Now.AddDays(1);
+                That(f.Session.AdvanceFatigueDay(clock.Now) is not null,
+                    "通过原每日恢复用例更新疲劳与角色版本");
+                That(f.Session.BeginOperationHope(resources.Hope,resources.Dungeons,Draw) && draws == frozenDraws,
+                    "恢复疲劳后1598只刷新角色版本，不重抽任务");
+                var restored = f.Session.Selected!;
+                var restoredCounts = f.Usage();
+                var entered = f.Enter();
+                That(entered.EntryFatigueCharged == 4 && restored.Fatigue!.Remaining-f.Read().Fatigue!.Remaining == 4 &&
+                    f.Usage() == new DungeonIncountUsage(restoredCounts.DailyUsed+1,restoredCounts.WeeklyUsed+1),
+                    "拒绝恢复后仅提交一次首区4疲劳与日周次数");
+                That(f.Session.ReturnFromFormalDungeon() is not null,"恢复后入场实例可正常退场并清理精确任务");
+            }
+        }
+        // 仅构造独立资源夹具；准入门槛可大于收费，不能靠当前资源的4==4掩盖门槛遗漏。
+        var definition = resources.Dungeons.Get(8523);
+        var source = OperationHopeFile.Parse(pvf.ReadTokens(OperationHopeCatalog.ResourcePath),pvf.ResolveString) with { NeedFatigue = 8 };
+        var threshold = (OperationHopeCatalog)typeof(OperationHopeCatalog).GetConstructors(BindingFlags.Instance|BindingFlags.NonPublic).Single().Invoke(
+            [source,OperationHopeDungeonFile.Parse(pvf.ReadTokens(definition.Path),pvf.ResolveString),definition,resources.Quests,resources.Rooms]);
+        using var separate = new Fixture(resources,hope:threshold,fatigueRemaining:4);
+        var original = separate.Read();
+        That(original.Fatigue is { Remaining: 4 } && separate.Session.Selected!.Fatigue is { Remaining: 4 },
+            $"独立门槛夹具库内与选中余额均为4，原：{original.Fatigue}，选中：{separate.Session.Selected!.Fatigue}");
+        That(threshold.NeedFatigue == 8,$"独立准入门槛为8，实际：{threshold.NeedFatigue}");
+        That(threshold.FatigueValue == 4,$"独立首区收费为4，实际：{threshold.FatigueValue}");
+        That(separate.Session.BeginOperationHope(threshold,resources.Dungeons,_=>0),"独立门槛夹具1598冻结选择");
+        That(separate.Session.BeginDungeonSelection() is not null,"独立门槛夹具15建立选图上下文");
+        That(separate.Session.EnterFormalDungeon(8523,0,threshold.Difficulty,resources.Dungeons,resources.Rooms) is null,
+            "可付4点费用但不足8点门槛不得安装实例");
+        That(separate.Session.LastFormalDungeonRejection == "start-fatigue-insufficient:8",
+            $"独立门槛应由正式入场报告8点门槛，实际：{separate.Session.LastFormalDungeonRejection}");
+        var unchanged = separate.Read();
+        That(unchanged.Revision == original.Revision,$"独立门槛拒绝不改角色版本，原：{original.Revision}，实际：{unchanged.Revision}");
+        That(unchanged.Fatigue == original.Fatigue,$"独立门槛拒绝不改疲劳，原：{original.Fatigue}，实际：{unchanged.Fatigue}");
+        // 原选角可合法接取自动每日任务；拒绝必须保留其完整接取身份，不要求活动槽为空。
+        That(unchanged.ActiveMainQuests.SequenceEqual(original.ActiveMainQuests),
+            $"独立门槛拒绝保留原活动任务及接取身份，原：{string.Join(',',original.ActiveMainQuests.Select(row=>row.QuestId))}，实际：{string.Join(',',unchanged.ActiveMainQuests.Select(row=>row.QuestId))}");
+        That(!unchanged.ActiveMainQuests.Any(row=>threshold.Missions.ContainsKey(row.QuestId)),"独立门槛拒绝不安装希望任务");
+        That(JsonSerializer.Serialize(unchanged) == JsonSerializer.Serialize(original),"独立门槛拒绝后完整角色与资产保持不变");
     }
 
     static async Task TimerBusy(Resources resources, PvfArchive pvf)
@@ -301,7 +379,11 @@ internal static class OperationHopeSessionTests
         }
     }
 
-    sealed class HopeClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow()=>now; }
+    sealed class HopeClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow()=>Now;
+    }
 
     static async Task TimerBusyCase(Resources resources, PvfArchive pvf, bool invalidate)
     {
@@ -507,6 +589,7 @@ internal static class OperationHopeSessionTests
     sealed class Fixture : IDisposable
     {
         readonly Resources resources;
+        readonly TimeProvider clock;
         readonly bool preserveDirectory;
         readonly string root = System.IO.Path.Combine(System.IO.Path.GetTempPath(),"S5A9-hope-session-"+Guid.NewGuid().ToString("N"));
         public string Path { get; }
@@ -514,9 +597,11 @@ internal static class OperationHopeSessionTests
         public CharacterRepository Repository { get; }
         public Character Created { get; }
         public GameSession Session { get; }
-        public Fixture(Resources resources, bool preserveDirectory = false, BattlePassMissionPolicy? policy = null, TimeProvider? clock = null)
+        public Fixture(Resources resources, bool preserveDirectory = false, BattlePassMissionPolicy? policy = null, TimeProvider? clock = null,
+            OperationHopeCatalog? hope = null, ushort? fatigueRemaining = null)
         {
-            this.resources = resources; this.preserveDirectory = preserveDirectory; Path = System.IO.Path.Combine(root,"game.db");
+            this.resources = resources; this.clock = clock ?? TimeProvider.System;
+            this.preserveDirectory = preserveDirectory; Path = System.IO.Path.Combine(root,"game.db");
             Repository = new(Path,resources.Quests,resources.Adventure,resources.Growth);
             if (policy is not null) Repository.ConfigureBattlePassMissions(policy);
             new AuthenticationService(new AuthenticationRepository(Path)).Create("hope-session","fixture-password");
@@ -524,8 +609,10 @@ internal static class OperationHopeSessionTests
             Created = Repository.Create(Owner,new("HopeSession",new(54,4,40,200),null) { Level = 95, CompletedQuests = [6170],
                 DungeonState = CharacterDungeonState.NewOrdinary,
                 InitialLearning = new(resources.Growth.GetLevelStartExperience(95),[new(0,10,0,[]),new(1,20,0,[])]) });
-            Repository.InitializeAdventure(Owner,resources.Adventure,DateTimeOffset.UtcNow);
-            Session = new(Repository,resources.Towns,Owner,questCatalog:resources.Quests,operationHope:resources.Hope,incounts:resources.Incounts,timeProvider:clock);
+            Repository.InitializeAdventure(Owner,resources.Adventure,this.clock.GetUtcNow());
+            if (fatigueRemaining is { } remaining)
+                Sql($"UPDATE character_fatigue SET used=maximum-{remaining},remaining={remaining}");
+            Session = new(Repository,resources.Towns,Owner,questCatalog:resources.Quests,operationHope:hope ?? resources.Hope,incounts:resources.Incounts,timeProvider:clock);
             Session.Select(Created.Slot,resumeTown: true); Session.MarkReady();
             That(Session.Selected!.Position is { Town: 54, Area: 4 },"正式换频道选角保留已存档的希望入口快照");
         }
@@ -533,7 +620,7 @@ internal static class OperationHopeSessionTests
         {
             var row = resources.Incounts.Find(8523) ?? throw new InvalidDataException("希望必须装配真实次数行");
             return Repository.LoadDungeonIncount(Owner,Created.Id,row.CountKey,
-                DungeonIncountPolicy.Period(DateTimeOffset.UtcNow,resources.Incounts.WeeklyResetDay(row.CountKey)));
+                DungeonIncountPolicy.Period(clock.GetUtcNow(),resources.Incounts.WeeklyResetDay(row.CountKey)));
         }
         public Character Read() => Repository.LoadCharacter(Owner,Created.Slot);
         public FormalDungeonReceipt Enter()

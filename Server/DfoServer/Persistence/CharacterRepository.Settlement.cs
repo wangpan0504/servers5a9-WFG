@@ -407,6 +407,8 @@ internal sealed partial class CharacterRepository
             JOIN character_dungeon_settlement_receipts s
               ON s.character_id=r.character_id AND s.instance_id=r.instance_id
             WHERE r.character_id=$id AND r.account=$account AND s.dungeon_id IN({dungeonIn})
+              AND NOT EXISTS(SELECT 1 FROM character_clear_reward_resets reset
+                WHERE reset.character_id=r.character_id AND reset.instance_id=r.instance_id)
             """;
         int daily = 0, weekly = 0;
         using var reader = command.ExecuteReader();
