@@ -157,7 +157,7 @@ internal static class HelperHellRotationTests
                 current = fixture.Session.CompleteFormalDungeonLoading()!;
             }
         }
-        var settings = new GameDebugSettings { InfiniteFatigue = false, SupportCompanions = 3,
+        var settings = new GameDebugSettings { SupportCompanions = 3,
             SupportProfiles = SupportCompanionCatalog.Load(pvf) };
         using (var fixture = Create(120, settings: settings))
         {

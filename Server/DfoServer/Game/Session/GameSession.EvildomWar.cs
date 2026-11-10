@@ -81,7 +81,7 @@ internal sealed partial class GameSession
             return "incount-resource-unavailable";
         if (!DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey))))
             return "incount-exhausted";
-        if (debugSettings?.InfiniteFatigue != true && FatigueForClient(character).Remaining < catalog.NeedFatigue)
+        if (!InfiniteFatigue && FatigueForClient(character).Remaining < catalog.NeedFatigue)
             return "fatigue-required";
         return null;
     }

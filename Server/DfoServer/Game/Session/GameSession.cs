@@ -84,12 +84,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true ||
         (Selected?.Inventory.AccountWallet.ContractExpiry(128) ?? 0) >
             (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+    internal bool InfiniteFatigue => debugSettings?.InfiniteFatigueFor(owner.Account) == true;
     public CharacterFatigueState FatigueForClient(Character character)
     {
         var state = (character.Fatigue ?? CharacterFatigueState.NewOrdinary)
             .ForBlackDiamond(character.BlackDiamondExpiresAt > (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
         state.Validate();
-        return debugSettings?.InfiniteFatigue == true ? state with { Used = 0, Remaining = state.Maximum } : state;
+        return InfiniteFatigue ? state with { Used = 0, Remaining = state.Maximum } : state;
     }
 
     IReadOnlySet<int> completed = new HashSet<int>();

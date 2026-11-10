@@ -676,8 +676,9 @@ internal static partial class FormalDungeonTcpTests
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,line,out var text),"GM调试端口返回 " + line);
             return text;
         }
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "两个调试开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "无限疲劳默认关闭，商城绝对期限默认开启");
+        That(Command("infinite-fatigue on").StartsWith("OK "), "本账号显式开启无限模式");
         using (var peer = Open(fixture))
         {
             peer.Create("InfiniteTcp");
@@ -730,8 +731,8 @@ internal static partial class FormalDungeonTcpTests
         VerifyExhaustedOrdinaryRetry(fixture, resources);
         await fixture.StopAsync();
         await fixture.StartAsync("restart");
-        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
-            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建恢复两个开关默认开启");
+        That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":false}" &&
+            Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "服务重建保持本账号无限疲劳关闭与商城默认开启");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "调试切换保留SQLite完整性");
         await fixture.StopAsync();

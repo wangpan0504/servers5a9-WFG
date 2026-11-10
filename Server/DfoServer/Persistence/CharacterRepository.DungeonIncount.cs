@@ -150,17 +150,24 @@ internal sealed partial class CharacterRepository
     // 在线内存不缓存已用次数，下次入场重新读库。
     public DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) => owner.Execute(() =>
     {
-        var now = DateTimeOffset.UtcNow;
-        int panelWeek = WeeklyDungeonPolicy.WeekKey(now);
-        var period = DungeonIncountPolicy.Period(now);
-        int calendarDay = ShopPurchaseCount.Today(now);
-        int assaultDay = AssaultModeEntryPolicy.DayKey(DateTimeOffset.Now);
-        int dazzlementWeek = DazzlementTowerAdmission.At(now).Week;
-        int griefDay = QuestCycle.Day(now);
-        var tagPeriod = TagEvildomPeriod.At(now);
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.ResetDungeonEntries");
         using var tx = write.Transaction;
+        var result = ResetDungeonEntriesInTransaction(db, tx, owner, DateTimeOffset.UtcNow);
+        tx.Commit();
+        return result;
+    });
+
+    static DungeonEntryResetResult ResetDungeonEntriesInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, DateTimeOffset now)
+    {
+        int panelWeek = WeeklyDungeonPolicy.WeekKey(now);
+        var period = DungeonIncountPolicy.Period(now);
+        int calendarDay = ShopPurchaseCount.Today(now);
+        int assaultDay = AssaultModeEntryPolicy.DayKey(now.ToLocalTime());
+        int dazzlementWeek = DazzlementTowerAdmission.At(now).Week;
+        int griefDay = QuestCycle.Day(now);
+        var tagPeriod = TagEvildomPeriod.At(now);
         int panel = Execute(db, tx, "DELETE FROM character_weekly_dungeon WHERE account=$account AND week=$week",
             ("$account", owner.Account), ("$week", panelWeek));
         int daily = Execute(db, tx, """
@@ -215,11 +222,10 @@ internal sealed partial class CharacterRepository
             DELETE FROM account_tag_evildom_challenges
             WHERE account=$account AND week=$week AND day<$day AND state=0
             """, ("$account", owner.Account), ("$week", tagPeriod.Week), ("$day", tagPeriod.Day));
-        tx.Commit();
         return new DungeonEntryResetResult(owner.Account, panelWeek, panel, daily, weekly, account, assault,
             dazzlement, griefAccount, griefCharacter, special, despair, raid, tag, tagChallenge)
         { RaidEpochsAdvanced = raidAdvances.Length, RaidGuideBindingsArchived = raidAdvances.Sum(row => row.ArchivedGuideBindings) };
-    });
+    }
 
     // 账号次数一账号一副本一行，周期键可能是日键或任意周起点的周键；按当前可能命中的周期键一次清零。
     static int ClearAccountEntries(SqliteConnection db, SqliteTransaction tx, string account, int[] periods)

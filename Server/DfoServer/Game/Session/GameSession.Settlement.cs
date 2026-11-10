@@ -721,7 +721,7 @@ internal sealed partial class GameSession
             formalDungeon is not { HellTicket: not null, HellPieces: { } pieces } dungeon ||
             Selected is not { } character) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
-            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
             (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
              FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
         if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
@@ -741,7 +741,7 @@ internal sealed partial class GameSession
             Selected is not { } character) return false;
         if (serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active != true) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
-            debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
+            !InfiniteFatigue && dungeon.Entry.StartFatigue > 0 &&
             (character.Fatigue is not { } fatigue || fatigue.Remaining < dungeon.Entry.StartFatigue ||
              FatigueForClient(character).Remaining < dungeon.Entry.StartFatigue)) return false;
         var done = QuestEligibility.Completed(character);

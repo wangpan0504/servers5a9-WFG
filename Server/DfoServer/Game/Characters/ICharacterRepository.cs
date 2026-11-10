@@ -112,6 +112,7 @@ internal interface ICharacterRepository
         WeeklyDungeonEntry? weekly = null);
     DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner);
     RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner);
+    DungeonQuotaResetResult ResetDungeonLimits(AccountOwners.Lease owner);
     DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
