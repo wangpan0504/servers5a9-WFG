@@ -44,6 +44,15 @@ internal static class PcRoomTimePointFileTests
         That(source.PeriodRewards.Length == 4 && source.PeriodRewards[3] is { StageIndex: 4, RequiredCount: 5, Flag: false } &&
             source.UiFile.EndsWith("RewardItemInfoWindow_Chn.xui", StringComparison.Ordinal),
             "累计五列及资源界面路径原值保留");
+        var changed = tokens.Select(token => token.Type == 0 && token.Value == 1800000 ? new PvfToken(0, 900000) : token).ToArray();
+        That(PcRoomTimePointFile.Parse(changed, Resolve).DailyRewards.All(row => row.DurationMilliseconds == 900000),
+            "修改四档时长不改变资源解析");
+        int[] replacements = [490000413, 5050528, 5050514, 5050518];
+        var replaced = tokens.ToArray();
+        int start = replaced.ToList().FindIndex(token => token.Type == 3 && Resolve(token.Value) == "[daily reward items]") + 1;
+        for (int i = 0; i < replacements.Length; i++) replaced[start + i * 6 + 1] = new(0, replacements[i]);
+        That(PcRoomTimePointFile.Parse(replaced, Resolve).DailyRewards.Select(row => row.ItemId).SequenceEqual(replacements),
+            "替换所有每日奖励保留真实模板编号");
         var truncated = tokens.ToList();
         truncated.RemoveAt(truncated.FindIndex(token => token.Type == 3 && Resolve(token.Value) == "[/daily reward items]") - 1);
         Reject<InvalidDataException>(() => PcRoomTimePointFile.Parse(truncated, Resolve));

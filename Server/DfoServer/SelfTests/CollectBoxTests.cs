@@ -93,6 +93,19 @@ internal static class CollectBoxTests
         That(permanent[1] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(permanent.AsSpan(2)) == 0 &&
             permanent[6] == 1, "无期限箱使用永久标志");
 
+        var noDateCatalog = new CollectBoxCatalog(CatalogText.Replace("[base expiration date] `2029-01-01`", "")
+            .Replace("[max expiration date] `2030-12-31 23:59:59`", ""));
+        var noDates = noDateCatalog.Get(2);
+        var oldPermanent = CollectBoxPackets.State(noDates, state, 2, baseline + 1000);
+        That(noDates.Extensions.Length == 2 && noDates.ResolveExpiration(baseline) is null &&
+            oldPermanent[6] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(oldPermanent.AsSpan(2)) == 0,
+            "删除两日期后即使保留续期物品及历史期限也按永久发送");
+        var permanentCharacter = new Character(1, 0, "Permanent", 1, new(1, 1, 0, 0, 0), null) with { CollectBox = state };
+        var rejectedExtension = new CollectBoxService(noDateCatalog, null!, null!).Extend(permanentCharacter,
+            new(2, 0, 5001), DateTimeOffset.FromUnixTimeSeconds(baseline));
+        That(!rejectedExtension.Accepted && rejectedExtension.Error == CollectBoxService.ErrorMissing && rejectedExtension.Plan is null,
+            "永久箱拒绝续期且不产生扣券计划");
+
         RunSpring2020Permanent();
 
         That(CollectBoxRequests.Select([2]) == 2 &&

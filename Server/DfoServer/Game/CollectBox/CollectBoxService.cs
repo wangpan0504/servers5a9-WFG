@@ -90,6 +90,9 @@ internal sealed class CollectBoxService(CollectBoxCatalog boxes, ItemCatalog ite
         if (!box.TryExtension(request.ItemId, out var extension) || request.SourceSlot > short.MaxValue)
             return CollectBoxResult.Reject(ErrorInvalidItem);
 
+        if (box.ResolveExpiration(character.CollectBox.Expiration(request.Box)) is null)
+            return CollectBoxResult.Reject(ErrorMissing);
+
         long seconds = now.ToUnixTimeSeconds();
         long current = character.CollectBox.Expiration(request.Box) ?? box.BaseExpiration ?? seconds;
         if (box.MaximumExpiration is { } maximum && current >= maximum)

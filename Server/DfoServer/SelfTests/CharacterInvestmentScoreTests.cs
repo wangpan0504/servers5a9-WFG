@@ -120,7 +120,11 @@ internal static class CharacterInvestmentScoreTests
         boxes[1] = new(1, 1, 2, null, null, [new(0, 9300, 0), new(1, 9301, 0)], []);
         var withBox = Character() with { CollectBox = new(1, [new(1, 0, 9300), new(2, 0, 9400)], []) };
         That(Score(withBox).Score == 50, "只计当前选中箱有效格，不计其它箱库存");
+        That(Score(withBox with { CollectBox = withBox.CollectBox with { Expirations = [new(1, 1000)] } }).Score == 50,
+            "无日期箱忽略历史期限并保留评分");
+        boxes[1] = new(1, 1, 2, 2000, null, [new(0, 9300, 0), new(1, 9301, 0)], []);
         That(Score(withBox with { CollectBox = withBox.CollectBox with { Expirations = [new(1, 1000)] } }).Score == 0, "收集箱到期不补分");
+        boxes[1] = new(1, 1, 2, null, null, [new(0, 9300, 0), new(1, 9301, 0)], []);
         That(Score(withBox with { CollectBox = new(1, [new(1, 1, 9300)], []) }).Partial, "箱内物品与物理格不符Partial");
         var random = title with { Core = title.Core with { Random0 = new(1, 7, 8), RandomChange = new(1, 99, 99), RandomState = 1 } };
         That(Module(Score(Character(random)), "random-option") == 40, "只计已提交魔封选项，不计预览且不将字节当百分比");
