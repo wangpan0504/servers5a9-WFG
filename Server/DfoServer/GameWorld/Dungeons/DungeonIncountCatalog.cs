@@ -39,6 +39,7 @@ internal sealed class DungeonIncountCatalog
     public ImmutableDictionary<int, int> SpecialWeeklyResetDay { get; }
     public DimensionDungeonCatalog? Dimension { get; private init; }
     public ImmutableArray<DungeonIncountRow> DaybreakRows { get; private init; } = [];
+    public DungeonIncountRow? ParticularHellRow { get; private init; }
     public ImmutableHashSet<int>? AvailableDungeons { get; private init; }
     public ImmutableArray<SingleDungeonGroup> SingleGroups { get; private init; } = [];
 
@@ -55,6 +56,7 @@ internal sealed class DungeonIncountCatalog
 
     public DungeonIncountRow? Find(int dungeon) => Rows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
         DaybreakRows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
+        (ParticularHellRow?.Dungeons.Contains(dungeon) == true ? ParticularHellRow : null) ??
         (Dimension?.Contains(dungeon) == true ? Dimension.DailyRow : null);
     public AccountIncountRow? FindAccount(int dungeon) => AccountRows.FirstOrDefault(row => row.Dungeon == dungeon);
     public bool ChargesOnClear(int dungeon) => SubOnClear.Contains(dungeon);
@@ -70,18 +72,37 @@ internal sealed class DungeonIncountCatalog
             ? DungeonCatalog.ParseDirectory(archive.ReadTokens("dungeon/dungeon.lst"), archive.ResolveString, "dungeon").Keys.ToImmutableHashSet()
             : null;
         var daybreak = ReadDaybreak(archive.ReadText("etc/crackofdaybreak.etc"));
+        var particular = ReadParticularHell(archive.ReadTokens(ParticularHellPartyCatalog.Path), archive.ResolveString);
         if (parsed.Rows.Any(row => row.Dungeons.Any(id => daybreak.Any(other => other.Dungeons.Contains(id)))))
             throw new InvalidDataException("黎明专表与通用次数重复登记");
+        if (parsed.Rows.Any(row => row.Dungeons.Contains(particular.CountKey)) || parsed.FindAccount(particular.CountKey) is not null ||
+            parsed.SubOnClear.Contains(particular.CountKey))
+            throw new InvalidDataException("魔界裂缝专表与通用次数、账号次数或通关计次冲突");
         var catalog = new DungeonIncountCatalog(parsed.Rows, parsed.AccountRows, parsed.ResetInfo,
             parsed.EnterAdd, parsed.SubOnClear, parsed.SpecialWeeklyResetDay)
-            { DaybreakRows = daybreak, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
+            { DaybreakRows = daybreak, ParticularHellRow = particular, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
         if (!archive.Contains(DimensionDungeonCatalog.Path)) return catalog;
         var dimension = new DimensionDungeonCatalog(archive);
-        if (catalog.Rows.Concat(daybreak).Any(row => row.Dungeons.Any(dimension.Contains)))
+        if (catalog.Rows.Concat(daybreak).Append(particular).Any(row => row.Dungeons.Any(dimension.Contains)))
             throw new InvalidDataException("异界专表与通用次数重复登记");
         return new(catalog.Rows, catalog.AccountRows, catalog.ResetInfo,
             catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay)
-            { Dimension = dimension, DaybreakRows = daybreak, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
+            { Dimension = dimension, DaybreakRows = daybreak, ParticularHellRow = particular, AvailableDungeons = available, SingleGroups = parsed.SingleGroups };
+    }
+
+    internal static DungeonIncountRow ReadParticularHell(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+    {
+        var document = new PvfTokenDocument(tokens, resolve);
+        var limits = document.Sections.Where(section => section.Name == "daily open chance").ToArray();
+        if (!document.Diagnostics.IsEmpty || limits.Length != 1 || limits[0].Values is not [{ Type: 0, Value: > 0 and <= byte.MaxValue }])
+            throw new InvalidDataException("魔界裂缝每日次数声明无效");
+        var indexes = document.Sections.Where(section => section.Name == "dungeon")
+            .SelectMany(section => section.Children.Where(child => child.Name == "index")).ToArray();
+        if (indexes.Any(section => section.Values is not [{ Type: 0, Value: > 0 }]) ||
+            indexes.Count(section => section.Values[0].Value == 316) != 1)
+            throw new InvalidDataException("魔界裂缝316副本声明缺失或重复");
+        // 同表中的530等副本各有自己的次数合同，不能把每日开放次数套到它们。
+        return new(0, [316], limits[0].Values[0].Value, false, 0) { HasCountNotification = false };
     }
 
     internal static ImmutableArray<DungeonIncountRow> ReadDaybreak(string text)

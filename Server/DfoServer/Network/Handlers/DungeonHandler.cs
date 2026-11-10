@@ -457,6 +457,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         await QuestProjection.DungeonTerrainBypassAsync(context, receipt.Entry, Guard);
         await PublishEntryAssetsAsync(context, receipt, Guard);
+        if (receipt.Entry.DungeonId == 316)
+            await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (receipt.Entry.DungeonId == 530)
             await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
         if (receipt.SpecialEntry?.Kind is DungeonSpecialEntryKind.Blood or DungeonSpecialEntryKind.Ultimate)

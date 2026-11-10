@@ -355,6 +355,8 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(scene.Character.Inventory.AccountWallet), "party_entry_cera", Current);
                 foreach (var count in scene.EnterCounts)
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
+                if (scene.Entry.DungeonId == 316)
+                    await RiftDailyProjection.RefreshParticularHellAsync(context, Current);
                 if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
                 RaidCombatProjection.AntonTimersForScene(context, Current);
                 if(scene.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());

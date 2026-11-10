@@ -336,6 +336,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
                 "dungeon_enter_count_initialize");
         await DimensionEntranceProjection.RefreshAsync(context);
         await DimensionEntranceProjection.AncientAsync(context);
+        await RiftDailyProjection.RefreshParticularHellAsync(context);
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
         if (marriage is not null)
@@ -416,6 +417,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         foreach (var count in context.Session.EnterCounts())
             await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_enter_count_daily", Guard);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
+        await RiftDailyProjection.RefreshParticularHellAsync(context, Guard);
         if (adventure is not null) await adventure.InformationAsync(context);
         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
         if (context.BoosterUses is { } boosters) await boosters.RefreshAsync();
