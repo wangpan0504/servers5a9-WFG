@@ -1934,6 +1934,7 @@ internal sealed partial class GameSession
                 ? snapshot.Identity : dungeon.Run.LastLoadingFact?.Identity,
             PassiveItems = dungeon.Ground.CurrentPassiveItems(),
             MonsterAi = dungeon.Run.CurrentMonsterAi,
+            HelperLanding = dungeon.Run.InitialHelperLanding,
             PartyActors = dungeon.PartyActors,
             GuildMemberships = dungeon.GuildMemberships,
             PartySlot = dungeon.PartySlot,
