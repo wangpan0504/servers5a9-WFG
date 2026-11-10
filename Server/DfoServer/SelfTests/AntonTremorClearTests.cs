@@ -68,6 +68,51 @@ internal static class AntonTremorClearTests
                     "每次访问独立完成加载");
             }
         }
+        foreach (int dungeon in new[] { 212, 214 })
+        foreach (bool leftFirst in new[] { true, false })
+        {
+            var (run, authority, plans) = Create(dungeon, officialEmpty: true);
+            var start = run.Snapshot.CurrentMap.Position;
+            var boss = run.Entry.BossMap.Position;
+            That(run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss).Outcome == DungeonRunOutcome.Rejected,
+                "官方空条件下两侧尚未击杀时仍拒绝直走上方终点");
+            var sides = leftFirst ? new[] { plans[1], plans[0] } : new[] { plans[0], plans[1] };
+            for (int index = 0; index < sides.Length; index++)
+            {
+                var plan = sides[index];
+                MoveOfficial(plan.Room.Map.Position);
+                var death = authority.Death(run.Snapshot.Identity, plan.Monsters[0].ObjectKey);
+                var prepared = run.PrepareConfirmedDeath(death).Pending!;
+                That(prepared.Result.ClearFact is null && run.ClearFact is null,
+                    "官方空条件下左右精英死亡仍不在支路结算");
+                run.ConfirmCommittedDeath(prepared);
+                MoveOfficial(start);
+                if (index == 0)
+                    That(run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss).Outcome == DungeonRunOutcome.Rejected,
+                        "官方空条件下只杀一侧仍不能进入终点");
+            }
+            That(run.Move(run.Snapshot.Identity, Guid.NewGuid(), boss).Outcome == DungeonRunOutcome.Accepted,
+                "官方空条件下两次已提交击杀放行上方终点");
+            var identity = run.Snapshot.Identity;
+            var action = Guid.NewGuid();
+            var loaded = run.CompleteLoading(identity, action);
+            That(loaded.ClearFact is { ConfirmedDeathEvents.Count: 2 } && run.HasCommittedAntonTremorClear &&
+                loaded.Snapshot.LivingMonsters.Contains(plans[3].Monsters[0].ObjectKey) &&
+                loaded.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement,
+                "官方空条件在双精英提交后加载终点即通关，不击杀69308、不等待15467");
+            That(run.CompleteLoading(identity, action).Outcome == DungeonRunOutcome.Duplicate &&
+                run.ClearFact == loaded.ClearFact, "官方空条件重复加载重放同一清图事实");
+            That(run.PreparePassiveClear(run.Snapshot.Identity, Guid.NewGuid(), 15467, 0) is null,
+                "官方空条件不绑定15467，加载后的物件报告不能当作唯一通关门");
+
+            void MoveOfficial(DungeonPoint target)
+            {
+                That(run.Move(run.Snapshot.Identity, Guid.NewGuid(), target).Outcome == DungeonRunOutcome.Accepted,
+                    "官方空条件支路沿原门墙移动");
+                That(run.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid()).Outcome == DungeonRunOutcome.Accepted,
+                    "官方空条件每次访问独立完成加载");
+            }
+        }
         foreach (var kind in new[] { RaidKind.Luke, RaidKind.Fiendwar })
         {
             var (run, _, _) = Create(212, kind);
@@ -78,7 +123,7 @@ internal static class AntonTremorClearTests
         Console.WriteLine($"PASS {Count - before} 安徒恩震颤双支路通关断言");
     }
 
-    static (SinglePlayerDungeonRun Run, Authority Authority, DungeonMonsterPlan[] Plans) Create(int dungeon, RaidKind kind = RaidKind.Anton)
+    static (SinglePlayerDungeonRun Run, Authority Authority, DungeonMonsterPlan[] Plans) Create(int dungeon, RaidKind kind = RaidKind.Anton, bool officialEmpty = false)
     {
         int first = dungeon == 212 ? 32220 : 32240;
         var maps = new[] { new DungeonMap("map", new(2, 1), first, "map/tremor-right.map"),
@@ -86,7 +131,7 @@ internal static class AntonTremorClearTests
             new DungeonMap("map", new(1, 1), first + 3, "map/tremor-start.map"),
             new DungeonMap("boss", new(1, 0), first + 2, "map/tremor-terminal.map") };
         var maze = new DungeonMaze(0, 3, 2, "AAIIAABBHHEE", [maps[2].Position], [maps[3].Position], maps, [])
-            { ClearConditions = [new("destroy object", 15467, 1)] };
+            { ClearConditions = officialEmpty ? [] : [new("destroy object", 15467, 1)] };
         var entry = new DungeonEntryPlan(99, 2, checked((uint)dungeon), 0, byte.MaxValue, 2, maze, maps[2], maps[3])
             { RaidEntry = new(Guid.NewGuid(), 0, 1, kind) };
         DungeonRoomMonster Monster(int id, string rank) => new(id, [id, 0, 20, 0, 0, 0, 1, 1], "[fixed]", rank, "monster/tremor.mob");
@@ -97,7 +142,7 @@ internal static class AntonTremorClearTests
         var authority = new Authority();
         That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new(plans,
             maps.Where(map => map != maps[2]).Select(map => new DungeonRouteConnection(maps[2].Position, map.Position)).ToArray())
-            { PassiveClearTarget = 15467 },
+            { PassiveClearTarget = officialEmpty ? null : 15467 },
             authority, out var run, out _), "四房正式Run创建成功");
         run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
         return (run, authority, plans);
