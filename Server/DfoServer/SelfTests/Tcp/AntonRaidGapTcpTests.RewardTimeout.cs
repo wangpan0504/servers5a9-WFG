@@ -21,12 +21,14 @@ internal static partial class AntonRaidGapTcpTests
             clock.Advance(25);
             That(AntonTcpProbe.Barrier(peer, "影片尚未结束").All(p => p.Opcode is not (600 or 24)), "原20秒截止不再提前发奖或回城");
             peer.Send(659, [1]); AntonTcpProbe.Barrier(peer, "影片完成后开始20秒选牌");
+            byte card = partial ? (byte)3 : (byte)0;
             if (partial)
             {
-                peer.Send(660, [1, 0]);
+                peer.Send(660, [1, card]);
                 That(AntonTcpProbe.Barrier(peer, "部分领取").Any(p => p is { Kind: 1, Opcode: 660, Body: [1] }),
-                    "期限内第一牌种提交资产");
+                    "期限内非零牌位的第一牌种提交资产");
             }
+            string firstReceipt = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE kind=1");
             peer.Send(42);
             AntonTcpProbe.Barrier(peer, "结算期回城");
             string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") +
@@ -52,7 +54,9 @@ internal static partial class AntonRaidGapTcpTests
                 fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY phase,kind") &&
                 Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts")[0][0]) == (partial ? 3 : 2),
                 "到期在线普通成员提交1/3，部分领取PC成员补齐2/3，均不增发");
-            peer.Send(660, [0, 0]);
+            That(!partial || firstReceipt == fixture.Snapshot("SELECT * FROM character_raid_reward_receipts WHERE kind=1"),
+                "自动补齐不改写已手领非零牌位的原资产回执");
+            peer.Send(660, [0, card]);
             That(AntonTcpProbe.Barrier(peer, "超时后回放").Any(p => p is { Kind: 1, Opcode: 660, Body: [1] }) &&
                 Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts")[0][0]) == (partial ? 3 : 2),
                 "休息态重放到期已提交回执，不增发");

@@ -2,6 +2,14 @@ namespace DfoServer.Persistence;
 
 internal static class DungeonCardRewardSchema
 {
+    // 只排除刷新前已冻结的奖励额度，不改写牌面、领取状态或原实例身份。
+    internal const string ResetSql = """
+        CREATE TABLE character_clear_reward_resets(
+          character_id INTEGER NOT NULL,instance_id TEXT NOT NULL,
+          PRIMARY KEY(character_id,instance_id),
+          FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_card_rewards(character_id,instance_id) ON DELETE CASCADE);
+        """;
+
     internal const string Sql = """
         CREATE TABLE character_dungeon_card_rewards(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL,

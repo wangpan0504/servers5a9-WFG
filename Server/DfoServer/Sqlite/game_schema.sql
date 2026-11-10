@@ -182,6 +182,22 @@ CREATE TABLE account_dungeon_incount(
   used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
   PRIMARY KEY(account,dungeon)
 );
+CREATE TABLE account_dungeon_incount_extra(
+  account TEXT NOT NULL,dungeon INTEGER NOT NULL CHECK(dungeon>0),
+  period INTEGER NOT NULL,extra INTEGER NOT NULL CHECK(extra BETWEEN 0 AND 1000000),
+  PRIMARY KEY(account,dungeon),FOREIGN KEY(account) REFERENCES accounts(account_id));
+CREATE TABLE character_dungeon_reward_extra(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+  target INTEGER NOT NULL CHECK(target>0),day INTEGER NOT NULL,
+  daily_extra INTEGER NOT NULL CHECK(daily_extra BETWEEN 0 AND 1000000),week INTEGER NOT NULL,
+  weekly_extra INTEGER NOT NULL CHECK(weekly_extra BETWEEN 0 AND 1000000),
+  PRIMARY KEY(character_id,kind,target),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+CREATE TABLE account_single_dungeon_bindings(
+  account TEXT NOT NULL,group_id INTEGER NOT NULL CHECK(group_id IN(1,3)),
+  period INTEGER NOT NULL,character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  PRIMARY KEY(account,group_id,character_id),
+  FOREIGN KEY(account) REFERENCES accounts(account_id));
 CREATE TABLE character_exp_bonus(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,
@@ -1024,6 +1040,11 @@ CREATE TABLE character_dungeon_card_rewards(
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account),
   FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_settlement_receipts(character_id,instance_id),
   FOREIGN KEY(mail_id) REFERENCES mailbox_messages(mail_id));
+
+CREATE TABLE character_clear_reward_resets(
+  character_id INTEGER NOT NULL,instance_id TEXT NOT NULL,
+  PRIMARY KEY(character_id,instance_id),
+  FOREIGN KEY(character_id,instance_id) REFERENCES character_dungeon_card_rewards(character_id,instance_id) ON DELETE CASCADE);
 
 CREATE TABLE server_events(
   event_id INTEGER NOT NULL PRIMARY KEY CHECK(event_id BETWEEN 1 AND 65535),

@@ -12,6 +12,7 @@ internal static class DungeonItemDropCatalogTests
     {
         int checks = Count;
         ParsedCandidateReuse();
+        MagicSealedDeclaration();
         ItemTemplate Template(int id, ItemKind kind, int grade, int rarity, int weight) =>
             new(id, kind, 0, 1, 0, 1000, 1, rarity, grade, "[free]", ushort.MaxValue, 0, "合成掉落") { CreationRate = weight };
         ItemTemplate[] source = [Template(100, ItemKind.Consumable, 1, 0, 2), Template(101, ItemKind.Consumable, 1, 0, 3),
@@ -82,6 +83,37 @@ internal static class DungeonItemDropCatalogTests
             "资源声明的副职业材料复用已有堆叠Core和材料页，不因枚举不同从掉落中丢失");
         Reject<InvalidDataException>(() => DungeonDropCreation.Create(equipment, 1, _ => -1, now), "非法随机值不能改成满品级成功");
         Console.WriteLine($"PASS {Count - checks} 资源掉落候选权重与分类断言");
+    }
+
+    static void MagicSealedDeclaration()
+    {
+        // 使用真实模板装配与import继承，避免只重复判断表达式而漏掉字段传播。
+        (string Declaration, bool Expected)[] declarations = [
+            ("", true), ("[random option]\n0", false), ("[random option]\n2", true),
+            ("[random option]\n-1", false), ("[random option]\n", false),
+            ("[random option]\n1 2", false), ("[random option]\nabc", false),
+            ("[random option]\n2147483648", false), ("[random option]\n1\n[random option]\n1", false)];
+        foreach (int rarity in new[] { 0, 1, 2, 3, 4 })
+        foreach (var (declaration, expected) in declarations)
+        {
+            const string path = "equipment/child.equ";
+            var document = EquipmentFile.ReadScript(source => source == path
+                ? "[import script]\n`base.equ`\n" + declaration
+                : "[equipment type]\n`[coat]`\n[creation rate]\n1\n[rarity]\n" + rarity + "\n[random option]\n1", path);
+            var items = new ItemCatalog(null!, new Dictionary<int, string> { [100] = "child.equ" }, new Dictionary<int, string>(), 1000);
+            var template = items.ParsedDropCandidate(100, "child.equ", document)!;
+            That(template.MagicSealedEquipment == (expected && (rarity is 2 or 3)) && template.RandomOptionEquipment,
+                "魔封精确资格遵守最近唯一正整数、稀有度及原标签兼容: " + rarity + "/" + declaration);
+        }
+        foreach (string type in new[] { "[coat]", "[skin avatar]" })
+        {
+            var items = new ItemCatalog(null!, new Dictionary<int, string> { [100] = "plain.equ" }, new Dictionary<int, string>(), 1000);
+            var document = new PvfDocument("[equipment type]\n`" + type + "`\n[creation rate]\n1\n[rarity]\n2" +
+                (type == "[coat]" ? "" : "\n[random option]\n1"));
+            var template = items.ParsedDropCandidate(100, "plain.equ", document)!;
+            That(!template.MagicSealedEquipment && template.RandomOptionEquipment == (type != "[coat]"),
+                "无声明普通装备与带标签装扮均不冒充魔封装备");
+        }
     }
 
     static void ParsedCandidateReuse()

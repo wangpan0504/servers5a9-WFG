@@ -5,6 +5,8 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Party;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Raids;
 using DfoServer.GameWorld.Towns;
 
@@ -17,6 +19,7 @@ internal sealed record RaidLifecycleAdmission(string Source, DateTimeOffset At, 
 internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory)
 {
     public RaidLifecycleAdmission? Lifecycle { get; init; }
+    public SingleDungeonAdmission? SingleBinding { get; init; }
 }
 internal sealed record RaidStartReceipt(RaidParty Party, ImmutableArray<RaidStartReservation> Reservations,
     ImmutableArray<Character> Characters, PartyNotice[] Squads, RaidCost Cost)
@@ -56,7 +59,8 @@ internal sealed class RaidStartCommands : IDisposable
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
     AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null,
-    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null, DfoServer.Game.Dungeons.DungeonDropControlSettings? dropControl = null)
+    FiendwarRewards? fiendwarRewards = null, Random? fiendwarMazeRandom = null, PreyGuideRewards? preyTeamRewards = null,
+    DungeonDropControlSettings? dropControl = null, DungeonIncountCatalog? incounts = null)
 {
 #if DEBUG
     internal bool DebugIgnorePreyEntryLimits { get; init; }
@@ -210,6 +214,13 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             timeout = new(completion.Source, Enumerable.Repeat(total, definition.Resources.Script.Phases.Length).ToImmutableArray());
         }
         int guideRoute = fiendwar && expected.Guide ? store.FiendwarGuideRoute(actor, now) : 0;
+        if (preyGuide && incounts is not null)
+        {
+            var group = incounts.SingleGroups.SingleOrDefault(group => group.Id == 3);
+            if (group is null) return new(19, "prey-guide-binding-group-missing");
+            var binding = SingleDungeonAdmission.At(group, clock ?? TimeProvider.System);
+            reservations = reservations.Select(row => row with { SingleBinding = binding }).ToImmutableArray();
+        }
         if (fiendwar)
         {
             if (expected.Members.Any(member => RaidAdmissionPlan.Rejection(member.Actor.Session.ChannelEntry,
@@ -276,6 +287,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             return startResult;
         }
         catch (RaidLifecycleRejectedException error) { return new(19, error.Reason); }
+        catch (SingleDungeonAdmissionRejectedException error) { return new(19, error.Message); }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }
         finally { if (!installed) timerLease?.Dispose(); }

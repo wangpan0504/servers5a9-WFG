@@ -202,6 +202,15 @@ internal static partial class DungeonSpecificCardRewardsTests
                 Card.TayberrsWish.ItemId: 10305617, Card.TayberrsWish.Count: 12 } &&
             fixture.Read().Inventory.Items.SequenceEqual(before.Inventory.Items),
             "泰波尔斯真实通关冻结两组材料，选牌前不提前写入背包");
+        Reject<InvalidOperationException>(() => fixture.Session.ResetRewardLimits(), "在线结算期间GM刷新仍拒绝，不绕开原会话门禁");
+        That(fixture.Repository.LoadClearRewardLimitUsage(fixture.Owner, before.Id,
+            clearLimits.FindDungeon(representative)!, ClearRewardLimitPolicy.Period(clock.GetUtcNow())) == new DungeonIncountUsage(1, 1),
+            "泰波尔斯真实通关冻结即计入当日1次和当周1次，不等待选牌领取");
+        string frozenJson = (string)fixture.Query("SELECT plan_json FROM character_dungeon_card_rewards")!;
+        // 单独验证仓储合同：排除已冻结额度后，原牌面仍可沿正式结算与领取入口回放。
+        That(fixture.Repository.ResetRewardLimits(fixture.Owner).ClearRewardRows == 1 &&
+            fixture.Query("SELECT plan_json FROM character_dungeon_card_rewards") is string afterResetJson && afterResetJson == frozenJson,
+            "仓储刷新单独排除次数，不改真实未领牌面的完整冻结JSON");
         var replay = fixture.Session.SettleFormalDungeon(before.Id, 99, 99, report, dungeons, clear, growth, policy);
         That(replay.Outcome == DungeonRunOutcome.Duplicate && replay.Card == settled.Card && draws == frozenDraws,
             "泰波尔斯重复通关复用同一专属牌面，不重抽通用装备");
@@ -227,7 +236,9 @@ internal static partial class DungeonSpecificCardRewardsTests
             "泰波尔斯重复选牌不再次增加物品、金币或角色版本");
         var limitUsage = fixture.Repository.LoadClearRewardLimitUsage(fixture.Owner, afterClaim.Id,
             clearLimits.FindDungeon(representative)!, ClearRewardLimitPolicy.Period(clock.GetUtcNow()));
-        That(limitUsage == new DungeonIncountUsage(1, 1),
-            "泰波尔斯通关后按clearrewardlimit组1持久统计当日1次、当周1次材料奖励");
+        That(limitUsage == default && fixture.Query("SELECT plan_json FROM character_dungeon_card_rewards") is string afterClaimJson && afterClaimJson == frozenJson,
+            "刷新前的真实旧牌面领取与重复选牌不复活当日及当周次数，原JSON保持");
+        That(policy.Prepare(dungeons.Get(representative), entryDifficulty, 1, utcNow: clock.GetUtcNow(),
+            clearRewardUsage: limitUsage).Item is { ItemId: 10305616, Count: 36 }, "刷新后的下一份奖励计划重新冻结完整材料");
     }
 }

@@ -257,6 +257,7 @@ internal static class ServerRuntime
         var epicProductionProjection=new EpicProductionProjection(clock);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
         var incounts = LoadIncounts(pvf);
+        var ticketRewardLimits = incounts is null ? null : ClearRewardLimitCatalog.Load(pvf);
         var weaponSkinService = new InventorySkinStorageService(itemResources.Items, itemResources.Skins,
             itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock);
         log.Write("weapon_skin_catalog", new { Recipes = itemResources.Skins.Recipes.Count,
@@ -560,7 +561,7 @@ internal static class ServerRuntime
         var pvpRecords = new Game.Pvp.PvpRecordQuery(repository, repository);
         var raidStart = new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards,
             raidSettings.AntonPhaseProgressEnabled || preyReady || preyTeamReady || fiendwarReady ? lukeTimers : null,
-            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards, dropControl.Settings)
+            preyRewards, fiendwarRewards, fiendwarMazeRandom, preyTeamRewards, dropControl.Settings, incounts)
 #if DEBUG
             { DebugIgnorePreyEntryLimits = true, DebugIgnorePreyRewardLimits = true }
 #endif
@@ -789,7 +790,7 @@ internal static class ServerRuntime
                 dungeonCatalog, rooms, drops, itemResources.Items, itemResources.EpicPieces, strongwayCatalog, clock,
                 context => ((DungeonHandler)dungeon).DepartStrongway2019Async(context), PrepareDrops, online: online);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
-            var clearRewardLimits = ClearRewardLimitCatalog.Load(pvf);
+            var clearRewardLimits = ticketRewardLimits ?? ClearRewardLimitCatalog.Load(pvf);
             var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items, clearRewardLimits);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
@@ -1033,7 +1034,8 @@ internal static class ServerRuntime
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler, guildEconomyHandler, guildExperienceHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
                 new DimensionEntryTicketService(itemResources.Items, clock),
-                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log),
+                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock,
+                    ticketRewardLimits), repository, inventoryProjection, log),
                 guildDungeonScrollHandler, cargoHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,

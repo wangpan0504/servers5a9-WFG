@@ -99,7 +99,7 @@ internal sealed partial class DungeonHandler
             if (notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated)
                 log.Write("evildom_war_progress", new { Connection = context.Id, view.BattleId, view.Revision,
                     view.Completed, States = view.Dungeons.Select(row => new { row.Id, row.State }).ToArray() });
-            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode,
+            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode, view.Completed,
                 (int)(view.Deadline - context.Session.EvildomWarNow).TotalSeconds, view.Dungeons),
                 "evildom_war_info", () => context.Session.CanPublishEvildomWar(view));
             if (warReward is not null)
@@ -128,8 +128,9 @@ internal sealed partial class DungeonHandler
                     var groups = notice.EvildomWarRewards.Select(member =>
                         new EvildomWarPackets.RewardGroup(member.Member.Slot, member.Receipt.Commit.Plan.Reward.Items.Select(row =>
                             new EvildomWarPackets.RewardRow(row.Group, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
-                    // 首字段单位仍未闭合，保留0；外层是真实成员槽位，内层是原奖励卡种。
-                    await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST, EvildomWarPackets.Rewards(0, groups),
+                    // 用时随原完成事实冻结；奖励提交或发送延迟不能计入通关时间。
+                    await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST,
+                        EvildomWarPackets.Rewards(warReward.Commit.Plan.Completion.ElapsedMilliseconds, groups),
                         "evildom_war_reward", Guard);
                     if (sent) context.Session.ConfirmEvildomWarRewardPublished(warReward);
                 }
@@ -137,6 +138,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_mail", Guard);
                 log.Write("evildom_war_reward_committed", new { Connection = context.Id, view.BattleId,
                     Character = warReward.Admission.CharacterId, warReward.Commit.Duplicate,
+                    warReward.Commit.Plan.Completion.ElapsedMilliseconds, TimeKnown = view.StartedAt is not null,
                     MailIds = warReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.Rule });
             }
             return;

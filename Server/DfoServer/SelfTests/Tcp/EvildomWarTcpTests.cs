@@ -47,8 +47,9 @@ internal static class EvildomWarTcpTests
             academyMaze.MapSpecification!.Select(map => map.Id).SequenceEqual([500095, 500096, 500097, 500098]),
             "5424顶层完整布局兼容解析，尺寸与四张地图均保持真实资源");
         // 固定本组业务时钟，保留全队1671整包精确断言；实际发送跨秒不应改变同一战况的测试预期。
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "evildom-war"), resources: resources, gm: true,
-            evildomHiddenDraw: _ => 0, clock: new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow));
+            evildomHiddenDraw: _ => 0, clock: clock);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out var fatigueMode) &&
             fatigueMode == "OK {\"infiniteFatigue\":false}", "魔界大战资格与扣费回归显式关闭开发无限疲劳");
@@ -162,6 +163,7 @@ internal static class EvildomWarTcpTests
                 That(All()[0].Any(packet => packet is { Kind: 1, Opcode: 15 } && packet.Body[0] == 0) && fixture.Snapshot() == assets,
                     "开战前的15不能绕过专用准入");
                 var requester = scenario == "not-leader" ? peers[1] : leader;
+                var battleStartedAt = clock.GetUtcNow();
                 requester.Send(1652);
                 var started = All(requester);
                 bool accepted = scenario is "rollback" or "hard" or "normal" or "guide" or "training-solo" or
@@ -209,7 +211,8 @@ internal static class EvildomWarTcpTests
                 }
                 var entered = All();
                 That(entered.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 1671 } &&
-                    packet.Body[16 + stageOrder[0] * 7] == 1)), "全员入场事务完成后同步1671，将选中前置图置为战斗中");
+                    packet.Body[0] == 2 && packet.Body[16 + stageOrder[0] * 7] == 1)),
+                    "全员入场事务完成后同步战役state2，将选中前置图置为战斗中");
                 That(entered.All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 28 }) && rows.Any(packet => packet is { Kind: 0, Opcode: 29 })) &&
                     entered.All(rows => Array.FindIndex(rows, packet => packet.Opcode == 28) < Array.FindIndex(rows, packet => packet.Opcode == 29)),
                     "普通/困难/引导均沿正式28→29创建真实地图和怪物: " + scenario);
@@ -279,6 +282,7 @@ internal static class EvildomWarTcpTests
                     for (int step = 0; step < stageOrder.Length; step++)
                     {
                         int stage = stageOrder[step];
+                        if (stage == 4) clock.Advance(TimeSpan.FromMilliseconds(256780));
                         if (step == 1 && scenario is "hard" or "normal-solo")
                         {
                             foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
@@ -312,6 +316,10 @@ internal static class EvildomWarTcpTests
                                     rewardNotices++;
                                     That(stage == 4 && killed.All(rows => rows.Count(packet => packet is { Kind: 0, Opcode: 1673 }) == 1),
                                         "仅王座真实完成后向每位成员发布一次1673");
+                                    That(killed.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body[0] == 3 &&
+                                        Array.FindIndex(rows, packet => packet is { Kind: 0, Opcode: 1671 }) <
+                                        Array.FindIndex(rows, packet => packet is { Kind: 0, Opcode: 1673 })),
+                                        "三模式全员先收到1671成功态3，再收到1673，沿原窗口收尾而不改变奖励包序");
                                     var teamRewards = peers.Select(peer =>
                                     {
                                         string json = (string)fixture.Query("SELECT reward_json FROM character_evildom_war_rewards WHERE character_id=$p0 AND delivered=1", peer.Id)[0][0];
@@ -324,7 +332,7 @@ internal static class EvildomWarTcpTests
                                         "奖励外层槽位来自实际付费席位，重连后仍唯一且不借用peers索引");
                                     byte[] expected = Build(writer =>
                                     {
-                                        writer.Write(0u); writer.Write((byte)teamRewards.Length);
+                                        writer.Write(256780u); writer.Write((byte)teamRewards.Length);
                                         foreach (var member in teamRewards)
                                         {
                                             writer.Write(member.Slot); writer.Write((byte)member.Saved.Reward.Items.Length);
@@ -343,6 +351,9 @@ internal static class EvildomWarTcpTests
                                             peerPackets.Any(packet => packet is { Kind: 0, Opcode: 14 }),
                                             "显示奖励之前每人独立回执已提交，翻牌奖励直接入包并下发14背包增量");
                                         var saved = member.Saved;
+                                        That(saved.Completion.ElapsedMilliseconds == 256780 &&
+                                            saved.Completion.Created == battleStartedAt.AddMilliseconds(256780),
+                                            "三模式真实结算冻结同一开战起点与非整数秒用时，逐成员奖励快照均保留毫秒");
                                         That(saved.Rule == EvildomWarRewardPolicy.Rule &&
                                             saved.Reward.Items.All(row => row.Group != 2) &&
                                             saved.Reward.Items.Where(row => row.Group == 0 && resources.ItemResources.Items.Get(row.ItemId).Kind == ItemKind.Talisman).All(row => row.Count == 1) &&
@@ -389,8 +400,10 @@ internal static class EvildomWarTcpTests
                                     completed = changed[0]!;
                                     bool sealsCleared = stageOrder.Take(step + 1).Count(index => index < 4 && info[15 + index * 7] < 2) == 2;
                                     That(changed.All(body => body is not null && body.AsSpan().SequenceEqual(completed)) &&
+                                        completed[0] == (stage == 4 ? 3 : 2) && completed[1] == mode && U32(completed, 6) == 5 &&
+                                        U32(completed, 2) == (uint)(catalog.LimitTime - (stage == 4 ? 257 : 0)) &&
                                         completed[16 + stage * 7] == 2 && completed[44] == (stage == 4 ? 2 : sealsCleared ? 0 : 3),
-                                        "全队真实通关同步完成状态，钥匙魔法阵各解一层，剑盾可选");
+                                        "前置小图保留战役state2，王座完成才用3；全队保留真实非零剩余秒数、五图与结界状态");
                                 }
                             }
                             if (actualDungeon != stageDungeon && point == new DungeonPoint(stageEntry[8], stageEntry[9]))
@@ -445,10 +458,11 @@ internal static class EvildomWarTcpTests
                             string clearedMails = fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id");
                             leader.Send(39, lastDeath);
                             That(All().All(rows => !rows.Any(packet => packet.Opcode == 1673) &&
-                                (stage == 4 || actualDungeon != stageDungeon || !rows.Any(packet => packet.Opcode == 1671))) && fixture.Snapshot() == clearedAssets &&
+                                (stage == 4 ? rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body.SequenceEqual(completed!) :
+                                    actualDungeon != stageDungeon || !rows.Any(packet => packet.Opcode == 1671))) && fixture.Snapshot() == clearedAssets &&
                                 fixture.Snapshot("SELECT reward_json,mail_ids,delivered FROM character_evildom_war_rewards ORDER BY character_id") == clearedRewards &&
                                 fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id") == clearedMails,
-                                "重复末怪可以同步最终战况但不重复弹奖或写入资产");
+                                "重复王座末怪重同步同一成功态3及真实剩余时间，不重复弹奖或写入资产");
                         }
                         foreach (var peer in peers)
                         {

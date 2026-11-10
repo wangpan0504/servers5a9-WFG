@@ -59,7 +59,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, entry.HellPartyMode,
                     monster.HellRewardRolls, entry.Difficulty, entry.IsHellLegend || epicEquipment is not null || materials?.UsesHarlemFragments(entry) == true,
                     epicEquipment, entry.IsInfernoParty ? entry.Maze.IsInfernoSpecial ? 13 : 11 : null,
-                    legacyHell?.EquipmentRange(entry));
+                    legacyHell?.EquipmentRange(entry), legacyHell?.MatchesOrdinaryReward(entry, monster) == true);
             if (legacyHell is not null) plan = legacyHell.Extend(plan, entry, monster);
             if (harlemEpics is not null) plan = harlemEpics.Extend(plan, entry, monster, hellRewards);
             if (harlemEpics is not null) plan = harlemEpics.ExtendLegendRare(plan, entry, monster);

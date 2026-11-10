@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Dungeons;
 using static DfoServer.Testing.TestCheck;
 
@@ -94,7 +95,70 @@ internal static class EvildomWarBattleTests
             "已离线成员的迟到事实不混入幸存队员通关");
         That(surviving.Complete(originalMembers[..^1].Select(run => new DungeonClearFact(run, 5426, [Guid.NewGuid()])).ToArray(), now)
             ?.Dungeons[0].State == 2, "离线成员释放原Run后，幸存队员全部真实事实仍能推进战役");
+        ResultTime();
         Console.WriteLine($"PASS evildom war battle {Count - before}");
+
+        void ResultTime()
+        {
+            foreach (byte mode in new byte[] { 0, 1, 2 })
+            foreach (uint elapsed in new uint[] { 0, 256780 })
+            {
+                var battle = new EvildomWarBattle(mode, now.AddMinutes(50), rows, startedAt: now);
+                int members = mode == 2 ? 1 : 4;
+                foreach (var row in rows.Take(2))
+                {
+                    var runs = Runs(members);
+                    battle.Enter((uint)row.Id, runs, now);
+                    battle.Complete(runs.Select(run => new DungeonClearFact(run, (uint)row.Id, [Guid.NewGuid()])).ToArray(), now);
+                }
+                var throne = Runs(members);
+                battle.Enter(5422, throne, now);
+                var facts = throne.Select(run => new DungeonClearFact(run, 5422, [Guid.NewGuid()])).ToArray();
+                var completedAt = now.AddMilliseconds(elapsed);
+                var fighting = battle.View;
+                if (mode == 0 && elapsed != 0)
+                {
+                    Reject<IOException>(() => battle.Complete(facts, completedAt, (_, _) => throw new IOException("time checkpoint failure")),
+                        "用时随原完成检查点提交，SQL失败不能提前安装完成时间");
+                    That(ReferenceEquals(battle.View, fighting) && battle.Completion is null,
+                        "完成持久化失败保留原活动Run、起点及未完成状态");
+                }
+                EvildomWarCheckpoint? committed = null;
+                battle.Complete(facts, completedAt, (_, snapshot) => { snapshot.Validate(); committed = snapshot; });
+                That(battle.Completion is { } completion && completion.Created == completedAt &&
+                    completion.ElapsedMilliseconds == elapsed && completion.Facts.Length == members,
+                    "三模式均从开战到真实全员终点冻结毫秒，零时长及256780毫秒不按整秒取整");
+                var restored = EvildomWarBattle.Restore(JsonSerializer.Deserialize<EvildomWarCheckpoint>(JsonSerializer.Serialize(committed))!);
+                var restoredCompletion = restored.Completion!;
+                That(restored.View.StartedAt == now && restoredCompletion.ElapsedMilliseconds == elapsed &&
+                    restored.Complete(facts, completedAt.AddMinutes(1)) is null &&
+                    ReferenceEquals(restored.Completion, restoredCompletion) && restoredCompletion.Created == completedAt,
+                    "检查点JSON恢复及迟到重复终末保留原起点、完成时刻和用时，不重新计时");
+                if (mode != 0 || elapsed == 0) continue;
+                var checkpoint = committed!;
+                Reject<InvalidDataException>(() => (checkpoint with { Completion = checkpoint.Completion! with { ElapsedMilliseconds = elapsed + 1 } }).Validate(),
+                    "完成用时与冻结起止不符时拒绝，不能以客户端限幅掩盖坏数据");
+                Reject<InvalidDataException>(() => (checkpoint with { View = checkpoint.View with { StartedAt = completedAt.AddTicks(1) } }).Validate(),
+                    "完成早于开战时拒绝，即使差值不足一毫秒也不能夹零");
+                Reject<InvalidDataException>(() => (checkpoint with { View = checkpoint.View with { Deadline = completedAt } }).Validate(),
+                    "完成必须严格早于原截止");
+                Reject<InvalidDataException>(() => (checkpoint with
+                {
+                    View = checkpoint.View with { Deadline = now.AddDays(100) },
+                    Completion = checkpoint.Completion! with { Created = now.AddMilliseconds((long)uint.MaxValue + 1), ElapsedMilliseconds = 0 }
+                }).Validate(), "超过u32毫秒时拒绝，不截断或夹到展示上限伪造合法用时");
+                var legacyJson = JsonSerializer.SerializeToNode(checkpoint)!;
+                legacyJson["View"]!.AsObject().Remove("StartedAt");
+                legacyJson["Completion"]!.AsObject().Remove("ElapsedMilliseconds");
+                var legacy = JsonSerializer.Deserialize<EvildomWarCheckpoint>(legacyJson.ToJsonString())!;
+                legacy.Validate();
+                var oldBattle = EvildomWarBattle.Restore(legacy);
+                var oldCompletion = oldBattle.Completion!;
+                That(oldBattle.View.StartedAt is null && oldCompletion.ElapsedMilliseconds == 0 &&
+                    oldBattle.Complete(facts, completedAt.AddMinutes(1)) is null && ReferenceEquals(oldBattle.Completion, oldCompletion),
+                    "旧JSON没有起点和用时仍可恢复，保持未知0而不从当前资源倒算");
+            }
+        }
 
         DungeonRunIdentity[] Runs(int count = 4)
         {

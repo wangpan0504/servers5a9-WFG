@@ -147,15 +147,43 @@ internal static class AntonResourceRewardLifecycleTests
             receipts.Add(squad!);
             sessions[0].ConfirmRaidRewardPublished(squad!);
             That(Claim(0, 3) is null, "内部小队3已提交后外部660仍不能重放回执或终结动画");
-            var automatic = new List<byte>(); sessions[1].AntonAutoRewardArrived = receipt =>
-            { automatic.Add(receipt.Prepared.Kind); receipts.Add(receipt); };
+            var pcParty = Claim(1, 1, 2)!;
+            receipts.Add(pcParty);
+            sessions[1].ConfirmRaidRewardPublished(pcParty);
+            That(pcParty.Prepared.Card == 2 && Claim(1, 1, 0) is null && Claim(1, 1, 3) is null &&
+                Scalar("SELECT count(*) FROM character_raid_reward_receipts") == 3,
+                "PC成员非零选位先提交团队牌，外部请求不能改用其它牌位重放");
+            var automatic = new List<RaidRewardReceipt>();
+            bool failPublication = true;
+            sessions[1].AntonAutoRewardArrived = receipt =>
+            {
+                automatic.Add(receipt);
+                if (!receipt.Commit.Duplicate) receipts.Add(receipt);
+                // 只注入发布回调失败；实际PC房资产已提交，后续显式重试必须复用该回执。
+                if (receipt.Prepared.Kind == 2 && failPublication)
+                {
+                    failPublication = false;
+                    throw new IOException("fixture anton reward publication failure");
+                }
+            };
+            Reject<IOException>(() => sessions[1].AutoClaimAntonReward(battle, 0, repository, items.Items,
+                items.GoldLimits, items.EpicPieces, clock.GetUtcNow()), "自动领奖发布失败不得吞掉异常或提前确认");
+            var pcroom = automatic.Single(receipt => receipt.Prepared.Kind == 2);
+            That(battle.View.State == AntonRaidBattleState.Reward && pcroom.Prepared.Card == 2 &&
+                !battle.HasConfirmedLukeReward(actors[1].Character, 0, 2) &&
+                Scalar("SELECT count(*) FROM character_raid_reward_receipts") == 4,
+                "发布失败保留已提交PC房资产与原牌位，未确认前不推进休息、不提前领取小队牌");
+            automatic.Clear();
             bool automaticClaimed = false;
             await AntonCardBackProjectionTests.VerifyQueuedAsync(actors[0], battle, root, "same-phase",
                 () => automaticClaimed = sessions[1].AutoClaimAntonReward(battle, 0, repository, items.Items,
                     items.GoldLimits, items.EpicPieces, clock.GetUtcNow()), expectedAck: true);
             That(automaticClaimed &&
-                automatic.SequenceEqual(new byte[] { 1, 2, 3 }) && battle.View.State == AntonRaidBattleState.Intermission,
-                "自动兜底沿真实领取链按团队1、PC房2、小队3提交，然后才进入休息");
+                automatic.Select(receipt => receipt.Prepared.Kind).SequenceEqual(new byte[] { 1, 2, 3 }) &&
+                automatic.Take(2).All(receipt => receipt.Commit.Duplicate) && !automatic[2].Commit.Duplicate &&
+                ReferenceEquals(automatic[0].Prepared, pcParty.Prepared) && ReferenceEquals(automatic[1].Prepared, pcroom.Prepared) &&
+                battle.View.State == AntonRaidBattleState.Intermission,
+                "自动重试沿团队1、PC房2原非零回执继续，最后只提交一次小队3再进入休息");
             That(receipts.Count == 5 && receipts.All(receipt => receipt.Prepared.Character == receipt.Commit.Character.Id &&
                     receipt.Prepared.Grants.SequenceEqual(policies[Array.FindIndex(actors, actor => actor.Character == receipt.Prepared.Character)]
                         .Offers.Single(offer => offer.Kind == receipt.Prepared.Kind).Grants)) &&
@@ -184,9 +212,12 @@ internal static class AntonResourceRewardLifecycleTests
             }
             var revision = sessions[1].Selected!.Revision;
             That(sessions[1].AutoClaimAntonReward(battle, 0, repository, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()) &&
-                sessions[1].Selected!.Revision == revision, "进入休息后重复到期回调不再发奖");
+                sessions[1].Selected!.Revision == revision && automatic.Count == 3, "进入休息后重复到期回调不再发奖或发布");
             await AntonCardBackProjectionTests.VerifyQueuedAsync(actors[1], battle, root, "old-epoch",
-                () => sessions[1].ReturnToRoster(), expectedAck: false, card: 0);
+                () => sessions[1].ReturnToRoster(), expectedAck: false, card: pcParty.Prepared.Card);
+            That(sessions[1].AutoClaimAntonReward(battle, 0, repository, items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()) &&
+                automatic.Count == 3 && Scalar("SELECT count(*) FROM character_raid_reward_receipts") == 5,
+                "旧选角代的到期回调不能发布旧回执或再写资产");
             var clockErrors = new List<string>();
             await using (var timers = new LukeRaidClocks(clock, repository, (stage, _) => clockErrors.Add(stage)))
             {
@@ -199,7 +230,7 @@ internal static class AntonResourceRewardLifecycleTests
                 That(battle.View.Phase == 1 && clockErrors.Count == 0, "真实one-shot时钟完成准备再进入下一阶段，无旧牌背ACK泄漏");
             }
 
-            RaidRewardReceipt? Claim(int index, byte kind) => sessions[index].ClaimRaidReward(kind, 3, repository,
+            RaidRewardReceipt? Claim(int index, byte kind, byte card = 3) => sessions[index].ClaimRaidReward(kind, card, repository,
                 items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow());
             long Scalar(string sql)
             {

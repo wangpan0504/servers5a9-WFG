@@ -19,7 +19,7 @@ internal static class EvildomWarRecoveryTransactionTests
     internal static void Run(TcpTestResources resources, EvildomWarCatalog catalog, string root)
     {
         int before = Count;
-        foreach (string scenario in new[] { "resume", "takeover", "cleanup-failure", "refund", "cross-day", "completed" })
+        foreach (string scenario in new[] { "resume", "takeover", "cleanup-failure", "refund", "cross-day", "completed", "legacy-completed" })
         {
             string path = Path.Combine(root, "war-recovery-" + scenario + ".db");
             var repository = new CharacterRepository(path, resources.Quests);
@@ -41,6 +41,15 @@ internal static class EvildomWarRecoveryTransactionTests
                 That(parties.SetInformation(session, 0, PartySettings.Default with { Kind = 5, KindArgument = 0 }).Accepted &&
                     service.StartEvildomWar(session, catalog) is null, "恢复夹具创建真实单人队伍并开战");
                 var war = session.ReadEvildomWar()!;
+                if (scenario == "legacy-completed")
+                {
+                    var legacyJson = JsonSerializer.SerializeToNode(new EvildomWarCheckpoint(war.Battle.View))!;
+                    legacyJson["View"]!.AsObject().Remove("StartedAt");
+                    var legacy = JsonSerializer.Deserialize<EvildomWarCheckpoint>(legacyJson.ToJsonString())!;
+                    legacy.Validate();
+                    session.StartEvildomWar(catalog, war.Party, EvildomWarBattle.Restore(legacy), repository);
+                    war = session.ReadEvildomWar()!;
+                }
                 uint dungeon = checked((uint)war.Dungeons[0].Id);
                 That(service.BeginSelection(session, dungeon).Length == 1, "恢复夹具真实选择首图");
                 var original = session.Selected!;
@@ -53,15 +62,21 @@ internal static class EvildomWarRecoveryTransactionTests
                 That(Enter(service, session, dungeon).Any(n => n.Kind == PartyDungeonNoticeKind.Entry), "首图费用与席位同事务提交");
                 var saved = repository.LoadEvildomWarRecovery(owner, session.Selected!.Id, clock.GetUtcNow())!;
                 That(saved.Checkpoint.View.BattleId == war.Battle.View.BattleId && saved.Payment.RemainingConsumed == 30 &&
+                    saved.Checkpoint.View.StartedAt == war.Battle.View.StartedAt &&
                     saved.Payment.UsedAdded == 30 && saved.Payment.Weekly?.Slot == 7 && saved.Payment.FirstRun.TaskAttempt == 1 &&
                     saved.Checkpoint.View.Dungeons[0].State == 1, "持久凭据冻结真实消耗差值、原周期、原尝试与战况");
-                if (scenario is "resume" or "completed")
+                if (scenario is "resume" or "completed" or "legacy-completed")
                 {
                     // 本层只验证持久检查点；真实怪物及终点事实另由完整五图TCP覆盖。
                     var identity = session.CurrentFormalDungeonScene()!.Snapshot.Identity;
                     var facts = new[] { new DungeonClearFact(identity, dungeon, [Guid.NewGuid()]) };
                     Sql("CREATE TRIGGER reject_war_checkpoint BEFORE UPDATE ON evildom_war_battles BEGIN SELECT RAISE(ABORT,'checkpoint failure'); END");
                     var previous = war.Battle.View;
+                    if (scenario == "resume")
+                        Reject<InvalidOperationException>(() => repository.CommitEvildomWarCheckpoint(owner, session.Selected!.Id,
+                            war.BindingToken, previous, new(previous with { Revision = previous.Revision + 1,
+                                StartedAt = previous.StartedAt!.Value.AddMilliseconds(-1) })),
+                            "检查点不能替换原开战时刻，即使新起点仍早于截止");
                     Reject<SqliteException>(() => war.Battle.Complete(facts, clock.GetUtcNow(), session.PersistEvildomWarCheckpoint),
                         "检查点SQL失败不能提前安装内存战况");
                     That(ReferenceEquals(war.Battle.View, previous), "检查点失败保留原版本及活动Run，可原事实重试");
@@ -69,21 +84,25 @@ internal static class EvildomWarRecoveryTransactionTests
                     That(war.Battle.Complete(facts, clock.GetUtcNow(), session.PersistEvildomWarCheckpoint) is not null,
                         "同一检查点在SQL恢复后提交一次");
                 }
-                if (scenario == "completed")
+                if (scenario is "completed" or "legacy-completed")
                 {
                     // 终态SQL合同测试不伪造客户端通关验收，也不发奖。
+                    clock.Advance(TimeSpan.FromMilliseconds(256780));
                     var previous = war.Battle.View;
                     var finished = previous with { Revision = previous.Revision + 1,
                         Dungeons = previous.Dungeons.Select(row => row with { State = 2 }).ToImmutableArray() };
                     var completion = new EvildomWarCompletion(previous.BattleId, previous.Mode, clock.GetUtcNow(),
-                        [new(session.CurrentFormalDungeonScene()!.Snapshot.Identity, (uint)finished.Dungeons.Single(row => row.Kind == 1).Id, [Guid.NewGuid()])]);
+                        [new(session.CurrentFormalDungeonScene()!.Snapshot.Identity, (uint)finished.Dungeons.Single(row => row.Kind == 1).Id, [Guid.NewGuid()])])
+                        { ElapsedMilliseconds = scenario == "legacy-completed" ? 0u : 256780u };
                     repository.CommitEvildomWarCheckpoint(owner, session.Selected.Id, war.BindingToken, previous, new(finished, completion));
                     clock.Advance(TimeSpan.FromSeconds(catalog.LimitTime + 1));
                     var refund = repository.RefundExpiredEvildomWarSeats(owner, session.Selected, clock.GetUtcNow());
                     That(refund.Seats == 0 && Scalar("SELECT state FROM character_evildom_war_seats") is 2L,
                         "持久完成终态排除超时退款，即使尚未冻结奖励");
-                    That(repository.LoadUnrewardedEvildomWarCompletions(owner, session.Selected.Id).Length == 1,
-                        "原Run结束前崩溃仍能读取持久完成事实，不依赖内存奖励计划");
+                    var recovered = repository.LoadUnrewardedEvildomWarCompletions(owner, session.Selected.Id);
+                    That(recovered.Length == 1 && recovered[0].Created == completion.Created &&
+                        recovered[0].ElapsedMilliseconds == completion.ElapsedMilliseconds,
+                        "原Run结束前崩溃仍恢复冻结完成用时；旧起点缺失保持未知0，不按恢复时间重算");
                     var policy = new EvildomWarRewardPolicy(catalog, resources.ItemResources.Items, resources.ItemResources.Boosters);
                     var choice = policy.Prepare(completion.Mode, session.Selected, _ => 0);
                     // 旧版已冻结奖励包含固定第1组，升级后必须继续交付原产物，不重写成v2。
@@ -93,6 +112,11 @@ internal static class EvildomWarRecoveryTransactionTests
                     pending.Validate();
                     repository.FreezeRecoveredEvildomWarReward(owner, session.Selected.Id, pending);
                     string frozen = (string)Scalar("SELECT reward_json FROM character_evildom_war_rewards")!;
+                    if (scenario == "legacy-completed")
+                        That(!frozen.Contains("\"ElapsedMilliseconds\"", StringComparison.Ordinal) &&
+                            JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(frozen)!.Completion.ElapsedMilliseconds == 0 &&
+                            JsonSerializer.Serialize(JsonSerializer.Deserialize<EvildomWarRewardSnapshot>(frozen)) == frozen,
+                            "旧冻结奖励无用时字段，反序列化与原字节合同仍兼容，不补造历史用时");
                     repository.FreezeRecoveredEvildomWarReward(owner, session.Selected.Id, pending with { Items = pending.Items.Reverse().ToImmutableArray() });
                     That(Scalar("SELECT reward_json FROM character_evildom_war_rewards") as string == frozen &&
                         repository.LoadUnrewardedEvildomWarCompletions(owner, session.Selected.Id).IsEmpty,
@@ -131,6 +155,7 @@ internal static class EvildomWarRecoveryTransactionTests
                     nextService.RecoverEvildomWarAsync(next, catalog).GetAwaiter().GetResult();
                     var restored = next.ReadEvildomWar()!;
                     That(restored.Battle.View.BattleId == saved.Checkpoint.View.BattleId && restored.Deadline == saved.Checkpoint.View.Deadline &&
+                        restored.Battle.View.StartedAt == saved.Checkpoint.View.StartedAt &&
                         restored.Dungeons[0].State == (scenario == "resume" ? 2 : 0) && restored.Charged && next.Phase == SessionPhase.Town,
                         "新会话重建真实一人队伍，保留已清图、原截止及支付状态");
                     That(!repository.ClaimEvildomWarSeat(replacementOwner, next.Selected!.Id, saved, Guid.NewGuid(), clock.GetUtcNow()),
@@ -141,7 +166,23 @@ internal static class EvildomWarRecoveryTransactionTests
                         war.BindingToken, clock.GetUtcNow());
                     That(Scalar("SELECT state FROM character_evildom_war_seats") is 0L, "当前owner携带旧token的迟到清理也不能覆盖新绑定");
                     uint second = (uint)restored.Dungeons[1].Id;
-                    That(nextService.BeginSelection(next, second).Length == 1 && Enter(nextService, next, second).Any(n => n.Kind == PartyDungeonNoticeKind.Entry) &&
+                    That(nextService.BeginSelection(next, second).Length == 1, "恢复后可选择原战役下一图");
+                    if (scenario == "resume")
+                    {
+                        string originalJson = (string)Scalar("SELECT checkpoint_json FROM evildom_war_battles")!;
+                        var mismatched = JsonSerializer.Deserialize<EvildomWarCheckpoint>(originalJson)!;
+                        string changedJson = JsonSerializer.Serialize(mismatched with { View = mismatched.View with
+                            { StartedAt = mismatched.View.StartedAt!.Value.AddMilliseconds(-1) } });
+                        SqlJson("UPDATE evildom_war_battles SET checkpoint_json=$json", changedJson);
+                        var originalCharacter = next.Selected;
+                        Reject<InvalidOperationException>(() => Enter(nextService, next, second),
+                            "后续进图核对原持久起点，不用内存新起点覆盖已有检查点");
+                        That(ReferenceEquals(next.Selected, originalCharacter) && next.CurrentFormalDungeonScene() is null &&
+                            Scalar("SELECT checkpoint_json FROM evildom_war_battles") as string == changedJson,
+                            "起点不一致的入场回滚原费用和Run，不更新检查点");
+                        SqlJson("UPDATE evildom_war_battles SET checkpoint_json=$json", originalJson);
+                    }
+                    That(Enter(nextService, next, second).Any(n => n.Kind == PartyDungeonNoticeKind.Entry) &&
                         next.Selected.Fatigue!.Used == 30 && Scalar("SELECT used FROM character_weekly_dungeon") is 1L &&
                         Scalar("SELECT daily_used FROM character_dungeon_incount") is 1L, "重连后的下一图沿用原费用，整场次数及周统计不重复");
                     next.DisconnectEvildomWar(); newParties.Detach(next); next.End();
@@ -200,6 +241,11 @@ internal static class EvildomWarRecoveryTransactionTests
             PartyDungeonNotice[] Enter(PartyDungeonService service, GameSession member, uint id) => service.Enter(member, id, 2,
                 SelfTestCatalogs.Dungeons(resources.Archive), SelfTestCatalogs.Rooms(resources.Archive), null, null, null, null);
             void Sql(string sql) { using var db = Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
+            void SqlJson(string sql, string json)
+            {
+                using var db = Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql;
+                cmd.Parameters.AddWithValue("$json", json); cmd.ExecuteNonQuery();
+            }
             object? Scalar(string sql) { using var db = Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; return cmd.ExecuteScalar(); }
             SqliteConnection Open() { var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open(); return db; }
         }

@@ -50,6 +50,7 @@ internal static class PreyGuideTests
     {
         string path = Path.Combine(root, "prey-domain", "game.db");
         var repo = new CharacterRepository(path);
+        new DfoServer.Game.Auth.AuthenticationService(new AuthenticationRepository(path)).Create("prey-guide-domain", "fixture-password");
         var owners = new AccountOwners();
         using var owner = owners.Acquire("prey-guide-domain", () => { });
         var clock = new LukeRaidClockTests.Clock(battlePass ? DateTimeOffset.Parse("2026-11-03T00:00:00Z") : null);
@@ -76,7 +77,8 @@ internal static class PreyGuideTests
             await using var timers = new LukeRaidClocks(clock, repo, (_, error) => throw new InvalidOperationException("Prey clock failed", error));
             var start = new AntonRaidStart(registry, parties, repo, resources.Towns, items.EpicPieces, clock,
                 timers: timers, preyRewards: new(definition.Resources!.Script, items.Items, items.Boosters),
-                preyTeamRewards: new(definition.Resources.PreyTeam!.Script, items.Items, items.Boosters));
+                preyTeamRewards: new(definition.Resources.PreyTeam!.Script, items.Items, items.Boosters),
+                incounts: DungeonIncountCatalog.Load(resources.Archive));
             using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
             {
                 db.Open();

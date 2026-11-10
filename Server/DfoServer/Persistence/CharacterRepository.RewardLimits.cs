@@ -12,7 +12,7 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    // 奖励上限刷新只迁移当前周期的资格/状态键，保留所有奖励回执、通关事实和已发邮件。
+    // 奖励上限刷新迁移资格/状态键，或单独标记已冻结的清图奖励；保留所有奖励回执、通关事实和已发邮件。
     // 各表使用账号范围内的 MAX+1 作为历史键，避开唯一键冲突；归档键超过合法日期，防止未来日切重新计入。
     public RewardLimitResetResult ResetRewardLimits(AccountOwners.Lease owner) => owner.Execute(() =>
     {
@@ -26,6 +26,16 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.ResetRewardLimits");
         using var tx = write.Transaction;
+
+        // 奖励冻结即占用次数，已领与未领都退出后续限次统计；领取回放仍只认原回执。
+        int clearRewards = ExecuteReward(db, tx, """
+            INSERT OR IGNORE INTO character_clear_reward_resets(character_id,instance_id)
+            SELECT r.character_id,r.instance_id FROM characters c
+            JOIN character_dungeon_card_rewards r ON r.character_id=c.id AND r.account=c.account
+            WHERE c.account=$account AND json_type(r.plan_json,'$.Item')='object'
+              AND NOT EXISTS(SELECT 1 FROM character_clear_reward_resets reset
+                WHERE reset.character_id=r.character_id AND reset.instance_id=r.instance_id)
+            """, ("$account", owner.Account));
 
         // 待投递完成和未消费匹配事实也预留归档键，不能只避让已投递账本。
         string[] strongwayTables = ["account_strongway2019_rewards", "character_strongway2019_completions", "character_strongway2019_match_facts"];
@@ -104,7 +114,8 @@ internal sealed partial class CharacterRepository
         return new RewardLimitResetResult(owner.Account, day, week, strongwayReward, strongwayCompletion, strongwayMatch,
             imperialDays, imperialRuns, imperialRewards, imperialChallenges, tagClearance, tagChallenge,
             griefAccount, griefCharacter, special, despair, raid, raidReceipts)
-            { RaidEpochsAdvanced = raidAdvances.Length, RevisedBeastStageRows = beastStages, RevisedBeastTerminalRows = beastTerminals };
+            { RaidEpochsAdvanced = raidAdvances.Length, ClearRewardRows = clearRewards,
+                RevisedBeastStageRows = beastStages, RevisedBeastTerminalRows = beastTerminals };
     });
 
     static int NextKey(SqliteConnection db, SqliteTransaction tx, string table, string column, string account, int current)
