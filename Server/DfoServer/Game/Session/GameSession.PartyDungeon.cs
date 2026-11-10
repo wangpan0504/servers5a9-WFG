@@ -187,7 +187,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
 
         int accelerationPercent = CaptureFatigueAcceleration(dungeon.Entry);
-        ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
+        ushort fatigue = InfiniteFatigue ? (ushort)0 :
             DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(dungeon.Entry.StartFatigue,
                 accelerationPercent, Selected.Fatigue?.Remaining ?? 0);
         DfoServer.Game.Guild.GuildDungeonAdmission? guildAdmission = null;

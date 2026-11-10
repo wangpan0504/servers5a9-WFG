@@ -1,4 +1,5 @@
 using DfoServer.GameWorld.Dungeons;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Settings;
 
@@ -16,19 +17,25 @@ internal sealed record SupportCompanionConfiguration(int SelectionMask, string W
     public static bool ValidTier(string tier) => tier is "entry" or "graduate" or "huge";
 }
 
-// 当前服务实例的调试设置；支援兵名单与档次单独持久化到安装配置，其余设置重启恢复各自默认值。
+// 当前服务实例的调试设置；支援兵名单与档次、账号无限疲劳分别持久化，其余设置重启恢复各自默认值。
 internal sealed class GameDebugSettings
 {
     readonly object supportGate = new();
     readonly Action<SupportCompanionConfiguration>? persistSupport;
+    readonly object fatigueGate = new();
+    readonly Action<ImmutableHashSet<string>>? persistFatigue;
+    ImmutableHashSet<string> fatigueAccounts;
 
     public GameDebugSettings(SupportCompanionConfiguration? initialSupport = null,
-        Action<SupportCompanionConfiguration>? persistSupport = null)
+        Action<SupportCompanionConfiguration>? persistSupport = null,
+        IEnumerable<string>? initialFatigueAccounts = null, Action<ImmutableHashSet<string>>? persistFatigue = null)
     {
         var initial = initialSupport ?? SupportCompanionConfiguration.Default;
         ValidateSupportConfiguration(initial);
         supportCompanion = initial;
         this.persistSupport = persistSupport;
+        fatigueAccounts = (initialFatigueAccounts ?? []).ToImmutableHashSet(StringComparer.Ordinal);
+        this.persistFatigue = persistFatigue;
     }
 
     internal static void ValidateSupportConfiguration(SupportCompanionConfiguration value)
@@ -52,7 +59,19 @@ internal sealed class GameDebugSettings
     // 两个开关均为true时忽略对应声明，不能互相代替或翻转成启用期限。
     public volatile bool IgnoreCashShopAbsoluteExpiration = true;
     public volatile bool IgnoreCashShopUsablePeriod = false;
-    public volatile bool InfiniteFatigue = true;
+    // 无记录即关闭；先持久化新快照，再发布给该账号的准入、扣点与显示读者。
+    public bool InfiniteFatigueFor(string account) => Volatile.Read(ref fatigueAccounts).Contains(account);
+    public void SetInfiniteFatigue(string account, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(account)) throw new ArgumentException("须指定当前账号", nameof(account));
+        lock (fatigueGate)
+        {
+            var next = enabled ? fatigueAccounts.Add(account) : fatigueAccounts.Remove(account);
+            if (ReferenceEquals(next, fatigueAccounts)) return;
+            persistFatigue?.Invoke(next);
+            Volatile.Write(ref fatigueAccounts, next);
+        }
+    }
     // 网吧身份独立于账号黑钻；字段默认关闭，线上实例由 ServerRuntime 启动时按数据目录 pc-room.json 置为开（缺文件即开），
     // GM 的 on/off 只改当前进程，重启不沿用上次的临时调试资格。
     public volatile bool PremiumPcRoom;

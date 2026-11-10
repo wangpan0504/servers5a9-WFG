@@ -79,3 +79,7 @@ internal sealed record RewardLimitResetResult(string Account, int Day, int Week,
     public int RevisedBeastStageRows { get; init; }
     public int RevisedBeastTerminalRows { get; init; }
 }
+
+// 当前账号全角色的入场与奖励额度在同一事务刷新。
+internal sealed record DungeonQuotaResetResult(DungeonEntryResetResult Entries, RewardLimitResetResult Rewards,
+    int CrackDailyRows, int SingleBindingRows, int EvildomGuideRows, int DazzlementBindingRows, int EndlessAdventureRows);
