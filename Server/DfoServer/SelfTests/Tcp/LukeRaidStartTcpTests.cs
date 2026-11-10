@@ -44,6 +44,7 @@ internal static class LukeRaidStartTcpTests
         LukeProductionTests.RunResources(resources.Archive, definition);
         BattlePassSongRaidRecoveryTransactionTests.Run(resources);
         LukeRaidLifecycleTransactionTests.Run(resources,definition,policy,source.PvfPath);
+        LukeNonzeroRewardRecoveryTests.Run(resources);
         return Task.CompletedTask;
     }
 
