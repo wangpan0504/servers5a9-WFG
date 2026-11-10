@@ -52,15 +52,18 @@ SupportApcResourcePatch prepare-paired-companion-maps current.pvf eligibility.js
 SupportApcResourcePatch prepare-support-behavior current.pvf new-behavior-output
 SupportApcResourcePatch prepare-support-auxiliary behavior.pvf new-auxiliary-output
 SupportApcResourcePatch prepare-support-natural-tiers auxiliary.pvf verified-overdrive-report.json new-tier-output
+SupportApcResourcePatch prepare-support-effective-tiers current.pvf verified-natural-tier-report.json new-effective-output
 ```
 
 地图准入通过指定的正式服务端程序集解析，包含两活动及魔兽三档专用迷宫；只在允许且没有被禁止模式共用、已有王富贵或光兵专用友方行的地图末尾补缺失两女，原行及序号不变。解析错误单独输出，不默认为允许。
 
 四职业现行行为不调度普攻，原KEY及其序号保留，新KEY仅在末尾追加。攻击使用学习门槛低于50的主动小技能；保留增益觉醒及辅助职责，近敌350×100，客户端靠近真人500×250；房内索敌使用有限范围1048576。奶妈补36/91，小魔女补341/344/349与实际前置；增益按缺失或将到期补，净化仅在可解除异常时使用，原生冷却、执行态、人偶、复活和维持态门禁继续生效。客户端仅对专用支援身份禁止光兵念气波12、奶妈二觉93、奶爸正义审判81及原有光之复仇23；技能定义、学习与KEY保留。
 
-女性主BUFF按实际装备技能加成反算学习等级，有效档次为20/30/35；职业被动按原学习基线、增加5级、增加10级且不超过真实上限。工具校验旧报告中的模板、装备和原学习值，不修改共享SKL系数或装备；客户端保留自然智力，不写统一8500。最终适用智力、队友增益与自然跟随施法仍须实机验收。
+女性主BUFF按实际装备技能加成反算学习等级，有效档次为20/30/35；职业被动按原学习基线、增加5级、增加10级且不超过真实上限。自然档次命令用于从旧资源迁移，不应重复应用于现行分档资源。
 
-专项入口为测试项目的`--behavior`、`--paired-maps`、`--auxiliary`、`--natural-tiers`。各步写包后必须逐资源raw审计；下述旧生成器仅供历史输入迁移，不能覆盖现行累计调度。
+现行累计输入再执行`prepare-support-effective-tiers`，以已核验自然档次报告复核134个模板、档位和主BUFF学习/装备等级。配套客户端将专用两女最终适用智力校准为6000/7200/9000；工具依据普通副本真实SKL基础列及智力分母，对每个专用AIC主BUFF五列追加原生`skill data up`正向加值。未计圣歌、偏爱和装备额外正增幅时，公式下限为力智4950/7750/14750、三攻850/1250/2350，与奶爸同档一致；整数基础列留一格裕量。保留装备、学习、被动、AI、KEY、持续时间及所有共享玩家SKL。已有AIC修正时拒绝重复叠加，必须明确协调。两端需配套更新，最终游戏面板与自然行为仍须实机验收。
+
+专项入口为测试项目的`--behavior`、`--paired-maps`、`--auxiliary`、`--natural-tiers`、`--effective-tiers`。各步写包后必须逐资源raw审计；下述旧生成器仅供历史输入迁移，不能覆盖现行累计调度。
 
 ## 两职业战斗动作差量
 
