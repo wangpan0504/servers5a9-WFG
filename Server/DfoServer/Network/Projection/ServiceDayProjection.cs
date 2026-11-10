@@ -45,6 +45,11 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             missionDay = missions.Period.Day;
             missionEpoch = context.Session.SelectionEpoch;
         }
+        var buffExpiry = context.Session.AdvanceVariousBuffs();
+        if (buffExpiry is { Accepted: true, Plan.Changed: true })
+            log.Write("various_buff_expired", new { Connection = context.Id, Character = buffExpiry.Receipt?.Character.Id,
+                Revision = buffExpiry.Receipt?.Character.Revision });
+        await DungeonEpicBuffProjection.PostAsync(context);
         var cycle = context.Session.AdvanceServerItems(epoch != context.Session.SelectionEpoch);
         if (cycle is { Accepted: true, Receipt: { } committed, Plan: { } plan })
         {
@@ -138,6 +143,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             {
                 var now = clock.GetUtcNow();
                 var next = context.Session.NextServiceWake(now);
+                var buffWake = context.Session.NextVariousBuffWake(now);
+                if (buffWake < next) next = buffWake;
                 if (context.MonsterMockBattle is { } mockBattle && mockBattle.NextRefresh > now && mockBattle.NextRefresh < next)
                     next = mockBattle.NextRefresh;
                 var missionReset = DfoServer.GameWorld.Time.ServiceDay.NextReset(now, clock.LocalTimeZone);

@@ -382,6 +382,7 @@ internal static class SqliteMigrations
         new(202, "普通清图奖励限次刷新标记", static (db, tx) => Execute(db, tx,
             DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
+        new(204, "通用Buff动态状态", static (db, tx) => Execute(db, tx, VariousBuffSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2650,6 +2651,7 @@ internal static class SqliteMigrations
             ("character_npc_bookmarks",NpcBookmarkSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_notify",QuestNotifySchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_various_buffs",VariousBuffSchema.Definition),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2893,6 +2895,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until,privilege_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
+        "SELECT character_id,account,buffs FROM character_various_buffs LIMIT 0",
         "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",

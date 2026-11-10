@@ -120,6 +120,7 @@ internal sealed partial class CharacterRepository
         "character_revised_beast_stage_rewards",
         "character_revised_beast_rewards",
         "character_boss_selection_buff",
+        "character_various_buffs",
         "character_clear_reward_resets",
         "character_dungeon_card_options",
         "character_dungeon_card_rewards",

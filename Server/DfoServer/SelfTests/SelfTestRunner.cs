@@ -500,6 +500,8 @@ internal static class SelfTestRunner
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
+        DungeonEpicDropBuffTests.RunCore();
+        VariousBuffAssociationTests.RunCore();
         EnhancementPotionTests.RunCore();
         UpgradeChronicleServiceTests.RunCore();
         ChronicleEnchantTests.RunCore();
