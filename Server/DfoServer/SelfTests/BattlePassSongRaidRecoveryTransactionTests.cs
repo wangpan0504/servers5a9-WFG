@@ -45,12 +45,25 @@ internal static class BattlePassSongRaidRecoveryTransactionTests
             }
             if (policy is null) throw new InvalidDataException("匹配资源未提供活跃周任务48");
             Scenario("normal-rollback", 0, 0, rollback: true);
+            Scenario("pvf-p2", 0, 0, rollback: true, rewardCount: 100, phase: 1);
+            Scenario("legacy-p2", 0, 0, rollback: true, rewardCount: 75, phase: 1,
+                source: LukeResourceRewards.LegacySource);
+            Scenario("pvf-p2-card3", 0, 0, rollback: true, rewardCount: 100, phase: 1, card: 3);
+            Scenario("legacy-p2-card3", 0, 0, rollback: true, rewardCount: 75, phase: 1, card: 3,
+                source: LukeResourceRewards.LegacySource);
             Scenario("holding-full", material.HoldingLimit, 0, rollback: false);
+            Scenario("pvf-p2-holding-full", material.HoldingLimit, 0, rollback: false, rewardCount: 100, phase: 1);
             int weekly = new[] { material.WeeklyAccountLimit, material.WeeklyCharacterLimit }
                 .Where(limit => limit > 0).DefaultIfEmpty(0).Min();
-            if (weekly > 0) Scenario("weekly-remaining", 0, Math.Max(0, weekly - 7), rollback: false);
+            if (weekly > 0)
+            {
+                Scenario("weekly-remaining", 0, Math.Max(0, weekly - 7), rollback: false);
+                Scenario("pvf-p2-weekly-remaining", 0, Math.Max(0, weekly - 7), rollback: false,
+                    rewardCount: 100, phase: 1, card: 3);
+            }
 
-            void Scenario(string name, int openingBalance, int earned, bool rollback)
+            void Scenario(string name, int openingBalance, int earned, bool rollback,
+                int rewardCount = 25, int phase = 0, byte card = 0, string source = LukeResourceRewards.Source)
             {
                 string account = "song-raid-" + name;
                 string path = Path.Combine(root, name + ".db");
@@ -71,14 +84,34 @@ internal static class BattlePassSongRaidRecoveryTransactionTests
                 long originalGold = CurrencyWallet.Get(role.Inventory, CurrencyKind.Gold);
                 Guid instance = Guid.NewGuid(), eventId = Guid.NewGuid();
                 long anchor = now.ToUnixTimeSeconds();
-                var offer = new RaidRewardOffer(1, 0, [new(itemId, 25), new(0, 19)], []);
-                var eligibility = new RaidPhaseEligibility(instance, RaidKind.Luke, 0, eventId, anchor,
-                    role.Id, false, true, "fixture-qualified", LukeResourceRewards.Source, raidWeek, [offer]);
-                Sql("INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,phase0_event,phase0_anchor,phase0_receipt) VALUES($p0,$p1,$p2,1,$p3,$p4,1,$p5,$p4,$p6)",
-                    role.Id, account, instance.ToString("N"), LukeResourceRewards.Source, anchor, eventId.ToString("N"), JsonSerializer.Serialize(eligibility));
+                var offer = new RaidRewardOffer(1, 0, [new(itemId, rewardCount), new(0, 19)], []);
+                var eligibility = new RaidPhaseEligibility(instance, RaidKind.Luke, phase, eventId, anchor,
+                    role.Id, false, true, "fixture-qualified", source, raidWeek, [offer]);
+                Sql($"INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,phase{phase}_event,phase{phase}_anchor,phase{phase}_receipt) VALUES($p0,$p1,$p2,1,$p3,$p4,1,$p5,$p4,$p6)",
+                    role.Id, account, instance.ToString("N"), source, anchor, eventId.ToString("N"), JsonSerializer.Serialize(eligibility));
+                // 重建仓储后仅从持久资格恢复，不能用当前策略重算旧75或新100。
+                repository = new CharacterRepository(path);
+                repository.ConfigureBattlePassMissions(policy);
+                role = repository.LoadCharacter(owner, 0);
+                original = role;
                 _ = repository.ReadBattlePassMissions(owner, now);
-                var target = new LukeRewardRecoveryTarget(role.Id, instance, 0, 1, 0);
-                int expected = Math.Min(25, Math.Max(0, material.HoldingLimit - openingBalance));
+                var target = new LukeRewardRecoveryTarget(role.Id, instance, phase, 1, 0);
+                PreparedRaidReward? direct = null;
+                InventoryPlan? directPlan = null;
+                if (card != 0)
+                {
+                    // 正常选牌的资产writer入口；非零牌面的管理恢复是独立缺陷，不以此夹具冒充通过。
+                    direct = repository.ReadLukeRewardRecovery(owner, role, target).Prepared with { Card = card };
+                    var granted = InventoryRewardGrantService.TryGrantBatch(role, direct.Grants,
+                        items.Items, items.GoldLimits, items.EpicPieces, utcNow: now, allowOverflowMail: true, raidReward: true);
+                    That(granted.Accepted && granted.Plan is not null, "真实资源数量可在正常选牌入口规划");
+                    var plan = granted.Plan!;
+                    directPlan = new InventoryPlan(plan.Before, plan.After, "raid_reward", new(role), plan.OverflowItems)
+                        { AccountMaterialRaidWeek = plan.AccountMaterialRaidWeek, AccountMaterialRaidDefinitions = plan.AccountMaterialRaidDefinitions };
+                    That(repository.CommitRaidReward(owner, original, direct with { Card = 4 }, directPlan, now) is null,
+                        "新旧正式来源仍拒绝超出0–3的牌面，零资产提交");
+                }
+                int expected = Math.Min(rewardCount, Math.Max(0, material.HoldingLimit - openingBalance));
                 if (material.WeeklyAccountLimit != 0) expected = Math.Min(expected, Math.Max(0, material.WeeklyAccountLimit - earned));
                 if (material.WeeklyCharacterLimit != 0) expected = Math.Min(expected, Math.Max(0, material.WeeklyCharacterLimit - earned));
                 if (rollback && expected > 0)
@@ -108,11 +141,12 @@ internal static class BattlePassSongRaidRecoveryTransactionTests
                     actual.Inventory.Items.All(item => item.Core.ItemId != itemId) &&
                     CurrencyWallet.Get(actual.Inventory, CurrencyKind.Gold) == originalGold + 19 && MissionCount() == expected &&
                     Number("SELECT count(*) FROM character_raid_reward_receipts") == 1 &&
+                    Number($"SELECT count(*) FROM character_raid_reward_receipts WHERE card={card}") == 1 &&
                     Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='raid_undefeated_song_acquisition'") == (expected > 0 ? 1 : 0),
-                    "真实恢复wrapper与仓储按实际额度计任务，满额仍发其它奖励：" + name);
+                    "恢复或正常选牌writer按冻结数量及实际额度计任务，满额仍发其它奖励：" + name);
                 long revision = actual.Revision;
                 var balance = actual.Inventory.AccountWallet.Material(itemId);
-                var replay = LukeRewardRecovery.Claim(owner, role, target, eventId, anchor, repository,
+                var replay = direct is not null ? Claim() : LukeRewardRecovery.Claim(owner, role, target, eventId, anchor, repository,
                     () => throw new InvalidOperationException("重放不得重读资源或重做资产规划"), now);
                 var repeated = repository.LoadCharacter(owner, 0);
                 That(replay.Duplicate && repeated.Revision == revision && repeated.Inventory.AccountWallet.Material(itemId).Same(balance) &&
@@ -121,8 +155,11 @@ internal static class BattlePassSongRaidRecoveryTransactionTests
                     Number("SELECT count(*) FROM account_battle_pass_source_events WHERE source_kind='raid_undefeated_song_acquisition'") == (expected > 0 ? 1 : 0),
                     "同原身份恢复重放不重复增加材料、周额度、其它奖励或任务来源：" + name);
 
-                RaidRewardCommit Claim() => LukeRewardRecovery.Claim(owner, role, target, eventId, anchor, repository,
-                    () => (items.Items, items.GoldLimits, items.EpicPieces), now);
+                RaidRewardCommit Claim() => direct is not null
+                    ? repository.CommitRaidReward(owner, original, direct, directPlan!, now)
+                        ?? throw new InvalidDataException("正常选牌未通过原冻结权益复验")
+                    : LukeRewardRecovery.Claim(owner, role, target, eventId, anchor, repository,
+                        () => (items.Items, items.GoldLimits, items.EpicPieces), now);
                 long MissionCount() => repository.ReadBattlePassMissions(owner, now)!.Slots
                     .Single(row => BattlePassUndefeatedSongSource.Matches(row.Instance.Key.Category, row.Instance.Definition)).Count;
                 long Number(string sql) { using var db = Open(); using var command = db.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar()); }

@@ -41,6 +41,8 @@ internal static class LukeRaidStartTcpTests
     public static Task RunRewardRestartAsync(ServerOptions source,string root,TcpTestResources resources)
     {
         var (definition,policy,_)=Prepare(resources,true,true,false,false);
+        LukeProductionTests.RunResources(resources.Archive, definition);
+        BattlePassSongRaidRecoveryTransactionTests.Run(resources);
         LukeRaidLifecycleTransactionTests.Run(resources,definition,policy,source.PvfPath);
         return Task.CompletedTask;
     }
