@@ -247,13 +247,19 @@ internal sealed partial class GameSession
             ? EquipmentRarityBonusPolicy.Capture(Selected!, rarityItems, settlementNow.ToUnixTimeSeconds(), dungeon.Entry.ExperienceEquipmentModule)
             : default;
         DungeonIncountUsage? clearRewardUsage = null;
+        DungeonIncountUsage? itemRewardUsage = null;
         if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
             if (cards.ClearRewardLimits?.FindDungeon(checked((int)dungeon.Entry.DungeonId)) is { } rewardLimit)
+            {
                 clearRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit, ClearRewardLimitPolicy.Period(settlementNow));
+                if (cards.LimitedContainer(checked((int)dungeon.Entry.DungeonId)) is { } container)
+                    itemRewardUsage = repository.LoadClearRewardLimitUsage(owner, Selected!.Id, rewardLimit,
+                        ClearRewardLimitPolicy.Period(settlementNow), container);
+            }
             normalCard = cards.Prepare(dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count, utcNow: settlementNow, job: Selected!.Job, grow: Selected.GrowType,
-                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
+                ancientBonus: ancientGate?.Bonus == true, clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Assault is not null && normalCard is not null
             ? cards!.PrepareAssault(normalCard.Gold, settlementNow)
@@ -264,7 +270,7 @@ internal sealed partial class GameSession
             var membership = repository.LoadCardMembership(owner,Selected!.Id,settlementNow);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count,membership,settlementNow,goldCardEvent,Selected.Job,Selected.GrowType,
-                clearRewardUsage: clearRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
+                clearRewardUsage: clearRewardUsage, itemRewardUsage: itemRewardUsage, equipmentRarityBonus: rarityBonus, dropMultipliers: dungeon.Entry.DropMultipliers);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
             dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);
@@ -746,7 +752,8 @@ internal sealed partial class GameSession
             var row = IncountRow(dungeon.Entry.DungeonId);
             var period = IncountPeriod(row?.CountKey ?? id);
             if (row is not null && !DungeonIncountPolicy.CanEnter(row, repository.LoadDungeonIncount(owner, character.Id, row.CountKey, period)) ||
-                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >= charge.Limit))
+                AccountCharges(id).Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >=
+                    (long)charge.Limit + repository.LoadAccountDungeonIncountExtra(owner, charge.Dungeon, charge.Period)))
                 return false;
         }
         if (dungeon.Entry.EntryItem is { } entryItem)

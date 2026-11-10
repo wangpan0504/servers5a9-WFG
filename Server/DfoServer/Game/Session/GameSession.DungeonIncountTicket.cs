@@ -29,15 +29,26 @@ internal sealed partial class GameSession
             if (plan.Period != DungeonIncountPolicy.Period(now, plan.WeeklyResetDay) ||
                 plan.Source.IsExpired(now.ToUnixTimeSeconds()) || plan.Inventory.CharacterPrecondition!.IsExpired(now.ToUnixTimeSeconds()))
                 return Reject("source-or-period-expired");
-            if (plan.Reset)
+            if (plan.Reset && plan.Row is { } resetRow)
             {
-                var usage = repository.LoadDungeonIncount(owner, expected.Id, plan.Row.CountKey, plan.Period);
-                if (DungeonIncountPolicy.DailyRemaining(plan.Row, usage) > 0)
+                var usage = repository.LoadDungeonIncount(owner, expected.Id, resetRow.CountKey, plan.Period);
+                if (DungeonIncountPolicy.DailyRemaining(resetRow, usage) > 0)
                     return Reject("reset-requires-exhausted-count");
             }
             pendingConsumableUse = plan.Inventory;
             // 提交结果不明时保留门闩，关闭连接后重选只读实际存档，不能再发成功扣券。
-            var committed = store.CommitDungeonIncountTicket(owner, plan, now);
+            DungeonIncountCommit committed;
+            try { committed = store.CommitDungeonIncountTicket(owner, plan, now); }
+            catch (DungeonTicketRejectedException rejected)
+            {
+                pendingConsumableUse = null;
+                return Reject(rejected.Message);
+            }
+            catch (InventoryQualificationExpiredException)
+            {
+                pendingConsumableUse = null;
+                return Reject("source-or-period-expired");
+            }
             pendingConsumableUse = null;
             Selected = committed.Character;
             var inventory = new InventoryResult(true, 0, plan.Inventory)
@@ -47,7 +58,7 @@ internal sealed partial class GameSession
                     PreviousQuests = expected.ActiveMainQuests, PreviousSkillSwitchInventory = expected.SkillSwitchInventory }
             };
             return new DungeonIncountTicketResult(ConsumableUseOutcome.Committed, "committed", UseGuard(), inventory,
-                DungeonIncountPolicy.Views(plan.Row, committed.Usage).ToImmutableArray());
+                plan.Row is { } row ? DungeonIncountPolicy.Views(row, committed.Usage).ToImmutableArray() : []);
         });
     }
 }

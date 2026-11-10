@@ -70,6 +70,9 @@ internal sealed partial class GameSession
     }
 
     DateTimeOffset IncountNow() => (timeProvider ?? TimeProvider.System).GetUtcNow();
+    SingleDungeonAdmission? SingleDungeonBinding(DungeonEntryPlan entry) => !entry.IsPractice &&
+        incounts?.SingleGroups.FirstOrDefault(group => group.Id == 1 && group.Dungeons.Contains(checked((int)entry.DungeonId))) is { } group
+        ? SingleDungeonAdmission.At(group, timeProvider ?? TimeProvider.System) : null;
 
     DungeonIncountPeriod IncountPeriod(int dungeon) =>
         DungeonIncountPolicy.Period(IncountNow(), incounts?.WeeklyResetDay(dungeon) ?? DungeonIncountCatalog.DefaultWeeklyResetDay);
@@ -140,7 +143,8 @@ internal sealed partial class GameSession
             return null;
         }
         var account = AccountCharges(id);
-        if (account.Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >= charge.Limit))
+        if (account.Any(charge => charge.Check && repository.LoadAccountDungeonIncount(owner, charge.Dungeon, charge.Period) >=
+            checked(charge.Limit + repository.LoadAccountDungeonIncountExtra(owner, charge.Dungeon, charge.Period))))
         {
             rejection = "dungeon-account-incount-exhausted";
             return null;

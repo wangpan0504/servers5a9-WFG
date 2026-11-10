@@ -199,7 +199,8 @@ internal static partial class DungeonIncountTicketTests
                         "原入场事务实际耗尽重置券目标次数");
             }
         }
-        That(resources.ItemResources.Items.ActionConsumable(10306644) is null,
-            "泰波尔斯奖励容器参数尚未闭合，保留整拒而非丢弃参数发假成功");
+        That(resources.ItemResources.Items.ActionConsumable(10306644) is
+            { Label: "[add dungeon incount item limit count]", Parameters: [291100320, 10305620, 10306736] },
+            "泰波尔斯完整识别入场与两种奖励容器参数，不丢弃后两项");
     }
 }

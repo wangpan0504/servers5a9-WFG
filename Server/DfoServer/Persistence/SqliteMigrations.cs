@@ -381,6 +381,7 @@ internal static class SqliteMigrations
         new(201, "人物辞典角色收藏", static (db, tx) => Execute(db, tx, NpcBookmarkSchema)),
         new(202, "普通清图奖励限次刷新标记", static (db, tx) => Execute(db, tx,
             DungeonCardRewardSchema.ResetSql.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(203, "追加券账号与奖励额度", DungeonTicketQuotaSchema.Upgrade),
     ];
 
     const string AccountCommon45ListConstraint = "CHECK(list_type IN (0,1,2,3,7,12,38,45,46))";
@@ -2730,6 +2731,9 @@ internal static class SqliteMigrations
             ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_dungeon_incount_extra",DungeonTicketQuotaSchema.AccountDefinition),
+            ("character_dungeon_reward_extra",DungeonTicketQuotaSchema.RewardDefinition),
+            ("account_single_dungeon_bindings",DungeonTicketQuotaSchema.SingleDefinition),
             ("guild_hongbao_records",GuildHongbaoSchema.Records.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_hongbao_claims",GuildHongbaoSchema.Claims.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_ranking_party_clears",GuildRankingSchema.Parties.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

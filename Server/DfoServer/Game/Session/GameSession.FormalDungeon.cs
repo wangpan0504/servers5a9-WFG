@@ -1118,6 +1118,7 @@ internal sealed partial class GameSession
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
         System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
         DungeonEntryIncount? entryIncount = null;
+        var singleBinding = SingleDungeonBinding(installing.Entry);
         if (installing.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
         if (installing.ChannelCost is { } cost)
         {
@@ -1131,7 +1132,7 @@ internal sealed partial class GameSession
                 if (!spent.Accepted || spent.Plan is not { } plan) return null;
                 consumption = plan;
             }
-            if (prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
+            if (singleBinding is not null || prepared.RequiredEvent is not null || installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null ||
                 installing.Entry.IsRevisedBeast || installing.Entry.IsAncientInfinite || installing.Entry.DungeonId == 530 ||
                 cost.Incount is { HasCountNotification: false })
             {
@@ -1223,7 +1224,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (singleBinding is not null || prepared.RequiredEvent is not null || installing.Entry.MockBattle is not null || installing.Strongway2019Admission is not null || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1233,13 +1234,18 @@ internal sealed partial class GameSession
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
                         prepared.Weekly,installing.GriefAdmission) { QuickSlotEnergySource = prepared.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
                 AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension,
-                MockBattle = installing.Entry.MockBattle,
+                MockBattle = installing.Entry.MockBattle, SingleBinding = singleBinding,
                 RequiredEvent = prepared.RequiredEvent ?? (installing.Entry.MockBattle is { } mockEntry ? new(mockEntry.Schedule, timeProvider ?? TimeProvider.System) :
                     Strongway2019RequiredEvent(installing.Strongway2019Admission)) });
             }
             catch (DungeonEventAdmissionRejectedException)
             {
                 LastFormalDungeonRejection = "epic-road-event-closed";
+                return null;
+            }
+            catch (SingleDungeonAdmissionRejectedException error)
+            {
+                LastFormalDungeonRejection = error.Message;
                 return null;
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)

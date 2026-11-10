@@ -32,6 +32,11 @@ internal sealed class DungeonIncountTicketHandler(DungeonIncountTicketService se
                 await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_incount_ticket_balance", Guard);
             if (result.Counts.Any(count => count.Dungeon == 530))
                 await RiftDailyProjection.RefreshAsync(context, Guard, force: true);
+            if (request.Action == 59)
+                foreach (var count in context.Session.EnterCounts())
+                    await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_ticket_reset_balance", Guard);
+            if (request.Action == 160)
+                await AntonNormalSequenceProjection.RefreshAsync(context, Guard);
             await inventory.RefreshAsync(context, result.Inventory!, new HashSet<InventorySlot> { new(InventoryListType.Main, (short)request.Slot) });
         }
         return CommandResult.Handled;

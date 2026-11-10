@@ -29,7 +29,7 @@ internal sealed partial class CharacterRepository
         "character_tutorial_receipts", "character_tutorial_state",
         "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",
         "character_fiendwar_counter_stream", "character_fiendwar_title_facts", "character_title_book_slots", "character_title_progress", "character_title_sections",
-        "character_dungeon_tournament_rewards", "character_dungeon_card_options", "character_dungeon_card_rewards",
+        "character_dungeon_reward_extra", "character_dungeon_tournament_rewards", "character_dungeon_card_options", "character_dungeon_card_rewards",
         "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches",
         "character_dungeon_passive_pickups",
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
