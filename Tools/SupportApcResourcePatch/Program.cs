@@ -126,6 +126,11 @@ else if (args[0] == "prepare-paired-companion-maps" && args.Length == 4)
     using var source = PvfArchive.Open(args[1]);
     PairedCompanionMapDelta.Write(source, args[1], args[2], args[3]);
 }
+else if (args[0] == "prepare-support-effective-tiers" && args.Length == 4)
+{
+    using var source = PvfArchive.Open(args[1]);
+    SupportEffectiveTierDelta.Write(source, args[2], args[3]);
+}
 else if (args[0] == "prepare-support-natural-tiers" && args.Length == 4)
 {
     using var source = PvfArchive.Open(args[1]);
