@@ -279,6 +279,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true);
         await HellLegendBuffProjection.PostAsync(context, force: true);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
@@ -695,6 +696,7 @@ internal sealed partial class TownProjection(TownCatalog towns, CharacterStatCom
         await GuildTrainingProjection.PostAsync(context, clear: true);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         await HellLegendBuffProjection.PostAsync(context, force: true, canSend: CanSend);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: CanSend);
         if (context.Session.RaidStatusSnapshot() is { } raid)
         {
             // 业务Town可早于24写出；时钟资格提交不得把成功演出投到仍在图内的原生场景。

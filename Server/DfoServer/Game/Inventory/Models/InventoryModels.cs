@@ -71,6 +71,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public ServerItemUsageState ServerItems { get; init; } = ServerItemUsageState.Empty;
     public long StaminaUntil { get; init; }
     public ImmutableArray<ConsumableState> ConsumableStates { get; init; } = [];
+    public ImmutableArray<VariousBuffState> VariousBuffs { get; init; } = [];
     public BossSelectionBuff? BossSelectionBuff { get; init; }
     public KnightShieldDeck ShieldDeck { get; init; } = KnightShieldDeck.Empty;
     public ushort CargoCapacity { get; init; } = 8;

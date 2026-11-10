@@ -51,6 +51,10 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
 {
     public DfoServer.GameWorld.Items.EquipmentRarityBonus EquipmentRarityBonus { get; init; }
     public int EpicPieceBonus { get; init; }
+    public int HellRewardEpicPotionPercent { get; init; }
+    public ImmutableArray<int> DungeonEpicBuffIds { get; init; } = [];
+    public int DungeonEpicBonusPercent { get; init; }
+    public int BossDropPercent { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public Game.Session.TagEvildomClearPreparation? PendingTagEvildomClear { get; init; }
     public Game.Session.ImperialArenaDeathPreparation? PendingImperialArenaDeath { get; init; }

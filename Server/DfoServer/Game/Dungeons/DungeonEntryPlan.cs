@@ -29,6 +29,7 @@ internal sealed record DungeonEntryPlan(
     // 与密门深渊共用 HellPartyMode/深渊标志，区别只在 HellParty 为空、不抽柱子波次。
     public bool IsInfernoParty { get; init; }
     public byte HellPartyMode { get; init; }
+    public int? VariousBuffDungeonType { get; init; }
     public bool IsHellLegend { get; init; }
     public bool IsCosmo { get; init; }
     public int? BasisLevel { get; init; }
@@ -741,6 +742,7 @@ internal sealed record DungeonEntryPlan(
         float experienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
+            VariousBuffDungeonType = definition.DungeonType switch { "ancient dungeon" => 1, "requiem dungeon" => 2, "dimension dungeon" => 0, _ => null },
             RequestedDifficulty = requestedDifficulty == difficulty ? null : requestedDifficulty,
             RandomizedObjectSelection = raid?.Kind == DfoServer.Game.Raids.RaidKind.Anton
                 ? DungeonRandomizedObjectSelection.Create(planMaze.RandomizedObjectGroups, draw) : null,

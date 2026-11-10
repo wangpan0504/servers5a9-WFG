@@ -3,43 +3,36 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-// 固定史诗掉率效果仅解释已核定的资源合同；概率选择和星空效果不借此放行。
+// 通用效果表的单项计时视图；历史维护位与恢复入口保持，不用Buff编号识别效果。
 internal sealed record EpicDropBuffDefinition(int BuffId, int Percent)
 {
+    // 仅保留本服明确要求的道具适用范围；不通过Buff编号或计时参数猜效果类型。
+    static readonly ImmutableHashSet<int> HellRewardScopeOverrides = ImmutableHashSet.Create(490005358, 490005359);
+    public bool HellRewardOnly { get; init; }
+    internal bool HasSupportedParameters => BuffId > 0 && Percent >= 0;
+    public string SystemGroup { get; init; } = "random_box_buff";
     public ImmutableHashSet<int>? ItemIds { get; init; }
     public bool IsFamilyItem(int itemId) => ItemIds?.Contains(itemId) == true;
 
-    internal static ImmutableDictionary<int, EpicDropBuffDefinition> Load(PvfArchive archive)
+    internal static ImmutableDictionary<int, EpicDropBuffDefinition> Load(PvfArchive archive) => Load(VariousBuffCatalog.Load(archive));
+
+    internal static ImmutableDictionary<int, EpicDropBuffDefinition> Load(VariousBuffCatalog catalog)
     {
-        if (!archive.Contains("etc/variousbufflist.etc") || !archive.Contains("etc/variousbuffstackablelist.etc"))
-            return ImmutableDictionary<int, EpicDropBuffDefinition>.Empty;
-        var rows = ReadIndices(archive.ReadTokens("etc/variousbufflist.etc"), archive.ResolveString);
-        var definitions = new Dictionary<int, EpicDropBuffDefinition>();
-        foreach (var group in rows.Where(row => row.Values is [{ Type: 0, Value: > 0 }]).GroupBy(row => row.Values[0].Value))
-        {
-            if (group.Count() != 1 || rows.Count(row => row.Values.Any(value => value.Type == 0 && value.Value == group.Key)) != 1) continue;
-            var row = group.Single();
-            PvfTokenSection? Field(ImmutableArray<PvfTokenSection> fields, string name) =>
-                fields.Count(field => field.Name == name) == 1 ? fields.Single(field => field.Name == name) : null;
-            bool Text(ImmutableArray<PvfTokenSection> fields, string name, string expected) =>
-                Field(fields, name) is { Children.Length: 0, Values: [{ Type: 6 } value] } && archive.ResolveString(value.Value) == expected;
-            bool Numbers(ImmutableArray<PvfTokenSection> fields, string name, params int[] expected) =>
-                Field(fields, name) is { Children.Length: 0 } field && field.Values.All(value => value.Type == 0) &&
-                field.Values.Select(value => value.Value).SequenceEqual(expected);
-            var effect = Field(row.Children, "effect");
-            var apply = Field(row.Children, "apply type");
-            if (!Text(row.Children, "system group", "random_box_buff") ||
-                effect is not { Values.Length: 0, Children.Length: 2 } || apply is not { Values.Length: 0, Children.Length: 2 } ||
-                !Text(effect.Children, "name", "epic_rarity_item_drop_rate") ||
-                Field(effect.Children, "param") is not { Children.Length: 0, Values: [{ Type: 0, Value: 100 } percent] } ||
-                !Text(apply.Children, "type", "expire_time") || !Numbers(apply.Children, "param", 0, 0) ||
-                !Text(row.Children, "apply dungeon type", "all") || !Numbers(row.Children, "overlap", 1) ||
-                row.Children.Any(field => field.Name is not ("system group" or "icon index" or "title str" or
-                    "tooltip text" or "effect" or "overlap" or "apply type" or "apply dungeon type"))) continue;
-            definitions.Add(group.Key, new(group.Key, percent.Value));
-        }
-        return ParseMappings(ReadIndices(archive.ReadTokens("etc/variousbuffstackablelist.etc"), archive.ResolveString), definitions);
+        // 范围配置锚定已知来源，再由关联解析到Buff身份；新STK别名和重编号资源自动继承，不重复加白名单。
+        var scoped = HellRewardScopeOverrides.Where(catalog.Items.ContainsKey).Select(item => catalog.Items[item].BuffId).ToHashSet();
+        return catalog.Items.Where(pair => pair.Value.Supported && IsLegacyView(pair.Value)).ToImmutableDictionary(pair => pair.Key,
+            pair => Convert(pair.Value) with { ItemIds = catalog.Families[pair.Value.SystemGroup], HellRewardOnly = scoped.Contains(pair.Value.BuffId) });
     }
+
+    internal static bool IsLegacyView(VariousBuffDefinition buff) => buff.Timed && buff.SystemGroup == "random_box_buff" &&
+        buff.DungeonScope == VariousBuffDungeonScope.All && buff.OnlyDropEffect(VariousBuffDropEffect.OrdinaryEpic);
+
+    static EpicDropBuffDefinition Convert(VariousBuffDefinition buff) =>
+        new(buff.BuffId, buff.Percent(VariousBuffDropEffect.OrdinaryEpic)) { SystemGroup = buff.SystemGroup };
+
+    internal static ImmutableDictionary<int, EpicDropBuffDefinition> ReadDefinitions(ImmutableArray<PvfTokenSection> rows,
+        Func<int, string> resolve) => VariousBuffCatalog.ReadDefinitions(rows, resolve).Values
+        .Where(buff => buff.Supported && IsLegacyView(buff)).ToImmutableDictionary(buff => buff.BuffId, Convert);
 
     // 单独切出每个index再解析，损坏的未闭合块不能把下一条合法声明吞作自己的子字段。
     internal static ImmutableArray<PvfTokenSection> ReadIndices(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
@@ -95,14 +88,15 @@ internal sealed record EpicDropBuffDefinition(int BuffId, int Percent)
                 { Name: "probability buff list", Values: [{ Type: 0 } value, { Type: 0, Value: 100 }] } => value.Value,
                 _ => null
             };
-            if (buff is { } id && definitions.TryGetValue(id, out var definition) && definition.BuffId == id && definition.Percent == 100)
+            if (buff is { } id && definitions.TryGetValue(id, out var definition) && definition.BuffId == id && definition.HasSupportedParameters)
                 result.Add(group.Key, definition);
         }
         // 本服仅补这一个已核缺映射物品；显式但损坏/重复/随机的声明仍拒绝。
         if (!declared.Contains(490000413) && definitions.TryGetValue(1136, out var canonical) && canonical is { BuffId: 1136, Percent: 100 })
             result.Add(490000413, canonical);
-        var ids = result.Keys.ToImmutableHashSet();
-        foreach (var pair in result.ToArray()) result[pair.Key] = pair.Value with { ItemIds = ids };
+        var scoped = result.Where(pair => HellRewardScopeOverrides.Contains(pair.Key)).Select(pair => pair.Value.BuffId).ToHashSet();
+        foreach (var pair in result.ToArray()) result[pair.Key] = pair.Value with { HellRewardOnly = scoped.Contains(pair.Value.BuffId), ItemIds = result
+            .Where(other => other.Value.SystemGroup == pair.Value.SystemGroup).Select(other => other.Key).ToImmutableHashSet() };
         return result.ToImmutable();
     }
 }

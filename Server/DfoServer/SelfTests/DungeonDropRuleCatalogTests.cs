@@ -213,6 +213,11 @@ internal static class DungeonDropRuleCatalogTests
             DungeonSpecialDropCatalog.Create([specialRule with { ListFlag = 1, ListValues = [1001, 5] }], []));
         That(randomIndependent.Prepare(42, 1, 3, 1).Trials[4].RarityBonusGroup == DungeonRarityBonusGroup.IndependentLottery,
             "只有list flag=1的独立随机列表登记稀有度加成，不混淆固定指定奖励");
+        That(specialPlan.Trials[4].IndependentDrop && randomIndependent.Prepare(42, 1, 3, 1).Trials[4].IndependentDrop &&
+            specialPlan.Trials.Where((_, i) => i != 4).All(trial => !trial.IndependentDrop) &&
+            ReferenceEquals(specialPlan.WithBossDropBonus(1).Trials[4], specialPlan.Trials[4]) &&
+            randomIndependent.Prepare(42, 1, 3, 1).WithBossDropBonus(1).Trials[4].BossDropAdjustment is not null,
+            "固定及列表独立掉落均保留来源身份，领主只加成其中装备，不把材料行或世界池误当独立装备");
         var specialAssets = specialPlan.Generate(bound => bound switch
         { 27 => 0, 10000 => 9999, 1000000 => 499999, 100000 => 2, _ => 0 }, DateTimeOffset.UtcNow);
         That(specialAssets.Select(asset => asset.Item!.ItemId).SequenceEqual(new[] { 1001, 1001, 1000 }) &&
