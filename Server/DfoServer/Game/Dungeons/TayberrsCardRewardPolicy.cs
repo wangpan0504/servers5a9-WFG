@@ -12,6 +12,8 @@ internal sealed class TayberrsCardRewardPolicy(DungeonCardPriceCatalog prices, B
     public const string Rule = "pvf-tayberrs-material-card-v1";
     readonly ImmutableDictionary<int, (int ContainerItemId, ImmutableArray<BoosterPool> Pools)> pools = Load(prices, boosters, items, limits);
     public ClearRewardLimitCatalog? Limits => limits;
+    public int? LimitedContainer(int dungeon) => pools.TryGetValue(dungeon, out var selected) &&
+        limits?.FindItem(selected.ContainerItemId) is not null ? selected.ContainerItemId : null;
 
     static ImmutableDictionary<int, (int ContainerItemId, ImmutableArray<BoosterPool> Pools)> Load(DungeonCardPriceCatalog prices,
         BoosterCatalog boosters, ItemCatalog items, ClearRewardLimitCatalog? limits)

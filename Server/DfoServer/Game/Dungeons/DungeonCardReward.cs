@@ -63,6 +63,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
     public const string Rule = "pvf-free-clear-card-v1";
     static readonly decimal[] DifficultyRates = [1.02m, 1.38m, 1.60m, 1.90m, 2.00m];
     public ClearRewardLimitCatalog? ClearRewardLimits => tayberrsRewards?.Limits;
+    public int? LimitedContainer(int dungeon) => tayberrsRewards?.LimitedContainer(dungeon);
 
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
         Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true,

@@ -259,6 +259,11 @@ internal sealed partial class PartyDungeonService(PartyService parties, IPartyDu
         {
             return [];
         }
+        catch (SingleDungeonAdmissionRejectedException error)
+        {
+            onRejected?.Invoke(error.Message, party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)).Slot);
+            return [];
+        }
         catch (Exception error) { entryFailure = error; throw; }
         finally
         {

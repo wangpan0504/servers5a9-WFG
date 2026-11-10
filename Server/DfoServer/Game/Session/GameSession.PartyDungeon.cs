@@ -204,6 +204,7 @@ internal sealed partial class GameSession
             { QuickSlotEnergySource = plan.QuickSlotEnergySource, BattlePassMissionClock = timeProvider ?? TimeProvider.System, GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
+                SingleBinding = SingleDungeonBinding(dungeon.Entry),
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension,
                 FatigueAccelerationPercent = accelerationPercent,

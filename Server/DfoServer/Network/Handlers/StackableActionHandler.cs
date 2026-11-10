@@ -73,7 +73,7 @@ internal sealed partial class StackableActionHandler(QuestCatalog quests,ItemCat
         }
         if (request.Action == FatigueConsumableDefinition.Action)
             return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
-        if (request.Action == DfoServer.Game.Dungeons.DungeonIncountTicketService.Action)
+        if (DfoServer.Game.Dungeons.DungeonIncountTicketService.Handles(request.Action))
             return incountTickets is not null ? await incountTickets.UseAsync(context, request) : CommandResult.Unhandled;
         if (request.Action is 90 or 92 or 93)
             return marriage is not null ? await marriage.UseItemActionAsync(context, request) : CommandResult.Unhandled;

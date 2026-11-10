@@ -98,7 +98,8 @@ internal sealed partial class CharacterRepository
         var usage = ReadDungeonIncount(db, tx, expected.Id, owner.Account, dungeon, now);
         if (check && row is not null && !DungeonIncountPolicy.CanEnter(row, usage)) return null;
         var used = charges.Select(charge => ReadAccountIncount(db, tx, owner.Account, charge.Dungeon, charge.Period)).ToArray();
-        if (check && charges.Where((charge, index) => charge.Check && used[index] >= charge.Limit).Any()) return null;
+        if (check && charges.Where((charge, index) => charge.Check && used[index] >= checked(charge.Limit +
+            ReadAccountIncountExtra(db, tx, owner.Account, charge.Dungeon, charge.Period))).Any()) return null;
         var character = consumption is null ? expected : CommitInventoryInTransaction(db, tx, owner, expected, consumption);
         if (increment && row is not null)
         {
