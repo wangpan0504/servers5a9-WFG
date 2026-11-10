@@ -625,6 +625,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 本次房间访问冻结的AI参数；null 表示冻结时功能关闭，不发送私有包。
     internal MonsterAiProfile? CurrentMonsterAi => current.MonsterAi;
+    internal DungeonLanding? InitialHelperLanding => entry.HelperRotation is not null && LastLoadingFact is null &&
+        Phase == SinglePlayerDungeonPhase.Loading && current.Plan.Room.Map == entry.StartMap
+        ? current.Plan.Room.HelperLanding : null;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {

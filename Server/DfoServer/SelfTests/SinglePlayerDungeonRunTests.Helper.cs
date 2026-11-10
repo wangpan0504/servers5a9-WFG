@@ -11,6 +11,7 @@ internal static partial class SinglePlayerDungeonRunTests
 {
     static void VerifyHelperRotation()
     {
+        VerifyHelperLanding();
         var first = new DungeonMap("map", new(0, 0), 1, "map/fixture-start.map");
         var pillar = new DungeonMap("map", new(1, 0), 2, "map/fixture-hell.map");
         var boss = new DungeonMap("boss", new(2, 0), 3, "map/fixture-boss.map");
@@ -32,7 +33,14 @@ internal static partial class SinglePlayerDungeonRunTests
         var authority = new FixtureCombatAuthority();
         var route = new DungeonFixedRoute([Plan(first, 10), Plan(pillar, 11), BossPlan(boss, 12)],
             [new(first.Position, pillar.Position), new(pillar.Position, boss.Position)]);
+        route = route with { Rooms = route.Rooms.Select(plan => plan.Room.Map == pillar
+            ? plan with { Room = plan.Room with { HelperLanding = new(104, 104) } } : plan).ToArray() };
+        That(SinglePlayerDungeonRun.TryCreate(target!, 2, 200, route, authority, out var rotated, out _) &&
+            rotated!.InitialHelperLanding == new DungeonLanding(104, 104), "仅轮换新实例首房携带一次性柱旁落点");
+        rotated!.CompleteLoading(rotated.Snapshot.Identity, Guid.NewGuid());
+        That(rotated.InitialHelperLanding is null, "加载完成后不能重放首房落点");
         That(SinglePlayerDungeonRun.TryCreate(entry, 1, 100, route, authority, out var run, out _), "建立普通深渊门资格夹具");
+        That(run!.InitialHelperLanding is null, "普通深渊不因地图含柱子或安全坐标而覆盖出生点");
         run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
         var before = run.Snapshot;
         That(!run.CanMove(before.Identity, pillar.Position), "尚有阻挡怪时轮换门资格与普通过门一致");
