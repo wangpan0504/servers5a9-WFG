@@ -103,6 +103,10 @@ internal sealed partial class GameSession
             return Reject("boss-potion-requires-town");
         if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("epic-potion-requires-town");
+        if (definition.DungeonEpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("dungeon-epic-potion-requires-town");
+        if (definition.VariousBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("various-buff-requires-town");
         if (definition.HellLegendEpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("hell-legend-epic-potion-requires-town");
         if (definition.VillageMoveSpeedBuff is not null && captured.Guard.Phase != SessionPhase.Town)
@@ -159,6 +163,9 @@ internal sealed partial class GameSession
             }
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
                 "free_dungeon_use_consumable",new(character, source.ExpireTime > 0 ? source.ExpireTime : null, service.Clock))) : preliminary;
+            var variousGrant = definition.VariousBuff is not null ? PlanVariousBuffGrant(definition, service.Clock.GetUtcNow()) :
+                PlanLegacyVariousCoverage(definition, service.Clock.GetUtcNow());
+            if (variousGrant is not null) actual = actual with { Plan = WithVariousBuffGrant(actual.Plan!, variousGrant) };
             if (definition.BossSelectionBuff is { } bossBuff)
             {
                 var now = service.Clock.GetUtcNow();
@@ -184,6 +191,11 @@ internal sealed partial class GameSession
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             if (!result.Accepted) return Reject(result.RejectReason ?? "source-expired");
+            if (variousGrant is not null)
+            {
+                transientVariousBuffs = variousGrant.Transient;
+                TrackVariousBuffRemovals(variousGrant, definition);
+            }
             long effectAt = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
             IEnumerable<ConsumableState> beforeEffects = character.Inventory.ConsumableStates;
             if (preserve)
@@ -225,7 +237,10 @@ internal sealed partial class GameSession
                     NativeNoConsumption = nativeNoConsumption, TownGiftItem = definition.TownGiftItem,
                     EffectUpdates = effectUpdates,
                     TreasureHunterBonus = definition.TreasureHunterPotion?.BonusRate,
-                    TreasureHunterFromExj = definition.TreasureHunterPotion?.FromExj };
+                    TreasureHunterFromExj = definition.TreasureHunterPotion?.FromExj,
+                    DungeonEpicBuffId = definition.DungeonEpicDropBuff?.BuffId,
+                    BossDropPercent = definition.DungeonEpicDropBuff?.BossDropPercent,
+                    VariousBuffIds = variousGrant?.Granted ?? [] };
         });
     }
 
@@ -292,5 +307,7 @@ internal sealed partial class GameSession
         levelUpCooldowns.Clear();
         pendingConsumableUse = null;
         pendingDisguise = null;
+        transientVariousBuffs = [];
+        pendingVariousBuffRemovals = ImmutableHashSet<int>.Empty;
     }
 }

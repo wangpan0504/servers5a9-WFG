@@ -25,6 +25,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
 {
     public DungeonRarityBonusGroup RarityBonusGroup { get; init; }
     public DungeonEquipmentRarityAdjustment? EquipmentRarityAdjustment { get; init; }
+    public bool IndependentDrop { get; init; }
+    public DungeonBossDropAdjustment? BossDropAdjustment { get; init; }
     // 仅正式深渊碎片骰登记。入场预留上界，死亡时才把本人冻结增量变为实际次数。
     public int EpicPieceBonusCapacity { get; init; }
     public DungeonDropTrial WithChanceBonus(long numerator, long denominator) => this with
@@ -108,8 +110,8 @@ internal sealed class DungeonDropGenerationPlan
             ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
     }
     // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
-    // added/scale：1136 为百分数（100/100）；星空 1271 为万分比（6520/10000）。
-    public DungeonDropGenerationPlan WithEpicDropBonus(int added, int scale = 100)
+    // 掉落Buff统一使用百分比；scale只供其他明确比例调用，小灯笼限定正式深渊结算装备来源。
+    public DungeonDropGenerationPlan WithEpicDropBonus(int added, int scale = 100, bool hellRewardOnly = false, bool includeDirectEpic = false)
     {
         if (added < 0) throw new InvalidDataException("史诗掉落加成不能为负");
         if (scale <= 0) throw new InvalidDataException("史诗掉落加成分母必须为正");
@@ -117,6 +119,21 @@ internal sealed class DungeonDropGenerationPlan
         bool changed = false;
         var trials = Trials.Select(trial =>
         {
+            if (hellRewardOnly && trial.RarityBonusGroup != DungeonRarityBonusGroup.HellEquipment) return trial;
+            if (includeDirectEpic && trial.Category == DungeonDropCategory.Equipment && trial.Items is { TotalWeight: > 0 } direct &&
+                direct.Entries.Any(row => DungeonEpicDropAdjustment.IsEpic(row.Template)))
+            {
+                if (trial.EpicAdjustment is null && direct.Entries.All(row => DungeonEpicDropAdjustment.IsEpic(row.Template)))
+                {
+                    var directAdjustment = trial.WithChanceBonus((long)scale + added, scale);
+                    if (directAdjustment.Threshold != trial.Threshold) changed = true;
+                    return directAdjustment;
+                }
+                decimal basis = trial.EpicAdjustment?.EpicThreshold ?? trial.Threshold;
+                decimal enhancedDirect = basis * ((decimal)scale + added) / scale;
+                if (enhancedDirect != basis) changed = true;
+                return trial with { EpicAdjustment = new(enhancedDirect) };
+            }
             var pools = trial.RarityPools;
             if (pools.IsDefaultOrEmpty || pools.Length != 7 || pools[^1].Threshold != DungeonDropRatePlan.RarityDenominator ||
                 !pools[4].CandidatePools.Any(pool => pool.TotalWeight > 0) ||
@@ -150,6 +167,35 @@ internal sealed class DungeonDropGenerationPlan
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
         return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial :
             trial.WithChanceBonus(100L + percent, 100)), ReferenceQuality, Amplification, Sarpoza) { OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment, ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers };
+    }
+
+    public DungeonDropGenerationPlan WithBossDropBonus(int percent)
+    {
+        if (percent < 0) throw new InvalidDataException("领主掉落加成不能为负");
+        if (percent == 0) return this;
+        bool changed = false;
+        var trials = Trials.Select(trial =>
+        {
+            if (trial.IndependentDrop)
+            {
+                // 独立混池仍只选一项；只有装备可以占用空抽空间，材料等维持原绝对概率。
+                if (trial.Items is not { TotalWeight: > 0 } pool || !pool.Entries.Any(row => row.Template.Kind == ItemKind.Equipment))
+                    return trial;
+                var adjustment = new DungeonBossDropAdjustment(percent);
+                if (adjustment.Widths(trial).SequenceEqual(new DungeonBossDropAdjustment(0).Widths(trial))) return trial;
+                changed = true;
+                return trial with { BossDropAdjustment = adjustment };
+            }
+            var adjusted = trial.WithChanceBonus(100L + percent, 100);
+            if (adjusted.Threshold == trial.Threshold && adjusted.EpicAdjustment == trial.EpicAdjustment) return trial;
+            changed = true;
+            return adjusted;
+        }).ToImmutableArray();
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification, Sarpoza)
+        {
+            OrdinaryLukeDailySource = OrdinaryLukeDailySource, ExcludeLowEquipment = ExcludeLowEquipment,
+            ExcludeLowMaterials = ExcludeLowMaterials, DropMultipliers = DropMultipliers
+        } : this;
     }
 
     public DungeonDropGenerationPlan WithAntoniumDropBonus(int basisPoints)
@@ -201,6 +247,10 @@ internal sealed class DungeonDropGenerationPlan
                 trial.RarityBonusGroup is not (DungeonRarityBonusGroup.MonsterSpecific or DungeonRarityBonusGroup.IndependentLottery or
                     DungeonRarityBonusGroup.WorldLottery or DungeonRarityBonusGroup.EquipmentLottery)))
                 throw new InvalidDataException("装备混池加成须绑定明确的随机策略及非负加成");
+            if (trial.BossDropAdjustment is { } bossAdjustment && (!trial.IndependentDrop ||
+                trial.Items is not { TotalWeight: > 0 } bossItems || bossAdjustment.Percent < 0 ||
+                !bossItems.Entries.Any(row => row.Template.Kind == ItemKind.Equipment)))
+                throw new InvalidDataException("领主独立掉落加成须绑定包含装备的原独立池及非负百分比");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
                 Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.CandidatePools).ToArray();
             if (!trial.RarityPools.IsDefaultOrEmpty && trial.RarityPools.Any(row => row.AlternatePermille is < 0 or > 1000 ||
@@ -275,7 +325,12 @@ internal sealed class DungeonDropGenerationPlan
             // 参考服先计算金币波动，再判定金币概率；即使未命中也保留这一抽样次序。
             int? preparedGold = trial.ReferenceGold ? GoldAmount(trial) : null;
             ItemTemplate? adjustedTemplate = null;
-            if (trial.EquipmentRarityAdjustment is { } equipmentAdjustment)
+            if (trial.BossDropAdjustment is { } bossAdjustment)
+            {
+                adjustedTemplate = bossAdjustment.Select(trial, Sample);
+                if (adjustedTemplate is null) continue;
+            }
+            else if (trial.EquipmentRarityAdjustment is { } equipmentAdjustment)
             {
                 adjustedTemplate = equipmentAdjustment.Select(trial, Sample);
                 if (adjustedTemplate is null) continue;

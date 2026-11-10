@@ -372,6 +372,7 @@ internal sealed partial class DungeonHandler
                 await GuildTrainingProjection.PostAsync(context);
                 await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Current);
                 await HellLegendBuffProjection.PostAsync(context, force: true, canSend: Current);
+                await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: Current);
                 GuildDungeonPartyBuffProjection.Post(context);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {

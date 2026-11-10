@@ -1,16 +1,22 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
-internal sealed record HellLegendBuffProjectionReceipt(long UntilSeconds, Func<bool> IsCurrent, Action MarkSent);
+internal sealed record HellLegendBuffProjectionReceipt(long UntilSeconds, Func<bool> IsCurrent, Action MarkSent)
+{
+    public int BuffId { get; init; } = HellLegendEpicDropBuffDefinition.CanonicalBuffId;
+    public int RemovedBuffId { get; init; }
+}
 
 internal sealed partial class GameSession
 {
     long hellLegendProjectionEpoch = -1;
     long hellLegendProjectedUntil;
+    int hellLegendProjectedBuff;
     long hellLegendProjectionVersion;
 
-    // 仅记录显示身份；掉率和截止时间仍以已提交的消耗品账本为准。
+    // 仅记录显示身份；效果及截止仍以已提交的消耗品账本与通用资源表为准。
     public HellLegendBuffProjectionReceipt? PlanHellLegendBuffProjection(bool force = false) => owner.Execute(() =>
     {
         if (Selected is not { } character || consumables is null) return null;
@@ -19,25 +25,30 @@ internal sealed partial class GameSession
         {
             hellLegendProjectionEpoch = epoch;
             hellLegendProjectedUntil = 0;
+            hellLegendProjectedBuff = 0;
         }
         long Now() => (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
-        long Until() => Selected!.Inventory.ConsumableStates
-            .Where(row => row.Kind == ConsumableStateKind.Effect && row.Active(Now()) &&
-                consumables.HellLegendEpicDropBuffs.ContainsKey(row.ItemId))
-            .Select(row => row.UntilMilliseconds / 1000).DefaultIfEmpty().Max();
-        long until = Until();
-        if (until <= Now() / 1000) until = 0;
-        if (until == hellLegendProjectedUntil && (!force || until == 0)) return null;
+        (int Buff, long Until) Active()
+        {
+            long now = Now();
+            return Selected!.Inventory.ConsumableStates.Where(row => row.Kind == ConsumableStateKind.Effect && row.Active(now))
+                .Select(row => (row.UntilMilliseconds, Definition: consumables.HellLegendEpicDropBuffs.GetValueOrDefault(row.ItemId)))
+                .Where(row => row.Definition is not null && row.UntilMilliseconds / 1000 > now / 1000)
+                .OrderByDescending(row => row.UntilMilliseconds).Select(row => (row.Definition!.BuffId, row.UntilMilliseconds / 1000))
+                .FirstOrDefault();
+        }
+        var desired = Active();
+        if (desired == (hellLegendProjectedBuff, hellLegendProjectedUntil) && (!force || desired.Buff == 0)) return null;
         long version = ++hellLegendProjectionVersion;
         var phase = Phase;
         bool Current() => owner.Execute(() => owner.IsCurrent && SelectionEpoch == epoch &&
-            Selected?.Id == character.Id && Phase == phase && hellLegendProjectionVersion == version &&
-            (until == 0 ? Until() <= Now() / 1000 : Until() == until && until > Now() / 1000));
+            Selected?.Id == character.Id && Phase == phase && hellLegendProjectionVersion == version && Active() == desired);
         void MarkSent() => owner.Execute(() =>
         {
-            if (Current()) hellLegendProjectedUntil = until;
+            if (Current()) { hellLegendProjectedBuff = desired.Buff; hellLegendProjectedUntil = desired.Until; }
             return true;
         });
-        return new HellLegendBuffProjectionReceipt(until, Current, MarkSent);
+        return new HellLegendBuffProjectionReceipt(desired.Until, Current, MarkSent)
+        { BuffId = desired.Buff, RemovedBuffId = hellLegendProjectedBuff != desired.Buff ? hellLegendProjectedBuff : 0 };
     });
 }

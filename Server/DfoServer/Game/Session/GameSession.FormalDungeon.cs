@@ -41,6 +41,8 @@ internal sealed partial class GameSession
         public HashSet<int> FreeTouchedNormalCooldowns { get; } = new();
         public HashSet<int> FreeTouchedNormalEffects { get; } = new();
         public BossSelectionBuff? BossSelectionBuff { get; init; }
+        public ImmutableArray<VariousBuffState> VariousBuffEntryEffects { get; init; } = [];
+        public ImmutableArray<int> PendingVariousEffectApplications { get; set; } = [];
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
         public long? RevisedBeastDeathDue { get; set; }
@@ -1191,6 +1193,13 @@ internal sealed partial class GameSession
             var after = (entryItems?.After ?? before) with { BossSelectionBuff = bossBuff.Remaining == 1 ? null : bossBuff with { Remaining = bossBuff.Remaining - 1 } };
             entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
+        var variousEntry = PlanVariousBuffEntry(installing.Entry, (timeProvider ?? TimeProvider.System).GetUtcNow());
+        if (!character.Inventory.VariousBuffs.SequenceEqual(variousEntry.Saved))
+        {
+            var before = entryItems?.Before ?? character.Inventory;
+            var after = (entryItems?.After ?? before) with { VariousBuffs = variousEntry.Saved };
+            entryItems = entryItems is null ? new(before, after, "various_buff_entry") : entryItems.WithAfter(after);
+        }
         int accelerationPercent = CaptureFatigueAcceleration(installing.Entry);
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 :
             DfoServer.Game.PcRoom.FatigueAccelerationRules.Cost(installing.Entry.StartFatigue,
@@ -1269,6 +1278,9 @@ internal sealed partial class GameSession
         }
         installing.Run.FreezeFatigueAcceleration(PremiumPcRoom ? accelerationPercent : 0);
         Selected = committed;
+        installing = installing with { VariousBuffEntryEffects = variousEntry.Active };
+        transientVariousBuffs = variousEntry.Transient;
+
         formalDungeon = installing;
         tagEvildomSelection = null;
         imperialArenaSelection = null;
@@ -1595,6 +1607,10 @@ internal sealed partial class GameSession
         var reward = frozen.Reward;
         FrozenDungeonGroundDeath? loot = null;
         int appliedEpicPieceBonus = 0;
+        int appliedHellRewardEpicPotionPercent = 0;
+        int appliedDungeonEpicPercent = 0;
+        ImmutableArray<int> appliedDropBuffIds = [];
+        int appliedBossDropPercent = 0;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
         {
             if (dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation))
@@ -1625,11 +1641,33 @@ internal sealed partial class GameSession
                         : 0;
                     int epicBonus = EpicDropPotionBonus(Selected, now);
                     var boosted = generation.WithGrowthContract(bonus).WithAntoniumDropBonus(antoniumBonus).WithEpicDropBonus(epicBonus);
+                    int lanternBonus = EpicDropPotionBonus(Selected, now, hellRewardOnly: true);
+                    var lanternPlan = boosted.WithEpicDropBonus(lanternBonus, hellRewardOnly: true);
+                    if (!ReferenceEquals(lanternPlan, boosted)) appliedHellRewardEpicPotionPercent = lanternBonus;
+                    boosted = lanternPlan;
                     if (dungeon.Entry.IsHellLegend)
                         boosted = boosted.WithEpicDropBonus(HellLegendEpicDropPotionBonus(Selected, now),
                             HellLegendEpicDropBuffDefinition.BonusScale);
+                    var compositeBuffs = ActiveCompositeDropBuffs(now.ToUnixTimeMilliseconds());
+                    appliedDropBuffIds = compositeBuffs.Where(buff => DungeonEpicDropBuffPolicy.Applies(buff, dungeon.Entry))
+                        .Select(buff => buff.BuffId).ToImmutableArray();
+                    int matchBonus = compositeBuffs.Sum(buff => DungeonEpicDropBuffPolicy.Bonus(buff, dungeon.Entry));
+                    var matchPlan = boosted.WithEpicDropBonus(matchBonus, DungeonEpicDropBuffPolicy.BonusScale, includeDirectEpic: true);
+                    if (!ReferenceEquals(matchPlan, boosted)) appliedDungeonEpicPercent = matchBonus;
+                    boosted = matchPlan;
                     boosted = boosted.WithEquipmentRarityBonus(frozen.RarityBonus);
                     boosted = boosted.WithEpicPieceBonus(frozen.EpicPieceBonus);
+                    int bossBonus = compositeBuffs.Sum(buff => DungeonEpicDropBuffPolicy.BossBonus(buff, dungeon.Entry, pending.Monster));
+                    var bossPlan = boosted.WithBossDropBonus(bossBonus);
+                    if (!ReferenceEquals(bossPlan, boosted)) appliedBossDropPercent = bossBonus;
+                    boosted = bossPlan;
+                    var usedEffects = compositeBuffs.Where(buff =>
+                        appliedDungeonEpicPercent > 0 && DungeonEpicDropBuffPolicy.Bonus(buff, dungeon.Entry) > 0 ||
+                        appliedBossDropPercent > 0 && DungeonEpicDropBuffPolicy.BossBonus(buff, dungeon.Entry, pending.Monster) > 0)
+                        .Select(buff => buff.BuffId).ToHashSet();
+                    dungeon.PendingVariousEffectApplications = LiveVariousBuffs(now.ToUnixTimeMilliseconds())
+                        .Where(row => row.Lifetime == VariousBuffLifetime.EffectApplications && usedEffects.Contains(row.BuffId))
+                        .Select(row => row.BuffId).ToImmutableArray();
                     bool epicRoadAvailable = dungeon.Entry.DungeonId is not (400000097 or 400000098) ||
                         serverEvents?.Read(Game.Events.ServerEventService.EpicRoadId).Active == true;
                     var ordinary = boosted.Generate(dungeon.Draw, now, epicRoadAvailable);
@@ -1668,7 +1706,12 @@ internal sealed partial class GameSession
             dungeon.PendingSpecialClearReward ??= new(pending, specialClearReward, specialClearReward.Roll(dungeon.Draw));
         var questDrop = dungeon.PendingQuestDrop;
         var specialClear = dungeon.PendingSpecialClearReward;
+        if (!dungeon.PendingVariousEffectApplications.IsEmpty) reward = reward with { AppliedVariousBuffs = dungeon.PendingVariousEffectApplications };
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop, specialClear);
+        if (!dungeon.PendingVariousEffectApplications.IsEmpty)
+            transientVariousBuffs = VariousBuffPolicy.Consume(transientVariousBuffs, VariousBuffLifetime.EffectApplications,
+                dungeon.PendingVariousEffectApplications.ToHashSet());
+        dungeon.PendingVariousEffectApplications = [];
         if (committed.Commit.CommittedBonuses is { } actualBonuses)
             reward = reward with { Bonuses = actualBonuses, Amount = actualBonuses.Total };
         dungeon.PendingDeathReward = null;
@@ -1708,6 +1751,10 @@ internal sealed partial class GameSession
             Drops = floorDrops,
             EquipmentRarityBonus = frozen.RarityBonus,
             EpicPieceBonus = appliedEpicPieceBonus,
+            HellRewardEpicPotionPercent = appliedHellRewardEpicPotionPercent,
+            DungeonEpicBuffIds = appliedDropBuffIds,
+            DungeonEpicBonusPercent = appliedDungeonEpicPercent,
+            BossDropPercent = appliedBossDropPercent,
             DirectPickup = directPickup,
             GainedExperience = committed.Commit.GainedExperience,
             EquipmentChanges = committed.Commit.EquipmentChanges,

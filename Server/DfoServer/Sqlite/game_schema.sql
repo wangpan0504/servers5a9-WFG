@@ -2663,3 +2663,10 @@ CREATE UNIQUE INDEX account_mock_battle_active ON account_monster_mock_battle_ru
             PRIMARY KEY(character_id,instance_id),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
         );
+
+CREATE TABLE character_various_buffs(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    buffs TEXT NOT NULL CHECK(json_valid(buffs)),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+) STRICT;

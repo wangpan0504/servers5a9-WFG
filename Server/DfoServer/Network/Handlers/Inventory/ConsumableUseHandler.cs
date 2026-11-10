@@ -121,6 +121,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
             List = request.Position.List, Accepted = accepted, result.Reason, Character = result.Guard?.Character?.Id,
             Revision = result.Guard?.Character?.Revision, result.SourceUid, result.NativeNoConsumption, result.TownGiftItem,
             result.TreasureHunterBonus, result.TreasureHunterFromExj,
+            result.DungeonEpicBuffId, result.BossDropPercent, result.VariousBuffIds,
             StaminaRecovered = result.Inventory?.Plan is { } used && used.Before.StaminaUntil != used.After.StaminaUntil });
         if (result.Outcome == ConsumableUseOutcome.CloseConnection) return CommandResult.CloseConnection;
         var guard = result.Guard ?? throw new InvalidOperationException("道具使用缺少原状态发布身份");
@@ -134,6 +135,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
                     "consumable_effect_time_refreshed", CanSend);
         if (accepted) await BossSelectionBuffProjection.PostAsync(context, canSend: CanSend);
         if (accepted) await HellLegendBuffProjection.PostAsync(context, canSend: CanSend);
+        if (accepted) await DungeonEpicBuffProjection.PostAsync(context, canSend: CanSend);
         if (accepted && result.TownGiftItem != 0 && town is not null)
             await town.GiftEffectAsync(context, result.TownGiftItem, CanSend);
         if (accepted && result.Inventory is { Plan: { } plan, Receipt: { } recoveryReceipt } &&

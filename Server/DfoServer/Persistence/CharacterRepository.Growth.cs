@@ -181,6 +181,14 @@ internal sealed partial class CharacterRepository
                         overflowMailSender: specialClearReward.Plan.OverflowMailSender,
                         overflowMailText: specialClearReward.Plan.OverflowMailText);
         }
+        if (!reward.AppliedVariousBuffs.IsDefaultOrEmpty)
+        {
+            var before = inventoryPlan?.After ?? expected.Inventory;
+            var after = before with { VariousBuffs = Game.Inventory.Services.VariousBuffPolicy.Consume(before.VariousBuffs,
+                Game.Inventory.Models.VariousBuffLifetime.EffectApplications, reward.AppliedVariousBuffs.ToHashSet()) };
+            if (!after.VariousBuffs.SequenceEqual(before.VariousBuffs))
+                inventoryPlan = inventoryPlan is null ? new(expected.Inventory, after, "various_buff_effect_application", new(expected)) : inventoryPlan.WithAfter(after);
+        }
         var inventoryCharacter = inventoryPlan is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,inventoryPlan);
         command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
         command.Parameters.AddWithValue("$increment", inventoryPlan?.Changed == true ? 0 : 1);

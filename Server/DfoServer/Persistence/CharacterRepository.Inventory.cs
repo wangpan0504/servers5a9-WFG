@@ -464,6 +464,8 @@ internal sealed partial class CharacterRepository
             exp.Parameters.AddWithValue("$permille", bonus.Permille);
             exp.ExecuteNonQuery();
         }
+        if (!plan.Before.VariousBuffs.SequenceEqual(plan.After.VariousBuffs))
+            WriteVariousBuffs(db, transaction, current.Id, owner.Account, inventory.VariousBuffs);
         if (!plan.Before.ConsumableStates.SequenceEqual(plan.After.ConsumableStates))
             WriteConsumableStates(db, transaction, owner.Account, current.Id, inventory.ConsumableStates);
         if (!BossSelectionBuff.Same(plan.Before.BossSelectionBuff, plan.After.BossSelectionBuff))
@@ -517,7 +519,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (left.PrivilegeService != right.PrivilegeService || !left.ShieldDeck.Same(right.ShieldDeck) || !left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.VariousBuffs.SequenceEqual(right.VariousBuffs) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -590,6 +592,7 @@ internal sealed partial class CharacterRepository
             NpcFavor = npcFavor, Skins = weaponSkins, AccountSkins = shared.Skins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account),
+            VariousBuffs = ReadVariousBuffs(db, transaction, characterId, account),
             BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account),
             ShieldDeck = ReadKnightShieldDeck(db, transaction, characterId, account),
             PrivilegeService = ReadPrivilegeService(db, transaction, characterId, account),

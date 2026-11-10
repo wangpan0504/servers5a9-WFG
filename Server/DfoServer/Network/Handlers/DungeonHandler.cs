@@ -467,6 +467,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await DungeonEnterCountProjection.RefreshDespairAsync(context, dungeons, Guard);
         await BossSelectionBuffProjection.PostAsync(context, canSend: Guard);
         await HellLegendBuffProjection.PostAsync(context, canSend: Guard);
+        await DungeonEpicBuffProjection.PostAsync(context, canSend: Guard);
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         if(receipt.BattlePassMissionClock is {} entryClock) await BattlePassMissionProjection.RefreshAsync(context,entryClock.GetUtcNow());
         return CommandResult.Handled;
@@ -553,6 +554,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         await GuildTrainingProjection.PostAsync(context);
         await BossSelectionBuffProjection.PostAsync(context, force: true, canSend: Guard);
         await HellLegendBuffProjection.PostAsync(context, force: true, canSend: Guard);
+        await DungeonEpicBuffProjection.PostAsync(context, force: true, canSend: Guard);
         if (receipt.ScriptedReturnId != Guid.Empty)
         {
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);
@@ -654,6 +656,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             result.Outcome, ObjectKey = objectKey, Report = audit,
             result.EquipmentRarityBonus.RarePercent, result.EquipmentRarityBonus.UniquePercent,
             result.EpicPieceBonus,
+            result.HellRewardEpicPotionPercent,
+            result.DungeonEpicBuffIds, result.DungeonEpicBonusPercent, result.BossDropPercent,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact,
             DirectItems = result.DirectPickup.GroundKeys.Length });
@@ -845,6 +849,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await EnableSettlementAsync(context, result.MonsterKey);
         await PublishEpicPieceShopAsync(context, prepare: true);
         if(result.BattlePassMissionClock is {} deathClock) await BattlePassMissionProjection.RefreshAsync(context,deathClock.GetUtcNow());
+        if (result.Reward is { AppliedVariousBuffs.IsDefaultOrEmpty: false })
+            await DungeonEpicBuffProjection.PostAsync(context);
         return CommandResult.Handled;
     }
 
