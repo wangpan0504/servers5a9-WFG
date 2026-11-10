@@ -73,6 +73,13 @@ internal static class DailyAttendanceTests
         {
             f.Apply(f.Plan(false));
             f.Apply(f.Plan(false));
+            if (day + 1 == 6)
+            {
+                var premature = f.Plan(true);
+                snapshot = f.Snapshot();
+                That(premature.Reward is null && f.Repository.ClaimDailyAttendance(f.Owner, f.Character, premature).MailId == 0 &&
+                    f.Snapshot() == snapshot && f.Read() is { Total: 6, Claimed: 0 }, "未满7天不可领取累计签到奖励");
+            }
             if (day + 1 is 7 or 14 or 21)
             {
                 int index = (day + 1) / 7 - 1;
@@ -83,7 +90,9 @@ internal static class DailyAttendanceTests
                 snapshot = f.Snapshot();
                 var duplicate = f.Repository.ClaimDailyAttendance(f.Owner, f.Character, plan);
                 That(claim.MailId > 0 && duplicate.MailId == 0 && f.Snapshot() == snapshot &&
-                    (claim.Snapshot.Claimed & (1 << index)) != 0, "累计奖励每档只落一封，重复旧计划零写");
+                    (claim.Snapshot.Claimed & (1 << index)) != 0 &&
+                    f.Number($"SELECT item_count FROM account_daily_attendance_claims WHERE mail_id={claim.MailId} AND kind=1 AND reward_index={index}") == Catalog.Accumulated[index].Count,
+                    "累计奖励每档只落一封，附件数量正确且重复旧计划零写");
             }
             f.Now = f.Now.AddDays(1);
         }
