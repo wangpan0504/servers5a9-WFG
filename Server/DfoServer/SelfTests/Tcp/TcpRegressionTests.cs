@@ -407,6 +407,17 @@ internal static class TcpRegressionTests
             TayberrsCardRewardTests.RunResources(resources.Archive, resources.ItemResources);
             return Task.CompletedTask;
         }),
+        ("tayberrs-settlement", (_, _, resources) =>
+        {
+            DungeonSpecificCardRewardsTests.RunTayberrsResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
+        ("epic-road-admission", (_, _, resources) =>
+        {
+            EpicRoadAdmissionSessionTests.RunResources(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("dungeon-clear-battle-pass", (_, _, resources) =>
         {
             DungeonSettlementTests.RunBattlePassTayberrsCore();
@@ -728,6 +739,8 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "otherverse-drop-rules",
+        "tayberrs-settlement",
+        "epic-road-admission",
         "fiendwar-reward-rules",
         "fiendwar-recovery-movie",
         "fiendwar-shared-limits",

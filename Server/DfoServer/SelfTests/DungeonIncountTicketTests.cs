@@ -17,8 +17,12 @@ internal static partial class DungeonIncountTicketTests
     internal static void Run(TcpTestResources resources, string root)
     {
         int before = Count;
+        DatabaseSchemaTests.DungeonTicketQuotaUpgrade(Path.Combine(root, "ticket-quota-schema"));
         RunDimensionLimits(resources, root);
         RunResetLimits(resources, root);
+        RunExpandedTickets(resources, root);
+        RunSingleBindingAdmission(resources, root);
+        RunPeriodWriter(resources, root);
         string path = Path.Combine(root, "incount-ticket.db");
         var repository = new CharacterRepository(path);
         var owners = new AccountOwners();

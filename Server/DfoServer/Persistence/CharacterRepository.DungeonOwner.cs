@@ -154,6 +154,11 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         AdmitOrdinaryLuke(db, tx, owner, expected, charge);
         AdmitPreyNormal(db, tx, owner, expected, charge);
         AdmitAntonNormal(db, tx, owner, expected, charge);
+        if (charge.SingleBinding is { } single)
+        {
+            if (!single.Group.Dungeons.Contains(charge.DungeonId)) throw new InvalidDataException("单人绑定副本与原入场不符");
+            BindSingleDungeonInTransaction(db, tx, owner, expected, single);
+        }
         AdmitDazzlementTower(db, tx, owner, expected, charge);
         AdmitGuildDungeon(db, tx, expected.Id, charge);
         CharacterFatigueState? fatigueBefore = null, fatigueAfter = null;

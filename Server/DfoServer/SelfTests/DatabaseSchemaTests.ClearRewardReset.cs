@@ -20,7 +20,7 @@ internal static partial class DatabaseSchemaTests
         {
             using var f = RaidQuotaEpochTests.CreateFixture();
             WeeklyEntryResetTests.SeedClearReward(f, f.Other.Id, "other", 291100320, 31, DateTimeOffset.UtcNow, claimed: true);
-            // 已发布v200魔兽及v201收藏迁移不重排；分别验证跨版本连续升级和v201单步升级。
+            // 已发布v200魔兽及v201收藏迁移不重排；分别验证跨版本连续升级和v201后的刷新迁移。
             f.Execute("DROP TABLE character_clear_reward_resets");
             int previousVersion = scenario == "upgrade-v199" ? 199 : scenario == "upgrade-v200" ? 200 : 201;
             if (previousVersion < 201)
@@ -55,7 +55,7 @@ internal static partial class DatabaseSchemaTests
                 f.Query("SELECT count(*) FROM character_npc_bookmarks") is long bookmarks && bookmarks == (previousVersion < 201 ? 0 : 1) &&
                 (previousVersion < 201 || f.Query($"SELECT hex(entries) FROM character_npc_bookmarks WHERE character_id={f.Other.Id}") is "11000000") &&
                 f.Snapshot() == history,
-                "v199/v200连续升级及v201单步升级只追加空刷新账本，已有收藏、冻结牌面、领取位与资产保持：" + scenario);
+                "v199/v200/v201连续升级只追加空账本，已有收藏、冻结牌面、领取位与资产保持：" + scenario);
             string saved = Snapshot(f.Path);
             _ = new CharacterRepository(f.Path);
             Check(Snapshot(f.Path) == saved, "奖励刷新结构重复打开幂等");

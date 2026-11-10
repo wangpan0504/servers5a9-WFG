@@ -172,8 +172,9 @@ internal interface ICharacterRepository
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
     int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
+    int LoadAccountDungeonIncountExtra(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号追加次数");
     DungeonIncountUsage LoadClearRewardLimitUsage(AccountOwners.Lease owner, ushort characterId,
-        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period) => default;
+        DfoServer.GameWorld.Dungeons.ClearRewardDungeonLimit limit, DungeonIncountPeriod period, int? containerItemId = null) => default;
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
     Character ClaimGrowthCapsule(AccountOwners.Lease owner, Character expected, uint requiredExperience = 10_000_000) =>
