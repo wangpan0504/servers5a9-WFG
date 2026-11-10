@@ -1,6 +1,12 @@
 using System.Text.Json;
 using PvfLib;
 
+if (args is ["--opening", var openingPvf, var openingOutput])
+{
+    SupportOpeningTests.Run(openingPvf, openingOutput);
+    return;
+}
+
 if (args is ["--effective-tiers", var effectivePvf, var effectiveEvidence, var effectiveOutput])
 {
     SupportEffectiveTierTests.Run(effectivePvf, effectiveEvidence, effectiveOutput);
