@@ -54,6 +54,7 @@ internal sealed record DungeonRoomDefinition(
 {
     // MAP自身的单值[type]，与迷宫位置的map/boss/layered声明分别保存；缺失或歧义不授予终点资格。
     public string? DeclaredType { get; init; }
+    public DungeonLanding? HelperLanding { get; init; }
     public IReadOnlyList<DungeonRoomSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonRoomSpecialObject>();
     public IReadOnlyList<DungeonRoomAiCharacter> AiCharacters { get; init; } = Array.Empty<DungeonRoomAiCharacter>();
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
@@ -133,6 +134,9 @@ internal sealed class DungeonRoomCatalog
         var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
         var room = ParseResource(map with { Path = path }, tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
+        if (room.SpecialObjects.Any(row => row.Children.Any(child => child.Kind == "[hellparty]")))
+            room = room with { HelperLanding = HelperHellLanding.Read(room, tokens, source.ResolveString,
+                file => source.Contains(file) ? geometry.ReadTokens(source, file) : [], geometry.CollisionPlans.GetValueOrDefault(path)) };
         // 只读本房引用的MOB，同模板在本次操作内只解析一次；限制随资源行冻结，不另建全局缓存。
         var restrictions = new Dictionary<int, (bool Restricted, bool Named)>();
         room = room with { Monsters = Array.AsReadOnly(room.Monsters.Select(monster =>

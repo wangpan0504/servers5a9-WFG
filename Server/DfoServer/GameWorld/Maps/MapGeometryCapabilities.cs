@@ -131,7 +131,7 @@ internal static class MapGeometryCapabilities
         return Normalize(owner[..(owner.LastIndexOf('/') + 1)] + name);
     }
 
-    private static string TileReference(string owner, string name)
+    internal static string TileReference(string owner, string name)
     {
         string path = Reference(owner, name);
         if (!path.EndsWith(".til", StringComparison.Ordinal)) throw new InvalidDataException("Map geometry tile reference kind");

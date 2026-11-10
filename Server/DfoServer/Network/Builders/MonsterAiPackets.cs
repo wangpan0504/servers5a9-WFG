@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Network.Builders;
 
-// 自定义服务端私有包：class0/opcode0x7FF0，MAI1/2/3分别为56/72/80字节。客户端在房间通知之后应用，
+// 自定义服务端私有包：class0/opcode0x7FF0，MAI1/2/3/4分别为56/72/80/96字节。
 // 本包必须由同一连接先于该29入队；身份字段用于拒绝迟到或跨房间的包。
 internal static class MonsterAiPackets
 {
@@ -12,19 +12,23 @@ internal static class MonsterAiPackets
     public const int BodyLength = 56;
     public const int ExtendedBodyLength = 72;
     public const int CombatBodyLength = 80;
+    public const int LandingBodyLength = 96;
     // "MAI1"
     const uint Magic = 0x3149414D;
 
-    public static byte[] Encode(uint serial, uint dungeonId, uint mapId, uint roomSeed, DungeonPoint position, MonsterAiProfile profile)
+    public static byte[] Encode(uint serial, uint dungeonId, uint mapId, uint roomSeed, DungeonPoint position, MonsterAiProfile profile,
+        DungeonLanding? landing = null)
     {
         if (serial == 0) throw new ArgumentOutOfRangeException(nameof(serial));
         if (dungeonId == 0) throw new ArgumentOutOfRangeException(nameof(dungeonId));
         if (mapId == 0) throw new ArgumentOutOfRangeException(nameof(mapId));
-        bool combat = profile.AttackPower.Mode != MonsterAiMode.Native;
+        if (landing is { } point && (point.X is < 0 or > 1048576 || point.Y is < 0 or > 1048576))
+            throw new ArgumentOutOfRangeException(nameof(landing));
+        bool combat = landing is not null || profile.AttackPower.Mode != MonsterAiMode.Native;
         bool extended = combat || profile.HitPoints.Mode != MonsterAiMode.Native || profile.Defense.Mode != MonsterAiMode.Native;
-        var body = new byte[combat ? CombatBodyLength : extended ? ExtendedBodyLength : BodyLength];
+        var body = new byte[landing is not null ? LandingBodyLength : combat ? CombatBodyLength : extended ? ExtendedBodyLength : BodyLength];
         var span = body.AsSpan();
-        BinaryPrimitives.WriteUInt32LittleEndian(span, combat ? 0x3349414D : extended ? 0x3249414D : Magic);
+        BinaryPrimitives.WriteUInt32LittleEndian(span, landing is not null ? 0x3449414D : combat ? 0x3349414D : extended ? 0x3249414D : Magic);
         BinaryPrimitives.WriteUInt32LittleEndian(span[4..], serial);
         BinaryPrimitives.WriteUInt32LittleEndian(span[8..], dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(span[12..], mapId);
@@ -42,6 +46,13 @@ internal static class MonsterAiPackets
             Write(span[64..], profile.Defense);
         }
         if (combat) Write(span[72..], profile.AttackPower);
+        if (landing is { } target)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(span[80..], 1);
+            BinaryPrimitives.WriteInt32LittleEndian(span[84..], target.X);
+            BinaryPrimitives.WriteInt32LittleEndian(span[88..], target.Y);
+            // Z及原生随机范围保持0，地面最终由客户端加载器校正。
+        }
         return body;
 
         // 原生模式不携带数字，客户端据此跳过固定值/倍率改写。
